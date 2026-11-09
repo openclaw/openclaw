@@ -39,6 +39,7 @@ const repositoryScriptEntries = [
   "scripts/finalize-installed-runtime.mjs!",
   // Performance drivers and their preloads are invoked directly from documented commands.
   "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
+  "scripts/perf/decision-tool-catalog-measure.ts!",
   // Spawned directly by native-allocation-profile.test.ts.
   "test/scripts/fixtures/native-profile-census.mjs!",
   // Spawned directly by mantis-telegram-failure.test.ts.
@@ -375,6 +376,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-access.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-fault.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/installed-terminal-dependencies.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/installed-terminal-reference.mts!",
   "scripts/e2e/lib/upgrade-survivor/older-runtime-recovery-observer.mjs!",
   "scripts/e2e/lib/upgrade-survivor/older-runtime-recovery.mjs!",
   "scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs!",
@@ -872,6 +875,12 @@ const rootBundledPluginRuntimeDependencies = [
 // owning workspace, or invoke their package binaries/loaders without a static module import.
 const rootToolingAndWorkspaceDependencies = [
   "@copilotkit/aimock",
+  // installed-terminal-dependencies.mjs loads these from the pinned npm CLI's own
+  // dependency tree via createRequire(npmCli), never from the root workspace.
+  "@npmcli/arborist",
+  "@npmcli/config",
+  "cacache",
+  "pacote",
   // scripts/ui.mts anchors these lookups at ui/package.json before invoking the UI workspace.
   "@vitest/browser-playwright",
   "dompurify",

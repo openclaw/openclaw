@@ -1390,6 +1390,34 @@ const shardRequiresTests = (shard, tests, fallback) =>
       ? patterns.some((pattern) => tests.some((test) => matchesGlob(test, pattern)))
       : fallback(plan);
   });
+const workerPresetOwner =
+  frozenTarget || !existsSync("./scripts/lib/vitest-runtime-selection.mts")
+    ? undefined
+    : await importTargetPlan("./scripts/lib/vitest-runtime-selection.mts");
+const workerCachePreset = (shard) => {
+  if (
+    shard.requiresDist ||
+    shard.pretestBuildMode ||
+    !workerPresetOwner?.resolveCiVitestWorkerPreset
+  ) {
+    return undefined;
+  }
+  const plans = shard.targets?.length
+    ? shard.targets.map((target) => ({ target }))
+    : (shard.groups ?? [shard]).map((group) =>
+        Object.assign({}, group, { env: { ...shard.env, ...group.env } }),
+      );
+  // Unknown flags keep the full archive; the runtime recomputes the decision.
+  const hasExtraArgs = [shard, ...plans].some((plan) => {
+    const args = plan.env?.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON;
+    return (
+      args !== undefined &&
+      (typeof args !== "string" || (args.trim() !== "" && args.trim() !== "[]"))
+    );
+  });
+  const preset = workerPresetOwner.resolveCiVitestWorkerPreset(plans, hasExtraArgs);
+  return preset === "full" ? undefined : preset;
+};
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
 const packedNodeTestRows = [];
 const nodeTestShards = targetNodeTestShards
@@ -1434,6 +1462,7 @@ const nodeTestShards = targetNodeTestShards
       configs: packedGroups ? undefined : shard.configs,
       env: shard.env,
       includePatterns: packedGroups ? undefined : shard.includePatterns,
+      worker_cache_preset: workerCachePreset(shard),
       pretest_build_mode: shard.pretestBuildMode,
       git_commits: resolveTestGitCommits(shard),
       requires_dist: shard.requiresDist,

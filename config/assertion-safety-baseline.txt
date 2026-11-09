@@ -1956,7 +1956,6 @@ src/mcp/channel-shared.ts	2
 src/mcp/codex-supervision-tools-serve.ts	1
 src/mcp/openclaw-tools-serve-config.ts	1
 src/mcp/plugin-tools-handlers.ts	1
-src/media-generation/provider-registry.ts	1
 src/media-understanding/entry-capabilities.ts	1
 src/media-understanding/image-model-runtime.ts	3
 src/media-understanding/shared.ts	1

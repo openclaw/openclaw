@@ -23,7 +23,6 @@ import {
   isHistoryCursor,
   resolveChatHistoryPagination,
   historySessionId,
-  reconcileHistoryTail,
   commitCurrentChatHistorySnapshot,
 } from "./chat-history-snapshot.ts";
 import {
@@ -41,9 +40,9 @@ import {
   materializeVisibleAssistantStreamMessages,
   persistsChatCommentary,
   readRunProjections,
-  applyHistoryRun,
+  applyHistoryTerminalRun,
 } from "./chat-history-stream.ts";
-import { extendChatHistoryWindow, prepareChatHistoryPacket } from "./chat-history-window.ts";
+import { prepareChatHistoryTail, prepareChatHistoryPacket } from "./chat-history-window.ts";
 import { loadChatLiveTools } from "./chat-live-tools.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
@@ -267,9 +266,35 @@ export async function hydrateChatHistory(
       isHistoryCursor(response) && response.kind === "reset"
         ? undefined
         : response.inFlightRun?.events;
-    const replayAgentEvent = inFlightEvents?.length
-      ? (await loadChatLiveTools()).handleAgentEvent
-      : undefined;
+    const inFlightRunId =
+      isHistoryCursor(response) && response.kind === "reset"
+        ? undefined
+        : response.inFlightRun?.runId?.trim();
+    const liveHistory =
+      inFlightEvents?.length || inFlightRunId
+        ? await subscribeToSharedRequest(
+            { promise: loadChatLiveTools(), subscribers: new Set<AbortController>() },
+            read,
+            read.signal,
+          )
+        : undefined;
+    const replayAgentEvent = liveHistory?.handleAgentEvent;
+    const applyHistoryRun =
+      liveHistory && inFlightRunId ? liveHistory.applyHistoryInFlightRun : applyHistoryTerminalRun;
+    // Load continuity code before capturing mutable view state; a fresh session needs only one tail.
+    const tailPreparation =
+      !isHistoryCursor(response) &&
+      state.currentSessionId &&
+      state.currentSessionId === historySessionId(response)
+        ? await subscribeToSharedRequest(
+            {
+              promise: import("./chat-history-page-preparation.ts"),
+              subscribers: new Set<AbortController>(),
+            },
+            read,
+            read.signal,
+          )
+        : undefined;
     if (!isCurrent()) {
       return undefined;
     }
@@ -397,14 +422,14 @@ export async function hydrateChatHistory(
       (previousDisplayedLeafEntryId === undefined ||
         previousDisplayedLeafEntryId === nextDisplayedLeafEntryId);
     const reconciledHistory = retainsTranscriptIdentity
-      ? reconcileHistoryTail({
+      ? (tailPreparation?.reconcileHistoryTail({
           nextMessages: visibleMessages,
           nextPagination,
           nextSessionId,
           previousMessages: previousTerminalMessages,
           previousPagination,
           previousSessionId,
-        })
+        }) ?? null)
       : null;
     const scope = readChatSessionProjectionScope(state, {
       sessionKey,
@@ -432,16 +457,23 @@ export async function hydrateChatHistory(
       heldGapPagination ??
       (reconciledHistory && previousPagination.hasNewer
         ? previousPagination
-        : extendChatHistoryWindow(
-            previousPagination,
-            previousTerminalMessages,
-            visibleMessages,
-            nextPagination,
-            res.newerCursor,
-            "tail",
-            reconciledHistory?.retainedCoverage ? reconciledHistory.pagination : undefined,
-            prepareChatHistoryPacket(visibleMessages, nextPagination, res.newerCursor),
-          ));
+        : reconciledHistory?.retainedCoverage && tailPreparation
+          ? tailPreparation.extendChatHistoryWindow(
+              previousPagination,
+              previousTerminalMessages,
+              visibleMessages,
+              nextPagination,
+              res.newerCursor,
+              "tail",
+              reconciledHistory.pagination,
+              prepareChatHistoryPacket(visibleMessages, nextPagination, res.newerCursor),
+            )
+          : prepareChatHistoryTail(
+              visibleMessages,
+              nextPagination,
+              res.newerCursor,
+              prepareChatHistoryPacket(visibleMessages, nextPagination, res.newerCursor),
+            ));
     state.chatSubmissions?.observeInitialSession(sessionKey, client, nextSessionId);
     // Only the pane-owned reducer proves which live and pending rows survive;
     // terminal-renderer cleanup must not reclassify them as history. A new

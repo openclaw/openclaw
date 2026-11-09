@@ -1,0 +1,5 @@
+# Reconcile test-line debt carried by frozen main e23c587c16f3836e01f2a2c15e5fdaa3e1bc394e.
+# Main counts 6605130 LF against an effective ceiling of 6604784 LF.
+# This exact 346-LF credit admits existing main tests; it adds no headroom.
+# M3 own allocations remain 6461 + 7055 + 382 = 13898 LF.
+346

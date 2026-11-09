@@ -1,9 +1,10 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
+import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import {
-  isMessageWaitingSubagentSession,
+  resolveSessionYieldWait,
   listLiveSubagentRootSessions,
-  listMessageWaitingSubagentSessions,
+  listYieldWaitingSessions,
   resolveRootSubagentRequester,
 } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
@@ -12,19 +13,12 @@ import {
 } from "../auto-reply/reply/session-event-handoff.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
-import { readSessionEntrySummariesInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
-import {
-  interruptOrphanedSessionPendingInputs,
-  listOrphanedSessionPendingInputTargets,
-} from "../config/sessions/session-pending-input-withdrawal.js";
+import { interruptOrphanedSessionPendingInputs } from "../config/sessions/session-pending-input-withdrawal.js";
 import {
   derivePersistedSessionLifecyclePatch,
   restartResumeSkipReason,
 } from "../config/sessions/session-run-lifecycle-projection.js";
-import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
-import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
-import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets-configured-agents.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -35,10 +29,7 @@ import {
   listLiveAgentRunIds,
 } from "../infra/agent-run-registry.js";
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
-import {
-  completeGatewayAgentRestartRecovery,
-  type GatewayRestartResumeWindow,
-} from "../infra/gateway-boot-lifecycle.js";
+import { completeGatewayAgentRestartRecovery } from "../infra/gateway-boot-lifecycle.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -50,11 +41,25 @@ import {
 } from "../sessions/session-controller.state.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
-import { withAgentInputRecovery } from "../state/agent-database-preparation-context.js";
+import {
+  waitForAgentInputAdmission,
+  withAgentInputRecovery,
+} from "../state/agent-database-preparation-context.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { recordRestartResumeFailure } from "./session-restart-resume-failure.js";
+import {
+  discoverRestartSessionStores,
+  prepareRestartStores,
+  type PreparedRestartStore,
+  type RestartResumeParams,
+  type RestartStoreTarget,
+} from "./session-restart-resume-discovery.js";
+import {
+  acceptRestartResumeReceipt,
+  recordRestartResumeFailure,
+  recordRestartYieldFailure,
+} from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
@@ -74,7 +79,7 @@ type SessionIdentity = {
   sessionId?: string;
   hadBackgroundExec?: true;
   needsResume: boolean;
-  parkedRunId?: string;
+  parked?: boolean;
 };
 
 /** Snapshot only live owners after admission closes, before shutdown aborts them. */
@@ -98,10 +103,11 @@ async function persistRunningSessions(
   summary: ReturnType<typeof createRestartResumeSummary>,
 ): Promise<void> {
   const assertCurrent = () => params.signal?.throwIfAborted();
+  // Enumeration is synchronous; persistence checks custody again at the write boundary.
   assertCurrent();
   const sessions = new Map<string, SessionIdentity>();
   const add = (input: Partial<SessionIdentity> & { sessionKey: string }) => {
-    const root = input.parkedRunId
+    const root = input.parked
       ? input
       : resolveRootSubagentRequester(input.sessionKey, input.agentId);
     const agentId =
@@ -116,7 +122,7 @@ async function persistRunningSessions(
       (resolveExplicitIncognitoAgentSqliteTarget(storePath, { agentId })
         ? "incognito"
         : undefined) ?? restartResumeSkipReason(root.sessionKey);
-    if (skip && !(skip === "subagent" && input.parkedRunId)) {
+    if (skip && !(skip === "subagent" && input.parked)) {
       summary.record(agentId, root.sessionKey, skip);
       return;
     }
@@ -131,16 +137,16 @@ async function persistRunningSessions(
         sessionId: root.sessionKey === input.sessionKey ? input.sessionId : undefined,
         hadBackgroundExec: input.hadBackgroundExec,
         needsResume: input.needsResume !== false,
-        parkedRunId: input.parkedRunId,
+        parked: input.parked,
       });
     } else {
-      existing.needsResume ||= !input.parkedRunId && input.needsResume !== false;
+      existing.needsResume ||= !input.parked && input.needsResume !== false;
       existing.hadBackgroundExec ||= input.hadBackgroundExec;
     }
   };
   for (const operation of activeSessionOperations()) {
-    assertCurrent();
-    if (operation.abortSignal.aborted) {
+    const restartAborted = isAgentRunRestartAbortReason(operation.abortSignal.reason);
+    if (operation.abortSignal.aborted && !restartAborted) {
       summary.record(
         operation.agentId ??
           parseAgentSessionKey(operation.key)?.agentId ??
@@ -157,11 +163,11 @@ async function persistRunningSessions(
       sessionId: operation.sessionId,
       storePath: target?.physicalStorePath ?? target?.storeScope,
       // Completed replies can retain execution custody only to settle workspace uploads.
-      needsResume: !operation.result && !hasCommittedReplyOperationOutcome(operation),
+      needsResume:
+        (!operation.result || restartAborted) && !hasCommittedReplyOperationOutcome(operation),
     });
   }
   for (const runId of listLiveAgentRunIds()) {
-    assertCurrent();
     if (!hasAgentRunContextExecutionOwner(runId)) {
       continue;
     }
@@ -175,36 +181,29 @@ async function persistRunningSessions(
     }
   }
   for (const root of listLiveSubagentRootSessions()) {
-    assertCurrent();
     add(root);
   }
   for (const process of listRunningSessions()) {
-    assertCurrent();
     const sessionKey = process.sessionKey ?? process.scopeKey;
     if (sessionKey) {
       add({ sessionKey, agentId: process.agentId, hadBackgroundExec: true });
     }
   }
-  for (const session of listMessageWaitingSubagentSessions()) {
-    assertCurrent();
+  for (const session of listYieldWaitingSessions()) {
     add(session);
   }
-  const selectors = new Map<string, SessionIdentity[]>();
+  const selectors = new Map<string, { first: SessionIdentity; batch: SessionIdentity[] }>();
   for (const session of sessions.values()) {
     const key = JSON.stringify([session.agentId, session.storePath]);
-    const batch = selectors.get(key) ?? [];
-    batch.push(session);
-    selectors.set(key, batch);
+    const group = selectors.get(key) ?? { first: session, batch: [] };
+    group.batch.push(session);
+    selectors.set(key, group);
   }
   // The replacement owner resolves each selector. Do not rediscover every store
   // before allowing the first marker write to commit.
   const writes = await Promise.allSettled(
-    [...selectors.values()].map(async (batch) => {
+    [...selectors.values()].map(async ({ first, batch }) => {
       assertCurrent();
-      const first = batch[0];
-      if (!first) {
-        return;
-      }
       const selected = new Map(batch.map((session) => [session.sessionKey, session]));
       const preserveQueued = await applySessionEntryReplacements<
         Array<{ session: SessionIdentity; preserve: () => void }>
@@ -228,11 +227,10 @@ async function persistRunningSessions(
             }
             const ownerSkip = restartResumeSkipReason(sessionKey, entry);
             const skip =
-              (ownerSkip === "subagent" && session.parkedRunId ? undefined : ownerSkip) ??
+              (ownerSkip === "subagent" && session.parked ? undefined : ownerSkip) ??
               (session.sessionId && session.sessionId !== entry.sessionId
                 ? "session-changed"
-                : session.parkedRunId &&
-                    !isMessageWaitingSubagentSession(sessionKey, entry, session.agentId)
+                : session.parked && !resolveSessionYieldWait(sessionKey, entry, session.agentId)
                   ? "session-changed"
                   : undefined);
             summary.record(session.agentId, sessionKey, skip ?? "persistence-incomplete");
@@ -272,25 +270,6 @@ async function persistRunningSessions(
   throwIfSettledRejected(writes, "Restart marker persistence failed");
 }
 
-type RestartResumeParams = {
-  context: GatewayRequestContext;
-  signal: AbortSignal;
-  log: { warn: (message: string) => void };
-};
-
-type RestartStoreTarget = {
-  agentId: string;
-  physicalAgentId: string;
-  storePath: string;
-  env?: NodeJS.ProcessEnv;
-};
-type PreparedRestartStore = {
-  target: RestartStoreTarget;
-  windows?: GatewayRestartResumeWindow[];
-  entries: Awaited<ReturnType<typeof readSessionEntrySummariesInWorker>>;
-  orphaned: Awaited<ReturnType<typeof listOrphanedSessionPendingInputTargets>>;
-};
-
 // Initial discovery and deferred preparation share one operation per physical agent.
 // Completed agents must not rescan newly admitted inputs as orphans.
 const restartRecovery = new WeakMap<
@@ -308,92 +287,6 @@ function getRestartRecovery(context: GatewayRequestContext) {
     restartRecovery.set(owner, recovery);
   }
   return recovery;
-}
-
-async function discoverRestartSessionStores(
-  params: RestartResumeParams,
-  env?: NodeJS.ProcessEnv,
-): Promise<RestartStoreTarget[]> {
-  const { context, signal } = params;
-  signal.throwIfAborted();
-  const cfg = context.getRuntimeConfig();
-  const inventory = prepareSessionStoreTargetInventoryRead(
-    prepareSessionStoreTargetInventory(
-      cfg,
-      listConfiguredSessionStoreAgentIds(cfg),
-      env,
-      "configured",
-    ),
-  );
-  return inventory.withRead(
-    async (snapshot) =>
-      snapshot.agents.flatMap(({ reads }) =>
-        reads.map(({ target, database }) => ({
-          ...target,
-          storePath: database.path,
-          physicalAgentId: database.agentId,
-          ...(env ? { env } : {}),
-        })),
-      ),
-    () => signal.throwIfAborted(),
-    signal,
-  );
-}
-
-async function prepareRestartStore(
-  params: RestartResumeParams,
-  target: RestartStoreTarget,
-): Promise<PreparedRestartStore | undefined> {
-  const { signal, log } = params;
-  let entries: PreparedRestartStore["entries"];
-  try {
-    entries = (await readSessionEntrySummariesInWorker(target)).filter(
-      ({ entry }) => entry.resumeAfterRestart || entry.mainRestartRecovery || entry.lifecycleRunId,
-    );
-    signal.throwIfAborted();
-  } catch (error) {
-    signal.throwIfAborted();
-    log.warn(
-      `Agent ${target.agentId} resume deferred: agent database unavailable: ${String(error)}`,
-    );
-    return undefined;
-  }
-  let orphaned: PreparedRestartStore["orphaned"] = [];
-  try {
-    orphaned = await listOrphanedSessionPendingInputTargets(
-      target,
-      entries.flatMap(({ entry }) => entry.resumeAfterRestart?.queuedInputIds ?? []),
-    );
-    signal.throwIfAborted();
-  } catch (error) {
-    signal.throwIfAborted();
-    log.warn(`Skipped interrupted input settlement for agent ${target.agentId}: ${String(error)}`);
-  }
-  const windows = params.context.restartResumeWindows;
-  return {
-    target,
-    entries,
-    orphaned,
-    windows:
-      windows && Object.hasOwn(windows, target.physicalAgentId)
-        ? windows[target.physicalAgentId]
-        : undefined,
-  };
-}
-
-async function prepareRestartStores(
-  params: RestartResumeParams,
-  targets: RestartStoreTarget[],
-): Promise<PreparedRestartStore[] | undefined> {
-  const prepared: PreparedRestartStore[] = [];
-  for (const target of targets) {
-    const store = await prepareRestartStore(params, target);
-    if (!store) {
-      return undefined;
-    }
-    prepared.push(store);
-  }
-  return prepared;
 }
 
 function resumePreparedRestartStores(
@@ -429,7 +322,7 @@ export async function prepareAgentRestartRecovery(
     env: NodeJS.ProcessEnv;
     assertCurrent: () => void;
   },
-): Promise<(() => Promise<void>) | undefined> {
+) {
   const targets = (await discoverRestartSessionStores(params, params.env)).filter(
     (target) => target.physicalAgentId === params.agentId,
   );
@@ -444,25 +337,46 @@ export async function prepareAgentRestartRecovery(
   ) {
     return undefined;
   }
-  // Do not retain assertCurrent: it belongs to the temporary preparation borrow.
-  const { context, signal, log, agentId } = params;
+  return createPreparedRestartRecovery(params, params.agentId, prepared);
+}
+
+function createPreparedRestartRecovery(
+  { context, signal, log }: RestartResumeParams,
+  agentId: string,
+  prepared: PreparedRestartStore[],
+) {
+  const sessions = new Map<string, Promise<void>>();
+  for (const store of prepared) {
+    for (const [key, ready] of store.sessions) {
+      const earlier = sessions.get(key);
+      sessions.set(
+        key,
+        earlier ? Promise.all([earlier, ready.promise]).then(() => {}) : ready.promise,
+      );
+    }
+  }
   const ready = getRestartRecovery(context).ready.promise;
-  return async () => {
-    await racePromiseWithAbortSignal(ready, signal);
-    await runWithGatewayIndependentRootWorkAdmission(
-      () =>
-        withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, async () => {
-          signal.throwIfAborted();
-          await resumePreparedRestartStores({ context, signal, log }, agentId, prepared);
-        }),
-      "startup:agent-session-resume",
-      signal,
-    );
+  return {
+    sessions,
+    run: async () => {
+      await racePromiseWithAbortSignal(ready, signal);
+      await runWithGatewayIndependentRootWorkAdmission(
+        () =>
+          withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, async () => {
+            signal.throwIfAborted();
+            await resumePreparedRestartStores({ context, signal, log }, agentId, prepared);
+          }),
+        "startup:agent-session-resume",
+        signal,
+      );
+    },
   };
 }
 
 /** Recover markers and unfinished predecessor runs without reviving older orphans. */
-export async function resumeMarkedSessions(params: RestartResumeParams): Promise<void> {
+export async function resumeMarkedSessions(
+  params: RestartResumeParams & { onPrepared?: () => void },
+): Promise<void> {
   const recovery = getRestartRecovery(params.context);
   const prepared = new Map<string, PreparedRestartStore[]>();
   const byAgent = new Map<string, RestartStoreTarget[]>();
@@ -494,10 +408,27 @@ export async function resumeMarkedSessions(params: RestartResumeParams): Promise
     // The startup observer reaches here only after deletion and subagent restoration.
     recovery.ready.resolve();
   }
-  for (const [agentId, stores] of prepared) {
-    await resumePreparedRestartStores(params, agentId, stores);
+  const owner = params.context.agentDatabaseStartup;
+  const pending = [...prepared].map(([agentId, stores]) => {
+    const work = createPreparedRestartRecovery(params, agentId, stores);
+    const completion = createDeferredCore();
+    owner?.registerInputRecovery(agentId, {
+      sessions: work.sessions,
+      completion: completion.promise,
+    });
+    return () => work.run().finally(completion.resolve);
+  });
+  // Discovery installs per-session waits before reconnecting turns can reach admission.
+  if (owner) {
+    params.onPrepared?.();
   }
-  // Prepared closures must own their FIFO slots before startup unlocks reconnecting sends.
+  throwIfSettledRejected(
+    await Promise.allSettled(pending.map((run) => run())),
+    "Restart recovery failed",
+  );
+  if (!owner) {
+    params.onPrepared?.();
+  }
   for (const agentId of byAgent.keys()) {
     await params.context.agentDatabaseStartup?.waitForAgentPreparation(agentId, {
       signal: params.signal,
@@ -511,10 +442,11 @@ export async function resumeMarkedSessions(params: RestartResumeParams): Promise
 
 async function resumeRestartStore(
   { context, signal, log }: RestartResumeParams,
-  { target, entries, orphaned, windows }: PreparedRestartStore,
+  { target, entries, orphaned, windows, sessions }: PreparedRestartStore,
 ): Promise<boolean> {
   let completed = true;
   const summary = createRestartResumeSummary("startup");
+  const entryKeys = new Set(entries.map(({ sessionKey }) => sessionKey));
   for (const { sessionKey } of entries) {
     summary.record(
       parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
@@ -535,17 +467,29 @@ async function resumeRestartStore(
         log.warn(
           `Skipped interrupted input settlement for ${session.sessionKey}: ${String(error)}`,
         );
+      } finally {
+        if (!entryKeys.has(session.sessionKey)) {
+          sessions.get(session.sessionKey)?.resolve();
+        }
       }
     }
     for (const { sessionKey, entry: snapshotEntry } of entries) {
+      const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId;
       let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
       let interrupted = false;
       try {
+        await waitForAgentInputAdmission(agentId, {
+          sessionKey,
+          storePath: target.storePath,
+          env: target.env,
+          signal,
+          owner: context.agentDatabaseStartup,
+        });
         const resumed = await applySessionEntryReplacements<
           | {
               entry: InternalSessionEntry;
               marker: NonNullable<InternalSessionEntry["resumeAfterRestart"]>;
-              parked: boolean;
+              parked: ReturnType<typeof resolveSessionYieldWait>;
             }
           | undefined
         >({
@@ -558,9 +502,9 @@ async function resumeRestartStore(
             if (!selected) {
               return { result: undefined };
             }
-            const parked = isMessageWaitingSubagentSession(sessionKey, selected, target.agentId);
+            const parked = resolveSessionYieldWait(sessionKey, selected, agentId);
             const orphanedRun =
-              !parked &&
+              (!parked || parked === "resume") &&
               selected.lifecycleRunId &&
               selected.lifecycleRunId === snapshotEntry.lifecycleRunId &&
               selected.status === undefined &&
@@ -620,7 +564,6 @@ async function resumeRestartStore(
           continue;
         }
         const { entry, marker, parked } = resumed;
-        const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId;
         let admissionStage = "principal";
         const skip = restartResumeSkipReason(sessionKey, entry);
         if (skip && !(parked && skip === "subagent")) {
@@ -630,7 +573,10 @@ async function resumeRestartStore(
           );
           continue;
         }
-        if (parked) {
+        if (parked === "unreachable") {
+          await recordRestartYieldFailure({ sessionKey, agentId, entry, signal });
+          summary.record(agentId, sessionKey, "yield-source-unavailable");
+        } else if (parked === "waiting") {
           // The registry retains the wait; a new requester message owns fresh admission.
           summary.record(agentId, sessionKey, "parked");
         } else {
@@ -669,24 +615,9 @@ async function resumeRestartStore(
                   },
                 ),
             );
-            const retained = authority;
+            const accepted = acceptRestartResumeReceipt(receipt, sessionKey, authority, log);
             authority = undefined;
-            void receipt.settled
-              .then((outcome) => {
-                if (outcome.status === "failed") {
-                  log.warn(
-                    `Restart resume input failed for ${sessionKey}: ${outcome.error ?? "unknown error"}`,
-                  );
-                }
-              })
-              .finally(() => retained?.release())
-              .catch((error: unknown) => {
-                log.warn(`Restart resume input failed for ${sessionKey}: ${String(error)}`);
-              });
-            const accepted = await receipt.accepted;
-            if (!accepted.ok) {
-              throw accepted.cause ?? new Error(accepted.error);
-            }
+            await accepted;
             summary.record(agentId, sessionKey, "resumed");
           } catch (error) {
             if (signal.aborted) {
@@ -722,6 +653,7 @@ async function resumeRestartStore(
         log.warn(`Skipped restart resume for ${sessionKey}: ${String(error)}`);
       } finally {
         authority?.release();
+        sessions.get(sessionKey)?.resolve();
       }
     }
   } finally {

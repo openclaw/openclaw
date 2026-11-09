@@ -1023,7 +1023,7 @@ it.each([false, true])("physically stops only an issued smooth command (issued: 
   };
   host.cancelScroll();
   expect(host.offsetState.scrollCommand).toBeNull();
-  expect(cancel).toHaveBeenCalledTimes(issued ? 0 : 1);
+  expect(cancel).toHaveBeenCalledTimes(1);
   expect(stop).toHaveBeenCalledTimes(issued ? 1 : 0);
   if (issued) {
     expect(stop).toHaveBeenCalledExactlyOnceWith(100, { behavior: "instant" });
@@ -1050,3 +1050,38 @@ it("does not stop a reconnected host at the same native element", () => {
   expect(host.connected).toBe(true);
   expect(stop).not.toHaveBeenCalled();
 });
+
+it.each(["replacement command", "reconnected host"] as const)(
+  "does not recapture a completed end after a %s takes over",
+  (change) => {
+    installTranscriptDomMocks();
+    const host = new ChatSessionVirtualizerHost(vi.fn());
+    onTestFinished(() => {
+      host.dispose();
+      resetTranscriptTestDom();
+    });
+    const element = document.createElement("div");
+    vi.spyOn(host, "scrollElement", "get").mockReturnValue(element);
+    host.connect();
+    const capture = vi.spyOn(TranscriptEndAnchor.prototype, "capture");
+    onTestFinished(() => capture.mockRestore());
+    const replacement = { target: "end", behavior: "auto", offset: 900 } as const;
+    const finish = vi.spyOn(host.virtualizer, "scrollToEnd").mockImplementation(() => {
+      if (change === "replacement command") {
+        host.offsetState.scrollCommand = replacement;
+      } else {
+        host.disconnect();
+        host.connect();
+      }
+    });
+    host.offsetState.scrollCommand = { target: "end", behavior: "smooth", offset: 700 };
+    host.cancelScroll(true);
+    expect(finish).toHaveBeenCalledExactlyOnceWith({ behavior: "instant" });
+    expect(capture).toHaveBeenCalledTimes(1);
+    if (change === "replacement command") {
+      expect(host.offsetState.scrollCommand).toBe(replacement);
+    } else {
+      expect(host.connected).toBe(true);
+    }
+  },
+);

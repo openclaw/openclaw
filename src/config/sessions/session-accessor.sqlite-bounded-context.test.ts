@@ -32,6 +32,7 @@ import {
   readSessionTranscriptBoundedMessageTailPage as tailPage,
 } from "./session-accessor.sqlite-active-events.js";
 import {
+  clearHistoryNavigation,
   readActiveTranscriptStats as activeStats,
   readSessionTranscriptHistoryEventById as historyEvent,
   withRecentActiveTranscriptEvents as visitRecentEvents,
@@ -431,13 +432,7 @@ it.for([false, true])(
     await waitProjection(scope);
     runOpenClawAgentWriteTransaction(
       (database) => {
-        database.db
-          .prepare(`UPDATE transcript_events
-          SET navigation_type = NULL, navigation_custom_type = NULL,
-              navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
-              navigation_last_custom_type = NULL, navigation_valid = 1
-          WHERE session_id = ?`)
-          .run(scope.sessionId);
+        clearHistoryNavigation(database, scope.sessionId);
         if (unindexedHeader) {
           // Imported headers can lack identity ownership while later messages are indexed.
           database.db
@@ -570,15 +565,7 @@ it.for(["header", "compaction"] as const)(
       await waitProjection(scope);
     }
     runOpenClawAgentWriteTransaction(
-      (database) => {
-        database.db
-          .prepare(`UPDATE transcript_events
-            SET navigation_type = NULL, navigation_custom_type = NULL,
-                navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
-                navigation_last_custom_type = NULL, navigation_valid = 1
-            WHERE session_id = ?`)
-          .run(scope.sessionId);
-      },
+      (database) => clearHistoryNavigation(database, scope.sessionId),
       { agentId: scope.agentId },
     );
     const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });

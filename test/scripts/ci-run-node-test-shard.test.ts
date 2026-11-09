@@ -291,6 +291,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: [
         "test/codex-settled-turn-finalization.integration.test.ts",
         "test/conversation-tools.codex.integration.test.ts",
+        "test/scripts/ci-test-timings-tooling.test.ts",
         "test/scripts/eager-import-closure.test.ts",
         "test/scripts/lint-suppressions.test.ts",
         "test/scripts/plugin-sdk-surface-report.test.ts",
@@ -302,7 +303,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     {
       configs: ["test/vitest/vitest.tooling.config.ts"],
       files: [
-        "test/codex-settled-turn-finalization.integration.test.ts",
+        "test/scripts/ci-test-timings-tooling.test.ts",
         "test/scripts/vitest-worker-shutdown.test.ts",
       ],
       preset: "full",
@@ -402,6 +403,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "src/config/io.load-async.test.ts",
         "src/plugins/loader.runtime-registry.test.ts",
         "src/plugins/plugin-generation-worker.test.ts",
+        "test/scripts/ci-test-timings-tooling.test.ts",
+        "test/scripts/type-suppression-inventory.test.ts",
       ],
       args: [],
       jobArgs: undefined,

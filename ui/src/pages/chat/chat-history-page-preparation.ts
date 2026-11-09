@@ -1,23 +1,23 @@
 import type { SessionProjectionEntry } from "@openclaw/gateway-client/browser";
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import {
+  nativeHistoryMessageIdentity,
   nativeHistoryMessageSourceIdentity,
   nativeHistoryMessageSourceId,
 } from "../../lib/chat/history-message-identity.ts";
 import { prependUniqueNativeMessages } from "../../lib/chat/history-message-merge.ts";
-import {
-  CHAT_RESIDENT_WEIGHT_TARGET,
-  intrinsicGroup,
-  messageWeight,
-  sourceGroups,
-} from "./chat-history-cost.ts";
+import { prepareChatHistoryAdmission } from "./chat-history-admission.ts";
+import { intrinsicChatHistorySource } from "./chat-history-cost.ts";
+import { advanceChatHistoryNavigation } from "./chat-history-pagination.ts";
 import type {
   ChatHistoryPagination,
+  ChatHistorySegment,
   ChatTranscriptReaderSnapshot,
 } from "./chat-history-pagination.ts";
 import { type ChatHistoryResult, resolveChatHistoryPagination } from "./chat-history-snapshot.ts";
 import {
   invalidateChatHistoryPacketSources,
-  extendChatHistoryWindow,
+  prepareChatHistoryTail,
   prepareChatHistorySegment,
   selectChatHistoryResidency,
   prepareChatHistoryResidencySegments,
@@ -28,63 +28,218 @@ import {
   prepareChatHistoryProjectionMessages,
 } from "./history-merge.ts";
 
-/** Charge uncovered pin occurrences; retained sources credit only their exact overlap. */
-function prepareChatHistoryPinCost(messages: readonly unknown[], pins: readonly unknown[]) {
-  const occurrences = new Map<unknown, number>();
-  const messageCounts = new Map<unknown, number>();
-  for (const message of pins) {
-    occurrences.set(message, (occurrences.get(message) ?? 0) + 1);
+function retainedRawHistoryStart(pagination: ChatHistoryPagination): number | null {
+  const totalMessages = asSafeIntegerInRange(pagination.totalMessages, { min: 0 });
+  if (totalMessages === undefined) {
+    return null;
   }
-  if (occurrences.size) {
-    for (const message of messages) {
-      messageCounts.set(message, (messageCounts.get(message) ?? 0) + 1);
-    }
+  const retainedDepth = pagination.hasMore ? pagination.nextOffset : totalMessages;
+  if (retainedDepth === undefined) {
+    return null;
   }
-  const groups = sourceGroups(pins);
-  const covered = new Map<string, { count: number; weight: number }>();
-  const cost = { count: 0, weight: 0, covered };
-  for (const [message, count] of occurrences) {
-    const source = nativeHistoryMessageSourceIdentity(message);
-    // Lifecycle pins keep only their own indivisibility exception, including
-    // a source-less provisional body. Neighbors never borrow that exception.
-    if (
-      source
-        ? intrinsicGroup(groups.get(source))
-        : messageWeight(message) + 1 > CHAT_RESIDENT_WEIGHT_TARGET
-    ) {
-      continue;
-    }
-    const weight = messageWeight(message);
-    cost.count += count;
-    cost.weight += count * weight;
-    if (source !== null) {
-      const overlap = Math.min(count, messageCounts.get(message) ?? 0);
-      const previous = covered.get(source);
-      covered.set(source, {
-        count: (previous?.count ?? 0) + overlap,
-        weight: (previous?.weight ?? 0) + overlap * weight,
-      });
-    }
-  }
-  return cost;
+  const start = totalMessages - retainedDepth + 1;
+  return asSafeIntegerInRange(start, { min: 1 }) ?? null;
 }
 
-/** Page admission carries source-only protection and scalar pin credits into the hot selector. */
-export function prepareChatHistoryAdmission(
-  messages: readonly unknown[],
-  pages: readonly import("./chat-history-pagination.ts").ChatHistorySegment[],
-  visibleSources: readonly string[],
-  pins: readonly unknown[],
-): import("./chat-history-window.ts").ChatHistoryResidencyAdmission {
-  const ordered = pages.flatMap((segment) => segment.sources);
-  const visible = new Set(visibleSources);
-  const firstVisible = ordered.findIndex((source) => visible.has(source));
-  const lastVisible = ordered.findLastIndex((source) => visible.has(source));
+export function reconcileHistoryTail(options: {
+  nextMessages: unknown[];
+  nextPagination: ChatHistoryPagination;
+  nextSessionId: string | null;
+  previousMessages: unknown[];
+  previousPagination: ChatHistoryPagination;
+  previousSessionId: string | null;
+}): { messages: unknown[]; pagination: ChatHistoryPagination; retainedCoverage?: true } | null {
+  if (!options.previousSessionId || options.previousSessionId !== options.nextSessionId) {
+    return null;
+  }
+  if (options.previousPagination.hasNewer) {
+    // A background tail refresh is not contiguous with a detached reader.
+    // Latest explicitly resets this window; never stitch across the newer gap.
+    return { messages: options.previousMessages, pagination: options.previousPagination };
+  }
+  const previousByIdentity = new Map<string, unknown[]>();
+  const previousSources = new Set<string>();
+  const changedSources = new Set<string>();
+  for (const message of options.previousMessages) {
+    const source = nativeHistoryMessageSourceIdentity(message);
+    if (source) {
+      previousSources.add(source);
+    }
+    const identity = nativeHistoryMessageIdentity(message);
+    if (identity) {
+      const matches = previousByIdentity.get(identity) ?? [];
+      matches.push(message);
+      previousByIdentity.set(identity, matches);
+    }
+  }
+  // Identical history rows keep their render identity, including projected siblings.
+  const messages = options.nextMessages.map((message) => {
+    const identity = nativeHistoryMessageIdentity(message);
+    const held = identity ? previousByIdentity.get(identity)?.shift() : undefined;
+    const source = nativeHistoryMessageSourceIdentity(message);
+    if (!held && source && previousSources.has(source)) {
+      changedSources.add(source);
+    }
+    return held ?? message;
+  });
+  const reconciled = { messages, pagination: options.nextPagination };
+  if (!options.nextPagination.hasMore) {
+    return reconciled;
+  }
+  const previousTotal = options.previousPagination.totalMessages;
+  const nextTotal = options.nextPagination.totalMessages;
+  if (previousTotal !== undefined && nextTotal !== undefined && nextTotal < previousTotal) {
+    return reconciled;
+  }
+  const nextStart = retainedRawHistoryStart(options.nextPagination);
+  const firstSource = nativeHistoryMessageSourceIdentity(messages[0]);
+  const overlap = firstSource
+    ? options.previousMessages.findIndex(
+        (message) => nativeHistoryMessageSourceIdentity(message) === firstSource,
+      )
+    : options.previousMessages.indexOf(messages[0]);
+  // Matching source IDs prove overlap without interpreting native sequences as
+  // CLI ordinals. An empty visible window needs authoritative raw coverage;
+  // a hidden page still advances the admitted oldest edge.
+  const adjoining =
+    typeof previousTotal === "number" &&
+    nextStart !== null &&
+    (options.previousMessages.length === 0
+      ? nextStart <= previousTotal + 1
+      : nextStart === previousTotal + 1);
+  if (overlap < 0 && !adjoining) {
+    return reconciled;
+  }
+  const prefix =
+    overlap >= 0 ? options.previousMessages.slice(0, overlap) : options.previousMessages;
+  const unavailable =
+    options.previousPagination.hasMore &&
+    !options.previousPagination.olderCursor &&
+    !options.previousPagination.needsBoundary;
+  // A missing edge never certified traversal. A fresh edge covers this tail
+  // only; any older held prefix must reopen its own source boundary.
+  if (unavailable && prefix.length === 0) {
+    return reconciled;
+  }
+  const previousStart = retainedRawHistoryStart(options.previousPagination);
+  const nextOffset =
+    previousStart !== null && typeof nextTotal === "number"
+      ? nextTotal - previousStart + 1
+      : undefined;
+  const replacedSources = new Set(
+    options.previousMessages.slice(prefix.length).map(nativeHistoryMessageSourceIdentity),
+  );
+  // Reuse occurrence matching above: removed or changed tail rows revoke every
+  // retained packet alias before refreshed bodies enter resident selection.
+  for (const remaining of previousByIdentity.values()) {
+    const source = nativeHistoryMessageSourceIdentity(remaining[0]);
+    if (source && replacedSources.has(source)) {
+      changedSources.add(source);
+    }
+  }
   return {
-    pages,
-    protectedSources: new Set(firstVisible < 0 ? [] : ordered.slice(firstVisible, lastVisible + 1)),
-    pinCost: prepareChatHistoryPinCost(messages, pins),
+    messages: [...prefix, ...messages],
+    retainedCoverage: true,
+    pagination: {
+      ...invalidateChatHistoryPacketSources(options.previousPagination, changedSources),
+      ...(unavailable ? { needsBoundary: true as const } : {}),
+      ...(nextTotal !== undefined ? { totalMessages: nextTotal } : {}),
+      ...(options.previousPagination.hasMore && nextOffset !== undefined ? { nextOffset } : {}),
+    },
   };
+}
+
+/** Each opaque edge certifies its own complete server response segment. */
+export function extendChatHistoryWindow(
+  previous: ChatHistoryPagination,
+  previousMessages: readonly unknown[],
+  incoming: readonly unknown[],
+  pagination: ChatHistoryPagination,
+  newerCursor: string | undefined,
+  direction: "older" | "newer" | "tail",
+  retainedCoverage?: ChatHistoryPagination,
+  preparedPacket?: ChatHistorySegment,
+): ChatHistoryPagination {
+  const page = preparedPacket ?? prepareChatHistorySegment(incoming, pagination, newerCursor);
+  if (direction === "tail" && !retainedCoverage) {
+    return prepareChatHistoryTail(incoming, pagination, newerCursor, page);
+  }
+  const held = retainedCoverage?.segments ??
+    previous.segments ?? [
+      prepareChatHistorySegment(previousMessages, previous, previous.newerCursor),
+    ];
+  const known = new Set(held.flatMap((segment) => segment.sources));
+  let segments: ChatHistorySegment[];
+  if (direction !== "tail" && page.sources.every((source) => known.has(source))) {
+    // Hidden/overlap-only traversal advances a raw edge, not a new body page.
+    segments = [...held];
+  } else if (direction === "tail") {
+    const incomingSources = new Set(page.sources);
+    const prefix = held
+      .filter((segment) => segment.sources.some((source) => !incomingSources.has(source)))
+      .map((segment) =>
+        segment.hasNewer
+          ? segment
+          : Object.assign({}, segment, {
+              hasNewer: true,
+              newerCursor: undefined,
+              boundedPacket: undefined,
+            }),
+      );
+    // A refresh must not rewind a hidden-page edge just because its visible
+    // prefix is empty. The reconciliation owner already proved continuity.
+    segments = prefix.length
+      ? [...prefix, page]
+      : [
+          {
+            ...page,
+            boundedPacket: undefined,
+            hasOlder: previous.hasMore,
+            olderCursor: previous.hasMore ? previous.olderCursor : undefined,
+          },
+        ];
+  } else {
+    let retained = held;
+    if (direction !== "tail" && page.sources.some((source) => known.has(source))) {
+      const positions = new Map(page.sources.map((source, index) => [source, index] as const));
+      const boundary =
+        direction === "older"
+          ? page.sources.findLastIndex((source) => !known.has(source))
+          : page.sources.findIndex((source) => !known.has(source));
+      // A live receipt can precede a hidden raw tail's anchor. Once this page
+      // extends past it, retire its old alias so page eviction cannot leave an
+      // isolated body. Ordinary boundary overlap still belongs to both pages.
+      retained = held.map((segment) => {
+        const sources = segment.sources.filter((source) => {
+          const index = positions.get(source);
+          return (
+            index === undefined || (direction === "older" ? index >= boundary : index <= boundary)
+          );
+        });
+        return sources.length === segment.sources.length
+          ? segment
+          : Object.assign({}, segment, { sources, boundedPacket: undefined });
+      });
+    }
+    segments = direction === "older" ? [page, ...retained] : [...retained, page];
+  }
+  // Record this at authoritative admission, never by reselecting a different
+  // oversized group during warm publication or reader movement.
+  const intrinsicSource =
+    intrinsicChatHistorySource(incoming) ??
+    (direction !== "tail" || retainedCoverage ? previous.intrinsicSource : undefined);
+  const coverage = {
+    ...(direction === "tail" ? (retainedCoverage ?? pagination) : previous),
+    ...(intrinsicSource ? { intrinsicSource } : {}),
+    segments,
+  };
+  return direction === "tail"
+    ? coverage
+    : advanceChatHistoryNavigation(
+        coverage,
+        { ...pagination, ...(newerCursor ? { hasNewer: true as const, newerCursor } : {}) },
+        direction,
+      );
 }
 
 /** Only a real source ID can reopen an interior cut. A bounded original packet

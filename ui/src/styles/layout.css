@@ -829,6 +829,13 @@ div.shell.shell--onboarding {
   }
 }
 
+/* Desktop list fills run flush with the panel's content box in every view
+   (Pages, Sessions, Users); the lead column sits 12px and the text column 40px
+   inside that edge. The mobile drawer keeps its own 8px inset rhythm. */
+.shell:not(.shell--mobile-nav) .sidebar-shell {
+  --sidebar-inset: 10px;
+}
+
 .sidebar-brand__icon {
   width: 30px;
   height: 30px;
@@ -1090,10 +1097,6 @@ div.shell.shell--onboarding {
 /* Pinned renders in its own list container above the chip list or agent roster. */
 .sidebar-recent-sessions--pinned {
   margin-block-end: var(--sidebar-group-gap);
-}
-
-.shell:not(.shell--mobile-nav) .sidebar-recent-sessions {
-  margin-inline: -6px;
 }
 
 .sidebar-shell__body--scroll-top,
@@ -1509,7 +1512,8 @@ div.shell.shell--onboarding {
 
 .sidebar-session-tree__show-more {
   min-height: 28px;
-  padding: 6px var(--sidebar-text-offset) 6px calc(var(--sidebar-text-offset) + 3px);
+  padding: 6px var(--sidebar-text-offset) 6px
+    calc(var(--sidebar-text-offset) + var(--sidebar-session-row-inset));
   border: 0;
   background: transparent;
   color: var(--muted);
@@ -1699,7 +1703,7 @@ div.shell.shell--onboarding {
   display: flex;
   justify-content: flex-start;
   gap: 14px;
-  padding: 0 10px 10px var(--sidebar-text-offset);
+  padding: 0 10px 10px calc(var(--sidebar-text-offset) + var(--sidebar-session-row-inset));
 }
 
 .sidebar-session-pagination__button {
@@ -1719,17 +1723,23 @@ div.shell.shell--onboarding {
   color: var(--text);
 }
 
+/* Hints start on the rows' title column in every sidebar view. */
 .sidebar-session-empty-hint {
   display: block;
-  padding: 4px 10px 10px var(--sidebar-text-offset);
+  padding: 4px 10px 10px calc(var(--sidebar-text-offset) + var(--sidebar-session-row-inset));
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
 
-/* A section's empty hint reads as part of its heading, on the title column. */
+/* The startup hint sits beside the list, so it reclaims the same section inset. */
+.sidebar-sessions > .sidebar-session-empty-hint {
+  margin-inline: -8px;
+}
+
+/* A section's empty hint reads as part of its heading. */
 .sidebar-recent-sessions__group > .sidebar-session-empty-hint {
   margin: 0;
-  padding: 2px 10px 14px calc(var(--sidebar-text-offset) + 2px);
+  padding-block: 2px 14px;
   font-size: calc(12.5px * var(--control-ui-text-scale));
   line-height: 18px;
 }
@@ -2214,7 +2224,9 @@ div.shell.shell--onboarding {
   min-width: 0;
   min-height: 32px;
   margin-inline: -8px;
-  padding: 4px 8px;
+  /* The avatar shares the session rows' lead column in both reading directions. */
+  padding-block: 4px;
+  padding-inline: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset)) 8px;
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
@@ -2409,14 +2421,10 @@ div.shell.shell--onboarding {
     anchor-scope: --sidebar-online-name;
   }
 
-  /* Avatar and name share the session rows' axes; counts end on the header's icon edge. */
+  /* Counts end on the header's icon edge. */
   .sidebar-online__person {
     display: flex;
-    padding-inline: 12px 15px;
-  }
-
-  .sidebar-online__list > .sidebar-session-empty-hint {
-    margin-inline-start: 4px;
+    padding-inline-end: 15px;
   }
 
   .sidebar-online__person-name {
@@ -2723,7 +2731,8 @@ a:is(
 .sidebar-zone-entry .sidebar-recent-session {
   --session-row-bg: var(--session-row-tint, transparent);
 
-  padding: 0 11px;
+  padding-block: 0;
+  padding-inline: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset)) 11px;
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -2731,7 +2740,7 @@ a:is(
 }
 
 .sidebar-zone-entry .sidebar-recent-session__link {
-  gap: 10px;
+  gap: var(--sidebar-row-gap);
   padding: 3px 0;
 }
 
@@ -3887,7 +3896,8 @@ html.openclaw-native-web-chrome
   flex: 0 0 16px;
 }
 
-.sidebar-recent-sessions .sidebar-session-indicator {
+.sidebar-recent-sessions .sidebar-session-indicator,
+.sidebar-zone-entry .sidebar-session-indicator {
   width: var(--sidebar-lead);
   flex-basis: var(--sidebar-lead);
 }

@@ -34,3 +34,8 @@ export function intrinsicGroup(group: { count: number; weight: number } | undefi
     (group.count > CHAT_RESIDENT_ENTRY_TARGET || group.weight + 1 > CHAT_RESIDENT_WEIGHT_TARGET),
   );
 }
+
+/** Record the indivisible source at admission, before ordinary resident publication. */
+export function intrinsicChatHistorySource(messages: readonly unknown[]) {
+  return [...sourceGroups(messages)].findLast(([, group]) => intrinsicGroup(group))?.[0];
+}

@@ -13,8 +13,8 @@ import {
   messageWeight,
   sourceGroups,
   intrinsicGroup,
+  intrinsicChatHistorySource,
 } from "./chat-history-cost.ts";
-import { advanceChatHistoryNavigation } from "./chat-history-pagination.ts";
 import type {
   ChatHistoryCursor,
   ChatHistoryPagination,
@@ -209,99 +209,16 @@ export function prepareChatHistoryPacket(
   return page;
 }
 
-/** Each opaque edge certifies its own complete server response segment. */
-export function extendChatHistoryWindow(
-  previous: ChatHistoryPagination,
-  previousMessages: readonly unknown[],
+/** A fresh authoritative tail starts one packet; retained continuity belongs to page preparation. */
+export function prepareChatHistoryTail(
   incoming: readonly unknown[],
   pagination: ChatHistoryPagination,
-  newerCursor: string | undefined,
-  direction: "older" | "newer" | "tail",
-  retainedCoverage?: ChatHistoryPagination,
+  newerCursor?: string,
   preparedPacket?: ChatHistorySegment,
 ): ChatHistoryPagination {
   const page = preparedPacket ?? prepareChatHistorySegment(incoming, pagination, newerCursor);
-  const held = retainedCoverage?.segments ??
-    previous.segments ?? [
-      prepareChatHistorySegment(previousMessages, previous, previous.newerCursor),
-    ];
-  const known = new Set(held.flatMap((segment) => segment.sources));
-  let segments: ChatHistorySegment[];
-  if (direction !== "tail" && page.sources.every((source) => known.has(source))) {
-    // Hidden/overlap-only traversal advances a raw edge, not a new body page.
-    segments = [...held];
-  } else if (direction === "tail" && retainedCoverage) {
-    const incomingSources = new Set(page.sources);
-    const prefix = held
-      .filter((segment) => segment.sources.some((source) => !incomingSources.has(source)))
-      .map((segment) =>
-        segment.hasNewer
-          ? segment
-          : Object.assign({}, segment, {
-              hasNewer: true,
-              newerCursor: undefined,
-              boundedPacket: undefined,
-            }),
-      );
-    // A refresh must not rewind a hidden-page edge just because its visible
-    // prefix is empty. The reconciliation owner already proved continuity.
-    segments = prefix.length
-      ? [...prefix, page]
-      : [
-          {
-            ...page,
-            boundedPacket: undefined,
-            hasOlder: previous.hasMore,
-            olderCursor: previous.hasMore ? previous.olderCursor : undefined,
-          },
-        ];
-  } else {
-    let retained = held;
-    if (direction !== "tail" && page.sources.some((source) => known.has(source))) {
-      const positions = new Map(page.sources.map((source, index) => [source, index] as const));
-      const boundary =
-        direction === "older"
-          ? page.sources.findLastIndex((source) => !known.has(source))
-          : page.sources.findIndex((source) => !known.has(source));
-      // A live receipt can precede a hidden raw tail's anchor. Once this page
-      // extends past it, retire its old alias so page eviction cannot leave an
-      // isolated body. Ordinary boundary overlap still belongs to both pages.
-      retained = held.map((segment) => {
-        const sources = segment.sources.filter((source) => {
-          const index = positions.get(source);
-          return (
-            index === undefined || (direction === "older" ? index >= boundary : index <= boundary)
-          );
-        });
-        return sources.length === segment.sources.length
-          ? segment
-          : Object.assign({}, segment, { sources, boundedPacket: undefined });
-      });
-    }
-    segments =
-      direction === "tail"
-        ? [page]
-        : direction === "older"
-          ? [page, ...retained]
-          : [...retained, page];
-  }
-  // Record this at authoritative admission, never by reselecting a different
-  // oversized group during warm publication or reader movement.
-  const intrinsicSource =
-    [...sourceGroups(incoming)].findLast(([, group]) => intrinsicGroup(group))?.[0] ??
-    (direction !== "tail" || retainedCoverage ? previous.intrinsicSource : undefined);
-  const coverage = {
-    ...(direction === "tail" ? (retainedCoverage ?? pagination) : previous),
-    ...(intrinsicSource ? { intrinsicSource } : {}),
-    segments,
-  };
-  return direction === "tail"
-    ? coverage
-    : advanceChatHistoryNavigation(
-        coverage,
-        { ...pagination, ...(newerCursor ? { hasNewer: true as const, newerCursor } : {}) },
-        direction,
-      );
+  const intrinsicSource = intrinsicChatHistorySource(incoming);
+  return { ...pagination, ...(intrinsicSource ? { intrinsicSource } : {}), segments: [page] };
 }
 
 export type ChatHistoryResidencyAdmission = {
@@ -320,7 +237,9 @@ export function prepareChatHistoryResidencySegments(
   pagination: ChatHistoryPagination,
   localOutputs: readonly unknown[],
 ): readonly ChatHistorySegment[] | null {
-  if (!pagination.segments?.length && !localOutputs.length) return null;
+  if (!pagination.segments?.length && !localOutputs.length) {
+    return null;
+  }
   return pagination.segments?.length
     ? pagination.segments
     : [prepareChatHistorySegment(messages, pagination, pagination.newerCursor)];

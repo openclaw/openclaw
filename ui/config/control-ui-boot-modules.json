@@ -436,6 +436,7 @@
   "ui/src/app/stale-chunk-reload.ts",
   "ui/src/app/startup-lifecycle.ts",
   "ui/src/app/startup-settings.ts",
+  "ui/src/app/sw-refresh.ts",
   "ui/src/app/terminal-font.ts",
   "ui/src/app/theme-background-artwork.ts",
   "ui/src/app/theme-branding.ts",

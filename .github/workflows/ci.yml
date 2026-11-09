@@ -3776,6 +3776,7 @@ jobs:
           dependency-cache: ${{ !(needs.preflight.outputs.boat_build_qualification == 'true' && github.run_attempt == 1 && needs.preflight.outputs.ci_shape == 'main' && matrix.check_name == 'checks-node-compact-large-4' && matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && matrix.plan_concurrency == 1 && matrix.pretest_build_mode == null && matrix.test_runtime_policy == 'node') && matrix.runner != 'runson-c8i-8xlarge' && (matrix.node_version == null || matrix.node_version == '24.x') && (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github' && runner.environment == 'self-hosted' && (github.event_name != 'workflow_dispatch' || ((needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1)) && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           vitest-fs-cache: "true"
           vitest-worker-cache: ${{ needs.preflight.outputs.frozen_target != 'true' && matrix.pretest_build_mode == null && (matrix.node_version == null || matrix.node_version == '24.x') && 'true' || 'false' }}
+          vitest-worker-preset: ${{ matrix.worker_cache_preset || 'full' }}
           node-compile-cache: "true"
 
       - name: Apply frozen Node test compatibility
@@ -4493,7 +4494,7 @@ jobs:
 
       - name: Cache extension package boundary artifacts for hosted core lint
         id: sdk-boundary-cache
-        if: (needs.preflight.outputs.shared_sdk_declarations != 'true' || matrix.requires_sdk_declarations != true) && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate
+        if: (needs.preflight.outputs.shared_sdk_declarations != 'true' || (!matrix.lint_selection_json && matrix.requires_sdk_declarations != true)) && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate
         uses: ./.ci-harness/.github/actions/sdk-declarations
         with: *sdk_main_restore_inputs
 

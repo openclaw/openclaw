@@ -26,11 +26,15 @@ export type PreparedAssistantMessageFacts = {
   event_id: string;
   message_role: unknown;
   context_free_command: number | null;
+  human_addressed: number | null;
   provenance_kind: unknown;
   provenance_source_channel: unknown;
 };
 
-/** Only the admitted user, context-free commands, and final Talk records are transparent. */
+/**
+ * Only the admitted user, context-free commands, messages addressed to other
+ * people, and final Talk records are transparent.
+ */
 export function preparedAssistantMessagesPreserveTurn<T extends PreparedAssistantMessageFacts>(
   messages: readonly T[],
   admittedUserId: string | undefined,
@@ -40,7 +44,8 @@ export function preparedAssistantMessagesPreserveTurn<T extends PreparedAssistan
     if (
       message.message_role !== "user" ||
       message.event_id === admittedUserId ||
-      message.context_free_command === 1
+      message.context_free_command === 1 ||
+      message.human_addressed === 1
     ) {
       return true;
     }

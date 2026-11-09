@@ -56,6 +56,7 @@ const runtimeOnlyUnitFiles = new Set([
   "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-native-search.gateway.test.ts",
   "test/plugins/deep-research-routing.gateway.test.ts",
+  "test/scripts/ci-test-timings-tooling.test.ts",
   "test/scripts/eager-import-closure.test.ts",
   "test/scripts/lint-suppressions.test.ts",
   "test/scripts/plugin-sdk-surface-report.test.ts",
@@ -91,7 +92,46 @@ export function selectVitestWorkerPreset(
   return toolingOnly ? "tooling" : runtimeOnly ? "runtime" : "full";
 }
 
-export function areToolingOnlyVitestUnitFiles(files: readonly string[]): boolean {
+/** Share the exact group decision between CI's archive hint and worker owner. */
+export function resolveCiVitestWorkerPreset(
+  plans: {
+    target?: string;
+    configs?: string[];
+    includePatterns?: readonly string[] | null;
+    requiresDist?: boolean;
+    pretestBuildMode?: string;
+    env?: NodeJS.ProcessEnv;
+  }[],
+  hasExtraArgs = false,
+): VitestWorkerPreset {
+  const supports = (
+    files: typeof areRuntimeOnlyVitestUnitFiles,
+    selection: typeof shouldUseRuntimeOnlyVitestWorkers,
+  ) =>
+    !hasExtraArgs &&
+    plans.length > 0 &&
+    plans.every((plan) =>
+      plan.target !== undefined
+        ? files([plan.target])
+        : plan.configs?.length === 1 &&
+          Boolean(plan.includePatterns?.length) &&
+          !plan.requiresDist &&
+          plan.pretestBuildMode === undefined &&
+          selection(
+            plan.configs[0]!,
+            [],
+            plan.env ?? {},
+            undefined,
+            plan.includePatterns ?? undefined,
+          ),
+    );
+  return selectVitestWorkerPreset(
+    supports(areRuntimeOnlyVitestUnitFiles, shouldUseRuntimeOnlyVitestWorkers),
+    supports(areToolingOnlyVitestUnitFiles, shouldUseToolingOnlyVitestWorkers),
+  );
+}
+
+function areToolingOnlyVitestUnitFiles(files: readonly string[]): boolean {
   return files.length > 0 && files.every((file) => toolingOnlyUnitFiles.has(file));
 }
 
@@ -120,7 +160,7 @@ export function shouldUseToolingOnlyVitestWorkers(
   );
 }
 
-export function areRuntimeOnlyVitestUnitFiles(files: readonly string[]): boolean {
+function areRuntimeOnlyVitestUnitFiles(files: readonly string[]): boolean {
   return files.length > 0 && files.every((file) => runtimeOnlyUnitFiles.has(file));
 }
 

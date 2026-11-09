@@ -7,6 +7,7 @@ import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-cha
 import "../../../components/tooltip.ts";
 import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
+import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import type { FileCopyFeedback } from "./chat-file-copy.ts";
@@ -280,6 +281,9 @@ export function SidebarFileMobileTextControls(props: {
                 placeholder={t("common.search")}
                 ref={(element) => props.controls.searchInputRef?.(element)}
                 value={props.controls.query}
+                onBlur={clearCompositionEnd}
+                onCompositionEnd={recordCompositionEnd}
+                onKeyUp={clearCompositionEnd}
                 onInput={(event) => props.controls.onSearchInput(event.currentTarget.value)}
                 onKeyDown={(event) => {
                   if (event.key !== "Escape") {

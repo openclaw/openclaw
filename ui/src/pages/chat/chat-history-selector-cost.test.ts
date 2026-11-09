@@ -1,6 +1,6 @@
 import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expect, it, vi } from "vitest";
-import { prepareChatHistoryAdmission } from "./chat-history-page-preparation.ts";
+import { prepareChatHistoryAdmission } from "./chat-history-admission.ts";
 import { prepareChatHistorySegment, selectChatHistoryResidency } from "./chat-history-window.ts";
 
 function row(seq: number) {
