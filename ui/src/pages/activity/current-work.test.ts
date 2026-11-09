@@ -303,6 +303,8 @@ it.each(["current", { personId: null, time: "all", query: "" }] as const)(
   "retains certified rows through a busy overlapping %j read without overflowing",
   async (query) => {
     vi.useFakeTimers();
+    // Isolate fallback pacing from the separately tested calendar rollover.
+    vi.setSystemTime(new Date(2026, 8, 27, 12));
     const { client, request, controller } = setup();
     await controller.load(client, query);
     const pending = createDeferred<SessionsListResult>();
