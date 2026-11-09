@@ -1,2 +1,2 @@
-379
+384
 # PostgreSQL schema captures: real-PostgreSQL round trip, failure-path cleanup, Doctor prune scoping, mixed state/agent install, and capture-drop retention cases.

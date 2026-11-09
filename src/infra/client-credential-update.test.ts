@@ -1004,12 +1004,14 @@ describe.skipIf(!connection)("client credential PostgreSQL public update custody
     const backupPath = path.join(path.dirname(f.pathname), backups[0]!);
     const manifest = await verifyMatchedPostgresBackup(backupPath, "exact");
     expect(manifest.source.schemaVersion).toBe(25);
-    using image = openNodeSqliteDatabase(path.join(backupPath, "database.sqlite"), {
-      readOnly: true,
-    });
-    expect(image.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
-      token: "synthetic-original-token",
-    });
+    // Doctor keeps the predecessor in a frozen schema on the server, not a SQLite image.
+    namespaces.add(String(manifest.schema));
+    const client = new Client({ connectionString: connection });
+    await client.connect();
+    const sql = `SELECT token FROM "${manifest.schema}".device_auth_tokens`;
+    const tokens = await client.query(sql);
+    await client.end();
+    expect(tokens.rows).toEqual([{ token: "synthetic-original-token" }]);
   });
 
   it("refuses native bootstrap before selecting PostgreSQL and gives the SQLite recovery path", async () => {

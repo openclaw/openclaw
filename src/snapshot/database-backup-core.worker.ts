@@ -269,7 +269,7 @@ export async function discardPostgresNamespace(client: Client, namespace: string
 }
 
 /** Drop marked captures of this store whose directory under the prefix is gone. */
-export async function prunePostgresSchemaCaptures(
+export async function pruneOrphanedPostgresCaptures(
   client: Client,
   params: { storeId: string; directoryPrefix: string },
 ) {

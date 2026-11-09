@@ -7,7 +7,7 @@ import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import {
   discardPostgresNamespace,
   fingerprintPostgresDatabase,
-  prunePostgresSchemaCaptures,
+  pruneOrphanedPostgresCaptures,
 } from "./database-backup-core.worker.js";
 import {
   capturePostgresBackupInWorker,
@@ -39,7 +39,7 @@ serveWorkerTasks<BackupReply, BackupTask>((task, _channel, control) => {
     if (task.operation === "prune") {
       const { directoryPrefix } = task.params;
       return withDatabasePortConnection(task.params.config, (client) =>
-        prunePostgresSchemaCaptures(client, { storeId: anchor.storeId, directoryPrefix }),
+        pruneOrphanedPostgresCaptures(client, { storeId: anchor.storeId, directoryPrefix }),
       );
     }
     if (task.operation === "fingerprint") {
