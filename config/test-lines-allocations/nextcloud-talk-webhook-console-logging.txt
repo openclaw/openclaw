@@ -1,0 +1,3 @@
+45
+# Nextcloud Talk webhook failure reasons routed to the subsystem console logger (not only the file log),
+# with a regression test proving console.error/warn emission. Exact net growth for BUG-348.
