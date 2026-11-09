@@ -2496,7 +2496,14 @@ internal fun ChatVoiceTranscriptBlock(
       Modifier
         .fillMaxWidth()
         .testTag("chat-voice-transcript")
-        .drawBehind { drawRect(barColor, size = Size(2.dp.toPx(), size.height)) }
+        .drawBehind {
+          val barWidth = 2.dp.toPx()
+          drawRect(
+            color = barColor,
+            topLeft = Offset(if (layoutDirection == LayoutDirection.Rtl) size.width - barWidth else 0f, 0f),
+            size = Size(barWidth, size.height),
+          )
+        }
         .padding(start = 10.dp),
     verticalArrangement = Arrangement.spacedBy(4.dp),
   ) {
@@ -2658,10 +2665,11 @@ private fun ToolActivityDisclosure(
           Modifier
             .padding(start = 7.dp)
             .drawBehind {
+              val x = if (layoutDirection == LayoutDirection.Rtl) size.width else 0f
               drawLine(
                 color = guideColor,
-                start = Offset(0f, 0f),
-                end = Offset(0f, size.height),
+                start = Offset(x, 0f),
+                end = Offset(x, size.height),
                 strokeWidth = 1.dp.toPx(),
               )
             }.padding(start = 12.dp),
