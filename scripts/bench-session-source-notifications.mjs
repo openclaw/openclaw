@@ -1,6 +1,7 @@
 // Native Windows Gateway proof: real RPC history reads and junction notification bursts.
 // Run with Node 26.12.1+: --root <new-output> --base <package> --head <package>
 // --base-sha <commit> --head-sha <commit> [--diagnostic] [--samples 5] [--pairs 200].
+// Use --warm-reads 100 for warm-tail investigations; raw per-read times are recorded.
 // Smaller sample counts are setup/diagnostic smoke runs, not performance campaigns.
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
@@ -19,18 +20,20 @@ const { values } = parseArgs({
     head: { type: "string" },
     samples: { type: "string", default: "5" },
     pairs: { type: "string", default: "200" },
+    "warm-reads": { type: "string", default: "10" },
     diagnostic: { type: "boolean", default: false },
     "base-sha": { type: "string" },
     "head-sha": { type: "string" },
     replacement: { type: "string" },
     "replacement-marker": { type: "string" },
+    "replacement-session-id": { type: "string" },
   },
 });
 assert.equal(process.platform, "win32");
 for (const key of ["root", "base", "head", "base-sha", "head-sha"]) {
   assert(values[key], `Missing --${key}`);
 }
-for (const key of ["samples", "pairs"]) {
+for (const key of ["samples", "pairs", "warm-reads"]) {
   assert(Number.isSafeInteger(Number(values[key])) && Number(values[key]) > 0, `Invalid --${key}`);
 }
 const root = path.resolve(values.root);
@@ -270,6 +273,7 @@ async function run(kind, index) {
     });
     assert(session.ok && session.key && session.sessionId);
     assert.equal(session.runStarted, false);
+    result.sessionId = session.sessionId;
     const params = { agentId: "main", sessionKey: session.key };
     const marker = `SOURCE_NOTIFICATION_PROOF_192941_${kind}_${index}`;
     assert((await rpc("chat.inject", { ...params, message: marker })).ok);
@@ -283,11 +287,21 @@ async function run(kind, index) {
     await history();
     await history();
     await delay(500);
+    if (values.diagnostic) {
+      await control("profile-start");
+      await control("reset");
+    }
     const warmed = [];
-    for (let j = 0; j < 10; j++) {
+    for (let j = 0; j < Number(values["warm-reads"]); j++) {
       warmed.push(await history());
     }
     result.warmHistory = stats(warmed);
+    result.warmHistorySamples = warmed;
+    if (values.diagnostic) {
+      result.phases.warm = await control("snapshot");
+      const profile = await control("profile-stop");
+      fs.writeFileSync(path.join(fixture, "warm.cpuprofile"), JSON.stringify(profile.profile));
+    }
     if (values.diagnostic) {
       await control("profile-start");
     }
@@ -348,6 +362,7 @@ async function run(kind, index) {
     if (values.replacement) {
       const replacement = path.resolve(values.replacement);
       assert(fs.statSync(replacement).isDirectory());
+      assert.notEqual(fs.realpathSync(replacement), fs.realpathSync(physical));
       fs.renameSync(alias, path.join(aliases, "retired"));
       fs.symlinkSync(replacement, alias, "junction");
       await delay(300);
@@ -378,10 +393,36 @@ async function run(kind, index) {
         assert(values["replacement-marker"], "Supply the expected replacement marker");
         const text = JSON.stringify(changed.messages);
         assert(!text.includes(marker), "Retargeted alias returned stale original content");
-        assert(text.includes(values["replacement-marker"]), "Replacement content missing");
+        // The resident metadata row can still select the old session ID, which
+        // has no transcript in this independently seeded replacement store.
+        assert(
+          changed.messages.length === 0 || text.includes(values["replacement-marker"]),
+          "Unexpected replacement content",
+        );
+        assert.equal(
+          changed.sessionId,
+          changed.messages.length === 0 ? session.sessionId : values["replacement-session-id"],
+          "Default history selected an unexpected session ID",
+        );
+        assert(values["replacement-session-id"], "Supply the seeded replacement session ID");
+        assert.notEqual(values["replacement-session-id"], session.sessionId);
+        const alternate = await rpc("chat.history", {
+          ...params,
+          limit: 20,
+          sessionId: values["replacement-session-id"],
+        });
+        assert.equal(alternate.sessionId, values["replacement-session-id"]);
+        assert(Array.isArray(alternate.messages));
+        const alternateText = JSON.stringify(alternate.messages);
+        assert(alternateText.includes(values["replacement-marker"]), "Replacement content missing");
+        assert(
+          !alternateText.includes(marker),
+          "Explicit replacement read returned original content",
+        );
         result.replacement = {
           outcome: "replacement-content",
-          sessionId: changed.sessionId,
+          defaultMessageCount: changed.messages.length,
+          sessionId: alternate.sessionId,
           oldMarkerReturned: false,
           ms: performance.now() - begin,
         };
