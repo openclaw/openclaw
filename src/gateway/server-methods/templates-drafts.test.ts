@@ -241,9 +241,10 @@ agent: { id: research-brief, description: Original agent description }
 workspace:
   bootstrapFiles: { AGENTS.md: { source: workspace/AGENTS.md } }
   files: [{ source: workspace/checklist.md, path: checklist.md }]
-packages:
-  - { kind: skill, source: clawhub, ref: "@maker/sources", version: 1.2.3 }
-  - { kind: plugin, source: clawhub, ref: "@maker/github", version: 2.0.0 }
+skills:
+  - { ref: "@maker/sources", version: 1.2.3 }
+plugins:
+  - { ref: "@maker/github", version: 2.0.0 }
 mcpServers: { research: { command: research-mcp } }
 automations:
   - id: weekly-recap
