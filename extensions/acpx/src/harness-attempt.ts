@@ -86,6 +86,8 @@ export async function runAcpHarnessAttempt(params: {
     },
     isStreaming: () => started && !settled,
     isAborted: () => signal.aborted,
+    // This attempt's own timer bounds the turn, so the host's stall watchdog must not.
+    ownsLiveness: () => !settled && !timedOut && !signal.aborted,
     isCompacting: () => false,
     cancel: () => controller.abort(),
     abort: () => controller.abort(),
