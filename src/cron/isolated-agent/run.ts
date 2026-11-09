@@ -41,6 +41,7 @@ import { CommandLane } from "../../process/lanes.js";
 import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isCronWithinActiveHours } from "../active-hours.js";
+import { resolveCronConfigurationRefusal } from "../configuration-refusal.js";
 import { isCronExecutionIdle } from "../execution-idle.js";
 import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
 import { CronOperatorSourceError } from "../operator-source-error.js";
@@ -538,6 +539,9 @@ async function runCronIsolatedAgentTurnInTrace(
                 isCronLaneTimeout ? error : err,
                 prepared.context.liveSelection.provider,
               );
+              const configurationRefusal = isCronLaneTimeout
+                ? undefined
+                : resolveCronConfigurationRefusal(err);
               outcome = "error";
               outcomeError = error;
               const admissionDisposition =
@@ -571,9 +575,11 @@ async function runCronIsolatedAgentTurnInTrace(
                   ? { kind: "aborted" }
                   : err instanceof CronOperatorSourceError
                     ? { kind: "permanent" }
-                    : errorReason
-                      ? { kind: "reason", reason: errorReason }
-                      : undefined,
+                    : (configurationRefusal?.errorClassification ??
+                      (errorReason ? { kind: "reason", reason: errorReason } : undefined)),
+                ...(configurationRefusal && !interruptedByRestart
+                  ? { failureNotificationDetail: configurationRefusal.failureNotificationDetail }
+                  : {}),
                 executionStarted,
                 usage,
                 ...(admissionDisposition ? { admissionDisposition } : {}),

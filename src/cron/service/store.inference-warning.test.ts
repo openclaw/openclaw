@@ -7,7 +7,7 @@ import { CronService } from "../service.js";
 import { loadCronJobsStore, saveCronJobsStore } from "../store.js";
 import type { CronStoredJob } from "../types.js";
 
-it("warns once from loaded legacy state before dispatch, without rewriting jobs or warning on known local/native routes", async () => {
+it("warns once from loaded legacy state before dispatch, including Codex, without rewriting jobs or warning on known local/native routes", async () => {
   await withOpenClawTestState({ label: "cron-inference-startup" }, async (state) => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -16,7 +16,10 @@ it("warns once from loaded legacy state before dispatch, without rewriting jobs 
           systemAgent: { agentId: "main" },
           model: "openai/gpt-5.5",
           subagents: { model: { primary: "openai/gpt-5.5" } },
-          models: { "anthropic/*": { agentRuntime: { id: "claude-cli" } } },
+          models: {
+            "anthropic/*": { agentRuntime: { id: "claude-cli" } },
+            "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
+          },
         },
       },
       models: {
@@ -46,8 +49,15 @@ it("warns once from loaded legacy state before dispatch, without rewriting jobs 
       id: "native",
       payload: { kind: "agentTurn", message: "Native", model: "anthropic/claude-opus-4-6" },
     };
+    // Codex runs host-managed stored accounts; the scheduled account guard refuses it unbound.
+    const codex: CronStoredJob = {
+      ...base,
+      id: "codex",
+      name: "Codex runtime",
+      payload: { kind: "agentTurn", message: "Codex", model: "openai/gpt-5.4" },
+    };
     const storePath = state.statePath("cron", "jobs.json");
-    await saveCronJobsStore(storePath, { version: 1, jobs: [base, local, native] });
+    await saveCronJobsStore(storePath, { version: 1, jobs: [base, local, native, codex] });
     const before = (await loadCronJobsStore(storePath)).jobs;
     const warn = vi.fn();
     const execute = vi.fn(async () => ({ status: "ok" as const }));
@@ -72,6 +82,10 @@ it("warns once from loaded legacy state before dispatch, without rewriting jobs 
       ).toEqual([
         [
           { jobId: "remote", name: "Remote inherited model" },
+          expect.stringContaining("openclaw doctor --fix"),
+        ],
+        [
+          { jobId: "codex", name: "Codex runtime" },
           expect.stringContaining("openclaw doctor --fix"),
         ],
       ]);

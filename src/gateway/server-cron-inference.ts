@@ -52,8 +52,10 @@ export function describeCronInferenceMigration(
       provider: selection.provider,
       modelId: selection.modelId,
     }).policy?.id;
+    // Codex also runs host-managed stored accounts, so the scheduled account guard and
+    // Doctor cover it; CLI backends own their login and never forward a stored account.
     if (
-      (runtime && runtime !== "openclaw" && runtime !== "auto") ||
+      (runtime && runtime !== "openclaw" && runtime !== "auto" && runtime !== "codex") ||
       isCliRuntimeProvider(selection.provider, { config: cfg }) ||
       resolveCliRuntimeExecutionProvider({
         cfg,

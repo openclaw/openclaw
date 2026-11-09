@@ -40,7 +40,14 @@ export type SessionEventOutcome = {
   nextCheckMs?: number;
   sourceDeliveryOutcome?: SourceDeliveryOutcome;
   automationResult?: CronRunTelemetry &
-    Pick<CronRunOutcome, "replyDisposition" | "diagnostics" | "result">;
+    Pick<
+      CronRunOutcome,
+      | "replyDisposition"
+      | "diagnostics"
+      | "result"
+      | "errorClassification"
+      | "failureNotificationDetail"
+    >;
   /** Recorded by the turn owner before delivery/cleanup can flatten its cause. */
   terminalOutcome?: AgentRunTerminalOutcome;
   /** Recorded controller restart outcome, before the error is flattened. */
