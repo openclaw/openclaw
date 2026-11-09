@@ -49,16 +49,17 @@ function bindHostedFacts(inference: Inference, id: string, config: RuntimeConfig
     );
   // Catalog rows omit transport headers. Read the same authored precedence as the
   // prepared request before any hosted limits or billing reach the accounting handoff.
+  const baseUrl = effectiveBaseUrl(config);
   const mergedHeaders = resolveProviderRequestHeaders({
     provider: "typesafe",
-    baseUrl: effectiveBaseUrl(config),
+    baseUrl,
     defaultHeaders: headers(configured?.headers),
     callerHeaders: headers(configuredModel?.headers),
     precedence: "caller-wins",
   });
   const effectiveHeaders = resolveProviderRequestHeaders({
     provider: "typesafe",
-    baseUrl: effectiveBaseUrl(config),
+    baseUrl,
     defaultHeaders: mergedHeaders,
     request: {
       headers: headers(configured?.request?.headers),
@@ -79,7 +80,7 @@ function bindHostedFacts(inference: Inference, id: string, config: RuntimeConfig
         : {}),
     },
   });
-  const hosted = effectiveBaseUrl(config) === hostedBaseUrl;
+  const hosted = baseUrl === hostedBaseUrl;
   const contextHeader = new Headers(omitNullRequestHeaders(effectiveHeaders)).get(
     "TypeSafe-Danger-Zone-Long-Context",
   );

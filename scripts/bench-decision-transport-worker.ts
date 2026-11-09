@@ -3,20 +3,25 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
-import plugin from "../extensions/typesafe/index.js";
-import manifest from "../extensions/typesafe/openclaw.plugin.json" with { type: "json" };
-import { closeProviderTransportDispatcherPool } from "../src/agents/provider-transport-dispatcher-pool.js";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { DecisionProviderContextV2 } from "../src/decisions/provider-context.js";
 import type { ProviderDecisionOutcomeV2 } from "../src/decisions/provider-outcomes.js";
 import type { DecisionProviderV2 } from "../src/decisions/provider-types.js";
 import type { DecisionBatchV2 } from "../src/decisions/types-v2.js";
+import type { DecisionBatch, DecisionBatchResult } from "../src/decisions/types.js";
 import type { OpenClawPluginApi } from "../src/plugins/types.js";
 import { parseBenchmarkInteger, runBenchmarkEntrypoint } from "./lib/benchmark-harness.mts";
 
-// Builds and eager imports precede measurement. The first evaluation and total
+// Builds and selected-case imports precede measurement. The first evaluation and total
 // CPU include lazy client/validator initialization; warm timings exclude it.
 export async function benchmarkDecisionTransport(requests: number) {
   parseBenchmarkInteger(String(requests), "requests", 2, 1000);
+  const [{ default: plugin }, { default: manifest }, { closeProviderTransportDispatcherPool }] =
+    await Promise.all([
+      import("../extensions/typesafe/index.js"),
+      import("../extensions/typesafe/openclaw.plugin.json", { with: { type: "json" } }),
+      import("../src/agents/provider-transport-dispatcher-pool.js"),
+    ]);
   const sockets = new Set<Socket>();
   let connections = 0;
   let received = 0;
@@ -221,11 +226,601 @@ export async function benchmarkDecisionTransport(requests: number) {
   return result;
 }
 
+async function benchmarkDecisionConversion(evaluations: number) {
+  const [{ decisionResultV1ToV2, decisionResultV2ToV1 }, { validateDecisionResultV2 }] =
+    await Promise.all([
+      import("../src/decisions/compatibility.js"),
+      import("../src/decisions/result-validation.js"),
+    ]);
+  const batch: DecisionBatch = {
+    state: "synthetic evidence",
+    questions: {
+      boolean: { type: "boolean" },
+      choice: { type: "choice", criteria: { yes: "yes", no: "no" } },
+      score: { type: "score", criteria: ["low", "middle", "high"] },
+    },
+  };
+  const v2Batch: DecisionBatchV2 = {
+    state: { type: "text", text: "synthetic evidence" },
+    questions: batch.questions,
+  };
+  const reported: DecisionBatchResult = {
+    model: "synthetic-model",
+    answers: {
+      boolean: { type: "boolean", probabilityTrue: 0.99 },
+      choice: { type: "choice", choice: "no", probabilities: { yes: 0.9, no: 0.9 } },
+      score: { type: "score", score: 0.25, probabilities: [0.7, 0.7, 0.7] },
+    },
+    usage: { inputTokens: 0, outputTokens: 2.5 },
+  };
+  const expected: DecisionBatchResult = {
+    model: "synthetic-model",
+    answers: {
+      boolean: { type: "boolean", probabilityTrue: 0.99 },
+      choice: { type: "choice", choice: "no", probabilities: { yes: 0.9, no: 0.9 } },
+      score: { type: "score", score: 0.25, probabilities: [0.7, 0.7, 0.7] },
+    },
+    usage: { inputTokens: 0, outputTokens: 2.5 },
+  };
+  const capabilities = normalizeModelCatalog(
+    {
+      providers: {
+        fixture: {
+          models: [
+            {
+              id: reported.model,
+              name: "Fixture",
+              inference: {
+                chat: false,
+                decision: {
+                  protocol: "fixture",
+                  input: ["text"],
+                  questions: {
+                    boolean: { probabilities: "boolean", abstention: false },
+                    choice: { probabilities: "provider-defined", abstention: false },
+                    score: { probabilities: "provider-defined", abstention: false },
+                  },
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+    { ownedProviders: new Set(["fixture"]) },
+  )?.providers?.fixture?.models[0]?.inference?.decision;
+  assert(capabilities);
+  const unchanged = JSON.stringify({ batch, v2Batch, reported, capabilities });
+  const timingsMs: number[] = [];
+  const memoryBefore = process.memoryUsage();
+  const cpuBefore = process.cpuUsage();
+  let peakRssBytes = memoryBefore.rss;
+  let validatedOutputs = 0;
+  // Setup never calls a converter or validator: index zero is the cold first entry.
+  for (let index = 0; index < evaluations; index++) {
+    const started = performance.now();
+    const converted = decisionResultV1ToV2(batch, reported);
+    assert(converted, "V1 conversion refused the fixed admitted fixture");
+    const valid = validateDecisionResultV2(v2Batch, converted, capabilities);
+    const roundTrip = decisionResultV2ToV1(v2Batch, converted);
+    timingsMs.push(performance.now() - started);
+    assert.equal(valid, true, "Independent public validation refused the converted result");
+    assert.deepEqual(converted, expected);
+    assert.deepEqual(roundTrip, expected);
+    assert.equal(Object.hasOwn(converted, "metadata"), false);
+    validatedOutputs++;
+    peakRssBytes = Math.max(peakRssBytes, process.memoryUsage().rss);
+  }
+  const cpu = process.cpuUsage(cpuBefore);
+  assert.equal(JSON.stringify({ batch, v2Batch, reported, capabilities }), unchanged);
+  assert.equal(capabilities.questions?.choice?.probabilities, "provider-defined");
+  assert.equal(capabilities.questions?.score?.probabilities, "provider-defined");
+  const processCpu = process.cpuUsage();
+  return {
+    case: "conversion",
+    fixture: "provider-defined-v1-estimates",
+    evaluations,
+    validatedOutputs,
+    firstEvaluationMs: timingsMs[0],
+    warmTimingsMs: timingsMs.slice(1),
+    cpuMs: (cpu.user + cpu.system) / 1000,
+    peakRssBytes,
+    memoryBefore,
+    memoryAfter: process.memoryUsage(),
+    processCpuMs: (processCpu.user + processCpu.system) / 1000,
+    processPeakRssBytes: process.resourceUsage().maxRSS * 1024,
+  };
+}
+
+async function benchmarkRegisteredV1(evaluations: number, fixture: string, mode: string) {
+  assert(fixture === "small" || fixture === "near-limit");
+  assert(mode === "cost" || mode === "work");
+  const [
+    { createPluginRegistry },
+    { createPluginRecord },
+    { runPluginRegisterSyncInRegistry },
+    { createPluginRuntime },
+    { setActivePluginRegistry },
+    { getPluginInstance },
+    { prepareDecisionProviderReload },
+    { evaluateDecisionInRegistry },
+    { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot },
+    { createAdmittedRunOperatorAuthority },
+    { prepareOperatorModelPolicy },
+    { withOperatorToolGatewayAuthority },
+    { decisionJsonLimits },
+    { isRecord },
+  ] = await Promise.all([
+    import("../src/plugins/registry.js"),
+    import("../src/plugins/loader-records.js"),
+    import("../src/plugins/loader-module-runtime.js"),
+    import("../src/plugins/runtime/index.js"),
+    import("../src/plugins/runtime.js"),
+    import("../src/plugins/plugin-instance-scope.js"),
+    import("../src/decisions/provider-reload.js"),
+    import("../src/decisions/runtime.js"),
+    import("../src/config/runtime-snapshot.js"),
+    import("../src/agents/admitted-run-context.js"),
+    import("../src/agents/operator-model-policy.js"),
+    import("../src/gateway/server-plugin-in-process-authority.js"),
+    import("../src/decisions/validation-common.js"),
+    import("../packages/normalization-core/src/record-coerce.js"),
+  ]);
+  const state = {
+    evidence: "x".repeat(fixture === "small" ? 32 : decisionJsonLimits.maxBytes - 2048),
+  };
+  const batch: DecisionBatch = { state, questions: { truth: { type: "boolean" } } };
+  const inputJsonBytes = Buffer.byteLength(JSON.stringify(batch));
+  const stateEvidenceBytes = Buffer.byteLength(state.evidence);
+  const reported: DecisionBatchResult = {
+    model: "fixture-v1",
+    answers: { truth: { type: "boolean", probabilityTrue: 0.7 } },
+  };
+  const config: OpenClawConfig = {
+    agents: { defaults: { decisionModel: "fixture/fixture-v1" } },
+  };
+  setRuntimeConfigSnapshot(config);
+  const lifetime = new AbortController();
+  const authority = createAdmittedRunOperatorAuthority({
+    profileId: "benchmark-operator",
+    scopes: ["operator.write"],
+    signal: lifetime.signal,
+    assertCurrent: () => lifetime.signal.throwIfAborted(),
+    modelPolicy: prepareOperatorModelPolicy({
+      cfg: config,
+      policy: { sourceAgent: "main", allow: ["fixture/fixture-v1"] },
+      manifestPlugins: [],
+    }),
+  });
+  const builder = createPluginRegistry({
+    runtime: createPluginRuntime(),
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    activateGlobalSideEffects: false,
+  });
+  const record = createPluginRecord({
+    id: "benchmark-owner",
+    source: "/synthetic/decision-benchmark.ts",
+    origin: "global",
+    enabled: true,
+    configSchema: false,
+    contracts: { decisionProviders: ["fixture"] },
+  });
+  const api = builder.createApi(record, { config });
+  let dispatched = 0;
+  runPluginRegisterSyncInRegistry(
+    (registration) =>
+      registration.registerDecisionProvider({
+        id: "fixture",
+        contractVersion: 1,
+        async evaluate(input, context) {
+          context.signal.throwIfAborted();
+          assert(context.isAdmissible?.());
+          assert.notEqual(input, batch);
+          assert.notEqual(input.state, state);
+          assert(isRecord(input.state));
+          assert.equal(input.state.evidence, state.evidence);
+          assert.deepEqual(input.questions, { truth: { type: "boolean" } });
+          // Mutating the submitted copy must not change caller data or result validation.
+          assert(Reflect.set(input.state, "evidence", "provider mutation"));
+          assert(
+            Reflect.set(input.questions, "truth", { type: "choice", criteria: { other: "other" } }),
+          );
+          dispatched++;
+          return { status: "ok", result: reported };
+        },
+      }),
+    api,
+    builder.registry,
+    record.id,
+  );
+  builder.registry.plugins.push(record);
+  setActivePluginRegistry(builder.registry);
+  const instance = getPluginInstance(record);
+  assert(instance);
+  const nativeClone = globalThis.structuredClone;
+  const clones = { calls: 0, stateBearingBatches: 0, questions: 0, results: 0 };
+  let admittedBatch: unknown;
+  let admittedQuestions: unknown;
+  // Only the known fixture and its native-cloned result are inspected by reference.
+  function observeClone<T>(...args: [T, StructuredSerializeOptions?]): T {
+    clones.calls++;
+    if (args[0] === batch || (admittedBatch !== undefined && args[0] === admittedBatch)) {
+      clones.stateBearingBatches++;
+    }
+    if (admittedQuestions !== undefined && args[0] === admittedQuestions) {
+      clones.questions++;
+    }
+    if (args[0] === reported) {
+      clones.results++;
+    }
+    const result = nativeClone(...args);
+    if (args[0] === batch) {
+      admittedBatch = result;
+      assert(isRecord(result));
+      admittedQuestions = result.questions;
+    }
+    return result;
+  }
+  const timingsMs: number[] = [];
+  const memoryBefore = process.memoryUsage();
+  let peakRssBytes = memoryBefore.rss;
+  const cpuBefore = process.cpuUsage();
+  try {
+    if (mode === "work") {
+      globalThis.structuredClone = observeClone;
+    }
+    for (let index = 0; index < evaluations; index++) {
+      const started = performance.now();
+      const outcome = await withOperatorToolGatewayAuthority(
+        { scopes: ["operator.write"], operatorRunAuthority: authority },
+        () =>
+          evaluateDecisionInRegistry(
+            batch,
+            {
+              purpose: "benchmark",
+              rubricVersion: "1",
+              timeoutMs: 10_000,
+              signal: lifetime.signal,
+              assertCurrent: authority.assertCurrent,
+            },
+            builder.registry,
+            config,
+          ),
+      );
+      timingsMs.push(performance.now() - started);
+      assert.equal(outcome.status, "ok");
+      assert(outcome.status === "ok");
+      assert.deepEqual(outcome.result, {
+        model: "fixture-v1",
+        answers: { truth: { type: "boolean", probabilityTrue: 0.7 } },
+      });
+      assert.notEqual(outcome.result, reported);
+      assert.equal(outcome.provenance.providerId, "fixture");
+      assert.deepEqual(batch.questions, { truth: { type: "boolean" } });
+      assert.equal(
+        state.evidence.length,
+        fixture === "small" ? 32 : decisionJsonLimits.maxBytes - 2048,
+      );
+      peakRssBytes = Math.max(peakRssBytes, process.memoryUsage().rss);
+    }
+  } finally {
+    globalThis.structuredClone = nativeClone;
+    assert.equal(globalThis.structuredClone, nativeClone);
+    prepareDecisionProviderReload(builder.registry, new Set([record.id]));
+    await instance.dispose();
+    lifetime.abort("benchmark settled");
+    clearRuntimeConfigSnapshot();
+  }
+  const cpu = process.cpuUsage(cpuBefore);
+  assert.equal(dispatched, evaluations);
+  const processCpu = process.cpuUsage();
+  return {
+    case: "runtime-v1",
+    fixture,
+    mode,
+    evaluations,
+    validatedOutputs: dispatched,
+    inputJsonBytes,
+    stateEvidenceBytes,
+    questionCount: Object.keys(batch.questions).length,
+    ...(mode === "work" ? { clones } : {}),
+    firstEvaluationMs: timingsMs[0],
+    warmTimingsMs: timingsMs.slice(1),
+    cpuMs: (cpu.user + cpu.system) / 1000,
+    peakRssBytes,
+    memoryBefore,
+    memoryAfter: process.memoryUsage(),
+    processCpuMs: (processCpu.user + processCpu.system) / 1000,
+    processPeakRssBytes: process.resourceUsage().maxRSS * 1024,
+  };
+}
+
+async function benchmarkRegisteredCatalog(evaluations: number, mode: string) {
+  assert(mode === "cost" || mode === "work");
+  assert.equal(Boolean(process.env.NODE_V8_COVERAGE), mode === "work", "Coverage is work-only");
+  const [
+    { default: plugin },
+    { default: manifest },
+    { createPluginRegistry },
+    { createPluginRecord },
+    { runPluginRegisterSyncInRegistry },
+    { createPluginRuntime },
+    { setActivePluginRegistry },
+    { getPluginInstance },
+    { prepareDecisionProviderReload },
+    { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot },
+  ] = await Promise.all([
+    import("../extensions/typesafe/index.js"),
+    import("../extensions/typesafe/openclaw.plugin.json", { with: { type: "json" } }),
+    import("../src/plugins/registry.js"),
+    import("../src/plugins/loader-records.js"),
+    import("../src/plugins/loader-module-runtime.js"),
+    import("../src/plugins/runtime/index.js"),
+    import("../src/plugins/runtime.js"),
+    import("../src/plugins/plugin-instance-scope.js"),
+    import("../src/decisions/provider-reload.js"),
+    import("../src/config/runtime-snapshot.js"),
+  ]);
+  const config = (
+    baseUrl = "https://api.typesafe.ai/v1/",
+    headers = { "typesafe-danger-zone-long-context": "true" },
+  ): OpenClawConfig => ({
+    models: { providers: { typesafe: { baseUrl, apiKey: "synthetic-key", models: [], headers } } },
+  });
+  const selectedConfig = config();
+  setRuntimeConfigSnapshot(selectedConfig);
+  const builder = createPluginRegistry({
+    runtime: createPluginRuntime(),
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    activateGlobalSideEffects: false,
+  });
+  const record = createPluginRecord({
+    id: "typesafe",
+    source: "/synthetic/typesafe-benchmark.ts",
+    origin: "global",
+    enabled: true,
+    configSchema: false,
+    contracts: manifest.contracts,
+  });
+  const api = builder.createApi(record, { config: selectedConfig });
+  runPluginRegisterSyncInRegistry(
+    (registration) => plugin.register(registration),
+    api,
+    builder.registry,
+    record.id,
+  );
+  builder.registry.plugins.push(record);
+  setActivePluginRegistry(builder.registry);
+  const instance = getPluginInstance(record);
+  assert(instance);
+  const provider = builder.registry.providers.find(
+    (entry) => entry.provider.id === "typesafe",
+  )?.provider;
+  assert(provider?.augmentModelCatalog && provider.normalizeTransport);
+  const row = {
+    provider: "typesafe",
+    id: "jev-1.13.0",
+    name: "Jev 1.13.0",
+    inference: {
+      chat: false as const,
+      decision: {
+        protocol: "typesafe-systemone",
+        input: ["text" as const, "image" as const],
+        limits: {
+          maxRequestTokens: 64000,
+          maxStateAndQuestionTokens: 32000,
+          image: { maxBytes: 4194304, mimeTypes: ["image/png", "image/jpeg"], remoteUrls: false },
+        },
+        billing: {
+          unit: "tokens" as const,
+          source: "provider-docs" as const,
+          usdPerMillion: { input: 0.042, output: 0 },
+        },
+      },
+    },
+  };
+  const original = JSON.stringify(row);
+  const expectedHosted = {
+    protocol: "typesafe-systemone",
+    input: ["text", "image"],
+    limits: {
+      image: { maxBytes: 4194304, mimeTypes: ["image/png", "image/jpeg"], remoteUrls: false },
+    },
+    billing: {
+      unit: "tokens",
+      source: "provider-docs",
+      usdPerMillion: { input: 0.042, output: 0 },
+    },
+  };
+  const expectedCustom = { protocol: "typesafe-systemone", input: ["text"] };
+  const phases: Awaited<ReturnType<typeof catalogCoveragePhase>>[] = [];
+  const capture = async (phase: string) => {
+    if (mode === "work") phases.push(await catalogCoveragePhase(phase));
+  };
+  const timingsMs: number[] = [];
+  let validatedOutputs = 0;
+  let controls = 0;
+  const memoryBefore = process.memoryUsage();
+  let peakRssBytes = memoryBefore.rss;
+  const cpuBefore = process.cpuUsage();
+  try {
+    await capture("setup");
+    for (let index = 0; index < evaluations; index++) {
+      const started = performance.now();
+      const rows = await provider.augmentModelCatalog({ env: {}, entries: [row] });
+      timingsMs.push(performance.now() - started);
+      assert.equal(rows?.length, 1);
+      assert.deepEqual(rows[0]?.inference?.decision, expectedHosted);
+      assert.equal(JSON.stringify(row), original);
+      validatedOutputs++;
+      peakRssBytes = Math.max(peakRssBytes, process.memoryUsage().rss);
+      if (index === 0) await capture("cold");
+    }
+    await capture("warm");
+    // Controls follow the measured entries; none consume the first production call.
+    assert.deepEqual(
+      await provider.augmentModelCatalog({ env: {}, entries: [{ ...row, provider: "other" }] }),
+      [],
+    );
+    controls++;
+    const unknown = { ...row, id: "unlisted" };
+    assert.deepEqual(await provider.augmentModelCatalog({ env: {}, entries: [unknown] }), [
+      unknown,
+    ]);
+    controls++;
+    for (const [settings, expected] of [
+      [
+        config("https://api.typesafe.ai/v1", { "typesafe-danger-zone-long-context": "false" }),
+        row.inference.decision,
+      ],
+      [config("https://custom.fixture.invalid/v1"), expectedCustom],
+      [config("https://api.typesafe.ai/v1"), expectedHosted],
+    ] as const) {
+      setRuntimeConfigSnapshot(settings);
+      const rows = await provider.augmentModelCatalog({ env: {}, entries: [row, row] });
+      assert.equal(rows?.length, 2);
+      for (const entry of rows) assert.deepEqual(entry.inference?.decision, expected);
+      controls++;
+    }
+    assert.equal(provider.normalizeTransport({ provider: "other", modelId: row.id }), undefined);
+    controls++;
+    setRuntimeConfigSnapshot(config("https://custom.fixture.invalid/v1"));
+    assert.deepEqual(provider.normalizeTransport({ provider: "typesafe", modelId: row.id }), {
+      baseUrl: "https://custom.fixture.invalid/v1",
+    });
+    controls++;
+    setRuntimeConfigSnapshot(config("invalid-url"));
+    await assert.rejects(
+      async () => provider.augmentModelCatalog!({ env: {}, entries: [row] }),
+      /Invalid models\.providers\.typesafe\.baseUrl/u,
+    );
+    controls++;
+    assert.equal(JSON.stringify(row), original);
+    await capture("controls");
+  } finally {
+    prepareDecisionProviderReload(builder.registry, new Set([record.id]));
+    await instance.dispose();
+    clearRuntimeConfigSnapshot();
+  }
+  const cpu = process.cpuUsage(cpuBefore);
+  const processCpu = process.cpuUsage();
+  return {
+    case: "catalog",
+    fixture: "configured",
+    mode,
+    evaluations,
+    validatedOutputs,
+    controls,
+    inputJsonBytes: Buffer.byteLength(original),
+    ...(mode === "work" ? { coverage: phases } : {}),
+    firstEvaluationMs: timingsMs[0],
+    warmTimingsMs: timingsMs.slice(1),
+    cpuMs: (cpu.user + cpu.system) / 1000,
+    peakRssBytes,
+    memoryBefore,
+    memoryAfter: process.memoryUsage(),
+    processCpuMs: (processCpu.user + processCpu.system) / 1000,
+    processPeakRssBytes: process.resourceUsage().maxRSS * 1024,
+  };
+}
+
+// Use Node's ordinary V8 report and source-map consumer. Raw reports remain the
+// authority; missing or ambiguous function mappings refuse work qualification.
+async function catalogCoveragePhase(phase: string) {
+  const { takeCoverage } = await import("node:v8");
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const { createHash } = await import("node:crypto");
+  const { SourceMap } = await import("node:module");
+  const { fileURLToPath } = await import("node:url");
+  const path = await import("node:path");
+  const directory = process.env.NODE_V8_COVERAGE;
+  assert(directory);
+  const before = new Set(readdirSync(directory));
+  takeCoverage();
+  const created = readdirSync(directory).filter(
+    (file) => !before.has(file) && file.startsWith(`coverage-${process.pid}-`),
+  );
+  assert.equal(created.length, 1, "One complete V8 phase report required");
+  const reportFile = path.resolve(directory, created[0]!);
+  const raw = readFileSync(reportFile);
+  const report = JSON.parse(raw.toString("utf8"));
+  const entries = [];
+  for (const script of report.result) {
+    const selected = script.functions.filter((fn: { functionName: string }) =>
+      /^(providerBaseUrl|effectiveBaseUrl)$/u.test(fn.functionName),
+    );
+    if (selected.length === 0) continue;
+    assert(script.url.startsWith("file:"));
+    const generatedPath = fileURLToPath(script.url);
+    const generated = readFileSync(generatedPath, "utf8");
+    const map = JSON.parse(readFileSync(generatedPath + ".map", "utf8"));
+    const sourceMap = new SourceMap(map);
+    for (const fn of selected) {
+      const range = fn.ranges[0];
+      assert(range && Number.isInteger(range.count) && range.count >= 0);
+      const prefix = generated.slice(0, range.startOffset);
+      const lines = prefix.split("\n");
+      const mapped = sourceMap.findEntry(lines.length - 1, lines.at(-1)!.length);
+      const target = fn.functionName === "providerBaseUrl" ? "config.ts" : "decisions.ts";
+      assert(
+        "originalSource" in mapped &&
+          mapped.originalSource?.endsWith("/extensions/typesafe/src/" + target),
+        "Wrong V8 owner range",
+      );
+      const sourceIndex = map.sources.findIndex(
+        (source: string) => source === mapped.originalSource,
+      );
+      assert(sourceIndex >= 0 && typeof map.sourcesContent[sourceIndex] === "string");
+      const source = map.sourcesContent[sourceIndex];
+      entries.push({
+        name: fn.functionName,
+        count: range.count,
+        generated: { file: generatedPath, start: range.startOffset, end: range.endOffset },
+        source: {
+          file: mapped.originalSource,
+          line: mapped.originalLine + 1,
+          column: mapped.originalColumn,
+          sha256: createHash("sha256").update(source).digest("hex"),
+        },
+      });
+    }
+  }
+  for (const name of ["providerBaseUrl", "effectiveBaseUrl"]) {
+    assert.equal(
+      entries.filter((entry) => entry.name === name).length,
+      1,
+      "Unique V8 function entry required",
+    );
+  }
+  return {
+    phase,
+    file: reportFile,
+    bytes: raw.length,
+    sha256: createHash("sha256").update(raw).digest("hex"),
+    entries,
+  };
+}
+
 if (import.meta.main) {
   await runBenchmarkEntrypoint("bench-decision-transport-worker", async () => {
     const requests = parseBenchmarkInteger(process.argv[2] ?? "50", "requests", 2, 1000);
-    console.log(
-      `[bench-decision-transport-result] ${JSON.stringify(await benchmarkDecisionTransport(requests))}`,
+    const workload = process.argv[3] ?? "http";
+    assert(
+      ["http", "conversion", "runtime-v1", "catalog"].includes(workload),
+      "Unknown benchmark case",
     );
+    const result =
+      workload === "http"
+        ? await benchmarkDecisionTransport(requests)
+        : workload === "conversion"
+          ? await benchmarkDecisionConversion(requests)
+          : workload === "catalog"
+            ? await benchmarkRegisteredCatalog(requests, process.argv[5] ?? "cost")
+            : await benchmarkRegisteredV1(
+                requests,
+                process.argv[4] ?? "small",
+                process.argv[5] ?? "cost",
+              );
+    console.log(`[bench-decision-transport-result] ${JSON.stringify(result)}`);
   });
 }
