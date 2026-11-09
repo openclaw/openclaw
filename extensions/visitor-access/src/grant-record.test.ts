@@ -26,7 +26,13 @@ function invitationTextFor(invitedByLabel: string): string {
     gatewayAccess: "Access granted.",
     signInUrl: "https://team.example.com/",
     noteSupplied: false,
-    accountSeats: { status: "available", occupied: 0, remaining: 75 },
+    accountSeats: {
+      status: "available",
+      capacity: 75,
+      occupied: 0,
+      remaining: 75,
+      diagnostics: [],
+    },
   }).details.invitationText;
 }
 
