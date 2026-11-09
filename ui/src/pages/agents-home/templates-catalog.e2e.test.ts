@@ -488,6 +488,38 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     },
   );
 
+  it("shows paused automation declarations in details and the inline preview", async () => {
+    const { page, gateway } = await fixture();
+    await gateway.setMethodResponse("templates.catalog.detail", {
+      detail: {
+        ...workflowOperator,
+        version: "1.2.0",
+        contents: {
+          instructions: [{ name: "AGENTS.md", source: "AGENTS.md" }],
+          skills: [],
+          integrations: [],
+          automations: [
+            { name: "Weekly brief", schedule: "0 9 * * 1", timezone: "UTC", enabled: false },
+          ],
+        },
+      },
+    });
+    const detail = await openDetail(page);
+    const automation = detail.locator(".plugin-capabilities").filter({ hasText: "Weekly brief" });
+    await capture(page, "paused-automation-detail", automation);
+    expect(await automation.textContent()).toContain("Paused");
+    await page.goto(`${server.baseUrl}chat/main`);
+    await page.locator("a.markdown-template-link").first().click();
+    const shell = page.getByRole("dialog", { name: "Template details", exact: true });
+    await shell.getByRole("button", { name: /Automations/ }).click();
+    const row = shell.getByRole("button", { name: /Weekly brief/ });
+    expect(await row.textContent()).toContain("Paused");
+    await row.click();
+    await capture(page, "paused-automation-preview", shell);
+    expect(await shell.textContent()).toContain("Paused");
+    expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
+  });
+
   it("keeps the inline preview shell stable through category and file navigation", async () => {
     const { page, gateway } = await fixture();
     await gateway.setMethodResponse("templates.catalog.preview", {

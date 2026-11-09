@@ -22,6 +22,26 @@ const expectNoSharedDraft = (workspaceDir: string) =>
   ).rejects.toMatchObject({ code: "ENOENT" });
 
 describe("agent-created Template drafts", () => {
+  it("reviews and builds a paused automation without enabling it", async () => {
+    const { prepare } = await draftFixture({
+      ...proposal,
+      manifest: proposal.manifest.replace(
+        "---\nCompare",
+        'automations:\n  - id: weekly\n    enabled: false\n    schedule: { cron: "0 9 * * 1", timezone: UTC }\n    session: isolated\n    message: Prepare a brief.\n---\nCompare',
+      ),
+    });
+    await using prepared = await prepare();
+    expect(prepared.items.find((item) => item.kind === "automation")).toMatchObject({
+      label: "weekly",
+      detail: "0 9 * * 1 · UTC · Paused",
+      included: true,
+    });
+    await using extracted = await extractBuiltTemplateArtifact(prepared.artifact);
+    expect(await readFile(join(extracted.packageRoot, "CLAW.md"), "utf8")).toContain(
+      "enabled: false",
+    );
+  });
+
   it("keeps the package slug while showing a title-cased agent name", async () => {
     const { target, prepare } = await draftFixture();
     await using initial = await prepare();

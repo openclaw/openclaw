@@ -1645,7 +1645,7 @@ var External = [
     /(^name$|^source$|^ref$|^version$|^excerpt$)/u,
     /(^name$|^kind$|^source$|^ref$|^version$)/u,
     /(^name$|^kind$)/u,
-    /(^name$|^schedule$|^timezone$)/u,
+    /(^name$|^enabled$|^schedule$|^timezone$)/u,
     /(^packageName$|^version$|^kind$|^name$)/u,
     /(^preview$)/u,
     /(^kind$|^name$|^content$)/u,
@@ -1702,10 +1702,10 @@ var External = [
     /(^allowedAgentIds$|^allowAnyConfiguredAgent$|^implicitSelfAllowed$|^requireAgentId$)/u,
     /(^coverage$|^jobs$)/u,
     /(^id$|^action$|^blocked$|^current$|^proposed$)/u,
-    /(^schedule$|^session$|^delivery$|^messageDigest$)/u,
+    /(^enabled$|^schedule$|^session$|^delivery$|^messageDigest$)/u,
     /(^cron$|^timezone$)/u,
     /(^everyMs$)/u,
-    /(^schedule$|^session$|^delivery$|^messageDigest$|^message$)/u,
+    /(^enabled$|^schedule$|^session$|^delivery$|^messageDigest$|^message$)/u,
     /(^ready$|^requirements$)/u,
     /(^kind$|^owner$)/u,
     /(^html$)/u,
@@ -19984,12 +19984,14 @@ var External = [
     value !== null &&
     !Array.isArray(value) &&
     "name" in value &&
+    "enabled" in value &&
     "schedule" in value &&
     "timezone" in value &&
     Object.getOwnPropertyNames(value).every(
       (unique_2028, unique_2029) => External[1022].test(unique_2028) || check_2(value[unique_2028]),
     ) &&
     check_6(value.name) &&
+    check_97(value.enabled) &&
     check_6(value.schedule) &&
     check_6(value.timezone),
   check_2999 = (value) => check_3000(value),
@@ -20956,6 +20958,7 @@ var External = [
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
+    "enabled" in value &&
     "schedule" in value &&
     "session" in value &&
     "delivery" in value &&
@@ -20963,6 +20966,7 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_2151, unique_2152) => External[1079].test(unique_2151) || check_2(value[unique_2151]),
     ) &&
+    check_97(value.enabled) &&
     check_3141(value.schedule) &&
     check_3144(value.session) &&
     check_3145(value.delivery) &&
@@ -20995,6 +20999,7 @@ var External = [
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
+    "enabled" in value &&
     "schedule" in value &&
     "session" in value &&
     "delivery" in value &&
@@ -21003,6 +21008,7 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_2157, unique_2158) => External[1082].test(unique_2157) || check_2(value[unique_2157]),
     ) &&
+    check_97(value.enabled) &&
     check_3141(value.schedule) &&
     check_3144(value.session) &&
     check_3145(value.delivery) &&
