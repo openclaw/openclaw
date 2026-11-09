@@ -3,9 +3,13 @@ import path, { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { readCloneFileMetadata } from "@openclaw/fs-safe/copy";
 import { afterEach, beforeEach, describe, expect, it as baseTest, vi } from "vitest";
+import { resolveSandboxedBridgeMediaPath } from "../agents/sandbox-media-paths.js";
+import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { slugifySessionKey } from "../agents/sandbox/shared.js";
 import { resolveStagedInputMediaPaths, STAGED_INPUT_MAX_BYTES } from "../media/staged-inputs.js";
 import { MEDIA_MAX_BYTES } from "../media/store.js";
+import { setStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { setTestEnvValue } from "../test-utils/env.js";
 import { CONFIG_DIR } from "../utils.js";
 import { stageSandboxMedia } from "./reply/stage-sandbox-media.js";
 import {
@@ -89,7 +93,12 @@ async function setupSandboxWorkspace(home: string) {
 
 const it = baseTest.extend<{ media: Awaited<ReturnType<typeof setupSandboxWorkspace>> }>({
   media: async ({ task }, use) => {
-    await withSandboxMediaTempHome(`openclaw-staging-${task.id}-`, async (home) => {
+    await withSandboxMediaTempHome(`openclaw-staging-${task.id}-`, async (tempHome) => {
+      // macOS tmp is a symlink; staging resolves sources, so the media store must too.
+      const home = await fs.realpath(tempHome);
+      setTestEnvValue("HOME", home);
+      setTestEnvValue("USERPROFILE", home);
+      setStateDirEnv(path.join(home, ".openclaw"));
       await use(await setupSandboxWorkspace(home));
     });
   },
@@ -189,8 +198,45 @@ describe("stageSandboxMedia", () => {
       new Map([
         ["file_upload.jpg", stagedPath],
         ["file_upload", stagedPath],
+        ["media://inbound/file_upload.jpg", stagedPath],
       ]),
     );
+  });
+
+  it("resolves a media://inbound ref to the staged copy of a channel image", async ({
+    media: m,
+  }) => {
+    const id = "IMG_9854---8705be7d-aa4d-4744-aa9e-607677e85cde.jpg";
+    await m.inbound(id, "jpeg-bytes");
+    const { ctx, result } = await m.stageMedia(`media://inbound/${id}`);
+    const stagedPath = result.staged.get(0)!;
+    const bridge = {
+      stat: async ({ filePath }: { filePath: string }) =>
+        (await fs.stat(join(m.sandboxDir, filePath)).catch(() => null))
+          ? { type: "file", size: 1, mtimeMs: 1 }
+          : null,
+      resolvePath: ({ filePath }: { filePath: string }) => ({
+        hostPath: join(m.sandboxDir, filePath),
+        relativePath: filePath,
+        containerPath: `/work/${filePath}`,
+      }),
+    } as unknown as SandboxFsBridge;
+
+    await expect(
+      resolveSandboxedBridgeMediaPath({
+        sandbox: {
+          root: m.sandboxDir,
+          bridge,
+          workspaceOnly: true,
+          stagedMediaPaths: resolveStagedInputMediaPaths(ctx.media),
+        },
+        mediaPath: `media://inbound/${id}`,
+        inboundFallbackDir: "media/inbound",
+      }),
+    ).resolves.toEqual({
+      resolved: join(m.sandboxDir, stagedPath),
+      rewrittenFrom: `media://inbound/${id}`,
+    });
   });
 
   it("keeps host-staged inbound images available to native vision", async ({ media: m }) => {
