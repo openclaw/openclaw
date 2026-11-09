@@ -97,10 +97,7 @@ export function createSessionBootSnapshot(
     void readSidebarBootSnapshot(gateway)
       .then(async (snapshot) => {
         if (!snapshot || retirement.signal.aborted || !current()) {
-          if (!snapshot) {
-            finishBootFrame();
-          }
-          return;
+          return snapshot ? undefined : finishBootFrame();
         }
         routingDefaults = snapshot.routingDefaults;
         const roster = snapshot.roster;
