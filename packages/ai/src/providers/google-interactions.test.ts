@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { configureAiTransportHost } from "../host.js";
 import { PROVIDER_CONTEXT_HANDOFF, PROVIDER_MODEL_INPUT } from "../provider-types.js";
 import type {
@@ -391,6 +392,94 @@ describe("google-interactions provider", () => {
     },
   );
 
+  it.each([false, true])(
+    "round-trips keyword parameters through Interactions (deltas=%s)",
+    async (deltas) => {
+      const wireArgs = { from_: "source", data: { from_: "opaque" } };
+      const frame = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
+      mockSse(
+        frame({
+          event_type: "step.start",
+          step: {
+            type: "function_call",
+            id: "call_kw",
+            name: "lookup",
+            arguments: deltas ? {} : wireArgs,
+          },
+        }) +
+          (deltas
+            ? frame({
+                event_type: "step.delta",
+                delta: {
+                  type: "arguments_delta",
+                  arguments: JSON.stringify(wireArgs),
+                },
+              })
+            : "") +
+          frame({ event_type: "step.stop" }) +
+          completedSse({ status: "requires_action" }),
+      );
+      const model = makeInteractionsModel();
+      const tools = [
+        {
+          name: "lookup",
+          description: "Lookup",
+          parameters: {
+            type: "object",
+            properties: { from: { type: "string" }, data: { type: "object" } },
+            required: ["from"],
+          },
+        },
+      ];
+      const output = await streamGoogleInteractions(
+        model,
+        { ...basicContext, tools },
+        { apiKey: "test-key" },
+      ).result();
+      expect(output.stopReason).toBe("toolUse");
+      expect(output.content).toEqual([
+        {
+          type: "toolCall",
+          id: "call_kw",
+          name: "lookup",
+          arguments: { from: "source", data: { from_: "opaque" } },
+        },
+      ]);
+      const payload = requestJson(vi.mocked(globalThis.fetch).mock.calls[0]?.[1]?.body);
+      expect(payload).toMatchObject({
+        tools: [
+          {
+            type: "function",
+            name: "lookup",
+            parameters: {
+              type: "object",
+              properties: { from_: { type: "string" }, data: { type: "object" } },
+              required: ["from_"],
+            },
+          },
+        ],
+      });
+      mockSse(completedSse());
+      await streamGoogleInteractions(
+        model,
+        { messages: [output, makeTextToolResult("call_kw", "lookup", "ok", false, 0)], tools },
+        { apiKey: "test-key" },
+      ).result();
+      expect(requestJson(vi.mocked(globalThis.fetch).mock.calls[0]?.[1]?.body)).toMatchObject({
+        input: [
+          { type: "function_call", id: "call_kw", name: "lookup", arguments: wireArgs },
+          {
+            type: "function_result",
+            call_id: "call_kw",
+            name: "lookup",
+            result: [{ type: "text", text: "ok" }],
+            is_error: false,
+          },
+        ],
+      });
+    },
+  );
+
   it("preserves streamed text, thought signatures, and tool arguments", async () => {
     const cases: Array<{
       frames: string[];
@@ -697,6 +786,36 @@ describe("google-interactions provider", () => {
         total: 0.000175,
       },
     });
+  });
+
+  it.each([
+    ["priority", "priority", 1.8],
+    ["priority", "standard", 1],
+    ["flex", null, 0.5],
+  ] as const)("prices requested %s fulfilled as %s", async (requested, fulfilled, multiplier) => {
+    const headers: Record<string, string> = { "Content-Type": "text/event-stream" };
+    if (fulfilled) {
+      headers["x-gemini-service-tier"] = fulfilled;
+    }
+    const usage = {
+      total_input_tokens: 1_000_000,
+      total_output_tokens: 0,
+      total_tokens: 1_000_000,
+    };
+    const sse = completedSse({ usage }) + "data: [DONE]\n\n";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(sse, { status: 200, headers })),
+    );
+    const model = {
+      ...makeInteractionsModel(),
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+    };
+    const result = await streamGoogleInteractions(model, basicContext, {
+      apiKey: "test-api-key",
+      onPayload: (body) => ({ ...(body as object), service_tier: requested }),
+    }).result();
+    expect(result.usage.cost.total).toBeCloseTo(multiplier);
   });
 
   it.each([

@@ -7,8 +7,12 @@ import { removeAuthProfilesAcrossOwnerStores } from "../agents/auth-profiles/pro
 import { hasAnyAuthProfileStoreSourceAsync } from "../agents/auth-profiles/source-check.js";
 import { loadAuthProfileStoreForRuntimeAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import * as cliSessions from "../agents/cli-runner/cli-live-session-registry.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
+import { loadPreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import { createWindowsCmdShimFixture } from "../test-helpers/windows-cmd-shim.js";
 import { setTestEnvValue } from "../test-utils/env.js";
@@ -188,6 +192,7 @@ async function prepareCliAuthFixture(
     const nativeRoot = path.join(state.home, ".claude");
     setTestEnvValue("CLAUDE_CONFIG_DIR", nativeRoot);
     await fs.mkdir(nativeRoot);
+    await fs.writeFile(path.join(nativeRoot, "execution-launches.log"), "", { flag: "wx" });
     if (nativeContinuity) {
       await fs.writeFile(
         path.join(nativeRoot, ".credentials.json"),
@@ -241,7 +246,7 @@ async function prepareCliAuthFixture(
 }
 
 async function executeHookAuthCase(fixture: CliAuthFixture, signal: AbortSignal) {
-  const { state, gateway, nativeRoot, modelRef } = fixture;
+  const { state, gateway, cfg, nativeRoot, modelRef } = fixture;
   const requests: Array<string | undefined> = [];
   const provider = await reserveTestPortListener({
     offsets: [0],
@@ -259,11 +264,20 @@ async function executeHookAuthCase(fixture: CliAuthFixture, signal: AbortSignal)
       `http://127.0.0.1:${provider.claim.port}/inference`,
     );
     const launchLog = path.join(nativeRoot, "execution-launches.log");
-    await fs.writeFile(launchLog, "", { flag: "wx" });
-    const launches = async () => (await fs.readFile(launchLog, "utf8")).split("\n").length - 1;
+    const settleCatalogs = async () => {
+      for (const agentId of ["main", "missing", "native"]) {
+        const input = { config: cfg, agentId, agentDir: state.agentDir(agentId) };
+        const owner = await loadPreparedModelRuntimeSnapshot(input);
+        await owner.loadFullModelCatalog?.({ refresh: true, wait: true });
+      }
+    };
+    // Native catalog probes only initialize; saved-credential launches must never be excluded.
+    const launches = async () =>
+      (await fs.readFile(launchLog, "utf8")).split("\n").filter((line) => line === "saved").length;
+    await settleCatalogs();
     const key = (agentId: string) => `hook:account-proof:${agentId}`;
     const canonicalKey = (agentId: string) => `agent:${agentId}:${key(agentId)}`;
-    const post = async (agentId: string, model?: string) => {
+    const post = async (agentId: string, model?: string, sessionKey = key(agentId)) => {
       const response = await fetch(`http://127.0.0.1:${gateway.port}/hooks/agent`, {
         method: "POST",
         headers: { authorization: "Bearer hook-cli-auth-test", "content-type": "application/json" },
@@ -271,7 +285,7 @@ async function executeHookAuthCase(fixture: CliAuthFixture, signal: AbortSignal)
           name: "Account isolation",
           message: "Reply using the selected account.",
           agentId,
-          sessionKey: key(agentId),
+          sessionKey,
           sessionMode: "persistent",
           wakeMode: "next-heartbeat",
           model,
@@ -283,27 +297,28 @@ async function executeHookAuthCase(fixture: CliAuthFixture, signal: AbortSignal)
       });
       return { status: response.status, body: await response.json() };
     };
+    const expectReply = async (agentId: string, credential: string, model?: string) => {
+      const before = requests.length;
+      expect(await post(agentId, model)).toMatchObject({
+        status: 200,
+        body: { ok: true, completion: { status: "ok" } },
+      });
+      expect(requests.slice(before)).toEqual([`Bearer ${credential}`]);
+    };
     // Fresh persistent hooks create their own session before selecting its agent default.
     for (const agentId of ["main", "missing"]) {
       expect(await hasAnyAuthProfileStoreSourceAsync(state.agentDir(agentId))).toBe(false);
-      const before = await launches();
-      const requestCount = requests.length;
+      const before = [await launches(), requests.length];
       const result = await post(
         agentId,
         agentId === "main" ? `${modelRef}@anthropic:missing` : undefined,
       );
       // Soft checks expose both independent no-source regressions when run on the base.
       expect.soft(result).toMatchObject({ status: 502, body: { ok: false } });
-      expect.soft(await launches()).toBe(before);
-      expect.soft(requests).toHaveLength(requestCount);
+      expect.soft([await launches(), requests.length]).toEqual(before);
     }
     for (const agentId of ["main", "native"]) {
-      const before = requests.length;
-      expect(await post(agentId)).toMatchObject({
-        status: 200,
-        body: { ok: true, completion: { status: "ok" } },
-      });
-      expect(requests.slice(before)).toEqual(["Bearer synthetic-native-login-token"]);
+      await expectReply(agentId, "synthetic-native-login-token");
     }
 
     for (const agentId of ["main", "native"]) {
@@ -316,12 +331,7 @@ async function executeHookAuthCase(fixture: CliAuthFixture, signal: AbortSignal)
       key: canonicalKey("main"),
       model: `${modelRef}@anthropic:claude-cli`,
     });
-    const beforeNative = requests.length;
-    expect(await post("main")).toMatchObject({
-      status: 200,
-      body: { ok: true, completion: { status: "ok" } },
-    });
-    expect(requests.slice(beforeNative)).toEqual(["Bearer synthetic-native-login-token"]);
+    await expectReply("main", "synthetic-native-login-token");
     await gateway.client.request("sessions.patch", {
       key: canonicalKey("native"),
       model: `${modelRef}@anthropic:pasted`,
@@ -333,35 +343,101 @@ async function executeHookAuthCase(fixture: CliAuthFixture, signal: AbortSignal)
       authProfileOverrideSource: "user",
     });
     for (const model of [undefined, `${modelRef}@anthropic:missing`]) {
-      const before = requests.length;
-      expect(await post("native", model)).toMatchObject({
-        status: 200,
-        body: { ok: true, completion: { status: "ok" } },
+      await expectReply("native", "synthetic-pasted-anthropic-token", model);
+    }
+    const healthyStore = await loadAuthProfileStoreForRuntimeAsync(state.agentDir("native"));
+    expect(healthyStore.usageStats?.["anthropic:pasted"]?.lastUsed).toBeGreaterThan(0);
+    let beforeRevocation: number[] = [];
+    const originalMemory = cliSessions.ensureCliLiveSessionMemory;
+    const revokeBeforeLaunch: typeof originalMemory = async (context, runSignal) => {
+      // Remove both owners after credential preparation, before the fresh child starts.
+      for (const agentId of ["main", "native"]) {
+        expect(
+          await removeAuthProfilesAcrossOwnerStores({
+            agentDir: state.agentDir(agentId),
+            profileIds: ["anthropic:pasted"],
+          }),
+        ).toBe(true);
+      }
+      const revokedStore = await loadAuthProfileStoreForRuntimeAsync(state.agentDir("native"), {
+        readOnly: true,
+        allowKeychainPrompt: false,
       });
-      expect(requests.slice(before)).toEqual(["Bearer synthetic-pasted-anthropic-token"]);
+      expect(revokedStore.profiles["anthropic:pasted"]).toBeUndefined();
+      await settleCatalogs();
+      beforeRevocation = [await launches(), requests.length];
+      return originalMemory(context, runSignal);
+    };
+    using gate = vi
+      .spyOn(cliSessions, "ensureCliLiveSessionMemory")
+      .mockImplementationOnce(revokeBeforeLaunch);
+    const terminalEvents: unknown[] = [];
+    const stopEvents = onAgentEvent((event) => {
+      if (event.stream === "lifecycle") {
+        terminalEvents.push(event.data);
+      }
+    });
+    let revoked: Awaited<ReturnType<typeof post>>;
+    try {
+      revoked = await post("native", `${modelRef}@anthropic:pasted`, `${key("native")}:revoked`);
+    } finally {
+      stopEvents();
     }
-    // Remove both exact owners: an inherited shared copy is still a usable account.
-    for (const agentId of ["main", "native"]) {
-      expect(
-        await removeAuthProfilesAcrossOwnerStores({
-          agentDir: state.agentDir(agentId),
-          profileIds: ["anthropic:pasted"],
-        }),
-      ).toBe(true);
-    }
-    expect(
-      (
-        await loadAuthProfileStoreForRuntimeAsync(state.agentDir("native"), {
-          readOnly: true,
-          allowKeychainPrompt: false,
-        })
-      ).profiles["anthropic:pasted"],
-    ).toBeUndefined();
-    const beforeRevocation = await launches();
-    const requestsBeforeRevocation = requests.length;
+    expect.soft(revoked).toMatchObject({ status: 200, body: { completion: { status: "error" } } });
+    expect.soft(terminalEvents).toContainEqual(
+      expect.objectContaining({
+        phase: "error",
+        error: expect.stringContaining('Saved account "anthropic:pasted" was removed'),
+      }),
+    );
+    expect(gate).toHaveBeenCalledOnce();
     expect(await post("native")).toMatchObject({ status: 502, body: { ok: false } });
-    expect(await launches()).toBe(beforeRevocation);
-    expect(requests).toHaveLength(requestsBeforeRevocation);
+    expect([await launches(), requests.length]).toEqual(beforeRevocation);
+
+    // Chat uses the reply renderer; hooks above retain their separate cron error surface.
+    for (const agentId of ["main", "native"]) {
+      await state.writeAuthProfiles(
+        { version: 1, profiles: { "anthropic:pasted": savedCredential } },
+        agentId,
+      );
+    }
+    await settleCatalogs();
+    const chatKey = `agent:native:revoked-chat-${randomUUID()}`;
+    await gateway.client.request("sessions.create", {
+      agentId: "native",
+      key: chatKey,
+      model: `${modelRef}@anthropic:pasted`,
+    });
+    gate.mockImplementationOnce(revokeBeforeLaunch);
+    const accepted = await gateway.client.request<{ runId: string }>("chat.send", {
+      sessionKey: chatKey,
+      message: "Reply using the selected account.",
+      deliver: false,
+      idempotencyKey: randomUUID(),
+    });
+    const recoveryText =
+      '⚠️ Saved account "anthropic:pasted" was removed. Select a connected account or sign in again under Models, then retry. OpenClaw did not submit this turn.';
+    expect
+      .soft(
+        await gateway.client.request(
+          "agent.wait",
+          { runId: accepted.runId, timeoutMs: 30_000 },
+          { timeoutMs: 35_000 },
+        ),
+      )
+      .toMatchObject({ status: "error", error: recoveryText });
+    const history = await gateway.client.request<{ messages: unknown[] }>("chat.history", {
+      sessionKey: chatKey,
+    });
+    expect.soft(history.messages).toContainEqual(
+      expect.objectContaining({
+        role: "custom",
+        customType: "run-failed-before-reply",
+        content: recoveryText,
+      }),
+    );
+    expect(gate).toHaveBeenCalledTimes(2);
+    expect([await launches(), requests.length]).toEqual(beforeRevocation);
   } finally {
     try {
       await provider.releaseListener();
@@ -414,6 +490,45 @@ async function executeCliAuthCase(
     reply,
   );
   if (nativeContinuity) {
+    const turnsBeforeSelection = await fs.readFile(path.join(nativeRoot, "turns.jsonl"), "utf8");
+    const refusedKey = `agent:main:missing-account-${randomUUID()}`;
+    await expect(
+      fixture.gateway.client.request("sessions.create", {
+        agentId: "main",
+        key: refusedKey,
+        model: `${modelRef}@anthropic:missing`,
+      }),
+    ).rejects.toMatchObject({
+      message: `A runtime is not available for ${modelRef}: selected account "anthropic:missing" is unavailable. Restore that account, or change the explicit or default account selection.`,
+    });
+    expect((await loadGatewaySessionEntryReadOnlyAsync(refusedKey)).entry).toBeUndefined();
+    const personalKey = `agent:main:missing-personal-account-${randomUUID()}`;
+    await fixture.gateway.client.request("sessions.create", {
+      agentId: "main",
+      key: personalKey,
+      model: modelRef,
+    });
+    // Removed personal accounts leave their exact session pin behind. Re-selecting
+    // the same model must report recovery without exposing that private locator.
+    const personalProfileId = `personal:${randomUUID()}:${randomUUID()}`;
+    const retainedPin = {
+      authProfileOverride: personalProfileId,
+      authProfileOverrideSource: "user" as const,
+    };
+    expect(
+      await patchSessionEntryCore({ agentId: "main", sessionKey: personalKey }, () => retainedPin),
+    ).toMatchObject(retainedPin);
+    await expect(
+      fixture.gateway.client.request("sessions.patch", { key: personalKey, model: modelRef }),
+    ).rejects.toMatchObject({
+      message: `A runtime is not available for ${modelRef}: selected personal account is unavailable. Restore that account, or change the explicit or default account selection.`,
+    });
+    expect((await loadGatewaySessionEntryReadOnlyAsync(personalKey)).entry).toMatchObject(
+      retainedPin,
+    );
+    expect(await fs.readFile(path.join(nativeRoot, "turns.jsonl"), "utf8")).toBe(
+      turnsBeforeSelection,
+    );
     const original = await readBinding(sessionKey);
     expect(original?.sessionId).toBeTruthy();
     expect(original?.authProfileId).toBeUndefined();

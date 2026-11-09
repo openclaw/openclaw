@@ -5,9 +5,9 @@ import type { TtsAutoMode } from "../config/types.tts.js";
 import { createTtsDirectiveTextStreamCleaner } from "./directive-facts.js";
 import { resolveConfiguredTtsMode } from "./tts-config.js";
 import type { PreparedTtsPreferences } from "./tts-preferences.js";
-import { resolveTtsSettingsSnapshot } from "./tts-settings.js";
+import { resolveTtsSettingsSnapshotAsync } from "./tts-settings.js";
 
-export function shouldDeferFinalTtsText(params: {
+export async function shouldDeferFinalTtsText(params: {
   cfg: OpenClawConfig;
   preparedTtsPreferences?: PreparedTtsPreferences;
   ttsAuto?: TtsAutoMode;
@@ -15,7 +15,7 @@ export function shouldDeferFinalTtsText(params: {
   channelId?: string;
   accountId?: string;
   inboundAudio: boolean;
-}): boolean {
+}): Promise<boolean> {
   if (!resolveChannelTtsVoiceDelivery(params.channelId)?.captionedFinalText) {
     return false;
   }
@@ -28,7 +28,7 @@ export function shouldDeferFinalTtsText(params: {
   ) {
     return false;
   }
-  const settings = resolveTtsSettingsSnapshot({
+  const settings = await resolveTtsSettingsSnapshotAsync({
     cfg: params.cfg,
     preparedTtsPreferences: params.preparedTtsPreferences,
     sessionAuto: params.ttsAuto,

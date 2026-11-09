@@ -539,12 +539,9 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
 
       const threadStart = harness.requests.find((request) => request.method === "thread/start");
       expect(threadStart?.params).toMatchObject({
-        developerInstructions: `<openclaw_thread_policy>\n${[
-          systemPrompt,
-          mcpMocks.staticDiagnosticNotice,
-        ]
+        developerInstructions: [systemPrompt, mcpMocks.staticDiagnosticNotice]
           .filter(Boolean)
-          .join("\n\n")}\n</openclaw_thread_policy>`,
+          .join("\n\n"),
       });
       expect(
         harness.requests.some(

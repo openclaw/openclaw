@@ -19,6 +19,9 @@ import type { createClientHarness } from "./test-support.js";
 import type { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import type { CodexAttemptThreadInput as StartParams } from "./thread-lifecycle.test-fixtures.js";
 
+// Mirrors the production budget: Codex reports a slow thread shutdown only after 10s.
+const CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS = 10_000;
+
 type PolicyRefreshFixtures = {
   createParams: (sessionFile: string, workspaceDir: string) => StartParams["params"];
   createThreadLifecycleAppServerOptions: () => StartParams["appServer"];
@@ -93,6 +96,8 @@ export function registerThreadPolicyRefreshTests({
     [
       { nativeStatus: "systemError", outcome: "unloaded", sibling: true },
       { nativeStatus: "idle", outcome: "unloaded", sibling: true },
+      // Live Codex teardown with MCP servers confirms its unload about 2s after unsubscribe.
+      { nativeStatus: "idle", outcome: "unloaded", sibling: true, slow: true },
       { nativeStatus: "systemError", outcome: "timeout", sibling: true },
       { nativeStatus: "idle", outcome: "timeout", sibling: false },
       { nativeStatus: "systemError", outcome: "timeout", sibling: false },
@@ -105,16 +110,17 @@ export function registerThreadPolicyRefreshTests({
       { nativeStatus: "notLoaded", outcome: "timeout", sibling: true, closing: 1 },
       { nativeStatus: "notLoaded", outcome: "abort", sibling: true, closing: 1 },
       { nativeStatus: "notLoaded", outcome: "revoked", sibling: true, closing: 1 },
-    ].map(({ nativeStatus, outcome, sibling, closing = 0, earlyClose = false }) => ({
+    ].map(({ nativeStatus, outcome, sibling, closing = 0, earlyClose = false, slow = false }) => ({
       nativeStatus,
       outcome,
       sibling,
       closing,
       earlyClose,
+      slow,
     })),
   )(
-    "preserves managed $nativeStatus history across $outcome with sibling=$sibling, closing=$closing, early=$earlyClose",
-    async ({ nativeStatus, outcome, sibling, closing, earlyClose }) => {
+    "preserves managed $nativeStatus history across $outcome with sibling=$sibling, closing=$closing, early=$earlyClose, slow=$slow",
+    async ({ nativeStatus, outcome, sibling, closing, earlyClose, slow }) => {
       const unsubscribed = createDeferred<void>();
       const resumeRequested = createDeferred<void>();
       const rejectClosing = createDeferred<void>();
@@ -227,13 +233,20 @@ export function registerThreadPolicyRefreshTests({
           if (outcome === "revoked") {
             current = false;
           }
+          if (slow) {
+            await vi.advanceTimersByTimeAsync(3_000);
+          }
           if (!earlyClose && (nativeStatus !== "notLoaded" || closing)) {
             wire.send({ method: "thread/closed", params: { threadId } });
           }
         } else if (outcome === "abort") {
           controller.abort(new Error("cancel unload"));
         } else {
-          await vi.advanceTimersByTimeAsync(closing ? 500 : 2_000);
+          await vi.advanceTimersByTimeAsync(
+            closing
+              ? CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS - 1_500
+              : CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS,
+          );
         }
         await result;
         expect(requests.filter(({ method }) => method === "thread/start")).toHaveLength(1);
@@ -245,8 +258,7 @@ export function registerThreadPolicyRefreshTests({
           }
           expect(requests.find(({ method }) => method === "thread/resume")?.params).toMatchObject({
             threadId,
-            developerInstructions:
-              "<openclaw_thread_policy>\nreplacement policy\n</openclaw_thread_policy>",
+            developerInstructions: "replacement policy",
           });
           expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(threadId);
         } else {
@@ -338,9 +350,9 @@ export function registerThreadPolicyRefreshTests({
         ]);
         const policy = JSON.stringify(requests.at(-1)?.params);
         expect(policy).toContain(
-          developerInstructions || "an empty block withdraws their entire policy",
+          developerInstructions || "earlier OpenClaw generic policy is withdrawn",
         );
-        expect(policy).toContain("fully replaces only earlier blocks with the same tag");
+        expect(policy).toContain("replacing earlier OpenClaw generic policy");
         expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(threadId);
       } finally {
         close(wire);

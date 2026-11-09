@@ -48,6 +48,7 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
         outcome === "shared" ? path.join(env.OPENCLAW_STATE_DIR, "shared.sqlite") : undefined;
       const config: OpenClawConfig = {
         agents: { ownership: "explicit", entries: { main: {}, ready: {} } },
+        ...(outcome === "ready" ? { session: { mainKey: "restart-admission" } } : {}),
         ...(sharedStore ? { session: { store: sharedStore } } : {}),
         gateway: {
           roles: {
@@ -190,13 +191,14 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
                 const recoverInputs = migrated ? migrated.recoverInputs : undefined;
                 return {
                   // Advisory transcript maintenance is not part of recovery admission.
-                  recoverInputs:
-                    recoverInputs &&
-                    (async () => {
+                  recoverInputs: recoverInputs && {
+                    ...recoverInputs,
+                    run: async () => {
                       inputRecoveryEntered.resolve();
                       await inputRecoveryReady.promise;
-                      await recoverInputs();
-                    }),
+                      await recoverInputs.run();
+                    },
+                  },
                 };
               },
             }),
@@ -241,7 +243,10 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
               marker,
             );
           }
-          expect(warn).toHaveBeenCalledTimes(sharedStore ? 0 : 1);
+          expect(warn).toHaveBeenCalledWith(
+            "Agent main resume deferred: agent database unavailable (agent-database-inspection-pending)",
+          );
+          expect(warn).toHaveBeenCalledTimes(sharedStore ? 1 : 2);
           const pendingPreparation = admission.pendingPreparation;
           expect(pendingPreparation).toBeDefined();
           preparationReady.resolve();
@@ -261,15 +266,30 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
               await import("./agent-database-preparation-context.js");
             const input = waitForAgentInputAdmission(sharedStore ? "ready" : "main", {
               ...(sharedStore ? { storePath: sharedStore } : { cfg: config }),
+              sessionKey:
+                outcome === "read-pending"
+                  ? undefined
+                  : outcome === "ready"
+                    ? "agent:MAIN:MAIN"
+                    : sharedStore
+                      ? readyScope.sessionKey
+                      : scope.sessionKey,
               owner: admission.observation,
               signal,
             });
             expect(input).toBeDefined();
             await withinTest(
               awaitGateBeforeSettlement(
-                readSessionEntryReadOnlyInWorker(readyScope),
+                Promise.resolve(
+                  waitForAgentInputAdmission(sharedStore ? "ready" : "main", {
+                    ...(sharedStore ? { storePath: sharedStore } : { cfg: config }),
+                    sessionKey: "agent:main:uninterrupted",
+                    owner: admission.observation,
+                    signal,
+                  }),
+                ),
                 input!,
-                "Fresh input overtook restart recovery",
+                "Unrelated session did not pass the retained input barrier independently",
               ),
               signal,
             );
@@ -292,34 +312,38 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
               code: "agent-database-inspection-failed",
             });
             expect(() => openAgent(scope)).toThrow("fixture startup preparation failed");
-            expect(warn).toHaveBeenCalledTimes(1);
+            expect(warn).toHaveBeenCalledTimes(2);
           } else if (outcome === "aborted") {
             expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
             expect((await readSessionEntryReadOnlyInWorker(scope))?.resumeAfterRestart).toEqual(
               marker,
             );
-            expect(warn).toHaveBeenCalledTimes(1);
+            expect(warn).toHaveBeenCalledTimes(2);
             return;
           } else {
             expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
             expect(
               (await readSessionEntryReadOnlyInWorker(scope))?.resumeAfterRestart,
             ).toBeUndefined();
-            expect(warn).toHaveBeenCalledTimes(legacyScope ? 3 : 2);
+            expect(warn).toHaveBeenCalledTimes(legacyScope ? 4 : 3);
             if (legacyScope) {
               expect(
                 (await readSessionEntryReadOnlyInWorker(legacyScope))?.mainRestartRecovery,
               ).toBeUndefined();
               expect(warn).toHaveBeenCalledWith(
-                `Skipped restart resume for ${legacyScope.sessionKey}: Error: Session principal has no current run authority.`,
+                expect.stringContaining(
+                  `Skipped restart resume for ${legacyScope.sessionKey}: Error: Session principal has no current run authority.`,
+                ),
               );
             }
             expect(warn).toHaveBeenCalledWith(
-              `Skipped restart resume for ${scope.sessionKey}: Error: Session principal has no current run authority.`,
+              expect.stringContaining(
+                `Skipped restart resume for ${scope.sessionKey}: Error: Session principal has no current run authority.`,
+              ),
             );
           }
           await withinTest(resumeMarkedSessions({ context, signal, log: { warn } }), signal);
-          expect(warn).toHaveBeenCalledTimes(outcome === "refused" ? 1 : legacyScope ? 3 : 2);
+          expect(warn).toHaveBeenCalledTimes(outcome === "refused" ? 3 : legacyScope ? 4 : 3);
         } finally {
           recovery.abort();
           preparationReady.resolve();

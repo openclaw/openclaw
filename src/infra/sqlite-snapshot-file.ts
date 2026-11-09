@@ -1,6 +1,6 @@
+// Keep file observation independent of publication cleanup and its runtime logger.
 import fsSync, { type BigIntStats, type Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
-import path from "node:path";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { sha256File } from "./directory-durability.js";
 import {
@@ -146,31 +146,6 @@ export function sameFileStatFingerprint(
   // Linking/unlinking changes ctime, which Linux can expose as birthtime without statx.
   // Publication separately verifies bytes; timestamps do not identify the transferred file.
   return sameFileIdentity(left, right) && left.size === right.size;
-}
-
-export async function removePublicationStagingDirectory(
-  stagingDir: string,
-  expectedIdentity: FileIdentityStat,
-): Promise<void> {
-  const currentIdentity = await fs.lstat(stagingDir, { bigint: true }).catch(() => undefined);
-  if (!currentIdentity) {
-    return;
-  }
-  if (!currentIdentity.isDirectory() || !sameFileIdentity(expectedIdentity, currentIdentity)) {
-    throw new Error(`SQLite publication staging directory changed: ${stagingDir}`);
-  }
-  const entries = await fs.readdir(stagingDir, { withFileTypes: true });
-  if (
-    entries.length > 1 ||
-    entries.some((entry) => entry.name !== "database.sqlite" || !entry.isFile())
-  ) {
-    throw new Error(`SQLite publication staging directory has unexpected contents: ${stagingDir}`);
-  }
-  const stagedEntry = entries[0];
-  if (stagedEntry) {
-    await fs.unlink(path.join(stagingDir, stagedEntry.name));
-  }
-  await fs.rmdir(stagingDir);
 }
 
 export async function assertMutationFingerprintUnchanged(

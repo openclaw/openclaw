@@ -247,6 +247,12 @@ OAuth refresh settlement remains owned by the OAuth manager.
   </Tab>
 </Tabs>
 
+Custom `StreamFn` factories may return a producer stream or a read-only stream
+with an async iterator and `result()`, either immediately or through a Promise.
+Read-only streams are bridged into the runtime while preserving their final
+`result()` independently of terminal-event completion. Existing synchronous
+producer streams retain their completion identity and lazy result behavior.
+
 Set `supportsSystemPromptCacheBoundary: true` on a provider registration
 only when its `createStreamFn` transport understands the stable/dynamic
 system-prompt boundary. Use `splitSystemPromptCacheBoundary` from
@@ -336,6 +342,11 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `sanitizeReplayHistory`           | Deprecated third-party replay compatibility hook; migrate to `sanitizeReplayHistoryAsync`   |
 | `validateReplayTurns`             | Strict replay-turn validation before the embedded runner                                    |
 | `onModelSelected`                 | Post-selection callback (e.g. telemetry)                                                    |
+
+Replay sanitation and validation hooks receive writable message copies. In-place
+edits remain part of replay when a hook returns `null` or `undefined`; validation
+then continues through the built-in validators. Return a replacement message
+array to replace history. These edits do not mutate the stored transcript.
 
 `reconcileLocalService` is called only for a configured local service,
 including a healthy process reused by a restarted Gateway. Honor its

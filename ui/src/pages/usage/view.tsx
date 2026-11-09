@@ -1,11 +1,11 @@
-import { For, Show, createMemo } from "solid-js";
-import { Icon } from "../../components/solid/icon.tsx";
+import { For, Show, createMemo, onSettled } from "solid-js";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
-import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import "../../components/tooltip.ts";
-import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import "../../styles/usage.css";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { isUsageCacheIncomplete } from "./cache-status.ts";
 import { UsageMosaic } from "./metrics-view.tsx";
 import { buildPeakErrorHours, formatUsageCost, formatUsageTokens } from "./metrics.ts";
@@ -13,11 +13,11 @@ import { renderUsageEmptyState } from "./page-shell.tsx";
 import { createUsagePhoneLayout } from "./phone-layout.ts";
 import { buildProviderSeries } from "./provider-series.ts";
 import { createUsageRead, UsagePending, UsageReadStatus, type UsageRead } from "./read-status.tsx";
+import { createSessionDetailReveal } from "./session-detail-reveal.ts";
 import { selectUsageExport, usageDisplaySessionCount, usageExportItems } from "./view-actions.tsx";
 import { DailyChartCompact, CostBreakdownCompact } from "./view-chart.tsx";
 import { createUsageControls, type UsageControlsProps } from "./view-controls.tsx";
 import { UsageCreators } from "./view-creators.tsx";
-import { SessionDetailPanel } from "./view-details.tsx";
 import { UsageHeatmap } from "./view-heatmap.tsx";
 import {
   CostWindowComparison,
@@ -26,7 +26,7 @@ import {
   UsageInsights,
   usageOverview,
 } from "./view-overview.tsx";
-import { SessionsCard } from "./view-sessions-card.tsx";
+import { UsageSessionsGrid } from "./view-sessions-grid.tsx";
 
 registerEnglishCatalog(registerUsageEnglish);
 
@@ -43,6 +43,9 @@ export function renderUsage(props: UsageControlsProps) {
 }
 
 function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRead }) {
+  // The report can replace its grid while a row selection is still being revealed.
+  const reveal = createSessionDetailReveal();
+  onSettled(() => reveal.dispose);
   const loading = () => props.loading;
   const phone = createUsagePhoneLayout();
   // Status reads would enlist retained chart eligibility in the request's retry lifecycle.
@@ -162,6 +165,7 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
         <section class="usage-header-section">
           <div class={["usage-header", { pinned: props.display.headerPinned && !phone() }]}>
             {controls.toolbar()}
+            {controls.appliedFilters()}
 
             {/* Carapace summary strip: fixed cells, so placeholders and loaded totals share one layout. */}
             <div class="usage-summary-strip">
@@ -179,26 +183,6 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
               ) : (
                 <div class="usage-summary-strip__actions">
                   {controls.partialStatus()}
-                  <button
-                    class={[
-                      "btn btn--sm btn--icon usage-pin-btn",
-                      { active: props.display.headerPinned },
-                    ]}
-                    aria-label={
-                      props.display.headerPinned
-                        ? t("usage.filters.pinned")
-                        : t("usage.filters.pin")
-                    }
-                    aria-pressed={props.display.headerPinned ? "true" : "false"}
-                    title={
-                      props.display.headerPinned
-                        ? t("usage.filters.pinned")
-                        : t("usage.filters.pin")
-                    }
-                    onClick={() => props.callbacks.filters.onToggleHeaderPinned()}
-                  >
-                    <Icon name={props.display.headerPinned ? "pinOff" : "pin"} />
-                  </button>
                   <Menu
                     id="usage-export"
                     label={t("usage.export.label")}
@@ -224,18 +208,21 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
             <UsageReadStatus read={props.read}>
               {() =>
                 props.data.error ? (
-                  <div class="callout danger usage-callout">{props.data.error}</div>
+                  <InlineAlert tone="danger" class="usage-callout">
+                    {props.data.error}
+                  </InlineAlert>
                 ) : undefined
               }
             </UsageReadStatus>
             {props.data.cacheRefresh === "failed" ? (
-              <div
-                class="callout warning usage-callout usage-cache-warning"
+              <InlineAlert
+                tone="warning"
+                class="usage-callout usage-cache-warning"
                 role="status"
                 aria-live="polite"
               >
                 {t("usage.cacheStatus.paused")}
-              </div>
+              </InlineAlert>
             ) : undefined}
           </div>
         </section>
@@ -266,9 +253,6 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
                 selectedDays={props.filters.selectedDays}
                 chartMode={props.display.chartMode}
                 dailyChartMode={props.display.dailyChartMode}
-                onDailyChartModeChange={(dailyChartMode) =>
-                  props.callbacks.display.onChange({ dailyChartMode })
-                }
                 onSelectDay={props.callbacks.filters.onSelectDay}
                 providerSeries={providerSeries()}
                 range={{
@@ -345,37 +329,18 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
               onSelectHour={props.callbacks.filters.onSelectHour}
             />
 
-            <div class="usage-grid">
-              <div class="usage-grid-column">
-                <SessionsCard
-                  sessions={analyticsData().sessions}
-                  selectedRows={analyticsData().overview?.selectedRows ?? []}
-                  usage={props}
-                  totalSessions={analyticsData().overview?.total ?? analyticsTotalSessions()}
-                  overview={
-                    retainedChartSnapshot()?.overview ??
-                    props.data.sessionPage ??
-                    props.data.overview
-                  }
-                  loading={loading()}
-                />
-              </div>
-              <Show when={showAnalytics() && primarySelectedEntry()}>
-                {(selectedSession) => (
-                  // Details stack under the session list so the page stays one column.
-                  <aside class="usage-grid-column" aria-label={t("usage.sessions.details")}>
-                    <SessionDetailPanel
-                      session={selectedSession()}
-                      detail={props.detail}
-                      callbacks={props.callbacks.details}
-                      range={props.filters}
-                      contextExpanded={props.display.contextExpanded}
-                      onClose={() => props.callbacks.filters.onClearSessions()}
-                    />
-                  </aside>
-                )}
-              </Show>
-            </div>
+            <UsageSessionsGrid
+              usage={props}
+              reveal={reveal}
+              sessions={analyticsData().sessions}
+              selectedRows={analyticsData().overview?.selectedRows ?? []}
+              totalSessions={analyticsData().overview?.total ?? analyticsTotalSessions()}
+              overview={
+                retainedChartSnapshot()?.overview ?? props.data.sessionPage ?? props.data.overview
+              }
+              loading={loading()}
+              selected={showAnalytics() ? primarySelectedEntry() : null}
+            />
           </div>
         </Show>
         {renderProviderUsage(

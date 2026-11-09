@@ -9,6 +9,8 @@
 // 5s foreground admission budget, so their migrations overlap the slow inspection.
 // --publication-api-delay-ms 500 seeds four historical publications; a private gh/fetch
 // fixture delays read-only GitHub observations and never uses real credentials or GitHub.
+// --restart-sessions 9 adds interrupted sessions plus 155 stale runs, synthetic inference,
+// and real startup read RPCs. Restore pristine state before each comparison sample.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv } from "node:crypto";
@@ -30,6 +32,7 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
+import type { InternalSessionEntry } from "../src/config/sessions/types.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../src/config/validation-core.js";
 import { isMainModule } from "../src/infra/is-main.js";
@@ -73,6 +76,15 @@ import {
   writePluginFixtures,
   waitForInitialProbe as waitForProbe,
 } from "./lib/gateway-bench-runtime.ts";
+import { summarizeGatewayModuleLoads } from "./lib/gateway-startup-module-counts.mjs";
+import {
+  STARTUP_RESUME_AGENT,
+  STARTUP_RESUME_SKIPPED,
+  startupResumeConfig,
+  startStartupResumeProvider,
+  probeStartupReads,
+  type StartupReadProbe,
+} from "./lib/gateway-startup-resume.ts";
 import { selectSlowStartupTraceDurations } from "./lib/gateway-startup-trace-ranking.js";
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
@@ -94,11 +106,29 @@ type GatewayBenchCase = {
   providerStaticCatalogStallMs?: number;
   publicationGitDelayMs?: number;
   publicationApiDelayMs?: number;
+  restartSessions?: number;
   teamScale?: boolean;
   runByDefault?: boolean;
 };
 
+type ExitListenerSnapshot = {
+  peak: number;
+  current: number;
+  defaultLimit: number;
+  registrations: { name: string; stack: string; count: number; removed: boolean }[];
+  warnings: { name: string; message: string; stack: string }[];
+};
+
 type GatewaySample = {
+  restartRecovery?: {
+    resumed: number;
+    skipped: number;
+    completeMs?: number;
+    inferenceMs: number[];
+    errors: string[];
+  };
+  startupReads?: StartupReadProbe;
+  exitListeners?: ExitListenerSnapshot;
   pluginMigration?: { total: number; completed: number; warnings: number };
   publicationRecovery?: { startedAtMs: number; releasedAtMs: number; delayMs: number };
   publicationApi?: {
@@ -125,6 +155,9 @@ type GatewaySample = {
   gatewayReadyLogMs: number | null;
   healthz: InitialProbeResult;
   heapProfilePath?: string;
+  snapshotCounts?: { directories: number; files: number; bytes: number; processes: number };
+  moduleCounts?: ReturnType<typeof summarizeGatewayModuleLoads>;
+  moduleCountsAtHttpListen?: ReturnType<typeof summarizeGatewayModuleLoads>;
   httpListenLogLine: string | null;
   httpListenLogMs: number | null;
   hostLoadBefore: number[];
@@ -151,6 +184,8 @@ type CliOptions = GatewayBenchRuntimeOptions & {
   cases: GatewayBenchCase[];
   cpuProfDir?: string;
   entry: string;
+  exitListeners: boolean;
+  assertExitListeners: boolean;
   heapProfDir?: string;
   installedCohort?: string;
   installedChild: boolean;
@@ -162,6 +197,8 @@ type CliOptions = GatewayBenchRuntimeOptions & {
   warmup: number;
   fixtureRoot?: string;
   seedOnly: boolean;
+  snapshotCounts: boolean;
+  moduleCounts: boolean;
   agentDatabaseMib: number;
   agentGateDelayMs: number;
   startAt?: number;
@@ -182,6 +219,10 @@ const BOOLEAN_FLAGS = new Set([
   "--installed-cpu-diagnostic",
   "--seed-only",
   "--team-scale",
+  "--snapshot-counts",
+  "--module-counts",
+  "--exit-listeners",
+  "--assert-exit-listeners",
 ]);
 const VALUE_FLAGS = new Set([
   "--case",
@@ -203,6 +244,7 @@ const VALUE_FLAGS = new Set([
   "--publication-git-delay-ms",
   "--publication-api-delay-ms",
   "--plugin-migration-fixture",
+  "--restart-sessions",
 ]);
 
 const BASE_CONFIG = BASE_GATEWAY_BENCH_CONFIG;
@@ -456,6 +498,8 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       "--cpu-prof-dir",
       "--heap-prof-dir",
       "--timeout-ms",
+      "--exit-listeners",
+      "--assert-exit-listeners",
     ]) {
       if (argv.includes(flag)) {
         throw new CliArgumentError(`${flag} is not supported with --installed-cohort`);
@@ -483,6 +527,24 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       throw new CliArgumentError("--team-scale requires --case teamBoot");
     }
     cases = [{ ...cases[0], teamScale: true, pluginCount: 46 }];
+  }
+  if (flags.has("--restart-sessions")) {
+    if (cases.length !== 1 || cases[0]?.id !== "teamBoot") {
+      throw new CliArgumentError("--restart-sessions requires --case teamBoot");
+    }
+    const restartSessions = parsePositiveInt(
+      flags.get("--restart-sessions")?.[0],
+      9,
+      "--restart-sessions",
+    );
+    if (restartSessions + STARTUP_RESUME_SKIPPED > 1250) {
+      throw new CliArgumentError(
+        "--restart-sessions plus skipped rows must fit the 1250-session agent",
+      );
+    }
+    cases = [
+      { ...cases[0], restartSessions, config: { ...cases[0].config, ...startupResumeConfig() } },
+    ];
   }
   if (flags.has("--plugin-migration-fixture")) {
     const pluginMigrationFixture = flags.get("--plugin-migration-fixture")?.[0];
@@ -540,10 +602,12 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     const value: unknown = JSON.parse(readFileSync(bundledPluginFixturePath, "utf8"));
     if (
       !isRecord(value) ||
-      Object.keys(value).some((key) => !["plugins", "models", "tools", "channels"].includes(key))
+      Object.keys(value).some(
+        (key) => !["plugins", "models", "tools", "channels", "secrets"].includes(key),
+      )
     ) {
       throw new CliArgumentError(
-        "--bundled-plugin-fixture may configure only plugins, models, tools, and channels",
+        "--bundled-plugin-fixture may configure only plugins, models, tools, channels, and secrets",
       );
     }
     const validated = validateConfigObjectRaw(value);
@@ -564,8 +628,8 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
         "--bundled-plugin-fixture requires 1–44 unique plugins.allow IDs and no plugins.load paths",
       );
     }
-    const { plugins, models, tools, channels } = validated.config;
-    cases = [{ ...cases[0], bundledPluginFixture: { plugins, models, tools, channels } }];
+    const { plugins, models, tools, channels, secrets } = validated.config;
+    cases = [{ ...cases[0], bundledPluginFixture: { plugins, models, tools, channels, secrets } }];
   }
   if (
     cases[0]?.pluginMigrationFixture &&
@@ -579,6 +643,8 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     cpuProfDir: flags.get("--cpu-prof-dir")?.[0],
     entry: resolveGatewayBenchEntry(flags.get("--entry")?.[0], DEFAULT_ENTRY),
     heapProfDir: flags.get("--heap-prof-dir")?.[0],
+    exitListeners: flags.has("--exit-listeners") || flags.has("--assert-exit-listeners"),
+    assertExitListeners: flags.has("--assert-exit-listeners"),
     installedCohort,
     installedChild,
     installedCpuDiagnostic,
@@ -589,6 +655,8 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     warmup: parseNonNegativeInt(flags.get("--warmup")?.[0], DEFAULT_WARMUP, "--warmup"),
     fixtureRoot: flags.get("--fixture-root")?.[0],
     seedOnly: flags.has("--seed-only"),
+    snapshotCounts: flags.has("--snapshot-counts"),
+    moduleCounts: flags.has("--module-counts"),
     agentDatabaseMib: parseNonNegativeInt(
       flags.get("--agent-database-mib")?.[0],
       512,
@@ -622,16 +690,21 @@ Options:
   --timeout-ms <ms>    Per-run timeout (default: ${DEFAULT_TIMEOUT_MS})
   --cpu-prof-dir <dir> Write one V8 CPU profile per run
   --heap-prof-dir <dir> Sample main-thread allocations through /readyz, including collected objects
+  --exit-listeners     Trace every main-thread exit registration and warning through startup
+  --assert-exit-listeners Fail if startup exceeds the default exit-listener limit (implies tracing)
   --installed-cohort <path> Measure one fresh installed startup and eight retained-state restarts
   --installed-cpu-diagnostic Profile one established startup after an unprofiled fresh prime; requires --installed-cohort
   --output <path>      Write machine-readable JSON to a file
   --json               Emit machine-readable JSON
   --help, -h           Show this text
   --fixture-root <path> Prepared teamBoot or slowAgentDatabase fixture (requires --runs 1 --warmup 0)
+  --snapshot-counts   Count private SQLite staging directories/bytes and retain full Gateway output
+  --module-counts     Count loaded module files at listener log and completion (diagnostic pass)
   --seed-only         Create a new --fixture-root without launching a Gateway
-  --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels config for teamBoot
+  --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels/secrets config for teamBoot
   --plugin-migration-fixture <status> Seed a pending or deferred config-only teamBoot obligation
   --team-scale                   Seed 46 plugins, 12 GiB shared/35 GiB agent data and 62k workspace files
+  --restart-sessions <n> Resume n interrupted sessions plus 155 stale runs; probe startup reads
   --publication-git-delay-ms <n> Seed one pending teamBoot publication with a slow local Git read (1–30000)
   --publication-api-delay-ms <n> Recover four historical publications through delayed mock GitHub reads (200–800)
   --agent-database-mib <n> Slow-agent cache payload (default: 512), or teamBoot total transcript database size
@@ -659,6 +732,7 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
           bundledPluginIds: benchCase.bundledPluginFixture?.plugins?.allow ?? [],
           publicationGitDelayMs: benchCase.publicationGitDelayMs,
           publicationApiDelayMs: benchCase.publicationApiDelayMs,
+          restartSessions: benchCase.restartSessions,
         }
       : {}),
     samples,
@@ -680,7 +754,10 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
   };
 }
 
-function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
+function collectResultFailures(
+  results: CaseResult[],
+  assertExitListeners = false,
+): BenchmarkFailure[] {
   const failures: BenchmarkFailure[] = [];
   for (const result of results) {
     result.samples.forEach((sample, index) => {
@@ -725,6 +802,19 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
           "four historical publications confirmed through mock GitHub and durable receipts",
         );
       }
+      if (
+        result.restartSessions !== undefined &&
+        (sample.restartRecovery?.resumed !== result.restartSessions ||
+          sample.restartRecovery.skipped !== STARTUP_RESUME_SKIPPED ||
+          sample.restartRecovery.inferenceMs.length !== result.restartSessions ||
+          sample.restartRecovery.errors.length ||
+          !sample.startupReads ||
+          Object.values(sample.startupReads.methods).some(
+            (read) => read.firstSuccessMs === undefined || read.errors.length,
+          ))
+      ) {
+        missing.push("restart admission/inference and successful startup read RPCs");
+      }
       if (result.id === "slowAgentDatabase") {
         if (
           SLOW_DATABASE_AGENT_IDS.some((agentId) => sample.agentRecoveryMs?.[agentId] === undefined)
@@ -733,6 +823,17 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
         }
         if (sample.integrityGateMs?.["gate-passed"] === undefined) {
           missing.push("full integrity scan");
+        }
+      }
+      if (assertExitListeners) {
+        if (!sample.exitListeners) {
+          missing.push("exit-listener capture");
+        } else if (sample.exitListeners.peak > sample.exitListeners.defaultLimit) {
+          failures.push({
+            id: result.id,
+            reason: `exit listeners peaked at ${sample.exitListeners.peak} (default limit ${sample.exitListeners.defaultLimit})`,
+            sampleIndex: index + 1,
+          });
         }
       }
       if (missing.length > 0) {
@@ -1471,12 +1572,24 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
         agentDb.runOpenClawAgentWriteTransaction(
           (writable) => {
             for (let index = 0; index < 1250; index++) {
-              writeSessionEntry(writable, `agent:${agentId}:bench-${index}`, {
+              const entry: InternalSessionEntry = {
                 sessionId: `team-boot-${agentId}-${index}`,
                 updatedAt: now - index,
                 label: `Synthetic startup session ${index}`,
                 visibility: "shared",
-              });
+                ...(benchCase.restartSessions && agentId === STARTUP_RESUME_AGENT
+                  ? index < benchCase.restartSessions
+                    ? { resumeAfterRestart: { queuedInputIds: [] } }
+                    : index < benchCase.restartSessions + STARTUP_RESUME_SKIPPED
+                      ? { lifecycleRunId: `synthetic-stale-${index}`, startedAt: now - 86_400_000 }
+                      : {}
+                  : {}),
+              };
+              writeSessionEntry(writable, `agent:${agentId}:bench-${index}`, entry);
+              // Creation retires private restart markers; shutdown marks the existing incarnation.
+              if (entry.resumeAfterRestart) {
+                writeSessionEntry(writable, `agent:${agentId}:bench-${index}`, entry);
+              }
             }
           },
           { agentId, env },
@@ -1625,6 +1738,7 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
         bundledPluginFixture: benchCase.bundledPluginFixture ?? {},
         publicationGitDelayMs: benchCase.publicationGitDelayMs,
         publicationApiDelayMs: benchCase.publicationApiDelayMs,
+        restartSessions: benchCase.restartSessions,
         externalPluginCount:
           benchCase.pluginCount! - (benchCase.bundledPluginFixture?.plugins?.allow?.length ?? 0),
         agentCount: agents.length,
@@ -1913,12 +2027,54 @@ async function captureStartupHeapProfile(
   });
 }
 
+async function captureStartupExitListeners(
+  child: ChildProcess,
+  timeoutMs: number,
+): Promise<ExitListenerSnapshot> {
+  return await new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.off("message", onMessage);
+      child.off("exit", onExit);
+      child.off("error", onError);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onExit = () => onError(new Error("Gateway exited before exit-listener capture"));
+    // The benchmark preload owns this IPC response.
+    const onMessage = (message: { type?: string; exitListeners?: ExitListenerSnapshot }) => {
+      if (message?.type !== "openclaw-startup-exit-listeners:captured" || !message.exitListeners) {
+        return;
+      }
+      cleanup();
+      resolve(message.exitListeners);
+    };
+    const timer = setTimeout(
+      () => onError(new Error("Exit-listener capture timed out")),
+      timeoutMs,
+    );
+    child.on("message", onMessage);
+    child.once("exit", onExit);
+    child.once("error", onError);
+    child.send({ type: "openclaw-startup-exit-listeners:capture" }, (error) => {
+      if (error) {
+        onError(error);
+      }
+    });
+  });
+}
+
 async function runGatewaySample(
   options: GatewayBenchRuntimeOptions & {
     benchCase: GatewayBenchCase;
     cpuProfDir?: string;
     entry: string;
     heapProfDir?: string;
+    exitListeners?: boolean;
+    snapshotCounts?: boolean;
+    moduleCounts?: boolean;
     sampleIndex: number;
     timeoutMs: number;
     fixtureRoot?: string;
@@ -1940,6 +2096,7 @@ async function runGatewaySample(
         "could not allocate a benchmark port >= 40000 after 32 attempts; ensure the host's ephemeral port range includes ports >= 40000",
       );
     }
+    let resumeProvider: Awaited<ReturnType<typeof startStartupResumeProvider>> | undefined;
     const configPath = writeConfig(root, options.benchCase);
     if (options.benchCase.id === "teamBoot") {
       copyFileSync(configPath, `${configPath}.bak`);
@@ -1971,7 +2128,27 @@ async function runGatewaySample(
     if (preload) {
       env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --import=${preload}`.trim();
     }
+    const snapshotCountPath = options.snapshotCounts
+      ? path.join(root, "snapshot-counts.jsonl")
+      : undefined;
+    if (snapshotCountPath) {
+      writeFileSync(snapshotCountPath, "");
+      env.OPENCLAW_BENCH_SNAPSHOT_COUNTS = snapshotCountPath;
+      const observer = fileURLToPath(
+        new URL("./lib/gateway-startup-snapshot-counts.mjs", import.meta.url),
+      );
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --import=${observer}`.trim();
+    }
     const agentRecoveryMs: Record<string, number> = {};
+    const moduleCountPath = options.moduleCounts
+      ? path.join(root, "module-counts.jsonl")
+      : undefined;
+    if (moduleCountPath) {
+      writeFileSync(moduleCountPath, "");
+      env.OPENCLAW_BENCH_MODULE_COUNTS = moduleCountPath;
+      const observer = new URL("./lib/gateway-startup-module-counts.mjs", import.meta.url).href;
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --import=${observer}`.trim();
+    }
     const integrityGateMs: Record<string, number> = {};
     let agentDatabaseAdmissionErrors = 0;
     let pluginMigrationWarnings = 0;
@@ -1988,9 +2165,6 @@ async function runGatewaySample(
       }
       await delay(remaining);
     }
-    const hostLoadBefore = loadavg();
-    const startAt = performance.now();
-    const deadlineAt = startAt + options.timeoutMs;
     const startupTrace: Record<string, number> = {};
     const startupTraceLines: string[] = [];
     const output: string[] = [];
@@ -2000,13 +2174,33 @@ async function runGatewaySample(
     let gatewayReadyLogMs: number | null = null;
     let httpListenLogLine: string | null = null;
     let httpListenLogMs: number | null = null;
+    let moduleCountsAtHttpListen: ReturnType<typeof summarizeGatewayModuleLoads> | undefined;
     let childExited = false;
     let heapProfilePath: string | undefined;
+    let startupReads: StartupReadProbe | undefined;
+    const restartRecovery = options.benchCase.restartSessions
+      ? { resumed: 0, skipped: 0, completeMs: undefined as number | undefined }
+      : undefined;
     let child: ChildProcess | undefined;
     let rssSampler: ReturnType<typeof startGatewayRssSampling> | undefined;
 
     try {
+      if (options.benchCase.restartSessions) {
+        resumeProvider = await startStartupResumeProvider();
+        writeConfig(root, {
+          ...options.benchCase,
+          config: { ...options.benchCase.config, ...resumeProvider.config },
+        });
+        copyFileSync(configPath, `${configPath}.bak`);
+      }
       const nodeOptions = [
+        ...(options.exitListeners
+          ? [
+              "--trace-warnings",
+              "--import",
+              fileURLToPath(new URL("./lib/gateway-startup-exit-listeners.mjs", import.meta.url)),
+            ]
+          : []),
         ...(options.heapProfDir
           ? [
               "--import",
@@ -2023,11 +2217,19 @@ async function runGatewaySample(
         options.benchCase.id === "teamBoot" || slowAgent ? "token" : "none",
       );
       const command = buildGatewayBenchCommand(childArgs, options);
+      const hostLoadBefore = loadavg();
+      const startAt = performance.now();
+      const deadlineAt = startAt + options.timeoutMs;
       child = spawn(command.command, command.args, {
         cwd: process.cwd(),
         detached: process.platform !== "win32",
         env,
-        stdio: ["pipe", "pipe", "pipe", ...(options.heapProfDir ? ["ipc" as const] : [])],
+        stdio: [
+          "pipe",
+          "pipe",
+          "pipe",
+          ...(options.heapProfDir || options.exitListeners ? ["ipc" as const] : []),
+        ],
       });
       try {
         await once(child, "spawn");
@@ -2045,6 +2247,9 @@ async function runGatewaySample(
       });
 
       const onLine = (line: string, nowMs: number) => {
+        if (resumeProvider) {
+          appendFileSync(path.join(root, "restart-gateway.log"), `${line}\n`);
+        }
         if (options.benchCase.publicationApiDelayMs !== undefined) {
           appendFileSync(path.join(root, "publication-gateway.log"), `${line}\n`);
         }
@@ -2066,10 +2271,23 @@ async function runGatewaySample(
         if (gate) {
           integrityGateMs[gate[1]!] ??= nowMs;
         }
+        const resumeSummary = /startup restart resume: (\[.*\])/u.exec(line);
+        if (restartRecovery && resumeSummary) {
+          for (const summary of JSON.parse(resumeSummary[1]!)) {
+            restartRecovery.resumed += summary.resumed ?? 0;
+            restartRecovery.skipped += summary.skipped ?? 0;
+          }
+          restartRecovery.completeMs = nowMs;
+        }
         const readyLogKind = classifyGatewayReadyLog(line);
         if (readyLogKind === "http-listen" && httpListenLogMs == null) {
           httpListenLogMs = nowMs;
           httpListenLogLine = line;
+          if (moduleCountPath) {
+            moduleCountsAtHttpListen = summarizeGatewayModuleLoads(
+              readFileSync(moduleCountPath, "utf8"),
+            );
+          }
         }
         if (readyLogKind === "gateway-ready" && gatewayReadyLogMs == null) {
           gatewayReadyLogMs = nowMs;
@@ -2085,7 +2303,7 @@ async function runGatewaySample(
         }
         const text = chunk.toString("utf8");
         output.push(text);
-        if (output.length > 20) {
+        if (!options.snapshotCounts && output.length > 20) {
           output.splice(0, output.length - 20);
         }
         const parsed = collectOutputLines(outputBuffers[stream], text);
@@ -2107,10 +2325,28 @@ async function runGatewaySample(
           startAt,
         });
       const healthzProbe = probe("/healthz");
+      const startupReadsWork = resumeProvider
+        ? healthzProbe.then(async (health) => {
+            if (health.status === 200) {
+              startupReads = await probeStartupReads({
+                port,
+                token: TEAM_BOOT_AUTH_TOKEN,
+                startAt,
+                deadlineAt,
+                isDone: () => childExited,
+              });
+            }
+          })
+        : undefined;
       const [healthz, readyz, firstSessionRpc] = await Promise.all([
         healthzProbe,
         probe("/readyz").then(async (readiness) => {
-          if (readiness.status === 200 && options.heapProfDir) {
+          if (
+            readiness.status === 200 &&
+            options.heapProfDir &&
+            !options.exitListeners &&
+            !resumeProvider
+          ) {
             heapProfilePath = await captureStartupHeapProfile(
               startedChild,
               options.heapProfDir,
@@ -2156,6 +2392,19 @@ async function runGatewaySample(
           );
         }),
       ]);
+      await startupReadsWork;
+      if (resumeProvider && restartRecovery) {
+        while (
+          performance.now() < deadlineAt &&
+          (restartRecovery.completeMs === undefined ||
+            resumeProvider.resumes.length < options.benchCase.restartSessions!)
+        ) {
+          if (childExited) {
+            break;
+          }
+          await delay(25);
+        }
+      }
       // Keep the recovered request alive through its real subprocess boundary even
       // when readyz and the first RPC complete before this optional work finishes.
       if (publicationMarker) {
@@ -2177,7 +2426,10 @@ async function runGatewaySample(
       // Compare CPU/RSS after the same optional startup work, even when publication
       // recovery overlaps that work on only one side of the comparison.
       const postReadyCompletion =
-        publicationMarker || options.benchCase.publicationApiDelayMs !== undefined
+        publicationMarker ||
+        options.benchCase.publicationApiDelayMs !== undefined ||
+        resumeProvider ||
+        options.exitListeners
           ? await Promise.all(
               ["post-ready.startup-maintenance", "post-ready.gateway-data.plugins"].map((phase) =>
                 waitForStartupTracePhase({
@@ -2208,7 +2460,24 @@ async function runGatewaySample(
       const cpuMs =
         cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
       const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, completedAt - startAt);
+      if (options.heapProfDir && (options.exitListeners || resumeProvider) && !childExited) {
+        heapProfilePath = await captureStartupHeapProfile(
+          startedChild,
+          options.heapProfDir,
+          Math.max(1, deadlineAt - performance.now()),
+        );
+      }
+      const exitListeners =
+        options.exitListeners && !childExited
+          ? await captureStartupExitListeners(
+              startedChild,
+              Math.max(1, deadlineAt - performance.now()),
+            )
+          : undefined;
       const shutdownStartedAt = performance.now();
+      const moduleCounts = moduleCountPath
+        ? summarizeGatewayModuleLoads(readFileSync(moduleCountPath, "utf8"))
+        : undefined;
       let shutdownForced = false;
       const exit = await stopChild(startedChild, {
         ...(options.benchCase.id === "teamBoot" ? { teardownGraceMs: 30_000 } : {}),
@@ -2221,7 +2490,35 @@ async function runGatewaySample(
       child = undefined;
       flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt);
 
+      const snapshotEvents: Array<{
+        kind: string;
+        pathname?: string;
+        bytes?: number;
+        pid: number;
+      }> = snapshotCountPath
+        ? readFileSync(snapshotCountPath, "utf8")
+            .trim()
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line))
+        : [];
       return {
+        ...(moduleCounts ? { moduleCounts } : {}),
+        ...(moduleCountsAtHttpListen ? { moduleCountsAtHttpListen } : {}),
+        ...(snapshotCountPath
+          ? {
+              snapshotCounts: {
+                directories: new Set(
+                  snapshotEvents
+                    .filter((event) => event.kind === "directory")
+                    .map((event) => event.pathname),
+                ).size,
+                files: snapshotEvents.filter((event) => event.kind === "publication").length,
+                bytes: snapshotEvents.reduce((bytes, event) => bytes + (event.bytes ?? 0), 0),
+                processes: new Set(snapshotEvents.map((event) => event.pid)).size,
+              },
+            }
+          : {}),
         ...(options.benchCase.id === "teamBoot"
           ? {
               pluginMigration: {
@@ -2241,6 +2538,16 @@ async function runGatewaySample(
           ? { publicationApi: await inspectPublicationApiFixture(root) }
           : {}),
         ...(slowAgent ? { agentRecoveryMs, integrityGateMs, agentDatabaseAdmissionErrors } : {}),
+        ...(resumeProvider && restartRecovery
+          ? {
+              restartRecovery: {
+                ...restartRecovery,
+                inferenceMs: resumeProvider.resumes.map((at) => at - startAt),
+                errors: resumeProvider.errors,
+              },
+              startupReads,
+            }
+          : {}),
         completionMs,
         cpuCoreRatio,
         cpuMs,
@@ -2252,12 +2559,15 @@ async function runGatewaySample(
         gatewayReadyLogMs,
         healthz,
         ...(heapProfilePath ? { heapProfilePath } : {}),
+        ...(exitListeners ? { exitListeners } : {}),
         httpListenLogLine,
         httpListenLogMs,
         hostLoadBefore,
         hostLoadAfter: loadavg(),
         maxRssMb,
-        outputTail: output.join("").split(/\r?\n/u).slice(-20).join("\n"),
+        outputTail: options.snapshotCounts
+          ? output.join("")
+          : output.join("").split(/\r?\n/u).slice(-20).join("\n"),
         readyz,
         shutdownForced,
         shutdownMs,
@@ -2267,6 +2577,7 @@ async function runGatewaySample(
       };
     } finally {
       rssSampler?.stop();
+      await resumeProvider?.close();
       if (child) {
         await stopChild(child).catch(() => undefined);
       }
@@ -2280,6 +2591,9 @@ async function runCase(
     cpuProfDir?: string;
     entry: string;
     heapProfDir?: string;
+    exitListeners?: boolean;
+    snapshotCounts?: boolean;
+    moduleCounts?: boolean;
     runs: number;
     timeoutMs: number;
     warmup: number;
@@ -2401,7 +2715,11 @@ async function main() {
         publicationApiDelayMs?: number;
         teamScale?: boolean;
         pluginMigrationFixture?: GatewayBenchCase["pluginMigrationFixture"];
+        restartSessions?: number;
       };
+      if (fixture.restartSessions !== options.cases[0]?.restartSessions) {
+        throw new CliArgumentError("--restart-sessions must match the prepared fixture");
+      }
       if (fixture.agentDatabaseMib !== options.cases[0]?.agentDatabaseMib) {
         throw new CliArgumentError("--agent-database-mib must match the prepared fixture");
       }
@@ -2476,7 +2794,7 @@ async function main() {
     }
   }
 
-  const failures = collectResultFailures(results);
+  const failures = collectResultFailures(results, options.assertExitListeners);
   if (failures.length > 0) {
     printBenchmarkFailures(failures);
     process.exitCode = 1;

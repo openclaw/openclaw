@@ -566,6 +566,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
                   "gateway.ws.event",
                   "gateway.ws.connections",
                   "sessions.list.retention",
+                  "sessions.projection.retention",
                   "sessions.event.retention",
                   "sessions.event.rows.reset",
                 ],

@@ -301,22 +301,11 @@ a.activity-current-work__row:hover {
   color: var(--text-strong);
 }
 
-.activity-feed__people-count,
-.activity-feed__people-group-label {
+.activity-feed__people-count {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
-}
-
-.activity-feed__people-count {
   margin-left: auto;
   font-variant-numeric: tabular-nums;
-}
-
-.activity-feed__people-group-label {
-  padding: var(--space-1) var(--space-2);
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .activity-feed__main {
@@ -396,7 +385,7 @@ a.activity-current-work__row:hover {
   height: 7px;
   margin-right: var(--space-1);
   border-radius: 50%;
-  background: var(--ok);
+  background: var(--status-running);
 }
 
 .activity-pulse__bars {
@@ -459,11 +448,6 @@ a.activity-current-work__row:hover {
 
 .activity-feed__day > h3 {
   margin: 0 0 var(--space-2);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .activity-feed__sessions,
@@ -715,7 +699,7 @@ a.activity-current-work__row:hover {
   bottom: auto;
   left: -2px;
   border-color: var(--card);
-  background: var(--accent);
+  background: var(--status-running);
   animation: pulse-subtle 1.8s ease-in-out infinite;
 }
 
@@ -949,11 +933,6 @@ a.activity-current-work__row:hover {
   cursor: var(--cursor-action);
 }
 
-.activity-status-filter input {
-  margin: 0;
-}
-
-.activity-status-filter:focus-within,
 .activity-entry__summary:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
@@ -1236,11 +1215,6 @@ a.activity-current-work__row:hover {
     color: var(--text);
     font-size: var(--control-ui-text-sm);
     font-weight: var(--control-ui-font-weight-normal);
-  }
-
-  /* Tapping a checkbox in the popover should not draw the keyboard focus ring. */
-  .activity-status-filter:focus-within:not(:has(:focus-visible)) {
-    outline: none;
   }
 
   /* The page scrolls here, so Active sessions takes the height it needs instead of

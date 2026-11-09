@@ -235,7 +235,8 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   text-decoration: none;
 }
 
-:is(.mobile-header__retry, .mobile-header__machine) {
+.mobile-header__retry,
+.mobile-header__machine {
   cursor: var(--cursor-action);
   pointer-events: auto;
 }
@@ -289,7 +290,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     inset: var(--safe-area-top) var(--safe-area-right) auto var(--safe-area-left);
     display: block;
     min-height: 0;
-    padding: 8px 16px 0;
+    padding: 8px 12px 0;
     border-bottom: 0;
     background: none;
     backdrop-filter: none;
@@ -313,10 +314,12 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   & .topnav-shell {
     position: relative;
     display: grid;
-    /* Equal sides center the title; their floors keep it clear of the pill,
-       so a long title truncates instead of colliding. */
-    grid-template-columns: minmax(max-content, 1fr) minmax(0, auto) minmax(max-content, 1fr);
-    gap: 8px;
+    /* Reserve title clearance for a page action before it mounts, without an empty pill slot. */
+    --floating-header-pill-button: clamp(30px, calc((100vw - 139px) / 6), 39px);
+    grid-template-columns:
+      minmax(max-content, 1fr) minmax(0, auto)
+      minmax(calc(3 * var(--floating-header-pill-button) + 6px), 1fr);
+    gap: 6px;
     min-height: var(--floating-header-control);
   }
 
@@ -344,7 +347,8 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     inset-block-start: calc(100% + 9px);
   }
 
-  & :is(.topbar-nav-toggle, .topnav-shell__actions) {
+  & .topbar-nav-toggle,
+  & .topnav-shell__actions {
     border: 0;
     border-radius: var(--floating-header-radius);
     background: var(--bg-hover);
@@ -360,9 +364,11 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   }
 
   & .topnav-shell__actions {
+    /* Only wrap actions that are present; title clearance belongs to the grid. */
     grid-column: 3;
     justify-self: end;
     gap: 0;
+    width: max-content;
     height: var(--floating-header-control);
     padding: 0 3px;
   }
@@ -382,8 +388,8 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     flex: none;
     align-items: center;
     justify-content: center;
-    width: 39px;
-    min-width: 39px;
+    width: var(--floating-header-pill-button, 39px);
+    min-width: var(--floating-header-pill-button, 39px);
     height: 39px;
     min-height: 39px;
     padding: 0;
@@ -593,19 +599,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     font-size: 18px;
   }
 
-  .field input,
-  .field textarea,
-  .field select {
-    padding: 8px 10px;
-    border-radius: var(--radius-md);
-    font-size: 14px;
-  }
-
-  .btn {
-    padding: 8px 12px;
-    font-size: 12px;
-  }
-
   .chat-thread {
     --chat-thread-padding-top: 0px;
 
@@ -638,7 +631,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .log-stream {
-    border-radius: var(--radius-md);
     max-height: 380px;
   }
 
@@ -665,19 +657,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     max-height: 380px;
   }
 
-  .log-row {
-    grid-template-columns: 1fr;
-    gap: 4px;
-    padding: 8px;
-  }
-
-  .log-time,
-  .log-level,
-  .log-subsystem,
-  .log-message {
-    font-size: 12px;
-  }
-
   .list-title {
     font-size: 13px;
   }
@@ -685,6 +664,22 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   .code-block {
     padding: 8px;
     border-radius: var(--radius-md);
+    font-size: 12px;
+  }
+}
+
+/* Controls take their phone size with the floating header and stacked rows. */
+@media (max-width: 640px) {
+  .field input,
+  .field textarea,
+  .field select {
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    font-size: 14px;
+  }
+
+  .btn {
+    padding: 8px 12px;
     font-size: 12px;
   }
 }

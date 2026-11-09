@@ -207,14 +207,16 @@ function recordSessionParticipantWithAliasRead(
       writeGeneration,
       projectionChanged,
     });
-    deferOpenClawAgentPostCommitPublication(database, () =>
-      emitSessionLifecycleEvent({
-        agentId: resolved.agentId,
-        sessionKey: resolved.sessionKey,
-        reason: "participants",
-        scope: "session-entry",
-      }),
-    );
+    if (projectionChanged) {
+      deferOpenClawAgentPostCommitPublication(database, () =>
+        emitSessionLifecycleEvent({
+          agentId: resolved.agentId,
+          sessionKey: resolved.sessionKey,
+          reason: "participants",
+          scope: "session-entry",
+        }),
+      );
+    }
     return { value: existing ? "updated" : "inserted", projectionChanged };
   };
   if (transaction) {

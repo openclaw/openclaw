@@ -23,6 +23,7 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "../../config/sessions/session-entry-codec.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import {
   resolveSessionTranscriptReadFence,
@@ -49,7 +50,7 @@ import type { Message } from "../../llm/types.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
-import { buildInitialContext, cloneSessionModelContextEntries } from "./session-manager-codec.js";
+import { projectSessionModelContextEntries, buildInitialContext } from "./session-manager-codec.js";
 import {
   sessionManagerOpenCompaction,
   sessionManagerOpenTranscriptCohort,
@@ -78,6 +79,7 @@ import type {
   SessionManagerPersistenceTarget,
   SessionManagerTranscriptCohort,
 } from "./session-manager-view-types.js";
+import { sessionManagerReadTranscriptBranch } from "./session-manager-view-types.js";
 import {
   appendSessionTranscriptNote,
   withSessionManagerWrite,
@@ -145,7 +147,7 @@ export class SessionManager extends SessionManagerBranching {
       "compaction" in this.boundedContextLimits ||
       this.pendingDeliberateAppend
     ) {
-      return this.buildSessionContext();
+      return buildInitialContext(this[sessionManagerReadTranscriptBranch]());
     }
     // A deliberate local branch owns its view; a concurrent selection must not
     // install the database's different active path into the same writer.
@@ -181,7 +183,7 @@ export class SessionManager extends SessionManagerBranching {
     ) {
       throw new Error("Session manager changed during initial context read");
     }
-    return buildInitialContext(context.getBranch(), this.byId);
+    return buildInitialContext(context[sessionManagerReadTranscriptBranch](), this.byId);
   }
 
   /** No buffered writes remain here; asynchronous metadata methods own their settlement. */
@@ -377,11 +379,12 @@ export class SessionManager extends SessionManagerBranching {
             throw new Error("Transcript rewrite source is not in the loaded view");
           }
           sources.set(destination, source);
-          for (const prefix of publication.cacheTtlProjectionPrefixes ?? []) {
-            if (prefix.anchorIds.includes(sourceId)) {
-              prefix.anchorIds.push(destination);
-            }
-          }
+          publication.cacheTtlProjectionPrefixes = publication.cacheTtlProjectionPrefixes?.map(
+            (prefix) =>
+              prefix.anchorIds.includes(sourceId)
+                ? { ...prefix, anchorIds: [...prefix.anchorIds, destination] }
+                : prefix,
+          );
         }
         const first = entries[0];
         const source = first && sources.get(first.id);
@@ -479,7 +482,9 @@ export class SessionManager extends SessionManagerBranching {
   ) {
     const { cwd, signal } = options;
     const limits = { compaction: true } as const;
-    const hydration = prepareSessionTranscriptHydration(target, limits, signal);
+    const hydration = withSessionTranscriptHydrationCaller("compaction", () =>
+      prepareSessionTranscriptHydration(target, limits, signal),
+    );
     const prepared = await hydration.read({ compaction: true });
     if (prepared.kind !== "bounded" || !prepared.compaction) {
       throw new Error("Expected a prepared compaction transcript");
@@ -564,7 +569,7 @@ export class SessionManager extends SessionManagerBranching {
       options,
       (cwd, captured, context, limits) => {
         const manager = new SessionManager(cwd, captured, context.events, { ...context, limits });
-        const branch = manager.getBranch();
+        const branch = manager[sessionManagerReadTranscriptBranch]();
         const reader = context.completeActivePath && getOwnedSessionTranscriptReader(captured);
         const writeToken =
           reader &&
@@ -573,7 +578,7 @@ export class SessionManager extends SessionManagerBranching {
           ]);
         if (writeToken && !manager.migrated && branch.length === context.totalEvents) {
           manager.preparedInitialContext = {
-            branch: cloneSessionModelContextEntries(branch),
+            branch: projectSessionModelContextEntries(branch),
             writeToken,
             view: manager.captureTranscriptView(),
           };

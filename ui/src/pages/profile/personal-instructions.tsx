@@ -16,6 +16,7 @@ import type {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerPersonalInstructionsEnglish } from "../../i18n/locales/en-personal-instructions.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -52,6 +53,15 @@ class PersonalInstructionsState {
   }
   get dirty() {
     return this.file !== null && this.draft !== this.file.content;
+  }
+
+  get unavailableMessage() {
+    const snapshot = this.context.gateway.snapshot;
+    return snapshot.phase !== "connected"
+      ? t("profilePage.personalInstructions.offline")
+      : !this.multipleProfiles || !snapshot.selfUser?.id
+        ? t("profilePage.personalInstructions.signIn")
+        : t("profilePage.personalInstructions.accessRequired");
   }
 
   dispose() {
@@ -216,8 +226,16 @@ class PersonalInstructionsState {
     return completion;
   }
 
-  reload() {
-    if (this.dirty && !window.confirm(t("profilePage.personalInstructions.discard"))) {
+  async reload() {
+    if (
+      this.dirty &&
+      !(await showConfirmDialog({
+        title: t("profilePage.personalInstructions.discard"),
+        message: t("profilePage.personalInstructions.discardBody"),
+        confirmLabel: t("profilePage.personalInstructions.discardAction"),
+        danger: true,
+      }))
+    ) {
       return;
     }
     this.load();
@@ -325,7 +343,7 @@ export function PersonalInstructions(props: { hidden?: boolean }) {
             {saving() === fileRequest() ? t("common.saving") : t("common.save")}
           </button>
           <Show when={editorProps.error}>
-            <button class="btn" disabled={editorProps.pending} onClick={() => state.reload()}>
+            <button class="btn" disabled={editorProps.pending} onClick={() => void state.reload()}>
               {t("profilePage.personalInstructions.reload")}
             </button>
           </Show>
@@ -351,7 +369,7 @@ export function PersonalInstructions(props: { hidden?: boolean }) {
           >
             <Show
               when={view().available}
-              fallback={<SettingsEmpty message={t("profilePage.personalInstructions.signIn")} />}
+              fallback={<SettingsEmpty message={view().unavailableMessage} />}
             >
               <Show
                 when={view().agents.length}

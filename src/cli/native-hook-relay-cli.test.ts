@@ -99,7 +99,7 @@ describe("native hook relay CLI", () => {
         relayId: "relay-1",
         generation: "generation-1",
         event: "pre_tool_use",
-        rawPayload,
+        rawPayload: { ...rawPayload, openclaw_inexact_number_paths: "[]" },
       },
       timeoutMs: expect.any(Number),
       signal: expect.any(AbortSignal),
@@ -347,22 +347,54 @@ describe("native hook relay CLI", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("rejects oversized hook input without touching the gateway", async () => {
-    const callGateway = vi.fn();
-    const { stderr, run } = relayFixture();
-
-    const exitCode = await run(
-      { event: "post_tool_use" },
-      {
-        stdin: Readable.from(["x".repeat(1024 * 1024 + 1)]),
-        callGateway: callGateway as never,
-      },
-    );
-
-    expect(exitCode).toBe(1);
-    expect(stderr.text()).toContain("native hook input exceeds");
-    expect(callGateway).not.toHaveBeenCalled();
-  });
+  it.each(["malformed", "oversized"])(
+    "renders policy decisions for %s hook input",
+    async (input) => {
+      const stdin = () =>
+        Readable.from([
+          input === "malformed"
+            ? "{"
+            : JSON.stringify({ tool_input: { command: "\u0001".repeat(300 * 1024) } }),
+        ]);
+      const invokeBridge = vi.fn();
+      const callGateway = vi.fn();
+      for (const event of ["pre_tool_use", "permission_request"] as const) {
+        const { stdout, stderr, run } = relayFixture();
+        const exitCode = await run({ event }, { stdin: stdin(), invokeBridge, callGateway });
+        expect(exitCode).toBe(0);
+        expect(JSON.parse(stdout.text())).toEqual({
+          hookSpecificOutput:
+            event === "pre_tool_use"
+              ? {
+                  hookEventName: "PreToolUse",
+                  permissionDecision: "deny",
+                  permissionDecisionReason:
+                    "Native hook input could not be read; shorten or split tool input and retry",
+                }
+              : {
+                  hookEventName: "PermissionRequest",
+                  decision: {
+                    behavior: "deny",
+                    message:
+                      "Native hook input could not be read; shorten or split tool input and retry",
+                  },
+                },
+        });
+        expect(stderr.text()).toContain("failed to read native hook input");
+      }
+      for (const event of ["pre_tool_use", "post_tool_use"] as const) {
+        const { stdout, stderr, run } = relayFixture();
+        const exitCode = await run(
+          { event, preToolUseUnavailable: "noop" },
+          { stdin: stdin(), invokeBridge, callGateway },
+        );
+        expect({ exitCode, stdout: stdout.text() }).toEqual({ exitCode: 0, stdout: "" });
+        expect(stderr.text()).toContain("failed to read native hook input");
+      }
+      expect(invokeBridge).not.toHaveBeenCalled();
+      expect(callGateway).not.toHaveBeenCalled();
+    },
+  );
 
   it("fails closed for PermissionRequest when the gateway relay is unavailable", async () => {
     const callGateway = vi.fn(async () => {

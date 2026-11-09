@@ -1,10 +1,15 @@
 import { Icon } from "../../components/solid/icon.tsx";
+import { Popover } from "../../components/solid/popover.tsx";
 import "../../components/tooltip.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 
 registerNewSessionSetupEnglish();
+
+/** Matches the docked layout in new-session.css, where the inline notice would move the draft. */
+export const NEW_SESSION_DOCKED_LAYOUT_QUERY =
+  "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
 
 export type NewSessionVisibilityControl = {
   visibility: NewSessionVisibility;
@@ -33,10 +38,7 @@ function VisibilityToggle(props: {
       : (reason() ?? t("sessionsView.incognitoDescription"));
   const toggleClass = () => `new-session-page__${props.mode}-toggle`;
   return (
-    <openclaw-tooltip
-      class={draft() ? "new-session-page__draft-tooltip" : undefined}
-      prop:content={description()}
-    >
+    <openclaw-tooltip prop:content={description()}>
       <button
         type="button"
         class={[
@@ -115,5 +117,40 @@ export function NewSessionIncognitoNotice(props: {
         {t("sessionsView.incognitoDescription")} {t("sessionsView.incognitoLimits")}
       </span>
     </div>
+  );
+}
+
+/** The docked layout swaps the hint for this line in place, so turning Incognito on moves nothing. */
+export function NewSessionWelcomeHint(props: {
+  hint: string;
+  noteOpen: boolean;
+  onNoteOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <span class="new-session-page__welcome-hint">
+      <span class="new-session-page__welcome-hint-text">{props.hint}</span>
+      <Popover
+        id="new-session-incognito-note"
+        lazy="while-open"
+        label={t("sessionsView.incognitoLabel")}
+        class="new-session-page__incognito-note"
+        triggerClass="new-session-page__incognito-status"
+        trigger={
+          <>
+            <span>{t("sessionsView.incognitoLabel")}</span>
+            <Icon name="info" />
+          </>
+        }
+        placement="bottom"
+        open={props.noteOpen}
+        onOpenChange={props.onNoteOpenChange}
+      >
+        {/* Read-only, and it can cover the composer on short screens: any tap dismisses it. */}
+        <div onClick={() => props.onNoteOpenChange(false)}>
+          <p>{t("sessionsView.incognitoDescription")}</p>
+          <p>{t("sessionsView.incognitoLimits")}</p>
+        </div>
+      </Popover>
+    </span>
   );
 }

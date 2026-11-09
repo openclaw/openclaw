@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   getLoadedChannelPlugin: vi.fn(),
   getBundledChannelPlugin: vi.fn(),
   getBundledChannelSetupPlugin: vi.fn(),
-  resolveReadOnlyChannelPluginsForConfig: vi.fn(),
+  listReadOnlyChannelPluginsForConfigAsync: vi.fn(),
 }));
 
 const READ_ONLY_CHANNEL_DOCTOR_OPTIONS = {
@@ -35,7 +35,7 @@ vi.mock("../../../channels/plugins/bundled.js", () => ({
 
 // mock-isolation: Keep read-only discovery independent of live plugin registration.
 vi.mock("../../../channels/plugins/read-only.js", () => ({
-  resolveReadOnlyChannelPluginsForConfig: mocks.resolveReadOnlyChannelPluginsForConfig,
+  listReadOnlyChannelPluginsForConfigAsync: mocks.listReadOnlyChannelPluginsForConfigAsync,
 }));
 
 function createMatrixEnabledConfig() {
@@ -43,9 +43,9 @@ function createMatrixEnabledConfig() {
 }
 
 function mockReadOnlyPlugins(doctors: Record<string, Record<string, unknown> | undefined>) {
-  mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
-    plugins: Object.entries(doctors).map(([id, doctor]) => (doctor ? { id, doctor } : { id })),
-  });
+  mocks.listReadOnlyChannelPluginsForConfigAsync.mockResolvedValue(
+    Object.entries(doctors).map(([id, doctor]) => (doctor ? { id, doctor } : { id })),
+  );
 }
 
 function mockBundledMatrixPlugin(
@@ -62,7 +62,7 @@ describe("channel doctor compatibility mutations", () => {
     for (const mock of Object.values(mocks)) {
       mock.mockReset().mockReturnValue(undefined);
     }
-    mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({ plugins: [] });
+    mocks.listReadOnlyChannelPluginsForConfigAsync.mockResolvedValue([]);
   });
 
   it.each([
@@ -86,7 +86,7 @@ describe("channel doctor compatibility mutations", () => {
   ])("skips plugin discovery for $name", async ({ cfg, stale }) => {
     const result = stale
       ? await collectChannelDoctorStaleConfigMutations(cfg)
-      : collectChannelDoctorCompatibilityMutations(cfg);
+      : await collectChannelDoctorCompatibilityMutations(cfg);
     expect(result).toStrictEqual([]);
     for (const lookup of Object.values(mocks)) {
       expect(lookup).not.toHaveBeenCalled();
@@ -149,10 +149,10 @@ describe("channel doctor compatibility mutations", () => {
       });
       const cfg = createMatrixEnabledConfig();
       const env = { OPENCLAW_HOME: "/tmp/openclaw-test-home" };
-      expect(collectChannelDoctorCompatibilityMutations(cfg, { env })).toEqual([
+      expect(await collectChannelDoctorCompatibilityMutations(cfg, { env })).toEqual([
         { config: cfg, changes: ["sender"] },
       ]);
-      expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(cfg, {
+      expect(mocks.listReadOnlyChannelPluginsForConfigAsync).toHaveBeenCalledWith(cfg, {
         env,
         ...READ_ONLY_CHANNEL_DOCTOR_OPTIONS,
       });
@@ -162,7 +162,7 @@ describe("channel doctor compatibility mutations", () => {
     },
   );
 
-  it("preserves config and continues after a channel repair throws", () => {
+  it("preserves config and continues after a channel repair throws", async () => {
     const cfg = { channels: { matrix: { enabled: true }, slack: { enabled: true } } };
     mockReadOnlyPlugins({
       matrix: {
@@ -179,7 +179,7 @@ describe("channel doctor compatibility mutations", () => {
       },
     });
 
-    expect(collectChannelDoctorCompatibilityMutations(cfg)).toEqual([
+    expect(await collectChannelDoctorCompatibilityMutations(cfg)).toEqual([
       {
         config: cfg,
         changes: ["slack"],
@@ -228,10 +228,7 @@ describe("channel doctor compatibility mutations", () => {
     ]);
   });
 
-  it("keeps configured channel doctor lookup non-fatal when setup loading fails", () => {
-    mocks.resolveReadOnlyChannelPluginsForConfig.mockImplementation(() => {
-      throw new Error("missing runtime dep");
-    });
+  it("keeps bundled fallback lookup non-fatal when setup loading fails", async () => {
     mocks.getBundledChannelSetupPlugin.mockImplementation((id: string) => {
       if (id === "discord") {
         throw new Error("missing runtime dep");
@@ -239,7 +236,7 @@ describe("channel doctor compatibility mutations", () => {
       return undefined;
     });
 
-    const result = collectChannelDoctorCompatibilityMutations({
+    const result = await collectChannelDoctorCompatibilityMutations({
       channels: { discord: { enabled: true } },
     });
 
@@ -249,7 +246,7 @@ describe("channel doctor compatibility mutations", () => {
     expect(mocks.getBundledChannelPlugin).toHaveBeenCalledWith("discord");
   });
 
-  it("reuses empty allowlist entries without exposing config to per-account hooks", () => {
+  it("reuses empty allowlist entries without exposing config to per-account hooks", async () => {
     const collectEmptyAllowlistExtraWarnings = vi.fn(({ prefix }: { prefix: string }) => [
       `${prefix} extra`,
     ]);
@@ -266,7 +263,7 @@ describe("channel doctor compatibility mutations", () => {
       slack: { collectEmptyAllowlistExtraWarnings },
     });
 
-    const hooks = createChannelDoctorEmptyAllowlistPolicyHooks({ cfg: cfg as never, env });
+    const hooks = await createChannelDoctorEmptyAllowlistPolicyHooks({ cfg: cfg as never, env });
     const account = (channelName: string, id: string) => ({
       account: {},
       channelName,
@@ -285,8 +282,8 @@ describe("channel doctor compatibility mutations", () => {
     ]);
     expect(hooks.shouldSkipDefaultEmptyGroupAllowlistWarning(account("matrix", "work"))).toBe(true);
 
-    expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledTimes(1);
-    expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(cfg, {
+    expect(mocks.listReadOnlyChannelPluginsForConfigAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.listReadOnlyChannelPluginsForConfigAsync).toHaveBeenCalledWith(cfg, {
       env,
       ...READ_ONLY_CHANNEL_DOCTOR_OPTIONS,
     });

@@ -471,6 +471,8 @@ describe("full-release-validation-at-sha", () => {
     rejectArgs(["-f", "rerun_group=release-checks"], "rerun_group must be one of");
     rejectArgs(["-f", "rerun_group=qa"], "rerun_group must be one of");
     expect(parseArgs(["-f", "rerun_group=qa-parity"]).inputs.rerun_group).toBe("qa-parity");
+    const qualified = parseArgs(["-f", "rerun_group=qualified-package"]);
+    expect(qualified.inputs.rerun_group).toBe("qualified-package");
     expect(parseArgs(["-f", "rerun_group=windows-node"]).inputs.rerun_group).toBe("windows-node");
   });
 
@@ -1520,13 +1522,31 @@ describe("full-release-validation-at-sha", () => {
       ],
     });
     const result = fixture.run();
-    expectDispatchFailure(result, "blocked_diagnostics_running");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Full Release Validation remains active:");
+    expect(result.stdout).toContain("Continue with: pnpm frv watch --run 123");
     expect(fixture.readWaits()).toEqual([120_000]);
     const calls = fixture.calls();
     expect(calls.filter((args) => args[0] === "run" && args[1] === "download")).toHaveLength(1);
     expect(calls.some((args) => args.includes("cancel") || args.includes("watch"))).toBe(false);
     expect(fixture.refs()).toHaveLength(1);
   });
+
+  it.each(["failure", "cancelled"])(
+    "keeps terminal %s authoritative over retained diagnostic-pending evidence",
+    (conclusion) => {
+      const fixture = createDispatchFixture({
+        parentRunStates: [
+          { conclusion, status: "completed", decisionState: "blocked_diagnostics_running" },
+        ],
+      });
+      const result = fixture.run();
+      expectDispatchFailure(result, `Full Release Validation concluded ${conclusion}`);
+      expect(result.stdout).not.toContain("remains active");
+      expect(fixture.readWaits()).toEqual([]);
+      expect(fixture.refs()).toHaveLength(1);
+    },
+  );
 
   it("does not redownload a validated decision or adopt a newer parent attempt", () => {
     const fixture = createDispatchFixture({

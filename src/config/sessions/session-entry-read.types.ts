@@ -83,6 +83,7 @@ export type SessionExactEntriesWorkerSelection =
         | "sharing"
         | "replacement"
         | "creation"
+        | "creation-receipt"
         | "list"
         | "lifecycle"
         | "exact"
@@ -133,8 +134,11 @@ export type SessionExactEntriesWorkerRequest = (
   /** Inspect authority facts without opening the original SQLite family. */
   preserveSourceArtifacts?: true;
   inspectionSourcePath?: string;
+  /** The enclosing inspection retains these private bytes through worker settlement. */
+  inspectionSnapshot?: DatabasePathIdentity;
   replacementSelection?: SessionEntryReplacementSelection;
   creationLabel?: string;
+  creationDigest?: string;
   continuation?: CanonicalSessionReaderContinuation;
   transcript?: Omit<SessionTranscriptAnchorSelection, "afterSeq" | "includeMessagesForRunId"> & {
     sessionKey: string;
@@ -191,6 +195,10 @@ export type SessionExactEntriesWorkerResult = {
   members?: Record<string, SessionMember[]>;
   participantRecords?: Record<string, SessionParticipantRecord[]>;
   replacement?: SessionEntryReplacementState & { databaseIdentity: string };
+  creationReceipt?: {
+    receipt: import("./session-creation-operation.js").SessionCreationReceipt;
+    entry?: SessionEntry;
+  };
   creation?: import("./session-accessor.sqlite-creation-read.js").SessionCreationSnapshot & {
     databaseIdentity: string;
     databasePath: string;

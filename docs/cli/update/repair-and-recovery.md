@@ -172,6 +172,8 @@ migration resources. The capture stays beside the selected state directory in
 `<state-directory>.update-captures/<run-id>`. Doctor continuations keep the same
 capture; they do not replace it with already migrated state. State-directory
 relocation leaves its original location and recorded paths intact.
+Each database copy is one coherent SQLite image, so a Gateway that keeps committing
+during capture, as its owner lease does every 30 seconds, leaves the copy valid.
 Continuation verifies the recorded live updater's process identity and ancestry;
 unreadable supervisors above that updater do not prevent its Doctor from reusing the capture.
 If ancestry cannot be verified through the live updater, Doctor defers maintenance
@@ -305,6 +307,20 @@ It creates no new backup or witness store and does not authorize migration,
 rollback, startup, or activation. Updates retain their existing safety gates;
 automatic migration acceptance is a separate integration.
 
+### Interrupted during an update
+
+A signal such as Ctrl-C or `SIGTERM` during `activating`, `restarting` or
+`verifying` stops the updater's forward work right away, including its readiness
+wait. The updater then recovers and reports the interruption before it exits. An
+update that has not finished activating rolls back and restarts the previous
+Gateway; a Gateway that already came up on the new version stays running.
+
+If the updater itself is killed, `openclaw update repair` restarts the Gateway the
+update stopped. It may first report that state is undergoing offline maintenance
+while a surviving Doctor process finishes; retry when that process exits. Run
+`openclaw update status`, then `openclaw update repair` for any recovery that
+remains pending.
+
 ### Interrupted state restore
 
 Update commands, including `update repair`, refuse with
@@ -415,7 +431,10 @@ by the updater's activation phase while the Gateway is currently stopped. Target
 selection may record a package-manager method without losing the handoff evidence.
 It restores a verified original installation
 when activation never started, or completes an interrupted package publication
-and runs post-core repair before restarting the verified candidate. Its private
+and runs post-core repair before restarting the verified candidate. Post-core
+repair first settles a plugin cohort that the killed updater reserved for the
+same update; a restored original runtime settles it the same way before its
+Gateway restarts. Its private
 staged runtime survives a missing installed package and records a terminal result
 in `openclaw update status`. This requires the helper that started the update to
 contain the recovery fix. `update repair` remains the backstop if the helper also
@@ -1140,12 +1159,19 @@ for other SQLite maintenance commands to finish. Stop database readers too,
 including watchers that repeatedly run `openclaw sessions --all-agents --json`,
 and keep them stopped until cleanup exits. Cleanup tolerates timestamp changes
 from read-only WAL/SHM bookkeeping, but still rejects replaced files, size changes,
-and changed database, WAL, or rollback-journal contents. A changed device number
-requires independent content evidence as well as the recorded inode. Cleanup can
-re-verify a closed destination against a producer-verified full original or an
-earlier verified destination fingerprint. A successful check restamps the device
-and records an optional `databaseIdentity.sha256` fingerprint in the existing
-manifest. Older manifests remain readable. Scoped backups and destinations with
+and changed database, WAL, or rollback-journal contents. A reboot can give the
+same volume a new device number. When the recorded device differs, cleanup accepts
+the original stored beside the destination, or its interrupted `.cleanup-*` claim,
+as proof of a remount: it must be on the destination's current device with its
+recorded inode, modification time, and size, and the destination must keep its
+recorded inode. Cleanup then restamps the device in the existing manifest without
+recording a new fingerprint, so destinations written since the migration still
+qualify. A destination with a different inode always keeps its originals. Without
+remount proof, for example when the original is on another device, cleanup needs
+independent content evidence: it can re-verify a closed destination against a
+producer-verified full original or an earlier verified destination fingerprint.
+That check restamps the device and records an optional `databaseIdentity.sha256`
+fingerprint. Older manifests remain readable. Scoped backups and destinations with
 data-bearing WAL or rollback journals cannot supply this full-image proof.
 If the contents differ or proof is unavailable, cleanup retains the originals
 with `destination-verification-failed` and names the device change. Run

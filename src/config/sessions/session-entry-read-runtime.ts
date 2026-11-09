@@ -55,7 +55,6 @@ import type {
   SessionExactEntriesWorkerResult,
 } from "./session-entry-read.types.js";
 import {
-  assertSessionStoreReadCandidate,
   captureSessionStoreReadCandidate,
   type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
@@ -646,7 +645,7 @@ export async function withSessionStoreReaderInWorker<T>(
             continuation?.assertCurrent();
             route.assertCurrent();
             // Discovery can yield before writable admission; retain its selected physical source.
-            if (!inspection && sourceIdentity?.key.startsWith("file:")) {
+            if (!inspection && !preparedSource && sourceIdentity?.key.startsWith("file:")) {
               assertExistingDatabaseIdentity(
                 database.path,
                 sourceIdentity.key,
@@ -676,19 +675,15 @@ export async function withSessionStoreReaderInWorker<T>(
     };
     let result: T;
     if (preparedSource) {
-      const assertPreparedCurrent = () => {
-        preparedSource.assertCurrent();
-        assertSessionStoreReadCandidate(preparedSource.path, candidates);
-      };
-      assertPreparedCurrent();
+      preparedSource.assertCurrent();
       result = await readDatabase(
         {
           agentId: preparedSource.agentId,
-          path: assertSessionStoreReadCandidate(preparedSource.path, candidates),
+          path: preparedSource.path,
         },
         agentId ?? preparedSource.agentId,
         preparedSource.path,
-        { assertCurrent: assertPreparedCurrent },
+        { assertCurrent: preparedSource.assertCurrent },
       );
     } else if (direct && target.agentId) {
       resolveSqliteAgentId({ scopedAgentId: agentId, storeAgentId: target.agentId });

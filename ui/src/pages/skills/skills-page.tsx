@@ -14,6 +14,7 @@ import {
   hasOperatorReadAccess,
   hasOperatorWriteAccess,
 } from "../../app/operator-access.ts";
+import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { createPageRequest, type PageReadResult } from "../../lib/page-request.ts";
@@ -30,7 +31,6 @@ import {
   installFromClawHub,
   installSkill,
   loadClawHubDetail,
-  loadClawHubSecurityVerdicts,
   loadSkillCard,
   loadSkills,
   refreshSkills,
@@ -88,7 +88,6 @@ export function SkillsPage(props: SkillsPageProps) {
     resolve: (result: PageReadResult) => void;
   } | null = null;
   let routeDataInitialized = false;
-  let routeDataEnabled = true;
   let accessSignature = "";
   const skills = observeState<SkillsState>({
     ...createSkillsData(),
@@ -251,7 +250,6 @@ export function SkillsPage(props: SkillsPageProps) {
     const previous = data.skillsAgentId;
     reconcileAgentState();
     if (routeDataInitialized && previous !== data.skillsAgentId) {
-      routeDataEnabled = false;
       ensureInitialData();
     }
   };
@@ -419,9 +417,6 @@ export function SkillsPage(props: SkillsPageProps) {
     setSearchCompletion(null);
     searchRequest.reset();
     clearClawHubSearchTimer();
-    if (routeDataInitialized) {
-      routeDataEnabled = false;
-    }
     selectSkill(null);
     Object.assign(data, createSkillsData(), {
       skillsAgentRevision: data.skillsAgentRevision + 1,
@@ -434,15 +429,12 @@ export function SkillsPage(props: SkillsPageProps) {
       return;
     }
     routeDataInitialized = true;
-    routeDataEnabled = true;
     if (!gateway.isRouteDataCurrent(route) || route.agents !== context.agents || !canReadSkills()) {
-      routeDataEnabled = false;
       return;
     }
     const selection = agentSelection().state;
     // A preload may finish after another explicit choice, including an A→B→A switch.
     if (agentSelection().intentRevision !== route.selectionIntentRevision) {
-      routeDataEnabled = false;
       reconcileAgentState();
       return;
     }
@@ -452,16 +444,13 @@ export function SkillsPage(props: SkillsPageProps) {
     }
     reconcileAgentState();
     if (data.skillsAgentId !== route.selectedAgentId) {
-      routeDataEnabled = false;
       return;
     }
-    routeDataEnabled = true;
     retireSkillsReads(data);
     data.skillsLoading = false;
-    data.skillsReport = route.report;
     data.skillsError = route.error;
-    if (route.report) {
-      void loadClawHubSecurityVerdicts(data, route.report);
+    if (!route.error) {
+      void loadSkills(data, { reportRead: route.reportRead });
     }
     if (route.clawhubRef && route.clawhubRef !== data.clawhubDetailRef) {
       openClawHubDetail(route.clawhubRef);
@@ -474,12 +463,7 @@ export function SkillsPage(props: SkillsPageProps) {
     }
     const snapshot = context.gateway.snapshot;
     library.ensureLoaded(snapshot);
-    if (
-      routeDataEnabled ||
-      !routeDataInitialized ||
-      snapshot.phase !== "connected" ||
-      !snapshot.client
-    ) {
+    if (!routeDataInitialized || snapshot.phase !== "connected" || !snapshot.client) {
       return;
     }
     const agentState = context.agents.state;
@@ -490,7 +474,7 @@ export function SkillsPage(props: SkillsPageProps) {
       return;
     }
     reconcileAgentState();
-    if (!data.skillsReport && !data.skillsLoading) {
+    if (!data.skillsReport && !data.skillsLoading && !data.skillsError) {
       void loadSkills(data);
     }
   }
@@ -592,7 +576,10 @@ export function SkillsPage(props: SkillsPageProps) {
     onSearch: () => navigateSkills("skills"),
     onWorkshop: () => context.navigate("skill-workshop"),
   };
-  const libraryPageMenu = () => <SkillLibraryPageMenu library={library} {...libraryNavigation} />;
+  const libraryPageMenu = () => {
+    const menu = () => <SkillLibraryPageMenu library={library} {...libraryNavigation} />;
+    return <FloatingHeaderActions fallback={menu()}>{menu()}</FloatingHeaderActions>;
+  };
   function navigateSkills(route: "skills" | "skill-settings") {
     context.navigate(route, {
       search: data.skillsAgentId ? `?agent=${encodeURIComponent(data.skillsAgentId)}` : "",
@@ -608,6 +595,8 @@ export function SkillsPage(props: SkillsPageProps) {
       />
       <SettingsWorkspace>
         <div
+          // Bound layout work for the large installed inventory without containing discovery.
+          style={{ contain: surface() === "settings" ? "layout" : undefined }}
           id={surface() === "discovery" ? PLUGINS_HUB_PANEL_ID : undefined}
           role={surface() === "discovery" ? "tabpanel" : undefined}
           aria-labelledby={surface() === "discovery" ? "plugins-tab-skills" : undefined}

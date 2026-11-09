@@ -7,6 +7,7 @@ import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
+import { isLiveStateRead } from "./artifact-preserving-state-reads.js";
 import { createAgentDatabaseLeaseStaleReasonReader } from "./openclaw-agent-db-lease-provenance.js";
 import {
   OpenClawAgentDatabaseLeaseActiveError,
@@ -43,13 +44,15 @@ export async function readActiveOpenClawAgentDatabaseLeasesReadOnly(
     ? openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(pathname)
     : undefined;
   if (!cached) {
-    const prepared = isStatePostgres()
-      ? undefined
-      : await prepareSqliteReadOnlyLocation(pathname, {
-          signal,
-          preserveSourceArtifacts: true,
-          requireCleanup: true,
-        });
+    const prepared =
+      isStatePostgres() || isLiveStateRead()
+        ? undefined
+        : await prepareSqliteReadOnlyLocation(pathname, {
+            signal,
+            preserveSourceArtifacts: true,
+            requireCleanup: true,
+            reuse: true,
+          });
     try {
       signal?.throwIfAborted();
       return withEngineStoreAdmission(() =>

@@ -11,7 +11,7 @@
  * mocks; no database or workspace scan belongs to this in-memory owner. This is
  * owner CPU/allocation evidence, not whole-Gateway latency or model execution.
  * Compare interleaved revisions and identical-source A/A controls. Acceptance:
- * unrelated auth, logging and provider changes retain all consumers; selected
+ * unrelated auth, logging, provider and MCP server changes retain all consumers; selected
  * auth changes refuse them. Report CPU/allocation changes and spread.
  * --phase bind includes complete policy capture and its first check, accounting
  * for preparation moved out of repeated live-policy checks.
@@ -47,7 +47,9 @@ const stateDir = path.resolve(values["state-dir"]);
 const workspace = path.resolve(values.workspace);
 const rounds = Number(values.rounds);
 assert(Number.isSafeInteger(rounds) && rounds > 0);
-assert(["unrelated", "unchanged", "logging", "unrelated-provider"].includes(values.scenario));
+assert(
+  ["unrelated", "unchanged", "logging", "unrelated-provider", "mcp"].includes(values.scenario),
+);
 assert(values.phase === "check" || values.phase === "bind");
 assert(!existsSync(values.output), "Refusing to overwrite a measurement");
 const fixture = JSON.parse(readFileSync(path.join(stateDir, "team-shape-summary.json"), "utf8"));
@@ -123,7 +125,12 @@ const relevant: OpenClawConfig = {
   ...original,
   auth: { profiles: { "openai:manual": { provider: "openai", mode: "oauth" } } },
 };
-const selected = { provider: "openai", model: "synthetic-model" };
+const selected = {
+  provider: "openai",
+  model: "synthetic-model",
+  agentRuntime: "openclaw",
+  cliExecution: false,
+};
 const prepareConsumer = (sessionKey: string, index: number) => {
   const job: CronStoredJob = {
     id: `synthetic-job-${index}`,
@@ -163,7 +170,9 @@ const measuredConfig: OpenClawConfig =
               providers: { other: { baseUrl: "https://after.example/v1", models: [] } },
             },
           }
-        : unrelated;
+        : values.scenario === "mcp"
+          ? { ...original, mcp: { servers: { unrelated: { enabled: false, command: "true" } } } }
+          : unrelated;
 const measure = () =>
   check(measuredConfig, values.phase === "bind" ? sessionKeys.map(prepareConsumer) : consumers);
 for (let warmup = 0; warmup < 3; warmup++) {

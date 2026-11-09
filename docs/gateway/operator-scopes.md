@@ -87,6 +87,10 @@ reconnect, or disconnect only their own account. These methods do not expose
 team secrets, mutate shared configuration, or grant OpenClaw write/admin scopes. System
 and per-agent GitHub changes remain `operator.admin`.
 
+Session-scoped readers can load agent avatar images from the Control UI
+`/avatar/<agentId>` route, which serves the avatar URL that `agent.identity.get`
+already returns to them. Assistant media file reads still require `operator.read`.
+
 Session-scoped readers can read shared GitHub publication options and receipts
 for sessions they can view through `sessions.github.options` and
 `sessions.github.status`. For these narrow callers, the shared publication option
@@ -117,6 +121,17 @@ configuration changes, Gateway-wide tool invocation, or publication outside
 the own-session shared-account path described above.
 
 Session readers can browse visible conversations and receive their updates.
+Session-only callers cannot open another person's Activity timeline or request
+their per-person activity counts. The Gateway returns `FORBIDDEN`; the Control UI
+shows the restriction and removes previously loaded activity. People and owner
+facets contain only the caller's own profile. Visible shared-session rows and
+their attribution remain available under the existing sharing policy.
+Presence stays visible as a person-only view: who is online, their last activity
+time, and watched sessions the caller can read. Device, network, connection, and
+email details remain `operator.read` only, as does `presence.query`
+([presence](/gateway/protocol/presence#broadcast-event-scoping)).
+Named roles with `operator.read` retain access to other people's activity even
+when a connection requests only session scopes.
 They can inspect a visible session's effective tool names with `tools.effective`.
 The session-only response includes core summaries and preserves policy-filtered
 GitHub action descriptions. It omits other runtime descriptions, configuration
@@ -188,6 +203,23 @@ and website widgets are discoverable with session-read access; plugin-specific
 scopes and widget approvals remain unchanged. Canvas imports require a saved widget
 receipt in the dashboard conversation, with source access retained through the write.
 Broad readers keep their existing document-ID-only access.
+
+For saved summaries, an authorized agent can publish selected results as a
+`session:report`; readers consume the saved session data. For live HTML
+dashboards, session readers can execute an explicitly approved named
+`github.actions.runs` query using only its view ticket and query name. The
+Gateway resolves its fixed repository, workflow, branch, filters, result limit,
+and returned fields. Runtime query overrides are rejected. The flexible
+`board.data.read` binding form requires broader access. A repository-only grant does not approve a
+named query, and changing a definition requires renewed approval under the
+existing policy.
+
+The Gateway authorizes the session from the view ticket and rechecks caller
+access, widget revision and view generation, and the current query grant before
+returning even cached data. Approval deliberately shares matching future and
+private Actions results obtained with the agent's credentials; readers need no
+GitHub repository access of their own. Session visibility alone is not approval.
+Other dashboard host data bindings and actions retain their broader scopes.
 
 Session readers can also use `artifacts.list`, `artifacts.get`, and
 `artifacts.download` for artifacts in a conversation they can currently read.
@@ -353,22 +385,30 @@ an older browser roster cannot restore agents excluded by the current role.
 
 ### Access program grants
 
-For role-governed people, Standard Access needs no additional grant. Blue and Red
-each require an explicit entry in the role's `accessPrograms.cyber` list:
+Execution capabilities follow the initiating operator's live authority, including
+in child runs, retries, and recovery. An operator admitted with `operator.admin`
+can use eligible Access programs without enumerating each execution mode when the
+role omits `accessPrograms`. This does not expand permitted agents, models, account
+access, tools, sandbox access, or authority for external actions.
+
+An explicit `accessPrograms.cyber` list is a ceiling, including for administrators.
+Use an empty list to permit Standard only. For operators without `operator.admin`,
+Standard needs no additional grant, and Blue and Red each require an entry:
 
 ```json5 validate=false
 // Inside gateway.roles.definitions.maintainer
 accessPrograms: { cyber: ["daybreak_blue", "daybreak_red"] },
 ```
 
-Omitting the field or setting `cyber: []` permits neither Blue nor Red. Granting
+For restricted operators, omitting the field permits neither Blue nor Red. Granting
 Red does not grant Blue, or vice versa. The person's effective role supplies these
 grants through the same explicit assignment, GitHub mapping, and default-role
 rules described above; there is no separate per-person Access assignment.
 
-These grants are independent of `modelPolicy`: an unrestricted model list, model
-wildcards, the old Daybreak model aliases, or `operator.admin` do not grant Access
-to a named role. The selected model still needs model permission. The exact
+These ceilings are independent of `modelPolicy`: an unrestricted model list, model
+wildcards, or the old Daybreak model aliases do not grant Access to restricted
+operators. Internal runtime or adapter scopes cannot elevate the original operator.
+The selected model still needs model permission. The exact
 provider account and runtime must also advertise the program; provider metadata
 is capability evidence, never an RBAC grant. Catalog choices show only the
 intersection, and direct mutations and execution enforce it server-side.
@@ -379,9 +419,7 @@ grant, and restoring it does not revive revoked authority. New admission is
 required. An unset-selection cyber fallback can retry with Blue only when both
 the role and provider permit Blue; an explicit Standard selection never escalates.
 
-Existing roles are not automatically granted Blue or Red during upgrade.
-Administrators must explicitly add the intended grants. System/shared-secret
-use and deployments without `gateway.roles` keep their existing non-RBAC
+System/shared-secret use and deployments without `gateway.roles` keep their existing non-RBAC
 behavior and provider capability checks. This is not a bypass available to a
 role-governed person.
 
@@ -660,6 +698,21 @@ dispatch so authorization failures have one standard structured response:
   `operator.admin`.
   For non-admin callers, the handler limits `cwd` to configured agent
   workspaces. `projectId` cannot be combined with `cwd` or `execNode`.
+  `projectGitUrl` (clone or reuse a repository by URL with the Gateway's GitHub
+  identity) requires `operator.write`.
+- Callers without `operator.write` (for example the `guest` and `contributor`
+  roles) only see and open agent-workspace projects and registry projects whose
+  origin is a public GitHub repository on the configured host. GitHub
+  `private` and Enterprise `internal` repositories, non-GitHub origins, and
+  failed or rate-limited visibility lookups are hidden. This applies to
+  `projects.list` (projects, recents; the default repository is write-only),
+  `projects.checkoutOptions`, project skills in `commands.list`,
+  `sessions.create` with `projectId`, native background spawns with
+  `projectId`, and children that inherit their parent's checkout, which check
+  the child's requester. Discovery caches visibility for up to 10 minutes;
+  creating a session or child asks GitHub again. Existing checkouts are kept.
+- `projects.searchRemote` and `worktrees.list` need `operator.write`;
+  worktree listings include every session's paths, repository roots, and branches.
 - `environments.list` needs `operator.read` for plain inventory and
   `operator.write` when `runtimeId` requests runtime-specific command eligibility.
   Session placement methods derive
@@ -699,6 +752,11 @@ dispatch so authorization failures have one standard structured response:
 - `sessions.delete` requires `operator.write` for an archived-only request
   with the supported fields, and `operator.admin` otherwise. Neither session
   scope authorizes deletion.
+- `session.typing` accepts `operator.sessions.write` for draft previews in the
+  authenticated creator’s own session, or broader `operator.write` access under
+  the existing participation policy. Read-only access cannot publish typing;
+  session visibility and current authority are checked again before a delayed
+  preview is delivered.
 - `session.reactions.list` accepts `operator.sessions.read` or broader read
   access and requires current session visibility. `session.reactions.set` requires `operator.write`, an identified
   author, and permission to send to or suggest in the session. A view-only
@@ -706,12 +764,17 @@ dispatch so authorization failures have one standard structured response:
 
 Project RPCs use these scopes:
 
-| Method                                 | Required scope and additional gate                                                                                            |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `projects.list`                        | `operator.sessions.read` or broader read access; only callers satisfying `operator.write` receive `repoRoot` and `originUrl`. |
-| `projects.add`                         | `operator.write` and the `controlPlaneWrite` method flag.                                                                     |
-| `projects.register`, `projects.remove` | `operator.admin`.                                                                                                             |
-| `projects.searchRemote`                | `operator.read`.                                                                                                              |
+| Method                                 | Required scope and additional gate                                                                                                                                                                            |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `projects.list`                        | `operator.sessions.read` or broader read access receives project names and optional read-safe `repositoryIdentity` (`org/repo`); only callers satisfying `operator.write` receive `repoRoot` and `originUrl`. |
+| `projects.add`                         | `operator.write` and the `controlPlaneWrite` method flag.                                                                                                                                                     |
+| `projects.register`, `projects.remove` | `operator.admin`.                                                                                                                                                                                             |
+| `projects.searchRemote`                | `operator.read`.                                                                                                                                                                                              |
+
+`repositoryIdentity` describes only an already discoverable project, not a clone
+URL or permission to read private repository content. Origins outside the
+configured GitHub host or unsupported clone forms omit it. Remote search,
+repository reads, and publication retain their existing access checks.
 
 Some handlers then apply stricter checks based on the concrete thing being
 approved or mutated:

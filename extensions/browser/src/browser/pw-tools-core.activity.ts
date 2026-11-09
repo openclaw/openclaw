@@ -1,4 +1,4 @@
-import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateUtf16Safe, withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS, DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type {
   BrowserConsoleMessage,
@@ -52,7 +52,7 @@ export async function getPageTextViaPlaywright(opts: {
       return error;
     },
   });
-  return { text: text.slice(0, maxChars), truncated: text.length > maxChars };
+  return { text: truncateUtf16Safe(text, maxChars), truncated: text.length > maxChars };
 }
 
 export async function getPageErrorsViaPlaywright(opts: {

@@ -31,6 +31,7 @@ import {
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createSandboxHostHttpRequestHandler } from "./mcp-app-sandbox-http.js";
+import * as operatorRunAuthority from "./operator-run-authority.js";
 import {
   connect,
   request,
@@ -631,6 +632,28 @@ describe("remote Control UI ingress production composition", () => {
     }
   });
 
+  it("captures a durable source from owner-resumable principal transport without handshake auth", async () => {
+    await factory.registerPrincipalRecovery?.(async (audienceId) =>
+      audienceId === principalOptions.audienceId
+        ? { ...principalOptions, recoveryId: "issued-transport-grant" }
+        : undefined,
+    );
+    const capture = vi.spyOn(operatorRunAuthority, "captureGatewayOperatorRunAuthority");
+    const binding = await factory.bindPrincipal(principalOptions);
+    try {
+      await binding.request("voicewake.get", {});
+      const captured = await capture.mock.results.at(-1)?.value;
+      expect(captured?.authority.recoverySnapshot).toMatchObject({
+        sourceIngress: "principal",
+        ingress: { audienceId: principalOptions.audienceId },
+        scopes: [...SCOPES],
+      });
+    } finally {
+      capture.mockRestore();
+      await binding.close();
+    }
+  });
+
   it("reuses a signed device across independent ceilings without retaining the previous grant's scopes", async () => {
     const identity = loadOrCreateDeviceIdentity({ identityKey: "synthetic-changing-ceiling" });
     for (const ceiling of [
@@ -830,5 +853,6 @@ describe("remote Control UI ingress production composition", () => {
       sharedToken: SHARED_TOKEN,
       ownerSessionKey: OWNER_SESSION_KEY,
       configure,
+      gatewayServer: () => listener.listener,
     }));
 });

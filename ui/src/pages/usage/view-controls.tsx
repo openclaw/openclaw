@@ -2,13 +2,27 @@ import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo } from "solid-js";
 import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import { Icon } from "../../components/solid/icon.tsx";
-import { SettingsSelect } from "../../components/solid/settings-select.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { formatIsoDate } from "./helpers.ts";
 import { applySuggestionToQuery, buildQuerySuggestions, removeQueryToken } from "./query.ts";
 import type { UsageProps } from "./types.ts";
 import { UsageCreatorFilter } from "./view-creators.tsx";
+import { UsageDisplayMenu } from "./view-display-menu.tsx";
+import {
+  createUsageFilterFields,
+  UsageAppliedFilters,
+  UsageFilterMenu,
+} from "./view-filter-menu.tsx";
 import { UsageFilterSheet } from "./view-filter-sheet.tsx";
 import { UsageQueryFilter } from "./view-query-filter.tsx";
 
@@ -51,6 +65,10 @@ export function createUsageControls(
         tool: [],
       },
   );
+  const application = useOptionalApplication();
+  const gateway = application ? projectGateway(application.gateway) : undefined;
+  // "You" leads the identity picker; the viewer is the Gateway's signed-in profile.
+  const viewerId = () => gateway?.read().snapshot.selfUser?.id ?? null;
   const queryTerms = createMemo(() => extractQueryTerms(props.filters.queryDraft));
   const querySuggestions = createMemo(() =>
     buildQuerySuggestions(props.filters.queryDraft, queryTerms(), filterOptions()),
@@ -112,12 +130,7 @@ export function createUsageControls(
   };
   // Everything behind the phone filter button; presets and metric stay on the page.
   const filtersActive = () =>
-    selectedPreset() === "" ||
-    props.filters.timeZone !== "local" ||
-    props.filters.creatorKey !== null ||
-    props.filters.scope !== "family" ||
-    hasDraftQuery() ||
-    hasQuery();
+    selectedPreset() === "" || props.filters.creatorKey !== null || hasDraftQuery() || hasQuery();
   const presetsControl = () => (
     <SettingsSegmented
       mode="buttons"
@@ -149,61 +162,13 @@ export function createUsageControls(
       onChange={(endDate) => props.callbacks.filters.onDatesChange({ endDate })}
     />
   );
-  const timeZoneSelect = () => (
-    <SettingsSelect
-      class="usage-select"
-      title={t("usage.filters.timeZone")}
-      aria-label={t("usage.filters.timeZone")}
-      value={props.filters.timeZone}
-      options={[
-        { value: "local", label: t("usage.filters.timeZoneLocal") },
-        { value: "utc", label: t("usage.filters.timeZoneUtc") },
-      ]}
-      onChange={(event) => {
-        const timeZone = event.currentTarget.value;
-        if (timeZone === "local" || timeZone === "utc") {
-          props.callbacks.filters.onScopeChange({ timeZone });
-        }
-      }}
-    />
-  );
   const creatorFilter = () => (
     <UsageCreatorFilter
       options={props.data.creatorOptions}
       selectedKey={props.filters.creatorKey}
+      viewerId={viewerId()}
+      placement={ctx.phone() ? "top-start" : "bottom-start"}
       onSelect={(creatorKey) => props.callbacks.filters.onScopeChange({ creatorKey })}
-    />
-  );
-  const scopeControl = () => (
-    <SettingsSegmented
-      mode="buttons"
-      value={props.filters.scope}
-      onChange={(scope) => props.callbacks.filters.onScopeChange({ scope })}
-      onReselect={(scope) => props.callbacks.filters.onScopeChange({ scope })}
-      options={[
-        {
-          value: "instance",
-          label: t("usage.scope.instance"),
-          title: t("usage.scope.instanceHint"),
-        },
-        {
-          value: "family",
-          label: t("usage.scope.family"),
-          title: t("usage.scope.familyHint"),
-        },
-      ]}
-    />
-  );
-  const metricControl = () => (
-    <SettingsSegmented
-      mode="buttons"
-      value={props.display.chartMode === "tokens" ? "tokens" : "cost"}
-      onChange={(chartMode) => props.callbacks.display.onChange({ chartMode })}
-      onReselect={(chartMode) => props.callbacks.display.onChange({ chartMode })}
-      options={[
-        { value: "tokens", label: t("usage.metrics.tokens") },
-        { value: "cost", label: t("usage.metrics.cost") },
-      ]}
     />
   );
   const partialStatus = () => (
@@ -234,8 +199,14 @@ export function createUsageControls(
         value={props.filters.queryDraft}
         aria-label={t("usage.query.placeholder")}
         placeholder={t("usage.query.placeholder")}
+        onBlur={clearCompositionEnd}
+        onCompositionEnd={recordCompositionEnd}
+        onKeyUp={clearCompositionEnd}
         onInput={(event) => props.callbacks.filters.onQueryDraftChange(event.currentTarget.value)}
         onKeyDown={(e: KeyboardEvent) => {
+          if (isComposingKeyboardEvent(e)) {
+            return;
+          }
           if (e.key === "Enter") {
             e.preventDefault();
             props.callbacks.filters.onApplyQuery();
@@ -265,6 +236,9 @@ export function createUsageControls(
           filterKey={filterKey}
           label={t(`usage.filters.${filterKey}`)}
           options={filterOptions()[filterKey]}
+          counts={
+            props.data.readChartSnapshot("filterOptions")?.overview?.filterOptionCounts?.[filterKey]
+          }
           queryDraft={props.filters.queryDraft}
           queryTerms={queryTerms()}
           onQueryDraftChange={props.callbacks.filters.onQueryDraftChange}
@@ -345,11 +319,34 @@ export function createUsageControls(
         </For>
       </div>
     ) : undefined;
+  const filterFields = createUsageFilterFields({
+    props,
+    queryTerms,
+    viewerId,
+    filterOptions,
+    counts: (key) =>
+      props.data.readChartSnapshot("filterOptions")?.overview?.filterOptionCounts?.[key],
+    suggestions: querySuggestions,
+  });
+  const matchCount = () =>
+    ctx.hasOverviewData() && hasQuery()
+      ? t("usage.query.ofTotal", {
+          shown: (
+            props.data.sessionPage?.total ??
+            props.data.overview?.total ??
+            props.data.sessions.length
+          ).toLocaleString(),
+          total: totalSessions().toLocaleString(),
+        })
+      : undefined;
+  // Applied filters sit in their own row under the toolbar, never inside it.
+  const appliedFilters = () =>
+    ctx.phone() ? undefined : <UsageAppliedFilters model={filterFields} count={matchCount} />;
   const queryWarningCallout = () =>
     queryWarnings().length > 0 ? (
-      <div class="callout warning usage-callout usage-callout--tight">
+      <InlineAlert tone="warning" class="usage-callout usage-callout--tight">
         {queryWarnings().join(" · ")}
-      </div>
+      </InlineAlert>
     ) : undefined;
   const toolbar = () => (
     <>
@@ -358,7 +355,7 @@ export function createUsageControls(
           {presetsControl()}
           <div class="usage-toolbar__row">
             {props.agentScope?.()}
-            {metricControl()}
+            <UsageDisplayMenu usage={props} phone />
             <UsageFilterSheet active={filtersActive()}>
               <div class="usage-filter-sheet__fields">
                 <label class="field">
@@ -370,15 +367,10 @@ export function createUsageControls(
                   {endDateInput()}
                 </label>
                 <label class="field">
-                  <span>{t("usage.filters.timeZone")}</span>
-                  {timeZoneSelect()}
-                </label>
-                <label class="field">
                   <span>{t("usage.creators.identity")}</span>
                   {creatorFilter()}
                 </label>
               </div>
-              {scopeControl()}
               <div class="usage-query-section">
                 {queryBar()}
                 {querySuggestionList()}
@@ -396,21 +388,15 @@ export function createUsageControls(
               <span class="usage-separator">{t("usage.filters.to")}</span>
               {endDateInput()}
             </div>
-            {timeZoneSelect()}
           </div>
           <div class="usage-view-options">
-            {creatorFilter()}
-            {scopeControl()}
-            {metricControl()}
-            <button
-              class="btn btn--sm btn--icon"
-              aria-label={t("common.refresh")}
-              title={t("common.refresh")}
+            <UsageFilterMenu model={filterFields} loading={ctx.loading()} />
+            <UsageDisplayMenu usage={props} phone={false} />
+            <RefreshButton
+              label={t("common.refresh")}
               onClick={() => void props.callbacks.filters.onRefresh()}
-              disabled={ctx.loading()}
-            >
-              <Icon name="refresh" />
-            </button>
+              busy={ctx.loading()}
+            />
           </div>
         </div>
       )}
@@ -432,19 +418,9 @@ export function createUsageControls(
           </div>
         </Show>
       ) : (
-        <div class="usage-query-section">
-          {queryBar()}
-          <div class="usage-filter-row">
-            {facetFilters()}
-            <span class="usage-query-hint">{t("usage.query.tip")}</span>
-            {queryCount()}
-          </div>
-          {queryChips()}
-          {querySuggestionList()}
-          {queryWarningCallout()}
-        </div>
+        queryWarningCallout()
       )}
     </>
   );
-  return { toolbar, querySection, partialStatus, partialNotice };
+  return { toolbar, appliedFilters, querySection, partialStatus, partialNotice };
 }

@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from "node:crypto";
+import { generateKeyPairSync, randomUUID } from "node:crypto";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { GatewayIngressPrincipal } from "openclaw/plugin-sdk/gateway-ingress";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -16,6 +16,7 @@ export type RelayGrant = RelayGrantAuthority & {
   clientId: string;
   clientName: string;
   createdAt: number;
+  issuanceId: string;
   lastUsedAt?: number;
 };
 
@@ -49,11 +50,26 @@ function parseAuthority(value: Record<string, unknown>): RelayGrantAuthority {
   if (principal.kind === "owner") {
     parsedPrincipal = { kind: "owner" };
   } else if (
-    principal.kind === "person" &&
+    (principal.kind === "person" || principal.kind === "delegated-person") &&
     typeof principal.profileId === "string" &&
     principal.profileId.trim()
   ) {
-    parsedPrincipal = { kind: "person", profileId: principal.profileId };
+    if (principal.kind === "delegated-person") {
+      if (
+        typeof principal.admission !== "string" ||
+        !principal.admission ||
+        principal.admission.length > 4096
+      ) {
+        throw stateError();
+      }
+      parsedPrincipal = {
+        kind: "delegated-person",
+        profileId: principal.profileId,
+        admission: principal.admission,
+      };
+    } else {
+      parsedPrincipal = { kind: "person", profileId: principal.profileId };
+    }
   } else {
     throw stateError();
   }
@@ -64,13 +80,17 @@ function parseAuthority(value: Record<string, unknown>): RelayGrantAuthority {
   };
 }
 
-function parseGrant(value: unknown): RelayGrant {
+type StoredRelayGrant = Omit<RelayGrant, "issuanceId"> & { issuanceId?: string };
+
+function parseGrant(value: unknown): StoredRelayGrant {
   if (
     !isRecord(value) ||
     typeof value.grantId !== "string" ||
     typeof value.clientId !== "string" ||
     typeof value.clientName !== "string" ||
     !timestamp(value.createdAt) ||
+    (value.issuanceId !== undefined &&
+      (typeof value.issuanceId !== "string" || !value.issuanceId)) ||
     (value.lastUsedAt !== undefined && !timestamp(value.lastUsedAt))
   ) {
     throw stateError();
@@ -80,6 +100,7 @@ function parseGrant(value: unknown): RelayGrant {
     clientId: value.clientId,
     clientName: value.clientName,
     createdAt: value.createdAt,
+    ...(value.issuanceId === undefined ? {} : { issuanceId: value.issuanceId }),
     ...parseAuthority(value),
     ...(value.lastUsedAt === undefined ? {} : { lastUsedAt: value.lastUsedAt }),
   };
@@ -134,7 +155,13 @@ export class RelayState {
     this.#grants.clear();
     for (const entry of await this.#store.entries()) {
       if (entry.key.startsWith("grant:")) {
-        const grant = parseGrant(entry.value);
+        const stored = parseGrant(entry.value);
+        const grant: RelayGrant = { ...stored, issuanceId: stored.issuanceId ?? randomUUID() };
+        if (stored.issuanceId === undefined) {
+          // Normalize legacy rows once, before startup can issue recovery sources.
+          await this.#store.register(entry.key, grant);
+          this.#assertCurrent();
+        }
         this.#grants.set(grant.grantId, grant);
       }
     }
@@ -201,6 +228,7 @@ export class RelayState {
         clientId: params.client.id,
         clientName: params.client.name,
         createdAt: now,
+        issuanceId: randomUUID(),
         principal: code.principal,
         ceiling: code.ceiling,
         ...(code.principalLabel === undefined ? {} : { principalLabel: code.principalLabel }),
@@ -212,14 +240,15 @@ export class RelayState {
   }
 
   async approveGrant(
-    grant: Omit<RelayGrant, "lastUsedAt">,
+    grant: Omit<RelayGrant, "lastUsedAt" | "issuanceId">,
     assertCommandCurrent: () => void,
   ): Promise<void> {
     return this.#update(async () => {
-      await this.#store.register(`grant:${grant.grantId}`, grant, {
+      const issued: RelayGrant = { ...grant, issuanceId: randomUUID() };
+      await this.#store.register("grant:" + issued.grantId, issued, {
         assertCurrent: assertCommandCurrent,
       });
-      this.#grants.set(grant.grantId, grant);
+      this.#grants.set(issued.grantId, issued);
     });
   }
 

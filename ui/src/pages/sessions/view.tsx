@@ -1,8 +1,10 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createDeferred, createMemo, Errored, isPending, Loading, Repeat, Show } from "solid-js";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ContextNewSessionAction } from "../../components/solid/new-session-link.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsPage,
@@ -19,8 +21,8 @@ import { sessionsTableColumnCount } from "./session-row.tsx";
 import { SessionWindow, type SessionEntry } from "./session-window.tsx";
 import { SessionsAdvancedFilters } from "./sessions-filters.tsx";
 import { TranscriptSearchForm, TranscriptSearchResults } from "./transcript-search-view.tsx";
-import type { SessionsProps } from "./view-types.ts";
 import "../../styles/sessions.css";
+import type { SessionsProps } from "./view-types.ts";
 
 registerSessionMenuEnglish();
 
@@ -141,15 +143,14 @@ export function SessionsView(props: SessionsProps) {
               </div>
             </Show>
             <TranscriptSearchForm {...props} phoneLayout={phoneLayout()} />
-            <button
-              class="btn btn--xs btn--icon sessions-toolbar__icon sessions-toolbar__refresh"
-              type="button"
-              aria-label={t("common.refresh")}
-              disabled={props.refreshing || props.refreshDisabled}
+            <RefreshButton
+              class="sessions-toolbar__icon sessions-toolbar__refresh"
+              label={t("common.refresh")}
+              busy={props.refreshing}
+              disabled={props.refreshDisabled}
+
               onClick={() => props.onRefresh()}
-            >
-              <Icon name="refresh" />
-            </button>
+            />
             <SessionsAdvancedFilters
               {...props}
               searchQuery={props.searchQuery}
@@ -322,10 +323,9 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
   }
   function SelectAllOnPage() {
     return (
-      <input
-        type="checkbox"
+      <Checkbox
         checked={allSelected()}
-        prop:indeterminate={selectedOnPage() > 0 && !allSelected()}
+        indeterminate={selectedOnPage() > 0 && !allSelected()}
         onChange={() => {
           const update = allSelected() ? props.onDeselectPage : props.onSelectPage;
           update(paginated().map((r) => r.key));

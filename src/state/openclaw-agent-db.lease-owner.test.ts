@@ -12,8 +12,10 @@ import {
   revokeSqliteDatabaseAdmissionsForPath,
 } from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import * as sqliteSnapshots from "../infra/sqlite-snapshot-source.js";
 import { observeSqliteWalPeriodicWork } from "../infra/sqlite-wal-scheduler.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withLiveStateReads } from "./artifact-preserving-state-reads.js";
 import {
   agentDatabaseBorrowers,
   getOpenClawAgentDatabaseIfOpen,
@@ -73,27 +75,45 @@ describe("agent database lease acquisition owner", () => {
     return { stateDir, nextStateDir, env, leases };
   }
 
-  it.each([true, false])("observes live leases before maintenance (cached: %s)", async (cached) => {
-    const { env } = createOwner();
-    const agent = openOpenClawAgentDatabase({ agentId: "main", env });
-    if (!cached) {
-      closeOpenClawStateDatabaseForTest();
-    }
+  it.each([
+    { cached: true, live: false },
+    { cached: false, live: false },
+    { cached: false, live: true },
+  ])(
+    "observes live leases before maintenance (cached: $cached, live: $live)",
+    async ({ cached, live }) => {
+      const { env } = createOwner();
+      const agent = openOpenClawAgentDatabase({ agentId: "main", env });
+      if (!cached) {
+        closeOpenClawStateDatabaseForTest();
+      }
+      const snapshot = vi.spyOn(sqliteSnapshots, "prepareSqliteReadOnlyLocation");
+      const inspect = async () => {
+        expect(await readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })).toEqual([
+          expect.objectContaining({ agent_id: "main", path: agent.path, owner_pid: process.pid }),
+        ]);
+        await expect(assertNoOpenClawAgentDatabaseLeasesReadOnly({ env })).rejects.toThrow(
+          "database is still open in process",
+        );
 
-    expect(await readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })).toEqual([
-      expect.objectContaining({ agent_id: "main", path: agent.path, owner_pid: process.pid }),
-    ]);
-    await expect(assertNoOpenClawAgentDatabaseLeasesReadOnly({ env })).rejects.toThrow(
-      "database is still open in process",
-    );
-
-    expect(closeOpenClawAgentDatabaseByPath(agent.path)).toBe(true);
-    if (!cached) {
-      closeOpenClawStateDatabaseForTest();
-    }
-    expect(await readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })).toEqual([]);
-    await expect(assertNoOpenClawAgentDatabaseLeasesReadOnly({ env })).resolves.toBeUndefined();
-  });
+        expect(closeOpenClawAgentDatabaseByPath(agent.path)).toBe(true);
+        if (!cached) {
+          closeOpenClawStateDatabaseForTest();
+        }
+        expect(await readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })).toEqual([]);
+        await expect(assertNoOpenClawAgentDatabaseLeasesReadOnly({ env })).resolves.toBeUndefined();
+      };
+      if (live) {
+        await withLiveStateReads(inspect);
+        expect(snapshot).not.toHaveBeenCalled();
+      } else {
+        await inspect();
+        if (!cached) {
+          expect(snapshot).toHaveBeenCalled();
+        }
+      }
+    },
+  );
 
   it("rejects initial authority denial without creating a database or changing its directory", async () => {
     const owner = createOwner();

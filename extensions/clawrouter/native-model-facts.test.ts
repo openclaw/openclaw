@@ -128,6 +128,45 @@ describe("ClawRouter native model facts", () => {
     clearLiveCatalogCacheForTests();
   });
 
+  it("sends Mistral's native completion fields through the router", async () => {
+    const catalog = await buildCatalog([
+      {
+        ...catalogProvider("mistral", "mistral-large-latest", ["llm.chat"]),
+        openaiCompatible: true,
+      },
+    ]);
+    const row = catalog.models[0];
+    if (!row || row.api !== "openai-completions") {
+      throw new Error("missing routed Mistral model");
+    }
+    const model: Model = {
+      ...row,
+      provider: "clawrouter",
+      api: row.api,
+      baseUrl: row.baseUrl ?? catalog.baseUrl,
+      input: ["text"],
+    };
+    const registered = await registerSingleProviderPlugin(plugin);
+    const wrapped = registered.wrapStreamFn?.({
+      provider: "clawrouter",
+      modelId: model.id,
+      streamFn: streamSimple,
+    });
+    if (!wrapped) {
+      throw new Error("missing ClawRouter stream wrapper");
+    }
+    const body = await captureRequestBody(() =>
+      wrapped(
+        model,
+        { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+        { apiKey: "fixture-key", maxTokens: 64 },
+      ),
+    );
+    expect(body).toMatchObject({ model: "mistral/mistral-large-latest", max_tokens: 64 });
+    expect(body).not.toHaveProperty("max_completion_tokens");
+    expect(body).not.toHaveProperty("store");
+  });
+
   it("gives routed OpenAI and Claude rows the native facts for the same upstream model", async () => {
     const provider = await buildCatalog([
       catalogProvider("openai", "gpt-6.1-sol", ...RESPONSES, [], {
