@@ -4,12 +4,24 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveGatewayServiceCgroupDirectory } from "../../process/linux-exec-cgroup.js";
+import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { managedGitHubIdentityEnvironment } from "../github-tool-identity-env.js";
 import type { CreateSandboxBackendParams, SandboxBackendHandle } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import type { SandboxContainerEngineTarget } from "./container-engine.js";
+import { writeFakeSystemdScope } from "./container-engine.scope.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+vi.mock("../../process/linux-exec-cgroup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/linux-exec-cgroup.js")>()),
+  resolveGatewayServiceCgroupDirectory: vi.fn(),
+}));
 
 const mocks = vi.hoisted(() => ({
   containerState: vi.fn(),
@@ -108,7 +120,9 @@ function assertMasked(bridge: Bridge, paths: string[]) {
 }
 
 function provision(containerName = "sandbox-container", podmanTarget?: typeof localTarget) {
-  mocks.ensureSandboxContainer.mockResolvedValueOnce({ containerName, containerId, podmanTarget });
+  mocks.ensureSandboxContainer.mockImplementationOnce(async (_params, prepare) =>
+    prepare({ containerName, containerId, podmanTarget }),
+  );
 }
 
 const bind = (source: string, target: string, writable: boolean) => ({ source, target, writable });
@@ -188,6 +202,7 @@ function runtimeEntry(backendId = "docker") {
 }
 
 beforeEach(() => {
+  vi.mocked(resolveGatewayServiceCgroupDirectory).mockReset();
   for (const mock of Object.values(mocks)) {
     mock.mockReset();
   }
@@ -222,11 +237,11 @@ it.each(["allocation", "mount inspection", "engine validation"] as const)(
       }
       return result;
     });
-    mocks.ensureSandboxContainer.mockImplementationOnce(async () => {
+    mocks.ensureSandboxContainer.mockImplementationOnce(async (_params, prepare) => {
       if (stage === "allocation") {
         current = false;
       }
-      return { containerName: "sandbox-container", containerId };
+      return prepare({ containerName: "sandbox-container", containerId });
     });
     const operation = createDockerSandboxBackend(
       backendParams({
@@ -422,6 +437,10 @@ it("binds Podman provisioning and later execs to the resolved target", async () 
       cfg: resolveSandboxConfigForAgent(createConfig("podman", false)),
     }),
   );
+  // Discovery can become unavailable after admission; the prepared target still works.
+  mocks.validateSandboxContainerEngineTarget.mockRejectedValue(new Error("discovery unavailable"));
+  mocks.execContainerRaw.mockResolvedValueOnce(rawResult());
+  await expect(backend.runShellCommand({ script: "true" })).resolves.toMatchObject({ code: 0 });
   const execSpec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
 
   expect(mocks.ensureSandboxContainer).toHaveBeenCalledWith(
@@ -430,6 +449,7 @@ it("binds Podman provisioning and later execs to the resolved target", async () 
       scopeKey,
       readOnlyResourceMounts,
     }),
+    expect.any(Function),
   );
   expect(mocks.execContainer).toHaveBeenCalledWith(
     expect.objectContaining({ id: "podman", globalArgs: podmanTarget.globalArgs }),
@@ -452,6 +472,45 @@ it("admits explicit piped input without enabling a PTY", async () => {
   await finalize(backend, spec.finalizeToken);
 });
 
+it.skipIf(process.platform === "win32").each([undefined, "/requested/tools"])(
+  "prepends the mounted Git shim after shell startup (requested PATH=%s)",
+  async (requestedPath) => {
+    provision();
+    const backend = await createDockerSandboxBackend(
+      backendParams({
+        readOnlyResourceMounts: [
+          { hostPath: "/host/git-tools", containerPath: "/openclaw/git-tools" },
+        ],
+      }),
+    );
+    const spec = await backend.buildExecSpec({
+      command: 'printf "%s" "$PATH"',
+      env: requestedPath ? { PATH: requestedPath } : {},
+      usePty: false,
+    });
+    try {
+      const staged = Object.fromEntries(
+        fs
+          .readFileSync(envFile(spec), "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => line.split("=")),
+      );
+      const child = spawnSync("/bin/sh", ["-c", spec.argv.at(-1)!], {
+        env: { PATH: "/usr/bin:/bin", ...staged },
+        encoding: "utf8",
+      });
+      expect(child.status).toBe(0);
+      expect(child.stdout).toBe(
+        `/openclaw/git-tools:${requestedPath ? `${requestedPath}:` : ""}/usr/bin:/bin`,
+      );
+      expect(child.stderr).toBe("");
+    } finally {
+      await finalize(backend, spec.finalizeToken);
+    }
+  },
+);
+
 it.skipIf(process.platform === "win32").each([
   { engine: "docker", host: "github.com" },
   { engine: "podman", host: "ghe.example.test" },
@@ -459,8 +518,18 @@ it.skipIf(process.platform === "win32").each([
 ] as const)(
   "$engine binds the current $host identity at launch without staging its token",
   async ({ engine, host }) => {
+    mockProcessPlatform("linux");
+    vi.mocked(resolveGatewayServiceCgroupDirectory).mockReturnValue(
+      "/sys/fs/cgroup/system.slice/openclaw.service",
+    );
+    vi.stubEnv("INVOCATION_ID", "gateway-invocation");
+    vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus");
+    vi.stubEnv("OPENCLAW_TEST_USER_SCOPE", undefined);
+    vi.stubEnv("LD_PRELOAD", "/synthetic/libjemalloc.so.2");
+    vi.stubEnv("MALLOC_CONF", "background_thread:true");
     const requestedPath = "$(touch /tmp/openclaw-path-injection)";
     const root = tempDirs.make("github-sandbox-launch-");
+    writeFakeSystemdScope(root);
     const profile = path.join(root, "profile");
     fs.mkdirSync(profile, { mode: 0o700 });
     const hosts = path.join(profile, "hosts.yml");
@@ -475,6 +544,11 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 process.stdout.write(JSON.stringify({
   args,
+  scoped: process.env.OPENCLAW_TEST_USER_SCOPE === "true",
+  invocation: process.env.INVOCATION_ID,
+  userBus: process.env.DBUS_SESSION_BUS_ADDRESS,
+  preload: process.env.LD_PRELOAD ?? null,
+  allocator: process.env.MALLOC_CONF ?? null,
   selected: process.env[${JSON.stringify(host === "ghe.example.test" ? "GH_ENTERPRISE_TOKEN" : "GH_TOKEN")}] === "synthetic-after-preparation",
   cleared: !process.env.GITHUB_TOKEN && !process.env.GITHUB_ENTERPRISE_TOKEN && !process.env[${JSON.stringify(host === "ghe.example.test" ? "GH_TOKEN" : "GH_ENTERPRISE_TOKEN")}],
   staged: fs.readFileSync(args[args.indexOf("--env-file") + 1], "utf8"),
@@ -506,7 +580,7 @@ process.stdout.write(JSON.stringify({
       },
     );
     const spec = await backend.buildExecSpec({
-      command: "printf ready",
+      command: "printf '%s' '$HOME space \"quotes\" ${HOME}'",
       workdir: "/workspace/project",
       env: {
         CONFIGURED_VALUE: "configured-value",
@@ -524,7 +598,16 @@ process.stdout.write(JSON.stringify({
       const result = launch(spec, root);
       expect(result).toMatchObject({ code: 0, stderr: "" });
       const delivered = JSON.parse(result.stdout);
-      expect(delivered).toMatchObject({ selected: true, cleared: true });
+      expect(delivered).toMatchObject({
+        selected: true,
+        cleared: true,
+        scoped: engine === "podman" && process.getuid?.() !== 0,
+        invocation: "gateway-invocation",
+        userBus: "unix:path=/run/user/1000/bus",
+        preload: null,
+        allocator: null,
+      });
+      expect(process.env.INVOCATION_ID).toBe("gateway-invocation");
       expect(spec.stdinMode).toBe("pipe-open");
       for (const value of ["configured-value", requestedPath]) {
         expect(spec.argv.join(" ")).not.toContain(value);
@@ -534,7 +617,7 @@ process.stdout.write(JSON.stringify({
       expect(delivered.args).toEqual(expect.arrayContaining(["-t", "-w", "/workspace/project"]));
       expect(delivered.args.slice(-4, -1)).toEqual([containerId, "/bin/sh", "-lc"]);
       expect(delivered.args.at(-1)).toBe(
-        'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; printf ready',
+        "export PATH=\"${OPENCLAW_PREPEND_PATH}:$PATH\"; unset OPENCLAW_PREPEND_PATH; printf '%s' '$HOME space \"quotes\" ${HOME}'",
       );
       expect(delivered.args.slice(delivered.args.indexOf("--env-file") + 2, -4)).toEqual(
         ["GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_TOKEN", "GITHUB_ENTERPRISE_TOKEN"].flatMap(

@@ -110,6 +110,7 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
               },
             },
             {
+              signal: new AbortController().signal,
               runNativeSection: async (operation) => operation(),
               throwIfCancelled() {},
             },

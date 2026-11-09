@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeVideoGenerationDuration } from "./duration-support.js";
-import type { VideoGenerationProvider } from "./types.js";
+import type { VideoGenerationProvider } from "./provider-types.js";
 
 describe("normalizeVideoGenerationDuration explicit durations", () => {
   const provider: VideoGenerationProvider = {

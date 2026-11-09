@@ -8,13 +8,19 @@ import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "./agent-run-registry.js";
 import { refreshCostUsageCacheForAgent as refreshAgent } from "./session-cost-usage-aggregation.js";
 import { requestCostUsageCacheRefresh as requestRefresh } from "./session-cost-usage-cache-runtime.js";
+import { acquireUsageLock } from "./session-cost-usage-cache.fixtures.test-support.js";
 import {
   loadCostUsageSummaryFromCache as loadSummary,
+  loadSessionCostSummary,
   loadSessionCostSummariesFromCache as loadSessions,
+  loadSessionUsageOverviewFromCache as loadOverview,
 } from "./session-cost-usage.js";
 
 const config = {};
@@ -194,11 +200,15 @@ async function withRefreshFixture(
       .map((file, index) => fs.writeFile(file, index === 0 ? firstRecord : userLine)),
   );
   await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-    if (fakeTimers) {
-      vi.useFakeTimers();
-    }
     const fixture = makeRefreshFixture(agentId, sessionFiles);
     try {
+      // Prepare real admission before fake time controls the refresh deadlines.
+      // A missing shared-state file requires an asynchronous filesystem probe on every batch.
+      openOpenClawStateDatabase();
+      await readAgentDeletionJournalStatusInWorker(agentId);
+      if (fakeTimers) {
+        vi.useFakeTimers();
+      }
       await run(fixture);
     } finally {
       try {
@@ -206,6 +216,7 @@ async function withRefreshFixture(
       } finally {
         fixture.refresh.mockReset();
         vi.useRealTimers();
+        await closeStateDatabaseForTest();
       }
     }
   });
@@ -213,6 +224,49 @@ async function withRefreshFixture(
 
 const test = it.extend<{ usage: ReturnType<typeof makeRefreshFixture> }>({
   usage: async ({ task: _task }, use) => withRefreshFixture(use),
+});
+
+it("returns marked stale session costs when another direct refresh stays busy", async () => {
+  const actual = await vi.importActual<typeof import("./session-cost-usage-aggregation.js")>(
+    "./session-cost-usage-aggregation.js",
+  );
+  await withRefreshFixture(
+    async ({ agentId, files: [sessionFile], refresh, scope }) => {
+      refresh.mockImplementation(actual.refreshCostUsageCacheForAgent);
+      await actual.refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+      await fs.appendFile(sessionFile, usageLine("later"));
+      await using lock = await acquireUsageLock(agentId);
+      vi.useFakeTimers();
+      const reading = scope.track(() => loadSessionCostSummary({ config, agentId, sessionFile }));
+      const settled = vi.fn();
+      void reading.then(settled, settled);
+      try {
+        await vi.waitFor(() => expect(refresh).toHaveBeenCalled(), {
+          timeout: 10_000,
+          interval: 1,
+        });
+        await vi.advanceTimersByTimeAsync(10_000);
+        await vi.waitFor(
+          () => expect(settled, "session-cost report wait budget").toHaveBeenCalled(),
+          {
+            timeout: 1_000,
+          },
+        );
+        expect(await reading).toMatchObject({
+          totalTokens: 10,
+          totalCost: 1,
+          staleSince: expect.any(Number),
+          refreshing: true,
+        });
+        expect(scope.hasPendingWork).toBe(true);
+      } finally {
+        await lock.release();
+        vi.useRealTimers();
+        await reading;
+      }
+    },
+    { fileCount: 1, fakeTimers: false, firstRecord: usageLine("first") },
+  );
 });
 
 test("keeps per-session quiet gaps across wall-clock rollback and unrelated reads", async ({
@@ -239,7 +293,7 @@ test("keeps per-session quiet gaps across wall-clock rollback and unrelated read
   expectNoTimers();
 });
 
-test("preserves oldest dirty age across turns and refreshes overdue work in the next idle gap", async ({
+test("preserves oldest dirty age across turns and refreshes at its deadline while busy", async ({
   usage: { agentId, refresh, dirty },
 }) => {
   refresh.mockResolvedValue("refreshed");
@@ -256,15 +310,20 @@ test("preserves oldest dirty age across turns and refreshes overdue work in the 
     expect(refresh).toHaveBeenCalledTimes(1);
     dirty();
     claim = claimAgentRunContext("usage-batch-turn", { agentId }, { trackOwner: true });
-    await tick(360_000, 1);
+    await tick(299_999, 1);
+    dirty();
+    await tick(1, 2);
+    dirty();
+    await tick(299_999, 2);
+    await tick(1, 3);
     releaseAgentRunContext("usage-batch-turn", claim);
-    await tick(0, 2);
+    await tick(0, 3);
   } finally {
     releaseAgentRunContext("usage-batch-turn", claim);
   }
 });
 
-test("wakes a busy retry when an overlapping turn becomes idle", async ({
+test("keeps eligible retries bounded across overlapping turns and publications", async ({
   usage: { agentId, refresh, hold, dirty },
 }) => {
   const held = hold("busy");
@@ -274,8 +333,10 @@ test("wakes a busy retry when an overlapping turn becomes idle", async ({
     dirty();
     await tick(30_000, 1);
     claim = claimAgentRunContext("usage-busy-turn", { agentId }, { trackOwner: true });
+    dirty();
     held.resolve("busy");
-    await tick(1_000, 1);
+    await tick(49, 1);
+    await tick(1, 2);
     releaseAgentRunContext("usage-busy-turn", claim);
     await tick(0, 2);
   } finally {
@@ -430,6 +491,35 @@ test.for(["completes", "slow", "cancelled", "rollback"] as const)(
   },
 );
 
+test("returns the committed overview while its refresh is still pending", async ({
+  usage: { agentId, files, refresh, hold, request, newScope },
+}) => {
+  const refreshOwner = newScope();
+  const release = hold("refreshed");
+  refresh.mockReturnValue(release.promise);
+  request({ sessionFiles: [files[0]] }, refreshOwner);
+  await tick(0, 1);
+  const settled = vi.fn();
+  const reading = newScope().track(() =>
+    loadOverview({
+      config,
+      agentId,
+      families: [[{ sessionFile: files[0] }]],
+      startMs: Date.UTC(2026, 8, 18),
+      endMs: Date.UTC(2026, 8, 19) - 1,
+    }),
+  );
+  void reading.then(settled, settled);
+  // A report must return its explicit partial state without waiting for a transcript scan.
+  await vi.waitFor(() => expect(settled).toHaveBeenCalled(), { timeout: 1_000 });
+  expect(await reading).toMatchObject({
+    computing: [true],
+    summarizing: 1,
+    cacheStatus: { status: "refreshing", pendingFiles: 1 },
+  });
+  expect(refreshOwner.signal.aborted).toBe(false);
+});
+
 test("keeps an exact logical-selector read pending across a deferred rebuild", async ({
   usage: { agentId, storePath, refresh, hold, read, request },
 }) => {
@@ -449,7 +539,7 @@ test("keeps an exact logical-selector read pending across a deferred rebuild", a
   await vi.advanceTimersByTimeAsync(0);
   const reading = read(logical);
   const settled = vi.fn();
-  void reading.then(settled);
+  void reading.then(settled, settled);
   releaseFirst.resolve("refreshed");
   await vi.advanceTimersByTimeAsync(1);
   expect(refresh.mock.calls[1]?.[0]).toMatchObject({

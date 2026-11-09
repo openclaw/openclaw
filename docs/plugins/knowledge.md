@@ -115,6 +115,7 @@ optional.
 | `maintenance.enabled`       | boolean  | `true`            | Run the scheduled maintenance pass.                                                                                                          |
 | `maintenance.schedule`      | string   | `"30 3 * * *"`    | Five-field cron expression for the pass.                                                                                                     |
 | `maintenance.timezone`      | string   | Gateway host zone | IANA time zone for the schedule.                                                                                                             |
+| `recallGate`                | object   | absent            | Optional decision-model recall gate. Off when absent. See [Recall gate](/plugins/knowledge/memory-provider#recall-gate).                     |
 
 `operatorRead` and `writesEnabled` are plugin-wide gates. Changes to
 `plugins.entries.knowledge.config.stores` do not reload the plugin; Knowledge
@@ -139,8 +140,10 @@ first match.
 
 Inside each store, owner-direct turns read and write the store's private
 partition. Group and other conversation turns are confined to their own
-conversation partition. Operators can manage membership from **Settings → Stores
-& sharing** in the Knowledge page (requires `operator.admin`).
+conversation partition unless an owner grants the conversation read, or read and
+save, access to the private partition. Operators can manage membership and
+conversation access from **Settings → Stores & sharing** in the Knowledge page
+(requires `operator.admin`).
 
 See [Stores and access](/plugins/knowledge/stores-and-access) for the storage
 layout, authority table, and limits.
@@ -162,6 +165,13 @@ Knowledge keeps all state under the Gateway state directory
 The location does not depend on how the plugin was installed. Back up the
 registry, each store's `state.sqlite`, and its `vault/` directory together. A
 Markdown-only or Git-only copy is not a complete backup.
+
+Knowledge flushes file contents and synchronizes publication directories where
+the platform supports it. On Windows, directory flushing is not portable;
+Knowledge accepts only the filesystem helper's checked unsupported outcome,
+not other I/O errors. Journal recovery and exact retries handle interrupted
+processes, but a completed save is not a guarantee against loss of directory
+entries after a Windows power failure. Keep a complete backup of the store.
 
 ## Writes and authority
 

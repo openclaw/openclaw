@@ -36,7 +36,7 @@ export function parseTemplateManifestSummary(value: unknown): {
     );
   }
   return {
-    ...(typeof agent.name === "string" ? { name: agent.name } : {}),
-    ...(typeof agent.description === "string" ? { description: agent.description } : {}),
+    ...(agent.name !== undefined ? { name: agent.name } : {}),
+    ...(agent.description !== undefined ? { description: agent.description } : {}),
   };
 }

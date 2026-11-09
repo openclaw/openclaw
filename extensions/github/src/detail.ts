@@ -280,7 +280,6 @@ async function loadGitHubDetailWithIdentity(
   if (!parsed) {
     throw new ControlUiGitHubError(400, "Invalid GitHub detail target");
   }
-  await identity?.revalidate();
   identity?.assertSelected();
   const id = parsed.kind === "commit" ? parsed.sha : parsed.number;
   const sourceKey = `${apiBaseUrl}\0${parsed.kind}:${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}#${id}\0${identity?.cacheScope ?? "anonymous"}\0${githubApiCredentialCacheScope(identity?.token)}\0`;
@@ -295,7 +294,7 @@ async function loadGitHubDetailWithIdentity(
     identity?.assertSelected();
   };
   const cached = detailCache.get(key);
-  if (!refresh && cached && cached.expiresAt > Date.now() && (!identity || cached.settled)) {
+  if (!refresh && cached && cached.expiresAt > performance.now() && (!identity || cached.settled)) {
     detailCache.delete(key);
     detailCache.set(key, cached);
     const result = await cached.promise;
@@ -317,7 +316,9 @@ async function loadGitHubDetailWithIdentity(
       ? detailCache.get(sourceKey + "overview")
       : undefined;
   const source =
-    overview?.settled && overview.expiresAt > Date.now() ? await overview.promise : undefined;
+    overview?.settled && overview.expiresAt > performance.now()
+      ? await overview.promise
+      : undefined;
   const load = async (): Promise<CachedDocument> => {
     const repositoryUrl = `${apiBaseUrl}/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}`;
     const repositoryUrls = new Set([repositoryUrl, ...(source?.repositoryUrls ?? [])]);
@@ -528,14 +529,14 @@ async function loadGitHubDetailWithIdentity(
     return result;
   };
   const entry = {
-    expiresAt: Date.now() + SUCCESS_CACHE_MS,
+    expiresAt: performance.now() + SUCCESS_CACHE_MS,
     settled: false,
     promise: load()
       .then((result) => {
         entry.settled = true;
         // PR checks and heads change independently of the body.
         if (parsed.kind === "pull" || result.document.partial) {
-          entry.expiresAt = Date.now() + PARTIAL_CACHE_MS;
+          entry.expiresAt = performance.now() + PARTIAL_CACHE_MS;
         }
         return result;
       })
@@ -543,7 +544,7 @@ async function loadGitHubDetailWithIdentity(
         // Caller-lifetime failures must not poison another reader's cache.
         if (error instanceof ControlUiGitHubError && error.statusCode !== 409) {
           entry.settled = true;
-          entry.expiresAt = Date.now() + PARTIAL_CACHE_MS;
+          entry.expiresAt = performance.now() + PARTIAL_CACHE_MS;
         } else if (detailCache.get(key) === entry) {
           detailCache.delete(key);
         }

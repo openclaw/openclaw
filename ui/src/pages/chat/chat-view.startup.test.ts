@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createTestTranscript, renderChatView } from "./chat-view.test-helpers.ts";
 import {
-  flushDeferredRowPrune,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
@@ -58,22 +58,23 @@ it.each([
       onRetrySessionPlacementStartup,
       onDiscardSessionPlacementStartup,
     });
-    await flushDeferredRowPrune();
-    expect(container.querySelectorAll(".chat-group.user")).toHaveLength(1);
-    const status = container.querySelector(".chat-send-status");
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".chat-group.user")).toHaveLength(1),
+    );
+    const status = () => container.querySelector(".chat-send-status");
     if (connected) {
-      expect(status).toBeNull();
+      expect(status()).toBeNull();
       return;
     }
-    expect(status?.textContent).toContain("Waiting for reconnect");
-    expect(status?.querySelector(".chat-send-status__retry")).toBeNull();
-    status?.querySelector<HTMLButtonElement>(".chat-send-status__discard")?.click();
+    await waitForSolid(() => expect(status()?.textContent).toContain("Waiting for reconnect"));
+    expect(status()?.querySelector(".chat-send-status__retry")).toBeNull();
+    status()?.querySelector<HTMLButtonElement>(".chat-send-status__discard")?.click();
     expect(onDiscardSessionPlacementStartup).toHaveBeenCalledOnce();
     expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
   },
 );
 
-it("keeps Retry and Discard reachable when exact history deduplicates the rejected initial turn", () => {
+it("keeps Retry and Discard reachable when exact history deduplicates the rejected initial turn", async () => {
   const onRetrySessionPlacementStartup = vi.fn();
   const onDiscardSessionPlacementStartup = vi.fn();
   const container = renderChatView({
@@ -89,19 +90,16 @@ it("keeps Retry and Discard reachable when exact history deduplicates the reject
     Array.from(container.querySelectorAll<HTMLButtonElement>(".chat-error button")).find(
       (button) => button.textContent?.trim() === label,
     );
-  const action = errorAction("Retry");
-  expect(action).toBeDefined();
-  action?.click();
+  await waitForSolid(() => expect(errorAction("Retry")).toBeDefined());
+  errorAction("Retry")?.click();
   expect(onRetrySessionPlacementStartup).toHaveBeenCalledOnce();
   expect(onDiscardSessionPlacementStartup).not.toHaveBeenCalled();
-  const discard = errorAction("Discard");
-  expect(discard).toBeDefined();
-  discard?.click();
+  errorAction("Discard")?.click();
   expect(onDiscardSessionPlacementStartup).toHaveBeenCalledOnce();
   expect(onRetrySessionPlacementStartup).toHaveBeenCalledOnce();
 });
 
-it("keeps the retained initial turn's Retry action usable while ordinary sending is held", () => {
+it("keeps the retained initial turn's Retry action usable while ordinary sending is held", async () => {
   const onRetrySessionPlacementStartup = vi.fn();
   const onQueueRetry = vi.fn();
   const paneId = "startup-retry";
@@ -144,5 +142,7 @@ it("keeps the retained initial turn's Retry action usable while ordinary sending
   buttons[0]?.click();
   expect(onRetrySessionPlacementStartup).toHaveBeenCalledOnce();
   expect(onQueueRetry).not.toHaveBeenCalled();
-  expect(container.querySelector(".chat-error")?.textContent).toContain("Retained initial turn");
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-error")?.textContent).toContain("Retained initial turn"),
+  );
 });

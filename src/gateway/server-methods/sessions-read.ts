@@ -14,11 +14,11 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../../config/sessions/session-canonical-key.js";
-import { SessionTranscriptColdError } from "../../config/sessions/session-cold-storage-state.js";
 import {
   readSessionEntriesFromStoreInWorker,
   readSessionEntrySummariesInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
+import { SessionTranscriptColdError } from "../../config/sessions/session-transcript-cold-error.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import { resolveExistingAgentSessionStoreTargetsAsync } from "../../config/sessions/targets-runtime.js";
 import type { SessionStoreTarget } from "../../config/sessions/targets.js";

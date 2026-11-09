@@ -51,6 +51,12 @@ function labels(selector = ".settings-sidebar__item-label") {
   return [...container.querySelectorAll(selector)].map((item) => item.textContent?.trim());
 }
 
+function requestedIdentityIds(ensure: SidebarProps["agentIdentity"]["ensure"]) {
+  return [...new Set(vi.mocked(ensure).mock.calls.flatMap(([ids]) => ids))].toSorted((a, b) =>
+    (a ?? "").localeCompare(b ?? ""),
+  );
+}
+
 function searchHarness(initialQuery: string, overrides: Partial<SidebarProps> = {}) {
   let searchQuery = initialQuery;
   const rerender = () =>
@@ -121,11 +127,34 @@ afterEach(async () => {
 });
 
 describe("settings sidebar search", () => {
+  it("keeps Usage and Logs copy narrow until the first search without replacing the input", async () => {
+    for (const activeRouteId of ["usage", "logs"] as const) {
+      render({ activeRouteId });
+      expect(labels()).toContain("Appearance");
+      expect(t("configView.chatPrefs.title")).toBe("configView.chatPrefs.title");
+    }
+    const search = searchHarness("", {
+      activeRouteId: "logs",
+      searchParams: { query: "collapse task progress", schema: null, value: null, uiHints: {} },
+    });
+    search.input.focus();
+    search.enter("collapse task progress");
+    await waitForSolid(() => expect(labels(".settings-sidebar__subitem-label")).toContain("Chat"));
+    expect(container.querySelector(".settings-sidebar__search-input")).toBe(search.input);
+    expect(document.activeElement).toBe(search.input);
+    expect(search.input.value).toBe("collapse task progress");
+  });
+
   it("keeps save recovery available in the embedded page header", async () => {
     const onRetry = vi.fn();
     render({
       presentation: "embed-page",
-      saveIndicator: { ...saveIndicator(), status: "error", lastError: "Save failed", onRetry },
+      saveIndicator: {
+        ...saveIndicator(),
+        status: "error",
+        lastError: "Couldn’t save settings. Try again.",
+        onRetry,
+      },
     });
     expect(container.querySelector<HTMLElement>(".settings-sidebar")).toBeNull();
     await vi.waitFor(() => {
@@ -178,15 +207,15 @@ describe("settings sidebar search", () => {
   it("does not match the middle of a word for a short query", () => {
     render({
       searchQuery: "cp",
-      searchBlockMatches: [block("connection", "Gateway Host", "#settings-connection-host")],
+      searchBlockMatches: [block("connection", "This computer", "#settings-connection-host")],
     });
 
     const resultLabels = labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label");
-    expect(resultLabels).toEqual(["Gateway", "Gateway Host"]);
+    expect(resultLabels).toEqual(["This computer"]);
+    expect(labels(".settings-sidebar__subitem-page")).toEqual(["Gateway"]);
   });
 
-  it("ranks matching pages before matching blocks and navigates to the block", () => {
-    const onNavigate = vi.fn();
+  it("shows only name matches when a page or section name matches", () => {
     render({
       searchQuery: "mcp",
       searchBlockMatches: [
@@ -195,17 +224,32 @@ describe("settings sidebar search", () => {
         }),
         block("mcp", "MCP", "#config-section-mcp", { search: "?section=mcp" }),
       ],
+    });
+
+    expect(labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label")).toEqual([
+      "MCP",
+    ]);
+  });
+
+  it("navigates to a matching section from a row that names its page", () => {
+    const onNavigate = vi.fn();
+    render({
+      searchQuery: "language",
+      searchBlockMatches: [
+        block("appearance", "Language", "#settings-language", {
+          search: "?section=__appearance__",
+        }),
+      ],
       onNavigate,
     });
 
-    const resultLabels = labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label");
-    expect(resultLabels).toEqual(["MCP", "Appearance", "Language"]);
-    const active = container.querySelector<HTMLElement>(".settings-sidebar__item--active");
-    expect(active?.textContent).toContain("Appearance");
-    expect(active?.getAttribute("aria-current")).toBe("page");
-
+    expect(labels(".settings-sidebar__item-label")).toEqual([]);
     const language = container.querySelector<HTMLAnchorElement>(
-      '.settings-sidebar__subitem[href="/settings/appearance?section=__appearance__#settings-language"]',
+      '.settings-sidebar__item[href="/settings/appearance?section=__appearance__#settings-language"]',
+    );
+    expect(language?.querySelector(".settings-sidebar__item-icon svg")).not.toBeNull();
+    expect(language?.querySelector(".settings-sidebar__subitem-page")?.textContent).toBe(
+      "Appearance",
     );
     language?.click();
     expect(onNavigate).toHaveBeenCalledWith("appearance", {
@@ -214,8 +258,29 @@ describe("settings sidebar search", () => {
     });
   });
 
-  it("keeps a precise block result when its owning page also matches", () => {
-    const onNavigate = vi.fn();
+  it("gives section rows the embedded list's chevron", () => {
+    render({
+      presentation: "embed-list",
+      searchQuery: "language",
+      searchBlockMatches: [block("appearance", "Language", "#settings-language")],
+    });
+
+    expect(
+      container.querySelector(".settings-sidebar__subitem .settings-row__chevron"),
+    ).not.toBeNull();
+  });
+
+  it("falls back to description and keyword matches only when no name matches", () => {
+    render({
+      searchQuery: "chromium",
+      searchBlockMatches: [
+        block("infrastructure", "Browser", "#config-section-browser", {
+          search: "?section=browser",
+        }),
+      ],
+    });
+    expect(labels(".settings-sidebar__subitem-label")).toEqual(["Browser"]);
+
     render({
       searchQuery: "infrastructure",
       searchBlockMatches: [
@@ -223,24 +288,13 @@ describe("settings sidebar search", () => {
           search: "?section=browser",
         }),
       ],
-      onNavigate,
     });
-
-    const resultLabels = labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label");
-    expect(resultLabels).toEqual(["Infrastructure", "Browser"]);
-
-    container
-      .querySelector<HTMLAnchorElement>(
-        '.settings-sidebar__subitem[href="/settings/infrastructure?section=browser#config-section-browser"]',
-      )
-      ?.click();
-    expect(onNavigate).toHaveBeenCalledWith("infrastructure", {
-      search: "?section=browser",
-      hash: "#config-section-browser",
-    });
+    expect(labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label")).toEqual([
+      "Infrastructure",
+    ]);
   });
 
-  it("finds Agent Defaults by page name after its sidebar demotion", () => {
+  it("finds Agent defaults by page name after its sidebar demotion", () => {
     render({
       activeRouteId: "agents",
       searchQuery: "agent defaults",
@@ -249,7 +303,7 @@ describe("settings sidebar search", () => {
     const result = container.querySelector<HTMLAnchorElement>(
       '.settings-sidebar__item[href="/settings/ai-agents"]',
     );
-    expect(result?.textContent?.trim()).toBe("Agent Defaults");
+    expect(result?.textContent?.trim()).toBe("Agent defaults");
   });
 
   it("excludes admin-only pages and config blocks from non-admin search", () => {
@@ -298,7 +352,7 @@ describe("settings sidebar search", () => {
     // Management surfaces moved back to the workspace sidebar.
     expect(allLabels).not.toContain("Activity");
     expect(allLabels).not.toContain("Sessions");
-    expect(allLabels).toContain("Privacy & Security");
+    expect(allLabels).toContain("Privacy & security");
     expect(allLabels.indexOf("Updates")).toBe(allLabels.indexOf("Logs") + 1);
     expect(allLabels.indexOf("About")).toBe(allLabels.indexOf("Updates") + 1);
 
@@ -318,7 +372,7 @@ describe("settings sidebar search", () => {
     enterQuery("does-not-exist");
     expect(labels()).toEqual([]);
     expect(container.querySelector<HTMLElement>('[role="status"]')?.textContent?.trim()).toBe(
-      "No matching settings.",
+      "No settings match your search.",
     );
 
     container.querySelector<HTMLButtonElement>(".settings-sidebar__search-clear")?.click();
@@ -352,6 +406,136 @@ describe("settings sidebar search", () => {
     expect(onExit).toHaveBeenCalledOnce();
   });
 
+  it("clears native search text while asynchronous results hold the previous query", async () => {
+    const prepared = Promise.withResolvers<void>();
+    const prepareLocale = vi.spyOn(i18n, "prepareLocale").mockReturnValue(prepared.promise);
+    const onExit = vi.fn();
+    const search = searchHarness("", {
+      onExit,
+      searchParams: { query: "appearance", schema: null, value: null, uiHints: {} },
+    });
+    search.input.focus();
+    try {
+      search.enter("appearance");
+      await vi.waitFor(() => expect(prepareLocale).toHaveBeenCalled());
+      expect(search.input.value).toBe("appearance");
+      search.input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+      expect(onExit).not.toHaveBeenCalled();
+      expect(search.value).toBe("");
+      expect(document.activeElement).toBe(search.input);
+    } finally {
+      prepared.resolve();
+      prepareLocale.mockRestore();
+      await prepared.promise;
+      flush();
+    }
+    await waitForSolid(() => expect(search.input.value).toBe(""));
+    expect(container.querySelector(".settings-sidebar__search-input")).toBe(search.input);
+  });
+
+  it("lists a group's pages after name matches when the query is its exact name", () => {
+    render({
+      searchQuery: "connections",
+      searchBlockMatches: [block("profile", "GitHub connections", "#profile-github")],
+    });
+
+    expect(labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label")).toEqual([
+      "GitHub connections",
+      "Gateway",
+      "Channels",
+      "Communications",
+      "Talk",
+      "Devices",
+      "Cloud environments",
+    ]);
+  });
+
+  it("lists only title and section names, without repeating a listed page", () => {
+    render({
+      searchQuery: "agent",
+      searchBlockMatches: [
+        block("ai-agents", "Agents", "#config-section-agents", { search: "?section=agents" }),
+        block("profile", "Personal instructions", "#profile-instructions"),
+        block("security", "Agent sandbox", "#agent-sandbox"),
+      ],
+    });
+
+    expect(labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label")).toEqual([
+      "Agents",
+      "Agent defaults",
+      "Agent sandbox",
+    ]);
+  });
+
+  it("clears an empty search from its own empty state", () => {
+    const search = searchHarness("zzzz", { searchBlockMatches: [] });
+    const clear = container.querySelector<HTMLButtonElement>(
+      ".settings-sidebar__empty--search button",
+    )!;
+    expect(clear.textContent).toBe("Clear settings search");
+    clear.click();
+    flush();
+    expect(search.value).toBe("");
+    expect(document.activeElement).toBe(search.input);
+    expect(container.querySelector(".settings-sidebar__empty")).toBeNull();
+  });
+
+  it("searches from the embedded settings list", () => {
+    const search = searchHarness("", { presentation: "embed-list", searchBlockMatches: [] });
+    search.enter("appearance");
+    flush();
+    expect(labels()).toEqual(["Appearance"]);
+  });
+
+  it("sends Escape from an empty search up a level and shows esc only where it exits", () => {
+    const onExit = vi.fn();
+    const onEscape = vi.fn();
+    render({ activeRouteId: "appearance", onExit, onEscape });
+    expect(container.querySelector(".settings-sidebar__esc")).not.toBeNull();
+    render({ activeRouteId: "lobsterdex", onExit, onEscape });
+    expect(container.querySelector(".settings-sidebar__esc")).toBeNull();
+    expect(
+      container.querySelector('.settings-sidebar__item[href="/settings/appearance"]')?.className,
+    ).toContain("settings-sidebar__item--active");
+
+    container
+      .querySelector<HTMLInputElement>(".settings-sidebar__search-input")
+      ?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+    expect(onEscape).toHaveBeenCalledOnce();
+    expect(onExit).not.toHaveBeenCalled();
+  });
+
+  it("clears the visible search before its projected query commits", () => {
+    const onExit = vi.fn();
+    const onSearchQueryChange = vi.fn((searchQuery: string) => {
+      setProps((current) => ({ ...current, searchQuery }));
+    });
+    const [props, setProps] = createSignal(sidebarProps({ onExit, onSearchQueryChange }));
+    mountSolid(() => <SettingsSidebar {...props()} />, { container });
+    flush();
+    const input = container.querySelector<HTMLInputElement>(".settings-sidebar__search-input")!;
+    input.focus();
+    input.value = "appearance";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(onSearchQueryChange).toHaveBeenLastCalledWith("");
+    expect(input.value).toBe("");
+    expect(document.activeElement).toBe(input);
+    expect(onExit).not.toHaveBeenCalled();
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(onExit).toHaveBeenCalledOnce();
+  });
+
   it("renders refreshed settings route titles from the active locale", async () => {
     render({});
 
@@ -372,7 +556,7 @@ describe("settings sidebar search", () => {
   });
 
   it.each(["sidebar", "embed-list", "embed-page"] as const)(
-    "preserves actionable save feedback in web settings and native connection recovery in %s",
+    "keeps save feedback in the native header and connection recovery in %s",
     async (presentation) => {
       const onRetryConnect = vi.fn();
       const renderSidebar = (
@@ -389,22 +573,29 @@ describe("settings sidebar search", () => {
           lastError,
           gatewayVersion: "1.0.0",
           onRetryConnect,
-          saveIndicator: { ...saveIndicator(), status: "error", lastError: "Save failed" },
+          saveIndicator: {
+            ...saveIndicator(),
+            status: "error",
+            lastError: "Couldn’t save settings. Try again.",
+          },
         });
 
       renderSidebar(null);
       expect(container.querySelector<HTMLElement>(".gateway-status__outbox")).toBeNull();
-      await vi.waitFor(() => {
-        expect(
-          container.querySelector<HTMLElement>(".settings-save-indicator")?.textContent,
-        ).toContain(t("configView.autoSaveFailed"));
-      });
+      // The web page floats this feedback over its content instead of the sidebar.
+      if (presentation !== "sidebar") {
+        await vi.waitFor(() => {
+          expect(
+            container.querySelector<HTMLElement>(".settings-save-indicator")?.textContent,
+          ).toContain(t("configView.autoSaveFailed"));
+        });
+      }
 
       renderSidebar(null);
       expect(container.querySelector<HTMLElement>(".gateway-status")).toBeNull();
       expect(
-        container.querySelector<HTMLElement>("openclaw-settings-save-indicator"),
-      ).not.toBeNull();
+        container.querySelector<HTMLElement>("openclaw-settings-save-indicator") !== null,
+      ).toBe(presentation !== "sidebar");
 
       for (const kind of [
         "connecting",
@@ -428,23 +619,14 @@ describe("settings sidebar search", () => {
       expect(suspended?.textContent).toContain(t("connection.suspended"));
       expect(suspended?.textContent).not.toContain("in outbox");
       expect(container.querySelector<HTMLElement>(".gateway-status__retry")).toBeNull();
-      expect(
-        container.querySelector<HTMLElement>("openclaw-settings-save-indicator") !== null,
-      ).toBe(presentation === "sidebar");
       if (presentation === "sidebar") {
         expect(
           container.querySelector<HTMLElement>(".sidebar-shell__footer")?.textContent,
         ).toContain("2 queued");
         expect(suspended?.hasAttribute("role")).toBe(false);
-        expect(
-          container.querySelector<HTMLElement>(".settings-save-indicator")?.textContent,
-        ).toContain(t("configView.autoSaveFailed"));
       }
 
       renderSidebar("offline", "connection refused?token=settings-secret");
-      expect(
-        container.querySelector<HTMLElement>("openclaw-settings-save-indicator") !== null,
-      ).toBe(presentation === "sidebar");
       const button = container.querySelector<HTMLButtonElement>(".gateway-status__retry");
       expect(button?.hasAttribute("title")).toBe(false);
       expect(
@@ -487,13 +669,12 @@ describe("Settings agent selector", () => {
       expect(
         selector.querySelector(".agent-select__trigger")?.getAttribute("aria-label"),
       ).toContain("Main");
-      for (const item of selector.querySelectorAll<HTMLElement>('[role="menuitemradio"]')) {
-        item.scrollIntoView = vi.fn();
-      }
       const trigger = selector.querySelector<HTMLButtonElement>(".agent-select__trigger")!;
       trigger.click();
-      await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
-      expect(props.agentIdentity.ensure).toHaveBeenCalledWith(["main", "research"]);
+      await waitForSolid(() => {
+        expect(trigger.getAttribute("aria-expanded")).toBe("true");
+        expect(requestedIdentityIds(props.agentIdentity.ensure)).toEqual(["main", "research"]);
+      });
       const research = selector.querySelector<HTMLElement>('[aria-label="Research"]')!;
       research.click();
       await waitForSolid(() =>
@@ -531,7 +712,8 @@ describe("Settings agent selector", () => {
       expect(selector.querySelector<HTMLButtonElement>(".agent-select__trigger")?.disabled).toBe(
         true,
       );
-      expect(selector.querySelectorAll("[data-agent-option]")).toHaveLength(count);
+      expect(selector.options).toHaveLength(count);
+      expect(selector.querySelectorAll("[data-agent-option]")).toHaveLength(0);
       expect(selector.options.some((option) => option.value === "system")).toBe(false);
     },
   );
@@ -556,6 +738,10 @@ describe("Settings agent selector", () => {
       "cycle-a",
       "cycle-b",
     ]);
+    selector.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+    await waitForSolid(() =>
+      expect(selector.querySelectorAll("[data-agent-option]")).toHaveLength(5),
+    );
     const rows = selector.querySelectorAll("[data-agent-option]");
     expect(rows[1]?.querySelector(".agent-select__option-description")?.textContent?.trim()).toBe(
       t("agents.createdBy", { id: "main" }),
@@ -614,6 +800,10 @@ it("follows agent owner replacement and publications without remounting", async 
     const agentIdentity = {
       ...agents.agentIdentity,
       ensure: vi.fn(async () => {}),
+      invalidate(agentIds: readonly (string | null | undefined)[]) {
+        identities = identities.filter((identity) => !agentIds.includes(identity.agentId));
+        identityListeners.forEach((notify) => notify());
+      },
       get: (agentId: string | null | undefined) =>
         identities.find((identity) => identity.agentId === agentId) ?? null,
       entries: () => identities,
@@ -650,6 +840,10 @@ it("follows agent owner replacement and publications without remounting", async 
   const selectionSubscriptions = [...selectionListeners];
   const identitySubscriptions = [...identityListeners];
   const subscriptions = [selectionSubscriptions, identitySubscriptions];
+  selector.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+  await waitForSolid(() =>
+    expect(selector.querySelector(".agent-select__option-copy")).not.toBeNull(),
+  );
   const optionCopy = selector.querySelector(".agent-select__option-copy");
   expect(optionCopy).not.toBeNull();
   render({ ...props, gatewayVersion: "test" });
@@ -667,7 +861,9 @@ it("follows agent owner replacement and publications without remounting", async 
   await waitForSolid(() => expect(label()).toContain("Main"));
   expect(selectionListeners.size).toBe(0);
   expect(identityListeners.size).toBe(0);
-  expect(replacement.agentIdentity.ensure).toHaveBeenCalledWith(["main"]);
+  await waitForSolid(() =>
+    expect(requestedIdentityIds(replacement.agentIdentity.ensure)).toEqual(["main", "research"]),
+  );
   const originalRequests = original.agentIdentity.ensure.mock.calls.length;
   const replacementRequests = replacement.agentIdentity.ensure.mock.calls.length;
   settingsAgentSelection.state.selectedId = "main";
@@ -679,15 +875,27 @@ it("follows agent owner replacement and publications without remounting", async 
     expect(replacement.agentIdentity.ensure).toHaveBeenCalledTimes(replacementRequests);
     expect(label()).toContain("Main");
   });
+  replacement.agentIdentity.ensure.mockClear();
+  replacement.agentIdentity.invalidate(["research"]);
+  await waitForSolid(() =>
+    expect(requestedIdentityIds(replacement.agentIdentity.ensure)).toEqual(["main", "research"]),
+  );
   replacement.settingsAgentSelection.state.selectedId = "research";
   replacement.selectionListeners.forEach((notify) =>
     notify(replacement.settingsAgentSelection.state),
   );
   replacement.publishIdentity("🦊");
   await waitForSolid(() => {
-    expect(replacement.agentIdentity.ensure).toHaveBeenLastCalledWith(["research"]);
+    expect(requestedIdentityIds(replacement.agentIdentity.ensure)).toEqual(["main", "research"]);
     expect(avatar()).toBe("🦊");
   });
+  selector.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+  await waitForSolid(() => expect(selector.querySelector("[data-agent-option]")).toBeNull());
+  replacement.agentIdentity.ensure.mockClear();
+  replacement.agentIdentity.invalidate(["research"]);
+  await waitForSolid(() =>
+    expect(requestedIdentityIds(replacement.agentIdentity.ensure)).toEqual(["research"]),
+  );
   render({
     ...props,
     ...replacement,

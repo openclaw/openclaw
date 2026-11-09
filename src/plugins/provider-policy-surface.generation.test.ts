@@ -1,10 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { createPluginModuleLoader } from "./loader-module-runtime.js";
 import { loadPluginRegistryHandle } from "./loader.js";
 import {
@@ -110,20 +109,22 @@ describe("provider policy generations", () => {
   });
 
   it("does not retain published registries through surviving policy caches", async () => {
-    class RetiredRegistry {
-      readonly fixtureLabel = "RetiredRegistry";
+    const references: WeakRef<object>[] = [];
+    function createRetiredRegistry() {
+      const registry = {};
+      references.push(new WeakRef(registry));
+      return registry;
     }
     policyArtifactSpy().mockReturnValue(null);
     const caches = Array.from({ length: 24 }, () => {
-      const registry = Object.assign(new RetiredRegistry(), createEmptyPluginRegistry());
+      const registry = Object.assign(createRetiredRegistry(), createEmptyPluginRegistry());
       stageActivePluginRegistry(registry, null, "default");
       const cache = createPluginCache();
       withCache(cache, () => expect(directPolicy("missing-policy")).toBeNull());
       return cache;
     });
     stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
-    await nextTurn();
-    expect(queryObjects(RetiredRegistry)).toBe(0);
+    await expectCollected(...references);
     for (const cache of caches) {
       withCache(cache, () => expect(directPolicy("missing-policy")).toBeNull());
     }

@@ -471,8 +471,9 @@ async function runInstallationCase(params: {
           },
         );
         const notes = mocks.note.mock.calls.flat().join("\n");
-        expect(notes).toContain(`${oldRoot} (2026.9.4)`);
-        expect(notes).toContain(`${mocks.activeRoot} (2026.9.17)`);
+        expect(notes).toContain(`Gateway service's 2026.9.4 at ${oldRoot}`);
+        expect(notes).toContain(`CLI 2026.9.17 at ${mocks.activeRoot}`);
+        expect(notes.match(/differs from the Gateway service's/g)).toHaveLength(1);
         expect(notes).toContain("openclaw doctor --fix");
         expect(notes).toContain("openclaw gateway install --force");
         if (params.bun) {
@@ -487,11 +488,9 @@ async function runInstallationCase(params: {
           return;
         }
         if (params.consent) {
+          const { interactive, aggressive, mixed } = params.consent;
           expect(mocks.confirm).toHaveBeenCalledTimes(
-            Number(
-              Boolean(params.consent.aggressive || params.consent.mixed) &&
-                params.consent.interactive,
-            ),
+            Number(interactive && Boolean(aggressive || mixed)),
           );
           if (params.consent.aggressive) {
             expect(notes).toContain("Service command does not include the gateway subcommand");
@@ -658,7 +657,14 @@ async function runInstallationCase(params: {
           finishError = error;
         }
         if (params.nativePolicy) {
-          if (params.nativePolicy === "disabled-before") {
+          if (params.nativePolicy === "disabled-before" && params.platform === "win32") {
+            // A disabled Scheduled Task cannot run; Doctor names the start command instead.
+            expect(finishError).toBeUndefined();
+            expectOriginal(["stop", "repair-state"], false);
+            expect(runtime.log).toHaveBeenCalledWith(
+              expect.stringContaining("Scheduled Task is disabled"),
+            );
+          } else if (params.nativePolicy === "disabled-before") {
             expect(finishError).toBeUndefined();
             expectOriginal(["stop", "repair-state", "restart"], true);
           } else {
@@ -743,6 +749,9 @@ async function runInstallationCase(params: {
           ]);
           expect(maintenance?.warnings).toEqual([
             expect.stringContaining("openclaw gateway install --force --port 19989"),
+            ...(outcome === "recovery-pending"
+              ? [expect.stringContaining("Keep the Gateway stopped until Doctor")]
+              : []),
           ]);
           expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(outcome));
           expect(mocks.health).not.toHaveBeenCalled();
@@ -784,10 +793,10 @@ async function runInstallationCase(params: {
           ]);
           expect(maintenance?.warnings?.[0]).not.toContain("doctor --fix");
           expect(runtime.log).toHaveBeenCalledWith(
-            expect.stringContaining(`${oldRoot} (2026.9.4)`),
+            expect.stringContaining(`Gateway service's 2026.9.4 at ${oldRoot}`),
           );
           expect(runtime.log).toHaveBeenCalledWith(
-            expect.stringContaining(`${mocks.activeRoot} (2026.9.17)`),
+            expect.stringContaining(`CLI 2026.9.17 at ${mocks.activeRoot}`),
           );
           expect(mocks.health).not.toHaveBeenCalled();
           return;
@@ -879,6 +888,14 @@ it.each<InstallationCase>([
 ])("repairs installation drift with doctor --fix (%j)", async (scenario) =>
   runInstallationCase({ ...scenario, mode: "direct" }),
 );
+
+it("leaves a disabled Windows Scheduled Task stopped and names the start command", async () =>
+  runInstallationCase({
+    platform: "win32",
+    mode: "maintenance",
+    definitionRepair: "not-needed",
+    nativePolicy: "disabled-before",
+  }));
 
 it.each([
   "disabled-before",

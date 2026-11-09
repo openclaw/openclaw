@@ -1,4 +1,5 @@
 import type { UsersMentionableParams, UsersMentionableResult } from "@openclaw/gateway-protocol";
+import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -118,9 +119,11 @@ export function createPersonReferenceCard(options: {
           id: profile.id,
           identity: { type: "profile", id: profile.id },
           name:
-            profile.displayName?.trim() ||
-            profile.githubIdentity?.login ||
-            t("presence.card.person"),
+            userProfileDisplayName(
+              profile.id,
+              profile.displayName,
+              profile.githubIdentity?.login,
+            ) || t("presence.card.person"),
           avatarUrl: profileAvatarUrl(profile),
           watchedSessions: [],
         };

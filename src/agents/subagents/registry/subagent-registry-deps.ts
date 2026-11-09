@@ -2,8 +2,8 @@ import type { AgentWaitParams } from "../../../../packages/gateway-protocol/src/
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ResolveContextEngineOptions } from "../../../context-engine/registry.js";
 import type { callGateway } from "../../../gateway/call.js";
+import { bindGatewayLifecycleRequest } from "../../../gateway/server-lifecycle-runtime-context.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { createLazyImportLoader, createLazyPromiseLoader } from "../../../shared/lazy-promise.js";
 import { importRuntimeModule } from "../../../shared/runtime-import.js";
@@ -37,7 +37,7 @@ export function createSubagentRegistryGatewayCaller(
 ): typeof callGateway {
   return async <T>(request: Parameters<typeof callGateway>[0]) => {
     if (request.method === "agent.wait") {
-      const gatewayRuntime = getGatewayContextResolver()?.()?.recoveryRuntime;
+      const gatewayRuntime = getGatewayContextResolver()?.()?.lifecycleRuntime;
       if (gatewayRuntime) {
         // Registry waits are Gateway-owned lifecycle work. Keep them on the
         // owning instance when one exists; standalone processes authenticate normally.

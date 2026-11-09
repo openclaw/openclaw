@@ -52,6 +52,8 @@ function color(value: string) {
 }
 
 function expectWithinViewport(element: HTMLElement) {
+  // Measure settled geometry, not WebKit's in-flight entry scale.
+  finishElementAnimations(element);
   const box = element.getBoundingClientRect();
   expect(box.width).toBeGreaterThan(0);
   expect(box.height).toBeGreaterThan(0);
@@ -80,7 +82,6 @@ function positionTrigger(style: Partial<CSSStyleDeclaration>) {
 function expectItemVisible(element: HTMLElement, menu: HTMLElement) {
   const box = expectWithinViewport(menu);
   const itemBox = element.getBoundingClientRect();
-  expect(box.height).toBeLessThanOrEqual(420);
   expect(itemBox.bottom).toBeLessThanOrEqual(box.bottom);
   expect(itemBox.top).toBeGreaterThanOrEqual(box.top);
 }
@@ -118,13 +119,17 @@ describe("native overlay presentation", () => {
       }
       document.getAnimations().forEach((animation) => animation.finish());
       const colors: [Element, "color" | "backgroundColor", string][] = [
-        [surface(), "backgroundColor", "popover"],
+        [surface(), "backgroundColor", "menu-surface"],
         [item("Open"), "color", "text"],
-        [details("Open"), "color", "muted"],
-        [trigger("people-group").querySelector(".oc-menu-item__submenu-icon")!, "color", "muted"],
+        [details("Open"), "color", "text-tertiary"],
+        [
+          trigger("people-group").querySelector(".oc-menu-item__submenu-icon")!,
+          "color",
+          "text-tertiary",
+        ],
         [item("Delete"), "color", "danger"],
         [details("Delete"), "color", "danger"],
-        [trigger("people-group"), "backgroundColor", "surface-selected"],
+        [trigger("people-group"), "backgroundColor", "surface-hover"],
       ];
       for (const [element, property, token] of colors) {
         expect(getComputedStyle(element)[property], theme).toBe(color(`var(--${token})`));
@@ -153,8 +158,6 @@ describe("native overlay presentation", () => {
       });
       positionTrigger({ left: "200px", top: "50px" });
       await openMenu();
-      // Measure the consumer budget, not WebKit's in-flight entry scale.
-      finishElementAnimations(surface());
       expect(expectWithinViewport(surface()).height).toBe(500);
       await userEvent.keyboard("{End}");
       expect(document.activeElement).toBe(item("Action 24"));

@@ -9,10 +9,8 @@ import {
   resolveEmbeddedCliBackendDispatchEligibilityAsync,
 } from "../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
-import {
-  buildConfiguredModelCatalog,
-  resolveThinkingDefault,
-} from "../../agents/model-selection.js";
+import { resolveThinkingDefault } from "../../agents/model-selection.js";
+import { buildThinkingCatalog } from "../../agents/model-thinking-default-core.js";
 import {
   concretizeAgentRuntime,
   resolveEffectiveAgentRuntime,
@@ -55,6 +53,7 @@ import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog
 import { createRuntimeSessionEntry } from "./runtime-agent-session-create.js";
 import { ensurePluginAgentWorkspace } from "./runtime-agent-workspace.js";
 import { defineCachedValue } from "./runtime-cache.js";
+import { createRuntimeConfig } from "./runtime-config.js";
 import type { PluginRuntime } from "./types.js";
 
 type RuntimeSession = PluginRuntime["agent"]["session"];
@@ -62,6 +61,9 @@ type RuntimeSessionStoreReadParams = Parameters<RuntimeSession["getSessionEntry"
 
 const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
   () => import("./runtime-embedded-agent.runtime.js"),
+);
+const loadToolAvailabilityRuntime = createLazyRuntimeModule(
+  () => import("../../agents/tool-availability-explanation.js"),
 );
 const loadAgentCommandRuntime = createLazyRuntimeModule(async () => {
   const [command, identity] = await Promise.all([
@@ -90,6 +92,7 @@ const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) =
     ? listAccessorSessionEntriesReadOnly
     : listAccessorSessionEntries;
   return listEntries({
+    projection: params.projection,
     ...(params.sessionKeys !== undefined ? { sessionKeys: params.sessionKeys } : {}),
     ...(params.includeParticipants !== undefined
       ? { includeParticipants: params.includeParticipants }
@@ -220,7 +223,13 @@ async function runWithSessionWorkAdmission<T>(
   }
 }
 
-export function createRuntimeAgent(): PluginRuntime["agent"] {
+/**
+ * `config` is the host-owned facade: the path-loaded runtime has its own module graph,
+ * so config reads for new members go through the host instead of this graph's snapshot.
+ */
+export function createRuntimeAgent(
+  config: PluginRuntime["config"] = createRuntimeConfig(),
+): PluginRuntime["agent"] {
   const agentRuntime = {
     defaults: { model: DEFAULT_MODEL, provider: DEFAULT_PROVIDER },
     resolveAgentDir,
@@ -240,7 +249,13 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
               modelId: params.model,
             })
           : undefined;
-      const catalog = params.catalog ?? buildConfiguredModelCatalog({ cfg: getRuntimeConfig() });
+      const catalog =
+        params.catalog ??
+        buildThinkingCatalog({
+          cfg: getRuntimeConfig(),
+          provider: params.provider,
+          model: params.model,
+        });
       const profile = resolveThinkingProfile({
         ...params,
         agentRuntime: effectiveRuntime,
@@ -260,9 +275,14 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     ensureAgentWorkspace: ensurePluginAgentWorkspace,
   } satisfies Omit<
     PluginRuntime["agent"],
-    "runCommandFromIngress" | "runEmbeddedAgent" | "session"
+    "runCommandFromIngress" | "runEmbeddedAgent" | "session" | "explainToolAvailability"
   > &
-    Partial<Pick<PluginRuntime["agent"], "runCommandFromIngress" | "runEmbeddedAgent" | "session">>;
+    Partial<
+      Pick<
+        PluginRuntime["agent"],
+        "runCommandFromIngress" | "runEmbeddedAgent" | "session" | "explainToolAvailability"
+      >
+    >;
 
   defineCachedValue(agentRuntime, "runCommandFromIngress", () =>
     createLazyRuntimeMethod(
@@ -279,12 +299,22 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
             },
             runtime,
             undefined,
-            {},
           ),
     ),
   );
   defineCachedValue(agentRuntime, "runEmbeddedAgent", () =>
     createLazyRuntimeMethod(loadEmbeddedAgentRuntime, (runtime) => runtime.runPluginEmbeddedAgent),
+  );
+  defineCachedValue(agentRuntime, "explainToolAvailability", () =>
+    createLazyRuntimeMethod(
+      loadToolAvailabilityRuntime,
+      (runtime) =>
+        async (params: Parameters<PluginRuntime["agent"]["explainToolAvailability"]>[0]) =>
+          await runtime.explainToolAvailability({
+            ...params,
+            config: config.current({ clone: true }),
+          }),
+    ),
   );
   defineCachedValue(agentRuntime, "session", () => ({
     resolveStorePath: resolveSessionStorePathCore,

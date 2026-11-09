@@ -29,7 +29,11 @@ suite.define(() => {
       expect(await search.inputValue()).toBe("");
       expect(await page.locator(".plugin-editor").isVisible()).toBe(true);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
-      await search.blur();
+      await search.press("Escape");
+      await expect
+        .poll(() => new URL(page.url()).pathname + new URL(page.url()).search)
+        .toBe("/settings/plugins/workboard");
+      await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins");
     });
@@ -57,6 +61,11 @@ suite.define(() => {
           .toBe(true);
         expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
+        await page.keyboard.press("Escape");
+        await expect
+          .poll(() => new URL(page.url()).pathname + new URL(page.url()).search)
+          .toBe("/settings/plugins/workboard");
+        await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
         await page.keyboard.press("Escape");
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins");
         await page.getByRole("heading", { level: 1, name: "Plugins", exact: true }).waitFor();

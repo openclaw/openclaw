@@ -455,5 +455,50 @@ created are rejected instead of changing what the node executes.
 ## Related
 
 - [CLI reference](/cli)
-- [Connect a machine](/cli/connect)
+- [Connect a device](/cli/connect)
 - [Nodes](/nodes)
+
+## Labs: OpenClaw ID tunnel targets
+
+An OpenClaw ID node target connects through `openclaw/tunnel/1` over iroh instead
+of a LAN address, Tailscale, or SSH. This is a Labs transport; enrollment with
+`openclaw node join` is a separate workstream, not part of this transport preview.
+After enrollment has saved an OpenClaw ID target, `openclaw node run` without
+Gateway endpoint flags resumes that target. Explicit `--host` / `--port` options
+continue to select the existing WebSocket transport.
+
+The saved target contains the claw id, root fingerprint, highest verified binding
+sequence, signed ServerBinding, and relay hint. The node verifies the binding and
+dials only its `K_srv`; a failed tunnel never falls back to a direct WebSocket.
+IP transports remain enabled so iroh can establish a direct encrypted path.
+
+The public target can also retain `discoveryUrl`, the deployment-selected Discovery
+API origin for future enrollment and descriptor refresh. It is never inferred from
+the claw hostname or relay URL. This transport-only preview does not select a
+Discovery default or implement `node join`; enrollment will resolve the configured
+origin and `--discovery-url` override. The origin must use HTTPS (HTTP is allowed
+only for localhost testbeds), without credentials, a path, query, or fragment.
+
+The node's iroh secret key is generated locally and stored separately at
+`$OPENCLAW_STATE_DIR/node-openclaw-id/endpoint.key` (32 bytes, mode `0600`). It is
+not a Gateway token and is never written into configuration or worker descriptors.
+Do not delete or copy that key to another node: a new key requires new enrollment.
+
+The main WebSocket, worker WebSocket, desktop and portal attachment streams,
+worker bundle downloads, and workspace transfers share the authenticated tunnel through an owner-only Unix socket
+(`0600` inside a `0700` directory). There is no localhost TCP proxy. This preview
+supports Unix hosts and native-process workers; Windows and container-isolated
+workers require a separate transport integration.
+
+Saved OpenClaw ID targets do not inherit Cloudflare Access or Gateway bearer
+credentials from the installing shell; the service resumes its enrolled key.
+
+The transport sends QUIC keep-alives, probes silent connections, and backs off
+when the relay denies admission. A removed or unadmitted node key stops the host
+with **“re-join this node”** rather than retrying indefinitely. Ordinary Gateway
+pairing-pending responses retain the existing wait-and-retry behavior.
+
+Node is the qualified runtime for this preview. The native addon loads and binds
+on Linux Bun 1.4.4, but streaming HTTP integration under the pinned Bun runtime
+stalled and the tunnel child missed health pings; Bun transport qualification is
+still pending.

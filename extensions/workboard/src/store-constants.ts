@@ -51,10 +51,9 @@ export function workboardCardConsumesOwnerSlot(card: WorkboardOwnerSlotCard, now
   const activeClaim = claim && isFutureDateTimestampMs(claim.expiresAt, { nowMs: now });
   return (
     !card.metadata?.archivedAt &&
+    card.status !== "done" &&
     !isWorkboardClaimReclaimable(claim, now) &&
-    (card.status === "running" ||
-      (card.status !== "done" && activeClaim) ||
-      card.execution?.status === "running")
+    (card.status === "running" || activeClaim || card.execution?.status === "running")
   );
 }
 

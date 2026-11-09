@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -9,16 +8,26 @@ import type { prepareSandboxDependencyTemplate } from "../../agents/sandbox/depe
 import { withWorktreeAllocationLease } from "../../agents/worktrees/allocation.js";
 import { createCopyWorktreeBackend } from "../../agents/worktrees/filesystem-backend.test-support.js";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { withWorktreePreparationTiming } from "../../agents/worktrees/preparation-timing.js";
+import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import { listTemplatesAsync } from "../../agents/worktrees/template-registry-async.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import { initializeLocalWorkspaceProjection } from "./local-workspace-checkout.js";
 import { prewarmLocalWorkspaceTemplates } from "./local-workspace-prewarm.js";
 import { cloneLocalWorkspaceTemplate } from "./local-workspace-template.js";
 
 const mocks = vi.hoisted(() => ({
   backend: vi.fn(),
   install: vi.fn<typeof prepareSandboxDependencyTemplate>(),
+  preparation: vi.fn(),
+}));
+// mock-isolation: Capture the completed preparation record without the diagnostic queue.
+vi.mock("../../infra/diagnostic-events.js", async (original) => ({
+  ...(await original<typeof import("../../infra/diagnostic-events.js")>()),
+  createQueuedDiagnosticPhaseEmitter: () => mocks.preparation,
 }));
 // mock-isolation: A portable copy backend exercises template ownership without native mounts.
 vi.mock("../../agents/worktrees/filesystem-backend.js", () => ({
@@ -53,6 +62,8 @@ const installerSecrets = [...hostSecrets, ".env.installer"];
 let source: string;
 let baseCommit: string;
 let changedCommit: string;
+let sourceCommit: string;
+let attributeCommit: string;
 let env: NodeJS.ProcessEnv;
 
 async function expectMissing(root: string, ...relatives: string[]) {
@@ -60,26 +71,18 @@ async function expectMissing(root: string, ...relatives: string[]) {
     await expect(fs.lstat(path.join(root, relative))).rejects.toMatchObject({ code: "ENOENT" });
   }
 }
-
 async function write(root: string, relative: string, value: string) {
   const target = path.join(root, relative);
   await fs.mkdir(path.dirname(target), { recursive: true });
   await fs.writeFile(target, value);
 }
-
-async function writeModulesManifest(root: string, virtualStoreDir = ".pnpm") {
-  const yaml = `virtualStoreDir: ${JSON.stringify(virtualStoreDir)}\n`;
-  await write(root, "node_modules/.modules.yaml", yaml);
-}
-
 async function installFiles(directory: string, files: Record<string, string>) {
-  await writeModulesManifest(directory);
+  await write(directory, "node_modules/.modules.yaml", 'virtualStoreDir: ".pnpm"\n');
   for (const [relative, contents] of Object.entries(files)) {
     await write(directory, relative, contents);
   }
   return { installed: true as const };
 }
-
 async function checkClones(signal: AbortSignal, check: (checkout: string) => Promise<void>) {
   const clone = await fixture(signal);
   for (const name of ["first", "second"]) {
@@ -87,10 +90,9 @@ async function checkClones(signal: AbortSignal, check: (checkout: string) => Pro
   }
   expect(mocks.install).toHaveBeenCalledOnce();
 }
-
 beforeAll(async () => {
-  vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
-  vi.stubEnv("GIT_CONFIG_SYSTEM", os.devNull);
+  vi.stubEnv("GIT_CONFIG_GLOBAL", gitNullConfigPath());
+  vi.stubEnv("GIT_CONFIG_SYSTEM", gitNullConfigPath());
   const root = directories.make("openclaw-dependency-template-");
   source = path.join(root, "source");
   env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
@@ -106,9 +108,16 @@ beforeAll(async () => {
   await git(source, "add", ".");
   await git(source, "commit", "--quiet", "-m", "fixture");
   baseCommit = await git(source, "rev-parse", "HEAD");
+  await write(source, "source.ts", "export const version = 'updated';\n");
+  await git(source, "commit", "--quiet", "-am", "source update");
+  sourceCommit = await git(source, "rev-parse", "HEAD");
   await write(source, "pnpm-lock.yaml", secondLock);
   await git(source, "commit", "--quiet", "-am", "lockfile update");
   changedCommit = await git(source, "rev-parse", "HEAD");
+  await write(source, ".gitattributes", "source.ts text eol=crlf\n");
+  await git(source, "add", ".gitattributes");
+  await git(source, "commit", "--quiet", "-m", "checkout attributes");
+  attributeCommit = await git(source, "rev-parse", "HEAD");
   await write(source, ".gitignore", "\n.env*\n.npmrc\nbuild/\n");
   await git(source, "commit", "--quiet", "-am", "dependency ignore variant");
   const remote = path.join(root, "origin.git");
@@ -118,16 +127,17 @@ beforeAll(async () => {
   await write(source, ".npmrc", "synthetic host-only registry credential\n");
   await git(source, "config", "credential.helper", "!echo synthetic-host-credential");
 });
-
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.backend.mockResolvedValue(createCopyWorktreeBackend());
   mocks.install.mockImplementation(async ({ directory }) => {
     await expectMissing(directory, ...hostSecrets);
-    return installFiles(directory, { [dependencyFile]: await read(directory, "pnpm-lock.yaml") });
+    return installFiles(directory, {
+      [dependencyFile]: await read(directory, "pnpm-lock.yaml"),
+      "node_modules/source-derived.txt": await read(directory, "source.ts"),
+    });
   });
 });
-
 async function fixture(signal: AbortSignal) {
   const root = directories.make("openclaw-dependency-consumers-");
   const templateRoot = path.join(root, "templates");
@@ -136,8 +146,8 @@ async function fixture(signal: AbortSignal) {
     const temporaryRoot = path.join(root, `${name}-temporary`);
     const destination = path.join(root, name);
     await fs.mkdir(temporaryRoot);
-    expect(
-      await cloneLocalWorkspaceTemplate({
+    await expect(
+      cloneLocalWorkspaceTemplate({
         source,
         repoRoot: source,
         baseCommit: commit,
@@ -154,12 +164,16 @@ async function fixture(signal: AbortSignal) {
           requireDiskSpace: async () => {},
         },
       }),
-    ).toBe(true);
+    ).resolves.toBe(true);
     return destination;
   };
 }
 
-it("isolates dependency clones and rebuilds after lockfile changes", async ({ signal }) => {
+it("refreshes source changes once, isolates clones, and rebuilds changed lockfiles", async ({
+  signal,
+}) => {
+  const backend = createCopyWorktreeBackend();
+  mocks.backend.mockResolvedValue(backend);
   const clone = await fixture(signal);
   const first = await clone("first");
   expect(await read(first, dependencyFile)).toBe(firstLock);
@@ -178,15 +192,42 @@ it("isolates dependency clones and rebuilds after lockfile changes", async ({ si
   expect(await read(first, dependencyFile)).toBe("consumer edit\n");
   expect(await git(second, "branch", "--show-current")).toBe("openclaw/second");
   expect(mocks.install).toHaveBeenCalledOnce();
-
-  const third = await clone("changed-lock", changedCommit);
+  const refreshed = await Promise.all([
+    clone("updated-a", sourceCommit),
+    clone("updated-b", sourceCommit),
+  ]);
+  for (const checkout of refreshed) {
+    expect(await git(checkout, "rev-parse", "HEAD")).toBe(sourceCommit);
+    expect(await read(checkout, "source.ts")).toBe("export const version = 'updated';\n");
+    expect(await read(checkout, dependencyFile)).toBe(firstLock);
+    expect(await read(checkout, "node_modules/source-derived.txt")).toBe(
+      "export const version = 'updated';\n",
+    );
+    expect(await git(checkout, "status", "--porcelain")).toBe("");
+  }
+  expect(await read(first, "source.ts")).toBe(sourceText);
+  expect(backend.createTemplate).toHaveBeenCalledOnce();
+  expect(mocks.install).toHaveBeenCalledTimes(2);
+  expect(mocks.install.mock.calls[0]![0].scopeKey).not.toBe(
+    mocks.install.mock.calls[1]![0].scopeKey,
+  );
+  const third = await withWorktreePreparationTiming("managed", () =>
+    clone("changed-lock", changedCommit),
+  );
   expect(await read(third, dependencyFile)).toBe(secondLock);
   expect(await read(third, "pnpm-lock.yaml")).toBe(secondLock);
-  expect(mocks.install).toHaveBeenCalledTimes(2);
-  const templates = (await listTemplatesAsync(env)).filter(
-    (record) => record.sourceCommit === changedCommit,
-  );
-  expect(templates).toMatchObject([{ status: "ready" }]);
+  expect(mocks.install).toHaveBeenCalledTimes(3);
+  expect(backend.createTemplate).toHaveBeenCalledTimes(2);
+  expect(mocks.preparation.mock.lastCall?.[0].details).toMatchObject({
+    template: "cold",
+    "template.reason": "ready",
+    "template.missReason": "commit-changed",
+    "template.priorSourceCommit": sourceCommit.slice(0, 12),
+    "template.requestedSourceCommit": changedCommit.slice(0, 12),
+  });
+  const attributes = await clone("attributes", attributeCommit);
+  expect(await read(attributes, "source.ts")).toBe("export const version = 'updated';\r\n");
+  expect(backend.createTemplate).toHaveBeenCalledTimes(3);
 });
 
 it("retains dependencies without credentials or install debris", async ({ signal }) => {
@@ -208,6 +249,68 @@ it("retains dependencies without credentials or install debris", async ({ signal
   });
 });
 
+it.for(["none", "same", "previous"])(
+  "applies idempotent fetch defaults from a reused template (existing origin: %s)",
+  async (configured, { signal }) => {
+    const clone = await fixture(signal);
+    const priorUrl = await git(source, "config", "remote.origin.url");
+    const url = "https://github.com/example/projection.git";
+    if (configured !== "none") {
+      await git(
+        source,
+        "config",
+        "remote.origin.url",
+        configured === "same" ? url : "https://github.com/example/previous.git",
+      );
+    }
+    const seed = await clone("old-fetch-defaults");
+    await git(source, "config", "remote.origin.url", url);
+    vi.stubEnv(
+      "GIT_CONFIG_PARAMETERS",
+      "'remote.origin.url=https://github.com/ambient/poison.git'",
+    );
+    try {
+      const projectionPath = path.join(path.dirname(seed), "templates", "fetch-proof", "workspace");
+      await withWorktreeAllocationLease({ env, signal }, (allocation) =>
+        initializeLocalWorkspaceProjection({
+          owner: {
+            agentId: "main",
+            sessionKey: "agent:main:fetch-proof",
+            sessionId: "fetch-proof",
+            lifecycleRevision: null,
+            assertCurrent: () => {},
+            env,
+            worktree: makeWorktreeRecord(source, "fetch-proof", { branch: "guest" }),
+          },
+          projectionPath,
+          baseCommit,
+          signal,
+          assertCurrent: () => {},
+          buildCacheInputs: async () => [],
+          dependencies: { sandbox, allocation },
+        }),
+      );
+      expect(mocks.install).toHaveBeenCalledOnce();
+      vi.stubEnv("GIT_CONFIG_PARAMETERS", undefined);
+      expect(await git(projectionPath, "config", "--get-all", "remote.origin.url")).toBe(url);
+      // The same-origin template and its projection each apply the fetch defaults.
+      const config = await read(projectionPath, ".git/config");
+      for (const remote of ["origin", url.slice(0, -4), url]) {
+        expect(config.split(`[remote "${remote}"]`)).toHaveLength(2);
+        expect(await git(projectionPath, "config", "--get-all", `remote.${remote}.promisor`)).toBe(
+          "true",
+        );
+        expect(
+          await git(projectionPath, "config", "--get-all", `remote.${remote}.partialclonefilter`),
+        ).toBe("blob:none");
+      }
+    } finally {
+      vi.stubEnv("GIT_CONFIG_PARAMETERS", undefined);
+      await git(source, "config", "remote.origin.url", priorUrl);
+    }
+  },
+);
+
 it.for([
   "external virtual store",
   "install failure",
@@ -219,7 +322,7 @@ it.for([
   const sourceChanged = failure.includes("tracked source");
   mocks.install.mockImplementation(async ({ directory }) => {
     if (failure === "external virtual store") {
-      await writeModulesManifest(directory, "../.pnpm");
+      await write(directory, "node_modules/.modules.yaml", 'virtualStoreDir: "../.pnpm"\n');
       await write(directory, ".pnpm/dependency/index.js", "external virtual store\n");
       await fs.symlink(
         "../.pnpm/dependency",

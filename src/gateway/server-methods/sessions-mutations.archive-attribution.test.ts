@@ -354,9 +354,6 @@ it.each([
     const sessionId = identified ? "session-archive-attribution" : "session-solo-archive";
     const retained = identified
       ? {
-          mainRestartRecovery: { cycleId: "interrupted-cycle", revision: 1, chargedAttempts: 0 },
-          restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration: "previous-boot" }],
-          restartRecoveryTerminalRunIds: ["delivered-run"],
           pendingFinalDelivery: {
             kind: "replayable" as const,
             text: "Retained final",

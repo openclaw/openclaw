@@ -4,6 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import { auditMarkdownTable } from "./chat-markdown-table-layout.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI comment lifecycle" });
@@ -27,13 +28,11 @@ async function sendComment(page: Page, gateway: Awaited<ReturnType<typeof instal
     message: string;
     idempotencyKey: string;
     sessionKey: string;
-    attachments: Array<{ content: string }>;
+    attachments?: unknown[];
   };
-  expect(sent.attachments).toHaveLength(1);
-  return {
-    ...sent,
-    attachment: Buffer.from(sent.attachments[0]!.content, "base64").toString("utf8"),
-  };
+  // Comments are user message text, never an uploaded file.
+  expect(sent.attachments ?? []).toHaveLength(0);
+  return sent;
 }
 
 async function sendWithoutComments(
@@ -82,39 +81,23 @@ async function addComment(page: Page, source: Locator, comment: string) {
 }
 
 suite.define(() => {
-  it("keeps the annotation-only bubble visible while its sent attachment is read", async () => {
+  it("keeps a legacy comment-file bubble stable while its attachment is read", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       await page.clock.install({ time: new Date() });
-      const history = [
-        ...Array.from({ length: 30 }, (_, index) => ({
-          role: index % 2 === 0 ? "user" : "assistant",
-          content: `Deployment checkpoint ${index + 1}. Review the service health before proceeding.`,
-        })),
-        { role: "assistant", content: passage },
-      ];
-      const { source, gateway } = await openChat(page, passage, history);
       const comment = "Explain the rollback steps before changing the deployment.";
-      await addComment(page, source, comment);
-      await gateway.deferNext("chat.send");
-      const sent = await sendComment(page, gateway);
-      expect(sent.message).toBe("");
-      const inline = page.locator(".chat-sent-comments-inline");
-      const quote = inline.getByRole("button", { name: passage, exact: true });
-      await quote.waitFor();
-      const before = await inline.boundingBox();
-      expect(before).not.toBeNull();
-      await gateway.resolveDeferred("chat.send", {
-        runId: sent.idempotencyKey,
-        status: "started",
-      });
-      expect(await quote.isVisible()).toBe(true);
-      expect(await inline.textContent()).toContain(comment);
-      expect(await inline.textContent()).not.toContain("Loading");
-      expect((await inline.boundingBox())?.height).toBe(before!.height);
-      const canonicalBody = createDeferred();
-      const reread = createDeferred();
+      // Transcripts from before comments became message text still carry this file.
+      const legacyFile = [
+        `Selected text:\n${passage}`,
+        `User comment:\n${comment}`,
+        [
+          "Source session: agent:main:main",
+          `Selected text UTF-16 length: ${passage.length}`,
+          `DOM text UTF-16 range: [0, ${passage.length})`,
+        ].join("\n"),
+      ].join("\n\n");
       let reads = 0;
       let tickets = 0;
+      const reread = createDeferred();
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         if (new URL(route.request().url()).searchParams.has("meta")) {
           const now = await page.evaluate(() => Date.now());
@@ -126,58 +109,43 @@ suite.define(() => {
           });
           return;
         }
-        await (++reads === 1 ? canonicalBody.promise : reread.promise);
-        await route.fulfill({ contentType: "text/plain", body: sent.attachment });
+        reads += 1;
+        if (reads > 1) {
+          await reread.promise;
+        }
+        await route.fulfill({ contentType: "text/plain", body: legacyFile });
       });
-      const canonicalRead = page.waitForResponse(
-        (response) =>
-          response.url().includes("/assistant-media?") &&
-          !new URL(response.url()).searchParams.has("meta"),
-      );
-      const canonicalId = `mock-user:${sent.idempotencyKey}`;
-      const canonicalSeq = history.length + 1;
-      const canonical = {
-        role: "user",
-        content: "",
-        idempotencyKey: `${sent.idempotencyKey}:user`,
-        __openclaw: {
-          id: canonicalId,
-          seq: canonicalSeq,
-          media: [
-            {
-              kind: "file",
-              url: "media://inbound/selection-comment.txt",
-              fileName: "selection-comment.txt",
-              contentType: "text/plain",
-            },
-          ],
+      const history = [
+        ...Array.from({ length: 30 }, (_, index) => ({
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `Deployment checkpoint ${index + 1}. Review the service health before proceeding.`,
+        })),
+        { role: "assistant", content: passage },
+        {
+          role: "user",
+          content: "",
+          __openclaw: {
+            id: "legacy-comment",
+            seq: 32,
+            media: [
+              {
+                kind: "file",
+                url: "media://inbound/selection-comment.txt",
+                fileName: "selection-comment.txt",
+                contentType: "text/plain",
+              },
+            ],
+          },
         },
-      };
-      const session = await gateway.getSessionRow(sent.sessionKey);
-      try {
-        await gateway.emitGatewayEvent("session.message", {
-          sessionKey: sent.sessionKey,
-          sessionId: session.sessionId,
-          status: session.status,
-          hasActiveRun: session.hasActiveRun,
-          activeRunIds: session.activeRunIds,
-          session,
-          clientRunId: sent.idempotencyKey,
-          messageId: canonicalId,
-          messageSeq: canonicalSeq,
-          message: canonical,
-        });
-        await page.locator(`[data-entry-id="${canonicalId}"]`).waitFor();
-        expect(await quote.isVisible()).toBe(true);
-        expect(await inline.textContent()).toContain(comment);
-        expect((await inline.boundingBox())?.height).toBe(before!.height);
-      } finally {
-        canonicalBody.resolve();
-      }
-      await (await canonicalRead).finished();
+      ];
+      await openChat(page, passage, history);
+      const inline = page.locator(".chat-sent-comments-inline");
+      const quote = inline.getByRole("button", { name: passage, exact: true });
       await quote.waitFor();
       await waitForChatScrollIdle(page);
       expect(await inline.textContent()).toContain(comment);
+      const before = await inline.boundingBox();
+      expect(before).not.toBeNull();
       const thread = page.locator(".chat-thread");
       const observation = await page.evaluateHandle(() => {
         let loading = false;
@@ -221,7 +189,7 @@ suite.define(() => {
     { width: 1440, height: 900, theme: "dark" },
     { width: 390, height: 844, theme: "light" },
   ] as const)(
-    "keeps an annotation-only quote on one line at $width px",
+    "renders an annotation-only message as a quoted passage at $width px",
     async ({ width, height, theme }) => {
       await suite.withPage(
         { ...pageOptions, viewport: { width, height }, colorScheme: theme },
@@ -234,11 +202,11 @@ suite.define(() => {
           const { source, gateway } = await openChat(page, selected);
           await addComment(page, source, comment);
           const params = await sendComment(page, gateway);
-          expect(params.message).toBe("");
-          expect(params.attachment).toContain(
-            `Selected text:\n${selected}\n\nUser comment:\n${comment}`,
-          );
-          expect(params.attachment).toContain("Source session:");
+          const quoted = selected
+            .split("\n")
+            .map((line) => `> ${line}`)
+            .join("\n");
+          expect(params.message).toBe(`${quoted}\n\n${comment}`);
           await gateway.emitChatFinal({
             runId: params.idempotencyKey,
             sessionKey: params.sessionKey,
@@ -251,85 +219,89 @@ suite.define(() => {
             })
             .waitFor();
           await waitForChatScrollIdle(page);
-          const inline = page.locator(".chat-sent-comments-inline");
-          await inline.waitFor();
-          const authored = inline.locator(".chat-sent-comments-inline__comment");
-          await expect.poll(() => authored.textContent()).toBe(comment);
-          const selection = inline.getByRole("button", { name: selected });
-          await selection.waitFor();
-          const geometry = await selection.evaluate((element) => ({
-            height: element.getBoundingClientRect().height,
-            lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
-            overflows: element.scrollWidth > element.clientWidth,
-            documentOverflows: document.documentElement.scrollWidth > window.innerWidth,
-          }));
-          expect(geometry.height).toBeLessThanOrEqual(geometry.lineHeight + 1);
-          expect(geometry.overflows).toBe(true);
-          expect(geometry.documentOverflows).toBe(false);
-          await page.keyboard.press("Tab");
-          await selection.focus();
-          const fullQuote = inline.getByRole("region", {
-            name: "Highlighted passage:",
-            exact: true,
-          });
-          await fullQuote.waitFor({ state: "visible" });
-          expect(await fullQuote.textContent()).toBe(selected);
-          await page.keyboard.press("Escape");
-          await fullQuote.waitFor({ state: "hidden" });
-          await selection.click();
-          await fullQuote.waitFor({ state: "visible" });
+          const blockquote = page.locator(".chat-bubble blockquote");
+          await blockquote.waitFor();
+          // The quoted passage keeps both lines; the comment follows as ordinary message text.
+          const quoteText = (await blockquote.textContent())?.replace(/\s+/g, " ").trim();
+          expect(quoteText).toBe(selected.replace(/\s+/g, " "));
+          const bubble = page.locator(".chat-bubble").filter({ has: page.locator("blockquote") });
+          expect(await bubble.textContent()).toContain(
+            "Explain the rollback steps before changing",
+          );
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth),
+          ).toBe(false);
           expect(await gateway.getRequests("chat.send")).toHaveLength(1);
         },
       );
     },
   );
 
-  it("keeps deletion in place and clears all with the keyboard", async () => {
-    await suite.withPage(pageOptions, async ({ page }) => {
-      const { gateway, composer, source, preview } = await openChat(page);
-      await composer.fill("Preserve the draft.");
-      for (const comment of ["First note", "Second note"]) {
-        await addComment(page, source, comment);
-      }
-      const chip = page.locator(".chat-attachments-preview .chat-selection-annotations__chip");
-      const trigger = chip.getByRole("button", { name: /^\d+ comments?$/ });
-      await page.mouse.move(0, 0);
-      const restingBounds = await chip.boundingBox();
-      await chip.hover();
-      await preview.waitFor({ state: "visible" });
-      expect(await chip.boundingBox()).toEqual(restingBounds);
-      const deletes = button(preview, "Delete comment");
-      await deletes.first().click();
-      await expect.poll(() => chip.textContent()).toContain("1 comment");
-      expect(await page.locator("openclaw-toast-host [role=status]").count()).toBe(0);
-      // Shrinking above the chip moves the first row away from a stationary pointer.
-      await page.waitForTimeout(250);
-      expect(await preview.isVisible()).toBe(true);
-      await expectFocus(deletes.first());
-      expect(await preview.textContent()).not.toContain("First note");
-      expect(await button(preview, "Edit comment 1").count()).toBe(1);
-      expect(await button(preview, "Edit comment 2").count()).toBe(0);
-      await page.keyboard.press("Escape");
-      await expect.poll(() => preview.isVisible()).toBe(false);
-      await trigger.press("Space");
-      await preview.waitFor({ state: "visible" });
-      await composer.click();
-      await expect.poll(() => preview.isVisible()).toBe(false);
-      await trigger.focus();
-      await page.keyboard.press("Tab");
-      const clear = button(page, "Remove all comments");
-      expect(await focused(clear)).toBe(true);
-      await page.keyboard.press("Shift+Tab");
-      expect(await focused(trigger)).toBe(true);
-      await page.keyboard.press("Tab");
-      await page.keyboard.press("Enter");
-      await chip.waitFor({ state: "detached" });
-      await expectFocus(composer);
-      expect(await composer.inputValue()).toBe("Preserve the draft.");
-      expect(await page.locator("openclaw-toast-host [role=status]").count()).toBe(0);
-      await sendWithoutComments(page, gateway);
-    });
-  });
+  it.each([1600, 390])(
+    "keeps transcript and deletion stable with the keyboard at %s px",
+    async (width) => {
+      await suite.withPage(
+        { ...pageOptions, viewport: { width, height: 900 } },
+        async ({ page }) => {
+          const content = `${auditMarkdownTable}\n\n${passage}`;
+          const { gateway, composer, source, preview } = await openChat(page, content);
+          await composer.fill("Preserve the draft.");
+          const table = page.locator(".chat-group.assistant .markdown-table");
+          const geometry = async () =>
+            (await Promise.all([table.boundingBox(), source.boundingBox()])).map((box) => ({
+              x: box!.x,
+              width: box!.width,
+            }));
+          await Promise.all([table.waitFor(), source.waitFor()]);
+          await waitForChatScrollIdle(page);
+          const before = await geometry();
+          for (const comment of ["First note", "Second note"]) {
+            await addComment(page, source, comment);
+            await expect.poll(geometry).toEqual(before);
+          }
+          const chip = page.locator(".chat-attachments-preview .chat-selection-annotations__chip");
+          const trigger = chip.getByRole("button", { name: /^\d+ comments?$/ });
+          await page.mouse.move(0, 0);
+          const restingBounds = await chip.boundingBox();
+          await chip.hover();
+          await preview.waitFor({ state: "visible" });
+          expect(await chip.boundingBox()).toEqual(restingBounds);
+          const deletes = button(preview, "Delete comment");
+          await deletes.first().click();
+          await expect.poll(() => chip.textContent()).toContain("1 comment");
+          await expect.poll(geometry).toEqual(before);
+          expect(await page.locator("openclaw-toast-host [role=status]").count()).toBe(0);
+          // Shrinking above the chip moves the first row away from a stationary pointer.
+          await page.waitForTimeout(250);
+          expect(await preview.isVisible()).toBe(true);
+          await expectFocus(deletes.first());
+          expect(await preview.textContent()).not.toContain("First note");
+          expect(await button(preview, "Edit comment 1").count()).toBe(1);
+          expect(await button(preview, "Edit comment 2").count()).toBe(0);
+          await page.keyboard.press("Escape");
+          await expect.poll(() => preview.isVisible()).toBe(false);
+          await trigger.press("Space");
+          await preview.waitFor({ state: "visible" });
+          await composer.click();
+          await expect.poll(() => preview.isVisible()).toBe(false);
+          await trigger.focus();
+          await page.keyboard.press("Tab");
+          const clear = button(page, "Remove all comments");
+          expect(await focused(clear)).toBe(true);
+          await page.keyboard.press("Shift+Tab");
+          expect(await focused(trigger)).toBe(true);
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("Enter");
+          await chip.waitFor({ state: "detached" });
+          await expect.poll(geometry).toEqual(before);
+          await expectFocus(composer);
+          expect(await composer.inputValue()).toBe("Preserve the draft.");
+          expect(await page.locator("openclaw-toast-host [role=status]").count()).toBe(0);
+          await sendWithoutComments(page, gateway);
+        },
+      );
+    },
+  );
 
   it("opens an offscreen comment from the composer without dismissing its own editor", async () => {
     await suite.withPage(

@@ -72,6 +72,7 @@ import { withSearchDetail } from "./search-detail.js";
 import { SessionActivityInput, SessionActivityOutput } from "./session-activity.js";
 import {
   AgentProxyInput,
+  GrantChangeInput,
   StoreState,
   StoresChangeInput,
   StoresChangeOutput,
@@ -103,7 +104,7 @@ export const contract = defineFeatureContract({
     timeline: {
       kind: "query",
       description:
-        "Chronological structured records, optionally scoped to an entity page ID and date range. Defaults to occurrence time; choose recorded_at/updated_at for when Knowledge changed or due_at for commitments. No dates inferred from prose or ingestion. Explicit source-event claims fold matching meeting pages. Unknown dates excluded. Follow nextOffset with the same filters and returned snapshot; restart on change.",
+        "Chronological structured records, optionally scoped to an entity page ID and date range. Defaults to occurrence time; choose recorded_at/updated_at for when Knowledge changed or due_at for commitments. No dates inferred from prose or ingestion. Explicit source-event claims fold matching meeting pages. group=source with entity returns its Timeline: one row per dated source with their relationship note and claim count. Unknown dates excluded. Follow nextOffset with the same filters and returned snapshot; restart on change.",
       input: TimelineInput,
       output: ChronicleOutput,
       tool: { name: "knowledge_timeline", label: "Read knowledge timeline" },
@@ -321,7 +322,7 @@ export const contract = defineFeatureContract({
     recall: {
       kind: "action",
       description:
-        "Owner-private agent tool for explicit automatic-recall approval. Set a short summary plus optional trigger phrases, importance and host project keys on one exact active record; the service supplies approval identity/time. Source and agent-inference claims cannot be approved. Clear removes recall metadata. Revision/hash preconditions and exact request replay use the normal publication receipt and local Git checkpoint path. Corrections do not inherit approval.",
+        "Agent tool for explicit automatic-recall approval, in owner-private conversations or conversations an owner granted saves to private knowledge. Set a short summary plus optional trigger phrases, importance and host project keys on one exact active record; the service supplies approval identity/time. Source and agent-inference claims cannot be approved. Clear removes recall metadata. Revision/hash preconditions and exact request replay use the normal publication receipt and local Git checkpoint path. Corrections do not inherit approval.",
       input: RecallInput,
       output: Receipt,
       tool: { name: "knowledge_recall", label: "Curate automatic recall" },
@@ -464,7 +465,7 @@ export const contract = defineFeatureContract({
     grep: {
       kind: "query",
       description:
-        "Find records by words in titles, aliases and bodies. Use for discovery when the exact identity is unknown. Rank authorized valid knowledge by title/alias/body keywords with SQLite FTS5. Default: all word tokens, active records. Saved pages need no approval. mode=any ORs literal words; mode=phrase matches their order. No raw FTS/regex operators. lifecycle=superseded/all includes history, never withdrawn records. Filters apply before ranking. Agents get compact hits (id, title, type, path, revision, short snippet, matched fields; default limit 10); detail=full adds revision/hash citations, body line locators, score, attribution and evidence. index.state=unavailable and total=null mean failed retrieval, not no matches. Compare index.snapshot across pages; restart on changes. Not exhaustive inventory: use knowledge_records. No embeddings.",
+        "Find records by words in titles, aliases and bodies. Use for discovery when the exact identity is unknown. Rank authorized valid knowledge by title/alias/body keywords with SQLite FTS5. Default: all word tokens, active records. Saved pages need no approval. mode=any ORs literal words; mode=phrase matches their order. No raw FTS/regex operators. lifecycle=superseded/all includes history, never withdrawn records. An active search also matches superseded wording and lists the current replacement after direct matches, with matches=[superseded] and via naming the earlier revision that matched. Filters apply before ranking. Agents get compact hits (id, title, type, path, revision, short snippet, matched fields; default limit 10); detail=full adds revision/hash citations, body line locators, score, attribution and evidence. index.state=unavailable and total=null mean failed retrieval, not no matches. Compare index.snapshot across pages; restart on changes. Not exhaustive inventory: use knowledge_records. No embeddings.",
       input: withSearchDetail(SearchInput),
       output: ToolSearchOutput,
       tool: { name: "knowledge_grep", label: "Search knowledge" },
@@ -555,7 +556,7 @@ export const contract = defineFeatureContract({
       kind: "query",
       description:
         "Operator settings: agents, effective store assignments and store inventory. Never creates storage.",
-      input: empty,
+      input: Type.Object({ includeRecordCounts: Type.Optional(Type.Boolean()) }),
       output: StoresSnapshot,
     },
     stores_change: {
@@ -563,6 +564,13 @@ export const contract = defineFeatureContract({
       description:
         "Operator settings: change one agent's store assignment (share its store, use a shared store, or use its own). Requires operator admin access and the current settings revision.",
       input: StoresChangeInput,
+      output: StoresChangeOutput,
+    },
+    stores_grant: {
+      kind: "action",
+      description:
+        "Operator settings: grant, change or revoke one conversation's read, write or read-write access to its agent's private knowledge. Requires operator admin access and the current grants revision.",
+      input: GrantChangeInput,
       output: StoresChangeOutput,
     },
     stores_change_status: {

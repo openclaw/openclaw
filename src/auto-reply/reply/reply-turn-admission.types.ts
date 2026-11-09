@@ -30,7 +30,6 @@ export type ReplyTurnAdmissionParams = {
   mailboxClaim?: SessionControllerMailboxClaim;
   rotationEvidence?: ReturnType<typeof createReplyTurnRotationEvidence>;
   runId?: string;
-  recoveryAdmissionRunId?: string;
   assertRequestCurrent?: () => void;
   onDatabaseRegistration?: AgentDatabaseRequestExecutionSource["onRegistryChange"];
   /** Capture caller-owned selection during admission checks, including the writer-ordered recheck. */
@@ -47,8 +46,6 @@ export type ReplyTurnAdmissionParams = {
   storePath?: string;
   kind: ReplyTurnKind;
   resetTriggered: boolean;
-  allowRestartTombstoneParentFork?: boolean;
-  allowRestartTombstoneReset?: boolean;
   routeThreadId?: string | number;
   originatingLeafEntryId?: string | null;
   /**

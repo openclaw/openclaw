@@ -24,6 +24,7 @@ import {
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import { FOLDED_SINGLETON_STATE_TABLES_V12 } from "./openclaw-state-db-schema-v12-foldin.js";
 import { STATE_CURSOR_TABLES_V22 } from "./openclaw-state-db-schema-v22-columns.js";
+import { needsPublicationDraftMigration } from "./openclaw-state-db-schema-v28-publication.js";
 import { TEMPLATE_STATE_TABLE_RENAMES } from "./openclaw-state-db-schema-v36-template-names.js";
 import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
@@ -103,6 +104,11 @@ export const STATE_SCHEMA_MIGRATION_READ_TABLES: Record<StateMigrationKind, read
     "local_workspace_source_path_sets",
   ],
   "template-names-v36": [...TEMPLATE_STATE_TABLE_RENAMES.flat(), "agent_provenance"],
+  "worker-resource-receipts-v37": ["worker_environments"],
+  "repository-disk-authority-v38": [
+    "session_repository_workspaces",
+    "worker_workspace_pending_results",
+  ],
   "operator-approvals-system-agent": ["operator_approvals"],
   "session-watch-cursor-provenance-v4": ["session_watch_cursors"],
   // STRICT migration can rebuild every ordinary table in the canonical schema.
@@ -178,7 +184,8 @@ export function migrateWorkerPlacementExecutionModeSchema(
           AND sql IS NOT NULL
           AND name NOT IN (
             'idx_worker_session_placements_session_key',
-            'idx_worker_session_placements_reconcile'
+            'idx_worker_session_placements_reconcile',
+            'idx_worker_session_placements_environment'
           )`,
     )
     .all();
@@ -479,7 +486,7 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   if (userVersion < 27) {
     migrations.push({ kind: "state-write-indexes-v27", path: pathname });
   }
-  if (userVersion < 28) {
+  if (userVersion < 28 || needsPublicationDraftMigration(db)) {
     migrations.push({ kind: "github-publication-draft-v28", path: pathname });
   }
   if (userVersion < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION) {
@@ -496,6 +503,12 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   }
   if (userVersion < 36) {
     migrations.push({ kind: "template-names-v36", path: pathname });
+  }
+  if (userVersion < 37) {
+    migrations.push({ kind: "worker-resource-receipts-v37", path: pathname });
+  }
+  if (userVersion < 38) {
+    migrations.push({ kind: "repository-disk-authority-v38", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

@@ -284,6 +284,27 @@ it("keeps the normalized deliverer from forwarding trustedLocalMedia", async () 
   });
 });
 
+it.each([
+  [{ mediaUrl: " \t", mediaUrls: [null, "", " \n"] }, [], ["caption"]],
+  [{ mediaUrl: null, mediaUrls: ["", image, " \t", null] }, [image], []],
+] as const)(
+  "delivers normalized replies without blank attachments: %j",
+  async (media, urls, texts) => {
+    const sendText = sendTextResult();
+    const sendMedia = vi.fn<NonNullable<Options["adapter"]["sendMedia"]>>(async () =>
+      sent("media"),
+    );
+    const deliver = createNormalizedOutboundDeliverer(async (payload) => {
+      await sendPayload(payload, { sendText, sendMedia });
+    });
+
+    await deliver({ text: "caption", ...media });
+
+    expect(sendMedia.mock.calls.map(([payload]) => payload.mediaUrl)).toEqual(urls);
+    expect(sendText.mock.calls.map(([payload]) => payload.text)).toEqual(texts);
+  },
+);
+
 it("marks media payloads as TTS supplements without treating spokenText alone as enough", () => {
   const payload = { mediaUrl: "file:///tmp/tts.mp3", spokenText: "read this" };
   const mark = (options?: { visibleTextAlreadyDelivered: boolean }) =>

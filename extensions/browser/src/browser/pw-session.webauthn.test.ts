@@ -80,14 +80,16 @@ function makeChromium(opts: ChromiumOptions = {}) {
       }),
       newCDPSession: vi.fn(async (page: Page) => {
         const target = targetIds.get(page) ?? "unknown";
-        return {
+        return Object.assign(new EventEmitter(), {
           send: vi.fn(async (method: string) =>
             method === "Target.getTargetInfo"
               ? { targetInfo: { targetId: target, title: target } }
-              : {},
+              : method === "Page.getFrameTree"
+                ? { frameTree: { frame: { id: target } } }
+                : {},
           ),
           detach: vi.fn(async () => {}),
-        } as unknown as CDPSession;
+        }) as unknown as CDPSession;
       }),
       close: vi.fn(async () => {}),
     } as unknown as BrowserContext;
@@ -104,8 +106,7 @@ function makeChromium(opts: ChromiumOptions = {}) {
           }),
         }) as unknown as Frame,
     );
-    const page = {
-      on: vi.fn(),
+    const page = Object.assign(new EventEmitter(), {
       isClosed: () => false,
       context: () => owner,
       frames: () => frames,
@@ -120,7 +121,7 @@ function makeChromium(opts: ChromiumOptions = {}) {
         return null;
       }),
       close: vi.fn(async () => {}),
-    } as unknown as Page;
+    }) as unknown as Page;
     targetIds.set(page, target);
     pages.push(page);
     return page;

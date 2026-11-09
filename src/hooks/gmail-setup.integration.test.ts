@@ -23,6 +23,9 @@ describePosix("Gmail setup diagnostics through real command execution", () => {
               `const bin = ${JSON.stringify(bin)};`,
               `fs.appendFileSync(${JSON.stringify(tracePath)}, bin + " " + args.slice(0, 3).join(" ") + "\\n");`,
               `const failing = ${JSON.stringify(failure)};`,
+              'if (bin === "gog" && args.includes("schema")) {',
+              '  console.log(JSON.stringify({ schema_version: 1, command: { type: "command", name: "serve", flags: ["token", "hook-token", "token-env", "hook-token-env"].map(name => ({name, type: "string"})) } })); process.exit(0);',
+              "}",
               'if (bin === "gcloud" && args[0] === "auth" && args[1] === "list") {',
               '  if (failing === "login") process.exit(1);',
               '  fs.writeSync(1, "fixture@example.com\\n"); process.exit(0);',
@@ -65,7 +68,10 @@ describePosix("Gmail setup diagnostics through real command execution", () => {
                 message = error.message;
               }
               const commands = (await fs.readFile(tracePath, "utf8")).trim().split("\n");
-              expect(commands[0]).toBe("gcloud auth list --filter");
+              expect(commands.slice(0, 2)).toEqual([
+                "gog --json --no-input schema",
+                "gcloud auth list --filter",
+              ]);
               expect(commands.at(-1)).toBe(
                 failure === "login" ? "gcloud auth login" : "gog gmail watch start",
               );

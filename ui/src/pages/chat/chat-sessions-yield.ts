@@ -1,3 +1,4 @@
+import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
@@ -25,14 +26,25 @@ import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
 
+function readYieldReceipt(card: ToolCard): Record<string, unknown> | null {
+  const details = asRecord(card.details);
+  if (details && Object.hasOwn(details, "status")) {
+    return details;
+  }
+  // Plugin result hooks can append text after the receipt; only its leading object is authoritative.
+  const receipt = extractBalancedJsonPrefix((card.outputText ?? "").trimStart(), {
+    openers: ["{"],
+  });
+  return receipt?.startIndex === 0 ? (safeParseJsonRecord(receipt.json) ?? null) : null;
+}
+
 function isConfirmedYield(card: ToolCard): boolean {
   return (
     card.name === "sessions_yield" &&
     Object.hasOwn(card, "args") &&
     card.completed === true &&
     card.isError !== true &&
-    (asRecord(card.details)?.status === "yielded" ||
-      safeParseJsonRecord(card.outputText ?? "")?.status === "yielded")
+    readYieldReceipt(card)?.status === "yielded"
   );
 }
 
@@ -184,7 +196,7 @@ function scanSessionsYieldItems(
       ) {
         handoffRunIds.unshift(handoffRunId);
       }
-      const facts = asRecord(lastYield.details) ?? safeParseJsonRecord(lastYield.outputText ?? "");
+      const facts = readYieldReceipt(lastYield);
       const acknowledgment =
         typeof facts?.acknowledgment === "string" ? facts.acknowledgment.trim() : "";
       if (acknowledgment) {
@@ -365,12 +377,40 @@ function scanSessionsYieldItems(
  * rows. A resumed run's request and handoffs are facts of the whole transcript,
  * so working and waiting statuses are taken from there, not from the matching rows.
  */
+// Hidden tool calls keep assistant text, whose ordinary calls coalescing split
+// into their own rows. Only handoff and permission rows stay visible.
+function keepsRowWithToolsHidden(item: ChatItem): boolean {
+  if (item.kind !== "message") {
+    return true;
+  }
+  const cards = extractToolCardsCached(item.message);
+  const message = asRecord(item.message);
+  // Anonymous calls cannot be split into identified invocation rows. Keep their
+  // accompanying content; the message renderer already hides the tool cards.
+  const hasContent =
+    (message?.role === "assistant" || message?.role === "user") &&
+    (typeof message.content === "string"
+      ? Boolean(message.content.trim())
+      : Array.isArray(message.content) &&
+        message.content.some((block) => {
+          const type = asRecord(block)?.type;
+          return !isToolCallContentType(type) && !isToolResultContentType(type);
+        }));
+  return (
+    cards.length === 0 ||
+    hasContent ||
+    hasHandoffToolCall(item.message) ||
+    cards.some((card) => readNodePermissionRequest(asRecord(card.details)?.permissionMissing))
+  );
+}
+
 export function projectSessionsYieldItems(
   items: ChatItem[],
   showToolCalls = true,
   complete?: readonly ChatItem[],
 ): ChatItem[] {
-  const projected = scanSessionsYieldItems(items, showToolCalls).items;
+  const shown = showToolCalls ? items : items.filter(keepsRowWithToolsHidden);
+  const projected = scanSessionsYieldItems(shown, showToolCalls).items;
   const status = complete?.find(isTurnStatus);
   const completeKeys = complete && new Set(complete.map((item) => item.key));
   const visible = completeKeys

@@ -127,6 +127,7 @@ export function readCommittedSessionManagerReload(
   }
   return withSessionTranscriptReadSource(target, ({ scope, resolved, owner, expectedIdentity }) =>
     owner.readTranscript({
+      caller: "committed-reload",
       target: { ...scope, sessionId: target.sessionId, sessionKey: target.sessionKey },
       resolvedScope: resolved,
       limits,

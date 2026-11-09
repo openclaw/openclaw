@@ -164,6 +164,7 @@ export async function readRequesterModelCatalog(params: {
           cfg: config,
           policy,
           rolePolicy: authority.rolePolicy,
+          scopes: authority.scopes,
           metadataSnapshot: owner.metadataSnapshot,
         })
           ?.forAgent(params.agentId, models)

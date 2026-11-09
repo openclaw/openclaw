@@ -254,6 +254,33 @@ describe("profile avatar HTTP endpoint", () => {
     expect(resolveHostAccountAvatar).toHaveBeenCalledOnce();
   });
 
+  it("serves the verified GitHub photo before Gravatar and keeps an uploaded photo authoritative", async () => {
+    const { writes, options, createReader } = await realProfiles("github-avatar-");
+    const person = writes.syncGitHubIdentity(
+      {
+        identity: { accountId: 424242, login: "octocat" },
+        authenticationAlias: { kind: "email", email: "private@example.test" },
+      },
+      options,
+    );
+    createProfileAvatarReader.mockImplementation((id: string) => createReader(id, options));
+    const bytes = new Uint8Array([1, 2, 3]);
+    const fetchImage = vi.fn(async () => image(bytes));
+    const res = response();
+    await serveProfile(person.id, res, fetchImage);
+    expectHead(res, 200, { "Content-Type": "image/png" });
+    expect(res.end).toHaveBeenCalledWith(bytes);
+    expect(fetchImage).toHaveBeenCalledExactlyOnceWith(
+      "https://avatars.githubusercontent.com/u/424242?v=4",
+      expect.objectContaining({ redirect: "error" }),
+    );
+    writes.setAvatar(person.id, new Uint8Array([9]), "image/png", options);
+    const uploaded = response();
+    await serveProfile(person.id, uploaded, fetchImage);
+    expect(uploaded.end).toHaveBeenCalledWith(new Uint8Array([9]));
+    expect(fetchImage).toHaveBeenCalledTimes(1);
+  });
+
   it("does not inherit the host photo through a merged owner before Doctor repair", async () => {
     const { profiles, options, createReader } = await realProfiles("openclaw-owner-avatar-");
     const owner = profiles.ensureGatewayOwnerProfile("Local Owner", options);

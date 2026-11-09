@@ -1,5 +1,6 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { assert, describe, expect, it, vi } from "vitest";
+import { buildGoogleStaticCatalogProvider } from "./provider-catalog.js";
 import { buildGoogleProvider } from "./provider-registration.js";
 
 const streamFns = vi.hoisted(() => ({ moduleLoads: 0, generativeAi: vi.fn(), vertex: vi.fn() }));
@@ -76,22 +77,36 @@ describe("buildGoogleProvider createStreamFn", () => {
     expect(streamFns.generativeAi).toHaveBeenCalledExactlyOnceWith(requestModel, context);
   });
 
-  it.each([
-    ["gemini-2.5-flash", "https://generativelanguage.googleapis.com", true],
-    ["google/gemini-3.1-pro-preview", "https://generativelanguage.googleapis.com/v1beta", true],
-    ["models/gemini-2.5-pro", "https://generativelanguage.googleapis.com/v1beta/", true],
-    ["gemma-4-26b-a4b-it", "https://generativelanguage.googleapis.com/v1beta", false],
-    ["gemini-2.5-flash-image", "https://generativelanguage.googleapis.com/v1beta", false],
-    ["gemini-2.5-flash", "https://proxy.example.test/v1beta", false],
-    ["gemini-2.5-flash", "https://user@generativelanguage.googleapis.com/v1beta", false],
-    ["gemini-2.5-flash", "https://generativelanguage.googleapis.com/v1beta?key=x", false],
-    ["gemini-2.5-flash", "https://generativelanguage.googleapis.com:8443/v1beta", false],
-    ["gemini-2.5-flash", "https://generativelanguage.googleapis.com/v1beta/openai", false],
-  ])("normalizes native-video input for exact AI Studio route %s", (modelId, baseUrl, expected) => {
-    const normalized = normalizeVideo({ id: modelId, baseUrl });
+  it.each(
+    (
+      [
+        ["gemini-2.5-flash", "https://generativelanguage.googleapis.com", true],
+        ["google/gemini-3.1-pro-preview", "https://generativelanguage.googleapis.com/v1beta", true],
+        ["models/gemini-2.5-pro", "https://generativelanguage.googleapis.com/v1beta/", true],
+        ["gemma-4-26b-a4b-it", "https://generativelanguage.googleapis.com/v1beta", false],
+        ["gemini-2.5-flash-image", "https://generativelanguage.googleapis.com/v1beta", false],
+        ["gemini-2.5-flash", "https://proxy.example.test/v1beta", false],
+        ["gemini-2.5-flash", "https://user@generativelanguage.googleapis.com/v1beta", false],
+        ["gemini-2.5-flash", "https://generativelanguage.googleapis.com/v1beta?key=x", false],
+        ["gemini-2.5-flash", "https://generativelanguage.googleapis.com:8443/v1beta", false],
+        ["gemini-2.5-flash", "https://generativelanguage.googleapis.com/v1beta/openai", false],
+      ] satisfies Array<[string, string, boolean]>
+    ).flatMap(([modelId, baseUrl, expected]) =>
+      ["google-generative-ai", "google-interactions"].map((api) => ({
+        modelId,
+        baseUrl,
+        expected,
+        api,
+      })),
+    ),
+  )(
+    "normalizes native-video input for exact AI Studio route $modelId ($api)",
+    ({ modelId, baseUrl, expected, api }) => {
+      const normalized = normalizeVideo({ id: modelId, baseUrl, api });
 
-    expect(((normalized?.input ?? []) as string[]).includes("video")).toBe(expected);
-  });
+      expect(((normalized?.input ?? []) as string[]).includes("video")).toBe(expected);
+    },
+  );
 
   it.each([
     ["google-vertex", "google-vertex"],
@@ -114,5 +129,79 @@ describe("buildGoogleProvider createStreamFn", () => {
       }),
     ).resolves.toBeNull();
     expect(resolveProviderApiKey).not.toHaveBeenCalled();
+  });
+});
+
+describe("Google catalog transport defaults", () => {
+  const catalog = buildGoogleStaticCatalogProvider();
+  const flash = catalog.models.find((entry) => entry.id === "gemini-3.8-flash");
+  assert(flash, "Google catalog must publish Flash");
+  const catalogModel = model({ ...flash, provider: "google", input: ["text", "image"] });
+  const apis = ["google-generative-ai", "google-interactions"] as const;
+  const endpoints = [
+    "https://generativelanguage.googleapis.com/v1beta",
+    "https://proxy.example.test/v1beta",
+  ] as const;
+
+  it.each(
+    endpoints.flatMap((baseUrl) => [
+      { baseUrl, scope: "default", api: undefined },
+      { baseUrl, scope: "model-endpoint", api: undefined },
+      ...apis.flatMap((api) =>
+        ["provider", "model"]
+          // Catalog routes admit a provider-wide API that matches the catalog row;
+          // AI Studio selects Interactions per model (or by the Gemini default).
+          .filter(
+            (scope) =>
+              !(scope === "provider" && api === "google-interactions" && baseUrl === endpoints[0]),
+          )
+          .map((scope) => ({ baseUrl, scope, api })),
+      ),
+    ]),
+  )("resolves $scope API $api on $baseUrl from the catalog", ({ baseUrl, scope, api }) => {
+    const providerConfig = {
+      baseUrl:
+        scope === "model-endpoint"
+          ? baseUrl === endpoints[0]
+            ? endpoints[1]
+            : endpoints[0]
+          : baseUrl,
+      ...(scope === "provider"
+        ? { api }
+        : scope === "model"
+          ? { api: apis.find((candidate) => candidate !== api) }
+          : {}),
+      models:
+        scope === "model" || scope === "model-endpoint"
+          ? [{ ...flash, api, baseUrl, id: "gemini-3.8-flash" }]
+          : [],
+    };
+    // Core overrides already applied the effective endpoint; the catalog row
+    // carries no API, so the provider hook alone decides the transport.
+    const resolved = provider.normalizeResolvedModel?.({
+      provider: "google",
+      modelId: catalogModel.id,
+      model: { ...catalogModel, baseUrl },
+      config: { models: { providers: { google: providerConfig } } },
+    });
+    expect(resolved).toMatchObject({
+      id: catalogModel.id,
+      baseUrl,
+      api: api ?? (baseUrl === endpoints[0] ? "google-interactions" : "google-generative-ai"),
+    });
+  });
+
+  it.each([
+    ["gemini-4-argon", "google-interactions"],
+    ["gemini-3.1-pro-preview", "google-interactions"],
+    ["gemma-4-26b-a4b-it", "google-generative-ai"],
+  ] as const)("defaults %s on AI Studio to %s", (modelId, api) => {
+    const resolved = provider.normalizeResolvedModel?.({
+      provider: "google",
+      modelId,
+      model: { ...catalogModel, id: modelId, baseUrl: endpoints[0] },
+      config: {},
+    });
+    expect(resolved?.api).toBe(api);
   });
 });

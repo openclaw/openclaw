@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  coveringGrant,
   parseMembership,
   effectiveBinding,
   storesRevision,
@@ -54,4 +55,17 @@ it("policy gates default on and reject retired config shapes", () => {
     parsePolicy({ maintenance: { schedule: "*/5 * * * *", timezone: "UTC" } }).maintenance,
   ).toStrictEqual({ enabled: true, schedule: "*/5 * * * *", timezone: "UTC" });
   expect(() => parsePolicy({ vault: {} })).toThrow(/invalid/);
+});
+
+it("a conversation grant covers its key-denoted children; the most specific grant wins", () => {
+  const grants = {
+    "agent:main:telegram:group:-100": "read",
+    "agent:main:telegram:group:-100:topic:7": "read-write",
+  } as const;
+  expect(coveringGrant(grants, "agent:main:telegram:group:-100:thread:9")).toBe("read");
+  expect(coveringGrant(grants, "agent:main:telegram:group:-100:topic:7:thread:1")).toBe(
+    "read-write",
+  );
+  expect(coveringGrant(grants, "agent:main:telegram:group:-1000")).toBe(undefined);
+  expect(coveringGrant(grants, "agent:other:telegram:group:-100")).toBe(undefined);
 });

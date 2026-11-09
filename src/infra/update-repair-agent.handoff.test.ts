@@ -14,7 +14,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease.js";
+import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease-inspection.js";
 import { createOpenClawDatabaseMaintenanceScope as createMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { withOpenClawTestState as withState } from "../test-utils/openclaw-test-state.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
@@ -78,7 +78,7 @@ it("settles the real repair turn without closing a parent lease before Doctor ad
     } finally {
       await seed.close();
     }
-    expect(leases()).toEqual([]);
+    expect(await leases()).toEqual([]);
     const config: OpenClawConfig = {
       plugins: { enabled: false },
       agents: { defaults: { skipBootstrap: true }, entries: { owner: { agentDir } } },
@@ -130,7 +130,7 @@ it("settles the real repair turn without closing a parent lease before Doctor ad
         envelope: { status: "ok", final: "Repair completed." },
       });
       // These checks must precede fixture teardown: cleanup must not hide a leaked lease.
-      expect(leases().map((lease) => lease.agent_id)).toEqual(["independent"]);
+      expect((await leases()).map((lease) => lease.agent_id)).toEqual(["independent"]);
       const saved = load();
       expect(saved.usageStats?.["fixture:repair"]?.lastUsed).toBeGreaterThan(0);
       const admitDoctor = () =>
@@ -143,7 +143,7 @@ it("settles the real repair turn without closing a parent lease before Doctor ad
         refusal: { kind: "deferred", reason: "agent-database-in-use" },
       });
       await parent.close();
-      expect(leases()).toEqual([]);
+      expect(await leases()).toEqual([]);
       const doctor = await admitDoctor();
       expect(doctor).toBeDefined();
       try {
@@ -151,7 +151,7 @@ it("settles the real repair turn without closing a parent lease before Doctor ad
       } finally {
         await doctor?.release();
       }
-      expect(leases()).toEqual([]);
+      expect(await leases()).toEqual([]);
       expect(load()).toEqual(saved);
     } finally {
       await parent.close();

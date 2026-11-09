@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { AGENT_GIT_SANDBOX_BIN } from "../../infra/agent-git-shim.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
+import { getGatewayAgentGitBinDir } from "../../infra/openclaw-cli-shim.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   ensureBrowserControlAuth,
@@ -204,6 +206,7 @@ type ResolveSandboxContextParams = {
   execOverrides?: ExecPolicyOverrides;
   requireCurrentConfig?: boolean;
   assertCurrent?: () => void;
+  abortSignal?: AbortSignal;
   admittedRunContext?: AdmittedRunContext;
   sessionKey?: string;
   skillsSnapshot?: SkillSnapshot;
@@ -248,7 +251,10 @@ async function prepareSandboxWorkspaceSelection(
         sessionKey: rawSessionKey,
         workspaceDir: params.workspaceDir,
         sandbox: resolved.cfg,
-        signal: operatorAuthority?.signal,
+        signal:
+          params.abortSignal && operatorAuthority?.signal
+            ? AbortSignal.any([params.abortSignal, operatorAuthority.signal])
+            : (params.abortSignal ?? operatorAuthority?.signal),
         // Cleanup retains the workspace owner after execution authorization closes.
         assertCurrent: persistentExecution ? undefined : params.assertCurrent,
         assertHost: () => {
@@ -455,6 +461,13 @@ async function resolveSandboxContextWithAuthority(
           if (githubMount) {
             (readOnlyResourceMounts ??= []).push(githubMount);
           }
+          const gitBinDir = getGatewayAgentGitBinDir();
+          if (gitBinDir && (cfg.backend === "docker" || cfg.backend === "podman")) {
+            (readOnlyResourceMounts ??= []).push({
+              hostPath: gitBinDir,
+              containerPath: AGENT_GIT_SANDBOX_BIN,
+            });
+          }
 
           const provisionBackend = () => {
             ownedParams.assertCurrent?.();
@@ -634,6 +647,7 @@ export async function prepareSandboxWorkspaceForSession(
     agentId?: string;
     sessionKey?: string;
     workspaceDir?: string;
+    abortSignal?: AbortSignal;
   },
   readSource?: CapturedSessionEntryReadSource,
 ): Promise<{
@@ -642,7 +656,10 @@ export async function prepareSandboxWorkspaceForSession(
   [Symbol.dispose]: () => void;
 } | null> {
   const readAuthority = captureChannelReadAuthority();
-  const assertCurrent = () => readAuthority?.();
+  const assertCurrent = () => {
+    params.abortSignal?.throwIfAborted();
+    readAuthority?.();
+  };
   const ownedParams = { ...params, assertCurrent };
   using resources = new DisposableStack();
   let assertWorkspaceCurrent = assertCurrent;

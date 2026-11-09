@@ -154,7 +154,7 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
     },
   );
 
-  it("recovers the original publication after a transient fetch failure without another push or PR", async () => {
+  it("recovers an accepted publication after a transient observation failure", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_001);
     const requestId = "transient-fetch";
     withEngineStoreAdmission(() =>
@@ -168,19 +168,32 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
     const transport = githubPublicationTestMocks().runCommand;
     const original = transport.getMockImplementation()!;
     const url = "https://github.com/openclaw/openclaw/pull/125200";
+    const message =
+      "Resume the publication\n\nCo-authored-by: alice <7+alice@users.noreply.github.com>\n" +
+      `OpenClaw-Publication: ${requestId}\n`;
+    let observations = 0;
     transport.mockImplementation(async (argv: string[], ...args: unknown[]) => {
-      if (argv.includes("fetch") && unavailable) {
-        return commandResult("", 1);
-      }
       if (argv.includes("--format=%H%n%T%n%P%n%B")) {
+        return commandResult(`${NEW_HEAD}\n${WORKSPACE_TREE}\n${OLD_HEAD}\n${message}`);
+      }
+      if (argv.includes(`repos/openclaw/openclaw/git/commits/${NEW_HEAD}`)) {
         return commandResult(
-          `${NEW_HEAD}\n${WORKSPACE_TREE}\n${OLD_HEAD}\nResume the publication\n\nCo-authored-by: alice <7+alice@users.noreply.github.com>\nOpenClaw-Publication: ${requestId}\n`,
+          JSON.stringify({
+            sha: NEW_HEAD,
+            tree: { sha: WORKSPACE_TREE },
+            parents: [{ sha: OLD_HEAD }],
+            message,
+          }),
         );
       }
       if (argv.includes("ls-remote")) {
         return commandResult(`${NEW_HEAD}\trefs/heads/${BRANCH}\n`);
       }
       if (argv.includes("state=all")) {
+        observations++;
+        if (unavailable) {
+          return commandResult("", 1);
+        }
         return commandResult(
           JSON.stringify([
             {
@@ -199,8 +212,10 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
     });
     const runtime = createRecoveryRuntime();
     await runtime.reconcilePublications();
+    expect(observations).toBe(1);
     unavailable = false;
     await runtime.reconcilePublications();
+    expect(observations).toBe(1);
     expect(await runtime.coordinator.readAsync(requestId)).toMatchObject({
       status: "publishing",
     });
@@ -214,9 +229,11 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
     });
     now += 3_600_000;
     await runtime.reconcilePublications();
-    expect(transport.mock.calls.filter(([argv]) => argv.includes("fetch"))).toHaveLength(2);
+    expect(observations).toBe(2);
     expect(
-      transport.mock.calls.filter(([argv]) => argv.includes("push") || argv.includes("POST")),
+      transport.mock.calls.filter(
+        ([argv]) => argv.includes("fetch") || argv.includes("push") || argv.includes("POST"),
+      ),
     ).toEqual([]);
   });
 

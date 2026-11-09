@@ -1,18 +1,21 @@
 import type { ChatEvent } from "../../../../packages/gateway-protocol/src/schema/logs-chat.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
+import { nativeHistoryMessageSourceIdentity } from "../../lib/chat/history-message-identity.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
   normalizeAgentId,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { resolveChatAgentId } from "./chat-agent-id.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { hydrateChatHistory } from "./chat-history-hydration.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request.ts";
-import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
-import { historySessionId } from "./chat-history-snapshot.ts";
+import type { ChatHistoryResult, ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
+import { clearHistoryCursor, historySessionId } from "./chat-history-snapshot.ts";
 import {
   chatHistoryRequests,
   getChatHistoryLoadState,
@@ -30,6 +33,34 @@ type LoadChatHistoryOptions = {
 };
 
 type ChatErrorDetail = Extract<ChatEvent, { state: "error" }>["errorDetail"];
+
+export function requiresChatHistoryReload(
+  result: ChatHistoryResult,
+  sessionId: string,
+  boundary?: string | null,
+): boolean {
+  return Boolean(
+    result.windowReset ||
+    (sessionId && historySessionId(result) !== sessionId) ||
+    (boundary && nativeHistoryMessageSourceIdentity(result.messages?.[0]) !== boundary),
+  );
+}
+
+export async function reloadChatHistoryWindow(state: ChatHistoryHost): Promise<void> {
+  const ownsConnection = captureChatConnectionOwner(state);
+  const sessionKey = state.sessionKey;
+  const agentId = resolveChatAgentId(state);
+  // Cursor reset is not an empty snapshot. Keep the observed reset until
+  // authoritative hydration adopts history with pending and live custody.
+  chatHistoryRequests(state).windowReset = {
+    isCurrent: () =>
+      ownsConnection() && state.sessionKey === sessionKey && resolveChatAgentId(state) === agentId,
+  };
+  clearHistoryCursor(state, sessionKey, agentId);
+  if (!(await loadChatHistory(state, { supersedeInFlight: true }))) {
+    throw new Error(state.chatError ?? t("chat.thread.earlierInterrupted"));
+  }
+}
 
 export async function loadChatHistory(
   state: ChatHistoryHost,

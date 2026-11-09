@@ -34,11 +34,12 @@ the ACP cancellation and ordinary local-session compatibility proofs.
 
 Repo E2Es that boot a real Gateway or built CLI through the shared test-instance
 helper hide the same import edges: the graph reaches only the helper. Policy
-watches in `scripts/lib/ci-policy-test-watch.mts` select the background-process
-restart, session-end shutdown, hook concurrency, session steering, and built-CLI
-runtime recovery suites when their production owners change (startup exec
-recovery, restart intent, the session controller, shutdown drain, command-queue
-capacity, hook dispatch, steer adoption and the followup queue, and CLI respawn). Each selection adds one existing E2E file (about
+watches in `scripts/lib/ci-policy-test-watch.mts` select the graceful
+restart-resume, session-end shutdown, hook concurrency, session steering, and built-CLI
+runtime recovery suites when their production owners change (startup resume,
+restart intent, the session controller, shutdown persistence, command-queue
+capacity, hook dispatch, steer adoption and the followup queue, and CLI respawn).
+Each selection adds one existing E2E file (about
 20–150 test seconds) to the changed-owner rows; no new job or runner is added.
 Hourly main does not run the E2E config; the complete set runs in the daily
 scheduled Gateway E2E shards and Full Release Validation.
@@ -166,10 +167,13 @@ in no PR job.
 
 Aggressive PR selection keeps changed tests and direct runtime import consumers,
 including package and SDK aliases. A changed module with fewer than 20 direct
-importers also selects tests at depth two; hubs stop at direct consumers. Changed
-packages also select direct package-specifier test consumers; that pass does not
-restart traversal through package readers and bypass the module hub cutoff. Erased type
-imports remain owned by typechecking.
+importers also selects tests at depth two; hubs stop at direct consumers.
+Ordinary `src/` module changes in packages and plugins retain direct package-specifier tests for
+resolved exports affected by the changed source, including re-export chains.
+Unrelated resolved subpaths stay unselected. Unresolved package bindings, package
+metadata and non-source changes retain the package-wide consumer fallback. That
+pass does not restart traversal through test readers and bypass the module hub
+cutoff. Erased type imports remain owned by typechecking.
 
 Same-directory tests are selected only when the directory contains at most 30
 test files. Larger flat directories use existing explicit owner mappings and

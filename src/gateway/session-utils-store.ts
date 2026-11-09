@@ -433,13 +433,13 @@ export async function listAgentsForGateway(
   );
   const agents = roster.map((entry) => {
     const { id } = entry;
+    const agentConfig = resolveAgentConfig(cfg, id);
+    const newSessionPermissionMode = agentConfig?.newSessionPermissionMode;
     // This label must never overstate permissiveness. When sandbox policy can vary
     // by session, the effective policy is unknowable at agent scope: omit the label.
     const defaultPermissionMode =
-      resolveSandboxRuntimeSettings(
-        cfg.agents?.defaults?.sandbox,
-        resolveAgentConfig(cfg, id)?.sandbox,
-      ).mode === "off"
+      resolveSandboxRuntimeSettings(cfg.agents?.defaults?.sandbox, agentConfig?.sandbox).mode ===
+      "off"
         ? resolvedPermissionLabel(resolveExecDefaults({ cfg, agentId: id, execApprovals }))
         : undefined;
     const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
@@ -504,6 +504,7 @@ export async function listAgentsForGateway(
       { model },
       utility ? { utilityModel: `${utility.provider}/${utility.model}` } : {},
       defaultPermissionMode ? { defaultPermissionMode } : {},
+      newSessionPermissionMode ? { newSessionPermissionMode } : {},
     );
     const provenance = provenanceById.get(id);
     return provenance
