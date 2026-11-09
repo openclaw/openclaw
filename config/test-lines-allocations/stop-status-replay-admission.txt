@@ -1,3 +1,2 @@
-539
-# 187 lines for delayed /stop and /status replay admission.
-# Plus 352 lines of inherited ceiling debt already present on upstream main, so this merge adds no extra slack.
+543
+# 187 lines for delayed /stop and /status replay admission, plus 356 lines main is already over its ceiling.
