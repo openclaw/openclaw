@@ -4,7 +4,7 @@ import { readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { captureAdaptiveGraphDecision } from "./ci-adaptive-decision.mts";
 import { readCiTestLaunchInputs } from "./ci-test-launch-inputs.mts";
-import { collectTestObservations } from "./ci-test-observations.mjs";
+import { collectTestObservations, compactTestObservations } from "./ci-test-observations.mjs";
 
 const MAX_BYTES = 8 * 1024 * 1024;
 const semanticEnv = [
@@ -236,6 +236,12 @@ export function createCiTestObservationCapture(options: {
         };
         let output = JSON.stringify(exported);
         let omittedDependencies = false;
+        if (kind === "run" && Buffer.byteLength(output) > MAX_BYTES) {
+          output = JSON.stringify({
+            ...exported,
+            observations: compactTestObservations(observations),
+          });
+        }
         if (kind === "run" && Buffer.byteLength(output) > MAX_BYTES) {
           // Native indexes can expand far beyond their on-disk size. Keep outcomes usable.
           for (const invocation of observations.invocations) {

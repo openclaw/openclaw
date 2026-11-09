@@ -218,7 +218,7 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
                           new URL(activity()!.href, window.location.href).href,
                         ).then((copied) =>
                           showToast({
-                            severity: copied ? undefined : "error",
+                            severity: copied ? "success" : "error",
                             message: t(copied ? "common.copied" : "common.copyFailed"),
                           }),
                         );

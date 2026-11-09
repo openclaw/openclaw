@@ -13,6 +13,11 @@ import { catalogProvider } from "./clawrouter-catalog.test-support.js";
 import { providerResponse } from "./embedded-agent-runner.wire.test-support.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner/run.js";
 import { resolveInlineProviderApiKeyCooldownUntil } from "./model-auth-provider-config.js";
+import { runWithModelFallback } from "./model-fallback-runner.js";
+import {
+  modelFallbackOverrideFromAvailability,
+  resolveModelFallbackAvailability,
+} from "./model-selection-config.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 
 beforeEach(bindSessionMcpRuntimeTestScheduler);
@@ -54,21 +59,25 @@ it.each([
                 reply.setHeader("content-type", "application/json");
                 reply.end(
                   JSON.stringify({
-                    providers: [catalogProvider("anthropic", ["claude-fixture"], "llm.messages")],
+                    providers: [
+                      catalogProvider("anthropic", ["claude-fixture"], "llm.messages"),
+                      catalogProvider("openai", ["gpt-fixture"], "llm.chat"),
+                    ],
                   }),
                 );
                 return;
               }
               requests.push(request.url ?? "");
               authorizations.push(request.headers.authorization);
-              if (reject && (disabled || requests.length === 1)) {
+              const primary = request.url?.endsWith("/messages");
+              if (reject && (disabled || primary)) {
                 reply.writeHead(status, { "content-type": "application/json" });
                 reply.end(JSON.stringify({ type: "error", error: { type: code, code, message } }));
                 return;
               }
               const response = providerResponse({
-                api: "anthropic-messages",
-                model: "claude-fixture",
+                api: primary ? "anthropic-messages" : "openai-completions",
+                model: primary ? "claude-fixture" : "gpt-fixture",
                 id: "synthetic-response",
                 messageId: "synthetic-message",
                 text: "Peer answered",
@@ -80,13 +89,17 @@ it.each([
         });
         try {
           const model = "clawrouter/anthropic/claude-fixture";
+          const fallback = "clawrouter/openai/gpt-fixture";
           const cfg: OpenClawConfig = {
             agents: {
               entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
               defaults: {
                 skipBootstrap: true,
-                model: { primary: model, fallbacks: [] },
-                models: { [model]: { agentRuntime: { id: "openclaw" } } },
+                model: { primary: model, fallbacks: [fallback] },
+                models: {
+                  [model]: { agentRuntime: { id: "openclaw" } },
+                  [fallback]: { agentRuntime: { id: "openclaw" } },
+                },
               },
             },
             models: {
@@ -97,16 +110,18 @@ it.each([
                   agentRuntime: { id: "openclaw" },
                   api: "anthropic-messages",
                   models: [
-                    {
-                      id: "anthropic/claude-fixture",
-                      name: "Synthetic Claude",
-                      reasoning: false,
-                      input: ["text"],
-                      contextWindow: 128_000,
-                      maxTokens: 1024,
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    },
-                  ],
+                    { id: "anthropic/claude-fixture", api: "anthropic-messages" as const },
+                    { id: "openai/gpt-fixture", api: "openai-completions" as const },
+                  ].map(({ id, api }) => ({
+                    id,
+                    api,
+                    name: id,
+                    reasoning: false,
+                    input: ["text" as const],
+                    contextWindow: 128_000,
+                    maxTokens: 1024,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  })),
                 },
               },
             },
@@ -117,20 +132,35 @@ it.each([
           await state.writeConfig(cfg);
           setRuntimeConfigSnapshot(cfg);
           const admittedRun = wrapRunWithTestPreparedAdmission(runEmbeddedAgent);
-          const run = (id: string) =>
-            admittedRun({
-              config: cfg,
-              agentId: "main",
+          const run = (id: string, pinned = false) =>
+            runWithModelFallback({
+              cfg,
               agentDir: state.agentDir(),
-              workspaceDir: state.workspaceDir,
-              runId: id,
-              sessionId: `session-${id}`,
-              sessionKey: `agent:main:${id}`,
-              prompt: "Reply.",
               provider: "clawrouter",
               model: "anthropic/claude-fixture",
-              timeoutMs: 30_000,
-            });
+              fallbacksOverride: modelFallbackOverrideFromAvailability(
+                resolveModelFallbackAvailability({
+                  cfg,
+                  agentId: "main",
+                  hasSessionModelOverride: pinned,
+                  modelSelectionLocked: pinned,
+                }),
+              ),
+              run: (provider, selectedModel) =>
+                admittedRun({
+                  config: cfg,
+                  agentId: "main",
+                  agentDir: state.agentDir(),
+                  workspaceDir: state.workspaceDir,
+                  runId: id,
+                  sessionId: `session-${id}`,
+                  sessionKey: `agent:main:${id}`,
+                  prompt: "Reply.",
+                  provider,
+                  model: selectedModel,
+                  timeoutMs: 30_000,
+                }),
+            }).then(({ result }) => result);
           const first = await run("rejected").catch((error: unknown) => error);
           expect(requests.length, String(first)).toBeGreaterThan(0);
           expect(authorizations).toEqual(requests.map(() => "Bearer synthetic-router-key"));
@@ -146,10 +176,16 @@ it.each([
           } else {
             expect(first).toMatchObject({ payloads: [{ text: "Peer answered" }] });
             expect(firstRequestCount).toBe(2);
+            expect(requests[0]).toMatch(/\/messages$/);
+            expect(requests[1]).toMatch(/\/chat\/completions$/);
+            const pinned = await run("pinned", true).catch((error: unknown) => error);
+            expect(String(pinned)).toMatch(/cannot serve this model.*Choose another model/);
+            expect(pinned).toMatchObject({ reason: "route_unavailable" });
+            expect(requests.length).toBe(3);
           }
           reject = false;
           const peer = await run("peer").catch((error: unknown) => error);
-          expect(requests.length).toBe(firstRequestCount + (disabled ? 0 : 1));
+          expect(requests.length).toBe(firstRequestCount + (disabled ? 0 : 2));
           if (disabled) {
             expect(String(peer)).toMatch(/Retry after|temporarily disabled/);
           } else {

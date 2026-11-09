@@ -15,7 +15,7 @@ import { resolveGatewayPort } from "../config/paths.js";
 import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
 
-export const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
+const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
 const GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS = 250;
 const GATEWAY_SKILLS_MUTATION_TIMEOUT_MS = 30_000;
 

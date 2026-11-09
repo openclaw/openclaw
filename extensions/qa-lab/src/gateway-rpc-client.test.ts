@@ -46,6 +46,20 @@ function emit(name: "onClose" | "onHelloOk" | "onReconnectPaused", info: unknown
 beforeEach(() => [rpc.Client, rpc.request, rpc.start, rpc.stop].forEach((m) => m.mockReset()));
 afterEach(() => vi.useRealTimers());
 
+it.each([undefined, "fixture-local-password"])(
+  "uses the selected RPC credential (%s)",
+  async (password) => {
+    const client = await startClient({ password });
+    expect(rpc.Client.mock.calls[0]?.[0]).toMatchObject(
+      password === undefined ? { token: "qa-token" } : { password },
+    );
+    expect(rpc.Client.mock.calls[0]?.[0]).not.toHaveProperty(
+      password === undefined ? "password" : "token",
+    );
+    await client.stop();
+  },
+);
+
 it("retains only observed hello identity and clears it across disconnect and stop", async () => {
   const deviceIdentity = { deviceId: "device", publicKeyPem: "public", privateKeyPem: "private" };
   const client = await startClient({ deviceIdentity, scopes: [], logs: () => "" });

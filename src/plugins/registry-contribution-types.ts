@@ -400,6 +400,11 @@ export type LearnContribution = {
   }) => LearnGuidance;
   /** Words after /learn that this contribution handles instead of a learning request. */
   subcommands?: readonly LearnSubcommand[];
+  /**
+   * Reply when /learn cannot learn here and this contribution's medium is the only one
+   * registered (or its subcommand was asked for). Default: a generic remedy.
+   */
+  unavailableText?: string;
 };
 
 export type LearnContributionRegistration = {

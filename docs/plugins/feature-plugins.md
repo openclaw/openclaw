@@ -264,17 +264,29 @@ view is presented again; previously captured operations remain retired.
 
 Use the host for shared application behavior:
 
-| Capability              | Purpose                                                                                                       |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `agents`                | Agent snapshots, selection, scope, and refresh.                                                               |
-| `components`            | Host-owned dialogs, pickers, and session dashboards.                                                          |
-| `connection`            | Current connection and operator capabilities.                                                                 |
-| `dock` (optional)       | Open a conversation beside the current page with `openSession`, close the dock, and observe `openSessionKey`. |
-| `navigation`            | Open plugin pages and build their URLs.                                                                       |
-| `request` and `onEvent` | Authenticated Gateway requests and event subscriptions.                                                       |
-| `sessions`              | Session snapshots, independent queries, navigation, creation, and updates.                                    |
-| `subscribe`             | Observe host snapshot changes, including the docked session key.                                              |
-| `ui`                    | Register, select, and invalidate plugin contributions.                                                        |
+| Capability                   | Purpose                                                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `agents`                     | Agent snapshots, selection, scope, and refresh.                                                               |
+| `components`                 | Host-owned dialogs, pickers, and session dashboards.                                                          |
+| `connection`                 | Current connection and operator capabilities.                                                                 |
+| `dock` (optional)            | Open a conversation beside the current page with `openSession`, close the dock, and observe `openSessionKey`. |
+| `navigation`                 | Open plugin pages and build their URLs.                                                                       |
+| `request` and `onEvent`      | Authenticated Gateway requests and event subscriptions.                                                       |
+| `recoveryStorage` (optional) | Account-bound, tab-local recovery data for this plugin.                                                       |
+| `sessions`                   | Session snapshots, independent queries, navigation, creation, and updates.                                    |
+| `subscribe`                  | Observe host snapshot changes, including the docked session key.                                              |
+| `ui`                         | Register, select, and invalidate plugin contributions.                                                        |
+
+Use `host.recoveryStorage` for private retry drafts that must survive a view
+remount. Version 1 provides `getItem`, `setItem`, `removeItem`, and
+`assertCurrent`. It is absent or null until the Gateway resolves the authenticated
+recovery owner. Include the agent and session identity in your local key. Storage
+errors throw; an unavailable read does not mean no previous operation exists.
+Captured handles stop working when the account, connection, plugin activation,
+or view changes. Credential replacement, rejection, or forgetting an account
+retires its stored data. Reconnect, acquire a new handle, and reauthorize the
+server resource before restoring private content. Do not fall back to an
+account-independent browser storage key.
 
 `onEvent("session.message", listener)` listeners receive complete messages;
 delivery begins once the Gateway confirms full-body delivery for this connection.

@@ -72,7 +72,7 @@ suite.define(() => {
         const indicator = page.locator("openclaw-settings-save-indicator");
         await expect
           .poll(() => indicator.textContent())
-          .toContain(restored ? "Save failed" : "Your draft is kept");
+          .toContain(restored ? "Couldn’t save settings. Try again." : "Your draft is kept");
         expect(await indicator.getByRole("button", { name: "Reload", exact: true }).count()).toBe(
           0,
         );

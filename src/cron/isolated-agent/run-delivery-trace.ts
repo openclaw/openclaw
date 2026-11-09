@@ -8,6 +8,7 @@ import type {
   SourceDeliveryVisibleDelivery,
 } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { resolveCronDeliveryDefaultsScope } from "../delivery-defaults.js";
 import { resolveCronDeliveryPlan, type CronDeliveryPlan } from "../delivery-plan.js";
 import { hasExplicitCronDeliveryTarget } from "../delivery-target-validation.js";
 import {
@@ -247,7 +248,10 @@ export async function resolveCronDeliveryContext(params: {
   job: CronStoredJob;
   agentId: string;
 }) {
-  const deliveryPlan = resolveCronDeliveryPlan(params.job);
+  const deliveryPlan = resolveCronDeliveryPlan(
+    params.job,
+    resolveCronDeliveryDefaultsScope(params.cfg.cron, params.job, params.agentId),
+  );
   const {
     buildDeliveryFormatPrompt,
     resolveDeliveryTarget,

@@ -2,12 +2,6 @@ import {
   prepareAcpSessionMetadataRead,
   readAcpSessionCommand,
 } from "../acp/runtime/session-meta-read.worker.js";
-import {
-  readSandboxBrowserRegistryInDatabase,
-  readSandboxRegistryEntryInDatabase,
-  readSandboxRegistryInDatabase,
-  readSandboxRuntimeIdsInDatabase,
-} from "../agents/sandbox/registry.kernel.js";
 import { loadSubagentSessionListRunsFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { readSubagentRunsInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
@@ -540,27 +534,6 @@ export function readOpenClawStateDatabaseCommand(
   }
   if (command.type === "agentDeletionJournal.retainedIds") {
     return { type: command.type, agentIds: readRetainedAgentDeletionIds(db) };
-  }
-  if (command.type === "sandboxRegistry.list") {
-    return { type: command.type, entries: readSandboxRegistryInDatabase(db, command.workspaceDir) };
-  }
-  if (command.type === "sandboxRegistry.get") {
-    return {
-      type: command.type,
-      entry: readSandboxRegistryEntryInDatabase(db, command.containerName),
-    };
-  }
-  if (command.type === "sandboxRegistry.runtimeIds") {
-    return {
-      type: command.type,
-      runtimeIds: readSandboxRuntimeIdsInDatabase(db, command),
-    };
-  }
-  if (command.type === "sandboxRegistry.browsers") {
-    return {
-      type: command.type,
-      entries: readSandboxBrowserRegistryInDatabase(db, command.workspaceDir),
-    };
   }
   return {
     type: command.type,

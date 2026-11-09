@@ -5,7 +5,7 @@ import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { shareVitestModuleGraphWithBundledPlugin } from "../../plugins/test-helpers/vitest-plugin-host-graph.js";
 
 /** The config with the bundled skill-workshop plugin enabled; Vitest runs with plugins off. */
-export function withWorkshopPlugin(config: OpenClawConfig = {}): OpenClawConfig {
+function withWorkshopPlugin(config: OpenClawConfig = {}): OpenClawConfig {
   const allow = config.plugins?.allow;
   return {
     ...config,

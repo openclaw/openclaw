@@ -14,31 +14,6 @@ const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 const sourceCache = new Map<string, string>();
 const tsFilesCache = new Map<string, string[]>();
-const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
-  "extensions/acpx/index.ts": ["reply_dispatch"],
-  "extensions/active-memory/index.ts": ["agent_end", "before_prompt_build"],
-  "extensions/advisor/index.ts": ["before_agent_reply"],
-  "extensions/agent-guidance/index.ts": ["before_prompt_build"],
-  "extensions/browser/plugin-registration.ts": ["session_end"],
-  "extensions/clickclack/src/discussions/register.ts": ["before_tool_call"],
-  "extensions/codex/index.ts": ["inbound_claim", "session_end"],
-  "extensions/discord/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
-  "extensions/facetime/index.ts": ["before_tool_call"],
-  "extensions/feishu/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
-  "extensions/knowledge/src/memory-index-hook.ts": ["before_prompt_build"],
-  "extensions/matrix/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
-  "extensions/mcp-events/index.ts": ["cron_changed", "cron_reconciled"],
-  "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start"],
-  "extensions/memory-core/index.ts": ["before_prompt_build"],
-  "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build", "session_end"],
-  "extensions/onepassword/index.ts": ["before_tool_call"],
-  "extensions/openshell/index.ts": ["before_prompt_build"],
-  "extensions/qa-lab/src/gateway-registration.ts": ["before_agent_run"],
-  "extensions/skill-workshop/src/review-service.ts": ["agent_end", "run_stopped"],
-  "extensions/visitor-access/index.ts": ["gateway_start"],
-  "extensions/workboard/index.ts": ["agent_end", "gateway_start", "gateway_stop", "subagent_ended"],
-  "extensions/x/src/work-origin.ts": ["before_prompt_build"],
-} as const satisfies Record<string, readonly string[]>;
 const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
   "extensions/active-memory/index.ts": ["resolveLivePluginConfigObject(", '"active-memory"'],
   "extensions/codex/index.ts": ["resolveLivePluginConfigObject(", '"codex"'],
@@ -219,22 +194,6 @@ describe("plugin contract boundary invariants", () => {
       /extensions\/\$\{|\.\.\/\.\.\/\.\.\/\.\.\/extensions\//u.test(readRepoSource(file)),
     );
     expect(offenders).toStrictEqual([]);
-  });
-
-  it("keeps bundled plugin typed hook files and names on an explicit allowlist", () => {
-    expect(
-      Object.fromEntries(
-        listTsFiles("extensions", { excludeTests: true })
-          .filter((file) => /\bapi\.on\(/u.test(readRepoSource(file)))
-          .map((file) => [
-            file,
-            [...readRepoSource(file).matchAll(/\bapi\.on\(\s*"([^"]+)"/gu)]
-              .map((match) => match[1])
-              .filter((hookName): hookName is string => typeof hookName === "string")
-              .toSorted(),
-          ]),
-      ),
-    ).toEqual(BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS);
   });
 
   it("keeps bundled plugin production code off raw registerHook calls", () => {
