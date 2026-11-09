@@ -97,7 +97,7 @@ export async function prepareCliSessionBinding(params: {
  * longer authorizes that transcript. Runners await again after the handoff and do not recheck.
  */
 export async function prepareFallbackPrompts(params: {
-  /** Live attempt params: the session entry is re-read on every authorization check. */
+  /** Rechecks current env selection and this attempt's entry; submission fences lifecycle changes. */
   run: AgentAttemptParams;
   isRawModelRun: boolean;
   childCwd: string;
