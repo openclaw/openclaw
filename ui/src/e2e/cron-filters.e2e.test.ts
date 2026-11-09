@@ -575,13 +575,18 @@ suite.define(() => {
 
   it("supports skip navigation, keyboard tabs, and URL back and forward", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
+      const job = cronJob("tab-navigation", "Tab navigation task", {
+        kind: "every",
+        everyMs: 60_000,
+      });
       const gateway = await installCronGateway(page, {
+        "cron.list": cronListResponse([job]),
         "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
       });
 
       const session = "agent:main:tab-navigation";
       await page.goto(
-        `${suite.server.baseUrl}cron?session=${encodeURIComponent(session)}&tab=enabled`,
+        `${suite.server.baseUrl}cron?session=${encodeURIComponent(session)}&agent=main&tab=enabled`,
       );
       await page.locator('[data-test-id="cron-tab-all"]').waitFor();
       await expect
@@ -633,8 +638,15 @@ suite.define(() => {
       await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
       await tasksTab.click();
       await expect.poll(() => tasksTab.getAttribute("aria-selected")).toBe("true");
-      expect(new URL(page.url()).searchParams.get("tab")).toBeNull();
+      expect(new URL(page.url()).searchParams.get("tab")).toBe("all");
       expect(new URL(page.url()).searchParams.get("session")).toBe(session);
+      expect(new URL(page.url()).searchParams.get("agent")).toBe("main");
+      await jobTitle(page, job.name).click();
+      const detail = page.locator('.cron-page[data-panel-mode="job"]');
+      await detail.waitFor();
+      await page.goBack();
+      await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
+      await detail.waitFor({ state: "detached" });
     });
   });
 });

@@ -153,6 +153,7 @@ it("loads history and delivery accounts only for their visible automation surfac
     clickTab("cron-tab-all");
     await page.settle();
     expect(page.querySelector("h1")?.textContent).toBe("Automations");
+    expect(new URLSearchParams(page.routeSearch).get("tab")).toBe("all");
     held.resolve(result);
     await held.promise;
     await page.settle();
@@ -191,6 +192,53 @@ it("loads history and delivery accounts only for their visible automation surfac
     channels.dispose();
   }
 });
+
+it.each(["?job=linked&run=cron%3Alinked%3A1", "?session=agent%3Amain%3Alinked&agent=main"])(
+  "keeps explicit overview tabs out of linked details (%s)",
+  async (search) => {
+    const job = createCronViewJob("linked", { state: {} });
+    const { page, context } = mountCronPage(
+      cronRpc({
+        "cron.list": () => cronListResponse([job]),
+        "cron.get": () => job,
+        "cron.runs": () => cronRunsResponse([createCronViewRun({ jobId: job.id })]),
+      }),
+    );
+    vi.mocked(context.navigate).mockImplementation((_route, options) => {
+      page.routeSearch = options?.search ?? "";
+    });
+    try {
+      page.routeSearch = search;
+      await waitForSolid(() => expect(page.cron.cronEditingJob?.id).toBe(job.id));
+      page.closePanel();
+      await page.settle();
+      getButtonByText(page, "Run history").click();
+      await page.settle();
+      expect(page.cron.cronEditingJob).toBeNull();
+      const params = new URLSearchParams(page.routeSearch);
+      expect(params.get("tab")).toBe("activity");
+      expect(params.has("job")).toBe(false);
+      expect(params.has("run")).toBe(false);
+      for (const key of ["session", "agent"]) {
+        expect(params.get(key)).toBe(new URLSearchParams(search).get(key));
+      }
+      page.selectJob(job);
+      await page.settle();
+      expect(page.cron.cronEditingJob?.id).toBe(job.id);
+      params.set("tab", "all");
+      page.routeSearch = `?${params}`;
+      await page.settle();
+      expect(page.cron.cronEditingJob).toBeNull();
+      expect(page.cron.cronRunsScope).toBe("all");
+      expect(page.cron.cronRunsJobId).toBeNull();
+      expect(page.querySelector(testId("cron-tab-all"))?.getAttribute("aria-selected")).toBe(
+        "true",
+      );
+    } finally {
+      page.remove();
+    }
+  },
+);
 
 it.each([true, false])(
   "reconciles an optimistic pause with its owner (accepted: %s)",

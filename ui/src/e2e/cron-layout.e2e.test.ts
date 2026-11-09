@@ -151,13 +151,14 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await pickerTitle.waitFor({ state: "hidden" });
         if (phone) {
+          const phoneUrl = page.url();
           await page.getByRole("tab", { name: "Activity history", exact: true }).click();
+          expect(page.url()).toBe(phoneUrl);
           expect(await page.locator(".cron-run-filter-search input").isVisible()).toBe(true);
           expect(await page.getByRole("tab", { name: "All", exact: true }).count()).toBe(1);
-          const phoneUrl = page.url();
           await page.setViewportSize(responsiveViewports[1]);
           await page.getByRole("tab", { name: "All", exact: true }).click();
-          expect(page.url()).toBe(phoneUrl);
+          expect(new URL(page.url()).searchParams.get("tab")).toBe("all");
           await page.locator(".cron-table__row").first().waitFor();
         } else {
           const history = page.getByRole("tab", { name: "Run history", exact: true });

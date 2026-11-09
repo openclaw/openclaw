@@ -58,9 +58,11 @@ type CronListTab = "tasks" | "activity";
 type CronDetailTab = "settings" | "history";
 type CronRouteListTab = "all" | "enabled" | "disabled" | "activity";
 
-function resolveListTab(search: string): CronRouteListTab {
+function resolveListTab(search: string): CronRouteListTab | null {
   const tab = new URLSearchParams(search).get("tab");
-  return tab === "enabled" || tab === "disabled" || tab === "activity" ? tab : "all";
+  return tab === "all" || tab === "enabled" || tab === "disabled" || tab === "activity"
+    ? tab
+    : null;
 }
 
 /** Owns page presentation; cron admission and mutation chains remain synchronous. */
@@ -296,7 +298,9 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         : !nextCron.cronCreateOpen && listTab() === "activity";
     cron = nextCron;
     const tab = resolveListTab(routeSearch);
-    updateCronJobsFilter(cron, { cronJobsEnabledFilter: tab === "activity" ? "all" : tab });
+    updateCronJobsFilter(cron, {
+      cronJobsEnabledFilter: tab === "activity" ? "all" : (tab ?? "all"),
+    });
     const routeData = cronRoute.resolveCronRouteData(routeSearch);
     cron.cronSessionFilter = routeData.session;
     routeSelection.requested = false;
@@ -381,12 +385,18 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       resetGatewayState(context().gateway.snapshot);
     }
     const tab = resolveListTab(search);
-    const enabledFilter = tab === "activity" ? cron.cronJobsEnabledFilter : tab;
+    if (tab !== null && (cron.cronEditingJob || cron.cronCreateOpen)) {
+      resetEditor(false);
+      selectCronRunsForJob(cron, null);
+    }
+    const enabledFilter = tab === "activity" ? cron.cronJobsEnabledFilter : (tab ?? "all");
     const enabledChanged = cron.cronJobsEnabledFilter !== enabledFilter;
     updateCronJobsFilter(cron, { cronJobsEnabledFilter: enabledFilter });
     setListTab(tab === "activity" ? "activity" : "tasks");
     setDetailTab("settings");
-    routeSelection.target = routeData.jobId || routeData.session ? routeData : null;
+    // An explicit tab selects the overview, even when its session has only one job.
+    routeSelection.target =
+      tab === null && (routeData.jobId || routeData.session) ? routeData : null;
     routeSelection.requested = false;
     cron.cronRunsRunId = null;
     pendingRunScroll = false;
@@ -407,13 +417,10 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
 
   function selectListTab(tab: CronRouteListTab) {
     const params = new URLSearchParams(routeSearch);
-    if (tab === "all") {
-      params.delete("tab");
-    } else {
-      params.set("tab", tab);
-    }
-    const query = params.toString();
-    const search = query ? `?${query}` : "";
+    params.delete("job");
+    params.delete("run");
+    params.set("tab", tab);
+    const search = `?${params}`;
     // Phone tabs are local; returning to desktop can select the URL we already have.
     if (search === routeSearch) {
       setRouteSearch(search, true);
