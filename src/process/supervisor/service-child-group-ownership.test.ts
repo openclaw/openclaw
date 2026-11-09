@@ -126,8 +126,29 @@ it("does not report an empty Linux group after its existing census budget expire
     now = 51;
     return stat(owner, owner);
   });
+  expect(() => [...readProcessGroupMembers(50)]).toThrow(
+    new Error(
+      `Process group census exceeded its deadline after reading PID ${owner} (elapsed=51ms, budget=50ms)`,
+    ),
+  );
+  now = 0;
   expect(hasLiveOwnedProcessGroupMembers(50)).toBeUndefined();
   expect(census).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["malformed stat", "private command content", `malformed stat for PID ${owner}`],
+  [
+    "PID mismatch",
+    stat(owner + 1, owner),
+    `stat PID mismatch for PID ${owner} (stat PID=${owner + 1})`,
+  ],
+])("identifies Linux census %s without exposing stat contents", (_name, row, reason) => {
+  rows.set(owner, row);
+  expect(() => [...readProcessGroupMembers(50)]).toThrow(
+    new Error(`Process group census is unavailable: ${reason}`),
+  );
+  expect(hasLiveOwnedProcessGroupMembers(50)).toBeUndefined();
 });
 
 const ownerRow = { pid: owner, pgid: owner, state: "S" };

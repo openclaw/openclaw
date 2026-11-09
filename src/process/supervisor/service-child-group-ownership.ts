@@ -102,7 +102,8 @@ export function* readProcessGroupMembers(
 ): Generator<GroupMember> {
   const includeCommand = commandInspection !== undefined;
   if (process.platform === "linux") {
-    const deadline = Date.now() + timeoutMs;
+    const startedAt = Date.now();
+    const deadline = startedAt + timeoutMs;
     for (const name of readdirSync("/proc")) {
       if (Date.now() >= deadline) {
         throw new Error("Process group census exceeded its deadline");
@@ -146,8 +147,19 @@ export function* readProcessGroupMembers(
       // comm can contain spaces, newlines and parentheses; pgrp follows PPID
       // after its final closing parenthesis (Linux procfs stat fields 1..5).
       const match = /^(\d+) \([\s\S]*\) (\S) (\d+) (\d+)(?:\s|$)/.exec(stat);
-      if (!match || Number(match[1]) !== pid || Date.now() >= deadline) {
-        throw new Error("Process group census is unavailable");
+      if (!match) {
+        throw new Error(`Process group census is unavailable: malformed stat for PID ${pid}`);
+      }
+      if (Number(match[1]) !== pid) {
+        throw new Error(
+          `Process group census is unavailable: stat PID mismatch for PID ${pid} (stat PID=${Number(match[1])})`,
+        );
+      }
+      const now = Date.now();
+      if (now >= deadline) {
+        throw new Error(
+          `Process group census exceeded its deadline after reading PID ${pid} (elapsed=${now - startedAt}ms, budget=${timeoutMs}ms)`,
+        );
       }
       if (argv?.length === 0) {
         // Empty cmdline is normal for kernel threads, but cannot identify a live
