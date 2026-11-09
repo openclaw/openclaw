@@ -238,12 +238,15 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
     {
       configs: ["test/vitest/vitest.plugins.config.ts"],
-      files: ["src/plugins/plugin-generation-worker.test.ts"],
+      files: [
+        "src/plugins/plugin-generation-worker.test.ts",
+        "src/plugins/plugin-generation-source-inspection.worker.test.ts",
+      ],
       preset: "runtime",
     },
     {
       configs: ["test/vitest/vitest.plugins.config.ts"],
-      files: ["src/plugins/plugin-generation-worker.test.ts", "unknown.test.ts"],
+      files: ["src/plugins/plugin-generation-source-inspection.worker.test.ts", "unknown.test.ts"],
       preset: "full",
     },
     {
@@ -364,6 +367,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "src/config/io.load-async.test.ts",
         "src/plugins/loader.runtime-registry.test.ts",
         "src/plugins/plugin-generation-worker.test.ts",
+        "src/plugins/plugin-generation-source-inspection.worker.test.ts",
       ],
       args: [],
       jobArgs: undefined,
