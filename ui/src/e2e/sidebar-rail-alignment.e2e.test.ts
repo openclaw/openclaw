@@ -77,7 +77,7 @@ suite.define(() => {
                 labelLeft: box(".picker-select__label")!.x,
               };
             });
-          const row = await firstRow.evaluate((element) => {
+          const rowGeometry = await firstRow.evaluate((element) => {
             const glyph = element
               .querySelector(".sidebar-session-indicator")!
               .getBoundingClientRect();
@@ -95,7 +95,7 @@ suite.define(() => {
             expect(control.radius, control.selector).toBe(allOwners.radiusToken);
           }
           expect(allOwners.avatarCenter).toBeNull();
-          expect(allOwners.labelLeft).toBe(row.glyphLeft);
+          expect(allOwners.labelLeft).toBe(rowGeometry.glyphLeft);
           await page.locator("#sidebar-session-owner-title").click();
           await page
             .locator('.sidebar-session-owner-filter [role="option"][data-value="owner:riley"]')
@@ -107,11 +107,11 @@ suite.define(() => {
               return mine.avatarCenter === null
                 ? null
                 : {
-                    avatarCentered: Math.abs(mine.avatarCenter - row.glyphCenter) <= 0.5,
+                    avatarCentered: Math.abs(mine.avatarCenter - rowGeometry.glyphCenter) <= 0.5,
                     label: mine.labelLeft,
                   };
             })
-            .toEqual({ avatarCentered: true, label: row.textLeft });
+            .toEqual({ avatarCentered: true, label: rowGeometry.textLeft });
           await selectAllSidebarSessions(page);
           await page
             .locator(".sidebar-recent-session__name")
