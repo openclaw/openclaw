@@ -83,6 +83,7 @@ class AndroidLicenseNoticesTest {
             ),
         )
       logs.value = logSummary
+      model.refreshSkills()
       restoration.setContent {
         if (mounted.value) {
           ClawDesignTheme {
