@@ -1,2 +1,2 @@
-28
-# Muse runtime pool: hosts are scoped per OpenClaw session so one session's force-close cannot end a sibling on the same agent.
+91
+# Muse harness: prove session host reuse and real interrupt/5-second force-close isolation with an active sibling; replaces the pool-only close test.

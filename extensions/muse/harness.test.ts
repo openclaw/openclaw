@@ -245,6 +245,83 @@ describe("Muse native MSP harness", () => {
     expect(spawns).toHaveLength(2);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "force-closes a stuck turn after interrupt without ending an active sibling",
+    async () => {
+      const { params, run, log } = setup(true);
+      const approval = Promise.withResolvers<{ decision: "allow-once" }>();
+      const requested = Promise.withResolvers<void>();
+      const started = Promise.withResolvers<void>();
+      const interrupted = Promise.withResolvers<void>();
+      const controller = new AbortController();
+      await using server = createServer((socket) => {
+        socket.once("data", () => socket.write("acknowledge"));
+        socket.once("end", () => interrupted.resolve());
+      });
+      const gatePath = join(workspace, "interrupt-gate.sock");
+      await once(server.listen(gatePath), "listening");
+      vi.stubEnv("MUSE_FIXTURE_INTERRUPT_GATE", gatePath);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const settled: string[] = [];
+      const attempts: Array<Promise<AgentHarnessAttemptResult>> = [];
+      try {
+        // Keep the first turn active at a real MSP approval while its sibling gets stuck.
+        const sibling = run({
+          prompt: "approval",
+          hostCapabilities: {
+            ...params.hostCapabilities,
+            requestApproval: async () => {
+              requested.resolve();
+              return approval.promise;
+            },
+          },
+        }).then((result) => {
+          settled.push("sibling");
+          return result;
+        });
+        attempts.push(sibling);
+        await requested.promise;
+        const sessionId = crypto.randomUUID();
+        const sessionKey = "agent:main:stuck-muse";
+        const stuck = run({
+          sessionId,
+          sessionKey,
+          runId: crypto.randomUUID(),
+          sessionFile: join(workspace, "stuck-session.jsonl"),
+          sessionTarget: { ...params.sessionTarget!, sessionId, sessionKey },
+          prompt: "stuck",
+          abortSignal: controller.signal,
+          onExecutionStarted: () => started.resolve(),
+        }).then((result) => {
+          settled.push("stuck");
+          return result;
+        });
+        attempts.push(stuck);
+        await started.promise;
+        controller.abort();
+        await interrupted.promise;
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(settled).toEqual([]);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(terminal(await stuck).kind).toBe("aborted");
+        expect(settled).toEqual(["stuck"]);
+        approval.resolve({ decision: "allow-once" });
+        const result = await sibling;
+        expect(terminal(result).kind).toBe("ok");
+        expect(result.assistantTexts).toEqual(["started: hello"]);
+        const requests = await readRequests(log);
+        expect(requests.filter((request) => request.method === "turn/start")).toHaveLength(2);
+        expect(requests.filter((request) => request.method === "turn/interrupt")).toHaveLength(1);
+      } finally {
+        approval.resolve({ decision: "allow-once" });
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(5_000);
+        vi.useRealTimers();
+        await Promise.allSettled(attempts);
+      }
+    },
+  );
+
   it.each(["defaults", "agent"] as const)(
     "applies host approval %s security floors before launching Muse",
     async (scope) => {
