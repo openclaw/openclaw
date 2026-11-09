@@ -941,6 +941,15 @@ remains authorized by the currently effective Claude profile/root. A changed pro
 is rejected before native-history I/O. The check uses the current backend and skill
 environment selection, including cleared variables; a past per-turn override alone
 does not authorize a later read. Canonical OpenClaw history remains available.
+Fallback requests carrying native context also retain its source authorization through
+host-owned preparation until prompt-projection capture or first submission. A profile
+change before that commitment stops the attempt; send the request again to rebuild it
+under the current profile. This is a local coordination failure, not a provider failure.
+A captured model-prompt projection is canonical history; later profile changes do not
+revoke that recorded context. Without a projection, the check remains active until first
+submission.
+For plugin-owned transports, the host checks at plugin dispatch; the plugin owns its
+subsequent asynchronous preparation and transport.
 For relative or empty configuration directories, the current child working directory
 also determines the authorized root. A changed working directory cannot keep the
 former relative root authorized through the binding's historical directory.

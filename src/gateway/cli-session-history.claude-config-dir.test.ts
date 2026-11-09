@@ -176,7 +176,10 @@ describe("Claude CLI history config directory", () => {
                   ? ""
                   : state.path("cafe\u0301");
         const fixture = await createFixture(state, { configDir });
-        const page = await readFixture(fixture);
+        const retainAuthorization = vi.fn<(isCurrent: () => boolean) => void>();
+        const page = await readFixture(fixture, { retainAuthorization });
+        expect(retainAuthorization).toHaveBeenCalledOnce();
+        expect(retainAuthorization.mock.calls[0]?.[0]()).toBe(true);
 
         expect(page.messages).toEqual(
           expect.arrayContaining([expect.objectContaining({ content: "Imported answer" })]),
@@ -184,33 +187,6 @@ describe("Claude CLI history config directory", () => {
       });
     },
   );
-
-  it("imports an authorized absolute root through the Gateway worker boundary", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const configDir = state.path("absolute-claude");
-      const fixture = await createFixture(state, { configDir });
-      const worker = vi.spyOn(sessionHistoryWorkerRuntime, "readSessionHistoryPageInWorker");
-
-      const retainAuthorization = vi.fn<(isCurrent: () => boolean) => void>();
-      const page = await readFixture(fixture, { retainAuthorization });
-      expect(retainAuthorization).toHaveBeenCalledOnce();
-      expect(retainAuthorization.mock.calls[0]?.[0]()).toBe(true);
-
-      expect(page.messages).toEqual(
-        expect.arrayContaining([expect.objectContaining({ content: "Imported answer" })]),
-      );
-      expect(worker).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "rpc",
-          params: expect.objectContaining({
-            cliHistoryProjectsRoot: path.join(configDir, "projects"),
-          }),
-        }),
-        undefined,
-        expect.any(Function),
-      );
-    });
-  });
 
   it.each(
     ["explicit", "run", "workspace"].flatMap((source) =>

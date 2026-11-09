@@ -415,6 +415,7 @@ export function installModelPromptProjection(params: {
   getUserTranscriptContexts?: () => readonly UserTranscriptContext[] | undefined;
   withTranscriptWrite?: <T>(write: () => Promise<T>) => Promise<T>;
   assertCurrent?: SessionSourceAssertion;
+  assertPrivateInputCurrent?: () => void;
 }): () => void {
   if (
     !params.recorder?.captureModelPromptProjection &&
@@ -507,7 +508,10 @@ export function installModelPromptProjection(params: {
           runWithSessionSourceScope(
             params.assertCurrent,
             async () => {
-              const assertCurrent = () => params.assertCurrent?.();
+              const assertCurrent = () => {
+                params.assertCurrent?.();
+                params.assertPrivateInputCurrent?.();
+              };
               const projection = await resolveProjection(
                 agent.state?.messages ?? [],
                 assertCurrent,
@@ -528,6 +532,7 @@ export function installModelPromptProjection(params: {
         const assertCurrent = () => {
           signal?.throwIfAborted();
           params.assertCurrent?.();
+          params.assertPrivateInputCurrent?.();
         };
         const projection = await resolveProjection(messages, assertCurrent);
         if (projection) {

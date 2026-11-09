@@ -1,4 +1,5 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   NATIVE_HISTORY_AUTHORIZATION_DENIED,
   isNativeHistoryAuthorizationDenied,
@@ -10,6 +11,7 @@ import { isClaudeCliProvider } from "../cli-output-records.js";
 import { resolveAuthorizedClaudeCliBinding } from "../cli-runner/child-env.js";
 import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
 import { clearCliSessionInStore } from "../cli-session-store.js";
+import { NativeHistoryAuthorizationChangedError } from "../native-history-authorization-error.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
@@ -91,13 +93,8 @@ export async function prepareCliSessionBinding(params: {
   return params.sessionEntry;
 }
 
-/**
- * Prompts for the attempt's runner handoff. Prior-context history from a retained Claude
- * transcript is read once; the returned reader drops it again if the current selection no
- * longer authorizes that transcript. Runners await again after the handoff and do not recheck.
- */
+/** Retain source authority with native context until its persistence or disclosure. */
 export async function prepareFallbackPrompts(params: {
-  /** Rechecks current env selection and this attempt's entry; submission fences lifecycle changes. */
   run: AgentAttemptParams;
   isRawModelRun: boolean;
   childCwd: string;
@@ -108,17 +105,17 @@ export async function prepareFallbackPrompts(params: {
     run.isFallbackRetry &&
     isClaudeCliProvider(run.originalProvider) &&
     !isClaudeCliProvider(run.providerOverride);
-  const authorizeClaudeCliFallback = () =>
+  const authorizeClaudeCliFallback = (config = getRuntimeConfigSnapshot() ?? run.cfg) =>
     resolveAuthorizedClaudeCliBinding({
       entry: run.sessionEntry,
-      config: run.cfg,
+      config,
       agentId: run.sessionAgentId,
       skillsSnapshot: run.skillsSnapshot,
       cwd: childCwd,
     });
-  const claudeCliBinding = seedsClaudeCliFallback ? authorizeClaudeCliFallback() : undefined;
-  // The retained root only locates the transcript; the current selection must still authorize
-  // it at each seam, up to the runner handoff.
+  // Initial selection belongs to this attempt; later checks observe live revocation.
+  const claudeCliBinding = seedsClaudeCliFallback ? authorizeClaudeCliFallback(run.cfg) : undefined;
+  // The retained root locates the transcript; the live selection authorizes its use.
   const sameClaudeCliAuthorization = () =>
     JSON.stringify(authorizeClaudeCliFallback()) === JSON.stringify(claudeCliBinding);
   const claudeCliFallbackPrelude = claudeCliBinding
@@ -138,30 +135,30 @@ export async function prepareFallbackPrompts(params: {
         throw error;
       })
     : "";
-  const derivePrompts = (priorContextPrelude: string) => {
-    const resolvedPrompt = resolveFallbackRetryPrompt({
+  const resolvedPrompt = resolveFallbackRetryPrompt({
+    body: run.body,
+    isFallbackRetry: run.isFallbackRetry,
+    sessionHasHistory: run.sessionHasHistory,
+    priorContextPrelude: claudeCliFallbackPrelude,
+  });
+  const effectivePrompt = isRawModelRun
+    ? resolvedPrompt
+    : annotateInterSessionPromptText(resolvedPrompt, run.opts.inputProvenance);
+  return {
+    priorContextPrelude: claudeCliFallbackPrelude,
+    resolvedPrompt,
+    effectivePrompt,
+    embeddedExecApprovalContinuationPromptRange: rebaseExecApprovalContinuationPromptRange({
       body: run.body,
-      isFallbackRetry: run.isFallbackRetry,
-      sessionHasHistory: run.sessionHasHistory,
-      priorContextPrelude,
-    });
-    const effectivePrompt = isRawModelRun
-      ? resolvedPrompt
-      : annotateInterSessionPromptText(resolvedPrompt, run.opts.inputProvenance);
-    return {
-      priorContextPrelude,
-      resolvedPrompt,
-      effectivePrompt,
-      embeddedExecApprovalContinuationPromptRange: rebaseExecApprovalContinuationPromptRange({
-        body: run.body,
-        prompt: effectivePrompt,
-        range: run.opts.execApprovalContinuationPromptRange,
-      }),
-    };
+      prompt: effectivePrompt,
+      range: run.opts.execApprovalContinuationPromptRange,
+    }),
+    assertPrivateInputCurrent: claudeCliFallbackPrelude
+      ? () => {
+          if (!sameClaudeCliAuthorization()) {
+            throw new NativeHistoryAuthorizationChangedError();
+          }
+        }
+      : undefined,
   };
-  const preparedPrompts = derivePrompts(claudeCliFallbackPrelude);
-  return () =>
-    preparedPrompts.priorContextPrelude && !sameClaudeCliAuthorization()
-      ? derivePrompts("")
-      : preparedPrompts;
 }

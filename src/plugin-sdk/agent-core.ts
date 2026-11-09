@@ -4,6 +4,7 @@ import {
 } from "../../packages/agent-core/src/agent.js";
 import type { AgentCoreRuntimeDeps } from "../../packages/agent-core/src/runtime-deps.js";
 import type { CompleteSimpleFn, StreamFn } from "../../packages/llm-core/src/index.js";
+import { NativeHistoryAuthorizationChangedError } from "../agents/native-history-authorization-error.js";
 import { isSqliteTranscriptMutationConflict } from "../config/sessions/session-mutation-conflict-error.js";
 import { isLocalStorageOutcomeError } from "../infra/sqlite-error-diagnostics.js";
 import { runPluginStreamConsumer } from "../plugins/plugin-instance-scope.js";
@@ -12,7 +13,10 @@ import { completeSimple, streamSimple } from "./llm.js";
 /** Runtime adapter that lets the package agent-core use OpenClaw LLM helpers. */
 export const openClawAgentCoreRuntime = {
   isLocalError: (error: unknown) => {
-    if (isLocalStorageOutcomeError(error)) {
+    if (
+      error instanceof NativeHistoryAuthorizationChangedError ||
+      isLocalStorageOutcomeError(error)
+    ) {
       return true;
     }
     try {

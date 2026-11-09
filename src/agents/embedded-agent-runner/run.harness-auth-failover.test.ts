@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
@@ -305,6 +305,39 @@ describe("native harness auth failover", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
+
+  it.each(["thrown", "returned"])(
+    "preserves %s native-context revocation without fallback or cooldown",
+    async (surface) => {
+      const runEmbeddedAgent = prepareAuthFailoverRun();
+      const { NativeHistoryAuthorizationChangedError } =
+        await import("../native-history-authorization-error.js");
+      const { resolveModelFallbackError, describeFailoverError } =
+        await import("../failover-error.js");
+      const actualFailover =
+        await vi.importActual<typeof import("../failover-error.js")>("../failover-error.js");
+      // The overflow fixture otherwise keeps only error.message, losing typed coordination copy.
+      vi.mocked(describeFailoverError).mockImplementation(actualFailover.describeFailoverError);
+      const { buildExternalRunFailureReply } =
+        await import("../../auto-reply/reply/agent-runner-failure-reply.js");
+      const failure = new NativeHistoryAuthorizationChangedError();
+      if (surface === "thrown") {
+        mockedRunEmbeddedAttempt.mockRejectedValueOnce(failure);
+      } else {
+        mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+          makeAttemptResult({ promptError: failure, promptErrorSource: "prompt" }),
+        );
+      }
+      await expect(runEmbeddedAgent(createCodexAuthRunParams())).rejects.toBe(failure);
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+      expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+      expect(resolveModelFallbackError(failure)).toEqual({ kind: "coordination", error: failure });
+      expect(buildExternalRunFailureReply({ error: failure, message: failure.message })).toEqual({
+        text: "⚠️ The selected Claude profile changed while preparing this reply. Please send the request again.",
+        isGenericRunnerFailure: false,
+      });
+    },
+  );
 
   it.each(["thrown", "returned"])(
     "does not rotate or mark profiles for a %s local context timeout",

@@ -316,6 +316,9 @@ export async function runAgentHarnessAttempt(
             readRunOperatorAuthority(params),
             params.cyberAccessProgram,
           );
+          if (!selection.builtIn) {
+            internalParams.assertPrivateInputCurrent?.();
+          }
           return harness.runAttempt(attempt);
         },
       );
@@ -567,6 +570,7 @@ function withoutPluginHarnessPrivateState(
   // The released replyOperation reference delegates to the same controller owner.
   const {
     admittedRunContext: _admittedRunContext,
+    assertPrivateInputCurrent: _assertPrivateInputCurrent,
     thinkingExplicit: _thinkingExplicit,
     runtimePluginToolGrant: _runtimePluginToolGrant,
     assistantErrorTranscript: _assistantErrorTranscript,

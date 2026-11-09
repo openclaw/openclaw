@@ -376,6 +376,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   } = {
     modelCallSequence: (runInput.modelCallSequence ??= { value: 0 }),
     bindWatchdogAttempt: attemptControls.bindWatchdogAttempt,
+    assertPrivateInputCurrent: params.assertPrivateInputCurrent,
     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
     awaitSessionDiffBaseline: params.awaitSessionDiffBaseline,
     pluginRuntimeRefreshPending: pluginRefresh.stopAtStep,

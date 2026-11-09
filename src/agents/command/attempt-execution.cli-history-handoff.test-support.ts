@@ -40,7 +40,7 @@ export function registerClaudeCliHistoryHandoffTests(fixture: {
           return entry;
         });
       try {
-        const prompt = await fixture.runFallback(cwd, {
+        const run = fixture.runFallback(cwd, {
           sessionId: "handoff-session",
           updatedAt: 1,
           cliSessionBindings: {
@@ -51,13 +51,16 @@ export function registerClaudeCliHistoryHandoffTests(fixture: {
             },
           },
         });
-        expect(pendingPreparation).toHaveBeenCalledOnce();
-        expect(prompt).toEqual(expect.stringContaining("Continue at handoff"));
         if (revoked) {
-          expect(prompt).not.toEqual(expect.stringContaining("Native handoff history"));
+          await expect(run).rejects.toMatchObject({
+            name: "NativeHistoryAuthorizationChangedError",
+          });
         } else {
+          const prompt = await run;
+          expect(prompt).toEqual(expect.stringContaining("Continue at handoff"));
           expect(prompt).toEqual(expect.stringContaining("Native handoff history"));
         }
+        expect(pendingPreparation).toHaveBeenCalledOnce();
       } finally {
         pendingPreparation.mockRestore();
       }

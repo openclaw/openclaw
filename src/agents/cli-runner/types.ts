@@ -147,6 +147,8 @@ export type RunCliAgentParams = Pick<
   };
   /** Caller-owned authority for credential use; cancellation alone is not authorization. */
   assertCurrent?: SessionSourceAssertion;
+  /** Check private prompt authority at dispatch, never during later run bookkeeping. */
+  assertPrivateInputCurrent?: () => void;
   /** Internal completion caller's representation of operator authorization failures. */
   mapOperatorAuthorizationError?: (error: unknown) => Error;
   onExecutionStarted?: () => unknown;

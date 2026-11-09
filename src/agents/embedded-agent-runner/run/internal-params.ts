@@ -51,6 +51,8 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** Caller-owned authority until canonical projection capture or first disclosure. */
+  assertPrivateInputCurrent?: () => void;
   /** The reply owner checkpoints the source before recovery rewrites its context. */
   beforeRecoveryCompaction?: (context: {
     sessionId: string;
@@ -122,6 +124,7 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
     | "onCompactionRequestBudget"
     | "runCleanupSettlement"
     | "joinObservation"
+    | "assertPrivateInputCurrent"
   > & {
     bindWatchdogAttempt?: (attempt: SessionControllerWatchdogAttempt) => void;
     /** The dispatch owner already selected this target, including any compaction successor. */

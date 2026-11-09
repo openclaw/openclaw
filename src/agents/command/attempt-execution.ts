@@ -162,7 +162,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     completionToolPolicies !== undefined &&
     isToolAllowedByPolicies("message", Object.values(completionToolPolicies)) &&
     isRuntimeToolAllowed("message", params.opts.toolsAllow);
-  const currentPrompts = await prepareFallbackPrompts({
+  const fallbackPrompts = await prepareFallbackPrompts({
     run: params,
     isRawModelRun,
     childCwd: params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir,
@@ -415,21 +415,17 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
           warn: (message) => log.warn(message),
         });
         const { internalEvents, runtimeContextFragments: supplementalContext } = params.opts;
-        // Compose the prompt after the last await before the runner handoff so a native prelude
-        // revoked during binding preparation is dropped. The runner still awaits its own
-        // preparation before the provider request; that window is not rechecked here.
-        const cliPrompts = currentPrompts();
         const cliResolvedPrompt = params.opts.execApprovalContinuationPromptRange
           ? resolveFallbackRetryPrompt({
               body: cliContinuationBody,
               isFallbackRetry: params.isFallbackRetry,
               sessionHasHistory: params.sessionHasHistory,
-              priorContextPrelude: cliPrompts.priorContextPrelude,
+              priorContextPrelude: fallbackPrompts.priorContextPrelude,
             })
-          : cliPrompts.resolvedPrompt;
+          : fallbackPrompts.resolvedPrompt;
         const cliEffectivePrompt = params.opts.execApprovalContinuationPromptRange
           ? annotateInterSessionPromptText(cliResolvedPrompt, params.opts.inputProvenance)
-          : cliPrompts.effectivePrompt;
+          : fallbackPrompts.effectivePrompt;
         const cliPrompt =
           params.opts.inputProvenance?.kind === "inter_session"
             ? cliEffectivePrompt
@@ -461,6 +457,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             persistAssistantTranscript:
               params.storePath !== undefined && params.sessionStore !== undefined,
             prompt: cliPrompt,
+            assertPrivateInputCurrent: fallbackPrompts.assertPrivateInputCurrent,
             runtimeContextFragments: buildEventContext(internalEvents, supplementalContext),
             transcriptPrompt: cliTranscriptPrompt,
             modelProvider: params.providerOverride,
@@ -603,8 +600,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     );
   }
 
-  // Selection may have changed during the awaited preparation above: re-derive at the runner handoff.
-  const embeddedPrompts = currentPrompts();
   const embeddedRunParams: RunEmbeddedAgentInternalParams = {
     ...buildCommonCommandRunParams(params, { disableTools, bootstrapPromptWarningSignaturesSeen }),
     sandboxSessionKey: params.sessionKey,
@@ -622,7 +617,8 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     agentHarnessRuntimePreparationHint:
       agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
-    prompt: embeddedPrompts.effectivePrompt,
+    prompt: fallbackPrompts.effectivePrompt,
+    assertPrivateInputCurrent: fallbackPrompts.assertPrivateInputCurrent,
     transcriptPrompt: continuationTranscriptBody,
     // CLI retries cannot replay a persisted turn after orphan-user repair removes it.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
@@ -641,7 +637,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     execSession: params.sessionEntry,
     sessionPromptDelivery: params.sessionEntry?.delivery,
     execApprovalContinuationPromptRange:
-      embeddedPrompts.embeddedExecApprovalContinuationPromptRange,
+      fallbackPrompts.embeddedExecApprovalContinuationPromptRange,
     execApprovalContinuationTranscriptPromptRange: continuationTranscriptPromptRange,
     // Hidden internal runs lack an event consumer; visible lanes still feed UI and parent relays.
     suppressLiveStreamOutput:

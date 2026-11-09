@@ -68,6 +68,8 @@ const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
 };
 
 const RUNTIME_COORDINATION_FAILURE_CODE_COPY: Readonly<Record<string, string>> = {
+  native_history_authorization_changed:
+    "The selected Claude profile changed while preparing this reply. Please send the request again.",
   codex_node_disconnected: "Codex execution node disconnected. Start a fresh attempt.",
   node_runner_update_required:
     "The device worker requires an update before it can host sessions. Run `openclaw update`, reconnect it, then run `openclaw node restart` on a headless node before trying again.",

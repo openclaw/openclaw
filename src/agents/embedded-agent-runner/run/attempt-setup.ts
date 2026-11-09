@@ -88,7 +88,7 @@ type PreparedProviderRuntimePluginHandle = ProviderRuntimePluginHandle & {
 
 export type EmbeddedAttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
 
-export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptParams) {
+export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptInternalParams) {
   using phases = observeDiagnosticsTimelinePhases("attempt.setup.initialize");
   // Ultra is a logical orchestration mode, not a provider effort. Preserve it for
   // prompt/status surfaces, then lower only at agent-core and provider boundaries.
@@ -130,11 +130,17 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
   const workspace = await resolveAttemptWorkspaceSandbox(params).catch(async (error: unknown) => {
     const recorder = params.userTurnTranscriptRecorder;
     if (isSandboxProvisioningError(error) && recorder?.captureModelPromptProjection) {
-      const assertCurrent = resolveAdmittedRunActiveAssertion(
+      const assertRunCurrent = resolveAdmittedRunActiveAssertion(
         params.admittedRunContext,
         params.abortSignal,
       );
-      if (assertCurrent && !recorder.isBlocked()) {
+      if (assertRunCurrent && !recorder.isBlocked()) {
+        const assertCurrent = () => {
+          assertRunCurrent();
+          if (readModelPromptProjection(recorder.getPersistedMessage?.()) === undefined) {
+            params.assertPrivateInputCurrent?.();
+          }
+        };
         try {
           assertCurrent();
           const message = await recorder.resolveMessage();

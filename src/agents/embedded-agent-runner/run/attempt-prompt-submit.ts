@@ -4,6 +4,7 @@ import {
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
 import type { ImageContent } from "../../../llm/types.js";
+import { readModelPromptProjection } from "../../../sessions/user-turn-transcript.message.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { isOpenClawSystemUpdateMessage } from "../../internal-runtime-context.js";
 import type { Agent, AgentMessage } from "../../runtime/index.js";
@@ -39,6 +40,7 @@ import {
 } from "./attempt-sessions-yield.js";
 import { waitForEmbeddedAbortSettle } from "./attempt-subscription-cleanup.js";
 import type { createChatGPTV2CompactionBoundary } from "./chatgpt-v2-compaction.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
@@ -67,7 +69,7 @@ type TrajectoryRecorder = Awaited<ReturnType<typeof createTrajectoryRuntimeRecor
 
 export async function submitEmbeddedAttemptPrompt(input: {
   attempt: Pick<
-    EmbeddedRunAttemptParams,
+    EmbeddedRunAttemptInternalParams,
     | "promptCacheKey"
     | "sessionId"
     | "sessionKey"
@@ -76,6 +78,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
     | "userTurnTranscriptRecorder"
     | "inputAlreadyDelivered"
     | "abortSignal"
+    | "assertPrivateInputCurrent"
   >;
   registration?: ActiveEmbeddedRunAttachment;
   activeSession: PromptSubmissionSession;
@@ -113,6 +116,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
   transcriptPrompt: string;
 }): Promise<void> {
   const { activeSession, attempt } = input;
+  let assertPrivateInputCurrent = attempt.assertPrivateInputCurrent;
   if (attempt.inputAlreadyDelivered) {
     attempt.abortSignal?.throwIfAborted();
     input.assertHostActive?.();
@@ -123,6 +127,16 @@ export async function submitEmbeddedAttemptPrompt(input: {
     attempt.skipPreparedUserTurnMessage || input.runtimeOnly || userTurnRecorder?.isBlocked()
       ? undefined
       : userTurnRecorder;
+  const assertPendingPrivateInputCurrent = () => {
+    if (
+      assertPrivateInputCurrent &&
+      readModelPromptProjection(projectionRecorder?.getPersistedMessage?.()) !== undefined
+    ) {
+      // A committed projection is canonical history, including on a later retry.
+      assertPrivateInputCurrent = undefined;
+    }
+    assertPrivateInputCurrent?.();
+  };
   const persistedUserIdempotencyKey =
     attempt.skipPreparedUserTurnMessage !== true && userTurnRecorder?.hasPersisted() === true
       ? (userTurnRecorder.getPersistedMessage?.() ?? userTurnRecorder.message)?.idempotencyKey
@@ -178,6 +192,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
           const assertRequestCurrent = () => {
             options?.signal?.throwIfAborted();
             (input.assertHostActive?.assertScopeCurrent ?? input.assertHostActive)?.();
+            assertPendingPrivateInputCurrent();
           };
           // Runtime admission queues behind the user append; join it outside that write lane.
           await userTurnRecorder?.waitForRuntimePersistence();
@@ -239,6 +254,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
           input.assertHostActive?.();
           if (foregroundRequest) {
             projectionRecorder?.markSentToProvider?.();
+            // The first foreground request commits this projection to canonical history.
+            assertPrivateInputCurrent = undefined;
           }
           const stream = await baseStreamFn(model, requestContext, options);
           return stream;
@@ -313,6 +330,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
         withTranscriptWrite: input.withTranscriptWrite,
         getUserTranscriptContexts: input.getUserTranscriptContexts,
         assertCurrent: input.assertHostActive,
+        assertPrivateInputCurrent: assertPendingPrivateInputCurrent,
       });
   const armModelPromptTransform = (submitted: boolean) => {
     captureCurrentPromptForModel ||= submitted;
@@ -343,6 +361,9 @@ export async function submitEmbeddedAttemptPrompt(input: {
             persistedUserIdempotencyKey,
           });
     try {
+      if (internalPrompt) {
+        assertPendingPrivateInputCurrent();
+      }
       await input.promptActiveSession(submittedPrompt, promptOptions);
     } finally {
       cleanupRuntimeContextMessage();

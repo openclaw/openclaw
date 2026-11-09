@@ -421,6 +421,7 @@ export async function executeCliProcess(params: {
           withChildProcessOperation("agent.cli", () =>
             supervisor.spawn({
               assertCurrent: params.assertCurrent,
+              beforeSpawn: params.argsPrompt ? runParams.assertPrivateInputCurrent : undefined,
               prepareSpawn: params.argsPrompt
                 ? context.cliHistoryWriter?.assertReadable
                 : undefined,
@@ -429,6 +430,7 @@ export async function executeCliProcess(params: {
                 ? async () => {
                     await context.cliHistoryWriter?.assertReadable();
                     await context.preparedBackend.prepareCredentialUse?.();
+                    runParams.assertPrivateInputCurrent?.();
                   }
                 : undefined,
               runId: runParams.runId,

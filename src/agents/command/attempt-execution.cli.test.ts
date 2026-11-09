@@ -1006,7 +1006,10 @@ describe("CLI attempt execution", () => {
     runFallback: async (cwd, sessionEntry) => {
       const sessionKey = "agent:main:cli-history-handoff";
       const sessionStore = await seedSessionStore(sessionKey, sessionEntry);
-      runCliAgentMock.mockResolvedValueOnce(makeCliResult("fallback complete"));
+      runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
+        params.assertPrivateInputCurrent?.();
+        return makeCliResult("fallback complete");
+      });
       await runStoredAttempt({
         cwd,
         sessionEntry,
