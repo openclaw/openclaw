@@ -590,6 +590,7 @@ export async function captureNativeModelSource(
       parent?.parent ??
       findUnqualifiedNativeModelParent(request, dependencies.parents, dependencies.admissions);
     if (!state || !dependencies.isCurrent(state)) {
+      request.onUnavailable?.(!state ? "native_state_missing" : "native_state_stale");
       return undefined;
     }
     if (
@@ -598,14 +599,19 @@ export async function captureNativeModelSource(
         (owner) => owner.turnId === request.turnId && owner.modelExecutionSettled,
       )
     ) {
+      request.onUnavailable?.("native_turn_settled");
       return undefined;
     }
     const owner = executionOwner(request, state, dependencies);
     if (owner) {
       dependencies.assertInputCurrent(request.threadId, owner);
-      return captureExecutionOwner(owner, () =>
+      const captured = captureExecutionOwner(owner, () =>
         dependencies.assertInputCurrent(request.threadId, owner),
       );
+      if (!captured) {
+        request.onUnavailable?.("native_source_missing");
+      }
+      return captured;
     }
     const parentExecution = parent
       ? dependencies.children.get(parent.assignment.runId)?.modelExecution?.executionOwner
@@ -640,6 +646,7 @@ export async function captureNativeModelSource(
       if (waitingOwner) {
         binding = capture?.source?.bindModelExecution?.(undefined);
         if (!binding) {
+          request.onUnavailable?.("native_binding_missing");
           return undefined;
         }
         binding.assertCurrent();
@@ -648,6 +655,7 @@ export async function captureNativeModelSource(
         !dependencies.hasPendingInput(request) &&
         !(observedChildTurn && parentExecution && matchingCause(parentExecution, request))
       ) {
+        request.onUnavailable?.("native_owner_unavailable");
         return undefined;
       }
       await waitForModelSourceChange(

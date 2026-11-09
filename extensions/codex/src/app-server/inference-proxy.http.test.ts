@@ -11,6 +11,7 @@ import { createServer } from "node:https";
 import { Socket } from "node:net";
 import { buffer as readBody } from "node:stream/consumers";
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -127,11 +128,15 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-function post(body = json(child), headers: Record<string, string> = {}) {
+function post(
+  body = json(child),
+  headers: Record<string, string> = {},
+  path = "/responses?cursor=synthetic%2Fa%5Cb%2Ec",
+) {
   const response = createDeferred<IncomingMessage>();
   const closed = createDeferred<void>();
   const req = request(
-    proxy.baseUrl + "/responses?cursor=synthetic%2Fa%5Cb%2Ec",
+    proxy.baseUrl + path,
     {
       method: "POST",
       agent: false,
@@ -154,6 +159,151 @@ async function waitForUpstreamClose() {
 }
 
 describe("inference HTTP transport ownership", () => {
+  it.each([
+    ["missing metadata", "metadata_missing"],
+    ["invalid metadata", "metadata_invalid"],
+    ["conflicting metadata", "metadata_mismatch"],
+    ["missing turn", "execution_identity_missing"],
+    ["missing monitor", "native_monitor_missing"],
+    ["missing state", "native_state_missing"],
+    ["wrong turn", "native_owner_unavailable"],
+    ["settled turn", "native_turn_settled"],
+    ["invalid shape", "request_shape_invalid"],
+    ["unexplained absence", "source_unavailable"],
+    ["capture exception", "source_capture_failed"],
+    ["late revocation", "source_assertion_failed"],
+  ])(
+    "reports bounded owner denial for %s without disclosing request data",
+    async (scenario, reason) => {
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+      const client = createClient();
+      const upstream = vi.fn((_req: IncomingMessage, res: ServerResponse) => res.end());
+      handle = upstream;
+      let revoked = false;
+      let capture = codexNativeSubagentMonitorRuntime.captureModelSource;
+      if (scenario === "capture exception") {
+        capture = async () => {
+          throw new Error("synthetic-private-token https://private.invalid");
+        };
+      } else if (scenario === "late revocation") {
+        capture = async () => ({
+          source: undefined,
+          nativeReviewRequired: false,
+          assertCurrent: () => {
+            if (revoked) {
+              throw new Error("synthetic-private-token");
+            }
+          },
+          release: () => {},
+          cancel: () => {},
+          recordNativeReviewRequirement: () => {},
+        });
+      } else if (scenario === "unexplained absence") {
+        capture = async () => undefined;
+      }
+      proxy.close();
+      proxy = await createCodexInferenceProxy({
+        upstream: new URL("https://api.openai.com/v1"),
+        assertCurrent: () => {},
+        ...(scenario === "late revocation"
+          ? {
+              oauth: {
+                resolve: async () => {
+                  revoked = true;
+                  return { token: "synthetic-private-token", assertCurrent: () => {} };
+                },
+              },
+            }
+          : {}),
+        bindModelExecution: createCodexInferenceModelBinding({
+          client: client.client,
+          provider: "fixture",
+          assertCurrent: () => {},
+          memoryConfigured: () => false,
+          captureModelSource: capture,
+          resolveModelThreadId: codexNativeSubagentMonitorRuntime.resolveModelThreadId,
+        }),
+      });
+      const owner = ["missing state", "wrong turn", "settled turn"].includes(scenario)
+        ? await codexNativeSubagentMonitorRuntime.register({
+            client: client.client,
+            parentThreadId: "parent-thread",
+            modelSource: createNativeModelSourceFixture(["allowed"]),
+          })
+        : undefined;
+      await owner?.ready;
+      owner?.bindTurn("parent-turn");
+      const admission =
+        scenario === "late revocation" ? await register("parent-thread", "") : undefined;
+      if (scenario === "settled turn") {
+        await client.notify({
+          method: "turn/completed",
+          params: {
+            threadId: "parent-thread",
+            turn: { id: "parent-turn", status: "completed", items: [] },
+          },
+        });
+      }
+      const native = {
+        request_kind: "turn",
+        ...(admission ? { [CODEX_INFERENCE_GENERATION_KEY]: admission.generation } : {}),
+        thread_id: scenario === "missing state" ? "absent" : "parent-thread",
+        ...(scenario === "missing turn"
+          ? {}
+          : { turn_id: scenario === "settled turn" ? "parent-turn" : "wrong-turn" }),
+      };
+      const body = {
+        ...(scenario === "invalid shape" ? {} : { model: "allowed" }),
+        input: "synthetic-private-token",
+        client_metadata:
+          scenario === "missing metadata"
+            ? {}
+            : scenario === "invalid metadata"
+              ? { "x-codex-turn-metadata": "synthetic-private-token" }
+              : metadata(native),
+      };
+      const headers = {
+        authorization: "Bearer synthetic-private-token",
+        ...(scenario === "conflicting metadata"
+          ? metadata({ ...native, turn_id: "secret-conflict" })
+          : {}),
+      };
+      try {
+        const upload = post(
+          json(body),
+          headers,
+          scenario === "late revocation" ? "/responses" : undefined,
+        );
+        const response = await upload.response;
+        expect(response.statusCode).toBe(403);
+        const text = (await readBody(response)).toString();
+        expect(JSON.parse(text).error).toMatchObject({
+          code: "model_permission_denied",
+          message:
+            "Codex cannot verify the owner of this model request. Start a fresh request before retrying.",
+        });
+        await upload.closed;
+        expect(upstream).not.toHaveBeenCalled();
+        expect(warn.mock.calls).toEqual([
+          [
+            "codex inference authorization denied",
+            {
+              transport: "http",
+              reason,
+              responseStarted: false,
+            },
+          ],
+        ]);
+        expect(JSON.stringify(warn.mock.calls) + text).not.toMatch(
+          /synthetic-private-token|secret-conflict|private.invalid/,
+        );
+      } finally {
+        admission?.release();
+        await owner?.unregister();
+      }
+    },
+  );
+
   it.each([false, true])(
     "authorizes a fork after early parent cleanup=%s",
     async (earlyCleanup) => {

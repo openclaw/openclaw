@@ -170,6 +170,27 @@ records through this same file-log pipeline. These records include event type,
 mode, transport, provider, and size/timing measurements when available, but omit
 transcript text, audio payloads, turn ids, call ids, and provider item ids.
 
+### Native model ownership denials
+
+The `agent/embedded` subsystem records `codex inference authorization denied`
+for HTTP requests and WebSocket frames rejected by the local model-authority
+guard. Its bounded `reason` distinguishes missing, invalid, or conflicting
+metadata; unavailable native monitors, states, turns, or sources; source
+assertion failures; and model-access refusals. `unknown` means the guard did
+not have a more specific cause. These records contain no request bodies,
+metadata values, credentials, private URLs, or raw exceptions.
+
+`agent harness host source denied` records the first rejected host assertion
+with the existing run correlation and the failing branch: closed host, missing
+admitted source, replaced operational run, refused admitted source, or stale
+Gateway. Repeated assertions on that host do not repeat the warning. A refused
+source is not proof of why its underlying owner was revoked, and foreground
+host completion does not itself revoke an independently retained native source.
+
+These diagnostics do not change admission, cancellation, model policy, error
+responses, log retention, or audit collection. Use them as evidence of the
+observed guard, not as proof that an earlier incident has the same root cause.
+
 ### Console output
 
 Console logs are **TTY-aware** and formatted for readability:
