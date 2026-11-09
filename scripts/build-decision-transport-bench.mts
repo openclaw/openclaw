@@ -18,7 +18,7 @@ await runBenchmarkEntrypoint("build-decision-transport-bench", async () => {
   // Refuse production edits: a revision label must identify the measured code.
   const sourceRevision = git("rev-parse", "--verify", `${process.argv[2] ?? "HEAD"}^{commit}`);
   const workload = process.argv[3] ?? "http";
-  if (workload !== "http" && workload !== "conversion") {
+  if (!["http", "conversion", "runtime-v1"].includes(workload)) {
     throw new Error("Unknown benchmark case");
   }
   const benchmarkRevision =
