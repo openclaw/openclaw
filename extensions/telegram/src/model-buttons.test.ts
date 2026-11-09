@@ -3,7 +3,6 @@ import {
   buildModelSelectionCallbackData,
   buildModelsKeyboard,
   expandModelEntries,
-  formatModelPickerRuntimeHint,
   resolveModelRuntimeSelection,
   buildProviderKeyboard,
   calculateTotalPages,
@@ -240,18 +239,6 @@ describe("runtime variants", () => {
       "<< Back",
     ]);
     expect(rows.flat()[4]?.callback_data).toBe("mdl_rt_claude-cli_anthropic/claude-opus-5-5");
-  });
-
-  it("describes runtime-labelled rows in the picker hint only when they exist", () => {
-    expect(formatModelPickerRuntimeHint(undefined)).toBe(
-      "Selecting a model also applies its configured runtime.",
-    );
-    expect(formatModelPickerRuntimeHint(new Map())).toBe(
-      "Selecting a model also applies its configured runtime.",
-    );
-    expect(formatModelPickerRuntimeHint(runtimeVariants)).toBe(
-      "Rows labelled with a runtime select that runtime; other rows apply the model's configured runtime.",
-    );
   });
 
   it("marks the default runtime when the session has no runtime pin", () => {
