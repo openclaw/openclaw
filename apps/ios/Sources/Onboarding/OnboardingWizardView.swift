@@ -84,7 +84,7 @@ struct OnboardingWizardView: View {
     private var connectPhase: OnboardingConnectPhase {
         let connectingDetail = self.connectingGateway == nil
             ? nil
-            : (self.statusLine.isEmpty ? "Connecting…" : self.statusLine)
+            : (self.statusLine.isEmpty ? String(localized: "Connecting…") : self.statusLine)
         let retryableFailure = self.issue == .none
             ? nil
             : self.connectMessage
@@ -102,15 +102,16 @@ struct OnboardingWizardView: View {
         case .none:
             ""
         case .tokenMissing:
-            "Gateway auth token is missing."
+            String(localized: "Gateway auth token is missing.")
         case .passwordMissing:
             self.connectMessage ?? self.statusLine
         case .unauthorized:
-            "Gateway rejected credentials."
+            String(localized: "Gateway rejected credentials.")
         case let .pairingRequired(requestId):
-            requestId.map { "Pairing required (request \($0))." } ?? "Pairing required."
+            requestId.map { String(format: String(localized: "Pairing required (request %@)."), $0) }
+                ?? String(localized: "Pairing required.")
         case .network:
-            "Could not reach the gateway."
+            String(localized: "Could not reach the gateway.")
         case let .unknown(message):
             message
         }
@@ -283,7 +284,7 @@ struct OnboardingWizardView: View {
             let destination = self.qrCodeCompletion.destination(
                 connectedStableID: self.appModel.activeGatewayConnectConfig?.effectiveStableID)
             self.showQRScanner = false
-            self.statusLine = "Connected."
+            self.statusLine = String(localized: "Connected.")
             if !self.didMarkCompleted, let selectedMode {
                 OnboardingStateStore.markCompleted(mode: selectedMode)
                 self.didMarkCompleted = true
@@ -307,7 +308,7 @@ struct OnboardingWizardView: View {
                 onError: { error in
                     guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
                     self.showQRScanner = false
-                    self.statusLine = "Scanner error: \(error)"
+                    self.statusLine = String(format: String(localized: "Scanner error: %@"), error)
                     self.scannerError = error
                 },
                 onDismiss: {
@@ -347,7 +348,7 @@ struct OnboardingWizardView: View {
                 guard let data = try? await item.loadTransferable(type: Data.self) else {
                     guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
                     self.showQRScanner = false
-                    self.scannerError = "Could not load the selected image."
+                    self.scannerError = String(localized: "Could not load the selected image.")
                     return
                 }
                 guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
@@ -362,7 +363,7 @@ struct OnboardingWizardView: View {
                     }
                 }
                 self.showQRScanner = false
-                self.scannerError = "No valid QR code found in the selected image."
+                self.scannerError = String(localized: "No valid QR code found in the selected image.")
             }
         }
     }
@@ -861,20 +862,20 @@ extension OnboardingWizardView {
         self.setupCodeStatus = nil
         let raw = self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else {
-            self.setupCodeStatus = "Paste a setup code to continue."
+            self.setupCodeStatus = String(localized: "Paste a setup code to continue.")
             return
         }
         self.clearStagedGatewaySetupLink()
 
         if AppleReviewDemoMode.isSetupCode(raw) {
             self.setupCode = ""
-            self.setupCodeStatus = "Apple Review demo mode enabled."
+            self.setupCodeStatus = String(localized: "Apple Review demo mode enabled.")
             self.handleScannedSetupCode(raw)
             return
         }
 
         guard let parsedLink = GatewayConnectDeepLink.fromSetupInput(raw) else {
-            self.setupCodeStatus = "Setup code not recognized or uses an insecure ws:// gateway URL."
+            self.setupCodeStatus = String(localized: "Setup code not recognized or uses an insecure ws:// gateway URL.")
             return
         }
 
@@ -885,9 +886,12 @@ extension OnboardingWizardView {
 
         guard await self.applyGatewayLink(link) else { return }
         self.setupCode = ""
-        self.setupCodeStatus = "Setup code applied. Connecting…"
-        self.connectMessage = "Connecting via setup code…"
-        self.statusLine = "Setup code loaded. Connecting to \(link.host):\(link.port)…"
+        self.setupCodeStatus = String(localized: "Setup code applied. Connecting…")
+        self.connectMessage = String(localized: "Connecting via setup code…")
+        self.statusLine = String(
+            format: String(localized: "Setup code loaded. Connecting to %1$@:%2$ld…"),
+            link.host,
+            link.port)
         await self.prepareFocusedFieldForStepTransition()
         self.navigate(to: .connect)
         await self.connectManual(setupAttemptID: attemptID)
@@ -895,7 +899,7 @@ extension OnboardingWizardView {
 
     private func queueScannedResult(_ result: QRScannerResult, scanID: UInt64) {
         guard self.scannerResultHandoff.queue(result, scanID: scanID) else { return }
-        self.statusLine = "QR loaded. Closing scanner..."
+        self.statusLine = String(localized: "QR loaded. Closing scanner...")
         self.showQRScanner = false
     }
 
@@ -931,8 +935,11 @@ extension OnboardingWizardView {
         guard self.setupAttemptID == attemptID else { return }
         guard await self.applyGatewayLink(link) else { return }
         self.qrCodeCompletion.stage(link)
-        self.connectMessage = "Connecting via setup code…"
-        self.statusLine = "Setup code loaded. Connecting to \(link.host):\(link.port)…"
+        self.connectMessage = String(localized: "Connecting via setup code…")
+        self.statusLine = String(
+            format: String(localized: "Setup code loaded. Connecting to %1$@:%2$ld…"),
+            link.host,
+            link.port)
         self.navigate(to: .connect)
         await self.connectManual(setupAttemptID: attemptID)
     }
@@ -950,7 +957,10 @@ extension OnboardingWizardView {
         }
         self.stagedGatewaySetupLink = link
         self.localConnectionFailure = nil
-        self.setupCodeStatus = "Setup link loaded for \(link.host):\(link.port). Tap Connect to apply."
+        self.setupCodeStatus = String(
+            format: String(localized: "Setup link loaded for %1$@:%2$ld. Tap Connect to apply."),
+            link.host,
+            link.port)
         self.connectMessage = nil
         self.statusLine = self.setupCodeStatus ?? ""
         self.navigate(to: .connect)
@@ -961,7 +971,7 @@ extension OnboardingWizardView {
         guard self.connectingGateway == nil else { return }
         guard let link = self.stagedGatewaySetupLink else { return }
         guard link.isValidEndpoint else {
-            let message = "Setup link has an invalid gateway endpoint."
+            let message = String(localized: "Setup link has an invalid gateway endpoint.")
             self.setupCodeStatus = message
             self.setConnectionFailure(message)
             return
@@ -976,10 +986,10 @@ extension OnboardingWizardView {
         guard self.stagedGatewaySetupLink == link else { return }
         guard await self.applyGatewayLink(link, disconnectExistingGatewayForBootstrap: false) else { return }
         self.stagedGatewaySetupLink = nil
-        self.setupCodeStatus = "Setup link applied. Connecting…"
+        self.setupCodeStatus = String(localized: "Setup link applied. Connecting…")
         self.issue = .none
-        self.connectMessage = "Connecting to \(link.host)…"
-        self.statusLine = "Connecting to \(link.host):\(link.port)…"
+        self.connectMessage = String(format: String(localized: "Connecting to %@…"), link.host)
+        self.statusLine = String(format: String(localized: "Connecting to %1$@:%2$ld…"), link.host, link.port)
         await self.connectCurrentManualGateway(
             host: link.host,
             port: link.port,
@@ -991,7 +1001,7 @@ extension OnboardingWizardView {
         guard self.stagedGatewaySetupLink != nil else { return }
         self.stagedGatewaySetupLink = nil
         self.pendingTargetSuppression.resumeAutoConnect(.setupLink, controller: self.gatewayController)
-        let message = "Setup link cleared."
+        let message = String(localized: "Setup link cleared.")
         self.localConnectionFailure = nil
         self.setupCodeStatus = message
         self.statusLine = message
@@ -1009,7 +1019,7 @@ extension OnboardingWizardView {
                 gatewayStableID: setupAuth.targetStableID,
                 disconnectGateway: disconnectExistingGatewayForBootstrap)
             else {
-                let message = "Could not safely replace the gateway's offline data. Try again."
+                let message = String(localized: "Could not safely replace the gateway's offline data. Try again.")
                 self.setupCodeStatus = message
                 self.connectMessage = message
                 self.setConnectionFailure(message)
@@ -1046,8 +1056,8 @@ extension OnboardingWizardView {
         self.qrCodeCompletion.cancel()
         self.showQRScanner = false
         self.invalidateSetupAttempt()
-        self.connectMessage = "Apple Review demo mode enabled."
-        self.statusLine = "Apple Review demo mode enabled."
+        self.connectMessage = String(localized: "Apple Review demo mode enabled.")
+        self.statusLine = String(localized: "Apple Review demo mode enabled.")
         self.selectedMode = .homeNetwork
         self.appModel.enterAppleReviewDemoMode()
         self.pendingTargetSuppression.releaseAutoConnect(.qrScanner, controller: self.gatewayController)
@@ -1081,8 +1091,8 @@ extension OnboardingWizardView {
         // so new status/auth errors can surface instead of being masked as pairing.
         if !silent {
             self.issue = .none
-            self.connectMessage = "Retrying after approval…"
-            self.statusLine = "Retrying after approval…"
+            self.connectMessage = String(localized: "Retrying after approval…")
+            self.statusLine = String(localized: "Retrying after approval…")
         }
         Task { await self.retryLastAttempt(silent: silent) }
     }
@@ -1347,8 +1357,8 @@ extension OnboardingWizardView {
         self.connectingGateway = .gateway(gateway.id)
         self.localConnectionFailure = nil
         self.issue = .none
-        self.connectMessage = "Connecting to \(gateway.name)…"
-        self.statusLine = "Connecting to \(gateway.name)…"
+        self.connectMessage = String(format: String(localized: "Connecting to %@…"), gateway.name)
+        self.statusLine = String(format: String(localized: "Connecting to %@…"), gateway.name)
         defer { self.connectingGateway = nil }
         if let message = await self.gatewayController.connectWithDiagnostics(gateway) {
             self.setConnectionFailure(message)
@@ -1402,8 +1412,8 @@ extension OnboardingWizardView {
         self.connectingGateway = .manual
         self.localConnectionFailure = nil
         self.issue = .none
-        self.connectMessage = "Connecting to \(host)…"
-        self.statusLine = "Connecting to \(host):\(port)…"
+        self.connectMessage = String(format: String(localized: "Connecting to %@…"), host)
+        self.statusLine = String(format: String(localized: "Connecting to %1$@:%2$ld…"), host, port)
         defer { self.connectingGateway = nil }
         await self.connectCurrentManualGateway(
             host: host,
@@ -1454,8 +1464,8 @@ extension OnboardingWizardView {
         self.localConnectionFailure = nil
         // Keep current auth/pairing issue sticky while retrying to avoid Step 3 UI flip-flop.
         if !silent {
-            self.connectMessage = "Retrying…"
-            self.statusLine = "Retrying last connection…"
+            self.connectMessage = String(localized: "Retrying…")
+            self.statusLine = String(localized: "Retrying last connection…")
         }
         defer { self.connectingGateway = nil }
 
@@ -1503,8 +1513,8 @@ extension OnboardingWizardView {
         }
         if problem.canTrustRotatedCertificate {
             self.connectingGateway = .trustCertificate
-            self.connectMessage = "Updating gateway certificate…"
-            self.statusLine = "Updating gateway certificate…"
+            self.connectMessage = String(localized: "Updating gateway certificate…")
+            self.statusLine = String(localized: "Updating gateway certificate…")
             defer { self.connectingGateway = nil }
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
