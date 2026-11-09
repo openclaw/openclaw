@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -71,7 +70,12 @@ private fun ChatSwarmGroupCard(group: ChatSwarmGroup) {
       modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
       verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        itemVerticalAlignment = Alignment.CenterVertically,
+      ) {
         Text(
           text = group.label,
           style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
@@ -88,9 +92,7 @@ private fun ChatSwarmGroupCard(group: ChatSwarmGroup) {
             ),
           color = ClawTheme.colors.textMuted,
           style = ClawTheme.type.caption,
-          maxLines = 1,
         )
-        Spacer(Modifier.weight(1f))
       }
       group.narrator?.let { narrator ->
         Text(
