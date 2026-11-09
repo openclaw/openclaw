@@ -500,7 +500,7 @@ function SystemsWorkspace(props: {
             {t("systems.desktop")}
           </button>
         </Show>
-        <Show when={controller().state.preview !== "simulator"}>
+        <Show when={!(simulatorNode() && controller().state.preview === "simulator")}>
           <button
             class="systems-icon-button"
             title={t(controller().statsVisible() ? "systems.hideStats" : "systems.stats")}
@@ -530,7 +530,7 @@ function SystemsWorkspace(props: {
           <Icon name="panelRightOpen" />
         </button>
       </header>
-      {controller().state.preview === "simulator" ? null : (
+      {simulatorNode() && controller().state.preview === "simulator" ? null : (
         <div
           class={[
             "systems-overview",
