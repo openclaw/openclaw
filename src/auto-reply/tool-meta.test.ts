@@ -49,6 +49,13 @@ describe("tool meta formatting", () => {
     });
   });
 
+  it("returns promptly for a deep path followed by a space", () => {
+    const command = `${"/a".repeat(24)}/notes file.txt --help`;
+    const startedAt = performance.now();
+    expect(formatToolAggregate("exec", [command])).toBe(command);
+    expect(performance.now() - startedAt).toBeLessThan(500);
+  });
+
   it("keeps exec flags outside markdown and moves them to the front", () => {
     withHome(() => {
       const out = formatToolAggregate("exec", [`cd ${home}/dir && gemini 2>&1 · elevated`], {

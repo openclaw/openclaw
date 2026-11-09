@@ -1,0 +1,3 @@
+# Tool progress labels stay fast for a deep path followed by a space.
+# Exact net growth for PR #196282.
+7
