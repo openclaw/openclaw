@@ -1,0 +1,5 @@
+# Source-bound prompt receipts, component conversation persistence and access,
+# capability action identity/revocation, and bounded device execution regressions.
+# Together with the three existing Lobby allocations (706), covers the measured
+# net +3377 test lines against abf7150adb2c; no unrelated baseline slack is borrowed.
+2671

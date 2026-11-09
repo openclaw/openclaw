@@ -5,6 +5,10 @@ import {
   closeHttpServer,
   listenLoopback,
 } from "../../../../test/helpers/gateway-integration-fixtures.ts";
+import {
+  WIDGET_PROMPT_EVENT,
+  type WidgetPromptEventDetail,
+} from "../../components/mcp-app-security.ts";
 import type { BoardWidget } from "./types.ts";
 import { BoardWidgetSandboxHost } from "./widget-sandbox-host.ts";
 import { createBoardWidget } from "./widget.test-support.ts";
@@ -293,6 +297,10 @@ describe("BoardWidgetSandboxHost", () => {
         client: promptClient(),
         resolveFrameUrl: () => "/__openclaw__/board/" + session + "/weather/index.html?bt=ticket",
       });
+      f.frame.addEventListener(WIDGET_PROMPT_EVENT, (event) => {
+        // SAFETY: this frame receives the typed event from dispatchWidgetPrompt.
+        (event as CustomEvent<WidgetPromptEventDetail>).detail.respond(true);
+      });
       f.frame.checkVisibility = () => true;
       activeFrame = f.frame;
       return await f.port();
@@ -301,6 +309,11 @@ describe("BoardWidgetSandboxHost", () => {
     for (let i = 0; i < 10; i += 1) {
       await reply(first, prompt("first-" + i, "Prompt " + i));
     }
+    await rejectRequest(
+      first,
+      prompt("exhausted", "Over budget"),
+      "widget prompt was not accepted",
+    );
     const other = await setup(prefix + "-b", "a".repeat(32));
     await reply(other, prompt("other-session", "Independent session"));
     const recreated = await setup(prefix + "-a", "b".repeat(32));

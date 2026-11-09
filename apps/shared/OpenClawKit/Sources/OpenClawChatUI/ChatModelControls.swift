@@ -2,14 +2,14 @@ import SwiftUI
 
 /// Session-owned model controls shared by chat and focused authoring surfaces.
 @MainActor
-public struct OpenClawChatModelPicker: View {
+struct OpenClawChatModelPicker: View {
     @Bindable private var viewModel: OpenClawChatViewModel
 
-    public init(viewModel: OpenClawChatViewModel) {
+    init(viewModel: OpenClawChatViewModel) {
         self.viewModel = viewModel
     }
 
-    public var body: some View {
+    var body: some View {
         Menu {
             ChatDeferredContent {
                 let sections = self.viewModel.modelPickerSections
@@ -104,14 +104,14 @@ public struct OpenClawChatModelPicker: View {
 }
 
 @MainActor
-public struct OpenClawChatThinkingPicker: View {
+struct OpenClawChatThinkingPicker: View {
     @Bindable private var viewModel: OpenClawChatViewModel
 
-    public init(viewModel: OpenClawChatViewModel) {
+    init(viewModel: OpenClawChatViewModel) {
         self.viewModel = viewModel
     }
 
-    public var body: some View {
+    var body: some View {
         Picker(selection: Binding(
             get: { self.viewModel.thinkingSelectionID },
             set: { next in self.viewModel.selectThinkingLevel(next) }))
@@ -146,14 +146,14 @@ public struct OpenClawChatThinkingPicker: View {
 #if os(iOS)
 /// The same compact effort control used in the normal conversation footer.
 @MainActor
-public struct OpenClawChatInlineEffortPicker: View {
+struct OpenClawChatInlineEffortPicker: View {
     @Bindable private var viewModel: OpenClawChatViewModel
 
-    public init(viewModel: OpenClawChatViewModel) {
+    init(viewModel: OpenClawChatViewModel) {
         self.viewModel = viewModel
     }
 
-    public var body: some View {
+    var body: some View {
         Menu {
             if self.viewModel.showsThinkingPicker {
                 OpenClawChatThinkingPicker(viewModel: self.viewModel)
