@@ -12,6 +12,7 @@ import {
   isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileOrderWithMetadata,
 } from "../../../agents/auth-profiles/order.js";
+import { resolveAuthProfileDatabasePath } from "../../../agents/auth-profiles/sqlite.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../../../agents/auth-profiles/store-runtime.js";
 import { resolveProviderModelAuthPolicy } from "../../../agents/model-auth-policy.js";
 import {
@@ -49,7 +50,6 @@ import { prepareArtifactPreservingSqliteRead } from "../../../infra/sqlite-snaps
 import type { PluginDoctorCronJob } from "../../../plugins/doctor-contract-module.js";
 import { resolveProviderAuthProfileId } from "../../../plugins/provider-runtime.js";
 import { isArtifactPreservingStateRead } from "../../../state/artifact-preserving-state-reads.js";
-import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { isUserModelAuthProfileId } from "../../../state/user-model-account-id.js";
@@ -122,7 +122,7 @@ export async function maybeRepairCronInferenceBindings(params: {
             { agentId, env },
           );
           for (const agentPath of new Set([
-            resolveOpenClawAgentSqlitePath({ agentId, env }),
+            resolveAuthProfileDatabasePath(resolveAgentDir(config, agentId, env)),
             sessionTarget.path,
           ])) {
             if (existsSync(agentPath)) {

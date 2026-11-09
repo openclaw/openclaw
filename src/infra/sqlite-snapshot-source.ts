@@ -60,7 +60,6 @@ import {
   createSqliteSnapshotStagingDirectorySync,
 } from "./sqlite-snapshot-staging.js";
 import {
-  assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
   readDatabaseFileIdentity,
   type DatabaseFileIdentity,
@@ -68,10 +67,27 @@ import {
 } from "./sqlite-worker-identity.js";
 import { isUpdateRehearsalPrivateDatabase } from "./update-rehearsal-paths.js";
 
+type ArtifactReadScope = Exclude<
+  ReturnType<typeof artifactPreservingReads.getStore>,
+  false | undefined
+>;
+
+/** Aliases share a captured image only while they still name its physical source. */
+function findArtifactSnapshot(scope: ArtifactReadScope, sourceIdentity: DatabasePathIdentity) {
+  const snapshot = scope.snapshots.get(sourceIdentity.canonicalPath);
+  if (
+    snapshot &&
+    (snapshot.sourceIdentity.key !== sourceIdentity.key ||
+      snapshot.sourceIdentity.birthtime !== sourceIdentity.birthtime)
+  ) {
+    throw new Error("SQLite database file identity changed during inspection");
+  }
+  return snapshot;
+}
+
 /** The inspection scope owns private readers until native close and snapshot disposal settle. */
 function retainArtifactSnapshot(
-  scope: Exclude<ReturnType<typeof artifactPreservingReads.getStore>, false | undefined>,
-  key: string,
+  scope: ArtifactReadScope,
   prepared: PreparedSqliteReadOnlyLocation,
   sourceIdentity: DatabasePathIdentity,
 ) {
@@ -91,7 +107,7 @@ function retainArtifactSnapshot(
       return prepared.cleanupAsync();
     },
   };
-  scope.snapshots.set(key, snapshot);
+  scope.snapshots.set(sourceIdentity.canonicalPath, snapshot);
   return snapshot;
 }
 
@@ -100,15 +116,15 @@ export function getArtifactPreservingSqliteRead(
   pathname: string,
 ): DatabasePathIdentity | undefined {
   const scope = artifactPreservingReads.getStore();
-  const snapshot = scope && scope.snapshots.get(path.resolve(pathname));
+  if (!scope) {
+    return undefined;
+  }
+  const sourceIdentity = readDatabasePathIdentitySync(pathname);
+  const snapshot = findArtifactSnapshot(scope, sourceIdentity);
   if (!snapshot) {
     // The update driver already captured the entire disposable SQLite family.
-    return scope && isUpdateRehearsalPrivateDatabase(pathname, process.env)
-      ? readDatabasePathIdentitySync(pathname)
-      : undefined;
+    return isUpdateRehearsalPrivateDatabase(pathname, process.env) ? sourceIdentity : undefined;
   }
-  const { sourceIdentity } = snapshot;
-  assertExistingDatabaseIdentity(pathname, sourceIdentity.key, sourceIdentity.birthtime);
   return readDatabasePathIdentitySync(snapshot.location);
 }
 
@@ -118,17 +134,18 @@ export async function prepareArtifactPreservingSqliteRead(
   signal?: AbortSignal,
 ): Promise<void> {
   const scope = artifactPreservingReads.getStore();
-  const key = path.resolve(pathname);
   if (
     !scope ||
     getDatabaseEngineInput("agent") ||
     !isArtifactPreservingStateRead("agent", pathname) ||
-    scope.snapshots.has(key) ||
     isUpdateRehearsalPrivateDatabase(pathname, process.env)
   ) {
     return;
   }
   const sourceIdentity = readDatabasePathIdentitySync(pathname);
+  if (findArtifactSnapshot(scope, sourceIdentity)) {
+    return;
+  }
   const prepared = await prepareSqliteReadOnlyLocation(pathname, {
     preserveSourceArtifacts: true,
     signal,
@@ -136,10 +153,10 @@ export async function prepareArtifactPreservingSqliteRead(
     expectedSourceIdentity: sourceIdentity,
   });
   // Concurrent callers can join one producer; the report retains only one of its leases.
-  if (scope.snapshots.has(key)) {
+  if (scope.snapshots.has(sourceIdentity.canonicalPath)) {
     await prepared.cleanupAsync();
   } else {
-    retainArtifactSnapshot(scope, key, prepared, sourceIdentity);
+    retainArtifactSnapshot(scope, prepared, sourceIdentity);
   }
 }
 
@@ -154,12 +171,11 @@ export function openSqliteReadOnlyDatabase(
   }
   // The published updater already prepared this image. Keep inspection read-only
   // and scoped, but do not copy the same database again for each canary check.
-  const key = path.resolve(pathname);
-  let snapshot = scope.snapshots.get(key);
+  const sourceIdentity = readDatabasePathIdentitySync(pathname);
+  let snapshot = findArtifactSnapshot(scope, sourceIdentity);
   if (!snapshot && !isUpdateRehearsalPrivateDatabase(pathname, process.env)) {
-    const sourceIdentity = readDatabasePathIdentitySync(pathname);
     const prepared = prepareSqliteReadOnlyLocationSync(pathname);
-    snapshot = retainArtifactSnapshot(scope, key, prepared, sourceIdentity);
+    snapshot = retainArtifactSnapshot(scope, prepared, sourceIdentity);
   }
   const release = snapshot
     ? retainSnapshotTempDirectory(snapshot.cleanupRoot ?? path.dirname(snapshot.location))
