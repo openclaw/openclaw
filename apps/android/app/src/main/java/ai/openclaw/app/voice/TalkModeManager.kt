@@ -2731,10 +2731,10 @@ class TalkModeManager internal constructor(
       ensurePlaybackActive(playbackToken)
       val lease = localPlayback
       if (lease?.token != playbackToken || !lease.job.isActive) throw CancellationException("assistant speech cancelled")
+      requestAudioFocusForTts(lease)
       lease.phase = PlaybackPhase.Playing
       publishSpeakingState()
       setStatus(nativeText("Speaking…"))
-      requestAudioFocusForTts(lease)
     }
     ensureInterruptListener()
   }
@@ -2837,6 +2837,7 @@ class TalkModeManager internal constructor(
     lease.releaseAudioFocus = { am.abandonAudioFocusRequest(req) }
     val result = am.requestAudioFocus(req)
     Log.d(tag, "audio focus request result=$result")
+    check(result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { "audio focus unavailable" }
   }
 
   private fun shouldInterrupt(transcript: String): Boolean {

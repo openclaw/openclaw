@@ -1473,6 +1473,101 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun deniedAudioFocusPreventsRemoteReplyPlaybackAndAllowsRetry() =
+    runTest {
+      val app = RuntimeEnvironment.getApplication()
+      val audio = shadowOf(app.getSystemService(AudioManager::class.java))
+      val synthesizer = FakeTalkSpeechSynthesizer()
+      completeRemoteSynthesis(synthesizer)
+      val player = FakeTalkAudioPlayer()
+      val callbacks = mutableListOf<String>()
+      val manager =
+        createManager(
+          talkSpeakClient = synthesizer,
+          talkAudioPlayer = player,
+          scope = this,
+          onBeforeSpeak = { callbacks += "before" },
+          onAfterSpeak = { callbacks += "after" },
+        )
+      withMain(cleanup = { manager.stopAllCapture() }) {
+        audio.setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
+        val denied = launch { manager.speakAssistantReply("Synthetic remote reply") }
+        runCurrent()
+
+        assertEquals("Denied focus must not reach the audio player", 0, player.playCalls)
+        assertTrue(denied.isCompleted)
+        assertFalse(manager.isSpeaking.value)
+        assertEquals("Speak failed: audio focus unavailable", manager.statusText.value)
+        assertEquals(listOf("before", "after"), callbacks)
+        val deniedFocus = checkNotNull(audio.lastAudioFocusRequest.audioFocusRequest)
+        assertSame(deniedFocus, audio.lastAbandonedAudioFocusRequest)
+
+        audio.setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+        val retry = launch { manager.speakAssistantReply("Synthetic retry") }
+        runCurrent()
+        assertEquals(1, player.playCalls)
+        assertTrue(manager.isSpeaking.value)
+        assertEquals("Speaking…", manager.statusText.value)
+        player.finished.complete(Unit)
+        runCurrent()
+        assertTrue(retry.isCompleted)
+        assertFalse(manager.isSpeaking.value)
+        assertEquals(listOf("before", "after", "before", "after"), callbacks)
+        val retryFocus = checkNotNull(audio.lastAudioFocusRequest.audioFocusRequest)
+        assertSame(retryFocus, audio.lastAbandonedAudioFocusRequest)
+      }
+    }
+
+  @Test
+  fun deniedAudioFocusPreventsSystemSpeechAndAllowsRetry() =
+    runTest {
+      val app = RuntimeEnvironment.getApplication()
+      val audio = shadowOf(app.getSystemService(AudioManager::class.java))
+      val synthesizer = FakeTalkSpeechSynthesizer()
+      synthesizer.result.complete(TalkSpeakResult.FallbackToLocal("Gateway TTS unavailable"))
+      val callbacks = mutableListOf<String>()
+      val manager =
+        createManager(
+          talkSpeakClient = synthesizer,
+          scope = this,
+          onBeforeSpeak = { callbacks += "before" },
+          onAfterSpeak = { callbacks += "after" },
+        )
+      ShadowTextToSpeech.addLanguageAvailability(Locale.GERMAN)
+      withMain(cleanup = { manager.stopAllCapture() }) {
+        audio.setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
+        val reply = "{\"language\":\"de\"}\nSynthetische Antwort"
+        val denied = launch { manager.speakAssistantReply(reply) }
+        runCurrent()
+        val engine = checkNotNull(ShadowTextToSpeech.getLastTextToSpeechInstance())
+        val speech = shadowOf(engine)
+        speech.onInitListener.onInit(TextToSpeech.SUCCESS)
+        runCurrent()
+
+        assertTrue("Denied focus must not submit an utterance", speech.spokenTextList.isEmpty())
+        assertTrue(denied.isCompleted)
+        assertFalse(manager.isSpeaking.value)
+        assertEquals("Speak failed: audio focus unavailable", manager.statusText.value)
+        assertEquals(listOf("before", "after"), callbacks)
+        val deniedFocus = checkNotNull(audio.lastAudioFocusRequest.audioFocusRequest)
+        assertSame(deniedFocus, audio.lastAbandonedAudioFocusRequest)
+
+        audio.setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+        val retry = launch { manager.speakAssistantReply(reply) }
+        runCurrent()
+        assertEquals(listOf("Synthetische Antwort"), speech.spokenTextList)
+        assertTrue(manager.isSpeaking.value)
+        shadowOf(Looper.getMainLooper()).idle()
+        runCurrent()
+        assertTrue(retry.isCompleted)
+        assertFalse(manager.isSpeaking.value)
+        assertEquals(listOf("before", "after", "before", "after"), callbacks)
+        val retryFocus = checkNotNull(audio.lastAudioFocusRequest.audioFocusRequest)
+        assertSame(retryFocus, audio.lastAbandonedAudioFocusRequest)
+      }
+    }
+
+  @Test
   fun localPlaybackReleasesItsAudioFocusForEveryTerminalOutcome() =
     runTest {
       for (outcome in listOf("completed", "failed", "focus-lost", "cancelled")) {
