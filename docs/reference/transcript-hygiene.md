@@ -297,6 +297,11 @@ inter-session user turns that only have provenance metadata.
   prior-turn reasoning fields such as `reasoning` or `reasoning_content`.
 - Current same-turn tool-call continuations keep the assistant reasoning
   block attached to the tool call until the tool result has been replayed.
+- Unowned OpenAI-compatible routes preserve historical reasoning for known
+  DeepSeek, Kimi, and MiMo replay-required model IDs even when reasoning metadata
+  is absent or false. History sanitization and request replay recognize the same
+  provider prefixes, colon qualifiers, and
+  `-free`, `-paid`, and `-trial` access-tier suffixes.
 - Custom/self-hosted model entries with `reasoning: true` preserve replayed
   reasoning metadata.
 - Provider-owned exceptions can opt out when their wire protocol requires

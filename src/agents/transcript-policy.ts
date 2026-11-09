@@ -8,6 +8,7 @@ import { supportsNativeOpenAIResponsesEndpoint } from "@openclaw/ai/internal/ope
 import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { requiresReasoningContentReplay } from "../../packages/ai/src/transports/openai-completions-reasoning-replay.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import type { ProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
@@ -104,41 +105,6 @@ function buildUnownedProviderTransportReplayFallback(params: {
     validateAnthropicTurns: isStrictOpenAiCompatible || isClaudeOpenAiResponses ? true : undefined,
     allowSyntheticToolResults: isGoogle || isOpenAiResponses ? true : undefined,
   };
-}
-
-const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
-  "kimi-for-coding",
-  "kimi-k2.5",
-  "kimi-k2.6",
-  "kimi-k2.7-code",
-  "kimi-k2.7-code-highspeed",
-  "kimi-k3",
-  "kimi-k3.1-pro",
-  "kimi-k3.1-pro-highspeed",
-  "kimi-k2-thinking",
-  "kimi-k2-thinking-turbo",
-  "mimo-v2-pro",
-  "mimo-v2-omni",
-  "mimo-v2.5",
-  "mimo-v2.5-pro",
-  "mimo-v2.6-flash",
-  "mimo-v2.6-pro",
-  "mimo-v2.6-pro-ultraspeed",
-]);
-
-function requiresReasoningContentReplay(modelId: string | null | undefined): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  if (!normalized) {
-    return false;
-  }
-  const parts = normalized.split("/").filter(Boolean);
-  const finalPart = parts[parts.length - 1] ?? normalized;
-  const candidates = [finalPart];
-  const colonParts = finalPart.split(":").filter(Boolean);
-  if (colonParts.length > 1) {
-    candidates.push(colonParts[0] ?? "", colonParts[colonParts.length - 1] ?? "");
-  }
-  return candidates.some((candidate) => REASONING_CONTENT_REPLAY_MODEL_IDS.has(candidate));
 }
 
 function mergeTranscriptPolicy(
