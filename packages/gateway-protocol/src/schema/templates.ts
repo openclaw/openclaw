@@ -61,13 +61,21 @@ const TemplatesCatalogContentsSchema = closedObject({
     }),
   ),
   skills: Type.Array(
-    closedObject({
-      name: NonEmptyString,
-      source: Type.Literal("clawhub"),
-      ref: TemplatePackageName,
-      version: NonEmptyString,
-      excerpt: Type.Optional(Type.String()),
-    }),
+    Type.Union([
+      closedObject({
+        name: NonEmptyString,
+        source: Type.Literal("clawhub"),
+        ref: TemplatePackageName,
+        version: NonEmptyString,
+        excerpt: Type.Optional(Type.String()),
+      }),
+      closedObject({
+        name: NonEmptyString,
+        source: Type.Literal("bundled"),
+        path: NonEmptyString,
+        excerpt: Type.Optional(Type.String()),
+      }),
+    ]),
   ),
   integrations: Type.Array(
     Type.Union([
@@ -79,6 +87,12 @@ const TemplatesCatalogContentsSchema = closedObject({
         version: NonEmptyString,
       }),
       closedObject({ name: NonEmptyString, kind: Type.Literal("mcpServer") }),
+      closedObject({
+        name: NonEmptyString,
+        kind: Type.Literal("plugin"),
+        source: Type.Literal("bundled"),
+        path: NonEmptyString,
+      }),
     ]),
   ),
   automations: Type.Array(
@@ -212,21 +226,42 @@ export const TemplatePluginAcknowledgementSchema = closedObject({
   acknowledgeRiskWarning: Type.Optional(Type.Literal(true)),
 });
 
-export const TemplateSkillReviewSchema = closedObject({
-  actionId: NonEmptyString,
-  ref: NonEmptyString,
-  version: NonEmptyString,
-  integrity: NonEmptyString,
-  riskWarning: NonEmptyString,
-  reviewToken: NonEmptyString,
-});
+export const TemplateSkillReviewSchema = Type.Union([
+  closedObject({
+    actionId: NonEmptyString,
+    ref: NonEmptyString,
+    version: NonEmptyString,
+    integrity: NonEmptyString,
+    riskWarning: NonEmptyString,
+    reviewToken: NonEmptyString,
+  }),
+  closedObject({
+    actionId: NonEmptyString,
+    source: Type.Literal("bundled"),
+    path: NonEmptyString,
+    name: NonEmptyString,
+    digest: TemplateArtifactIntegrity,
+    riskWarning: NonEmptyString,
+    reviewToken: NonEmptyString,
+  }),
+]);
 
-export const TemplateSkillAcknowledgementSchema = closedObject({
-  actionId: NonEmptyString,
-  ref: NonEmptyString,
-  reviewToken: NonEmptyString,
-  acknowledgeRiskWarning: Type.Literal(true),
-});
+export const TemplateSkillAcknowledgementSchema = Type.Union([
+  closedObject({
+    actionId: NonEmptyString,
+    ref: NonEmptyString,
+    reviewToken: NonEmptyString,
+    acknowledgeRiskWarning: Type.Literal(true),
+  }),
+  closedObject({
+    actionId: NonEmptyString,
+    source: Type.Literal("bundled"),
+    path: NonEmptyString,
+    digest: TemplateArtifactIntegrity,
+    reviewToken: NonEmptyString,
+    acknowledgeRiskWarning: Type.Literal(true),
+  }),
+]);
 
 export const TemplatesAddPlanParamsSchema = closedObject({
   source: TemplateCatalogCoordinateSchema,
@@ -361,12 +396,20 @@ const TemplateOwnershipEffectSchema = closedObject({
   affectedTemplateCount: Type.Integer({ minimum: 0 }),
 });
 
-const TemplateSkillArtifactSchema = closedObject({
-  source: Type.Literal("clawhub"),
-  ref: NonEmptyString,
-  version: NonEmptyString,
-  integrity: TemplateArtifactIntegrity,
-});
+const TemplateSkillArtifactSchema = Type.Union([
+  closedObject({
+    source: Type.Literal("clawhub"),
+    ref: NonEmptyString,
+    version: NonEmptyString,
+    integrity: TemplateArtifactIntegrity,
+  }),
+  closedObject({
+    source: Type.Literal("bundled"),
+    path: NonEmptyString,
+    name: NonEmptyString,
+    digest: TemplateArtifactIntegrity,
+  }),
+]);
 
 const TemplateMcpDeclarationSchema = closedObject({
   transport: stringLiteralUnion(["stdio", "sse", "streamable-http"]),

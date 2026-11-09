@@ -298,6 +298,9 @@ const dependencyReferenceSchema = z
   })
   .strict();
 
+const bundledDependencySchema = z.object({ path: packageRelativePath }).strict();
+const dependencySchema = z.union([dependencyReferenceSchema, bundledDependencySchema]);
+
 const environmentReference = nonEmptyString.regex(
   /^\$\{[A-Z_][A-Z0-9_]*\}$/,
   "MCP environment values must be unresolved ${ENV_VAR} references.",
@@ -463,8 +466,8 @@ const manifestSchema = z
       .optional(),
     metadata: z.record(nonEmptyString, z.string()).optional().default({}),
     workspace: workspaceSchema.optional().default({ bootstrapFiles: {}, files: [] }),
-    skills: z.array(dependencyReferenceSchema).optional().default([]),
-    plugins: z.array(dependencyReferenceSchema).optional().default([]),
+    skills: z.array(dependencySchema).optional().default([]),
+    plugins: z.array(dependencySchema).optional().default([]),
     mcpServers: z
       .record(
         nonEmptyString.regex(/^[a-z][a-z0-9_-]{0,63}$/, "Invalid MCP server name."),
@@ -503,17 +506,28 @@ const manifestSchema = z
       workspaceTargets.add(destinationKey);
     });
 
+    const bundledPaths = new Set<string>();
     for (const kind of ["skills", "plugins"] as const) {
       const refs = new Set<string>();
       manifest[kind].forEach((dependency, index) => {
-        if (refs.has(dependency.ref)) {
-          ctx.addIssue({
-            code: "custom",
-            path: [kind, index, "ref"],
-            message: `Dependency ${JSON.stringify(dependency.ref)} is declared more than once in ${kind}.`,
-          });
+        if ("path" in dependency) {
+          const key = portableTemplatePathKey(dependency.path);
+          if (conflictsWithTemplatePath(bundledPaths, key))
+            ctx.addIssue({
+              code: "custom",
+              path: [kind, index, "path"],
+              message: "Bundled dependency directories must not overlap.",
+            });
+          bundledPaths.add(key);
+        } else {
+          if (refs.has(dependency.ref))
+            ctx.addIssue({
+              code: "custom",
+              path: [kind, index, "ref"],
+              message: `Dependency ${JSON.stringify(dependency.ref)} is declared more than once in ${kind}.`,
+            });
+          refs.add(dependency.ref);
         }
-        refs.add(dependency.ref);
       });
     }
 
@@ -547,6 +561,14 @@ const manifestSchema = z
   });
 
 export type TemplateDependencyReference = z.output<typeof dependencyReferenceSchema>;
+export type TemplateBundledDependency = {
+  kind: "skill" | "plugin";
+  source: "bundled";
+  path: string;
+  /** Derived from the validated source entrypoint; never authored in CLAW.md. */
+  name?: string;
+};
+export type TemplateDependency = TemplatePackage | TemplateBundledDependency;
 export type TemplatePackage = TemplateDependencyReference & {
   kind: "skill" | "plugin";
   source: typeof TEMPLATE_PACKAGE_SOURCE;
