@@ -2622,12 +2622,15 @@ src/agents/harness/errors.ts
 src/agents/live-model-errors.ts
 src/agents/sandbox-host.ts
 src/agents/sandbox-widget-scroll-bridge.ts
+src/agents/sandbox-widget-presentation-bridge.ts
 src/agents/sessions/session-manager-append-codec.ts
 src/agents/tools/chat-history-text.ts
 src/agents/usage.ts
 src/auto-reply/reply/history.ts
 src/boards/board-capabilities.ts
+src/boards/board-action-bindings.ts
 src/boards/board-layout.ts
+src/boards/component-conversation.ts
 src/boards/board-report.ts
 src/boards/board-store.ts
 src/boards/board-website.ts

@@ -1,5 +1,6 @@
 {
   "id": "device-controls",
+  "categories": ["computer-use"],
   "name": "Device Controls",
   "description": "Bounded remote audio and pointer controls. Disabled until explicitly configured.",
   "enabledByDefault": false,

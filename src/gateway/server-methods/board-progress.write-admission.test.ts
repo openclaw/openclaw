@@ -285,7 +285,8 @@ it.each([
         "board.update": { tabs: [{ tabId: "notes", title: "Notes" }] },
         "board.widget.put": { widgets: [{ name: "admission", revision: 1 }] },
         "board.widget.grant": {
-          widgets: [{ name: "admission", revision: 1, grantState: "rejected" }],
+          // A grant transition advances the revision to retire earlier presentations.
+          widgets: [{ name: "admission", revision: 2, grantState: "rejected" }],
         },
         "progressCard.put": { markdown: "admitted", revision: 1 },
       }[method],

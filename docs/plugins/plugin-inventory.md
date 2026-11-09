@@ -52,7 +52,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-79 plugins
+80 plugins
 
 - **[a2a](/plugins/reference/a2a)** (`@openclaw/a2a`) - included in OpenClaw. A2A v1.0 Agent-to-Agent protocol channel plugin.
 
@@ -101,6 +101,8 @@ Each entry lists the package, distribution route, and description.
 - **[deep-research](/plugins/reference/deep-research)** (`@openclaw/deep-research`) - included in OpenClaw. Bounded research with source-backed findings and explicit gaps.
 
 - **[deepgram](/plugins/reference/deepgram)** (`@openclaw/deepgram-provider`) - included in OpenClaw. Deepgram audio transcription with Nova and Flux models, plus realtime speech recognition.
+
+- **[device-controls](/plugins/reference/device-controls)** (`@openclaw/device-controls`) - included in OpenClaw. Bounded remote audio and pointer controls. Disabled until explicitly configured.
 
 - **[device-pair](/plugins/reference/device-pair)** (`openclaw`) - included in OpenClaw. Generate setup codes and approve device pairing requests.
 

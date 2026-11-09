@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 export const AUDIO_COMMAND = "device-controls.audio";
 const MAX_DURATION_MS = 10_000;
@@ -107,7 +107,7 @@ function renderWav(notes: readonly Note[], volume: number): Buffer {
 /** Fixed native player, private temporary input, cancellation waits for child exit. */
 const playWav: AudioSink = async (wav, signal) => {
   signal.throwIfAborted();
-  const directory = await mkdtemp(join(tmpdir(), "openclaw-device-audio-"));
+  const directory = await mkdtemp(join(resolvePreferredOpenClawTmpDir(), "openclaw-device-audio-"));
   try {
     const filename = join(directory, "sequence.wav");
     await writeFile(filename, wav, { mode: 0o600 });

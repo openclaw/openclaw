@@ -185,7 +185,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     for (const [width, height] of [
       [370, 720],
       [760, 370],
-    ]) {
+    ] as const) {
       parent.style.width = `${width}px`;
       view.style.height = `${height}px`;
       await vi.waitFor(() => {
@@ -248,7 +248,13 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     await vi.waitFor(() => {
       const slots = [...view.querySelectorAll<HTMLElement>(".lobby-component__preview-slot")];
       expect(slots).toHaveLength(2);
-      expect(slots[0].getBoundingClientRect().left).toBe(slots[1].getBoundingClientRect().left);
+      const [plainSlot, permittedSlot] = slots;
+      if (!plainSlot || !permittedSlot) {
+        throw new Error("Both component previews must be present");
+      }
+      expect(plainSlot.getBoundingClientRect().left).toBe(
+        permittedSlot.getBoundingClientRect().left,
+      );
       expect(view.querySelector('[data-test-id="board-capabilities-granted"]')).toBeNull();
       const badge = view.querySelector<HTMLElement>(".lobby-component__description")!;
       expect(badge.textContent).toBe("Move the pointer on your paired Mac.");
@@ -259,7 +265,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
       );
       expect(badge.closest(".lobby-component__toggle")).not.toBeNull();
       expect(badge.getBoundingClientRect().right).toBeLessThan(
-        slots[1].getBoundingClientRect().left,
+        permittedSlot.getBoundingClientRect().left,
       );
     });
   });

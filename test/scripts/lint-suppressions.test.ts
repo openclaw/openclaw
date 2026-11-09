@@ -429,6 +429,7 @@ describe("production lint suppressions", () => {
         "ui/src/app/native-bridge.ts|unicorn/require-post-message-target-origin|1",
         "ui/src/app/native-gateway-auth.ts|unicorn/prefer-add-event-listener|1",
         "ui/src/app/native-gateway-auth.ts|unicorn/require-post-message-target-origin|2",
+        "ui/src/components/board/board-view.tsx|unicorn/require-post-message-target-origin|1",
         "ui/src/components/mascot-canvas.ts|unicorn/no-array-fill-with-reference-type|1",
         // A bridge renderer keeps the same native host for its complete lifetime.
         "ui/src/components/session-background.tsx|solid/reactivity|1",
