@@ -1297,6 +1297,7 @@ src/infra/sqlite-snapshot-capacity-error.ts
 src/infra/sqlite-snapshot-diagnostics.ts
 src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
+src/infra/sqlite-snapshot-publication-cleanup.ts
 src/infra/sqlite-snapshot-reclamation.ts
 src/infra/sqlite-snapshot-retirement.ts
 src/infra/sqlite-snapshot-reuse.ts

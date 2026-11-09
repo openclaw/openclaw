@@ -372,6 +372,12 @@ struct ChatProTab: View {
             statusText: self.appModel.talkMode.statusText,
             providerLabel: self.appModel.talkMode.gatewayTalkProviderLabel,
             level: self.talkLevel,
+            isMicrophoneMuted: self.appModel.talkMode.isMicrophoneMuted,
+            toggleMicrophone: {
+                Task {
+                    await self.appModel.talkMode.setMicrophoneMuted(!self.appModel.talkMode.isMicrophoneMuted)
+                }
+            },
             inputDevices: self.talkInputDevices,
             selectedInputDeviceID: self.selectedTalkInputDeviceID,
             selectInputDevice: { deviceID in

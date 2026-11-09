@@ -3,6 +3,7 @@ import { readChannelContextGatewayContextResolver } from "../../channels/message
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import { logVerbose } from "../../globals.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { withSessionControllerSource } from "../../sessions/session-controller.context.js";
 import {
@@ -410,6 +411,7 @@ export function createDispatchReplyOperationCoordinator(
       if (!mailboxClaim) {
         const selected = claimSessionControllerTask(input, () => {}, replyTurnKind);
         try {
+          using _ = observeDiagnosticsTimelinePhases("reply.admission.mailbox_wait");
           mailboxClaim = await selected;
         } catch (error) {
           if (input.abortSignal.aborted) {
