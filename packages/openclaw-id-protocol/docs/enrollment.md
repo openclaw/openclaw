@@ -32,6 +32,7 @@ must perform (`disconnect`, `invalidate_tokens`, `cancel_runs`, `notify_owners`,
 | InviteRedemption                              | `submitRedemption`                         | any (normally mailbox) | becomes **pending**, reserves the invite, admits nothing                                            |
 | Approve redemption                            | `submitStatement` (`add` with `invite_id`) | tunnel, local_operator | must match the pending account and peer key; role <= invite role                                    |
 | Deny redemption                               | `submitStatement` (`deny_invite`)          | tunnel, local_operator | consumes the invite                                                                                 |
+| Re-bind (proposed, below)                     | Gateway `rebind_prepare` / `rebind_commit` | local_operator         | a new R-signed ServerBinding at a higher binding_seq naming new K_srv and K_gw                      |
 
 Root supremacy: an R-signed statement is accepted wherever a device-signed one is, plus over
 the mailbox. A refusal leaves the state unchanged and has no events.
@@ -69,7 +70,7 @@ new kit (kit enrollment below) or an approval from a new owner device. A root ch
 valid RootReset is still `root_mismatch`, the substitution warning.
 
 Trade-off: K_gw now vouches for a root change, so whoever holds K_gw (the machine) can reset
-the claw. Moving a claw to new machine keys is a separate operation, not designed yet.
+the claw. Moving a claw to new machine keys under the same root is the re-bind, below.
 
 Owner device certificates have **no expiry unless the person approving the device enters
 one** (`expires_at: null`). A device stops being an owner when it is removed from the claw's
@@ -78,6 +79,150 @@ allowlist.
 `ownerDeviceCertBody` is the certificate builder approvers use: `expires_at` defaults to
 null, and an explicit expiry must be after the issue time. Approval UIs (SAS approval, owner
 devices) offer the expiry as an optional field.
+
+### Re-bind: moving a claw to new machine keys (proposed, openclaw-bec)
+
+**Status: proposed for review, not implemented.** Nothing below exists in the Gateway yet. The
+pieces it relies on already exist: pins follow an R-signed ServerBinding at a higher
+binding_seq (this package), and Discovery accepts a descriptor signed by the K_gw its new
+binding names (Discovery `main`).
+
+A re-bind moves a claw to new machine keys under the **same** root R: R signs a new
+ServerBinding with binding_seq + 1, naming a new K_srv and a new K_gw. Nothing else changes:
+the claw id, hostname, root, owner devices, members, nodes, invites, membership `seq`, device
+tokens and device pairings all stay. Clients follow it with rules they already apply: the
+binding verifies under the pinned root, its binding_seq is higher than the pin's, and the pin
+stores the new K_gw (statements.md, "Pins and rollback"). There is **no new statement type**.
+
+Re-bind and owner reset are opposites. Owner reset changes who controls the claw (a new R)
+and keeps the machine keys. Re-bind changes which machine keys the claw answers on and keeps
+who controls it.
+
+#### When to re-bind
+
+| Trigger                                                        | Keys that must change | What the ceremony changes                  |
+| -------------------------------------------------------------- | --------------------- | ------------------------------------------ |
+| Lost key file (disk loss, deleted, restore that skipped keys)  | the lost one          | both                                       |
+| Suspected leak of K_srv (the tunnel child's key)               | K_srv                 | both                                       |
+| Suspected leak of K_gw (the Gateway key)                       | K_gw                  | both                                       |
+| Moved to a new machine without the key files                   | both                  | both                                       |
+| Moved to a new machine with the whole state directory          | none                  | nothing: no re-bind needed                 |
+| Routine rotation                                               | owner's choice        | both                                       |
+| Someone could run processes on the Gateway host, or kit leaked | -                     | owner reset (then re-bind if keys are bad) |
+
+The ceremony always replaces both keys. Both live on the same host under the same user, so a
+reason to distrust one usually covers the other; a client verifies one new binding whatever
+changed, so replacing an intact key costs it nothing; and one path means one set of tests.
+
+A re-bind does not audit membership. If someone may have changed the Gateway's state (host
+compromise), owner reset is the tool: it removes every owner device and member.
+
+#### Who signs
+
+Only R signs, from the recovery kit, on the machine. Alternatives considered:
+
+- **An owner device with the `bind` capability.** Rejected. Clients pin only fp(R) and have
+  no allowlist; the only document that lists owner devices to a client is the snapshot, which
+  is signed by K_gw, the key being replaced. Whoever holds the old K_gw could list a device of
+  their own with `bind`. Bindings stay R-only (statements.md); `bind` stays reserved.
+- **The old K_gw vouches for the new keys**, as it does for a RootReset. Rejected. It cannot
+  work when K_gw is lost, it hands the decision to the attacker when K_gw leaked, and it would
+  let K_gw alone point clients at any K_srv, a power K_gw does not have today.
+- **A standby binding pre-signed at link time** for spare keys. Rejected. It is an escrowed
+  R signature over keys stored next to the ones it replaces, so the loss it covers usually
+  takes it too.
+
+#### Where it runs
+
+On the machine only: `local_operator` (direct loopback), like linking and owner reset. Over
+the tunnel the Gateway refuses it with `not_local_operator` and the Control UI does not show
+it. It works with the tunnel down, which is the lost-key case. The new keys are created on the
+machine and the binding must name them, and the kit is typed where the link ceremony typed it:
+in the CLI on the machine or the Control UI on direct loopback.
+
+The Gateway must be running; OpenClaw ID in it may be stopped by the key check below. If the
+Gateway cannot start at all, that is a separate repair.
+
+#### Steps
+
+1. **Prepare** (`rebind_prepare`, local_operator). Requires a linked claw. Creates the staged
+   keys if they do not exist yet: K_gw' in `openclaw-id/gateway.key.next` (by the Gateway) and
+   K_srv' in `openclaw-id/endpoint.key.next` (by the tunnel child in a one-shot `stage` run;
+   the Gateway never reads a K_srv file). Returns `{ claw_id, hostname, root_pub, k_srv, k_gw,
+   binding_seq, root_epoch }` for the new binding, plus the current keys for display.
+   binding_seq is the stored binding's + 1, or a higher value the operator gives. Preparing
+   again returns the same staged keys; cancelling deletes them. Prepare commits nothing.
+2. **Sign** (in the CLI process or the local Control UI browser). Decode the kit, derive R,
+   check that fp(R) equals the claw's pinned root (else stop: "this kit is for another
+   claw"), show the old and new key fingerprints, sign the ServerBinding, drop R and S.
+3. **Commit** (`rebind_commit`, local_operator). The authority checks, serialized with every
+   other write: the binding verifies under the pinned root (`wrong_signer`, `bad_signature`);
+   it names this claw and hostname and exactly the staged K_srv' and K_gw' (`target_mismatch`);
+   its binding_seq is the prepared one and above the stored one (`rollback`); both keys differ
+   from the stored binding's (`target_mismatch`). Accepted: the binding replaces the stored one
+   in one write. From here the stored binding alone says which keys are current.
+4. **Activate.** The Gateway switches to K_gw' and restarts the tunnel child on K_srv'
+   (promotion follows the key rule below, so a crash anywhere completes it on the next start).
+   Every live tunnel connection closes with `shutdown` (code 0, reconnect allowed).
+5. **Publish** the descriptor, then the snapshot, both signed by K_gw' (discovery.md,
+   "Re-bind"). The snapshot keeps the membership `seq` with a new `issued_at` and the new
+   binding_seq. A failed publication is retried by the existing publication retry (the
+   published binding_seq is below the stored one); until it succeeds, remote clients cannot
+   reach the claw. The Gateway also mails owners a `rebind` notice (discovery.md, "Mailbox").
+
+Events: `restart_tunnel`, `publish_descriptor`, `publish_snapshot`,
+`notify_owners: rebind`. No `disconnect` or `invalidate_tokens`: nobody lost access.
+
+#### Key files at every start (fail closed, openclaw-aab)
+
+A linked Gateway never creates a machine key. The stored binding names the current K_srv and
+K_gw, and at every start:
+
+1. The key file holds the named key: use it, and delete a leftover `.next` file.
+2. Otherwise the `.next` file holds it: rename it over the key file (this finishes an
+   interrupted re-bind) and use it.
+3. Otherwise: refuse. OpenClaw ID stays off with the reason `keys_missing` (no file) or
+   `key_mismatch` (another key). No tunnel, no publication, no Discovery request signed by an
+   unknown key. The rest of the Gateway runs. Status and the Control UI point to the re-bind.
+
+The Gateway applies this to K_gw. The tunnel child applies it to K_srv: its start message
+carries the K_srv the binding names, and it exits with a code the supervisor does not retry.
+An unlinked Gateway creates keys as it does today.
+
+#### What stays, and why
+
+Owner reset removes everyone because control of the claw changed, and is often used because
+an owner device can no longer be trusted. A re-bind does not change control. Every owner
+device and member traces its approval to R, which is unchanged. Device tokens and pairings
+are bound to the client's own key W, not to K_srv. Invites and node join links name the
+claw id, fp(R) and hostname, none of the machine keys. The membership is unchanged, so its
+`seq` does not move.
+
+#### Concurrency and failures
+
+- **Owner reset or link at the same time.** All three are serialized by the authority. Commit
+  re-checks the pinned root and the stored binding_seq, so a reset between prepare and commit
+  fails the commit (`wrong_signer` or `rollback`) and the operator starts over with the new
+  kit. A reset after a re-bind is vouched for by the new K_gw.
+- **Kit unavailable.** No re-bind. If K_gw is intact: owner reset with a new kit, then
+  re-bind with it if K_srv is the problem. If the kit and K_gw are both gone, neither works:
+  Discovery accepts a new root only with a RootReset by its registered K_gw (discovery.md).
+  The claw must be linked again as a new claw (hostnames are never reused).
+- **Rollback.** An older binding is refused by Discovery (`stale_binding`) and by every
+  client whose pin moved past it (`rollback`). Equal seq with other bytes: `conflict`.
+- **Restore from an older backup.** The local binding_seq can be below Discovery's.
+  Publication then fails with `stale_binding` or `conflict`; the operator re-binds again with
+  a binding_seq above Discovery's. (A restored older membership has its own seq problem,
+  outside this design.)
+- **Leaked old keys.** Discovery stops accepting the old K_gw at the descriptor publish, and
+  no longer admits the old K_srv to the relay. A client that verified the new binding ignores
+  anything signed by the old K_gw. A client still pinned to the old binding stays exposed as
+  statements.md describes until it reads the new descriptor.
+- **A leaked kit.** R alone moves a claw: every pinned client follows any binding R signs at
+  a higher seq. Discovery therefore asks for a one-time code from the claw's owner account
+  before it accepts a new K_gw (discovery.md, "Re-bind"). A Gateway whose publication is
+  refused because Discovery holds a newer binding this Gateway did not commit reports
+  `binding_superseded`.
 
 ### Admission
 

@@ -92,7 +92,8 @@ so that statements signed before epochs were removed still verify.
 
 Capabilities: `approve_device`, `bind`, `invite`, `manage_members`. R holds all of them.
 (`bind` stays a certificate capability, but bindings are signed by R alone: clients that pin
-only fp(R) must be able to verify them.) Member roles: `operator`, `viewer` (open question:
+only fp(R) must be able to verify them. This includes a re-bind to new machine keys,
+enrollment.md, "Re-bind".) Member roles: `operator`, `viewer` (open question:
 final role set; invites grant at most `operator`).
 
 MembershipChange targets:
@@ -222,6 +223,13 @@ Evidence is untrusted Discovery output: `{ root_pub, binding, reset? }` (`descri
 
 On success the caller stores the returned pin and dials only `binding.k_srv`.
 
+A re-bind (proposed, enrollment.md "Re-bind") is only a newer binding under the same root, so
+these steps already follow it: the client dials the new K_srv, and the returned pin stores the
+new binding_seq and K_gw. No chain is needed: a client that missed several re-binds verifies
+the newest binding directly. Because the pin's `k_gw` moves with each verified binding, a
+RootReset signed by a K_gw a re-bind retired is `root_mismatch` for every client that verified
+the newer binding.
+
 ### Owner reset
 
 `owner_reset` means: the pin stored a K_gw, the descriptor's `reset.previous_binding` passes
@@ -280,6 +288,12 @@ A snapshot from the future is never stored. The Gateway re-signs at least every
 `SNAPSHOT_REPUBLISH_SECONDS` (1 h), so an honest claw's snapshot is always well inside the 3 h
 window. A K_srv rotation must publish the new binding and a snapshot with its binding_seq together.
 
+After a re-bind that replaces K_gw, the new snapshot is signed by the new K_gw and does not
+verify under the old binding, so rule 2 cannot retire the old binding by itself. The pin does:
+a client that verified the new binding refuses the old one (`rollback`), and a client that
+stored the new snapshot's binding_seq refuses it (`stale_binding`). Snapshots signed by the
+retired K_gw do not verify under the new binding.
+
 **Accepted v1 limitation:** an attacker holding both the old K_srv and the old K_gw can sign
 fresh snapshots for the old binding until the client has pinned the newer binding.
 A K_gw-signed answer to a client nonce would not close this: it shows that a holder of that K_gw
@@ -290,6 +304,12 @@ Discovery, the old K_gw can sign a RootReset to a root of the attacker's choosin
 whose pin stored that K_gw gets `owner_reset` and is asked to set itself up again. That browser
 opens no connection and releases no credential. A K_gw holder can also deny service to an origin for good by signing an inflated
 binding_seq; K_gw can already refuse service.
+
+A re-bind (enrollment.md) narrows this limitation to clients that never verified the newer
+binding: once a client has, the old keys get nothing from it. For a client that is still
+pinned to the old binding (offline since the re-bind) and reads from an attacker-chosen
+Discovery, the old keys keep every power listed here, including the inflated binding_seq that
+forces the browser to be set up again.
 
 ## Test vectors
 
