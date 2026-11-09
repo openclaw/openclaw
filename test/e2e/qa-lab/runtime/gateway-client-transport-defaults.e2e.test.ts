@@ -82,7 +82,8 @@ async function connectWithFakeTime(
   server?.once("connection", (socket) => {
     // Establish the real transport before timers become deterministic.
     vi.useFakeTimers({
-      toFake: ["Date", "clearInterval", "clearTimeout", "setInterval", "setTimeout"],
+      // The tick watchdog measures silence with monotonic performance time.
+      toFake: ["Date", "performance", "clearInterval", "clearTimeout", "setInterval", "setTimeout"],
     });
     socketReady.resolve(socket);
   });
