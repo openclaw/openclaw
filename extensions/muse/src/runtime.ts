@@ -30,6 +30,8 @@ export type MuseRuntime = {
   host: SpawnedMspConnection;
   credentialIdentity: string;
   sessions: Map<string, Session>;
+  /** MSP usage notices are consumer-folded, not routed to turn handles. */
+  usageObservers: Map<string, (params: unknown) => void>;
   dead: boolean;
   closing: boolean;
   users: number;
@@ -263,6 +265,7 @@ export class MusePool {
         host,
         credentialIdentity,
         sessions: new Map(),
+        usageObservers: new Map(),
         users: 0,
         dead: false,
         closing: false,
@@ -275,6 +278,9 @@ export class MusePool {
       host.connection.onNotification((event) => {
         const sessionId = event.params?.sessionId;
         if (typeof sessionId === "string") {
+          if (event.method === "session/tokenUsage") {
+            runtime.usageObservers.get(sessionId)?.(event.params);
+          }
           runtime.sessions.get(sessionId)?.apply(event);
         }
       });

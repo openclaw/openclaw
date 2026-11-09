@@ -40,6 +40,7 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { consumeTurn } from "./src/events.js";
 import { MusePool, openMuseSession } from "./src/runtime.js";
+import { museTurnUsage } from "./src/usage.js";
 import { MuseCatalogReader } from "./src/verify-setup.js";
 
 type MuseInputPart = Parameters<Session["sendUserTurn"]>[0]["input"][number];
@@ -215,6 +216,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       let failure: unknown;
       let activeAttachment: ReturnType<typeof setActiveEmbeddedRun> | undefined;
       const messages: AgentMessage[] = [];
+      const tokenUsage: unknown[] = [];
       let text = "";
       let lastToolError: AgentHarnessAttemptResult["lastToolError"];
       let assistantTranscriptOwned = false;
@@ -320,6 +322,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
             options.logger?.warn(`${message}; started a new Muse session.`);
           },
         });
+        runtime.usageObservers.set(session.sessionId, (usage) => tokenUsage.push(usage));
         assertDispatchActive();
         let sessionContext = "";
         if (freshSession) {
@@ -566,6 +569,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           undefined,
           activeAttachment,
         );
+        runtime.usageObservers.delete(session?.sessionId ?? "");
         bound?.release();
         lease.release();
       }
@@ -604,6 +608,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         assistantTranscriptIdempotencyKey: finalKey,
         toolMetas,
         lastToolError,
+        attemptUsage: museTurnUsage(tokenUsage, turn?.turnId),
         cloudCodeAssistFormatError: false,
         didSendViaMessagingTool: false,
         itemLifecycle: {
