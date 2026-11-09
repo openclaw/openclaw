@@ -405,7 +405,7 @@ export function prepareProjectedSessionSharing(params: {
           );
   const ownerEquivalent =
     !identity && Boolean(cfg.gateway?.roles) && isSessionSharingOwnerEquivalent(client, actor);
-  const scopes = client?.connect.scopes;
+  const scopes = client?.connect?.scopes;
   const readSnapshot = (): ProjectedSharingSnapshot => {
     const viewer = params.owner ?? client ?? cfg;
     const previous = projectedSharingKeys.get(viewer);
