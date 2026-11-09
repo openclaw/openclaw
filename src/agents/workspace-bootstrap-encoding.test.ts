@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { Utf8InputError } from "../infra/utf8-input.js";
 import { registerAgentWorkspaceAccess } from "./workspace-access.js";
 import { copyWorkspaceBootstrapFiles } from "./workspace-bootstrap-copy.js";
 import { DEFAULT_AGENTS_FILENAME, DEFAULT_SOUL_FILENAME } from "./workspace-bootstrap-policy.js";
@@ -39,7 +40,7 @@ describe("workspace bootstrap file UTF-8 validation", () => {
     const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
     expect(agents).toMatchObject({
       missing: false,
-      content: "[UNREADABLE: Workspace bootstrap file is not valid UTF-8.]",
+      content: "[UNREADABLE: Workspace bootstrap file must be valid UTF-8.]",
     });
   });
 
@@ -50,6 +51,11 @@ describe("workspace bootstrap file UTF-8 validation", () => {
       workspaceDir,
     });
     expect(loaded).toMatchObject({ ok: false, reason: "validation" });
+    if (loaded.ok === false) {
+      // The shared strict decoder owns the rejection; no parallel error hierarchy.
+      expect(loaded.error).toBeInstanceOf(Utf8InputError);
+      expect(loaded.error).toMatchObject({ code: "ERR_INVALID_UTF8" });
+    }
   });
 
   it("rejects malformed bridge bytes as validation failures", async () => {

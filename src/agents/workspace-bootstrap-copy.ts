@@ -2,6 +2,7 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { openRootFile } from "../infra/boundary-file-read.js";
+import { Utf8InputError } from "../infra/utf8-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -11,7 +12,6 @@ import { publishBootstrapFile } from "./workspace-bootstrap-publish.js";
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   readWorkspaceBootstrapFile,
-  WorkspaceBootstrapEncodingError,
 } from "./workspace-bootstrap-read.js";
 
 const log = createSubsystemLogger("sandbox-workspace");
@@ -58,8 +58,8 @@ export async function copyWorkspaceBootstrapFiles(
           );
           continue;
         }
-        if (err instanceof WorkspaceBootstrapEncodingError) {
-          log.warn(`Ignoring sandbox seed file ${src}: not valid UTF-8`);
+        if (err instanceof Utf8InputError) {
+          log.warn(`Ignoring sandbox seed file ${src}: ${err.message}`);
           continue;
         }
         throw err;

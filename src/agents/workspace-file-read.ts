@@ -7,6 +7,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { FsSafeError } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { retryAsync } from "../infra/retry.js";
+import { decodeUtf8Input, Utf8InputError } from "../infra/utf8-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { exactWorkspaceEntryExists } from "../memory/root-memory-files.js";
 import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
@@ -19,10 +20,9 @@ import {
   type WorkspaceBootstrapFileName,
 } from "./workspace-bootstrap-policy.js";
 import {
-  decodeWorkspaceBootstrapBytes,
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   readWorkspaceBootstrapFile,
-  WorkspaceBootstrapEncodingError,
+  WORKSPACE_BOOTSTRAP_UTF8_SOURCE_LABEL,
 } from "./workspace-bootstrap-read.js";
 import { readWorkspaceFileCache, writeWorkspaceFileCache } from "./workspace-file-cache.js";
 
@@ -133,7 +133,7 @@ export async function readWorkspaceFileWithGuards(params: {
       }
       return {
         ok: true,
-        content: decodeWorkspaceBootstrapBytes(data),
+        content: decodeUtf8Input(data, WORKSPACE_BOOTSTRAP_UTF8_SOURCE_LABEL),
         sourceIdentity: [canonicalPath, undefined, workspaceRelativePath],
       };
     } catch (error) {
@@ -197,7 +197,7 @@ export async function readWorkspaceFileWithGuards(params: {
 }
 
 function isWorkspaceReadValidationError(error: unknown): boolean {
-  return error instanceof RangeError || error instanceof WorkspaceBootstrapEncodingError;
+  return error instanceof RangeError || error instanceof Utf8InputError;
 }
 
 export function isTransientWorkspaceReadError(error: unknown): boolean {
