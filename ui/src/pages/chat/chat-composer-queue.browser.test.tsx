@@ -103,7 +103,7 @@ it.each([1, 2].flatMap((count) => [false, true].map((server) => ({ count, server
       count === 1 ? "1 annotation" : "2 annotations",
     );
     expect(container.querySelector(".chat-queue__state")?.textContent ?? null).toBe(
-      server ? "Queued behind the current turn" : null,
+      server ? "Queued" : null,
     );
   },
 );
