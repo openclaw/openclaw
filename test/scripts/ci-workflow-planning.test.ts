@@ -248,10 +248,13 @@ describe("PostgreSQL conformance selection", () => {
     [["extensions/workboard/README.md", "extensions/workboard/src/store.ts"], true],
     [["extensions/workboard/test/fixtures/README.md", "src/utils/absolute-deadline.test.ts"], true],
     [["src/infra/database-engine/open.ts"], true],
+    [["package.json"], true],
+    [["pnpm-lock.yaml"], true],
     ...[
       "src/cron/store/row-codec.ts",
       "src/cron/store/runtime-rows.kernel.ts",
       "src/cron/store/run-finalization.worker.ts",
+      "src/cron/store/run-queue.worker.ts",
       "src/cron/service.ts",
       "src/cron/service/ops-run.ts",
       "src/gateway/server-methods/cron.ts",
