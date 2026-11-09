@@ -168,6 +168,27 @@ describe("memory_search unavailable payloads", () => {
     },
   );
 
+  it.each([-120_000, 120_000])(
+    "keeps the failure pause on elapsed time across a %ims wall-clock jump",
+    async (stepMs) => {
+      const searchImpl = mockSearch(async () => {
+        throw new Error("openai embeddings failed: 429 insufficient_quota");
+      });
+      const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+      const tool = createMemorySearchToolOrThrow();
+      const result = await executeSearch(tool);
+      vi.setSystemTime(new Date(Date.now() + stepMs));
+      expect((await executeSearch(tool)).details).toEqual(result.details);
+      expect(searchImpl).toHaveBeenCalledTimes(1);
+      searchImpl.mockImplementation(async () => [hit("MEMORY.md", "memory", "retry succeeded")]);
+      now.mockReturnValue(62_000);
+      expect((await executeSearch(tool)).details).toMatchObject({
+        results: [{ path: "MEMORY.md" }],
+      });
+      expect(searchImpl).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it.each(["initialization", "search"] as const)(
     "classifies a closed storage scope by code during %s",
     async (phase) => {
