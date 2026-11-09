@@ -8,6 +8,7 @@ export const FAILOVER_PROBE_STATUS = {
   overloaded: "rate_limit",
   billing: "billing",
   server_error: "unknown",
+  route_unavailable: "unknown",
   timeout: "timeout",
   tls_certificate: "unknown",
   context_overflow: "unknown",

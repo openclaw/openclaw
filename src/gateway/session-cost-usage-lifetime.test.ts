@@ -19,6 +19,7 @@ import * as modelPricing from "../model-catalog/pricing.js";
 import { closeAgentWorkAdmissions } from "../sessions/session-controller.lifecycle.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { readGlobalSingleton } from "../shared/global-singleton.js";
 import type { SessionCostUsagePublication } from "../shared/usage-types.js";
 import {
   createAgentDatabaseInspectionRefusal,
@@ -128,6 +129,13 @@ it.for(["discovery", "pricing", "scan admission"])(
   "aborts in-flight %s before joining the usage sidecar",
   async (phase, { signal }) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const listeners = readGlobalSingleton(
+        Symbol.for("openclaw.internalSessionTranscriptListeners"),
+      );
+      if (!(listeners instanceof Set)) {
+        throw new Error("Transcript listener registry is unavailable");
+      }
+      const listenersBefore = listeners.size;
       const entered = createDeferred();
       const release = createDeferred();
       let releaseAdmission: (() => void) | undefined;
@@ -165,6 +173,7 @@ it.for(["discovery", "pricing", "scan admission"])(
         vi.useFakeTimers();
         const stopped = vi.fn();
         void lifetime.stop().then(stopped);
+        expect(listeners.size).toBe(listenersBefore);
         await vi.advanceTimersByTimeAsync(100);
         expect(stopped).toHaveBeenCalledOnce();
       } finally {

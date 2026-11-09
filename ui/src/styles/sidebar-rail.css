@@ -74,18 +74,15 @@
   --sidebar-rail-action-size: 30px;
   --sidebar-rail-glyph-size: 19px;
   --sidebar-rail-item-gap: 8px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
   flex: 0 0 var(--shell-nav-rail-width, 52px);
   min-width: 0;
   min-height: 0;
   padding: 8px 4px;
-  gap: var(--sidebar-rail-item-gap);
   border-inline-end: var(--shell-divider-size) solid var(--resize-handle-rest-color);
   background: var(--sidebar-rail-surface, transparent);
 }
 
+.sidebar-rail,
 .sidebar-rail__views,
 .sidebar-rail__bottom,
 .sidebar-rail__pins {
@@ -127,16 +124,13 @@
   line-height: 1;
 }
 
-.sidebar-rail
-  :is(
-    .sidebar-rail__button,
-    .nav-item,
-    .sidebar-brand__icon,
-    .sidebar-issues-button,
-    .sidebar-agent-card__main,
-    .sidebar-workspace-header__main,
-    .sidebar-identity-card
-  ) {
+.sidebar-rail .sidebar-rail__button,
+.sidebar-rail .nav-item,
+.sidebar-rail .sidebar-brand__icon,
+.sidebar-rail .sidebar-issues-button,
+.sidebar-rail .sidebar-agent-card__main,
+.sidebar-rail .sidebar-workspace-header__main,
+.sidebar-rail .sidebar-identity-card {
   --sidebar-rail-control-surface: var(--sidebar-rail-background);
   display: flex;
   align-items: center;
@@ -169,17 +163,27 @@
       color: var(--text-strong);
     }
 
-    &:is(:hover, [aria-current="page"], [aria-pressed="true"], .nav-item--active) {
-      --sidebar-rail-control-surface: var(--sidebar-rail-hover-surface);
-      background: var(--sidebar-rail-control-surface);
-      color: var(--text-strong);
+    /* Preserve the build's existing hover guard while splitting the subject keys. */
+    @media (hover: hover) {
+      &:hover,
+      &[aria-current="page"],
+      &[aria-pressed="true"],
+      &.nav-item--active {
+        --sidebar-rail-control-surface: var(--sidebar-rail-hover-surface);
+        background: var(--sidebar-rail-control-surface);
+        color: var(--text-strong);
+      }
     }
 
-    &:is([aria-current="page"], [aria-pressed="true"], .nav-item--active) {
+    &[aria-current="page"],
+    &[aria-pressed="true"],
+    &.nav-item--active {
       --sidebar-rail-control-surface: var(--sidebar-rail-selected-surface);
     }
 
-    &:is([aria-current="page"], [aria-pressed="true"], .nav-item--active):hover {
+    &[aria-current="page"]:hover,
+    &[aria-pressed="true"]:hover,
+    &.nav-item--active:hover {
       --sidebar-rail-control-surface: var(--sidebar-rail-selected-hover-surface);
     }
 
@@ -196,7 +200,8 @@
     box-shadow: none;
   }
 
-  &:is(:disabled, [aria-disabled="true"]) {
+  &:disabled,
+  &[aria-disabled="true"] {
     opacity: 0.4;
   }
 
@@ -226,17 +231,17 @@
   flex-basis: var(--sidebar-rail-action-size);
   margin: calc((var(--sidebar-rail-control-size) - var(--sidebar-rail-action-size)) / 2);
   background: var(--sidebar-rail-action-bg);
-  color: var(--accent-foreground);
+  color: var(--sidebar-rail-action-foreground);
 }
 
 .sidebar-rail__create .sidebar-new-session:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-hover-bg);
-  color: var(--accent-foreground);
+  color: var(--sidebar-rail-action-foreground);
 }
 
 .sidebar-rail__create .sidebar-new-session:active:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-active-bg);
-  color: var(--accent-foreground);
+  color: var(--sidebar-rail-action-foreground);
 }
 
 .sidebar-rail__create .sidebar-new-session:focus-visible {
@@ -456,9 +461,9 @@
   letter-spacing: -0.008em;
 }
 
+.sidebar-pages__entry:hover :is(.nav-item:not(.nav-item--active)),
 .sidebar-pages__entry:hover
   :is(
-    .nav-item:not(.nav-item--active),
     .sidebar-recent-session:not(.sidebar-recent-session--active, .sidebar-recent-session--selected)
   ) {
   color: var(--text);
@@ -651,7 +656,6 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
   &.shell--nav-collapsed {
     --shell-controls-width: var(--shell-chrome-control-size);
     --shell-nav-width: var(--shell-nav-rail-width);
-    grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
 
     .shell-nav {
       clip-path: inset(0 calc(100% - var(--shell-nav-rail-width)) 0 0);

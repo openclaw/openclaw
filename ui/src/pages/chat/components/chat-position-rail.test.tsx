@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createSignal } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
@@ -275,10 +275,14 @@ describe("conversation position rail", () => {
     const resize = (clientHeight: number, scrollHeight: number) => {
       viewportHeight = clientHeight;
       transcriptHeight = scrollHeight;
-      publishTranscriptScroll(root, {
-        type: "resize",
-        viewport: { clientHeight, scrollHeight, scrollTop: 0 },
-      });
+      // Shrinking the transcript can publish this notification during rendering.
+      const publish = createMemo(() =>
+        publishTranscriptScroll(root, {
+          type: "resize",
+          viewport: { clientHeight, scrollHeight, scrollTop: 0 },
+        }),
+      );
+      publish();
       flushFrame();
     };
     resize(600, 601);
@@ -328,6 +332,9 @@ describe("conversation position rail", () => {
       });
       root.scrollTop = startsAtTop ? 0 : 8315;
       const flushRailFrames = () => {
+        // Native layout observation publishes dimensions and the reader; a
+        // scroll on the rail itself only publishes its own offset.
+        emitTranscriptResize(marks, 44, marksHeight);
         marks.dispatchEvent(new Event("scroll"));
         flushFrame();
         flushFrame();
@@ -508,6 +515,7 @@ describe("conversation position rail", () => {
   });
 
   it("keeps focused previews after pointer exit and resets interaction when the session changes", async () => {
+    const flushFrame = stubSettledAnimationFrames();
     const messages = Array.from({ length: 40 }, (_, index) =>
       message(
         `message-${index}`,
@@ -522,6 +530,10 @@ describe("conversation position rail", () => {
     const { transcript, container, view, rerender, markers, preview, query } = threadFixture(props);
     rerender();
     transcript.start();
+    const marks = part(container, "marks")!;
+    measure(marks, { clientHeight: 600 });
+    emitTranscriptResize(marks, 44, 600);
+    flushFrame();
     expect(markers()).toHaveLength(40);
     // Rail wheel input belongs to its scrollport, never transcript history.
     for (const type of ["wheel", "touchstart", "touchmove"]) {
@@ -695,8 +707,9 @@ describe("conversation position rail", () => {
     expect(document.activeElement).toBe(provisional);
     expect(preview()).toContain("Final response");
     const persistedBubble = query('[data-entry-id="persisted-answer"]')!;
-    await settleFrames();
+    // Ref retirement releases the old target before queued additions and layout.
     expect(observed.has(streamBubble)).toBe(false);
+    await settleFrames();
     expect(observed.has(persistedBubble)).toBe(true);
     marker().click();
     await settleFrames();

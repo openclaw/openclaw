@@ -327,18 +327,20 @@ function findNotesHumanBlock(
   page: string,
   producerMarkdown = false,
 ): { start: number; end: number } | null {
-  const bodyOffset = producerMarkdown ? (page.match(FRONTMATTER_PATTERN)?.[0].length ?? 0) : 0;
-  const searchable = producerMarkdown ? maskMarkdownCode(page.slice(bodyOffset), true) : page;
-  const searchFrom = producerMarkdown ? 0 : afterSourceContentFence(page);
-  const start = searchable.indexOf(HUMAN_START_MARKER, searchFrom);
+  const bodyOffset = producerMarkdown
+    ? (page.match(FRONTMATTER_PATTERN)?.[0].length ?? 0)
+    : afterSourceContentFence(page);
+  // Code examples belong to the transcript/producer, never to the local Notes slot.
+  const searchable = maskMarkdownCode(page.slice(bodyOffset), true);
+  const start = searchable.indexOf(HUMAN_START_MARKER);
   const endMarker = searchable.lastIndexOf(HUMAN_END_MARKER);
-  if (start === -1 && endMarker < searchFrom) {
+  if (start === -1 && endMarker < 0) {
     // Raw producer documents can have their own unmarked Notes heading.
     if (producerMarkdown) {
       return null;
     }
     const notesSection = /(?:^|\r?\n)## Notes[\t ]*(?:\r?\n|$)([\s\S]*)/u.exec(
-      page.slice(searchFrom),
+      page.slice(bodyOffset),
     );
     if (!notesSection?.[1]?.trim()) {
       return null;
@@ -465,8 +467,8 @@ export function formatWikiLink(params: {
   const destination = /[\s()<>]/.test(linkTarget)
     ? `<${linkTarget.replace(/[<>]/g, "\\$&")}>`
     : linkTarget;
-  // Titles are metadata: unmatched brackets or a trailing backslash must not break the link.
-  const label = params.title.replace(/[\\[\]`]/g, "\\$&");
+  // Titles are metadata: Markdown, entities, and HTML must not change their displayed text.
+  const label = params.title.replace(/[\\[\]`*_~<&]/g, "\\$&");
   return `[${label}](${destination})`;
 }
 
