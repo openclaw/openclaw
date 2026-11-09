@@ -53,7 +53,7 @@
 .chat-thread-viewport,
 .chat-thread {
   --chat-thread-padding-top: clamp(20px, 3vh, 28px);
-  --chat-thread-padding-bottom: 6px;
+  --chat-thread-padding-bottom: calc(6px + var(--chat-composer-overlap, 0px));
 }
 
 .chat-thread-viewport {
@@ -114,7 +114,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   .chat-thread-viewport,
   .chat-thread {
     --chat-thread-padding-top: 0px;
-    --chat-thread-padding-bottom: 0px;
+    --chat-thread-padding-bottom: var(--chat-composer-overlap, 0px);
   }
 }
 
@@ -145,9 +145,12 @@ div.chat-thread:where(.chat-thread--annotations) {
   /* Existing conversations spend height on the transcript; new chat keeps the
      shared writing-surface floor. Mobile and short-pane floors remain local. */
   --chat-composer-min-height: 88px;
-  /* The transcript scrolls right up to the composer; a top margin would leave
-     an empty band between the clipped transcript and the writing surface. */
+  /* The transcript runs under the composer's rounded top corners, so content
+     slides behind the writing surface instead of being cut flat beside them
+     or above an empty band. Its bottom padding keeps the last turn clear. The
+     overlap covers the largest corner, the resting mobile capsule. */
   --chat-composer-top-margin: 0px;
+  --chat-composer-overlap: calc(28px * var(--openclaw-corner-radius-scale));
   --chat-footer-max-height: calc(100cqh - clamp(60px, 20cqh, 160px));
 
   position: absolute;
@@ -176,6 +179,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   min-width: 0;
   min-height: 0;
   max-height: var(--chat-footer-max-height);
+  margin-top: calc(-1 * var(--chat-composer-overlap, 0px));
 }
 
 .creation-composer {
