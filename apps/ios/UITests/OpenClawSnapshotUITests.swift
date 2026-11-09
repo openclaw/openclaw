@@ -1186,3 +1186,5 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "local-settings-permissions")
     }
 }
+
+extension OpenClawSnapshotUITests {}

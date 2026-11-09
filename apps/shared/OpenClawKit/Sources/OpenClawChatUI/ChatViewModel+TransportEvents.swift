@@ -77,6 +77,7 @@ extension OpenClawChatViewModel {
             self.resetSessionReactions()
             self.invalidateSessionMetadataReadiness()
             self.syncSessionReactions(refreshMetadata: true)
+            self.resetEarlierHistory()
             self.cancelHistoryInvalidationRefresh()
             self.invalidateModelChoices()
             self.refreshSourceContext()
@@ -499,7 +500,14 @@ extension OpenClawChatViewModel {
         }
 
         let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + ingested)
-        replaceMessages(Self.dedupeMessages(reconciled))
+        let deduped = Self.dedupeMessages(reconciled)
+        if last.role.lowercased() == "user",
+           let newUser = deduped.last(where: { $0.role.lowercased() == "user" }),
+           !self.messages.contains(where: { $0.id == newUser.id })
+        {
+            self.markLiveUserTurn(id: newUser.id)
+        }
+        replaceMessages(deduped)
         pruneProvisionalFinalMessages()
         pruneRunMessageScopes()
         self.clearActiveSessionRunIndicatorIfLatestUserAnswered()

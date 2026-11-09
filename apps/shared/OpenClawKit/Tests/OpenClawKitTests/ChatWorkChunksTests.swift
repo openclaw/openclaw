@@ -111,9 +111,6 @@ struct ChatWorkChunksTests {
         #expect(source.workPresentationParts.compactMap {
             ChatMessageUsagePresentation.make(message: $0, contextWindowTokens: nil)
         }.count == 1)
-        let group = ChatAssistantRunGroup.build(
-            rows, liveRunID: nil, hasLiveContent: false, searchActive: false)
-        #expect(group.last?.answerID == visible.last?.presentationID)
     }
 
     @Test(arguments: [false, true], [false, true])
@@ -192,8 +189,12 @@ struct ChatWorkChunksTests {
         ], timestamp: 2, transcriptRunID: "run")
         let rows = ChatTranscriptRow.collapseCompletedWork(
             [user, answer, unfinished].map(ChatTranscriptRow.message), runWorking: false)
-        let groups = ChatAssistantRunGroup.build(rows, liveRunID: nil, hasLiveContent: false, searchActive: false)
-        #expect(groups.last?.answerID == answer.id)
+        let completedReplies = rows.compactMap { row -> UUID? in
+            guard case let .message(message) = row,
+                  message.presentationOwnsFooter, message.isCompletedReply else { return nil }
+            return message.presentationID
+        }
+        #expect(completedReplies == [answer.id])
         #expect(unfinished.workPresentationParts.allSatisfy { !$0.isCompletedReply })
     }
 

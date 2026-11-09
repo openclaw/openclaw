@@ -825,6 +825,7 @@ extension OpenClawChatViewModel {
         let canonical = Self.reconcileMessageIDs(previous: self.messages, incoming: incoming)
         // These local echoes outlive old route run IDs until history confirms them.
         self.historyRouteLocalUserEchoIDs.subtract(canonical.map(\.id))
+        let earlierPrefix = isDelta ? [] : self.retainedEarlierHistoryPrefix(payload, incoming: incoming)
         let unmatchedProvisionalFinalIDs = Set(provisionalFinalMessagesMissing(from: incoming).map(\.id))
         var retainedMessageIDs = unmatchedProvisionalFinalIDs
         // A queued refresh can observe a lagging page after its predecessor has already
@@ -889,7 +890,7 @@ extension OpenClawChatViewModel {
         nextMessages.append(contentsOf: self.messages.filter { message in
             retainedMessageIDs.contains(message.id) && !reconciledMessageIDs.contains(message.id)
         })
-        nextMessages = Self.dedupeMessages(nextMessages)
+        nextMessages = Self.dedupeMessages(earlierPrefix + nextMessages)
         self.historyRouteLocalUserEchoIDs.formIntersection(nextMessages.map(\.id))
         // An unchanged cursor is not a newer transcript projection. Incomplete reads must not fence
         // an older request that still owns a durable reply for the unanswered turn.
@@ -911,6 +912,8 @@ extension OpenClawChatViewModel {
             unmatchedProvisionalFinalIDs.isEmpty &&
             (isDelta || !preservingOptimisticLocalMessages || !incoming.isEmpty)
         replaceMessages(nextMessages, narrationSettled: narrationSettled)
+        // Accepted history can admit rows while an older bootstrap is still in flight.
+        self.invalidateHistorySnapshots()
         confirmOutboxCommands(in: incoming)
         self.prunePendingLocalUserEchoMessageIDs()
         self.clearProvisionalFinalMarkersAdoptedByHistory(incoming)

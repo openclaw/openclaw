@@ -935,6 +935,11 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
     public let activity: [OpenClawChatHistoryActivity]?
     public let kind: String?
     public let deltaCursor: String?
+    public let offset: Int?
+    public let nextOffset: Int?
+    public let hasMore: Bool?
+    public let totalMessages: Int?
+    public let windowReset: Bool?
 
     public init(
         sessionKey: String,
@@ -946,7 +951,12 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         inputConsumptions: [InputConsumption]? = nil,
         activity: [OpenClawChatHistoryActivity]? = nil,
         kind: String? = nil,
-        deltaCursor: String? = nil)
+        deltaCursor: String? = nil,
+        offset: Int? = nil,
+        nextOffset: Int? = nil,
+        hasMore: Bool? = nil,
+        totalMessages: Int? = nil,
+        windowReset: Bool? = nil)
     {
         self.sessionKey = sessionKey
         self.sessionId = sessionId
@@ -956,6 +966,11 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         self.inFlightRun = inFlightRun
         self.inputConsumptions = inputConsumptions
         self.activity = activity
+        self.offset = offset
+        self.nextOffset = nextOffset
+        self.hasMore = hasMore
+        self.totalMessages = totalMessages
+        self.windowReset = windowReset
         self.kind = kind
         self.deltaCursor = deltaCursor
     }
@@ -976,6 +991,11 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         self.inputConsumptions = try values.decodeIfPresent([InputConsumption].self, forKey: .inputConsumptions)
         self.activity = try values.decodeIfPresent([OpenClawChatHistoryActivity].self, forKey: .activity)
         self.deltaCursor = try values.decodeIfPresent(String.self, forKey: .deltaCursor)
+        self.offset = try values.decodeIfPresent(Int.self, forKey: .offset)
+        self.nextOffset = try values.decodeIfPresent(Int.self, forKey: .nextOffset)
+        self.hasMore = try values.decodeIfPresent(Bool.self, forKey: .hasMore)
+        self.totalMessages = try values.decodeIfPresent(Int.self, forKey: .totalMessages)
+        self.windowReset = try values.decodeIfPresent(Bool.self, forKey: .windowReset)
     }
 }
 
