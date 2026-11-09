@@ -115,6 +115,7 @@
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <activity
             android:name=".ui.chat.ChatCameraActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|keyboard|keyboardHidden|navigation"
             android:exported="false" />
         <!-- External sender tasks must converge on one visible composer and share queue. -->
         <activity
