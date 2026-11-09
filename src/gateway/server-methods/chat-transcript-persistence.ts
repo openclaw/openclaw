@@ -39,6 +39,11 @@ import {
   type AbortedPartialSnapshot,
 } from "./chat-aborted-partial.js";
 import {
+  findMatchingAssistantCaptions,
+  normalizeAssistantMediaCaption,
+  retainCaptionUsageLine,
+} from "./chat-assistant-caption.js";
+import {
   sanitizeAssistantDisplayText,
   type AssistantDisplayContentBlock,
   type AssistantDisplayMediaBySource,
@@ -107,6 +112,7 @@ export function buildAssistantDisplayRewrite(params: {
   message: Record<string, unknown>;
   displayContent: AssistantDisplayContentBlock[];
   mediaBySource?: AssistantDisplayMediaBySource;
+  responseUsageLine?: string;
   managedMediaUrls?: readonly string[];
   retainOriginalText?: true;
 }): Record<string, unknown> {
@@ -162,9 +168,7 @@ export function buildAssistantDisplayRewrite(params: {
       : [],
   );
   const authoredText = extractAssistantPhaseText(params.message);
-  const joinedCaption = authoredText
-    ? sanitizeAssistantDisplayText(splitMediaFromOutput(authoredText).text)
-    : undefined;
+  const joinedCaption = authoredText ? normalizeAssistantMediaCaption(authoredText) : undefined;
   // A row mirroring one native CLI message owns only that message; earlier
   // narration in the delivered caption is already shown by its own native rows.
   const nativeMirror = Boolean(
@@ -172,18 +176,10 @@ export function buildAssistantDisplayRewrite(params: {
   );
   // Delivery can join multiple authored blocks into one caption. Consume that
   // caption while retaining the original blocks around their selected media.
+  const usageLine = params.responseUsageLine;
   const matchingCaptions =
     params.mediaBySource?.size && joinedCaption
-      ? prepared.content.filter((block) => {
-          const caption =
-            block.type === "text" && typeof block.text === "string"
-              ? sanitizeAssistantDisplayText(splitMediaFromOutput(block.text).text)
-              : undefined;
-          return (
-            caption === joinedCaption ||
-            (nativeMirror && caption?.endsWith(`\n${joinedCaption}`) === true)
-          );
-        })
+      ? findMatchingAssistantCaptions(prepared.content, joinedCaption, nativeMirror, usageLine)
       : [];
   const retainOriginalText = params.retainOriginalText || matchingCaptions.length > 0;
   // Final delivery replaces its own media while retaining prepared progress segments.
@@ -271,6 +267,7 @@ export function buildAssistantDisplayRewrite(params: {
       content.push({ ...block, text: "" });
     }
   }
+  retainCaptionUsageLine(content, matchingCaptions, usageLine);
   for (const block of prepared.content) {
     if (
       block.type === "text" &&
@@ -605,6 +602,7 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
 export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: {
   content: AssistantDisplayContentBlock[];
   mediaBySource?: AssistantDisplayMediaBySource;
+  responseUsageLine?: string;
   idempotencyKey: string;
   managedMediaUrls?: readonly string[];
   scope: SessionTranscriptWriteScope;
@@ -626,6 +624,7 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
               message: target.message,
               displayContent: params.content,
               mediaBySource: params.mediaBySource,
+              responseUsageLine: params.responseUsageLine,
               managedMediaUrls: params.managedMediaUrls,
             }),
           })
@@ -641,6 +640,7 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
   assistantMessageIndex: number;
   content: AssistantDisplayContentBlock[];
   mediaBySource?: AssistantDisplayMediaBySource;
+  responseUsageLine?: string;
   expectedGeneration: string | null;
   mediaUrls: readonly string[];
   rejectedMediaCount: number;
@@ -671,6 +671,7 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
         message: target.message,
         displayContent: params.content,
         mediaBySource: params.mediaBySource,
+        responseUsageLine: params.responseUsageLine,
         managedMediaUrls: params.mediaUrls,
         // Indexed replies can contain earlier chunks; exact final/mirror replacements cannot.
         retainOriginalText: true,
@@ -694,6 +695,7 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
 export async function enrichAssistantTranscriptMediaForRun(params: {
   content: AssistantDisplayContentBlock[];
   mediaBySource?: AssistantDisplayMediaBySource;
+  responseUsageLine?: string;
   mediaUrls: readonly string[];
   runId: string;
   expectedLifecycleRevision: SessionLifecycleRevisionExpectation;
@@ -710,6 +712,7 @@ export async function enrichAssistantTranscriptMediaForRun(params: {
         message,
         displayContent: params.content,
         mediaBySource: params.mediaBySource,
+        responseUsageLine: params.responseUsageLine,
         managedMediaUrls: params.mediaUrls,
         retainOriginalText: true,
       }),
