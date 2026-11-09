@@ -157,24 +157,24 @@ describe("memory index", () => {
     trackManager(second);
 
     const cachedBeforeProbe = second.getCachedEmbeddingAvailability?.();
+    const checkedAtMs = cachedBeforeProbe?.checkedAtMs ?? 0;
+    // Reported timestamps stay wall-clock epochs even though expiry uses elapsed time.
+    expect(Math.abs(Date.now() - checkedAtMs)).toBeLessThan(5_000);
     expect(cachedBeforeProbe).toMatchObject({
       ok: true,
       checked: true,
       cached: true,
-      checkedAtMs: expect.any(Number),
-      cacheExpiresAtMs: expect.any(Number),
+      cacheExpiresAtMs: checkedAtMs + 30_000,
     });
-    expect((cachedBeforeProbe?.cacheExpiresAtMs ?? 0) - (cachedBeforeProbe?.checkedAtMs ?? 0)).toBe(
-      30_000,
-    );
-    await expect(second.probeEmbeddingAvailability()).resolves.toStrictEqual({
-      ok: true,
-      checked: true,
-      cached: true,
-      checkedAtMs: cachedBeforeProbe?.checkedAtMs,
-      cacheExpiresAtMs: cachedBeforeProbe?.cacheExpiresAtMs,
-    });
+    await expect(second.probeEmbeddingAvailability()).resolves.toStrictEqual(cachedBeforeProbe);
     expect(providerFixture.embedQueryCalls).toBe(1);
+
+    // A wall-clock step back must not keep the probe cached past 30 elapsed seconds.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() - 3_600_000);
+    vi.spyOn(performance, "now").mockReturnValue(performance.now() + 30_000);
+    const afterClockStep = second.getCachedEmbeddingAvailability?.();
+    vi.restoreAllMocks();
+    expect(afterClockStep).toBeNull();
   });
 
   it("clears cached embedding probe readiness when local embeddings degrade", async () => {
