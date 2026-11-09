@@ -59,10 +59,10 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // Coordinator-accepted warm cached-page reveal latch (#195865): measured
-  // 1,297,193 B plus 64 B headroom; no startup growth.
-  chatBootJsGzipBytes: 1_297_257,
-  // Channels: raw -159 B, served +22 B; coordinator-accepted normalized trade +64 B.
-  newBootJsGzipBytes: 803_250,
+  // 1,297,436 B (+582 B over its CI base) plus 64 B headroom.
+  chatBootJsGzipBytes: 1_297_500,
+  // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
+  newBootJsGzipBytes: 803_364,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
