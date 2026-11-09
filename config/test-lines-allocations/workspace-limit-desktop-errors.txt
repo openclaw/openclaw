@@ -1,0 +1,4 @@
+# Wrapped and reconstructed workspace-limit failures must retain a safe desktop
+# diagnosis through accepted chat.send without changing shared transcript text.
+# Also rejects an untyped diagnostic containing the same marker.
+28

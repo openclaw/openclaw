@@ -26,8 +26,12 @@ export type FirstRunRestartObservation =
   | { status: "not-required"; reason: "configured-handoff" }
   | {
       status: "observed";
+      journeyStartedAtEpochMs: number;
       waitStartedAtMs: number;
       shutdownAtMs: number;
+      disconnectedAtMs: number;
+      gatewayUnavailableAtEpochMs: number;
+      gatewayReadyAtEpochMs: number;
       reconnectedAtMs: number;
       composerReadyAtMs: number;
       waitMs: number;
@@ -42,7 +46,15 @@ export type FirstRunRestartObservation =
 /** Real Gateway driver: every answer follows the product's visible, named prompt. */
 export async function runControlUiFirstRunFlow(
   page: Page,
-  options: { url: string; providerUrl: string; measure: FirstRunMeasure },
+  options: {
+    url: string;
+    providerUrl: string;
+    measure: FirstRunMeasure;
+    waitForGatewayReady: () => Promise<{
+      unavailableAtEpochMs: number;
+      readyAtEpochMs: number;
+    }>;
+  },
 ): Promise<{
   onboarding: "apply-setup" | "configured-handoff";
   onboardingRestart: FirstRunRestartObservation;
@@ -54,10 +66,22 @@ export async function runControlUiFirstRunFlow(
   type SocketFrame = { payload: string | Buffer };
   const observers = new Map<
     WebSocket,
-    { sent: (frame: SocketFrame) => void; received: (frame: SocketFrame) => void }
+    {
+      sent: (frame: SocketFrame) => void;
+      received: (frame: SocketFrame) => void;
+      closed: () => void;
+    }
   >();
   let initialBootId: string | undefined;
   let shutdown: { at: number; reason: string; restartExpectedMs: number } | undefined;
+  let disconnectedAtMs: number | undefined;
+  let gatewayReady:
+    | Promise<{
+        unavailableAtEpochMs: number;
+        readyAtEpochMs: number;
+      } | null>
+    | undefined;
+  let gatewayReadyError: unknown;
   let reconnected: { at: number; bootId: string } | undefined;
   let notifyRestart: (() => void) | undefined;
   const observeSocket = (socket: WebSocket) => {
@@ -114,14 +138,38 @@ export async function runControlUiFirstRunFlow(
       }
       notifyRestart?.();
     };
-    observers.set(socket, { sent, received });
+    const closed = () => {
+      if (shutdown && !reconnected && disconnectedAtMs === undefined) {
+        disconnectedAtMs = performance.now() - journeyStartedAt;
+        gatewayReady = Promise.resolve()
+          .then(() => options.waitForGatewayReady())
+          .catch((error: unknown) => {
+            gatewayReadyError = error;
+            return null;
+          });
+      }
+    };
+    observers.set(socket, { sent, received, closed });
     socket.on("framesent", sent);
     socket.on("framereceived", received);
+    socket.on("close", closed);
   };
   page.on("websocket", observeSocket);
   const submit = () =>
     page.locator(wizard).getByRole("button", { name: "Submit", exact: true }).click();
-  const wait = (selector: string) => page.locator(selector).first().waitFor({ state: "visible" });
+  const wait = (selector: string) =>
+    page.waitForFunction(
+      (target) => {
+        const element = document.querySelector(target);
+        if (!element || getComputedStyle(element).visibility === "hidden") {
+          return false;
+        }
+        const bounds = element.getBoundingClientRect();
+        return bounds.width > 0 && bounds.height > 0;
+      },
+      selector,
+      { polling: "raf" },
+    );
   try {
     const choice = 'openclaw-model-setup-page [data-auth-choice="custom-api-key"] button';
     await measure(
@@ -151,6 +199,24 @@ export async function runControlUiFirstRunFlow(
       `${choice}:not([disabled])`,
     );
     const initialDocument = await page.evaluate(() => performance.timeOrigin);
+
+    const providerCatalog = "[data-models-login-search]";
+    await measure(
+      "provider-catalog-open",
+      async () => {
+        await page.getByRole("button", { name: "Add account", exact: true }).click();
+        await wait(providerCatalog);
+      },
+      `${providerCatalog}:not([disabled])`,
+    );
+    await measure(
+      "provider-catalog-close",
+      async () => {
+        await page.keyboard.press("Escape");
+        await page.locator(providerCatalog).waitFor({ state: "hidden" });
+      },
+      `${choice}:not([disabled])`,
+    );
 
     await measure(
       "provider-open",
@@ -283,7 +349,7 @@ export async function runControlUiFirstRunFlow(
         page.on("close", closed);
         notifyRestart();
       });
-      assert(shutdown && reconnected);
+      assert(shutdown && reconnected && disconnectedAtMs !== undefined);
       await page.waitForFunction(
         () => window.openclawControlUi?.snapshot().gatewayPhase === "connected",
         undefined,
@@ -291,10 +357,22 @@ export async function runControlUiFirstRunFlow(
       );
       await wait(`${composer}:not([disabled])`);
       const composerReadyAtMs = performance.now() - journeyStartedAt;
+      assert(gatewayReady, "Gateway readiness probe did not start after socket close");
+      const gatewayReadiness = await gatewayReady;
+      if (gatewayReadyError !== undefined) {
+        throw new Error("Gateway readiness probe failed after setup restart", {
+          cause: gatewayReadyError,
+        });
+      }
+      assert(gatewayReadiness !== null, "Gateway readiness probe did not observe recovery");
       onboardingRestart = {
         status: "observed",
+        journeyStartedAtEpochMs: performance.timeOrigin + journeyStartedAt,
         waitStartedAtMs,
         shutdownAtMs: shutdown.at,
+        disconnectedAtMs,
+        gatewayUnavailableAtEpochMs: gatewayReadiness.unavailableAtEpochMs,
+        gatewayReadyAtEpochMs: gatewayReadiness.readyAtEpochMs,
         reconnectedAtMs: reconnected.at,
         composerReadyAtMs,
         waitMs: composerReadyAtMs - waitStartedAtMs,
@@ -345,38 +423,42 @@ export async function runControlUiFirstRunFlow(
       "first-message-reply",
       async () => {
         await page.locator(send).click();
-        await page
-          .locator(reply)
-          .getByText("Synthetic first-run reply.", { exact: true })
-          .waitFor();
+        await wait(`${reply} p`);
+        assert.equal(await page.locator(`${reply} p`).textContent(), "Synthetic first-run reply.");
         await wait(`${composer}:not([disabled])`);
       },
-      `${reply} p`,
+      `body:has(${reply} p) ${composer}:not([disabled])`,
     );
 
     const assistantGroup = ".chat-pane-cache__pane--active .chat-group.assistant";
-    const previousReplies = await page.locator(assistantGroup).evaluateAll((groups) =>
-      groups.map((group) => {
-        const key = group.getAttribute("data-chat-row-key");
-        if (!key) {
-          throw new Error("Assistant reply must have a transcript row key");
-        }
-        return key;
-      }),
-    );
-    const nextReply = `${assistantGroup}${previousReplies.map((key) => `:not([data-chat-row-key=${JSON.stringify(key)}])`).join("")} .chat-text p`;
-    await page.locator(composer).fill("Say hello again in one short sentence.");
-    await wait(`${send}:not([disabled])`);
-    await measure(
-      "second-message-reply",
-      async () => {
-        await page.locator(send).click();
-        await page.locator(nextReply).waitFor();
-        assert.equal(await page.locator(nextReply).textContent(), "Synthetic first-run reply.");
-        await wait(`${composer}:not([disabled])`);
-      },
-      nextReply,
-    );
+    for (const [name, message] of [
+      ["second-message-reply", "Say hello again in one short sentence."],
+      ["later-message-reply", "Say hello a third time in one short sentence."],
+    ] as const) {
+      const previousReplies = await page.locator(assistantGroup).evaluateAll((groups) =>
+        groups.map((group) => {
+          const key = group.getAttribute("data-chat-row-key");
+          if (!key) {
+            throw new Error("Assistant reply must have a transcript row key");
+          }
+          return key;
+        }),
+      );
+      // Streaming groups can still contain a working placeholder beside the answer.
+      const nextReply = `${assistantGroup}:not([data-chat-streaming="true"]):not(.chat-group--working)${previousReplies.map((key) => `:not([data-chat-row-key=${JSON.stringify(key)}])`).join("")} .chat-text p`;
+      await page.locator(composer).fill(message);
+      await wait(`${send}:not([disabled])`);
+      await measure(
+        name,
+        async () => {
+          await page.locator(send).click();
+          await wait(nextReply);
+          assert.equal(await page.locator(nextReply).textContent(), "Synthetic first-run reply.");
+          await wait(`${composer}:not([disabled])`);
+        },
+        `body:has(${nextReply}) ${composer}:not([disabled])`,
+      );
+    }
 
     return {
       onboarding,
@@ -393,6 +475,7 @@ export async function runControlUiFirstRunFlow(
     for (const [socket, observer] of observers) {
       socket.off("framesent", observer.sent);
       socket.off("framereceived", observer.received);
+      socket.off("close", observer.closed);
     }
   }
 }

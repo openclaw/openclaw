@@ -455,10 +455,12 @@ describe("pw-session ensurePageState", () => {
   it("bounds page-controlled text while tracking network requests", () => {
     const { emit, state } = observedPage();
     const oversized = `${"x".repeat(2047)}😀tail`;
+    const argument = { dispose: vi.fn(async () => {}) };
     const consoleMessage = {
       type: () => oversized,
       text: () => oversized,
       location: () => ({ url: oversized, lineNumber: 1, columnNumber: 2 }),
+      args: () => [argument],
     };
     const pageError = Object.assign(new Error(oversized), { name: oversized, stack: oversized });
     const req = {
@@ -471,6 +473,7 @@ describe("pw-session ensurePageState", () => {
     emit("response", { request: () => req, status: () => 500, ok: () => false });
     emit("requestfailed", req);
     emit("console", consoleMessage);
+    expect(argument.dispose).toHaveBeenCalledOnce();
     emit("pageerror", pageError);
 
     const consoleEntry = state.console.at(-1);

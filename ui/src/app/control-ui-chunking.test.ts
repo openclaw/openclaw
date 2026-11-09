@@ -177,6 +177,55 @@ describe("Control UI build chunking", () => {
     }
   });
 
+  it("groups catalog cards without eagerly loading the skill reader or Markdown", async () => {
+    const discovery = modulePath("../pages/skills/discovery-view.tsx");
+    const reader = modulePath("../pages/skills/skill-reader-dialog.tsx");
+    const grid = modulePath("../pages/plugins/catalog-grid.tsx");
+    const card = modulePath("../pages/plugins/plugin-card.tsx");
+    const markdown = modulePath("../../node_modules/markdown-it/dist/markdown-it.mjs");
+    const entry = "\0catalog-reader-fixture";
+    const result = await buildFixture(
+      entry,
+      new Map([
+        [entry, `export const open = () => import(${JSON.stringify(discovery)});`],
+        [
+          discovery,
+          `import { grid } from ${JSON.stringify(grid)}; import { card } from ${JSON.stringify(card)}; export const render = () => grid + card; export const read = () => import(${JSON.stringify(reader)});`,
+        ],
+        [grid, "export const grid = 'catalog grid';"],
+        [card, "export const card = 'catalog card';"],
+        [
+          reader,
+          `import { card } from ${JSON.stringify(card)}; import { markdown } from ${JSON.stringify(markdown)}; export const read = () => card + markdown;`,
+        ],
+        [markdown, "export const markdown = 'reader Markdown';"],
+      ]),
+    );
+    if (Array.isArray(result) || !("output" in result)) {
+      throw new Error("Expected one in-memory build");
+    }
+    const chunks = result.output.filter((asset) => asset.type === "chunk");
+    const chunkFor = (id: string) => chunks.find((chunk) => id in chunk.modules)!;
+    const reachable = importClosure(
+      (file) => chunks.find((chunk) => chunk.fileName === file)!.imports,
+    );
+    const catalogChunk = chunkFor(grid);
+    expect(catalogChunk.fileName).toContain("plugin-catalog-runtime");
+    expect(chunkFor(card)).toBe(catalogChunk);
+    const discoveryChunk = chunkFor(discovery);
+    const readerChunk = chunkFor(reader);
+    expect(discoveryChunk.dynamicImports).toContain(readerChunk.fileName);
+    expect(reachable(discoveryChunk.fileName).has(catalogChunk.fileName)).toBe(true);
+    for (const chunk of [readerChunk, chunkFor(markdown)]) {
+      expect(reachable(discoveryChunk.fileName).has(chunk.fileName)).toBe(false);
+      expect(reachable(readerChunk.fileName).has(chunk.fileName)).toBe(true);
+    }
+    const startup = reachable(chunks.find((chunk) => chunk.isEntry)!.fileName);
+    for (const chunk of [catalogChunk, readerChunk, chunkFor(markdown)]) {
+      expect(startup.has(chunk.fileName)).toBe(false);
+    }
+  });
+
   it("keeps the real schema analyzer independent of the optional value validator", async () => {
     const analyze = modulePath("../components/config-form.analyze.ts");
     const constraints = modulePath("../components/config-form.constraints.ts");
@@ -417,7 +466,7 @@ describe("Control UI build chunking", () => {
     const settingsUi = modulePath("../components/solid/settings-ui.tsx");
     const settingsSelect = modulePath("../components/solid/settings-select.tsx");
     const routeSubtitles = modulePath("../i18n/locales/en-route-subtitles.ts");
-    const talk = modulePath("../pages/talk/talk-page.tsx");
+    const talk = modulePath("../pages/config/talk-page.tsx");
     const channels = modulePath("../pages/channels/channels-page.tsx");
     const checkbox = modulePath("../components/solid/checkbox.tsx");
     const terminal = modulePath("../pages/terminal/terminal-page.tsx");

@@ -396,7 +396,8 @@ export function createPositionRail(props: PositionRailParams) {
     if (syncPositionRailVisibility(scrollElement, overflowing) && !overflowing) {
       // Guarded marker callbacks retain this object while the rail is hidden.
       Object.assign(interactionState, initialInteraction());
-      refreshWindow();
+      // A shrinking range can notify us from the transcript's render computation.
+      onSettled(refreshWindow);
     }
     const { state, scheduleLayout: needsLayout } = resolvePositionRailReaderViewport(
       reader,

@@ -111,8 +111,16 @@ export function registerNodeCli(program: Command) {
         defaultRuntime.exit(1);
         return;
       }
-      const { host, port, contextPath, tls, tlsFingerprint, cloudflareAccess, gatewayCandidates } =
-        gatewayOptions;
+      const {
+        host,
+        port,
+        contextPath,
+        tls,
+        tlsFingerprint,
+        cloudflareAccess,
+        gatewayCandidates,
+        gatewayTarget,
+      } = gatewayOptions;
       if (port === null) {
         defaultRuntime.error(formatInvalidPortOption("--port"));
         defaultRuntime.exit(1);
@@ -132,6 +140,7 @@ export function registerNodeCli(program: Command) {
         gatewayContextPath: contextPath,
         gatewayCloudflareAccess: cloudflareAccess,
         gatewayCandidates,
+        gatewayTarget,
         gatewayBootstrapToken: pair?.bootstrapToken,
         gatewayBootstrapExpiresAtMs: pair?.expiresAtMs,
         preferGatewayBootstrapToken: opts.pair !== undefined,

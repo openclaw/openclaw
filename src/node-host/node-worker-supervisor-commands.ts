@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
+import { parseUnixGatewayUrl } from "../../packages/gateway-client/src/unix-target.js";
 import type {
   SessionsProcessesListResult,
   SessionsProcessesStopResult,
@@ -177,6 +178,10 @@ function resolveWorkerConnectionEndpoint(params: {
 }): WorkerConnectionEndpoint {
   if (!params.gatewayUrl) {
     throw new Error("node worker gateway connection unavailable");
+  }
+  const unix = parseUnixGatewayUrl(params.gatewayUrl);
+  if (unix) {
+    return { kind: "unix", socketPath: unix.socketPath, path: WORKER_PUBLIC_INGRESS_PATH };
   }
   const endpointUrl = new URL(params.gatewayUrl);
   if (endpointUrl.protocol !== "ws:" && endpointUrl.protocol !== "wss:") {

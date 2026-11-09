@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
-import { queryObjects } from "node:v8";
 import { parentPort } from "node:worker_threads";
 import { mockNativeModuleExports } from "../../../test/helpers/native-module-mock.js";
+import { forceFullGc } from "../../test-utils/retention.js";
 import type * as Catalog from "./prepared-model-catalog-inspection.js";
 
 const port = parentPort!;
@@ -139,7 +139,7 @@ port.postMessage = (message: { status: string; value?: object }, transferList) =
         for (let pass = 0; pass < 2; pass++) {
           await new Promise<void>((resolve) => {
             setImmediate(() => {
-              queryObjects(WeakRef);
+              forceFullGc();
               resolve();
             });
           });

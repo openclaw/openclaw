@@ -61,6 +61,16 @@ configured workspace when it is selected with `worktree: true`. This authorizes
 source preparation, not direct access to that host directory. Arbitrary external
 `cwd` values and direct project bindings remain restricted.
 
+On copy-on-write filesystems, managed Docker and Podman workspaces can clone a
+prepared pnpm dependency tree. The builder and runtime use the same pnpm store
+path outside the checkout, so a subsequent install can reuse those dependencies
+instead of replacing them because the store moved. The default store lives in
+the container's disposable `/tmp/openclaw-deps` tmpfs; its bytes are private to
+that container and are not included in the projection snapshot. An explicit
+`PNPM_CONFIG_STORE_DIR` environment setting (or the older `npm_config_store_dir`
+spelling) or command-line store selection still takes precedence. Changed dependencies still need installation, and
+package lifecycle scripts still run.
+
 Visible child sessions keep their managed worktree as the sandbox workspace on
 later turns, including sessions created before an update.
 
@@ -96,6 +106,50 @@ rules change. Save durable reports and screenshots outside disposable build/cach
 roots; ordinary `.artifacts/` outputs remain available to saved message references.
 Source filenames must be valid UTF-8; rename invalid Git paths
 before retrying preparation. Publication uses the same admission boundary.
+
+New private checkouts are shallow snapshots. For GitHub.com projects, their
+credential-free HTTPS `origin` and the matching HTTPS repository URLs (with and
+without `.git`) default to `blob:none` fetches: history arrives without historical
+file contents, and checkout or diff fetches missing contents as needed. These
+defaults are reapplied when creating a checkout from a retained dependency
+template, including templates created before these defaults existed. Host object
+stores and credentials remain outside the sandbox; private repository access
+still requires the existing authorized publication workflow.
+
+The agent Git wrapper also defaults GitHub fork URL fetches to `blob:none` in
+these blobless repositories. This covers HTTPS, `git@github.com:owner/repo`, and
+`ssh://git@github.com/owner/repo` addresses through the agent's normal `git`
+command on POSIX hosts and Docker/Podman sandboxes. Git records the fetched URL
+as a promisor so later checkout and diff can retrieve fork-only file contents.
+Explicit `--filter` and `--no-filter` choices are preserved. Outside projections,
+full repositories and non-GitHub URLs retain Git's normal defaults. Direct
+invocations of a Git binary outside the wrapper also keep native defaults.
+
+Standalone projections also default single-remote fetches to `--depth=64`,
+including implicit `origin` fetches (`git fetch`) and explicit blob filters. The projection owner marks this
+Git metadata when building or reusing the checkout; shared base clones are not
+marked and do not receive this depth default. This bounds each fetched tip's
+history instead of downloading all commits and trees. Explicit `--depth`,
+`--deepen`, `--shallow-since`, `--shallow-exclude`, `--unshallow`, and
+`--update-shallow` options take precedence. `--no-filter` changes blob filtering, not the history limit.
+
+Checkout and direct `git diff <base> <branch>` use complete file contents. History
+walks remain shallow: `git log <base>..<branch>` can omit older PR commits or
+include shared ancestors when the base's ancestry is missing. Fetch the base
+from `origin` and deepen the relevant tips explicitly when a complete range or
+merge base is required. A fixed depth is intentional: `--deepen` alone can still
+fetch an old fork's entire ancestry, and `--shallow-exclude` requires a remote
+branch or tag, not an arbitrary projection base SHA.
+
+Use `github_publish` with `action: "prepare_pr"` for eligible PR continuation and
+`refresh_base` for base updates. For separate commit inspection, prefer
+`git fetch --no-tags --depth=1 <url> <commit>...`; deepen explicitly if the task
+needs ancestry, or use `--filter=blob:none` when history is required. Existing
+checkouts without blobless defaults and commands outside the wrapper need these
+explicit flags for fork fetches.
+An unbounded fetch in a shallow checkout can otherwise download the repository's
+entire history, including obsolete blobs. Servers must support filtering;
+Git warns and falls back to an unfiltered fetch when they do not.
 
 A newly created filename containing a literal backslash cannot pass workspace
 checkpoint validation. Its bytes and the pending checkpoint remain preserved.
@@ -259,7 +313,11 @@ this checkout while capturing or applying changes. An existing session first
 checks both workspaces against their accepted baseline without pausing. If both
 are unchanged and no recovery is pending, its runtimes keep running. Changed or
 interrupted checks return to paused reconciliation; file edits are never applied
-from the live check. Concurrent preparations of the same workspace and session
+from the live check. Checkpoints after commands and file mutations use the same
+check for the guest workspace: commands that leave accepted files unchanged do
+not pause the sandbox. Changed checkpoints still pause through capture and
+publication, including writes from background processes and termination handlers.
+Concurrent preparations of the same workspace and session
 generation share queued reconciliation. Once filesystem observation begins,
 later preparations require a fresh check so intervening edits remain visible.
 Completed preparation results are not cached. Each caller retains its own
@@ -270,10 +328,17 @@ checkpoint to release the workspace before proceeding; background commands do no
 hold that preparation lease for their entire lifetime. Files and assistant-media
 reads select the current backing without acquiring checkpoint custody or pausing
 runtimes. Each read retains its session and workspace authority checks; sandbox
-aliases also verify the existing runtime mount. File saves checkpoint guest changes
-before comparing the editor hash and updating the canonical file. Capture,
+aliases also verify the existing runtime mount. For local sandbox sessions, a retained
+private checkout remains the preview's live view; direct host edits enter that view during the next workspace
+preparation. File saves checkpoint guest changes, compare the editor hash, update
+the canonical file, and import the saved change into the private checkout under the
+same custody before resuming its runtimes. Capture,
 publication, and lifecycle operations retain their reconciliation lease and pause
 requirements.
+Each successful container pause records a `sandbox/quiescence` info log with a
+bounded reason (`checkpoint`, `preparation`, `publication`, `retirement`, `restore`,
+or `reconcile`) and that reason's process-lifetime counter. Already-paused runtimes
+and stopped containers do not increment it; counters restart with the Gateway.
 Captured workspace authority is checked again after
 filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner
@@ -305,6 +370,9 @@ With the OpenShell backend, `mirror` mode still uses the local workspace as the 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 Later conversation turns load retained images from that same staged copy.
 Missing copies and paths outside the active sandbox remain unavailable.
+If a previously included image becomes unavailable, replay keeps a resend notice
+and stops retrying that image for the retained session decision. Resend the image
+as a new attachment to make another attempt; other attachments remain available.
 For a managed project session, attachments on follow-up messages use that
 session's private checkout, including after its worktree has been created.
 Attachment staging retains the managed workspace owner until the copy settles.

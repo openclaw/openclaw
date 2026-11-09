@@ -26,9 +26,10 @@ afterEach(() => {
 
 async function withLiveWorkspace(
   run: (fixture: Awaited<ReturnType<typeof prepareFixture>>) => Promise<void>,
+  sandboxed = true,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const fixture = await prepareFixture(state.workspaceDir);
+    const fixture = await prepareFixture(state.workspaceDir, sandboxed);
     try {
       await run(fixture);
     } finally {
@@ -37,11 +38,11 @@ async function withLiveWorkspace(
   });
 }
 
-async function prepareFixture(root: string) {
+async function prepareFixture(root: string, sandboxed: boolean) {
   const repo = await initializeManagedWorktreeTestRepository(root);
   const sessionKey = "agent:main:live-file-reader";
   const cfg: OpenClawConfig = {
-    agents: { defaults: { sandbox: { mode: "all", backend: "docker" } } },
+    agents: { defaults: { sandbox: { mode: sandboxed ? "all" : "off", backend: "docker" } } },
   };
   setRuntimeConfigSnapshot(cfg);
   const service = new ManagedWorktreeService();
@@ -67,7 +68,7 @@ async function prepareFixture(root: string) {
     {
       sessionId: owner.sessionId,
       updatedAt: 1,
-      sandbox: "required",
+      sandbox: sandboxed ? "required" : undefined,
       spawnedCwd: worktree.path,
       sessionRoot: worktree.path,
       worktree: { id: worktree.id, branch: worktree.branch, repoRoot: repo },
@@ -105,7 +106,10 @@ async function prepareFixture(root: string) {
     agentId: owner.agentId,
     requestAuth: { authMethod: "token", operatorScopes: ["operator.admin"] },
   });
-  assert(policy?.sandboxWorkspace);
+  assert(policy);
+  if (sandboxed) {
+    assert(policy.sandboxWorkspace);
+  }
   const prepareFile = (filePath: string) =>
     prepareSessionFileReadPath({
       root: worktree.path,
@@ -147,6 +151,12 @@ async function prepareFixture(root: string) {
       { sessionKey, path: "README.md", content: "host edit\n", expectedHash },
       { getRuntimeConfig: () => cfg },
     );
+  const get = () =>
+    createSessionFilesHandlerInvoker(sessionsFilesHandlers)(
+      "sessions.files.get",
+      { sessionKey, path: "README.md" },
+      { getRuntimeConfig: () => cfg },
+    );
   return {
     root,
     worktree,
@@ -158,6 +168,7 @@ async function prepareFixture(root: string) {
     policy,
     authority,
     save,
+    get,
   };
 }
 
@@ -181,7 +192,20 @@ it("reads fresh sandbox files and media without pausing or publishing guest edit
     assert(hash);
     expect(await save(hash)).toMatchObject([{ ok: true }]);
     expect(await fs.readFile(path.join(worktree.path, "README.md"), "utf8")).toBe("host edit\n");
+    expect(await readFile("README.md")).toMatchObject({ content: "host edit\n" });
+    expect(await readMedia("/workspace/README.md")).toBe("host edit\n");
   });
+});
+
+it("reads canonical host-session files despite a retained sandbox projection", async () => {
+  await withLiveWorkspace(async ({ worktree, projection, commands, get }) => {
+    await fs.writeFile(path.join(projection, "README.md"), "retained guest bytes\n");
+    await fs.writeFile(path.join(worktree.path, "README.md"), "current host bytes\n");
+    expect(await get()).toMatchObject([
+      { ok: true, payload: { file: { content: "current host bytes\n" } } },
+    ]);
+    expect(commands.mock.calls.filter(([, args]) => args[0] === "pause")).toHaveLength(0);
+  }, false);
 });
 
 it("keeps live reads on admitted descriptors through symlink swaps and partial writes", async () => {
