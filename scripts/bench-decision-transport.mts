@@ -60,6 +60,7 @@ function parseProductionSample(
   workload: string,
   fixture: string,
   mode: string,
+  catalogSourceHashes?: Record<string, string>,
 ) {
   assert(isRecord(value), "Missing conversion result");
   assert.equal(value.case, workload);
@@ -106,6 +107,9 @@ function parseProductionSample(
           assert(isRecord(entry) && Number.isInteger(entry.count) && nonNegative(entry.count) >= 0);
           assert(isRecord(entry.source) && typeof entry.source.sha256 === "string");
           assert(nonNegative(entry.source.line) > 0);
+          const file = name === "providerBaseUrl" ? "config.ts" : "decisions.ts";
+          assert(catalogSourceHashes, "Missing catalog source provenance");
+          assert.equal(entry.source.sha256, catalogSourceHashes["extensions/typesafe/src/" + file]);
         }
         return phase;
       });
@@ -189,6 +193,14 @@ function artifact(manifestPath: string) {
           builderSourceSha256: hash(value.productionInputs.builderSourceSha256),
           installedLockfileSha256: hash(value.productionInputs.installedLockfileSha256),
           modulesMetadataSha256: hash(value.productionInputs.modulesMetadataSha256),
+          catalogSourceHashes: isRecord(value.productionInputs.catalogSourceHashes)
+            ? Object.fromEntries(
+                Object.entries(value.productionInputs.catalogSourceHashes).map(([file, digest]) => [
+                  file,
+                  hash(digest),
+                ]),
+              )
+            : undefined,
           benchmarkRevision: value.productionInputs.benchmarkRevision,
           platform: value.productionInputs.platform,
           arch: value.productionInputs.arch,
@@ -249,7 +261,7 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
       baseline: "",
       candidate: "",
       case: "http",
-      fixture: "small",
+      fixture: "",
       mode: "cost",
       runs: 20,
       requests: 50,
@@ -297,6 +309,13 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
     return;
   }
   assert(options.baseline && options.candidate, "Both build manifests are required");
+  if (!options.fixture) options.fixture = options.case === "catalog" ? "configured" : "small";
+  assert(
+    options.case === "catalog"
+      ? options.fixture === "configured"
+      : options.fixture !== "configured",
+    "Fixture does not match the selected case",
+  );
   assert(
     options.mode === "cost" || ["runtime-v1", "catalog"].includes(options.case),
     "Work case unsupported",
@@ -349,6 +368,7 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
                 options.case,
                 options.fixture,
                 options.mode,
+                artifacts[variant].manifest.productionInputs?.catalogSourceHashes,
               ),
       });
       return { variant, sample, commandWallMs: performance.now() - started, result };

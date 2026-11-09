@@ -535,7 +535,8 @@ async function benchmarkRegisteredV1(evaluations: number, fixture: string, mode:
   };
 }
 
-async function benchmarkRegisteredCatalog(evaluations: number, mode: string) {
+async function benchmarkRegisteredCatalog(evaluations: number, fixture: string, mode: string) {
+  assert.equal(fixture, "configured");
   assert(mode === "cost" || mode === "work");
   assert.equal(Boolean(process.env.NODE_V8_COVERAGE), mode === "work", "Coverage is work-only");
   const [
@@ -815,7 +816,11 @@ if (import.meta.main) {
         : workload === "conversion"
           ? await benchmarkDecisionConversion(requests)
           : workload === "catalog"
-            ? await benchmarkRegisteredCatalog(requests, process.argv[5] ?? "cost")
+            ? await benchmarkRegisteredCatalog(
+                requests,
+                process.argv[4] ?? "configured",
+                process.argv[5] ?? "cost",
+              )
             : await benchmarkRegisteredV1(
                 requests,
                 process.argv[4] ?? "small",
