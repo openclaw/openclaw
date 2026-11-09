@@ -112,7 +112,7 @@ const enGitHub = {
     title: "Publication",
     publishAsLabel: "Publish as",
     personal: "My GitHub",
-    system: "System GitHub",
+    system: "Shared agent account",
     agent: "Agent override",
     publishAs: "Publish as @{account}",
     account: "Publication account",
