@@ -3,6 +3,7 @@ import { createEffect, createSignal, Show } from "solid-js";
 import type { ApplicationGatewaySnapshot } from "../../app/context-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { SimulatorInputQueue } from "./simulator-input-queue.ts";
 
 type Client = NonNullable<ApplicationGatewaySnapshot["client"]>;
 type CaptureFrame = {
@@ -61,36 +62,31 @@ export function SimulatorPreview(props: {
   const [fps, setFps] = createSignal(0);
   const [retry, setRetry] = createSignal(0);
   let frameSession: { sessionId: string; executionId: string } | undefined;
-  let inputQueue: Promise<unknown> = Promise.resolve();
   let moveTimer: ReturnType<typeof setTimeout> | undefined;
   let pendingMove: { x: number; y: number } | undefined;
   let dragging = false;
   let active = false;
-  let inputEpoch = 0;
+  const inputQueue = new SimulatorInputQueue(
+    () => active && props.canControl,
+    (cause) => {
+      if (active) setError(formatUiError(cause));
+    },
+  );
 
   const sendInput = (action: string, details: Record<string, unknown> = {}) => {
     const session = frameSession;
     if (!session || !props.canControl || !active) {
       return;
     }
-    const epoch = inputEpoch;
     const client = props.client;
     const nodeId = props.nodeId;
-    inputQueue = inputQueue
-      .then(() =>
-        epoch === inputEpoch && active
-          ? invoke(client, nodeId, "simulator.act", {
-              ...session,
-              action,
-              ...details,
-            })
-          : undefined,
-      )
-      .catch((cause: unknown) => {
-        if (active) {
-          setError(formatUiError(cause));
-        }
-      });
+    void inputQueue.enqueue(() =>
+      invoke(client, nodeId, "simulator.act", {
+        ...session,
+        action,
+        ...details,
+      }),
+    );
   };
 
   const point = (event: PointerEvent) => {
@@ -112,6 +108,18 @@ export function SimulatorPreview(props: {
   };
 
   createEffect(
+    () => props.canControl,
+    (canControl) => {
+      if (!canControl) {
+        inputQueue.retire();
+        dragging = false;
+        clearTimeout(moveTimer);
+        pendingMove = undefined;
+      }
+    },
+  );
+
+  createEffect(
     () => ({
       nodeId: props.nodeId,
       client: props.client,
@@ -124,7 +132,7 @@ export function SimulatorPreview(props: {
       }
       const controller = new AbortController();
       const executionId = crypto.randomUUID();
-      inputEpoch += 1;
+      inputQueue.retire();
       active = true;
       setImage(null);
       setError(null);
@@ -187,7 +195,7 @@ export function SimulatorPreview(props: {
       })();
       return () => {
         active = false;
-        inputEpoch += 1;
+        inputQueue.retire();
         dragging = false;
         clearTimeout(moveTimer);
         pendingMove = undefined;

@@ -4,6 +4,7 @@ import OpenClawKit
 
 private struct SimulatorCaptureParams: Decodable {
     let action: String
+    let executionId: String?
     let sessionId: String?
     let after: UInt64?
 }
@@ -34,7 +35,10 @@ extension MacNodeRuntime {
         let frame: SimulatorCaptureService.Frame?
         switch params.action {
         case "start":
-            frame = try await services.startSimulatorCapture()
+            guard let executionId = params.executionId else {
+                throw OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: executionId required")
+            }
+            frame = try await services.startSimulatorCapture(executionId: executionId)
         case "read":
             guard let sessionId = params.sessionId else {
                 throw OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: sessionId required")
@@ -76,6 +80,13 @@ extension MacNodeRuntime {
         try await services.activateSimulator(sessionId: input.sessionId, desktopPermit: desktopPermit)
         let result = try await services.performComputerAct(
             params, lifecycleGeneration: lifecycleGeneration, desktopPermit: desktopPermit)
+        guard result.ok else {
+            return BridgeInvokeResponse(
+                id: req.id, ok: false,
+                error: OpenClawNodeError(
+                    code: .unavailable,
+                    message: "UNAVAILABLE: Simulator input was not delivered; refocus the Simulator and retry"))
+        }
         return BridgeInvokeResponse(
             id: req.id, ok: true,
             payloadJSON: String(decoding: try JSONEncoder().encode(result), as: UTF8.self))

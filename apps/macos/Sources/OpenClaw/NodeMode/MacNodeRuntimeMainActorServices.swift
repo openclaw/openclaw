@@ -21,10 +21,11 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
         fps: Double?,
         includeAudio: Bool?) async throws -> (path: String, durationMs: Int, fps: Double, hasAudio: Bool)
 
-    func startSimulatorCapture() async throws -> SimulatorCaptureService.Frame
+    func startSimulatorCapture(executionId: String) async throws -> SimulatorCaptureService.Frame
     func readSimulatorCapture(sessionId: String, after sequence: UInt64) async throws
         -> SimulatorCaptureService.Frame
     func stopSimulatorCapture(sessionId: String?) async
+    func stopSimulatorCapture(forExecutionId executionId: String) async
     func simulatorInput(
         sessionId: String, action: OpenClawComputerAction,
         x: Double?, y: Double?, text: String?, keys: String?) async throws -> OpenClawComputerActParams
@@ -89,8 +90,8 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
             includeAudio: includeAudio)
     }
 
-    func startSimulatorCapture() async throws -> SimulatorCaptureService.Frame {
-        try await self.simulatorCapture.start()
+    func startSimulatorCapture(executionId: String) async throws -> SimulatorCaptureService.Frame {
+        try await self.simulatorCapture.start(executionId: executionId)
     }
 
     func readSimulatorCapture(sessionId: String, after sequence: UInt64) async throws
@@ -101,6 +102,10 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
 
     func stopSimulatorCapture(sessionId: String?) async {
         await self.simulatorCapture.stop(sessionId: sessionId)
+    }
+
+    func stopSimulatorCapture(forExecutionId executionId: String) async {
+        await self.simulatorCapture.stop(forExecutionId: executionId)
     }
 
     func simulatorInput(

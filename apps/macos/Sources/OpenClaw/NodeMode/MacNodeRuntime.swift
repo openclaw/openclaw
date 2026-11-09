@@ -178,6 +178,7 @@ actor MacNodeRuntime {
                     return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: #"{"ok":true}"#)
                 }
                 await self.cancelDesktopInvokes(permits: [permit])
+                await self.cachedMainActorServices?.stopSimulatorCapture(forExecutionId: id)
                 let response: BridgeInvokeResponse = if self.computerControlProvider() == .cua, let nodeHostWorker {
                     await nodeHostWorker.invoke(req)
                 } else {

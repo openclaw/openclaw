@@ -46,6 +46,7 @@ final class SimulatorCaptureService {
     private var stream: SCStream?
     private var output: SimulatorFrameOutput?
     private var sessionId: String?
+    private var executionId: String?
     private var metadata: Frame?
     private var windowID: CGWindowID?
     private var windowFrame: CGRect?
@@ -54,7 +55,7 @@ final class SimulatorCaptureService {
     private var lastRead = Date.distantPast
     private var expiry: Task<Void, Never>?
 
-    func start() async throws -> Frame {
+    func start(executionId: String) async throws -> Frame {
         try await ScreenCaptureSupport.requirePermission()
         await self.stop()
         let content = try await SCShareableContent.current
@@ -84,6 +85,7 @@ final class SimulatorCaptureService {
         try await stream.startCapture()
         let sessionId = UUID().uuidString
         self.sessionId = sessionId
+        self.executionId = executionId
         self.stream = stream
         self.output = output
         self.windowID = window.windowID
@@ -115,9 +117,17 @@ final class SimulatorCaptureService {
 
     func read(sessionId: String, after sequence: UInt64) async throws -> Frame {
         guard self.sessionId == sessionId, let output, let metadata else { throw CaptureError.staleSession }
-        if let failure = output.failure() { throw CaptureError.captureStopped(failure) }
+        if let failure = output.failure() {
+            await self.stop(sessionId: sessionId)
+            throw CaptureError.captureStopped(failure)
+        }
         if Date().timeIntervalSince(self.lastGeometryCheck) >= 1 {
-            try await self.validateWindow(sessionId: sessionId)
+            do {
+                try await self.validateWindow(sessionId: sessionId)
+            } catch {
+                await self.stop(sessionId: sessionId)
+                throw error
+            }
             self.lastGeometryCheck = Date()
         }
         self.lastRead = Date()
@@ -139,7 +149,12 @@ final class SimulatorCaptureService {
         action: OpenClawComputerAction,
         x: Double?, y: Double?, text: String?, keys: String?) async throws -> OpenClawComputerActParams
     {
-        try await self.validateWindow(sessionId: sessionId)
+        do {
+            try await self.validateWindow(sessionId: sessionId)
+        } catch {
+            await self.stop(sessionId: sessionId)
+            throw error
+        }
         guard let metadata else { throw CaptureError.staleSession }
         guard [.leftClick, .leftMouseDown, .mouseMove, .leftMouseUp, .type, .key].contains(action) else {
             throw CaptureError.staleSession
@@ -188,11 +203,17 @@ final class SimulatorCaptureService {
         self.stream = nil
         self.output = nil
         self.sessionId = nil
+        self.executionId = nil
         self.metadata = nil
         self.windowID = nil
         self.windowFrame = nil
         self.simulatorPID = nil
         if let stream { try? await stream.stopCapture() }
+    }
+
+    func stop(forExecutionId executionId: String) async {
+        guard self.executionId == executionId else { return }
+        await self.stop()
     }
 }
 

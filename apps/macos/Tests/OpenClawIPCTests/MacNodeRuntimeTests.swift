@@ -171,26 +171,45 @@ struct MacNodeRuntimeTests {
 
         var permissionStates: [Capability: OpenClawPermissionState] = [:]
 
-        func startSimulatorCapture() async throws -> SimulatorCaptureService.Frame {
-            throw SimulatorCaptureService.CaptureError.noWindow
+        var simulatorStarts = 0
+        var simulatorStops = 0
+        var actResultOk = true
+
+        private func simulatorFrame() -> SimulatorCaptureService.Frame {
+            SimulatorCaptureService.Frame(
+                sessionId: "sim-session", sequence: 1, jpegBase64: nil,
+                width: 300, height: 600,
+                windowX: 0, windowY: 0, windowWidth: 300, windowHeight: 600,
+                displayX: 0, displayY: 0, displayWidth: 1200,
+                screenIndex: 0, refWidth: 1200, displayFrameId: "display-frame-test")
+        }
+
+        func startSimulatorCapture(executionId: String) async throws -> SimulatorCaptureService.Frame {
+            self.simulatorStarts += 1
+            return self.simulatorFrame()
         }
 
         func readSimulatorCapture(sessionId: String, after sequence: UInt64) async throws
             -> SimulatorCaptureService.Frame
         {
-            throw SimulatorCaptureService.CaptureError.staleSession
+            return self.simulatorFrame()
         }
 
-        func stopSimulatorCapture(sessionId: String?) async {}
+        func stopSimulatorCapture(sessionId: String?) async { self.simulatorStops += 1 }
+        func stopSimulatorCapture(forExecutionId executionId: String) async { self.simulatorStops += 1 }
 
         func simulatorInput(
             sessionId: String, action: OpenClawComputerAction,
             x: Double?, y: Double?, text: String?, keys: String?) async throws -> OpenClawComputerActParams
         {
-            throw SimulatorCaptureService.CaptureError.staleSession
+            return OpenClawComputerActParams(
+                action: action, x: x, y: y, text: text, keys: keys,
+                refWidth: 1200, deliveryMode: .foreground)
         }
 
-        func activateSimulator(sessionId: String, desktopPermit: MacDesktopAvailabilityCoordinator.Permit) throws {}
+        func activateSimulator(sessionId: String, desktopPermit: MacDesktopAvailabilityCoordinator.Permit) throws {
+            try self.desktopAvailability.validate(desktopPermit)
+        }
 
         func missingPermissions(_ capabilities: [Capability], disabled: [Capability]) async -> OpenClawNodeError? {
             PermissionManager.missingPermission(capabilities.compactMap { capability in
@@ -327,7 +346,7 @@ struct MacNodeRuntimeTests {
             if let actError {
                 throw actError
             }
-            return OpenClawComputerActResult(ok: true)
+            return OpenClawComputerActResult(ok: self.actResultOk)
         }
 
         func releaseExecutionInput(_ permit: MacDesktopAvailabilityCoordinator.Permit) async {
@@ -925,6 +944,110 @@ struct MacNodeRuntimeTests {
 }
 
 extension MacNodeRuntimeTests {
+    @MainActor
+    @Test func `Simulator capture and input obey lock revocation`() async {
+        let services = MainActorServicesProbe()
+        let runtime = MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { .peekaboo })
+        let execution = "11111111-1111-4111-8111-111111111111"
+        services.desktopPlatform.state = .locked
+        let blocked = await self.invoke(
+            runtime, "sim-locked", "simulator.capture",
+            "{\"action\":\"start\",\"executionId\":\"\(execution)\"}")
+        #expect(!blocked.ok)
+        #expect(services.simulatorStarts == 0)
+
+        services.desktopPlatform.state = .unlocked
+        let started = await self.invoke(
+            runtime, "sim-start", "simulator.capture",
+            "{\"action\":\"start\",\"executionId\":\"\(execution)\"}")
+        #expect(started.ok)
+        #expect(services.simulatorStarts == 1)
+        let input = await self.invoke(
+            runtime, "sim-tap", "simulator.act",
+            "{\"action\":\"left_click\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.5,\"y\":0.5}")
+        #expect(input.ok)
+        #expect(services.performCallCount == 1)
+
+        var revoked: [MacDesktopAvailabilityCoordinator.Permit] = []
+        services.desktopAvailability.onExecutionsRevoked = { permits, _ in revoked.append(contentsOf: permits) }
+        services.desktopPlatform.state = .locked
+        services.desktopAvailability.refresh()
+        await runtime.revokeDesktopExecutions(revoked, reason: "desktop-locked")
+        #expect(services.simulatorStops > 0)
+        #expect(services.releasedExecutionScopes == revoked.map(\.inputScopeId))
+        let afterLock = await self.invoke(
+            runtime, "sim-after-lock", "simulator.act",
+            "{\"action\":\"left_click\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.5,\"y\":0.5}")
+        #expect(!afterLock.ok)
+        #expect(services.performCallCount == 1)
+    }
+
+    @MainActor
+    @Test func `Simulator view only and failed input have visible outcomes`() async {
+        let services = MainActorServicesProbe()
+        let execution = "22222222-2222-4222-8222-222222222222"
+        let viewOnly = MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { false },
+            computerControlProvider: { .peekaboo })
+        #expect(await self.invoke(
+            viewOnly, "sim-view", "simulator.capture",
+            "{\"action\":\"start\",\"executionId\":\"\(execution)\"}").ok)
+        let denied = await self.invoke(
+            viewOnly, "sim-denied", "simulator.act",
+            "{\"action\":\"left_click\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.5,\"y\":0.5}")
+        #expect(!denied.ok)
+        #expect(services.performCallCount == 0)
+
+        let controlledServices = MainActorServicesProbe()
+        let controlled = MacNodeRuntime(
+            desktopAvailability: controlledServices.desktopAvailability,
+            makeMainActorServices: { controlledServices },
+            computerControlEnabled: { true },
+            computerControlProvider: { .peekaboo })
+        controlledServices.actResultOk = false
+        #expect(await self.invoke(
+            controlled, "sim-controlled", "simulator.capture",
+            "{\"action\":\"start\",\"executionId\":\"\(execution)\"}").ok)
+        let failed = await self.invoke(
+            controlled, "sim-noop", "simulator.act",
+            "{\"action\":\"left_click\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.5,\"y\":0.5}")
+        #expect(!failed.ok)
+        #expect(failed.error?.message.contains("not delivered") == true)
+    }
+
+    @MainActor
+    @Test func `Simulator close releases held input before ending capture`() async {
+        let services = MainActorServicesProbe()
+        let runtime = MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { .peekaboo })
+        let execution = "33333333-3333-4333-8333-333333333333"
+        #expect(await self.invoke(
+            runtime, "sim-start", "simulator.capture",
+            "{\"action\":\"start\",\"executionId\":\"\(execution)\"}").ok)
+        #expect(await self.invoke(
+            runtime, "sim-down", "simulator.act",
+            "{\"action\":\"left_mouse_down\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.5,\"y\":0.5}").ok)
+        let closed = await self.invoke(
+            runtime, "sim-close", "computer.act",
+            "{\"action\":\"__close_execution\",\"executionId\":\"\(execution)\"}")
+        #expect(closed.ok)
+        #expect(services.releasedExecutionScopes.count == 1)
+        #expect(services.simulatorStops == 1)
+        #expect(services.desktopPlatform.assertions.isEmpty)
+        #expect(!(await self.invoke(
+            runtime, "sim-late", "simulator.act",
+            "{\"action\":\"mouse_move\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.6,\"y\":0.5}")).ok)
+    }
+
     @Test(arguments: [MacDesktopAvailabilityCoordinator.State.locked, .unknown])
     @MainActor
     func `registered Computer capture refuses an unavailable desktop before CUA dispatch`(

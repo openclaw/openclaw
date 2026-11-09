@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "./client-types.js";
 import {
   admitSimulatorInvoke,
+  cleanupSimulatorNodeSession,
   completeSimulatorInvoke,
   isSimulatorAdmissionCurrent,
 } from "./nodes.simulator-lease.js";
@@ -134,5 +135,78 @@ describe("Simulator Gateway lease", () => {
       ),
     ).toMatch(/transport limit/);
     expect(cleanup).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops a frame when viewer authority closes during the node invoke", () => {
+    const nodeId = crypto.randomUUID();
+    const executionId = crypto.randomUUID();
+    const first = viewer();
+    let authorized = true;
+    const cleanup = vi.fn();
+    const admission = start({
+      nodeId,
+      client: first.client,
+      executionId,
+      cleanup,
+      isClientCurrent: () => authorized,
+    });
+    if (!("lease" in admission)) throw new Error("expected lease");
+    completeSimulatorInvoke(
+      admission,
+      "simulator.capture",
+      { action: "start" },
+      {
+        ok: true,
+        payloadJSON: JSON.stringify({ sessionId: "session-3" }),
+      },
+    );
+    const read = admitSimulatorInvoke({
+      nodeId,
+      command: "simulator.capture",
+      input: { action: "read", sessionId: "session-3", executionId },
+      client: first.client,
+      connId: "conn-1",
+      pairingGeneration: "pair-1",
+      isClientCurrent: () => authorized,
+      cleanup,
+    });
+    if (!("lease" in read)) throw new Error("expected read lease");
+    authorized = false;
+    expect(
+      completeSimulatorInvoke(
+        read,
+        "simulator.capture",
+        { action: "read" },
+        {
+          ok: true,
+          payloadJSON: JSON.stringify({ sessionId: "session-3", jpegBase64: "private-frame" }),
+        },
+      ),
+    ).toMatch(/connection ended/);
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("closes held input before stopping capture on viewer loss", async () => {
+    const nodeId = crypto.randomUUID();
+    const executionId = crypto.randomUUID();
+    const first = viewer();
+    const admission = start({ nodeId, client: first.client, executionId, cleanup: vi.fn() });
+    if (!("lease" in admission)) throw new Error("expected lease");
+    completeSimulatorInvoke(
+      admission,
+      "simulator.capture",
+      { action: "start" },
+      {
+        ok: true,
+        payloadJSON: JSON.stringify({ sessionId: "session-4" }),
+      },
+    );
+    const commands: string[] = [];
+    await cleanupSimulatorNodeSession(admission.lease, async (params) => {
+      commands.push(params.command);
+      return { ok: true };
+    });
+    expect(commands).toEqual(["computer.act", "simulator.capture"]);
+    first.controller.abort();
   });
 });

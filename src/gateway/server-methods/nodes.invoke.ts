@@ -50,6 +50,7 @@ import {
 } from "./nodes.shared.js";
 import {
   admitSimulatorInvoke,
+  cleanupSimulatorNodeSession,
   completeSimulatorInvoke,
   isSimulatorAdmissionCurrent,
   isSimulatorCommand,
@@ -512,30 +513,13 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               pairingGeneration: generation.key,
               isClientCurrent: () => hasCurrentClientAuthority?.() !== false,
               cleanup: (lease) => {
-                void (async () => {
-                  if (lease.sessionId) {
-                    await context.nodeRegistry.invoke({
-                      nodeId: lease.nodeId,
-                      expectedConnId: lease.connId,
-                      expectedPairingGeneration: lease.pairingGeneration,
-                      command: "simulator.capture",
-                      params: {
-                        action: "stop",
-                        sessionId: lease.sessionId,
-                        executionId: lease.executionId,
-                      },
-                      timeoutMs: 2_000,
-                    });
-                  }
-                  await context.nodeRegistry.invoke({
-                    nodeId: lease.nodeId,
-                    expectedConnId: lease.connId,
-                    expectedPairingGeneration: lease.pairingGeneration,
-                    command: "computer.act",
-                    params: { action: "__close_execution", executionId: lease.executionId },
-                    timeoutMs: 2_000,
-                  });
-                })();
+                void cleanupSimulatorNodeSession(lease, (params) =>
+                  context.nodeRegistry.invoke(params),
+                ).catch(() => {
+                  context.logGateway.warn(
+                    `Simulator session cleanup failed for node ${lease.nodeId}`,
+                  );
+                });
               },
             })
           : undefined;

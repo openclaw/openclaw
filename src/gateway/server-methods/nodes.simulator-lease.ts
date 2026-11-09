@@ -1,4 +1,5 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import type { NodeInvokeParams, NodeInvokeResult } from "../node-invoke.types.js";
 import type { GatewayClient } from "./client-types.js";
 
 type SimulatorCommand = "simulator.capture" | "simulator.act";
@@ -59,6 +60,38 @@ export function isSimulatorAdmissionCurrent(admission: { lease: Lease }): boolea
 
 export function abandonSimulatorAdmission(admission: { lease: Lease }): void {
   release(admission.lease);
+}
+
+/** Cancel input before stopping pixels so no queued drag can outlive its viewer. */
+export async function cleanupSimulatorNodeSession(
+  lease: Lease,
+  invoke: (params: NodeInvokeParams) => Promise<NodeInvokeResult>,
+): Promise<void> {
+  try {
+    await invoke({
+      nodeId: lease.nodeId,
+      expectedConnId: lease.connId,
+      expectedPairingGeneration: lease.pairingGeneration,
+      command: "computer.act",
+      params: { action: "__close_execution", executionId: lease.executionId },
+      timeoutMs: 2_000,
+    });
+  } finally {
+    if (lease.sessionId) {
+      await invoke({
+        nodeId: lease.nodeId,
+        expectedConnId: lease.connId,
+        expectedPairingGeneration: lease.pairingGeneration,
+        command: "simulator.capture",
+        params: {
+          action: "stop",
+          sessionId: lease.sessionId,
+          executionId: lease.executionId,
+        },
+        timeoutMs: 2_000,
+      });
+    }
+  }
 }
 
 /** One authenticated Gateway connection owns a Simulator session and its input scope. */
@@ -137,7 +170,8 @@ export function completeSimulatorInvoke(
   result: { ok: boolean; payloadJSON?: string | null },
 ): string | undefined {
   const { lease, started } = admission;
-  if (leases.get(lease.nodeId) !== lease) {
+  if (!current(lease, lease.connId, lease.pairingGeneration)) {
+    release(lease);
     if (started && result.ok) {
       const payload = parseSession(result.payloadJSON);
       if (payload) {
