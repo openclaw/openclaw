@@ -408,6 +408,52 @@
   outline: none;
 }
 
+/* Match the native scrollport exactly; decorations never receive pointer or selection input. */
+.composer-mention-highlights {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  padding-block: var(--chat-composer-editor-inset-block);
+  padding-inline: calc(
+    var(--chat-composer-editor-inset-inline) - var(--chat-composer-editor-scroll-inset)
+  );
+  color: var(--text-strong);
+  font: inherit;
+  font-size: var(--chat-composer-editor-size);
+  line-height: var(--chat-composer-editor-line);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  pointer-events: none;
+  user-select: none;
+}
+
+.composer-mention-highlight {
+  border-radius: var(--radius-sm);
+  background: var(--person-reference-bg);
+  color: var(--chat-text-link, var(--link));
+}
+
+.agent-chat__composer-combobox > textarea.composer-has-mentions {
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--text-strong);
+}
+
+@supports selector(::-webkit-scrollbar) {
+  .composer-mention-highlights {
+    padding-inline-end: var(--chat-composer-editor-inset-inline);
+  }
+}
+
+@media (forced-colors: active) {
+  .composer-mention-highlights {
+    display: none;
+  }
+
+  .agent-chat__composer-combobox > textarea.composer-has-mentions {
+    -webkit-text-fill-color: FieldText;
+  }
+}
+
 /* Enter before the session is ready keeps the draft, dimmed, until it sends. */
 .agent-chat__input--submit-queued .agent-chat__composer-combobox > textarea {
   color: var(--muted);
@@ -446,7 +492,10 @@
   }
 }
 
-.agent-chat__composer-combobox > textarea:is([data-scroll-fade-top], [data-scroll-fade-bottom]) {
+.agent-chat__composer-combobox > textarea:is([data-scroll-fade-top], [data-scroll-fade-bottom]),
+.agent-chat__composer-combobox
+  > textarea:is([data-scroll-fade-top], [data-scroll-fade-bottom])
+  + .composer-mention-highlights {
   --chat-composer-scroll-mask-top: currentColor;
   --chat-composer-scroll-mask-bottom: currentColor;
 
@@ -459,11 +508,13 @@
   );
 }
 
-.agent-chat__composer-combobox > textarea[data-scroll-fade-top] {
+.agent-chat__composer-combobox > textarea[data-scroll-fade-top],
+.agent-chat__composer-combobox > textarea[data-scroll-fade-top] + .composer-mention-highlights {
   --chat-composer-scroll-mask-top: transparent;
 }
 
-.agent-chat__composer-combobox > textarea[data-scroll-fade-bottom] {
+.agent-chat__composer-combobox > textarea[data-scroll-fade-bottom],
+.agent-chat__composer-combobox > textarea[data-scroll-fade-bottom] + .composer-mention-highlights {
   --chat-composer-scroll-mask-bottom: transparent;
 }
 

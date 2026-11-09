@@ -4,6 +4,7 @@ import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createPageOpener } from "./new-session-page.scenario.test-support.ts";
 import {
+  captureUiProof,
   captureUiProofEnabled,
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -365,6 +366,20 @@ suite.define(() => {
     await pollText(preview).toContain("Will notify");
     await pollText(preview.locator(".composer-context-strip__person-name")).toBe("Bob");
     const remove = preview.getByRole("button", { name: "Remove mention" });
+    await textarea.pressSequentially("'");
+    expect(await textarea.inputValue()).toBe("@Bob'");
+    await textarea.press("ControlOrMeta+z");
+    expect(await textarea.inputValue()).toBe("@Bob ");
+    await textarea.press("ControlOrMeta+Shift+z");
+    expect(await textarea.inputValue()).toBe("@Bob'");
+    await textarea.pressSequentially("s notes");
+    await captureUiProof(suite, page, "new-chat-selected-mention.png");
+    expect(await textarea.inputValue()).toBe("@Bob's notes");
+    const highlight = page.locator(".new-session-page__composer .composer-mention-highlight");
+    await pollText(highlight).toBe("@Bob");
+    expect(
+      await highlight.evaluate((element) => getComputedStyle(element).backgroundColor),
+    ).not.toBe("rgba(0, 0, 0, 0)");
 
     for (const viewport of [
       { width: 1280, height: 900 },
@@ -414,8 +429,43 @@ suite.define(() => {
       await expect.poll(() => remove.isVisible()).toBe(true);
     }
 
+    for (let line = 0; line < 24; line++) {
+      await textarea.press("Shift+Enter");
+      await textarea.pressSequentially("A longer draft line for native scrolling.");
+    }
+    await expect.poll(() => textarea.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    const bottomScroll = await textarea.evaluate((element) => element.scrollTop);
+    await textarea.press("ControlOrMeta+Home");
+    await expect
+      .poll(() => textarea.evaluate((element) => element.scrollTop))
+      .toBeLessThan(bottomScroll);
+    await expect
+      .poll(async () => {
+        const labelBox = await highlight.boundingBox();
+        const inputBox = await textarea.boundingBox();
+        return (
+          labelBox!.y >= inputBox!.y &&
+          labelBox!.y + labelBox!.height <= inputBox!.y + inputBox!.height
+        );
+      })
+      .toBe(true);
+    await textarea.evaluate((element: HTMLTextAreaElement) =>
+      element.setSelectionRange(12, element.value.length),
+    );
+    await textarea.press("Backspace");
     await remove.click();
     await pollCount(preview).toBe(0);
-    expect(await textarea.inputValue()).toBe("@Bob ");
+    expect(await textarea.inputValue()).toBe("@Bob's notes");
+    expect(await highlight.count()).toBe(0);
+    await textarea.fill("");
+    await textarea.pressSequentially("@Bob");
+    await page.getByRole("option", { name: /Bob/ }).click();
+    await textarea.pressSequentially("’s notes");
+    expect(await textarea.inputValue()).toBe("@Bob’s notes");
+    await page.locator(".new-session-page__start-submit").click();
+    expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
+      message: "@Bob’s notes",
+      mentions: [{ profileId: "profile-bob", start: 0, end: 4 }],
+    });
   });
 });
