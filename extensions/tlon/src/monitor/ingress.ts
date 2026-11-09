@@ -47,6 +47,27 @@ const TlonIngressPermanentError = createChannelIngressError<"invalid-event" | "t
   { withReason: true },
 );
 
+// Raw Urbit events are attacker-shaped JSON. JSON.parse accepts nesting that
+// JSON.stringify cannot serialize, so durable storage must reject such events
+// instead of letting a stack overflow escape the awaited SSE callback.
+class TlonIngressUnserializableEventError extends Error {
+  constructor(cause: unknown) {
+    super("Tlon firehose event is too deeply nested to store.", { cause });
+    this.name = "TlonIngressUnserializableEventError";
+  }
+}
+
+function serializeTlonIngressEvent(event: unknown): string {
+  try {
+    return JSON.stringify(event);
+  } catch (error) {
+    if (error instanceof RangeError) {
+      throw new TlonIngressUnserializableEventError(error);
+    }
+    throw error;
+  }
+}
+
 function inspectChannelsEvent(event: unknown): { eventId: string; laneKey: string } | null {
   const envelope = asRecord(event);
   const nest = nonEmptyString(envelope?.nest);
@@ -162,7 +183,7 @@ export function createTlonIngressMonitor(options: {
       serialize: (raw, { receivedAt }) => ({
         receivedAt,
         source: raw.source,
-        rawEvent: JSON.stringify(raw.event),
+        rawEvent: serializeTlonIngressEvent(raw.event),
       }),
       deserialize: (body, { claim }) => deserializeTlonIngressEvent(body, claim.id),
       encode: ({ body }) => ({ version: TLON_INGRESS_PAYLOAD_VERSION, ...body }),
@@ -202,9 +223,18 @@ export function createTlonIngressMonitor(options: {
     receive: async ({
       source,
       event,
-    }: TlonIngressRaw): Promise<{ kind: "accepted" | "ignored" }> => {
-      const result = await monitor.admit({ source, event });
-      return { kind: result.kind === "durable" ? "accepted" : "ignored" };
+    }: TlonIngressRaw): Promise<{ kind: "accepted" | "ignored" | "dropped" }> => {
+      try {
+        const result = await monitor.admit({ source, event });
+        return { kind: result.kind === "durable" ? "accepted" : "ignored" };
+      } catch (error) {
+        if (error instanceof TlonIngressUnserializableEventError) {
+          // Permanent poison: acknowledge it so the Urbit channel queue is not pinned.
+          options.runtime.log?.(`tlon dropped ${source} event: ${error.message}`);
+          return { kind: "dropped" };
+        }
+        throw error;
+      }
     },
     start: monitor.start,
     stop: monitor.stop,

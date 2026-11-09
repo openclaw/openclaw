@@ -9,6 +9,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { asNullableRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getTlonRuntime } from "../runtime.js";
@@ -172,7 +173,11 @@ export function isGroupInviteAllowed(
   }).allowed;
 }
 
-function renderInlineItem(item: unknown, topLevel = false): string {
+// Inline styles can nest arbitrarily deeply in remote content. Stop rendering past
+// this depth while preserving shallower markers, siblings, and later content.
+const MAX_INLINE_DEPTH = 100;
+
+function renderInlineItem(item: unknown, topLevel = false, depth = 0): string {
   if (typeof item === "string") {
     return item;
   }
@@ -206,23 +211,32 @@ function renderInlineItem(item: unknown, topLevel = false): string {
     const linkContent = readStringField(link, "content");
     return topLevel ? linkHref : linkContent || linkHref;
   }
-  if (Array.isArray(record.bold)) {
-    return `**${extractInlineText(record.bold)}**`;
+  const bold = Array.isArray(record.bold) ? record.bold : undefined;
+  const italics = Array.isArray(record.italics) ? record.italics : undefined;
+  const strike = Array.isArray(record.strike) ? record.strike : undefined;
+  const blockquote = topLevel && Array.isArray(record.blockquote) ? record.blockquote : undefined;
+  const nested = bold ?? italics ?? strike ?? blockquote;
+  if (!nested) {
+    return "";
   }
-  if (Array.isArray(record.italics)) {
-    return `*${extractInlineText(record.italics)}*`;
+  if (depth >= MAX_INLINE_DEPTH) {
+    return "";
   }
-  if (Array.isArray(record.strike)) {
-    return `~~${extractInlineText(record.strike)}~~`;
+  const inner = extractInlineText(nested, depth + 1);
+  if (bold) {
+    return `**${inner}**`;
   }
-  if (topLevel && Array.isArray(record.blockquote)) {
-    return `> ${extractInlineText(record.blockquote)}`;
+  if (italics) {
+    return `*${inner}*`;
   }
-  return "";
+  if (strike) {
+    return `~~${inner}~~`;
+  }
+  return `> ${inner}`;
 }
 
-function extractInlineText(items: readonly unknown[]): string {
-  return items.map((item) => renderInlineItem(item)).join("");
+function extractInlineText(items: readonly unknown[], depth = 0): string {
+  return items.map((item) => renderInlineItem(item, false, depth)).join("");
 }
 
 export function extractMessageText(content: unknown): string {
@@ -319,6 +333,20 @@ export function extractMessageText(content: unknown): string {
     })
     .join("\n")
     .trim();
+}
+
+// A malformed message must settle without pinning the shared firehose for replay.
+// History and citation readers retain their own error handling around the raw renderer.
+export function extractMessageTextForMonitor(
+  content: unknown,
+  runtime: Pick<RuntimeEnv, "log">,
+): string {
+  try {
+    return extractMessageText(content);
+  } catch {
+    runtime.log?.("[tlon] Failed to extract message text");
+    return "";
+  }
 }
 
 export function isSummarizationRequest(messageText: string): boolean {

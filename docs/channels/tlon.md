@@ -69,6 +69,11 @@ DM the bot or @ mention it in a group channel.
 
 OpenClaw persists accepted Tlon DM and group-chat events before agent dispatch. Pending or retryable turns survive a Gateway restart, and work remains serialized per group channel or direct peer. Stable Urbit message IDs also suppress a redelivered event while its queue record or retained completion record exists.
 
+Inline rich-text rendering stops after 100 nested formatting levels, preserving shallower text
+and later content. Eligible inbound events too deeply nested to serialize for durable storage are
+logged and acknowledged without dispatch, so they cannot block later messages. Other storage
+failures remain retryable rather than being acknowledged as successful admission.
+
 Delivery is at least once across the queue-to-agent boundary: a crash during handoff can replay a turn. Agent actions that produce external side effects should therefore avoid duplicating those effects on retries where practical.
 
 ## Private/LAN ships

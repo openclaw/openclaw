@@ -123,25 +123,28 @@ afterEach(() => {
 });
 
 describe("Tlon durable ingress", () => {
-  it("propagates durable append failure before dispatch", async () => {
-    await withQueue(async (queue) => {
-      const appendError = new Error("sqlite unavailable");
-      const failingQueue = {
-        ...queue,
-        enqueue: vi.fn().mockRejectedValue(appendError),
-      } satisfies TlonIngressQueue;
-      const dispatch = vi.fn();
-      const monitor = startMonitor(failingQueue, dispatch);
-      try {
-        await expect(monitor.receive({ source: "channels", event: channelEvent() })).rejects.toBe(
-          appendError,
-        );
-        expect(dispatch).not.toHaveBeenCalled();
-      } finally {
-        await monitor.stop();
-      }
-    });
-  });
+  it.each([Error, RangeError])(
+    "propagates durable append %s before dispatch",
+    async (ErrorType) => {
+      await withQueue(async (queue) => {
+        const appendError = new ErrorType("sqlite unavailable");
+        const failingQueue = {
+          ...queue,
+          enqueue: vi.fn().mockRejectedValue(appendError),
+        } satisfies TlonIngressQueue;
+        const dispatch = vi.fn();
+        const monitor = startMonitor(failingQueue, dispatch);
+        try {
+          await expect(monitor.receive({ source: "channels", event: channelEvent() })).rejects.toBe(
+            appendError,
+          );
+          expect(dispatch).not.toHaveBeenCalled();
+        } finally {
+          await monitor.stop();
+        }
+      });
+    },
+  );
 
   it("recovers an uncompleted message with a fresh drain exactly once", async () => {
     await withQueue(async (queue, stateDir) => {

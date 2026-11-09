@@ -110,6 +110,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/telegram/src/telegram-ingress-drain.test.ts",
   "extensions/telegram/src/telegram-ingress-supersede.test.ts",
   "extensions/telegram/src/webhook.test.ts",
+  "extensions/tlon/src/monitor/index.depth.test.ts",
   "extensions/tlon/src/monitor/ingress.test.ts",
   "extensions/tlon/src/monitor/index.test.ts",
   "extensions/twitch/src/twitch-ingress.test.ts",
