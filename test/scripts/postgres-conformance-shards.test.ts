@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  PG16_GATEWAY_SMOKE_RESERVATION_SECONDS,
   assignPostgresConformanceShards,
   createPostgresConformanceEstimator,
 } from "../../scripts/lib/postgres-conformance-shards.mts";
@@ -38,7 +39,11 @@ describe("PostgreSQL conformance cost model", () => {
     const targets = Array.from({ length: 12 }, (_, index) => `test-${index}`);
     const estimateWork = (selected: readonly string[]) => selected.length * 50;
     const shards = assignPostgresConformanceShards(targets, 3, estimateWork);
-    expect(shards.map(estimateWork)).toEqual([100, 250, 250]);
+    expect(shards.map(estimateWork)).toEqual([
+      250 - PG16_GATEWAY_SMOKE_RESERVATION_SECONDS,
+      250,
+      250,
+    ]);
     expect(shards.flat().toSorted()).toEqual(targets.toSorted());
   });
 

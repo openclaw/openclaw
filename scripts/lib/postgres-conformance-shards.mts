@@ -1,5 +1,7 @@
 import { isTestFileTarget } from "./changed-path-facts.mjs";
 
+export const PG16_GATEWAY_SMOKE_RESERVATION_SECONDS = 150;
+
 const DATABASE_ENGINE_TARGET = "src/infra/database-engine";
 const postgresConformanceTargets = [
   "extensions/workboard",
@@ -146,7 +148,7 @@ export function assignPostgresConformanceShards(
   // Keep one deterministic plan for every caller, reserving service lifecycle headroom too.
   const shards = Array.from({ length: count }, (_, index) => ({
     targets: new Array<string>(),
-    overhead: index === 0 ? 150 : 0,
+    overhead: index === 0 ? PG16_GATEWAY_SMOKE_RESERVATION_SECONDS : 0,
     weight: 0,
   }));
   const ordered = targets
