@@ -176,6 +176,11 @@ describe("PostgreSQL conformance selection", () => {
     );
     expect(Object.keys(workflow.on).toSorted()).toEqual(["schedule", "workflow_dispatch"]);
     expect(workflow.on.schedule).toEqual([{ cron: "17 7 * * *" }, { cron: "43 6 * * 1" }]);
+    expect(workflow.concurrency).toEqual({
+      group: "postgres-conformance-weekly",
+      queue: "max",
+      "cancel-in-progress": false,
+    });
     const versions = workflow.on.workflow_dispatch.inputs.versions;
     expect(versions.default).toBe("all");
     expect(versions.options).toEqual(["all", "pg16", "pg17", "pg18"]);
