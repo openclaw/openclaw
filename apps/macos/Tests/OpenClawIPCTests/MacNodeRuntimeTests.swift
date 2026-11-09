@@ -174,6 +174,8 @@ struct MacNodeRuntimeTests {
         var simulatorStarts = 0
         var simulatorStops = 0
         var actResultOk = true
+        var simulatorStartEntered: AsyncTestGate?
+        var releaseSimulatorStart: AsyncTestGate?
 
         private func simulatorFrame() -> SimulatorCaptureService.Frame {
             SimulatorCaptureService.Frame(
@@ -186,6 +188,8 @@ struct MacNodeRuntimeTests {
 
         func startSimulatorCapture(executionId: String) async throws -> SimulatorCaptureService.Frame {
             self.simulatorStarts += 1
+            self.simulatorStartEntered?.open()
+            await self.releaseSimulatorStart?.wait()
             return self.simulatorFrame()
         }
 
@@ -944,6 +948,37 @@ struct MacNodeRuntimeTests {
 }
 
 extension MacNodeRuntimeTests {
+    @MainActor
+    @Test func `Simulator start closed while capture suspends leaves no live execution`() async {
+        let services = MainActorServicesProbe()
+        let entered = AsyncTestGate()
+        let release = AsyncTestGate()
+        defer { release.open() }
+        services.simulatorStartEntered = entered
+        services.releaseSimulatorStart = release
+        let runtime = MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { .peekaboo })
+        let execution = "44444444-4444-4444-8444-444444444444"
+        let pending = Task {
+            await self.invoke(
+                runtime, "sim-slow-start", "simulator.capture",
+                "{\"action\":\"start\",\"executionId\":\"\(execution)\"}")
+        }
+        await entered.wait()
+        let closed = await self.invoke(
+            runtime, "sim-close", "computer.act",
+            "{\"action\":\"__close_execution\",\"executionId\":\"\(execution)\"}")
+        #expect(closed.ok)
+        release.open()
+        let result = await pending.value
+        #expect(!result.ok)
+        #expect(services.simulatorStops == 2)
+        #expect(services.desktopPlatform.assertions.isEmpty)
+    }
+
     @MainActor
     @Test func `Simulator capture and input obey lock revocation`() async {
         let services = MainActorServicesProbe()

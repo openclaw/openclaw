@@ -11,6 +11,7 @@ import {
   createOptimistic,
   createSignal,
   latest,
+  lazy,
   onSettled,
 } from "solid-js";
 import { hostDesktopSetupCopy } from "../../components/desktop/host-desktop-setup.ts";
@@ -29,7 +30,6 @@ import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
-import { SimulatorPreview } from "./simulator-preview.tsx";
 import { SystemsBackups } from "./systems-backups.tsx";
 import type { SystemsInventoryRow } from "./systems-data.ts";
 import { SystemMeasurements } from "./systems-measurements.tsx";
@@ -39,6 +39,9 @@ import type { Systems } from "./systems-state.ts";
 import "../../styles/systems.css";
 
 registerEnglishCatalog(registerSystemsEnglish);
+const SimulatorPreview = lazy(() => import("./simulator-preview.tsx"), {
+  export: "SimulatorPreview",
+});
 
 export function SystemsPage(props: { controller: Systems; presented: boolean }) {
   let desktopPanel: HTMLElementTagNameMap["openclaw-desktop-panel"] | undefined;

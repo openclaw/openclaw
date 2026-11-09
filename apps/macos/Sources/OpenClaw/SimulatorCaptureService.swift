@@ -9,6 +9,7 @@ import OpenClawKit
 final class SimulatorCaptureService {
     enum CaptureError: LocalizedError {
         case noWindow
+        case busy
         case staleSession
         case noDisplay
         case changedWindow
@@ -17,6 +18,7 @@ final class SimulatorCaptureService {
         var errorDescription: String? {
             switch self {
             case .noWindow: "Open Simulator and boot an iOS device, then retry."
+            case .busy: "Simulator is already open in another preview. Close it before retrying."
             case .staleSession: "Simulator preview ended; reopen it to start a new capture."
             case .noDisplay: "The Simulator window is not on an available display."
             case .changedWindow: "Simulator moved or resized; reopen the preview to realign input."
@@ -47,6 +49,7 @@ final class SimulatorCaptureService {
     private var output: SimulatorFrameOutput?
     private var sessionId: String?
     private var executionId: String?
+    private var reservationId: UUID?
     private var metadata: Frame?
     private var windowID: CGWindowID?
     private var windowFrame: CGRect?
@@ -56,63 +59,78 @@ final class SimulatorCaptureService {
     private var expiry: Task<Void, Never>?
 
     func start(executionId: String) async throws -> Frame {
-        try await ScreenCaptureSupport.requirePermission()
-        await self.stop()
-        let content = try await SCShareableContent.current
-        let windows = content.windows.filter {
-            $0.owningApplication?.bundleIdentifier == "com.apple.iphonesimulator" &&
-                $0.isOnScreen && $0.frame.width > 100 && $0.frame.height > 100
-        }
-        guard let window = windows.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
-        else { throw CaptureError.noWindow }
-        let displays = content.displays.sorted { $0.displayID < $1.displayID }
-        guard let screenIndex = displays.firstIndex(where: { CGDisplayBounds($0.displayID).intersects(window.frame) })
-        else { throw CaptureError.noDisplay }
-        let display = displays[screenIndex]
-        let refWidth = display.width
-        let geometry = try ScreenCaptureDisplayGeometry(display: display, noDisplays: CaptureError.noDisplay)
-        let filter = SCContentFilter(desktopIndependentWindow: window)
-        let config = SCStreamConfiguration()
-        let scale = min(1, 1400 / max(window.frame.width, window.frame.height))
-        config.width = max(1, Int((window.frame.width * scale).rounded()))
-        config.height = max(1, Int((window.frame.height * scale).rounded()))
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 12)
-        config.queueDepth = 2
-        config.showsCursor = false
-        let output = SimulatorFrameOutput()
-        let stream = SCStream(filter: filter, configuration: config, delegate: output)
-        try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: output.queue)
-        try await stream.startCapture()
-        let sessionId = UUID().uuidString
-        self.sessionId = sessionId
+        guard self.reservationId == nil else { throw CaptureError.busy }
+        let reservationId = UUID()
+        self.reservationId = reservationId
         self.executionId = executionId
-        self.stream = stream
-        self.output = output
-        self.windowID = window.windowID
-        self.windowFrame = window.frame
-        self.simulatorPID = window.owningApplication?.processID
-        self.lastRead = Date()
-        self.expiry = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(5))
-                guard let self, !Task.isCancelled else { return }
-                if Date().timeIntervalSince(self.lastRead) > 15 {
-                    await self.stop()
-                    return
+        var pendingStream: SCStream?
+        do {
+            try await ScreenCaptureSupport.requirePermission()
+            let content = try await SCShareableContent.current
+            let windows = content.windows.filter {
+                $0.owningApplication?.bundleIdentifier == "com.apple.iphonesimulator" &&
+                    $0.isOnScreen && $0.frame.width > 100 && $0.frame.height > 100
+            }
+            guard let window = windows.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
+            else { throw CaptureError.noWindow }
+            let displays = content.displays.sorted { $0.displayID < $1.displayID }
+            guard let screenIndex = displays.firstIndex(where: { CGDisplayBounds($0.displayID).intersects(window.frame) })
+            else { throw CaptureError.noDisplay }
+            let display = displays[screenIndex]
+            let refWidth = display.width
+            let geometry = try ScreenCaptureDisplayGeometry(display: display, noDisplays: CaptureError.noDisplay)
+            let filter = SCContentFilter(desktopIndependentWindow: window)
+            let config = SCStreamConfiguration()
+            let scale = min(1, 1400 / max(window.frame.width, window.frame.height))
+            config.width = max(1, Int((window.frame.width * scale).rounded()))
+            config.height = max(1, Int((window.frame.height * scale).rounded()))
+            config.minimumFrameInterval = CMTime(value: 1, timescale: 12)
+            config.queueDepth = 2
+            config.showsCursor = false
+            let output = SimulatorFrameOutput()
+            let stream = SCStream(filter: filter, configuration: config, delegate: output)
+            pendingStream = stream
+            try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: output.queue)
+            try await stream.startCapture()
+            pendingStream = nil
+            guard self.reservationId == reservationId else {
+                try? await stream.stopCapture()
+                throw CaptureError.staleSession
+            }
+            let sessionId = UUID().uuidString
+            self.sessionId = sessionId
+            self.stream = stream
+            self.output = output
+            self.windowID = window.windowID
+            self.windowFrame = window.frame
+            self.simulatorPID = window.owningApplication?.processID
+            self.lastRead = Date()
+            self.expiry = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(5))
+                    guard let self, !Task.isCancelled else { return }
+                    if Date().timeIntervalSince(self.lastRead) > 15 {
+                        await self.stop()
+                        return
+                    }
                 }
             }
+            let metadata = Frame(
+                sessionId: sessionId, sequence: 0, jpegBase64: nil,
+                width: config.width, height: config.height,
+                windowX: Double(window.frame.minX), windowY: Double(window.frame.minY),
+                windowWidth: Double(window.frame.width), windowHeight: Double(window.frame.height),
+                displayX: geometry.geometry.originX, displayY: geometry.geometry.originY,
+                displayWidth: geometry.geometry.widthPoints,
+                screenIndex: screenIndex, refWidth: refWidth,
+                displayFrameId: geometry.frameId(referenceWidth: refWidth))
+            self.metadata = metadata
+            return metadata
+        } catch {
+            if let pendingStream { try? await pendingStream.stopCapture() }
+            if self.reservationId == reservationId { await self.stop() }
+            throw error
         }
-        let metadata = Frame(
-            sessionId: sessionId, sequence: 0, jpegBase64: nil,
-            width: config.width, height: config.height,
-            windowX: Double(window.frame.minX), windowY: Double(window.frame.minY),
-            windowWidth: Double(window.frame.width), windowHeight: Double(window.frame.height),
-            displayX: geometry.geometry.originX, displayY: geometry.geometry.originY,
-            displayWidth: geometry.geometry.widthPoints,
-            screenIndex: screenIndex, refWidth: refWidth,
-            displayFrameId: geometry.frameId(referenceWidth: refWidth))
-        self.metadata = metadata
-        return metadata
     }
 
     func read(sessionId: String, after sequence: UInt64) async throws -> Frame {
@@ -204,6 +222,7 @@ final class SimulatorCaptureService {
         self.output = nil
         self.sessionId = nil
         self.executionId = nil
+        self.reservationId = nil
         self.metadata = nil
         self.windowID = nil
         self.windowFrame = nil

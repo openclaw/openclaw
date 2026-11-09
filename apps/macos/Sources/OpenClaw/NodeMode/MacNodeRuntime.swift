@@ -259,6 +259,11 @@ actor MacNodeRuntime {
                 }
                 try await desktop.validate(permit)
             } catch {
+                if req.command == "simulator.capture", envelope.action == "start",
+                   let executionId = envelope.executionId
+                {
+                    await self.cachedMainActorServices?.stopSimulatorCapture(forExecutionId: executionId)
+                }
                 await desktop.finishInvocation(permit)
                 throw error
             }
