@@ -2,9 +2,9 @@ import { createSessionProjection, reduceSessionProjection } from "@openclaw/gate
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
-import { admitChatHistoryPages } from "../../../ui/src/pages/chat/chat-history-snapshot.ts";
 import { prepareChatHistorySegment } from "../../../ui/src/pages/chat/chat-history-window.ts";
 import { makeChatHost } from "../../../ui/src/pages/chat/chat-host.test-support.ts";
+import { admitChatHistoryPages } from "../../../ui/src/pages/chat/chat-pane-history-packets.runtime.ts";
 import {
   getChatSessionProjection,
   publishChatSessionProjection,
