@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { attributeWriterOccupancy } from "../../scripts/diagnostic-writer-occupancy.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 
 const patchOperation = "session-entry.patch";
 const at = (time: string) => `2026-10-13T${time}`;
@@ -181,3 +185,28 @@ describe("writer occupancy log report", () => {
     expect(JSON.stringify(report)).not.toMatch(/"(?:pid|threadId|scope|storePath|agentId|error)":/);
   });
 });
+
+it("exits on invalid CLI bounds while the input producer stays connected", async () => {
+  const child = spawn(
+    resolveTestNodeExecPath(),
+    [
+      fileURLToPath(new URL("../../scripts/diagnostic-writer-occupancy.mts", import.meta.url)),
+      "--from",
+      "invalid",
+    ],
+    { stdio: ["pipe", "ignore", "pipe"], timeout: 5_000 },
+  );
+  let stderr = "";
+  child.stderr.setEncoding("utf8").on("data", (chunk) => {
+    stderr += chunk;
+  });
+  const closed = once(child, "close");
+  onTestFinished(async () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+    await closed;
+  });
+  expect(await closed, stderr).toEqual([1, null]);
+  expect(stderr).toContain("Writer occupancy report failed");
+}, 10_000);

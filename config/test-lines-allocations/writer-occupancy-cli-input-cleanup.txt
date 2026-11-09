@@ -1,0 +1,2 @@
+# Real CLI exits after invalid bounds without waiting for its stdin producer.
+29
