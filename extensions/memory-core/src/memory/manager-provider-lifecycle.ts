@@ -679,16 +679,12 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   protected cacheProbeResult(result: MemoryEmbeddingProbeResult): MemoryEmbeddingProbeResult {
-    // Expiry runs on the monotonic clock so a wall-clock step cannot extend the
-    // window, while the reported timestamps stay wall-clock epochs for clients
-    // reading doctor.memory.status as dates.
-    const checkedAtMonoMs = performance.now();
+    // Expiry uses elapsed time; reported timestamps stay wall-clock epochs.
     this.embeddingProbeCache.set(this.cacheKey, {
       result,
       adapters: this.getEmbeddingProbeOwners(),
       checkedAtMs: Date.now(),
-      checkedAtMonoMs,
-      expireAtMs: checkedAtMonoMs + EMBEDDING_PROBE_CACHE_TTL_MS,
+      expireAtMs: performance.now() + EMBEDDING_PROBE_CACHE_TTL_MS,
     });
     return result;
   }

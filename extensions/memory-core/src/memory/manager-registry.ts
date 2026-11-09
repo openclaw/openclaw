@@ -66,11 +66,8 @@ export function resolveMemoryIndexManagerCacheKey(params: {
 export type MemoryEmbeddingProbeCacheEntry = {
   result: MemoryEmbeddingProbeResult;
   adapters: readonly MemoryEmbeddingProviderAdapter[];
-  /** Wall-clock completion time; reported to clients as an epoch timestamp. */
   checkedAtMs: number;
-  /** Monotonic process timestamp; owns expiry so wall-clock steps cannot extend it. */
-  checkedAtMonoMs: number;
-  /** Monotonic expiry boundary compared against `performance.now()`. */
+  /** Compared against `performance.now()` so wall-clock steps cannot extend it. */
   expireAtMs: number;
 };
 
