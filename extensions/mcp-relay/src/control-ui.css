@@ -62,6 +62,7 @@
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .mcp-connected-apps__details {
@@ -125,10 +126,21 @@
 }
 
 .mcp-connected-apps__error {
+  margin: var(--space-3) 0;
   padding: var(--space-3);
   border: 1px solid var(--danger);
   border-radius: var(--radius-sm);
   color: var(--danger);
+}
+
+.mcp-connected-apps__error details {
+  margin-top: var(--space-2);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.mcp-connected-apps__error details p {
+  margin: var(--space-1) 0 0;
 }
 
 .mcp-connected-apps__feedback:empty {

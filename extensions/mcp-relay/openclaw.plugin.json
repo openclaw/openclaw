@@ -40,8 +40,8 @@
       "help": "HTTPS relay origin. HTTP is supported only for localhost and 127.0.0.1 development."
     },
     "agentId": {
-      "label": "Default Agent",
-      "help": "Optional agent for new conversations; otherwise use the Gateway default."
+      "label": "Default agent",
+      "help": "Optional agent for new sessions; otherwise use the Gateway default."
     }
   },
   "controlUi": {
