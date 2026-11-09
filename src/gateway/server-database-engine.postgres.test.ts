@@ -454,14 +454,15 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       await expect(restarted.client.request("cron.status", {})).resolves.toMatchObject({
         enabled: true,
       });
-      // An automatically completed due job proves the new scheduler generation ran;
-      // startupSettled alone does not join the detached cron startup task.
+      // A due slot created after cron.status proves this scheduler generation ran.
+      // Backdating it can invoke downtime catch-up; startupSettled alone does not
+      // join the detached cron startup task.
       const probe = await restarted.client.request<{ id: string }>("cron.add", {
         name: "automatic-scheduler-probe",
         agentId: "main",
         enabled: true,
         deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
+        schedule: { kind: "at", at: new Date().toISOString() },
         sessionTarget: "isolated",
         wakeMode: "now",
         payload: { kind: "agentTurn", message: probePrompt },
