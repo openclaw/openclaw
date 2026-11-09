@@ -5,12 +5,6 @@
 import { abortAgentHarnessRun } from "openclaw/plugin-sdk/agent-harness";
 import { BargeInAgentAbortCoordinator } from "../barge-in-agent-abort.js";
 
-/** The webhook server surface this trigger reads, resolved lazily per call. */
-export type BargeInAbortHost = {
-  config: { bargeIn?: { abortAgentRun?: boolean } };
-  logger: { info: (message: string) => void; warn: (message: string) => void };
-};
-
 export type BargeInAbortTrigger = {
   /** Guarded abort for the interrupted turn; never throws to the audio path. */
   abortForBargeIn: (callId: string) => void;
@@ -29,13 +23,16 @@ export type BargeInAbortTrigger = {
  * can change under a config hot reload and the logger is assigned in the
  * webhook server's constructor, after field initializers run.
  */
-export function createBargeInAbortTrigger(host: () => BargeInAbortHost): BargeInAbortTrigger {
+export function createBargeInAbortTrigger(
+  getConfig: () => { bargeIn?: { abortAgentRun?: boolean } },
+  logger: { info: (message: string) => void; warn: (message: string) => void },
+): BargeInAbortTrigger {
   const coordinator = new BargeInAgentAbortCoordinator({
     // Same run-abort entry point the TUI escape key uses; it signals the run's
     // abort signal, which kills in-flight tool child processes immediately
     // instead of waiting for a tool-call boundary.
     abortAgentRun: (sessionId) => abortAgentHarnessRun(sessionId),
-    log: (message) => host().logger.info(message),
+    log: (message) => logger.info(message),
   });
   // Turns overlap because handleInboundResponse is void-called, so a late
   // settle must clear only the run it started, not its replacement's.
@@ -46,14 +43,14 @@ export function createBargeInAbortTrigger(host: () => BargeInAbortHost): BargeIn
         // Read the flag inside the guard: this runs on the inbound transcript
         // path, and a config shape missing bargeIn must not throw past here
         // and swallow a caller audio frame.
-        if (!host().config.bargeIn?.abortAgentRun) {
+        if (!getConfig().bargeIn?.abortAgentRun) {
           return;
         }
         coordinator.abortForBargeIn({ callId, source: "streaming" });
       } catch (err) {
         // A throw here would skip the rest of barge-in handling, so clearing
         // queued audio must never depend on the agent-run abort succeeding.
-        host().logger.warn(`barge-in agent run abort failed callId=${callId} error=${String(err)}`);
+        logger.warn(`barge-in agent run abort failed callId=${callId} error=${String(err)}`);
       }
     },
     registerRun: (callId, run) => {

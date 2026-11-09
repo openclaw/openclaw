@@ -16,6 +16,7 @@ vi.mock("../logger.js", async (importOriginal) => ({
   },
 }));
 
+// mock-isolation: a counting fake supervisor observes kill behaviour without spawning real children.
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
     spawn: async () => {
@@ -57,14 +58,16 @@ vi.mock("../process/supervisor/index.js", () => ({
   }),
 }));
 
-// Keeps the tool off the real login shell and the real host executors.
+// mock-isolation: keeps the tool off the real login shell, so the test cannot depend on the host.
 vi.mock("../infra/shell-env.js", () => ({
   getShellPathFromLoginShell: vi.fn(() => null),
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
 }));
+// mock-isolation: the gateway host executor is stubbed so no command leaves the test process.
 vi.mock("./bash-tools.exec-host-gateway.js", () => ({
   processGatewayAllowlist: vi.fn(async () => ({})),
 }));
+// mock-isolation: the node host executor throws on purpose; reaching it means the wrong path ran.
 vi.mock("./bash-tools.exec-host-node.js", () => ({
   executeNodeHostCommand: vi.fn(async () => {
     throw new Error("node host not expected in abort kill log tests");

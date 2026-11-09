@@ -1,0 +1,10 @@
+398
+# Barge-in agent-run abort on caller interruption (voice-call streaming path).
+# Three new suites, none of which have an existing home:
+#   barge-in-agent-abort.test.ts      coordinator registry, opt-in gate, abort dispatch
+#   webhook.barge-in-abort.test.ts    the streaming trigger end to end, including the
+#                                     guarded-throw path that must not drop a caller frame
+#   bash-tools.exec.abort-kill-log.test.ts  the exec abort-kill log line, foreground and
+#                                     backgrounded, since only the foreground child is killed
+# Each covers a distinct defect class and the coverage cannot be folded into an
+# existing suite without losing the isolation these fixtures provide.

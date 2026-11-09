@@ -119,7 +119,7 @@ export class VoiceCallWebhookServer {
    * Barge-in agent-run abort for the streaming path. Inert unless
    * `bargeIn.abortAgentRun` is set, so audio-only barge-in is the default.
    */
-  private readonly bargeInAgentAbort = createBargeInAbortTrigger(() => this);
+  private readonly bargeIn: ReturnType<typeof createBargeInAbortTrigger>;
   /** Realtime voice handler for duplex provider bridges. */
   private realtimeHandler: RealtimeCallHandler | null = null;
   private replayResponses = new Map<string, CachedWebhookResponse>();
@@ -142,6 +142,7 @@ export class VoiceCallWebhookServer {
       debug: console.debug,
     };
     this.logger = createPrefixedWebhookLogger(rawLogger);
+    this.bargeIn = createBargeInAbortTrigger(() => this.config, this.logger);
     this.streamDisconnectGrace = new StreamDisconnectGrace(({ providerCallId }) => {
       const call = this.manager.getCallByProviderCallId(providerCallId);
       if (!call) {
@@ -246,7 +247,7 @@ export class VoiceCallWebhookServer {
     this.streamSpeechGenerations.set(current.call, generation);
     this.manager.invalidateAutoResponse(current.call);
     current.provider.clearTtsQueue(providerCallId);
-    this.bargeInAgentAbort.abortForBargeIn(current.call.callId);
+    this.bargeIn.abortForBargeIn(current.call.callId);
     return generation;
   }
 
@@ -922,7 +923,7 @@ export class VoiceCallWebhookServer {
         transcript: call.transcript,
         userMessage,
         onEarlyText: speakResponse,
-        onAgentRunStarted: (run) => this.bargeInAgentAbort.registerRun(callId, run),
+        onAgentRunStarted: (run) => this.bargeIn.registerRun(callId, run),
       });
 
       if (result.error) {
@@ -938,7 +939,7 @@ export class VoiceCallWebhookServer {
         await speakResponse("Sorry, I hit a problem working out a response. Please try again.");
       }
     } finally {
-      this.bargeInAgentAbort.clearTurn(callId);
+      this.bargeIn.clearTurn(callId);
       response.release();
     }
   }

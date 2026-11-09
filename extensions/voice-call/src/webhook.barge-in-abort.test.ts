@@ -10,6 +10,7 @@ import { VoiceCallWebhookServer } from "./webhook.js";
 const mocks = vi.hoisted(() => ({
   abortAgentHarnessRun: vi.fn<(sessionId: string) => boolean>(),
 }));
+// mock-isolation: the abort entry point stays a spy; a real abort would reach the live agent harness.
 vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
   abortAgentHarnessRun: mocks.abortAgentHarnessRun,
 }));
@@ -76,15 +77,13 @@ function createServer(abortAgentRun: boolean) {
   // both internal, and the observable behaviour under test is the abort call.
   const internals = server as unknown as {
     interruptStreamReply: (providerCallId: string, streamSid: string) => symbol | undefined;
-    bargeInAgentAbort: {
-      trackTurn: (callId: string) => {
-        onAgentRunStarted: (run: { sessionId: string; runId: string }) => void;
-      };
+    bargeIn: {
+      registerRun: (callId: string, run: { sessionId: string; runId: string }) => void;
     };
   };
   const bargeIn = () => internals.interruptStreamReply(PROVIDER_CALL_ID, STREAM_SID);
   const trackRun = () =>
-    internals.bargeInAgentAbort.trackTurn(CALL_ID).onAgentRunStarted({
+    internals.bargeIn.registerRun(CALL_ID, {
       sessionId: "session-1",
       runId: "voice:call-1:1",
     });
