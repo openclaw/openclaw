@@ -8,7 +8,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { clearCronJobActive, markCronJobActive } from "../../cron/active-jobs.js";
 import { cronJobReadView } from "../../cron/job-read-view.js";
 import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
