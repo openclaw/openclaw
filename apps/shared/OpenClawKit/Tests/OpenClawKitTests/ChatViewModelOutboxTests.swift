@@ -782,6 +782,10 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
         return commands
     }
 
+    func loadCommandStatusesIfAvailable() async -> [(id: String, status: OpenClawChatOutboxCommand.Status)]? {
+        await self.base.loadCommandStatusesIfAvailable()
+    }
+
     private func delayLoad() async {
         guard self.loadDelayNanoseconds > 0 else { return }
         try? await Task.sleep(nanoseconds: self.loadDelayNanoseconds)

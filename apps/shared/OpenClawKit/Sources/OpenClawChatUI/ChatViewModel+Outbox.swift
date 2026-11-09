@@ -799,7 +799,7 @@ extension OpenClawChatViewModel {
     {
         guard let outbox, !self.isTransportDetached else { return .idle }
         let deadline = Date().addingTimeInterval(Double(max(0, timeoutMs)) / 1000)
-        guard let initial = await outbox.loadCommandsIfAvailable() else { return .pending }
+        guard let initial = await outbox.loadCommandStatusesIfAvailable() else { return .pending }
         let unsent = Set(initial.filter { $0.status == .queued || $0.status == .sending }.map(\.id))
         guard !unsent.isEmpty else { return .idle }
         guard await waitForRoute(Int(deadline.timeIntervalSinceNow * 1000)) else { return .noRoute }
@@ -814,7 +814,7 @@ extension OpenClawChatViewModel {
                 await self.pollHealthIfNeeded(force: forceHealthPoll, timeoutMs: min(5000, remainingMs))
                 forceHealthPoll = false
             }
-            if self.outboxFlushTask == nil, let commands = await outbox.loadCommandsIfAvailable() {
+            if self.outboxFlushTask == nil, let commands = await outbox.loadCommandStatusesIfAvailable() {
                 let tracked = commands.filter { unsent.contains($0.id) }
                 if !tracked.contains(where: { $0.status == .queued || $0.status == .sending }) {
                     // Accepted rows await history confirmation or are already gone.
