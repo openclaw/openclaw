@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { dashboardCommand } from "../../commands/dashboard.js";
 import { baseConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import {
@@ -75,10 +76,19 @@ async function createListener(connection: (ws: WebSocket) => void, rejectUpgrade
   return `ws://127.0.0.1:${address.port}`;
 }
 
-function serveStatus(ws: WebSocket, auth: unknown[], error?: string) {
+function serveStatus(
+  ws: WebSocket,
+  auth: unknown[],
+  error?: string,
+  hold?: { method: string; received: () => void },
+) {
   sendMinimalGatewayConnectChallenge(ws);
   ws.on("message", (data) => {
     const frame = parseMinimalGatewayRequestFrame(data);
+    if (hold && frame.method === hold.method) {
+      hold.received();
+      return;
+    }
     if (frame.method === "connect") {
       auth.push(frame.params?.auth);
       sendMinimalGatewayResponse(
@@ -141,6 +151,39 @@ async function checkDashboardReadiness(url: string, rpc: NonNullable<DaemonStatu
 }
 
 describe("Gateway reachability over real sockets", () => {
+  it.each([false, true])(
+    "cancels a pending check and closes its socket (RPC=%s)",
+    async (requireRpc) => {
+      await createState();
+      const received = createDeferred();
+      const closed = createDeferred();
+      const url = await createListener((ws) => {
+        ws.once("close", () => closed.resolve());
+        serveStatus(ws, [], undefined, {
+          method: requireRpc ? "status" : "connect",
+          received: () => received.resolve(),
+        });
+      });
+      const controller = new AbortController();
+      const reason = new DOMException("Status interrupted.", "AbortError");
+      const result = probeGatewayStatus({
+        url,
+        urlOverride: url,
+        token: "synthetic-token",
+        config: {},
+        timeoutMs: 2_000,
+        json: true,
+        requireRpc,
+        signal: controller.signal,
+      });
+      const interrupted = expect(result).rejects.toBe(reason);
+      await received.promise;
+      controller.abort(reason);
+      await interrupted;
+      await closed.promise;
+    },
+  );
+
   it.each([{}, { token: "service-token" }, { password: "service-password" }])(
     "freezes resolved service auth %j without pairing writes",
     async (auth) => {

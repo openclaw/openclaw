@@ -1,6 +1,7 @@
 // Daemon status tests cover service status gathering and CLI responses.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import type { DaemonStatus } from "./status.gather.js";
 
@@ -77,6 +78,33 @@ describe("runDaemonStatus", () => {
     defaultRuntime.writeJson.mockClear();
     resetRuntimeCapture();
   });
+
+  it.each(["before", "pending", "late result"])(
+    "does not publish status or ordinary failure after an owned interrupt (%s)",
+    async (phase) => {
+      const scope = new AsyncWorkScope();
+      const reason = new DOMException("Status interrupted.", "AbortError");
+      if (phase === "before") {
+        scope.beginClose(reason);
+      } else {
+        gatherDaemonStatus.mockImplementationOnce(async () => {
+          scope.beginClose(reason);
+          if (phase === "pending") {
+            throw reason;
+          }
+          return createStatus();
+        });
+      }
+
+      await scope.run(() => runDaemonStatus({ ...statusOptions, json: true }));
+
+      expect(printDaemonStatus).not.toHaveBeenCalled();
+      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+      expect(defaultRuntime.error).not.toHaveBeenCalled();
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(gatherDaemonStatus).toHaveBeenCalledTimes(phase === "before" ? 0 : 1);
+    },
+  );
 
   it("returns local runtime intent while shared-state diagnostics are unavailable", async () => {
     gatherDaemonStatus.mockRejectedValue(new Error("Shared state is unavailable"));
@@ -168,27 +196,38 @@ describe("runDaemonStatus", () => {
     });
   });
 
-  it("renders service-inspection failures as JSON in JSON mode", async () => {
-    const secret = "sk-abcdefghijklmnopqrstuv";
-    const error = new Error(`service manager unavailable: Authorization: Bearer ${secret}`);
-    error.name = "ServiceManagerError";
-    gatherDaemonStatus.mockRejectedValueOnce(error);
+  it.each([false, true])(
+    "renders service-inspection failures as JSON (interrupted=%s)",
+    async (interrupted) => {
+      const secret = "sk-abcdefghijklmnopqrstuv";
+      const error = new Error(`service manager unavailable: Authorization: Bearer ${secret}`);
+      error.name = "ServiceManagerError";
+      const scope = new AsyncWorkScope();
+      gatherDaemonStatus.mockImplementationOnce(async () => {
+        if (interrupted) {
+          scope.beginClose(new DOMException("Status interrupted.", "AbortError"));
+        }
+        throw error;
+      });
 
-    await expect(runDaemonStatus({ ...statusOptions, json: true })).rejects.toThrow("__exit__:1");
+      await expect(
+        scope.run(() => runDaemonStatus({ ...statusOptions, json: true })),
+      ).rejects.toThrow("__exit__:1");
 
-    expect(printDaemonStatus).not.toHaveBeenCalled();
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
-      ok: false,
-      error: {
-        type: "cli_error",
-        message: expect.stringContaining("Gateway status failed: service manager unavailable"),
-      },
-    });
-    expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(error.name);
-    expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(secret);
-    expect(defaultRuntime.error).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
-  });
+      expect(printDaemonStatus).not.toHaveBeenCalled();
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+        ok: false,
+        error: {
+          type: "cli_error",
+          message: expect.stringContaining("Gateway status failed: service manager unavailable"),
+        },
+      });
+      expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(error.name);
+      expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(secret);
+      expect(defaultRuntime.error).not.toHaveBeenCalled();
+      expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("exits only once after printing a failed required RPC probe", async () => {
     gatherDaemonStatus.mockResolvedValueOnce(

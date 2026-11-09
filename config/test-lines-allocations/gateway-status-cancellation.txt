@@ -1,0 +1,4 @@
+# Two real-socket cancellation regressions cover held connect and status RPC reads.
+# The status-action cases protect cancellation output ownership and preserve real errors.
+# Exact net regression-test LF growth against be82aeb77bbc08661080049650679dc602d8d197.
+82
