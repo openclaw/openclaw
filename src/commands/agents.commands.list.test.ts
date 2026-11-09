@@ -17,19 +17,25 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
-const mocks = vi.hoisted(() => ({
-  plugins: vi.fn<() => ChannelPlugin[]>(() => []),
-  provenance: vi.fn(),
-  displayProvenance: vi.fn(),
-  config: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  const plugins = vi.fn<() => ChannelPlugin[]>(() => []);
+  return {
+    plugins,
+    syncPlugins: vi.fn(() => plugins()),
+    asyncPlugins: vi.fn(async () => plugins()),
+    provenance: vi.fn(),
+    displayProvenance: vi.fn(),
+    config: vi.fn(),
+  };
+});
 
 // mock-isolation: List fixture-owned configurations without reading operator state.
 vi.mock("./config-validation.js", () => ({ requireValidConfig: mocks.config }));
 
 // mock-isolation: Use synthetic plugin descriptors, retaining the command's real provider projection.
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: mocks.plugins,
+  listReadOnlyChannelPluginsForConfig: mocks.syncPlugins,
+  listReadOnlyChannelPluginsForConfigAsync: mocks.asyncPlugins,
 }));
 
 // mock-isolation: Control provenance rows without opening the state database.
@@ -108,6 +114,11 @@ describe("agentsListCommand", () => {
     await expect(list({ json: true, tree: true })).rejects.toThrow(
       "unrelated stored provenance is invalid",
     );
+  });
+  it("resolves provider enrichment through the async read-only channel resolver", async () => {
+    await list({});
+    expect(mocks.asyncPlugins).toHaveBeenCalledTimes(1);
+    expect(mocks.syncPlugins).not.toHaveBeenCalled();
   });
   it("renders roots, children, missing and dangling creators with optional routing rules", async () => {
     setEntries(
@@ -422,6 +433,7 @@ describe("agent provider inventories", () => {
     const bindings = providerMocks.plugins().map((entry) => route(entry.id, "*"));
     bindings.push(route("feishu"));
     providerMocks.plugins.mockClear();
+    providerMocks.asyncPlugins.mockClear();
     const output = await listProviders(cfg, bindings);
     expectProviders(output, [
       "workchat default (Work): linked",
@@ -442,7 +454,7 @@ describe("agent provider inventories", () => {
     expect(isLinked).not.toHaveBeenCalled();
     expect(calls).toEqual(raw.config.listAccountIds(cfg));
     expect(cfg.channels?.imessage?.accounts?.Alpha?.name).toBe("Alias");
-    expect(providerMocks.plugins).toHaveBeenCalledWith(expect.objectContaining(cfg), {
+    expect(providerMocks.asyncPlugins).toHaveBeenCalledWith(expect.objectContaining(cfg), {
       includeSetupFallbackPlugins: false,
     });
   });

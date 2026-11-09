@@ -4,7 +4,7 @@ import { describeChannelAccount, resolveChannelAccount } from "../channels/accou
 import { hasConfiguredUnavailableCredentialStatus } from "../channels/account-snapshot-fields.js";
 import { isChannelVisibleInConfiguredLists } from "../channels/plugins/exposure.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
-import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
+import { listReadOnlyChannelPluginsForConfigAsync } from "../channels/plugins/read-only.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import {
   projectChannelAccountDisplayState,
@@ -213,9 +213,9 @@ export async function agentsListCommand(opts: {
   // JSON and tree queries avoid plugin runtime unless --bindings requests provider enrichment.
   const includeProviderDetails = (!opts.json && !opts.tree) || opts.bindings === true;
   if (includeProviderDetails) {
-    const inventory = listReadOnlyChannelPluginsForConfig(cfg, {
-      includeSetupFallbackPlugins: false,
-    }).map((plugin) => ({ plugin, accountIds: plugin.config.listAccountIds(cfg) }));
+    const inventory = (
+      await listReadOnlyChannelPluginsForConfigAsync(cfg, { includeSetupFallbackPlugins: false })
+    ).map((plugin) => ({ plugin, accountIds: plugin.config.listAccountIds(cfg) }));
     const providerStatus = new Map<string, ProviderAccountStatus>();
 
     for (const { plugin, accountIds } of inventory) {
