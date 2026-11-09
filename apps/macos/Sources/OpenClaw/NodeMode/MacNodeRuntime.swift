@@ -194,8 +194,15 @@ actor MacNodeRuntime {
             let controlsComputer = req.command == OpenClawComputerCommand.act.rawValue ||
                 req.command == "simulator.act" ||
                 (req.command == OpenClawScreenCommand.snapshot.rawValue && self.computerControlProvider() == .cua)
-            let capabilities: [Capability] = controlsComputer
-                ? [.accessibility, .eventPosting, .screenRecording, .computerControl] : [.screenRecording]
+            let capabilities: [Capability] = if req.command == "simulator.capture" {
+                []
+            } else if req.command == "simulator.act" {
+                [.computerControl]
+            } else if controlsComputer {
+                [.accessibility, .eventPosting, .screenRecording, .computerControl]
+            } else {
+                [.screenRecording]
+            }
             if let error = await services.missingPermissions(
                 capabilities,
                 disabled: controlsComputer && !self.computerControlEnabled() ? [.computerControl] : [])

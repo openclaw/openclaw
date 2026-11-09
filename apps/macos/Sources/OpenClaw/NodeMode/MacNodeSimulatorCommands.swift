@@ -31,9 +31,6 @@ extension MacNodeRuntime {
                 code: .invalidRequest, message: "INVALID_REQUEST: invalid simulator capture params"))
         }
         let services = await self.mainActorServices()
-        if let missing = await services.missingPermissions([.screenRecording], disabled: []) {
-            throw missing
-        }
         let frame: SimulatorCaptureService.Frame?
         switch params.action {
         case "start":
@@ -76,22 +73,12 @@ extension MacNodeRuntime {
             throw OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: invalid simulator input")
         }
         let services = await self.mainActorServices()
-        let params = try await services.simulatorInput(
+        try await services.simulatorInput(
             sessionId: input.sessionId, action: input.action,
             x: input.x, y: input.y, fromX: input.fromX, fromY: input.fromY,
-            text: input.text, keys: input.keys)
-        try await services.activateSimulator(sessionId: input.sessionId, desktopPermit: desktopPermit)
-        let result = try await services.performComputerAct(
-            params, lifecycleGeneration: lifecycleGeneration, desktopPermit: desktopPermit)
-        guard result.ok else {
-            return BridgeInvokeResponse(
-                id: req.id, ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "UNAVAILABLE: Simulator input was not delivered; refocus the Simulator and retry"))
-        }
+            text: input.text, keys: input.keys, desktopPermit: desktopPermit)
+        _ = lifecycleGeneration
         return BridgeInvokeResponse(
-            id: req.id, ok: true,
-            payloadJSON: String(decoding: try JSONEncoder().encode(result), as: UTF8.self))
+            id: req.id, ok: true, payloadJSON: #"{"ok":true}"#)
     }
 }

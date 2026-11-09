@@ -29,8 +29,7 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
     func simulatorInput(
         sessionId: String, action: OpenClawComputerAction,
         x: Double?, y: Double?, fromX: Double?, fromY: Double?,
-        text: String?, keys: String?) async throws -> OpenClawComputerActParams
-    func activateSimulator(sessionId: String, desktopPermit: MacDesktopAvailabilityCoordinator.Permit) throws
+        text: String?, keys: String?, desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws
 
     func locationAuthorizationStatus() -> CLAuthorizationStatus
     func locationAccuracyAuthorization() -> CLAccuracyAuthorization
@@ -112,16 +111,14 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
     func simulatorInput(
         sessionId: String, action: OpenClawComputerAction,
         x: Double?, y: Double?, fromX: Double?, fromY: Double?,
-        text: String?, keys: String?) async throws -> OpenClawComputerActParams
+        text: String?, keys: String?, desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws
     {
+        try self.desktopAvailability.validate(desktopPermit)
         try await self.simulatorCapture.input(
             sessionId: sessionId, action: action, x: x, y: y,
-            fromX: fromX, fromY: fromY, text: text, keys: keys)
-    }
-
-    func activateSimulator(sessionId: String, desktopPermit: MacDesktopAvailabilityCoordinator.Permit) throws {
+            fromX: fromX, fromY: fromY, text: text, keys: keys,
+            validate: { try self.desktopAvailability.validate(desktopPermit) })
         try self.desktopAvailability.validate(desktopPermit)
-        try self.simulatorCapture.activate(sessionId: sessionId)
     }
 
     func locationAuthorizationStatus() -> CLAuthorizationStatus {

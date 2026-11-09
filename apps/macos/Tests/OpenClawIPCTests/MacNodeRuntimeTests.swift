@@ -173,6 +173,7 @@ struct MacNodeRuntimeTests {
 
         var simulatorStarts = 0
         var simulatorStops = 0
+        var simulatorInputCount = 0
         var actResultOk = true
         var simulatorStartEntered: AsyncTestGate?
         var releaseSimulatorStart: AsyncTestGate?
@@ -180,10 +181,7 @@ struct MacNodeRuntimeTests {
         private func simulatorFrame() -> SimulatorCaptureService.Frame {
             SimulatorCaptureService.Frame(
                 sessionId: "sim-session", sequence: 1, jpegBase64: nil,
-                width: 300, height: 600,
-                windowX: 0, windowY: 0, windowWidth: 300, windowHeight: 600,
-                displayX: 0, displayY: 0, displayWidth: 1200,
-                screenIndex: 0, refWidth: 1200, displayFrameId: "display-frame-test")
+                width: 300, height: 600)
         }
 
         func startSimulatorCapture(executionId: String) async throws -> SimulatorCaptureService.Frame {
@@ -205,15 +203,13 @@ struct MacNodeRuntimeTests {
         func simulatorInput(
             sessionId: String, action: OpenClawComputerAction,
             x: Double?, y: Double?, fromX: Double?, fromY: Double?,
-            text: String?, keys: String?) async throws -> OpenClawComputerActParams
+            text: String?, keys: String?, desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws
         {
-            return OpenClawComputerActParams(
-                action: action, x: x, y: y, fromX: fromX, fromY: fromY, text: text, keys: keys,
-                refWidth: 1200, deliveryMode: .foreground)
-        }
-
-        func activateSimulator(sessionId: String, desktopPermit: MacDesktopAvailabilityCoordinator.Permit) throws {
             try self.desktopAvailability.validate(desktopPermit)
+            self.simulatorInputCount += 1
+            if !self.actResultOk {
+                throw SimulatorCaptureService.CaptureError.unavailable("input could not be delivered")
+            }
         }
 
         func missingPermissions(_ capabilities: [Capability], disabled: [Capability]) async -> OpenClawNodeError? {
@@ -1006,7 +1002,7 @@ extension MacNodeRuntimeTests {
             runtime, "sim-tap", "simulator.act",
             "{\"action\":\"left_click\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.5,\"y\":0.5}")
         #expect(input.ok)
-        #expect(services.performCallCount == 1)
+        #expect(services.simulatorInputCount == 1)
 
         var revoked: [MacDesktopAvailabilityCoordinator.Permit] = []
         services.desktopAvailability.onExecutionsRevoked = { permits, _ in revoked.append(contentsOf: permits) }
@@ -1019,7 +1015,7 @@ extension MacNodeRuntimeTests {
             runtime, "sim-after-lock", "simulator.act",
             "{\"action\":\"left_click\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.5,\"y\":0.5}")
         #expect(!afterLock.ok)
-        #expect(services.performCallCount == 1)
+        #expect(services.simulatorInputCount == 1)
     }
 
     @MainActor
@@ -1038,7 +1034,7 @@ extension MacNodeRuntimeTests {
             viewOnly, "sim-denied", "simulator.act",
             "{\"action\":\"left_click\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.5,\"y\":0.5}")
         #expect(!denied.ok)
-        #expect(services.performCallCount == 0)
+        #expect(services.simulatorInputCount == 0)
 
         let controlledServices = MainActorServicesProbe()
         let controlled = MacNodeRuntime(
@@ -1054,11 +1050,11 @@ extension MacNodeRuntimeTests {
             controlled, "sim-noop", "simulator.act",
             "{\"action\":\"left_click\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.5,\"y\":0.5}")
         #expect(!failed.ok)
-        #expect(failed.error?.message.contains("not delivered") == true)
+        #expect(failed.error?.message.contains("could not be delivered") == true)
     }
 
     @MainActor
-    @Test func `Simulator close releases held input before ending capture`() async {
+    @Test func `Simulator close ends input before capture`() async {
         let services = MainActorServicesProbe()
         let runtime = MacNodeRuntime(
             desktopAvailability: services.desktopAvailability,
@@ -1071,7 +1067,7 @@ extension MacNodeRuntimeTests {
             "{\"action\":\"start\",\"executionId\":\"\(execution)\"}").ok)
         #expect(await self.invoke(
             runtime, "sim-down", "simulator.act",
-            "{\"action\":\"left_mouse_down\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.5,\"y\":0.5}").ok)
+            "{\"action\":\"left_click\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.5,\"y\":0.5}").ok)
         let closed = await self.invoke(
             runtime, "sim-close", "computer.act",
             "{\"action\":\"__close_execution\",\"executionId\":\"\(execution)\"}")

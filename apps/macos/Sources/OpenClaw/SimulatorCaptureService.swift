@@ -1,28 +1,27 @@
-import AppKit
-import CoreImage
 import Foundation
+import ImageIO
 import OpenClawKit
-@preconcurrency import ScreenCaptureKit
 
-/// Keeps only the newest Simulator frame. A slow viewer never queues old pixels.
+/// The Simulator framebuffer and HID client belong to the same desktop execution.
+/// Neither child may survive a closed or revoked execution.
 @MainActor
 final class SimulatorCaptureService {
     enum CaptureError: LocalizedError {
-        case noWindow
         case busy
+        case noDevice
+        case multipleDevices
         case staleSession
-        case noDisplay
-        case changedWindow
-        case captureStopped(String)
+        case unavailable(String)
+        case invalidInput
 
         var errorDescription: String? {
             switch self {
-            case .noWindow: "Open Simulator and boot an iOS device, then retry."
             case .busy: "Simulator is already open in another preview. Close it before retrying."
-            case .staleSession: "Simulator preview ended; reopen it to start a new capture."
-            case .noDisplay: "The Simulator window is not on an available display."
-            case .changedWindow: "Simulator moved or resized; reopen the preview to realign input."
-            case let .captureStopped(reason): "Simulator capture stopped: \(reason). Reopen the preview."
+            case .noDevice: "Boot an iOS Simulator, then reopen the preview."
+            case .multipleDevices: "More than one iOS Simulator is booted. Shut down the extra device and retry."
+            case .staleSession: "Simulator preview ended; reopen it to continue."
+            case let .unavailable(reason): "Simulator helper stopped: \(reason). Reopen the preview."
+            case .invalidInput: "Simulator input is invalid or unsupported."
             }
         }
     }
@@ -33,246 +32,350 @@ final class SimulatorCaptureService {
         let jpegBase64: String?
         let width: Int
         let height: Int
-        let windowX: Double
-        let windowY: Double
-        let windowWidth: Double
-        let windowHeight: Double
-        let displayX: Double
-        let displayY: Double
-        let displayWidth: Double
-        let screenIndex: Int
-        let refWidth: Int
-        let displayFrameId: String
     }
 
-    private var stream: SCStream?
-    private var output: SimulatorFrameOutput?
     private var sessionId: String?
     private var executionId: String?
     private var reservationId: UUID?
-    private var metadata: Frame?
-    private var windowID: CGWindowID?
-    private var windowFrame: CGRect?
-    private var simulatorPID: pid_t?
-    private var lastGeometryCheck = Date.distantPast
+    private var captureProcess: Process?
+    private var touchProcess: Process?
+    private var capturePipe: Pipe?
+    private var captureErrorPipe: Pipe?
+    private var touchErrorPipe: Pipe?
+    private var touchInputPipe: Pipe?
+    private var frames: SimulatorFrameBuffer?
+    private var touchReady: SimulatorTouchReadiness?
     private var lastRead = Date.distantPast
     private var expiry: Task<Void, Never>?
+    private var inputInProgress = false
 
     func start(executionId: String) async throws -> Frame {
         guard self.reservationId == nil else { throw CaptureError.busy }
-        let reservationId = UUID()
-        self.reservationId = reservationId
+        let reservation = UUID()
+        self.reservationId = reservation
         self.executionId = executionId
-        var pendingStream: SCStream?
         do {
-            try await ScreenCaptureSupport.requirePermission()
-            let content = try await SCShareableContent.current
-            let windows = content.windows.filter {
-                $0.owningApplication?.bundleIdentifier == "com.apple.iphonesimulator" &&
-                    $0.isOnScreen && $0.frame.width > 100 && $0.frame.height > 100
+            let udid = try Self.bootedIOSDevice()
+            let captureOutput = SimulatorFrameBuffer()
+            let touchOutput = SimulatorTouchReadiness()
+            let capture = try Self.helper("openclaw-simulator-capture", arguments: ["12", udid, "jpeg"])
+            var environment = ProcessInfo.processInfo.environment
+            environment["TAPFLOW_IOS_MAX_SIZE"] = "1400"
+            capture.environment = environment
+            let capturePipe = Pipe()
+            let captureErrorPipe = Pipe()
+            capture.standardOutput = capturePipe
+            capture.standardError = captureErrorPipe
+            capturePipe.fileHandleForReading.readabilityHandler = { handle in
+                captureOutput.append(handle.availableData)
             }
-            guard let window = windows.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
-            else { throw CaptureError.noWindow }
-            let displays = content.displays.sorted { $0.displayID < $1.displayID }
-            guard let screenIndex = displays.firstIndex(where: { CGDisplayBounds($0.displayID).intersects(window.frame) })
-            else { throw CaptureError.noDisplay }
-            let display = displays[screenIndex]
-            let refWidth = display.width
-            let geometry = try ScreenCaptureDisplayGeometry(display: display, noDisplays: CaptureError.noDisplay)
-            let filter = SCContentFilter(desktopIndependentWindow: window)
-            let config = SCStreamConfiguration()
-            let scale = min(1, 1400 / max(window.frame.width, window.frame.height))
-            config.width = max(1, Int((window.frame.width * scale).rounded()))
-            config.height = max(1, Int((window.frame.height * scale).rounded()))
-            config.minimumFrameInterval = CMTime(value: 1, timescale: 12)
-            config.queueDepth = 2
-            config.showsCursor = false
-            let output = SimulatorFrameOutput()
-            let stream = SCStream(filter: filter, configuration: config, delegate: output)
-            pendingStream = stream
-            try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: output.queue)
-            try await stream.startCapture()
-            pendingStream = nil
-            guard self.reservationId == reservationId else {
-                try? await stream.stopCapture()
-                throw CaptureError.staleSession
+            captureErrorPipe.fileHandleForReading.readabilityHandler = { handle in
+                captureOutput.appendError(handle.availableData)
             }
-            let sessionId = UUID().uuidString
-            self.sessionId = sessionId
-            self.stream = stream
-            self.output = output
-            self.windowID = window.windowID
-            self.windowFrame = window.frame
-            self.simulatorPID = window.owningApplication?.processID
-            self.lastRead = Date()
-            self.expiry = Task { [weak self] in
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(5))
-                    guard let self, !Task.isCancelled else { return }
-                    if Date().timeIntervalSince(self.lastRead) > 15 {
-                        await self.stop()
-                        return
-                    }
+            capture.terminationHandler = { process in
+                captureOutput.stop("capture exited with status \(process.terminationStatus)")
+            }
+            try capture.run()
+            self.captureProcess = capture
+            self.capturePipe = capturePipe
+            self.captureErrorPipe = captureErrorPipe
+            self.frames = captureOutput
+
+            let touch = try Self.helper("openclaw-simulator-touch", arguments: [udid])
+            let touchInputPipe = Pipe()
+            let touchErrorPipe = Pipe()
+            touch.standardInput = touchInputPipe
+            touch.standardError = touchErrorPipe
+            touchErrorPipe.fileHandleForReading.readabilityHandler = { handle in
+                touchOutput.append(handle.availableData)
+            }
+            touch.terminationHandler = { process in
+                touchOutput.stop("input exited with status \(process.terminationStatus)")
+            }
+            try touch.run()
+            self.touchProcess = touch
+            self.touchInputPipe = touchInputPipe
+            self.touchErrorPipe = touchErrorPipe
+            self.touchReady = touchOutput
+
+            let deadline = Date().addingTimeInterval(5)
+            while Date() < deadline {
+                guard self.reservationId == reservation else { throw CaptureError.staleSession }
+                if let failure = captureOutput.failure ?? touchOutput.failure {
+                    throw CaptureError.unavailable(failure)
                 }
+                if touchOutput.ready, let frame = captureOutput.latest {
+                    let sessionId = UUID().uuidString
+                    self.sessionId = sessionId
+                    self.lastRead = Date()
+                    self.expiry = Task { [weak self] in
+                        while !Task.isCancelled {
+                            try? await Task.sleep(for: .seconds(5))
+                            guard let self, !Task.isCancelled else { return }
+                            if Date().timeIntervalSince(self.lastRead) > 15 {
+                                await self.stop()
+                                return
+                            }
+                        }
+                    }
+                    return Frame(sessionId: sessionId, sequence: frame.sequence,
+                                 jpegBase64: frame.jpeg.base64EncodedString(),
+                                 width: frame.width, height: frame.height)
+                }
+                try await Task.sleep(for: .milliseconds(20))
             }
-            let metadata = Frame(
-                sessionId: sessionId, sequence: 0, jpegBase64: nil,
-                width: config.width, height: config.height,
-                windowX: Double(window.frame.minX), windowY: Double(window.frame.minY),
-                windowWidth: Double(window.frame.width), windowHeight: Double(window.frame.height),
-                displayX: geometry.geometry.originX, displayY: geometry.geometry.originY,
-                displayWidth: geometry.geometry.widthPoints,
-                screenIndex: screenIndex, refWidth: refWidth,
-                displayFrameId: geometry.frameId(referenceWidth: refWidth))
-            self.metadata = metadata
-            return metadata
+            throw CaptureError.unavailable("no device frame or HID ready signal within 5 seconds")
         } catch {
-            if let pendingStream { try? await pendingStream.stopCapture() }
-            if self.reservationId == reservationId { await self.stop() }
+            if self.reservationId == reservation { await self.stop() }
             throw error
         }
     }
 
-    func read(sessionId: String, after sequence: UInt64) async throws -> Frame {
-        guard self.sessionId == sessionId, let output, let metadata else { throw CaptureError.staleSession }
-        if let failure = output.failure() {
-            await self.stop(sessionId: sessionId)
-            throw CaptureError.captureStopped(failure)
-        }
-        if Date().timeIntervalSince(self.lastGeometryCheck) >= 1 {
-            do {
-                try await self.validateWindow(sessionId: sessionId)
-            } catch {
-                await self.stop(sessionId: sessionId)
-                throw error
-            }
-            self.lastGeometryCheck = Date()
+    func read(sessionId: String, after sequence: UInt64) throws -> Frame {
+        guard self.sessionId == sessionId, let frames, let touchReady else { throw CaptureError.staleSession }
+        if let failure = frames.failure ?? touchReady.failure { throw CaptureError.unavailable(failure) }
+        guard let latest = frames.latest else { throw CaptureError.unavailable("device frame unavailable") }
+        guard Date().timeIntervalSince(latest.receivedAt) < 3 else {
+            throw CaptureError.unavailable("device frames stopped arriving")
         }
         self.lastRead = Date()
-        let latest = output.latest()
-        return Frame(
-            sessionId: sessionId, sequence: latest?.sequence ?? 0,
-            jpegBase64: (latest?.sequence ?? 0) > sequence ? latest?.data.base64EncodedString() : nil,
-            width: latest?.width ?? metadata.width, height: latest?.height ?? metadata.height,
-            windowX: metadata.windowX, windowY: metadata.windowY,
-            windowWidth: metadata.windowWidth, windowHeight: metadata.windowHeight,
-            displayX: metadata.displayX, displayY: metadata.displayY,
-            displayWidth: metadata.displayWidth,
-            screenIndex: metadata.screenIndex, refWidth: metadata.refWidth,
-            displayFrameId: metadata.displayFrameId)
+        return Frame(sessionId: sessionId, sequence: latest.sequence,
+                     jpegBase64: latest.sequence > sequence ? latest.jpeg.base64EncodedString() : nil,
+                     width: latest.width, height: latest.height)
     }
 
     func input(
-        sessionId: String,
-        action: OpenClawComputerAction,
+        sessionId: String, action: OpenClawComputerAction,
         x: Double?, y: Double?, fromX: Double?, fromY: Double?,
-        text: String?, keys: String?) async throws -> OpenClawComputerActParams
+        text: String?, keys: String?, validate: () throws -> Void) async throws
     {
-        do {
-            try await self.validateWindow(sessionId: sessionId)
-        } catch {
-            await self.stop(sessionId: sessionId)
-            throw error
-        }
-        guard let metadata else { throw CaptureError.staleSession }
-        guard [.leftClick, .leftClickDrag, .type, .key].contains(action) else {
-            throw CaptureError.staleSession
-        }
-        func point(_ x: Double?, _ y: Double?) -> (Double, Double)? {
+        guard self.sessionId == sessionId, !self.inputInProgress,
+              self.touchReady?.ready == true, self.touchReady?.failure == nil,
+              let pipe = self.touchInputPipe else { throw CaptureError.staleSession }
+        self.inputInProgress = true
+        defer { self.inputInProgress = false }
+        func point(_ x: Double?, _ y: Double?) throws -> (Float, Float) {
             guard let x, let y, x.isFinite, y.isFinite,
-                  (0...1).contains(x), (0...1).contains(y) else { return nil }
-            let scale = Double(metadata.refWidth) / metadata.displayWidth
-            return (
-                (metadata.windowX - metadata.displayX + x * metadata.windowWidth) * scale,
-                (metadata.windowY - metadata.displayY + y * metadata.windowHeight) * scale)
+                  (0...1).contains(x), (0...1).contains(y) else { throw CaptureError.invalidInput }
+            return (Float(x), Float(y))
         }
-        let target = point(x, y)
-        let from = point(fromX, fromY)
-        if action != .type && action != .key && target == nil {
-            throw CaptureError.staleSession
+        func write(_ data: Data) throws {
+            try validate()
+            guard self.sessionId == sessionId, self.touchProcess?.isRunning == true else {
+                throw CaptureError.staleSession
+            }
+            try pipe.fileHandleForWriting.write(contentsOf: data)
         }
-        if action == .leftClickDrag && from == nil {
-            throw CaptureError.staleSession
+        func touch(_ kind: UInt8, _ point: (Float, Float)) throws {
+            var data = Data([kind])
+            for value in [point.0, point.1] {
+                var bits = value.bitPattern.bigEndian
+                withUnsafeBytes(of: &bits) { data.append(contentsOf: $0) }
+            }
+            try write(data)
         }
-        return OpenClawComputerActParams(
-            action: action, displayFrameId: target == nil ? nil : metadata.displayFrameId,
-            x: target?.0, y: target?.1, fromX: from?.0, fromY: from?.1,
-            text: text, keys: keys,
-            screenIndex: metadata.screenIndex, refWidth: metadata.refWidth,
-            deliveryMode: .foreground)
+        func key(_ usage: UInt32, shift: Bool = false) throws {
+            var data = Data([9, shift ? 2 : 0, 0, 0, 0])
+            var bits = usage.bigEndian
+            withUnsafeBytes(of: &bits) { data.append(contentsOf: $0) }
+            try write(data)
+        }
+        switch action {
+        case .leftClick:
+            let target = try point(x, y)
+            try touch(1, target)
+            do {
+                try await Task.sleep(for: .milliseconds(60))
+                try touch(3, target)
+            } catch {
+                try? touch(13, target)
+                throw error
+            }
+        case .leftClickDrag:
+            let origin = try point(fromX, fromY)
+            let target = try point(x, y)
+            try touch(1, origin)
+            do {
+                for step in 1...12 {
+                    try await Task.sleep(for: .milliseconds(20))
+                    let fraction = Float(step) / 12
+                    try touch(2, (origin.0 + (target.0 - origin.0) * fraction,
+                                  origin.1 + (target.1 - origin.1) * fraction))
+                }
+                try touch(3, target)
+            } catch {
+                try? touch(13, target)
+                throw error
+            }
+        case .key:
+            if keys == "HOME" {
+                try write(Data([5, 0, 0, 0, 0, 0, 0, 0, 0]))
+                return
+            }
+            let mapping: [String: UInt32] = [
+                "RETURN": 0x28, "ENTER": 0x28, "ESCAPE": 0x29, "BACKSPACE": 0x2A,
+                "TAB": 0x2B, "RIGHT": 0x4F, "LEFT": 0x50, "DOWN": 0x51, "UP": 0x52,
+            ]
+            guard let keys, let usage = mapping[keys] else { throw CaptureError.invalidInput }
+            try key(usage)
+        case .type:
+            guard let text, !text.isEmpty, text.count <= 256 else { throw CaptureError.invalidInput }
+            for character in text {
+                guard let mapped = Self.keyForCharacter(character) else { throw CaptureError.invalidInput }
+                try key(mapped.0, shift: mapped.1)
+                try await Task.sleep(for: .milliseconds(12))
+            }
+        default:
+            throw CaptureError.invalidInput
+        }
     }
 
-    func activate(sessionId: String) throws {
-        guard self.sessionId == sessionId, let simulatorPID else { throw CaptureError.staleSession }
-        NSRunningApplication(processIdentifier: simulatorPID)?.activate()
-    }
-
-    private func validateWindow(sessionId: String) async throws {
-        guard self.sessionId == sessionId, let windowID, let windowFrame else {
-            throw CaptureError.staleSession
+    private static func keyForCharacter(_ character: Character) -> (UInt32, Bool)? {
+        guard character.unicodeScalars.count == 1,
+              let scalar = character.unicodeScalars.first, scalar.value <= 127 else { return nil }
+        let ascii = UInt8(scalar.value)
+        switch ascii {
+        case 97...122: return (UInt32(ascii - 97) + 4, false)
+        case 65...90: return (UInt32(ascii - 65) + 4, true)
+        case 49...57: return (UInt32(ascii - 49) + 0x1E, false)
+        case 48: return (0x27, false)
+        case 32: return (0x2C, false)
+        case 10: return (0x28, false)
+        case 46: return (0x37, false)
+        case 44: return (0x36, false)
+        case 45: return (0x2D, false)
+        case 95: return (0x2D, true)
+        case 47: return (0x38, false)
+        case 58: return (0x33, true)
+        case 59: return (0x33, false)
+        case 64: return (0x1F, true)
+        default: return nil
         }
-        let content = try await SCShareableContent.current
-        guard let window = content.windows.first(where: {
-            $0.windowID == windowID && $0.owningApplication?.bundleIdentifier == "com.apple.iphonesimulator"
-        }), window.isOnScreen, window.frame == windowFrame else {
-            throw CaptureError.changedWindow
-        }
-        guard self.sessionId == sessionId else { throw CaptureError.staleSession }
     }
 
     func stop(sessionId: String? = nil) async {
         if let sessionId, self.sessionId != sessionId { return }
-        self.expiry?.cancel()
-        self.expiry = nil
-        let stream = self.stream
-        self.stream = nil
-        self.output = nil
+        self.reservationId = nil
         self.sessionId = nil
         self.executionId = nil
-        self.reservationId = nil
-        self.metadata = nil
-        self.windowID = nil
-        self.windowFrame = nil
-        self.simulatorPID = nil
-        if let stream { try? await stream.stopCapture() }
+        self.expiry?.cancel()
+        self.expiry = nil
+        self.capturePipe?.fileHandleForReading.readabilityHandler = nil
+        self.captureErrorPipe?.fileHandleForReading.readabilityHandler = nil
+        self.touchErrorPipe?.fileHandleForReading.readabilityHandler = nil
+        try? self.touchInputPipe?.fileHandleForWriting.close()
+        if self.touchProcess?.isRunning == true { self.touchProcess?.terminate() }
+        if self.captureProcess?.isRunning == true { self.captureProcess?.terminate() }
+        self.captureProcess = nil
+        self.touchProcess = nil
+        self.capturePipe = nil
+        self.captureErrorPipe = nil
+        self.touchErrorPipe = nil
+        self.touchInputPipe = nil
+        self.frames = nil
+        self.touchReady = nil
     }
 
     func stop(forExecutionId executionId: String) async {
         guard self.executionId == executionId else { return }
         await self.stop()
     }
+
+    private static func helper(_ name: String, arguments: [String]) throws -> Process {
+        guard let directory = Bundle.main.executableURL?.deletingLastPathComponent() else {
+            throw CaptureError.unavailable("app bundle is unavailable")
+        }
+        let url = directory.appendingPathComponent(name)
+        guard FileManager.default.isExecutableFile(atPath: url.path) else {
+            throw CaptureError.unavailable("\(name) is missing from this app build")
+        }
+        let process = Process()
+        process.executableURL = url
+        process.arguments = arguments
+        return process
+    }
+
+    private static func bootedIOSDevice() throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = ["simctl", "list", "devices", "booted", "--json"]
+        let output = Pipe()
+        process.standardOutput = output
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0,
+              let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let devices = root["devices"] as? [String: [[String: Any]]] else {
+            throw CaptureError.unavailable("xcrun simctl could not list booted devices")
+        }
+        let booted = devices.filter { $0.key.contains("SimRuntime.iOS-") }
+            .flatMap { $0.value }.filter { $0["state"] as? String == "Booted" }
+            .compactMap { $0["udid"] as? String }
+        guard !booted.isEmpty else { throw CaptureError.noDevice }
+        guard booted.count == 1 else { throw CaptureError.multipleDevices }
+        return booted[0]
+    }
 }
 
-private final class SimulatorFrameOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
-    let queue = DispatchQueue(label: "ai.openclaw.simulator.capture")
+private final class SimulatorFrameBuffer: @unchecked Sendable {
+    struct Latest { let sequence: UInt64; let jpeg: Data; let width: Int; let height: Int; let receivedAt: Date }
     private let lock = NSLock()
-    private let context = CIContext()
-    private var frame: (sequence: UInt64, data: Data, width: Int, height: Int)?
+    private var buffer = Data()
+    private var current: Latest?
     private var stoppedReason: String?
+    var latest: Latest? { self.lock.withLock { self.current } }
+    var failure: String? { self.lock.withLock { self.stoppedReason } }
 
-    func latest() -> (sequence: UInt64, data: Data, width: Int, height: Int)? {
-        self.lock.withLock { self.frame }
-    }
-
-    func failure() -> String? { self.lock.withLock { self.stoppedReason } }
-
-    func stream(_ stream: SCStream, didStopWithError error: any Error) {
-        self.lock.withLock { self.stoppedReason = error.localizedDescription }
-        _ = stream
-    }
-
-    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen, CMSampleBufferDataIsReady(sampleBuffer),
-              let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
-        else { return }
-        let image = CIImage(cvPixelBuffer: imageBuffer)
-        guard let cgImage = self.context.createCGImage(image, from: image.extent),
-              let jpeg = NSBitmapImageRep(cgImage: cgImage).representation(
-                using: .jpeg, properties: [.compressionFactor: 0.66])
-        else { return }
+    func append(_ data: Data) {
         self.lock.withLock {
-            self.frame = ((self.frame?.sequence ?? 0) + 1, jpeg, cgImage.width, cgImage.height)
+            guard !data.isEmpty, self.stoppedReason == nil else { return }
+            self.buffer.append(data)
+            while self.buffer.count >= 4 {
+                let length = self.buffer.prefix(4).reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+                guard length > 0, length <= 6_000_000 else {
+                    self.stoppedReason = "invalid or oversized device frame"
+                    return
+                }
+                guard self.buffer.count >= Int(length) + 4 else { return }
+                let jpeg = Data(self.buffer[4..<(Int(length) + 4)])
+                self.buffer.removeSubrange(0..<(Int(length) + 4))
+                guard let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
+                      let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                      let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                      let height = properties[kCGImagePropertyPixelHeight] as? Int else {
+                    self.stoppedReason = "invalid JPEG device frame"
+                    return
+                }
+                self.current = Latest(sequence: (self.current?.sequence ?? 0) + 1,
+                                      jpeg: jpeg, width: width, height: height, receivedAt: Date())
+            }
         }
-        _ = stream
+    }
+
+    func appendError(_ data: Data) {
+        _ = data
+    }
+
+    func stop(_ reason: String) {
+        self.lock.withLock { self.stoppedReason = reason }
+    }
+}
+
+private final class SimulatorTouchReadiness: @unchecked Sendable {
+    private let lock = NSLock()
+    private var output = ""
+    private var isReady = false
+    private var stoppedReason: String?
+    var ready: Bool { self.lock.withLock { self.isReady } }
+    var failure: String? { self.lock.withLock { self.stoppedReason } }
+    func append(_ data: Data) {
+        self.lock.withLock {
+            self.output = String((self.output + String(decoding: data, as: UTF8.self)).suffix(500))
+            if self.output.contains("touch-helper ready") { self.isReady = true }
+        }
+    }
+    func stop(_ reason: String) {
+        self.lock.withLock { self.stoppedReason = reason }
     }
 }

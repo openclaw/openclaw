@@ -69,6 +69,7 @@ const enSystems = {
       disconnected: "Preview disconnected · retry to regain control",
       textLabel: "Type or paste into Simulator",
       sendText: "Send",
+      home: "Home",
     },
     host: "This computer",
     worker: "Cloud device",

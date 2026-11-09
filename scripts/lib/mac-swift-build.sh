@@ -15,6 +15,10 @@ mac_cli_bin_for_arch() {
   echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/openclaw-mac"
 }
 
+simulator_bin_for_arch() {
+  echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/$2"
+}
+
 helper_build_path_for_arch() {
   echo "$MLX_TTS_HELPER_BUILD_ROOT/$1"
 }
@@ -540,6 +544,10 @@ build_swift_architecture() {
   verify_snapshot_swift_lock
   echo "🔨 Building openclaw-mac ($BUILD_CONFIG) [$arch]"
   swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product openclaw-mac --build-path "$BUILD_PATH" --arch "$arch" "${target_flags[@]}" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  for simulator_product in openclaw-simulator-touch openclaw-simulator-capture; do
+    echo "🔨 Building $simulator_product ($BUILD_CONFIG) [$arch]"
+    swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product "$simulator_product" --build-path "$BUILD_PATH" --arch "$arch" "${target_flags[@]}"
+  done
   verify_snapshot_swift_lock
   arch_peekaboo_commit="$(compiled_peekaboo_commit "$PEEKABOO_SNAPSHOT_MOUNT" "$PEEKABOO_LOCKED_SOURCE_COMMIT")"
   printf '%s\n' "$arch_peekaboo_commit" > "$SWIFT_WORK_ROOT/peekaboo-commit"

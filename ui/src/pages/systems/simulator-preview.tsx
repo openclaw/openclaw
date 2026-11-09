@@ -210,7 +210,7 @@ export function SimulatorPreview(props: {
               firstFrameDeadline = Number.POSITIVE_INFINITY;
             } else if (Date.now() >= firstFrameDeadline) {
               throw new Error(
-                "Simulator produced no frames. Check Screen Recording access and reopen the preview.",
+                "Simulator produced no device frames. Check that an iOS Simulator is booted and reopen the preview.",
               );
             }
             await new Promise((resolve) => setTimeout(resolve, 75));
@@ -316,6 +316,15 @@ export function SimulatorPreview(props: {
                 : "systems.simulator.viewOnly",
           )}
         </span>
+        <Show when={image() && props.canControl && !error()}>
+          <button
+            type="button"
+            class="systems-text-button"
+            onClick={() => sendInput("key", { keys: "HOME" })}
+          >
+            {t("systems.simulator.home")}
+          </button>
+        </Show>
         <Show when={image() && props.canControl && !error()}>
           <form
             class="simulator-preview__text"
