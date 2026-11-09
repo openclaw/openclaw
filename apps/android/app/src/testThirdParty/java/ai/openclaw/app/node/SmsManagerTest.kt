@@ -253,6 +253,47 @@ class SmsManagerTest {
   }
 
   @Test
+  fun buildSendPlanSplitsLocallyWhenDividerIsDenied() {
+    val message = "a".repeat(651)
+    val plan =
+      SmsManager.buildSendPlan(message) {
+        throw SecurityException("getGroupIdLevel1")
+      }
+    assertTrue(plan.useMultipart)
+    assertEquals(5, plan.parts.size)
+    assertEquals(message, plan.parts.joinToString(""))
+    assertTrue(plan.parts.all { it.length <= 153 })
+  }
+
+  @Test
+  fun buildSendPlanKeepsShortMessageSinglePartWhenDividerIsDenied() {
+    val plan =
+      SmsManager.buildSendPlan("short message") {
+        throw SecurityException("getGroupIdLevel1")
+      }
+    assertFalse(plan.useMultipart)
+    assertEquals(listOf("short message"), plan.parts)
+  }
+
+  @Test
+  fun splitForConcatenatedSmsUsesUcs2LimitForNonGsmText() {
+    val message = "ü".repeat(70) + "日".repeat(70)
+    val parts = SmsManager.splitForConcatenatedSms(message)
+    assertEquals(message, parts.joinToString(""))
+    assertTrue(parts.all { it.length <= 67 })
+  }
+
+  @Test
+  fun splitForConcatenatedSmsNeverSplitsASurrogatePair() {
+    // 67 UTF-16 units of padding puts the next part boundary inside an emoji.
+    val message = "a".repeat(66) + "😀".repeat(10)
+    val parts = SmsManager.splitForConcatenatedSms(message)
+    assertEquals(message, parts.joinToString(""))
+    assertTrue(parts.none { it.isNotEmpty() && it.last().isHighSurrogate() })
+    assertTrue(parts.none { it.isNotEmpty() && it.first().isLowSurrogate() })
+  }
+
+  @Test
   fun parseQueryParamsAcceptsEmptyPayload() {
     val result = SmsManager.parseQueryParams(null)
     assertTrue(result is SmsManager.QueryParseResult.Ok)
