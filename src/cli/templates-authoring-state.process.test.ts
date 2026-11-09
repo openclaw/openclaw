@@ -5,6 +5,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -73,6 +77,44 @@ function runTemplates(root: string, args: string[]) {
 }
 
 describe("Template authoring process state", () => {
+  it(
+    "previews with stored plugin metadata without changing operator state",
+    { timeout: 120_000 },
+    async () => {
+      const root = tempDirs.make("openclaw-templates-populated-state-");
+      const project = path.join(root, "project");
+      const stateDir = path.join(root, "state");
+      await fs.mkdir(path.join(root, "config"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "config", "openclaw.json"),
+        JSON.stringify({
+          gateway: { controlUi: { experimental: { templates: true } } },
+          models: {
+            providers: {
+              fixture: {
+                baseUrl: "https://example.invalid/v1",
+                api: "openai-completions",
+                models: [{ id: "fixture", name: "Fixture" }],
+              },
+            },
+          },
+        }),
+      );
+      openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+      await closeOpenClawStateDatabaseAsync();
+      await writeProject(project);
+      await fs.mkdir(resolveGatewayLockDir(stateDir), { recursive: true });
+      const before = await snapshotTree(root);
+      const result = runTemplates(root, ["add", project, "--dry-run", "--json"]);
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        agent: { finalId: "authoring-state-test" },
+        blockers: [],
+      });
+      expect(await snapshotTree(root)).toEqual(before);
+    },
+  );
   it.for(["dev", "add"])(
     "leaves migration-pending operator state unchanged for templates %s",
     { timeout: 120_000 },

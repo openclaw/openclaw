@@ -12,6 +12,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import { monotonicNow } from "../shared/monotonic-time.js";
+import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { applyTemplateAddPlanStateless } from "../templates/add-stateless.js";
 import { TEMPLATE_ADD_RESULT_SCHEMA_VERSION, TemplateAddMutationError } from "../templates/add.js";
@@ -196,75 +200,78 @@ export async function runTemplatesInspectCommand(
   }
 }
 
-// Add's planning and application both read or mutate Gateway-owned state.
+// Preview inspects existing state; only Add acquires mutation ownership.
 export async function runTemplatesAddCommand(
   sourcePath: string,
   opts: TemplatesAddOptions,
 ): Promise<void> {
+  const run = async () => {
+    const config = opts.dryRun
+      ? readCurrentConfigForPolicyCheck({ configPath: resolveConfigPath(), env: process.env })
+      : getRuntimeConfig();
+    if (!isTemplatesLabsEnabled(config)) {
+      emitTemplateFailure(opts.json, TEMPLATES_LABS_DISABLED_MESSAGE, {
+        schemaVersion: TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
+        stability: TEMPLATE_OUTPUT_STABILITY,
+        ok: false,
+        error: { code: "templates_labs_disabled", message: TEMPLATES_LABS_DISABLED_MESSAGE },
+      });
+      return;
+    }
+
+    if (existsSync(sourcePath) || !isCanonicalClawHubPackageName(sourcePath)) {
+      return await runTemplatesAddFromSource(
+        await readTemplateManifestFile(sourcePath),
+        opts,
+        config,
+      );
+    }
+    let sourceRunStarted = false;
+    let sourceRunFinished = false;
+    try {
+      await withResolvedClawHubSource({
+        coordinate: { packageName: sourcePath },
+        mode: opts.dryRun ? "preview" : "apply",
+        acknowledgeClawHubRisk: opts.acknowledgeClawhubRisk,
+        run: async (source, trust) => {
+          sourceRunStarted = true;
+          await runTemplatesAddFromSource(source, opts, config, trust);
+          sourceRunFinished = true;
+        },
+      });
+    } catch (error) {
+      // Cleanup must not replace an already reported Add outcome.
+      if (sourceRunFinished) {
+        runtime.error("Template source cleanup failed after Add; temporary files may remain.");
+        return;
+      }
+      if (sourceRunStarted) {
+        throw error;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      emitTemplateFailure(opts.json, message, {
+        schemaVersion: TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
+        stability: TEMPLATE_OUTPUT_STABILITY,
+        ok: false,
+        error: {
+          code: error instanceof ClawHubSourceError ? error.code : "clawhub_source_failed",
+          message,
+        },
+        ...(error instanceof ClawHubSourceError && error.warning
+          ? { trustWarning: error.warning }
+          : {}),
+      });
+    }
+  };
+  if (opts.dryRun) {
+    return await withArtifactPreservingStateReads(() => withOpenClawStateDatabaseReadSnapshot(run));
+  }
   return await runWithLocalStateOwner({
     method: "templates.add",
     params: {},
     target: "Template configuration and provenance",
     onForeignOwner: "refuse",
-    ...(opts.dryRun ? { databaseAccess: "none" as const } : {}),
-    runLocal: async () => {
-      const config = opts.dryRun
-        ? readCurrentConfigForPolicyCheck({ configPath: resolveConfigPath(), env: process.env })
-        : getRuntimeConfig();
-      if (!isTemplatesLabsEnabled(config)) {
-        emitTemplateFailure(opts.json, TEMPLATES_LABS_DISABLED_MESSAGE, {
-          schemaVersion: TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
-          stability: TEMPLATE_OUTPUT_STABILITY,
-          ok: false,
-          error: { code: "templates_labs_disabled", message: TEMPLATES_LABS_DISABLED_MESSAGE },
-        });
-        return;
-      }
-
-      if (existsSync(sourcePath) || !isCanonicalClawHubPackageName(sourcePath)) {
-        return await runTemplatesAddFromSource(
-          await readTemplateManifestFile(sourcePath),
-          opts,
-          config,
-        );
-      }
-      let sourceRunStarted = false;
-      let sourceRunFinished = false;
-      try {
-        await withResolvedClawHubSource({
-          coordinate: { packageName: sourcePath },
-          mode: opts.dryRun ? "preview" : "apply",
-          acknowledgeClawHubRisk: opts.acknowledgeClawhubRisk,
-          run: async (source, trust) => {
-            sourceRunStarted = true;
-            await runTemplatesAddFromSource(source, opts, config, trust);
-            sourceRunFinished = true;
-          },
-        });
-      } catch (error) {
-        // Cleanup must not replace an already reported Add outcome.
-        if (sourceRunFinished) {
-          runtime.error("Template source cleanup failed after Add; temporary files may remain.");
-          return;
-        }
-        if (sourceRunStarted) {
-          throw error;
-        }
-        const message = error instanceof Error ? error.message : String(error);
-        emitTemplateFailure(opts.json, message, {
-          schemaVersion: TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
-          stability: TEMPLATE_OUTPUT_STABILITY,
-          ok: false,
-          error: {
-            code: error instanceof ClawHubSourceError ? error.code : "clawhub_source_failed",
-            message,
-          },
-          ...(error instanceof ClawHubSourceError && error.warning
-            ? { trustWarning: error.warning }
-            : {}),
-        });
-      }
-    },
+    runLocal: run,
   });
 }
 
