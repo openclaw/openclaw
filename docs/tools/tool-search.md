@@ -243,19 +243,31 @@ catalog. An exact tool name is still honored even when it tokenizes to nothing.
 `tool_search` states this requirement in its model-facing description.
 
 Untrusted parameter schemas are never indexed. MCP and client tools are matched
-on name and description only, which is the same boundary that defers their input
-signatures as `input: "unknown"`.
+on name and description only, so remote parameter names cannot steer ranking.
 
 Results are compact and safe
-to put back into prompt context. Each hit includes a bounded TypeScript-style
-`input` signature, such as `{ id: string; mode?: "drip" | "flood" }`, so the
-model can skip `tool_describe` when that signature is sufficient. A trusted
-OpenClaw core or plugin tool may also include a compact `output` hint, such as
-`Array<{ id: string; paid: boolean }>`. MCP and client output-schema claims are
-not promoted into this trusted hint. Their untrusted input schemas are also
-deferred as `input: "unknown"`; use `tool_describe` before calling them. Open,
-oversized, or otherwise partial output schemas omit the hint and remain
-available through `tool_describe` instead.
+to put back into prompt context. Each OpenClaw and MCP hit includes a bounded
+TypeScript-style `input` signature, such as
+`{ channel: string; limit?: number /* integer, <= 500, > 0 */ }`, so the model
+can skip `tool_describe` when that signature is sufficient. The signature keeps
+only structure: property names, types, required and optional fields, short
+enums, and numeric bounds. Descriptions, defaults, and string formats are left
+out. It is capped at 300 characters, four nesting levels, 16 properties per
+object, and eight short enum values. Larger or unsupported parts render as
+`unknown` or `...`, and a missing or unrenderable schema renders as
+`input: "unknown"`. Use `tool_describe` for the exact schema in those cases.
+MCP signatures are rendered from the server's input schema, which
+`tool_describe` already returns in full.
+
+Client tools keep `input: "unknown"`; use `tool_describe` before calling them.
+Code Mode lists client tools in its system prompt from these same compact
+entries, and caller-supplied schema text stays out of that prompt.
+
+A trusted OpenClaw core or plugin tool may also include a compact `output`
+hint, such as `Array<{ id: string; paid: boolean }>`. MCP and client
+output-schema claims are not promoted into this trusted hint. Open, oversized,
+or otherwise partial output schemas omit the hint and remain available through
+`tool_describe` instead.
 
 ```json
 { "query": "calendar event", "limit": 5 }
