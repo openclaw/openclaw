@@ -2968,6 +2968,62 @@ class ChatComposerLayoutTest {
       assertTrue("Completion retires only its origin, never replacement B", fresh.isShowing)
     }
 
+  @Test
+  @Config(
+    sdk = [34],
+    qualifiers = "w1000dp-h1000dp-mdpi",
+    instrumentedPackages = ["ai.openclaw.app.AndroidScreenshotFixture"],
+  )
+  fun branchSelectionSemanticsFollowSuccessfulSwitchAndReopen() {
+    withBranchRequests { _, calls, _ ->
+      openBranchSheet(calls)
+      val original = branchRow(1)
+      val alternative = branchRow(2)
+      original.assertIsDisplayed()
+      original.assertIsNotEnabled()
+      original.assertIsSelected()
+      alternative.assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
+      alternative.assertIsEnabled()
+      alternative.performClick()
+      composeRule.waitForIdle()
+      awaitBranchSwitch(calls)
+      composeRule.onNode(isDialog()).assertDoesNotExist()
+      val request = calls.single { it.method == "sessions.branches.switch" }
+      assertEquals(JsonPrimitive("android-screenshot-branch-02"), request.params["leafEntryId"])
+
+      openBranchSheet(calls)
+      branchRow(1).assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
+      branchRow(1).assertIsEnabled()
+      branchRow(2).assertIsSelected()
+      branchRow(2).assertIsNotEnabled()
+      assertEquals(1, calls.count { it.method == "sessions.branches.switch" })
+    }
+  }
+
+  @Test
+  @Config(
+    sdk = [34],
+    qualifiers = "w1000dp-h1000dp-mdpi",
+    instrumentedPackages = ["ai.openclaw.app.AndroidScreenshotFixture"],
+  )
+  fun branchSelectionSemanticsRemainDistinctWhenReadOnly() {
+    withBranchRequests { model, calls, _ ->
+      composeRule.runOnIdle { runtimeScopes().value = listOf("operator.read") }
+      composeRule.waitUntil { "operator.admin" !in model.operatorScopes.value }
+      val dialog = openBranchSheet(calls)
+      val original = branchRow(1)
+      val alternative = branchRow(2)
+      original.assertIsNotEnabled()
+      alternative.assertIsNotEnabled()
+      alternative.assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
+      original.assertIsSelected()
+      composeRule.runOnIdle { dialog.onBackPressedDispatcher.onBackPressed() }
+      composeRule.waitForIdle()
+      composeRule.onNode(isDialog()).assertDoesNotExist()
+      assertEquals(0, calls.count { it.method == "sessions.branches.switch" })
+    }
+  }
+
   private fun branchRow(index: Int) = composeRule.onNode(hasText("Release plan ${index.toString().padStart(2, '0')}") and hasClickAction() and hasAnyAncestor(isDialog()))
 
   private fun branchList() = composeRule.onNode(hasScrollAction() and hasAnyAncestor(isDialog()))
