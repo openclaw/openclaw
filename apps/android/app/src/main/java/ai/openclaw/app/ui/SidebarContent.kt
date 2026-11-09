@@ -1044,7 +1044,10 @@ private fun SidebarPagesHeader(
           .heightIn(min = 44.dp)
           .clip(RoundedCornerShape(10.dp))
           .clickable(role = Role.Button, onClick = onToggleExpanded)
-          .padding(horizontal = 8.dp),
+          .padding(horizontal = 8.dp)
+          .semantics {
+            stateDescription = if (expanded) nativeString("Expanded") else nativeString("Collapsed")
+          },
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -1204,7 +1207,10 @@ private fun SidebarSessionCatalog(
             Modifier
               .fillMaxWidth()
               .clickable(role = Role.Button) { onToggleHost(host.stableId) }
-              .padding(start = 20.dp, end = 12.dp, top = 8.dp, bottom = 6.dp),
+              .padding(start = 20.dp, end = 12.dp, top = 8.dp, bottom = 6.dp)
+              .semantics {
+                stateDescription = if (hostExpanded) nativeString("Expanded") else nativeString("Collapsed")
+              },
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -1251,7 +1257,10 @@ private fun SidebarSessionCatalog(
                 Modifier
                   .fillMaxWidth()
                   .clickable(role = Role.Button) { onToggleWorkspace(workspace.stableId) }
-                  .padding(start = 24.dp, end = 12.dp, top = 7.dp, bottom = 7.dp),
+                  .padding(start = 24.dp, end = 12.dp, top = 7.dp, bottom = 7.dp)
+                  .semantics {
+                    stateDescription = if (expanded) nativeString("Expanded") else nativeString("Collapsed")
+                  },
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
