@@ -13,7 +13,7 @@ const screenshotArgs = { action: "screenshot" };
 
 suite.define(() => {
   it.each(["history", "result-first", "receipt-first"] as const)(
-    "loads retained computer screenshots (%s)",
+    "loads retained computer screenshots from tool details (%s)",
     (delivery) =>
       suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
@@ -60,12 +60,7 @@ suite.define(() => {
                 role: "assistant",
                 content: [
                   { type: "text", text: "Here is the desktop screenshot." },
-                  {
-                    type: "toolCall",
-                    name: computerCall.name,
-                    id: "capture",
-                    arguments: screenshotArgs,
-                  },
+                  { type: "toolCall", name: "computer", id: "capture", arguments: screenshotArgs },
                 ],
                 __openclaw: { id: "capture-call", seq: 2, runId },
                 timestamp: 2,
@@ -121,6 +116,8 @@ suite.define(() => {
               await result();
             }
           }
+          await page.locator(".chat-activity-group__summary").click();
+          await page.locator(".chat-tool-msg-summary").click();
           const screenshot = page.locator("img.chat-message-image");
           await screenshot.waitFor({ state: "visible" });
           expect(
@@ -139,6 +136,8 @@ suite.define(() => {
             expect(await stop.isVisible()).toBe(true);
           } else {
             await page.reload();
+            await page.locator(".chat-activity-group__summary").click();
+            await page.locator(".chat-tool-msg-summary").click();
             await page.locator("img.chat-message-image").waitFor({ state: "visible" });
             expect(await omitted.count()).toBe(0);
           }
