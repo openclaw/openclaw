@@ -188,6 +188,43 @@ class CameraCaptureOwnershipTest {
     }
 
   @Test
+  fun idleActivityBindingSurvivesStopButIsRetiredOnDestroy() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      val owner = Owner()
+      val camera = CameraCaptureManager(app).apply { attachLifecycleOwner(owner) }
+      owner.registry.currentState = Lifecycle.State.CREATED
+      owner.registry.currentState = Lifecycle.State.RESUMED
+      assertEquals(owner, camera.withCapture { current, _ -> current })
+
+      owner.registry.currentState = Lifecycle.State.DESTROYED
+      val failure =
+        runCatching { camera.withCapture { _, _ -> error("destroyed Activity used") } }
+          .exceptionOrNull()
+      assertEquals("UNAVAILABLE: camera not ready", failure?.message)
+
+      val replacement = Owner()
+      camera.attachLifecycleOwner(replacement)
+      assertEquals(replacement, camera.withCapture { current, _ -> current })
+    }
+
+  @Test
+  fun replacementActivityKeepsItsBindingWhenTheOldActivityIsDestroyed() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      val oldOwner = Owner()
+      val camera = CameraCaptureManager(app).apply { attachLifecycleOwner(oldOwner) }
+      val replacement = Owner()
+      camera.attachLifecycleOwner(replacement)
+      assertEquals(0, oldOwner.registry.observerCount)
+
+      oldOwner.registry.currentState = Lifecycle.State.DESTROYED
+      assertEquals(replacement, camera.withCapture { current, _ -> current })
+      camera.attachLifecycleOwner(oldOwner)
+      assertEquals(replacement, camera.withCapture { current, _ -> current })
+    }
+
+  @Test
   fun callerCancellationStaysCancellationAndReleasesOwnership() =
     runBlocking {
       val app = RuntimeEnvironment.getApplication()
