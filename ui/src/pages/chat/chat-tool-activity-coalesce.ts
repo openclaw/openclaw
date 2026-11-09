@@ -395,6 +395,9 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     if (bundle) {
       bundle.inputs.push(...inputs);
       bundle.item.message.content.push(...content);
+      if (invocation.attachments.length > 0) {
+        bundle.item.message.role = "toolResult";
+      }
       if (ownsActivity || Array.isArray(bundle.item.message.activity)) {
         bundle.item.message.activity = [
           ...readPreparedActivity(bundle.item.message),
