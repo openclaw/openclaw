@@ -1,2 +1,2 @@
-# Conversation skill-load extraction; durable reconstruction beyond the display page; native RPC pagination; incognito, eviction, reset/incarnation, and live-overlap regressions.
-676
+# Conversation skill-load extraction; durable reconstruction and native RPC pagination; mock-response helper growth; incognito, eviction, reset/incarnation, lazy live retention, and delta-overlap regressions.
+724

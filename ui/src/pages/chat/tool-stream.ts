@@ -23,6 +23,7 @@ import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { updateChatReasoning } from "./chat-reasoning.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
 import { getChatRunOwner, getChatRunProjection } from "./history-merge.ts";
+import { resolveChatSnapshotKey } from "./session-message-cache.ts";
 import { observedRunInputSendId } from "./stream-causal-boundary.ts";
 import type { AgentEventPayload, ToolStreamEntry, ToolStreamHost } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
@@ -184,6 +185,17 @@ function publishToolStreamEntry(host: ToolStreamHost, entry: ToolStreamEntry, fo
   host.toolStreamSyncTimer = window.setTimeout(() => {
     flushToolStreamSync(host);
   }, TOOL_STREAM_THROTTLE_MS);
+}
+
+// Tool chrome is preloaded; skill decoding is not needed until a real skill result.
+async function recordLiveSkillLoad(host: ToolStreamHost, message: Record<string, unknown>) {
+  const scope = [
+    resolveChatSnapshotKey(host, { sessionKey: host.sessionKey }),
+    host.currentSessionId,
+    host.chatDisplayedLeafEntryId,
+  ] as const;
+  const { retainLiveConversationSkillLoad } = await import("../../lib/chat/skills-used.ts");
+  retainLiveConversationSkillLoad(host, scope, message);
 }
 
 function toolActivityIdentity(runId: string, toolCallId: string): string {
@@ -667,5 +679,11 @@ export function handleAgentEvent(
     );
   }
   publishToolStreamEntry(host, entry, phase === "result" || approvalReview !== null);
+  if (source === "live" && phase === "result" && entry.name === "skills_read") {
+    void recordLiveSkillLoad(host, entry.message).catch((error: unknown) => {
+      // The next authoritative history read still reconstructs this receipt.
+      console.warn("Could not retain live skill usage; history will reconcile it.", error);
+    });
+  }
   return true;
 }

@@ -44,6 +44,7 @@ import { loadChatLiveTools } from "./chat-live-tools.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
@@ -212,6 +213,12 @@ export async function hydrateChatHistory(
     const replayAgentEvent = inFlightEvents?.length
       ? (await loadChatLiveTools()).handleAgentEvent
       : undefined;
+    // Full reads already carry the authoritative inventory. Only nonempty catch-up
+    // needs tool decoding; keep optional skill extraction outside the chat boot path.
+    const { extendConversationSkillHistory: extendSkills } =
+      isHistoryCursor(response) && response.kind === "delta" && response.messages.length
+        ? await import("../../lib/chat/skills-used.ts")
+        : { extendConversationSkillHistory: undefined };
     if (!isCurrent()) {
       return undefined;
     }
@@ -229,7 +236,7 @@ export async function hydrateChatHistory(
         ? previousHistoryState?.skillsUsed
         : undefined;
     // Preserve wire metadata before the display and roster owners derive their projections.
-    const historyState =
+    const historyState: ChatHistoryState | null =
       !(isHistoryCursor(response) && response.kind === "reset") &&
       (response.stateRevision || recordedSkills)
         ? {
@@ -256,6 +263,8 @@ export async function hydrateChatHistory(
       for (const payload of response.messages) {
         applySessionMessagePayload(state, payload, runActive, { kind: "history-delta" });
       }
+      // Held admitted rows correlate calls/results across batches without older-page reads.
+      const deltaHistoryState = extendSkills?.(historyState, state.chatMessages) ?? historyState;
       const historyProjection = getChatSessionProjection(state);
       if (Object.hasOwn(response.sessionInfo, "activeLeafEntryId")) {
         state.chatDisplayedLeafEntryId = response.sessionInfo.activeLeafEntryId?.trim() || null;
@@ -291,7 +300,7 @@ export async function hydrateChatHistory(
         state,
         response.deltaCursor ?? null,
         response.sessionInfo,
-        historyState,
+        deltaHistoryState,
       );
       return {
         messages: state.chatMessages,

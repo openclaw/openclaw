@@ -2,6 +2,56 @@ import {
   createConversationSkillLoadCollector,
   type ConversationSkillLoad,
 } from "../../../../src/chat/conversation-skills.js";
+import type { ChatHistoryState } from "../../pages/chat/chat-transcript-metadata.ts";
+import {
+  cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
+  resolveChatSnapshotKey,
+  type ChatHistoryCursorHost,
+  type ChatMessageCache,
+} from "../../pages/chat/session-message-cache.ts";
+
+export function extendConversationSkillHistory(
+  history: ChatHistoryState | null | undefined,
+  messages: readonly unknown[],
+): ChatHistoryState {
+  const collector = createConversationSkillLoadCollector(history?.skillsUsed);
+  for (const message of messages) {
+    collector.add(message);
+  }
+  return { ...(history ?? { stateRevision: {} }), skillsUsed: collector.finish() };
+}
+
+export function retainLiveConversationSkillLoad(
+  host: ChatHistoryCursorHost & {
+    chatMessagesBySession?: ChatMessageCache;
+    chatDisplayedLeafEntryId?: string | null;
+  },
+  scope: readonly [string, string | null | undefined, string | null | undefined],
+  message: unknown,
+) {
+  const target = { sessionKey: host.sessionKey };
+  if (
+    !host.chatMessagesBySession ||
+    resolveChatSnapshotKey(host, target) !== scope[0] ||
+    host.currentSessionId !== scope[1] ||
+    host.chatDisplayedLeafEntryId !== scope[2]
+  ) {
+    return;
+  }
+  const snapshot = readChatSessionSnapshot(host.chatMessagesBySession, host, target);
+  if (!snapshot || snapshot.sessionId !== scope[1]) {
+    return;
+  }
+  const historyState = extendConversationSkillHistory(snapshot.historyState, [message]);
+  if (
+    !historyState.skillsUsed?.length ||
+    historyState.skillsUsed.length === snapshot.historyState?.skillsUsed?.length
+  ) {
+    return;
+  }
+  cacheChatSessionSnapshot(host.chatMessagesBySession, host, target, { ...snapshot, historyState });
+}
 
 export type ConversationSkillUse = { name: string; loads: number };
 const cache = new WeakMap<

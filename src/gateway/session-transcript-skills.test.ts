@@ -70,7 +70,7 @@ describe("session skill-load reconstruction", () => {
       event("answer", "nested", { role: "assistant", content: "Done" }),
     );
     const scope = await writeTranscript("skills", messages);
-    const page = await readPage(scope, { maxMessages: 1, maxBytes: 4096 });
+    const page = await readPage(scope, { offset: 0, maxMessages: 1, maxBytes: 4096 });
     expect(page.messages).toHaveLength(1);
     expect(JSON.stringify(page.messages)).not.toContain("skills_read");
     expect(page.totalMessages).toBeGreaterThan(80);

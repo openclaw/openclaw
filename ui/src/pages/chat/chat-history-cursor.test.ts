@@ -2,6 +2,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import * as skillLoads from "../../../../src/chat/conversation-skills.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
@@ -582,11 +583,13 @@ describe("chat history cursor revalidation", () => {
 });
 
 it("retains historical skill receipts through empty and incremental deltas, eviction, and reset", async () => {
+  const historical = [{ id: '["older","old"]', name: "older-review" }];
+  const reconstruct = vi.spyOn(skillLoads, "createConversationSkillLoadCollector");
   const handler = vi.fn().mockResolvedValue({
     messages: [],
     sessionInfo: sessionInfo(),
     deltaCursor: "skills-start",
-    skillsUsed: [{ id: '["older","old"]', name: "older-review" }],
+    skillsUsed: historical,
   });
   const state = createState(handler);
   await loadChatHistory(state);
@@ -594,9 +597,8 @@ it("retains historical skill receipts through empty and incremental deltas, evic
     readChatSessionSnapshot(state.chatMessagesBySession!, state, { sessionKey: state.sessionKey });
   handler.mockResolvedValue(delta("skills-quiet", []));
   await loadChatHistory(state);
-  expect(read()?.historyState?.skillsUsed).toEqual([
-    { id: '["older","old"]', name: "older-review" },
-  ]);
+  expect(read()?.historyState?.skillsUsed).toEqual(historical);
+  expect(reconstruct).not.toHaveBeenCalled();
   const invocation = message(
     "assistant",
     [{ type: "toolCall", id: "new", name: "skills_read", arguments: { name: "new-review" } }],
@@ -612,17 +614,18 @@ it("retains historical skill receipts through empty and incremental deltas, evic
     content: [{ type: "text", text: "Instructions" }],
     __openclaw: { id: "skill-result", seq: 2, runId: "live" },
   };
+  handler.mockResolvedValue(delta("skills-call", [persisted(invocation)]));
+  await loadChatHistory(state);
   handler.mockResolvedValue(
-    delta("skills-new", [
-      persisted(invocation),
-      { message: output, messageId: "skill-result", messageSeq: 2 },
-    ]),
+    delta("skills-new", [{ message: output, messageId: "skill-result", messageSeq: 2 }]),
   );
   await loadChatHistory(state);
   expect(read()?.historyState?.skillsUsed).toEqual([
-    { id: '["older","old"]', name: "older-review" },
+    ...historical,
     { id: '["live","new"]', name: "new-review" },
   ]);
+  expect(reconstruct).toHaveBeenCalledTimes(2);
+  reconstruct.mockRestore();
   state.chatMessages = [{ role: "assistant", content: "A later page without tool bodies" }];
   commitCurrentChatHistorySnapshot(state);
   expect(read()?.historyState?.skillsUsed).toHaveLength(2);
@@ -637,4 +640,45 @@ it("retains historical skill receipts through empty and incremental deltas, evic
   state.currentSessionId = "replacement-incarnation";
   commitCurrentChatHistorySnapshot(state);
   expect(read()?.historyState?.skillsUsed).toBeUndefined();
+});
+
+it("retains admitted live skill receipts without recording replay, other sessions, or incarnations", async () => {
+  vi.stubGlobal("window", globalThis);
+  const state = createState(() => ({
+    messages: [],
+    sessionInfo: sessionInfo(),
+    deltaCursor: "live-skills",
+    skillsUsed: [],
+  }));
+  await loadChatHistory(state);
+  const emit = (id: string, source: "live" | "history" = "live", sessionKey = "main") =>
+    ["start", "result"].forEach((phase, index) =>
+      handleAgentEvent(
+        state,
+        {
+          ...event(index + 1, "tool", {
+            phase,
+            name: "skills_read",
+            toolCallId: id,
+            args: { name: id },
+            result: "Instructions",
+            isError: false,
+          }),
+          sessionKey,
+        },
+        source,
+      ),
+    );
+  emit("other", "live", "other");
+  emit("admitted");
+  emit("replayed", "history");
+  state.chatToolMessages = [];
+  commitCurrentChatHistorySnapshot(state);
+  const recorded = [{ id: '["run-live","admitted"]', name: "admitted" }];
+  await vi.waitFor(() => expect(cachedSnapshot(state)?.historyState?.skillsUsed).toEqual(recorded));
+  emit("stale");
+  state.currentSessionId = "replacement-incarnation";
+  await vi.dynamicImportSettled();
+  expect(cachedSnapshot(state)?.historyState?.skillsUsed).toEqual(recorded);
+  vi.unstubAllGlobals();
 });

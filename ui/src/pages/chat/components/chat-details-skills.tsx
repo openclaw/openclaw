@@ -1,13 +1,12 @@
 import { For, Show, createMemo } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { conversationSkillsUsed } from "../../../lib/chat/skills-used.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
-import "../../../styles/chat/details-skills.css";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 const noTools: readonly unknown[] = [];
 
 export function ChatDetailsSkills(props: {
@@ -25,35 +24,40 @@ export function ChatDetailsSkills(props: {
     ),
   );
   const content = () => (
-    <ul class="chat-details-skills__list">
+    <div role="list" class="chat-details-skills__list">
       <For each={skills()} keyed={(skill) => skill.name}>
         {(skill) => (
-          <li class="chat-details-skills__item">
+          <div role="listitem" class="chat-details__row chat-details-skills__item">
             <Icon name="book" />
             <span class="chat-details-skills__name">{skill().name}</span>
             <Show when={skill().loads > 1}>
-              <span
-                class="chat-details-skills__loads"
+              <small
+                class="muted chat-details-skills__loads"
                 aria-label={t("chat.sessionDetails.skillLoads", { count: String(skill().loads) })}
               >
                 ×{skill().loads}
-              </span>
+              </small>
             </Show>
-          </li>
+          </div>
         )}
       </For>
-    </ul>
+    </div>
   );
   return (
     <Show when={skills().length > 0}>
       <Show
         when={props.desktop}
         fallback={
-          <details class="chat-details-skills" data-details-group="skills">
-            <summary class="chat-details__caption">
-              {t("chat.sessionDetails.skillsUsed")}
-              <span>{skills().length}</span>
-              <Icon name="chevronDown" />
+          <details
+            class="chat-details-skills chat-details-mobile-root__group"
+            data-details-group="skills"
+          >
+            <summary class="chat-details-mobile-root__entry">
+              <span class="chat-details-mobile-root__copy">
+                {t("chat.sessionDetails.skillsUsed")}
+              </span>
+              <span class="chat-details-mobile-root__metadata">{skills().length}</span>
+              <Icon name="chevronDown" class="chat-details-mobile-root__chevron" />
             </summary>
             {content()}
           </details>

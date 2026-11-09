@@ -28,8 +28,6 @@ const enChatSession = {
       menu: "Session details",
       title: "Details",
       close: "Close details",
-      skillsUsed: "Skills used",
-      skillLoads: "Loaded {count} times",
       automations: en.chat.sessionDetails.automations,
       progressOptions: en.chat.sessionDetails.progressOptions,
       hideProgress: "Don’t show task progress again",
