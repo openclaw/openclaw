@@ -35,7 +35,8 @@ test("saved target retains independent Discovery routing without inferring an or
 
 test.each([
   "http://remote.example",
-  "https://user:pass@api.example",
+  // Built at runtime so secret scanners do not mistake the synthetic userinfo for a credential.
+  Object.assign(new URL("https://api.example"), { username: "user", password: "fixture" }).href,
   "https://api.example/path",
   "https://api.example/?q=1",
   "https://api.example/#x",
