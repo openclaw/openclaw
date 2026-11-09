@@ -13,10 +13,11 @@ import {
 import { paneDomId } from "./chat-composer-dom.ts";
 import {
   beginInlineFreeformSlashArguments,
-  commitInlineSlashSelection,
   findDirectInlineSlashArgumentInvocation,
+  draftAfterSlashToken,
   hasActiveInlineSlashArgumentPrefix,
   removeInlineSlashSelection,
+  replaceSlashToken,
 } from "./chat-composer-inline-slash.ts";
 import type { SkillMenuHost } from "./chat-composer-skill-menu-state.ts";
 
@@ -57,7 +58,7 @@ export type SlashMenuHost = SkillMenuHost & {
   canRun: (inline: boolean, command?: SlashCommandDef, args?: string) => boolean;
   runInlineCommand?: (command: string) => void;
   commandFilter?: (command: SlashCommandDef) => boolean;
-  activateComposerMode?: (command: SlashCommandDef, inline: boolean) => boolean;
+  activateComposerMode?: (command: SlashCommandDef, inline: boolean, args?: string) => boolean;
 };
 
 export function isSlashMenuVisible(state: SlashMenuState): boolean {
@@ -211,7 +212,7 @@ export function createSlashMenu() {
     const completion = findInlineSlashCompletion(value, caret);
     // The caret-local token owns completion before a leading command's argument tail.
     const argMatch = value.match(/^\/(\S+)\s(.*)$/);
-    if (argMatch && !completion?.inline) {
+    if (argMatch && !completion) {
       if (!opts.skipSlashIntent) {
         requestSlashCommandRefresh(host);
       }
@@ -291,7 +292,10 @@ export function createSlashMenu() {
     completeOnly = false,
   ): void {
     const completion = state.slashMenuCompletion;
-    if (host.activateComposerMode?.(cmd, completion?.inline === true)) {
+    // Prose after a leading command token becomes that command's arguments.
+    const leadingArgs =
+      completion && !completion.inline ? draftAfterSlashToken(completion, host).trim() : "";
+    if (host.activateComposerMode?.(cmd, completion?.inline === true, leadingArgs || undefined)) {
       return;
     }
     if (
@@ -341,7 +345,12 @@ export function createSlashMenu() {
     }
     if (completion?.inline) {
       resetSlashMenuState(state);
-      commitInlineSlashSelection(inlineReplacement, completion, host);
+      replaceSlashToken(inlineReplacement, completion, host);
+      return;
+    }
+    if (completion && leadingArgs) {
+      resetSlashMenuState(state);
+      replaceSlashToken(`/${cmd.name}`, completion, host);
       return;
     }
 
@@ -400,7 +409,7 @@ export function createSlashMenu() {
     }
     if (completion?.inline && (!run || !command || !executesInlineImmediately(command))) {
       resetSlashMenuState(state);
-      commitInlineSlashSelection(`/${cmdName} ${arg}`, completion, host);
+      replaceSlashToken(`/${cmdName} ${arg}`, completion, host);
       return;
     }
     resetSlashMenuState(state);

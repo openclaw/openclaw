@@ -34,20 +34,26 @@ function commitDraftWithCaret(host: InlineSlashHost, next: string, caret: number
   });
 }
 
-export function commitInlineSlashSelection(
+/** Replaces only the completed slash token; surrounding draft text stays in place. */
+export function replaceSlashToken(
   replacement: string,
-  completion: InlineSlashCompletion | null,
+  completion: InlineSlashCompletion,
   host: InlineSlashHost,
-): boolean {
-  if (!completion?.inline) {
-    return false;
-  }
+): void {
   const current = host.getTextarea()?.value ?? host.getDraft();
   const after = current.slice(completion.end);
   const separator = after.length === 0 || !/^\s/u.test(after) ? " " : "";
   const next = `${current.slice(0, completion.start)}${replacement}${separator}${after}`;
   commitDraftWithCaret(host, next, completion.start + replacement.length + separator.length);
-  return true;
+}
+
+/** Draft text after the completed slash token, without the separating whitespace. */
+export function draftAfterSlashToken(
+  completion: InlineSlashCompletion,
+  host: InlineSlashHost,
+): string {
+  const current = host.getTextarea()?.value ?? host.getDraft();
+  return current.slice(completion.end).trimStart();
 }
 
 export function beginInlineFreeformSlashArguments(
@@ -139,8 +145,7 @@ export function findDirectInlineSlashArgumentInvocation(
         query: typedName,
         start,
         end: boundedCaret,
-        inline:
-          text.slice(0, start).trim().length > 0 || text.slice(boundedCaret).trim().length > 0,
+        inline: text.slice(0, start).trim().length > 0,
         argumentStart: match.index + match[0].length,
       },
     };
