@@ -1,2 +1,0 @@
-# Managed-launch cooldown elapsed-time (performance.now) discriminant test in PR #194187.
-25
