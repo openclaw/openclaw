@@ -1476,8 +1476,46 @@ async function verifyEventLoadPageUp(page: Page, toolCount: number) {
       );
       return thread && Math.abs(thread.scrollHeight - thread.clientHeight - thread.scrollTop) <= 8;
     });
-    await page.evaluate(() => Reflect.get(window, "__eventLoad").beginScroll());
-    await threadLocator.press("PageUp");
+    // Read completed history: the still-growing tool group may reflow its own
+    // text without moving the viewport. Page through it using native input.
+    const pageLimit = await threadLocator.evaluate(
+      (thread) => Math.ceil(thread.scrollHeight / thread.clientHeight) + 1,
+    );
+    for (let pageIndex = 0; pageIndex < pageLimit; pageIndex++) {
+      await threadLocator.press("PageUp");
+      await page.waitForFunction(
+        (position) => {
+          const thread = document.querySelector<HTMLElement>(
+            ".chat-pane-cache__pane--active .chat-thread",
+          );
+          if (!thread) {
+            return false;
+          }
+          position.stable = position.top === thread.scrollTop ? position.stable + 1 : 0;
+          position.top = thread.scrollTop;
+          return position.stable >= 3;
+        },
+        { top: -1, stable: 0 },
+        { polling: "raf" },
+      );
+      const historyVisible = await threadLocator.evaluate((thread) => {
+        const viewport = thread.getBoundingClientRect();
+        return [...thread.querySelectorAll<HTMLElement>(".chat-text")].some((element) => {
+          const bounds = element.getBoundingClientRect();
+          return (
+            element
+              .closest(".chat-bubble[data-entry-id]")
+              ?.getAttribute("data-entry-id")
+              ?.startsWith("interaction-0-") &&
+            bounds.top >= viewport.top &&
+            bounds.bottom <= viewport.bottom
+          );
+        });
+      });
+      if (historyVisible) {
+        break;
+      }
+    }
     // Wait for the browser's native paging motion, not an assigned scrollTop.
     await page.waitForFunction(
       ({ expected, position }) => {
@@ -1513,7 +1551,7 @@ async function verifyEventLoadPageUp(page: Page, toolCount: number) {
         const bounds = element.getBoundingClientRect();
         return (
           entryId &&
-          /^(?:interaction-0-|event-load-call-)\d+$/u.test(entryId) &&
+          /^interaction-0-\d+$/u.test(entryId) &&
           !element.closest(".chat-tool-msg-body") &&
           bounds.top >= viewport.top &&
           bounds.bottom <= viewport.bottom &&
@@ -1534,6 +1572,9 @@ async function verifyEventLoadPageUp(page: Page, toolCount: number) {
         settledFrames: 0,
       };
     });
+    // Release the second wave after capturing native PageUp intent so a fast
+    // renderer cannot drain the overlap before its anchor is observed.
+    await page.evaluate(() => Reflect.get(window, "__eventLoad").beginScroll());
     await page.waitForFunction(
       ({ proof, expected }) => {
         const thread = document.querySelector<HTMLElement>(
