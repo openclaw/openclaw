@@ -76,8 +76,10 @@ function scheduleJobLoadDiagnostics(state: CronServiceState, inventory: CronStor
       let checked = 0;
       let closed = false;
       const ended = createDeferredCore();
+      const controller = new AbortController();
       const finish = () => {
         closed = true;
+        controller.abort();
         ended.resolve();
       };
       const expire = () => {
@@ -114,7 +116,7 @@ function scheduleJobLoadDiagnostics(state: CronServiceState, inventory: CronStor
             }
             let warning: string | undefined;
             try {
-              warning = await describe(job);
+              warning = await describe(job, controller.signal);
             } catch {
               warning =
                 "cron: inference account readiness could not be checked; run openclaw doctor --lint.";

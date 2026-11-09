@@ -114,7 +114,10 @@ export type CronServiceDeps = {
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
   /** Best-effort host diagnostics after inventory publication, outside cron readiness and operations. */
-  describeJobLoadWarning?: (job: CronStoredJob) => string | undefined | Promise<string | undefined>;
+  describeJobLoadWarning?: (
+    job: CronStoredJob,
+    signal: AbortSignal,
+  ) => string | undefined | Promise<string | undefined>;
   /** Disallow automation jobs that run commands or scripts on the host. */
   hostExecutionDisabled?: boolean;
   resolveUserTimezone?: () => string | undefined;

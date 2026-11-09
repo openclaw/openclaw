@@ -197,6 +197,45 @@ function isProfileForProvider(params: {
   );
 }
 
+/** Shared compatibility decision; callers decide whether to persist a cleared pin. */
+export function resolveSessionAuthProfileOverrideCompatibility(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
+  entry: SessionEntry;
+  store: AuthProfileStore;
+  provider: string;
+  providers: readonly string[];
+}): "available" | "unavailable" | "personal-unavailable" | "incompatible" {
+  const { cfg, agentDir, entry, store, provider, providers } = params;
+  const profileId = entry.authProfileOverride?.trim();
+  if (!profileId) {
+    return "incompatible";
+  }
+  if (
+    !store.profiles[profileId] &&
+    !providers.some((candidateProvider) =>
+      isConfiguredAwsSdkAuthProfileForProvider({ cfg, provider: candidateProvider, profileId }),
+    )
+  ) {
+    if (isUserModelAuthProfileId(profileId)) {
+      return "personal-unavailable";
+    }
+    return providers.some((candidateProvider) =>
+      shouldPreserveUnavailableSessionAuthProfileOverride({
+        cfg,
+        agentDir,
+        entry,
+        store,
+        currentProvider: entry.providerOverride ?? provider,
+        provider: candidateProvider,
+      }),
+    )
+      ? "unavailable"
+      : "incompatible";
+  }
+  return isProfileForProvider({ cfg, providers, profileId, store }) ? "available" : "incompatible";
+}
+
 function uniqueProviders(provider: string, acceptedProviderIds?: readonly string[]): string[] {
   return normalizeUniqueTrimmedStringList(
     acceptedProviderIds?.length ? acceptedProviderIds : [provider],
@@ -336,54 +375,35 @@ async function resolveSessionAuthProfileOverride(
     assertCommitAllowed: params.assertCommitAllowed,
   };
 
-  const currentProfileId = current;
-  if (
-    currentProfileId &&
-    !store.profiles[currentProfileId] &&
-    !providers.some((candidateProvider) =>
-      isConfiguredAwsSdkAuthProfileForProvider({
-        cfg,
-        provider: candidateProvider,
-        profileId: currentProfileId,
-      }),
-    )
-  ) {
-    if (isUserModelAuthProfileId(currentProfileId)) {
-      // A missing personal owner must not let the next participant claim this session's billing.
-      throw new Error(
-        "This session's personal model account is unavailable. Select another account for this session, or reconnect your account and start a new session.",
-      );
-    }
-    if (
-      providers.some((candidateProvider) =>
-        shouldPreserveUnavailableSessionAuthProfileOverride({
-          cfg,
-          agentDir,
-          entry: sessionEntry,
-          store,
-          currentProvider: sessionEntry.providerOverride ?? provider,
-          provider: candidateProvider,
-        }),
-      )
-    ) {
-      authProfilesLog.warn(
-        "selected session auth profile is unavailable; explicit pin remains strict",
-        {
-          event: "session_auth_profile_unavailable",
-          sessionKey,
-          profileId: currentProfileId,
-          recovery:
-            "select a configured model@profile or reconnect the intended account with models auth login --profile-id",
-          tags: ["auth_profiles", "session_recovery"],
-        },
-      );
-      return { profileId: currentProfileId, store };
-    }
-    await clearSessionAuthProfileOverride(overrideTarget);
-    current = undefined;
+  const compatibility = resolveSessionAuthProfileOverrideCompatibility({
+    cfg,
+    agentDir,
+    entry: sessionEntry,
+    store,
+    provider,
+    providers,
+  });
+  if (compatibility === "personal-unavailable") {
+    // A missing personal owner must not let the next participant claim this session's billing.
+    throw new Error(
+      "This session's personal model account is unavailable. Select another account for this session, or reconnect your account and start a new session.",
+    );
   }
-
-  if (current && !isProfileForProvider({ cfg, providers, profileId: current, store })) {
+  if (compatibility === "unavailable") {
+    authProfilesLog.warn(
+      "selected session auth profile is unavailable; explicit pin remains strict",
+      {
+        event: "session_auth_profile_unavailable",
+        sessionKey,
+        profileId: current,
+        recovery:
+          "select a configured model@profile or reconnect the intended account with models auth login --profile-id",
+        tags: ["auth_profiles", "session_recovery"],
+      },
+    );
+    return { profileId: current, store };
+  }
+  if (current && compatibility === "incompatible") {
     await clearSessionAuthProfileOverride(overrideTarget);
     current = undefined;
   }

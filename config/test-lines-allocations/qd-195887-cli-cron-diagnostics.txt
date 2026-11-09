@@ -1,2 +1,2 @@
-# Doctor/lint, selected-source, default-profile, pinned-session, and background-budget regressions for #195887.
-402
+# Doctor/lint selection parity, selected-source, and non-blocking diagnostic cutoff regressions for #195887.
+177

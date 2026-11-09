@@ -1,9 +1,11 @@
 import { resolveSessionAuthProfilePreference } from "../agents/auth-profiles/selection-preference.js";
+import { resolveSessionAuthProfileOverrideCompatibility } from "../agents/auth-profiles/session-override.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
   selectCliExecutionAuthProfile,
 } from "../agents/cli-execution-auth.js";
+import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-route.js";
 import { isCliProvider } from "../agents/model-selection-cli.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
@@ -26,9 +28,11 @@ import type { CronStoredJob } from "./types.js";
 export async function prepareCronInferenceDiagnosticSession(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  signal?: AbortSignal;
   job: Pick<CronStoredJob, "id" | "sessionTarget" | "sessionKey">;
 }) {
-  const { cfg, agentId, job } = params;
+  const { cfg, agentId, job, signal } = params;
+  signal?.throwIfAborted();
   const targetKey = resolveCronSessionTargetSessionKey(job.sessionTarget);
   const sessionKey = resolveCronAgentSessionKey({
     cfg,
@@ -42,6 +46,7 @@ export async function prepareCronInferenceDiagnosticSession(params: {
       sessionKeys: [sessionKey],
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     });
+    signal?.throwIfAborted();
     const entry = read.entries[0]?.entry;
     if (entry) {
       return { sessionEntry: entry, initialSessionEntry: entry, isNewSession: false };
@@ -71,19 +76,38 @@ export async function inspectCronCliInferenceAccount(params: {
   provider: string;
   model: string;
   configuredProfileId?: string;
+  signal?: AbortSignal;
   session: Pick<
     Awaited<ReturnType<typeof prepareCronSession>>,
     "sessionEntry" | "initialSessionEntry" | "isNewSession"
   >;
 }): Promise<{ warning?: string } | undefined> {
   const { cfg, agentId, provider, model, session, job } = params;
+  params.signal?.throwIfAborted();
+  // Compatibility is checked on the read-only snapshot, never persisted as a repair.
+  const store = session.sessionEntry.authProfileOverride
+    ? await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir)
+    : undefined;
+  params.signal?.throwIfAborted();
+  const sessionProfileId =
+    store &&
+    resolveSessionAuthProfileOverrideCompatibility({
+      cfg: resolveModelProviderAuthConfig({ config: cfg, provider, modelId: model }),
+      agentDir: params.agentDir,
+      entry: session.sessionEntry,
+      store,
+      provider,
+      providers: [provider],
+    }) === "incompatible"
+      ? undefined
+      : session.sessionEntry.authProfileOverride;
   const preference = resolveSessionAuthProfilePreference({
     cfg,
     agentId,
     provider,
     modelId: model,
     configuredProfileId: params.configuredProfileId,
-    sessionProfileId: session.sessionEntry.authProfileOverride,
+    sessionProfileId,
     sessionProfileSource: resolveSessionAuthProfileOverrideSource(session.sessionEntry),
   });
   const execution = resolveCronCandidateExecution(
@@ -114,11 +138,15 @@ export async function inspectCronCliInferenceAccount(params: {
   ) {
     return {};
   }
+  params.signal?.throwIfAborted();
+  const authStore =
+    store ?? (await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir));
+  params.signal?.throwIfAborted();
   const selected = selectCliExecutionAuthProfile({
     cliExecutionProvider: execution.executionProvider,
     authProfileProvider: provider,
     config: cfg,
-    store: await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir),
+    store: authStore,
     readinessMode: "read-only",
     selected: preference
       ? { authProfileId: preference.profileId, authProfileIdSource: preference.source }

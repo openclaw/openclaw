@@ -23,10 +23,17 @@ import { resolveCronModelSelection } from "../cron/isolated-agent/model-selectio
 import type { CronStoredJob } from "../cron/types.js";
 import { resolveProviderAuthProfileId } from "../plugins/provider-runtime.js";
 
+/** Adapt live config reads to the cron service's cancellable diagnostic callback. */
+export function createCronInferenceMigrationDiagnostic(readConfig: () => OpenClawConfig) {
+  return (job: CronStoredJob, signal?: AbortSignal) =>
+    describeCronInferenceMigration(readConfig(), job, signal);
+}
+
 /** Startup inspects existing owner facts; Doctor remains the sole migration writer. */
-export async function describeCronInferenceMigration(
+async function describeCronInferenceMigration(
   config: OpenClawConfig,
   job: CronStoredJob,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
   if (
     job.payload.kind !== "agentTurn" ||
@@ -38,14 +45,21 @@ export async function describeCronInferenceMigration(
     return undefined;
   }
   try {
+    signal?.throwIfAborted();
     const agentId = tryResolveCronJobEffectiveAgentId(job, tryResolveAmbientOwnerAgentId(config));
     if (!agentId) {
       return undefined;
     }
-    const session = await prepareCronInferenceDiagnosticSession({ cfg: config, agentId, job });
+    const session = await prepareCronInferenceDiagnosticSession({
+      cfg: config,
+      agentId,
+      job,
+      signal,
+    });
     if (session.initialSessionEntry?.modelSelectionLocked) {
       throw new Error("Native runtime owns the session model");
     }
+    signal?.throwIfAborted();
     const selection = await resolveCronModelSelection({
       cfg: config,
       agentId,
@@ -56,6 +70,7 @@ export async function describeCronInferenceMigration(
       payloadModel: job.payload.model,
       isGmailHook: job.payload.externalContentSource === "gmail",
     });
+    signal?.throwIfAborted();
     if (!selection.ok) {
       throw new Error(selection.error);
     }
@@ -69,7 +84,9 @@ export async function describeCronInferenceMigration(
       model: selection.model,
       configuredProfileId: selection.configuredProfileId,
       session,
+      signal,
     });
+    signal?.throwIfAborted();
     if (cli) {
       return cli.warning ? `cron: ${cli.warning}` : undefined;
     }
@@ -105,6 +122,11 @@ export async function describeCronInferenceMigration(
       sessionProfileSource: resolveSessionAuthProfileOverrideSource(session.sessionEntry),
     });
     const explicitProfileId = preference?.source === "user" ? preference.profileId : undefined;
+    signal?.throwIfAborted();
+    const authProfileStore = await loadAuthProfileStoreWithoutExternalProfilesAsync(
+      selection.owner.agentDir,
+    );
+    signal?.throwIfAborted();
     const [attempt] = prepareAgentRuntimeAuth({
       config: cfg,
       agentId,
@@ -112,9 +134,7 @@ export async function describeCronInferenceMigration(
       modelId: selection.model,
       agentDir: selection.owner.agentDir,
       workspaceDir: selection.owner.workspaceDir,
-      authProfileStore: await loadAuthProfileStoreWithoutExternalProfilesAsync(
-        selection.owner.agentDir,
-      ),
+      authProfileStore,
       sessionAuthProfileId: preference?.profileId,
       sessionAuthProfileSource: preference?.source,
       ...(explicitProfileId
@@ -134,6 +154,9 @@ export async function describeCronInferenceMigration(
     }
     return "cron: automation has no recorded inference account; run openclaw doctor --fix before its next scheduled run to migrate a clear stored account or see the explicit adoption needed. This is an account check, not a requirement to pin its model.";
   } catch {
+    if (signal?.aborted) {
+      return undefined;
+    }
     // A diagnostic cannot turn an unresolved model/agent into a Gateway startup refusal.
     return "cron: legacy inference account readiness could not be determined; inspect it with openclaw doctor --lint before the next scheduled run.";
   }
