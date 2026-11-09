@@ -218,8 +218,8 @@ Examples:
 acpx openclaw exec "Summarize the active OpenClaw session state."
 
 # Persistent named session for follow-up turns
-acpx openclaw sessions ensure --name codex-bridge
-acpx openclaw -s codex-bridge --cwd /path/to/repo \
+acpx --cwd /path/to/repo openclaw sessions ensure --name codex-bridge
+acpx --cwd /path/to/repo openclaw -s codex-bridge \
   "Ask my OpenClaw work agent for recent context relevant to this repo."
 ```
 

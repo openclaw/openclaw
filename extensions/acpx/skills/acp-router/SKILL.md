@@ -154,7 +154,8 @@ Use this path to drive harness sessions without `/acp` or subagent runtime.
 2. Reuse a stable session name per conversation so follow-up prompts stay in the same harness context.
 3. Prefer `--format quiet` for clean assistant text to relay back to user.
 4. Use `exec` (one-shot) only when the user wants one-shot behavior.
-5. Keep working directory explicit (`--cwd`) when task scope depends on repo context.
+5. Keep working directory explicit (`--cwd`) and identical for session lookup, creation, prompts, cancellation, and close.
+6. Put global options such as `--cwd` and `--format` before the harness name.
 
 ### Session naming
 
@@ -169,28 +170,28 @@ Where `conversationId` is thread id when available, otherwise channel/conversati
 Persistent session (create if missing, then prompt):
 
 ```bash
-${ACPX_CMD} codex sessions show oc-codex-<conversationId> \
-  || ${ACPX_CMD} codex sessions new --name oc-codex-<conversationId>
+${ACPX_CMD} --cwd <workspacePath> codex sessions show oc-codex-<conversationId> \
+  || ${ACPX_CMD} --cwd <workspacePath> codex sessions new --name oc-codex-<conversationId>
 
-${ACPX_CMD} codex -s oc-codex-<conversationId> --cwd <workspacePath> --format quiet "<prompt>"
+${ACPX_CMD} --cwd <workspacePath> --format quiet codex -s oc-codex-<conversationId> "<prompt>"
 ```
 
 One-shot:
 
 ```bash
-${ACPX_CMD} codex exec --cwd <workspacePath> --format quiet "<prompt>"
+${ACPX_CMD} --cwd <workspacePath> --format quiet codex exec "<prompt>"
 ```
 
 Cancel in-flight turn:
 
 ```bash
-${ACPX_CMD} codex cancel -s oc-codex-<conversationId>
+${ACPX_CMD} --cwd <workspacePath> codex cancel -s oc-codex-<conversationId>
 ```
 
 Close session:
 
 ```bash
-${ACPX_CMD} codex sessions close oc-codex-<conversationId>
+${ACPX_CMD} --cwd <workspacePath> codex sessions close oc-codex-<conversationId>
 ```
 
 ### Harness aliases in acpx
@@ -244,7 +245,7 @@ If your local Cursor install still exposes ACP as `agent acp`, set that as the `
   - for thread-spawn ACP requests, first restore built-in defaults by removing broken `~/.acpx/config.json` agent overrides
   - then retry once before offering fallback
   - if user wants binary-based overrides, install exactly the configured adapter binary
-- `NO_SESSION`: run `${ACPX_CMD} <agent> sessions new --name <sessionName>` then retry prompt.
+- `NO_SESSION`: run `${ACPX_CMD} --cwd <workspacePath> <agent> sessions new --name <sessionName>` with the prompt's working directory, then retry prompt.
 - queue busy: either wait for completion (default) or use `--no-wait` when async behavior is explicitly desired.
 
 ### Output relay
