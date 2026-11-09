@@ -29,6 +29,7 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.onTimeout
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -1348,32 +1349,41 @@ class GatewaySession(
           val call = downloadClient.newCall(request.build())
           call.timeout().timeout(20, java.util.concurrent.TimeUnit.SECONDS)
           var retryDelayMs: Long? = null
-          call.execute().use { response ->
-            if (response.code == 202 && playbackRendition) {
-              retryDelayMs = retry.nextDelayMs()
-            } else {
-              if (!response.isSuccessful) return@withContext null
-              val body = response.body
-              val mimeType = body.contentType()?.toString()?.lowercase(Locale.ROOT) ?: return@withContext null
-              if (!kind.acceptsMimeType(mimeType)) return@withContext null
-              val maximumBytes = kind.maximumBufferedBytes
-              val declaredLength = body.contentLength()
-              if (declaredLength > maximumBytes) return@withContext null
-              val buffer = Buffer()
-              val source = body.source()
-              var total = 0L
-              while (true) {
-                val read = source.read(buffer, minOf(8192L, maximumBytes + 1L - total))
-                if (read == -1L) break
-                total += read
-                if (total > maximumBytes) return@withContext null
+          val media =
+            call.useCancellableResponse { response ->
+              if (response.code == 202 && playbackRendition) {
+                retryDelayMs = retry.nextDelayMs()
+                null
+              } else {
+                if (!response.isSuccessful) return@useCancellableResponse null
+                val body = response.body
+                val mimeType = body.contentType()?.toString()?.lowercase(Locale.ROOT) ?: return@useCancellableResponse null
+                if (!kind.acceptsMimeType(mimeType)) return@useCancellableResponse null
+                val maximumBytes = kind.maximumBufferedBytes
+                val declaredLength = body.contentLength()
+                if (declaredLength > maximumBytes) return@useCancellableResponse null
+                val buffer = Buffer()
+                val source = body.source()
+                var total = 0L
+                while (true) {
+                  val read = source.read(buffer, minOf(8192L, maximumBytes + 1L - total))
+                  if (read == -1L) break
+                  total += read
+                  if (total > maximumBytes) return@useCancellableResponse null
+                }
+                bufferedMedia(bytes = buffer.readByteArray(), mimeType = mimeType)
               }
-              return@withContext bufferedMedia(bytes = buffer.readByteArray(), mimeType = mimeType)
             }
-          }
-          delay(retryDelayMs ?: return@withContext null)
+          delay(retryDelayMs ?: return@withContext media)
         }
         null
+      }
+
+    private suspend fun <T> Call.useCancellableResponse(block: (Response) -> T): T =
+      suspendCancellableCoroutine { continuation ->
+        // Keep cancellation attached through body reads, not just until response headers arrive.
+        continuation.invokeOnCancellation { cancel() }
+        continuation.resumeWith(runCatching { execute().use(block) })
       }
 
     private fun resolveTicketedMediaRequest(
