@@ -53,18 +53,28 @@ internal data class DeviceAppEntry(
 )
 
 internal interface DeviceAppSource {
-  fun listApps(includeNonLaunchable: Boolean): List<DeviceAppEntry>
+  fun listApps(
+    includeNonLaunchable: Boolean,
+    includeDisabled: Boolean,
+  ): List<DeviceAppEntry>
 }
 
 private class AndroidDeviceAppSource(
   private val appContext: Context,
 ) : DeviceAppSource {
-  override fun listApps(includeNonLaunchable: Boolean): List<DeviceAppEntry> {
+  override fun listApps(
+    includeNonLaunchable: Boolean,
+    includeDisabled: Boolean,
+  ): List<DeviceAppEntry> {
     val packageManager = appContext.packageManager
     val launcherIntent = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
+
+    // MATCH_ALL does not include disabled launcher components on Android.
+    val launcherFlags =
+      PackageManager.MATCH_ALL or if (includeDisabled) PackageManager.MATCH_DISABLED_COMPONENTS else 0
     val launchablePackages =
       packageManager
-        .queryIntentActivities(launcherIntent, PackageManager.MATCH_ALL)
+        .queryIntentActivities(launcherIntent, launcherFlags)
         .asSequence()
         .mapNotNull {
           it.activityInfo
@@ -152,7 +162,7 @@ class DeviceHandler internal constructor(
     val limit = (parseJsonInt(params, "limit") ?: DEFAULT_DEVICE_APPS_LIMIT).coerceIn(1, MAX_DEVICE_APPS_LIMIT)
     val matchingApps =
       appSource
-        .listApps(includeNonLaunchable = includeNonLaunchable)
+        .listApps(includeNonLaunchable = includeNonLaunchable, includeDisabled = includeDisabled)
         .asSequence()
         .filter { includeSystem || !it.system }
         .filter { includeDisabled || it.enabled }

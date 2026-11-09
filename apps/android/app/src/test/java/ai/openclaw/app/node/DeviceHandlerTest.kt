@@ -561,7 +561,10 @@ private class FakeDeviceAppSource(
 ) : DeviceAppSource {
   val includeNonLaunchableRequests = mutableListOf<Boolean>()
 
-  override fun listApps(includeNonLaunchable: Boolean): List<DeviceAppEntry> {
+  override fun listApps(
+    includeNonLaunchable: Boolean,
+    includeDisabled: Boolean,
+  ): List<DeviceAppEntry> {
     includeNonLaunchableRequests += includeNonLaunchable
     return apps
   }
