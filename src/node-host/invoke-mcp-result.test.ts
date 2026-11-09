@@ -47,4 +47,16 @@ describe("boundMcpToolResultPayload", () => {
       structuredContent,
     });
   });
+
+  it("drops the bare array a server wrapped as single-key structured content", () => {
+    const structuredContent = { items: [{ id: "C1", name: "general" }] };
+    const payload = boundMcpToolResultPayload({
+      content: [
+        { type: "text", text: JSON.stringify(structuredContent.items, null, 1) },
+        { type: "text", text: "[]" },
+      ],
+      structuredContent,
+    });
+    expect(payload).toEqual({ content: [{ type: "text", text: "[]" }], structuredContent });
+  });
 });
