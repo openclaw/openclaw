@@ -35,7 +35,10 @@ import {
   refreshNodeHostOpenClawIdTarget,
   type NodeHostConfig,
 } from "./config.js";
-import type { NodeHostOpenClawIdTarget } from "./openclaw-id-target.js";
+import {
+  dialableNodeHostOpenClawIdTarget,
+  type NodeHostOpenClawIdTarget,
+} from "./openclaw-id-target.js";
 
 const fixtureDigest = ["fixture", "digest"].join("-");
 const fixture = createFixtureLifetime();
@@ -398,6 +401,43 @@ describe("node-host SQLite config", () => {
     expect(second.gateway).toBeUndefined();
     await expect(loadNodeHostConfig(env)).resolves.toEqual(second);
   }, 30_000);
+
+  it("loads a preview target without a Discovery origin for an explicit-origin rejoin, never to dial", async () => {
+    const { env, configure, load } = makeTestEnv();
+    const { discoveryUrl: _origin, ...legacy } = await idTarget(2, 3);
+    writeConfigMachineState(
+      NODE_HOST_CONFIG_KEY,
+      { version: 1, nodeId: "preview-node", gateway: { kind: "openclaw-id", openclawId: legacy } },
+      { env },
+    );
+    const saved = (await load())?.gateway?.openclawId;
+    expect(saved).toEqual(legacy);
+    expect(() => dialableNodeHostOpenClawIdTarget(saved!)).toThrow(
+      "re-join this node with a new link and --discovery-url",
+    );
+    // A refused rejoin retains stronger trust without inventing routing.
+    const stronger = { ...(await idTarget(3, 4)), discoveryUrl: undefined };
+    await expect(
+      refreshNodeHostOpenClawIdTarget({
+        env,
+        nodeId: "preview-node",
+        expected: saved!,
+        target: stronger,
+      }),
+    ).resolves.toMatchObject({ pin: { binding_seq: 3 } });
+    // An admitted rejoin saves the explicit origin and keeps the retained trust.
+    await configure({ gateway: { kind: "openclaw-id", openclawId: await idTarget() } });
+    await closeOpenClawStateDatabaseAsync();
+    const rejoined = (await load())?.gateway?.openclawId;
+    expect(rejoined).toMatchObject({
+      pin: { binding_seq: 3 },
+      discoveryUrl: "https://discovery.example",
+      freshness: { snapshot: { seq: 4, binding_seq: 3 } },
+    });
+    expect(dialableNodeHostOpenClawIdTarget(rejoined!).discoveryUrl).toBe(
+      "https://discovery.example",
+    );
+  });
 
   it("rejects corrupt canonical rows instead of rotating identity", async () => {
     const { env, configure, load } = makeTestEnv();

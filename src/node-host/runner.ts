@@ -51,7 +51,10 @@ import {
   setNodeHostLauncherRestartArguments,
   watchNodeHostParentStdin,
 } from "./launcher-client.js";
-import { sameNodeHostOpenClawIdScope } from "./openclaw-id-target.js";
+import {
+  dialableNodeHostOpenClawIdTarget,
+  sameNodeHostOpenClawIdScope,
+} from "./openclaw-id-target.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 import { ensureNodeHostStateReady } from "./startup-state-readiness.js";
 
@@ -364,7 +367,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<{ connected
     gateway.kind === "openclaw-id" && gateway.openclawId
       ? await import("./openclaw-id-transport.js").then(({ startNodeTunnelTransport }) =>
           startNodeTunnelTransport({
-            target: gateway.openclawId!,
+            target: dialableNodeHostOpenClawIdTarget(gateway.openclawId!),
             readTarget: async () => {
               const current = await loadNodeHostConfig();
               if (
@@ -379,7 +382,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<{ connected
               if (!sameNodeHostOpenClawIdScope(target, initial)) {
                 throw new Error("OpenClaw ID node target changed; restart the node host");
               }
-              return target;
+              return dialableNodeHostOpenClawIdTarget(target);
             },
             persistTarget: (target, expected) =>
               refreshNodeHostOpenClawIdTarget({ nodeId, expected, target }),

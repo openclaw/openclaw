@@ -22,14 +22,14 @@ import { NodeWorkerTurnKernel } from "./node-worker-turn-store.kernel.js";
 import {
   sameNodeHostOpenClawIdIdentity,
   sameNodeHostOpenClawIdScope,
-  type NodeHostOpenClawIdTarget,
+  type SavedNodeHostOpenClawIdTarget,
 } from "./openclaw-id-target.js";
 
 /** Trust advances independently of startup endpoint selection and display/command updates. */
 function mergeTargetTrust(
-  current: NodeHostOpenClawIdTarget,
-  candidate: NodeHostOpenClawIdTarget,
-): NodeHostOpenClawIdTarget {
+  current: SavedNodeHostOpenClawIdTarget,
+  candidate: SavedNodeHostOpenClawIdTarget,
+): SavedNodeHostOpenClawIdTarget {
   if (
     current.pin.binding_seq === candidate.pin.binding_seq &&
     canonicalize(current.evidence.binding.body) !== canonicalize(candidate.evidence.binding.body)
@@ -61,7 +61,9 @@ function mergeGatewayTrust(
     openclawId: {
       ...mergeTargetTrust(current.openclawId, candidate.openclawId),
       relayUrl: candidate.openclawId.relayUrl,
-      discoveryUrl: candidate.openclawId.discoveryUrl,
+      ...(candidate.openclawId.discoveryUrl
+        ? { discoveryUrl: candidate.openclawId.discoveryUrl }
+        : {}),
     },
   };
 }
@@ -107,13 +109,13 @@ function refreshNodeHostOpenClawIdTargetInWorker(
   [input]: [
     {
       nodeId: string;
-      expected: NodeHostOpenClawIdTarget;
-      target: NodeHostOpenClawIdTarget;
+      expected: SavedNodeHostOpenClawIdTarget;
+      target: SavedNodeHostOpenClawIdTarget;
       updatedAtMs: number;
     },
   ],
   { write }: WorkerWriteOperationContext,
-): { target: NodeHostOpenClawIdTarget; superseded: boolean } {
+): { target: SavedNodeHostOpenClawIdTarget; superseded: boolean } {
   return write(
     ({ db }) => {
       requestSqliteWorkerOperationAdmission({

@@ -17,7 +17,10 @@ import {
   nodeDiscoveryCall,
   NodeDiscoveryError,
 } from "./openclaw-id-discovery.js";
-import type { NodeHostOpenClawIdTarget } from "./openclaw-id-target.js";
+import type {
+  NodeHostOpenClawIdTarget,
+  SavedNodeHostOpenClawIdTarget,
+} from "./openclaw-id-target.js";
 
 /** Mail W's signed declaration, then verify admitted-node evidence before saving or dialing. */
 export async function enrollNode(params: {
@@ -26,7 +29,7 @@ export async function enrollNode(params: {
   signer: StatementSigner;
   description: NodeDescription;
   previous?: {
-    target: NodeHostOpenClawIdTarget;
+    target: SavedNodeHostOpenClawIdTarget;
     persist: (target: NodeHostOpenClawIdTarget) => Promise<unknown>;
   };
   signal?: AbortSignal;

@@ -20,7 +20,31 @@ export type NodeHostOpenClawIdTarget = {
   freshness?: FreshnessState;
 };
 
+/**
+ * Preview builds saved targets without a Discovery origin. Their trust facts still load so
+ * `node join --discovery-url` can retain them, but such a target never dials.
+ */
+export type SavedNodeHostOpenClawIdTarget = Omit<NodeHostOpenClawIdTarget, "discoveryUrl"> & {
+  discoveryUrl?: string;
+};
+
 export function parseNodeHostOpenClawIdTarget(value: unknown): NodeHostOpenClawIdTarget {
+  return dialableNodeHostOpenClawIdTarget(parseSavedNodeHostOpenClawIdTarget(value));
+}
+
+export function dialableNodeHostOpenClawIdTarget(
+  target: SavedNodeHostOpenClawIdTarget,
+): NodeHostOpenClawIdTarget {
+  const { discoveryUrl } = target;
+  if (discoveryUrl === undefined) {
+    throw new Error(
+      "OpenClaw ID Discovery origin is missing; re-join this node with a new link and --discovery-url",
+    );
+  }
+  return { ...target, discoveryUrl };
+}
+
+export function parseSavedNodeHostOpenClawIdTarget(value: unknown): SavedNodeHostOpenClawIdTarget {
   if (
     !isRecord(value) ||
     typeof value.hostname !== "string" ||
@@ -41,12 +65,8 @@ export function parseNodeHostOpenClawIdTarget(value: unknown): NodeHostOpenClawI
   if (!relayUrl) {
     throw new Error("invalid OpenClaw ID relay URL");
   }
-  if (value.discoveryUrl === undefined) {
-    throw new Error(
-      "OpenClaw ID Discovery origin is missing; re-join this node with --discovery-url",
-    );
-  }
-  const discoveryUrl = parseNodeDiscoveryOrigin(value.discoveryUrl);
+  const discoveryUrl =
+    value.discoveryUrl === undefined ? undefined : parseNodeDiscoveryOrigin(value.discoveryUrl);
   let freshness: FreshnessState | undefined;
   if (value.freshness !== undefined) {
     const stored = value.freshness;
@@ -98,7 +118,7 @@ export function parseNodeHostOpenClawIdTarget(value: unknown): NodeHostOpenClawI
     },
     evidence: { root_pub: value.evidence.root_pub, binding: binding.statement },
     relayUrl,
-    discoveryUrl,
+    ...(discoveryUrl ? { discoveryUrl } : {}),
     ...(freshness ? { freshness } : {}),
   };
 }
@@ -144,8 +164,8 @@ function isNonNegativeInteger(value: unknown): value is number {
 
 /** Discovery routing can change without changing the claw's trust identity. */
 export function sameNodeHostOpenClawIdIdentity(
-  a: NodeHostOpenClawIdTarget,
-  b: NodeHostOpenClawIdTarget,
+  a: SavedNodeHostOpenClawIdTarget,
+  b: SavedNodeHostOpenClawIdTarget,
 ): boolean {
   return (
     a.hostname === b.hostname && a.pin.claw_id === b.pin.claw_id && a.pin.root_fp === b.pin.root_fp
@@ -154,8 +174,8 @@ export function sameNodeHostOpenClawIdIdentity(
 
 /** A reconnect may advance trust within a claw, never switch its configured identity or route. */
 export function sameNodeHostOpenClawIdScope(
-  a: NodeHostOpenClawIdTarget,
-  b: NodeHostOpenClawIdTarget,
+  a: SavedNodeHostOpenClawIdTarget,
+  b: SavedNodeHostOpenClawIdTarget,
 ): boolean {
   return sameNodeHostOpenClawIdIdentity(a, b) && a.discoveryUrl === b.discoveryUrl;
 }

@@ -14,7 +14,7 @@ import {
   type NodeHostGatewayConfig,
 } from "./config-shared.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
-import type { NodeHostOpenClawIdTarget } from "./openclaw-id-target.js";
+import type { SavedNodeHostOpenClawIdTarget } from "./openclaw-id-target.js";
 
 export type { NodeHostConfig, NodeHostGatewayConfig } from "./config-shared.js";
 
@@ -128,10 +128,10 @@ export async function configureNodeHost(params: {
 /** Commit verified reconnect facts without replacing unrelated node configuration. */
 export async function refreshNodeHostOpenClawIdTarget(params: {
   nodeId: string;
-  expected: NodeHostOpenClawIdTarget;
-  target: NodeHostOpenClawIdTarget;
+  expected: SavedNodeHostOpenClawIdTarget;
+  target: SavedNodeHostOpenClawIdTarget;
   env?: NodeJS.ProcessEnv;
-}): Promise<NodeHostOpenClawIdTarget> {
+}): Promise<SavedNodeHostOpenClawIdTarget> {
   const env = params.env ?? process.env;
   assertNodeHostLegacyStateMigrated(env);
   const worker = new NodeWorkerJournalWorker({ env });

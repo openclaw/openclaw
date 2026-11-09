@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import { fingerprint } from "../../packages/openclaw-id-protocol/src/index.js";
 import { buildWorld } from "../../packages/openclaw-id-protocol/src/testing/world.js";
 import { normalizeGatewayConfig } from "./config-shared.js";
+import { dialableNodeHostOpenClawIdTarget } from "./openclaw-id-target.js";
 
 const world = await buildWorld();
 const target = {
@@ -17,11 +18,13 @@ const target = {
 const normalize = (discoveryUrl?: string) =>
   normalizeGatewayConfig({
     kind: "openclaw-id",
-    openclawId: { ...target, discoveryUrl: discoveryUrl! },
+    openclawId: { ...target, ...(discoveryUrl === undefined ? {} : { discoveryUrl }) },
   });
 
 test("saved target retains independent Discovery routing without inferring an origin", () => {
-  expect(() => normalize()).toThrow("Discovery origin");
+  const legacy = normalize()?.openclawId;
+  expect(legacy?.discoveryUrl).toBeUndefined();
+  expect(() => dialableNodeHostOpenClawIdTarget(legacy!)).toThrow("Discovery origin");
   expect(normalize("https://discovery.example/")?.openclawId?.discoveryUrl).toBe(
     "https://discovery.example",
   );
