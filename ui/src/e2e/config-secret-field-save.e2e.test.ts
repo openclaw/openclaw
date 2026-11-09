@@ -168,7 +168,7 @@ suite.define(() => {
       await token.press("Enter");
       await ime.send("Input.insertText", { text: PARTIAL });
       await gateway.deferNext("config.patch");
-      await token.press("Enter");
+      await save.click();
       const request = await gateway.waitForRequest("config.patch");
       expect(JSON.parse((request.params as { raw: string }).raw)).toEqual({
         logging: { apiToken: PARTIAL },
