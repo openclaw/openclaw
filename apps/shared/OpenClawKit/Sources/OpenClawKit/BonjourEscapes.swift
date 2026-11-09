@@ -2,26 +2,26 @@ import Foundation
 
 public enum BonjourEscapes {
     /// mDNS / DNS-SD commonly escapes bytes in instance names as `\DDD` (decimal-encoded),
-    /// e.g. spaces are `\032`.
+    /// e.g. spaces are `\032`. Escapes are octets, so a multi-byte UTF-8 character arrives
+    /// as several escapes; collect bytes and decode them as UTF-8, like the Android decoder.
     public static func decode(_ input: String) -> String {
-        var out = ""
+        var bytes: [UInt8] = []
         var i = input.startIndex
         while i < input.endIndex {
             if input[i] == "\\" {
                 let digits = input[input.index(after: i)...].prefix(3)
-                if digits.count == 3, digits.allSatisfy(\.isNumber),
-                   let value = Int(digits),
-                   let scalar = UnicodeScalar(value)
+                if digits.count == 3, digits.allSatisfy({ $0.isASCII && $0.isNumber }),
+                   let value = UInt8(digits)
                 {
-                    out.append(Character(scalar))
+                    bytes.append(value)
                     i = input.index(i, offsetBy: 4)
                     continue
                 }
             }
 
-            out.append(input[i])
+            bytes.append(contentsOf: String(input[i]).utf8)
             i = input.index(after: i)
         }
-        return out
+        return String(decoding: bytes, as: UTF8.self)
     }
 }
