@@ -73,7 +73,8 @@ it.for([
   "settles automation $result ($notification/$messageTool/$alias) through its shared session owner",
   async (scenario, { signal }) => {
     const progress = scenario.result === "progress";
-    const failed = scenario.result === "failed" || scenario.result === "thrown";
+    const thrown = scenario.result === "thrown";
+    const failed = scenario.result === "failed" || thrown;
     const notification = "notification" in scenario ? scenario.notification : undefined;
     const nativeOnly = notification === "native-only";
     const otherConversation = notification === "other-conversation";
@@ -236,7 +237,7 @@ it.for([
               },
             });
           }
-          if (scenario.result === "thrown") {
+          if (thrown) {
             throw new Error(failure);
           }
           if (failed) {
@@ -272,9 +273,7 @@ it.for([
           expect(outcome, outcome.error).toMatchObject({
             status: failed ? "error" : "ok",
             executionStarted: true,
-            ...(failed
-              ? { error: scenario.result === "thrown" ? `Error: ${failure}` : failure }
-              : {}),
+            ...(failed ? { error: thrown ? `Error: ${failure}` : failure } : {}),
           });
           expect(outcome.result).toEqual(result);
           const settled = expectDefined(
