@@ -84,4 +84,19 @@ describe("catalog-owned model compat", () => {
       ),
     ).toBeUndefined();
   });
+
+  it.each([
+    [catalogRoute, true],
+    [{ ...catalogRoute, api: "OPENAI-RESPONSES" }, true],
+    [{ ...catalogRoute, api: "openai-completions" }, false],
+    [{ baseUrl: null }, true],
+    [{ baseUrl: "///" }, true],
+    [{ baseUrl: "https://api.example.test:443/v1" }, true],
+    [{ baseUrl: "https://other.example.test/v1" }, false],
+    [{ baseUrl: "https://api.example.test/v2" }, false],
+    [{ baseUrl: "https://api.example.test/v1?route=other" }, false],
+    [{ baseUrl: "https://user@api.example.test/v1" }, false],
+  ] as const)("preserves route identity for %j", (configuredRoute, matches) => {
+    expect(modelTransportRoutesMatch(catalogRoute, configuredRoute)).toBe(matches);
+  });
 });
