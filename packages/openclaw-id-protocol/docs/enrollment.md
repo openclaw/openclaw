@@ -164,14 +164,19 @@ Gateway cannot start at all, that is a separate repair.
 4. **Activate.** The Gateway switches to K_gw' and restarts the tunnel child on K_srv'
    (promotion follows the key rule below, so a crash anywhere completes it on the next start).
    Every live tunnel connection closes with `shutdown` (code 0, reconnect allowed).
-5. **Publish** the descriptor, then the snapshot, both signed by K_gw' (discovery.md,
-   "Re-bind"). The snapshot keeps the membership `seq` with a new `issued_at` and the new
-   binding_seq. A failed publication is retried by the existing publication retry (the
-   published binding_seq is below the stored one); until it succeeds, remote clients cannot
-   reach the claw. The Gateway also mails owners a `rebind` notice (discovery.md, "Mailbox").
+5. **Publish** the descriptor and its snapshot **in one request**, signed by K_gw', with the
+   owner-account code (discovery.md, "Re-bind"). The snapshot has the new binding_seq and the
+   current membership `seq`. Discovery stores both or neither, so members, owners and nodes
+   never see a descriptor without a matching snapshot. The Gateway keeps the code in memory
+   for this publication and its retries and drops it once the publish is confirmed. If the code
+   is gone (Gateway restart) or expired (10 minutes), status reports `needs_link_code` and the
+   owner runs `openclaw id publish --code`. A publish that was accepted but whose answer was
+   lost is harmless to repeat: Discovery then already stores K_gw', so no code is needed and an
+   identical binding at the same seq is accepted. Until publication succeeds, remote clients
+   cannot reach the claw. The Gateway also mails owners a `rebind` notice (discovery.md,
+   "Mailbox").
 
-Events: `restart_tunnel`, `publish_descriptor`, `publish_snapshot`,
-`notify_owners: rebind`. No `disconnect` or `invalidate_tokens`: nobody lost access.
+Events: `restart_tunnel`, `publish_rebind`, `notify_owners: rebind`. No `disconnect` or `invalidate_tokens`: nobody lost access.
 
 #### Key files at every start (fail closed, openclaw-aab)
 
@@ -181,12 +186,17 @@ K_gw, and at every start:
 1. The key file holds the named key: use it, and delete a leftover `.next` file.
 2. Otherwise the `.next` file holds it: rename it over the key file (this finishes an
    interrupted re-bind) and use it.
-3. Otherwise: refuse. OpenClaw ID stays off with the reason `keys_missing` (no file) or
-   `key_mismatch` (another key). No tunnel, no publication, no Discovery request signed by an
-   unknown key. The rest of the Gateway runs. Status and the Control UI point to the re-bind.
+3. Otherwise: refuse that key, with the reason `keys_missing` (no file) or `key_mismatch`
+   (another key). Status and the Control UI point to the re-bind. The rest of the Gateway runs.
+
+"Holds the named key" means the public key derived from the file's seed equals the one the
+binding names; a planted `.next` file with any other seed is never promoted.
 
 The Gateway applies this to K_gw. The tunnel child applies it to K_srv: its start message
 carries the K_srv the binding names, and it exits with a code the supervisor does not retry.
+A refused K_srv means no tunnel. A refused K_gw means nothing is signed with K_gw: no
+publication, snapshot or Discovery request. An intact key keeps working, so with K_srv lost
+and K_gw intact the Gateway can still publish the local ceremonies (owner reset, re-bind).
 An unlinked Gateway creates keys as it does today.
 
 #### What stays, and why
@@ -204,12 +214,20 @@ claw id, fp(R) and hostname, none of the machine keys. The membership is unchang
   re-checks the pinned root and the stored binding_seq, so a reset between prepare and commit
   fails the commit (`wrong_signer` or `rollback`) and the operator starts over with the new
   kit. A reset after a re-bind is vouched for by the new K_gw.
-- **Kit unavailable.** No re-bind. If K_gw is intact: owner reset with a new kit, then
-  re-bind with it if K_srv is the problem. If the kit and K_gw are both gone, neither works:
+- **Reset and re-bind in sequence.** Discovery accepts a reset only when its previous binding
+  is exactly the stored one (discovery.md, "Owner reset"), and a reset keeps the machine keys.
+  So neither ceremony may start while the other's publication is pending: the Gateway refuses
+  it with `publication_pending` until Discovery confirmed the earlier one. Owner reset is a
+  dependency of the reset paths below: the Gateway does not implement it yet, and Discovery
+  `main` does not yet accept a root change.
+- **Kit unavailable.** No re-bind. If K_gw is intact: owner reset with a new kit (published
+  by the intact K_gw, even with K_srv lost), then re-bind with it if K_srv is the problem. If the kit and K_gw are both gone, neither works:
   Discovery accepts a new root only with a RootReset by its registered K_gw (discovery.md).
   The claw must be linked again as a new claw (hostnames are never reused).
 - **Rollback.** An older binding is refused by Discovery (`stale_binding`) and by every
-  client whose pin moved past it (`rollback`). Equal seq with other bytes: `conflict`.
+  client whose pin moved past it (`rollback`). Only Discovery refuses an equal seq with other
+  bytes (`conflict`); clients accept an equal seq, so a signer must never sign two different
+  bindings at the same binding_seq (a restored or copied kit included).
 - **Restore from an older backup.** The local binding_seq can be below Discovery's.
   Publication then fails with `stale_binding` or `conflict`; the operator re-binds again with
   a binding_seq above Discovery's. (A restored older membership has its own seq problem,
@@ -217,7 +235,11 @@ claw id, fp(R) and hostname, none of the machine keys. The membership is unchang
 - **Leaked old keys.** Discovery stops accepting the old K_gw at the descriptor publish, and
   no longer admits the old K_srv to the relay. A client that verified the new binding ignores
   anything signed by the old K_gw. A client still pinned to the old binding stays exposed as
-  statements.md describes until it reads the new descriptor.
+  statements.md describes until it reads the new descriptor. A stolen K_gw can also sign a
+  snapshot with an inflated membership `seq` or a future `issued_at` before the re-bind; so
+  that this cannot block the honest snapshots afterwards, Discovery and clients order
+  snapshots only among those signed by the same K_gw (discovery.md, "Re-bind";
+  statements.md, "Freshness").
 - **A leaked kit.** R alone moves a claw: every pinned client follows any binding R signs at
   a higher seq. Discovery therefore asks for a one-time code from the claw's owner account
   before it accepts a new K_gw (discovery.md, "Re-bind"). A Gateway whose publication is

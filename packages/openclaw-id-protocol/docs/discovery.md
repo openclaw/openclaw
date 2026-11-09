@@ -60,7 +60,7 @@ ready message.
 | registerClaw            | `POST /v1/claws`                                      | gateway (key = binding.k_gw)              | `{ code, descriptor }` -> `{ claw_id, owner_account_id }`                                          |
 | getRegistration         | `GET /v1/claws/{claw_id}/registration`                | gateway (current registered K_gw only)    | -> `{ claw_id, owner_account_id, descriptor }`; no account-session fallback                        |
 | listClaws               | `GET /v1/claws`                                       | user                                      | -> `{ claws: [{ claw_id, hostname, name, relationship, role, online, descriptor_published_at }] }` |
-| publishDescriptor       | `PUT /v1/claws/{claw_id}/descriptor`                  | gateway (stored K_gw, or see Re-bind)     | `{ descriptor, code? }` -> 204; `stale_binding` if binding_seq decreases                           |
+| publishDescriptor       | `PUT /v1/claws/{claw_id}/descriptor`                  | gateway (stored K_gw, or see Re-bind)     | `{ descriptor, snapshot?, code? }` -> 204; `stale_binding` if binding_seq decreases                |
 | getDescriptor           | `GET /v1/claws/{claw_id}/descriptor`                  | user                                      | -> `{ descriptor }`                                                                                |
 | publishSnapshot         | `PUT /v1/claws/{claw_id}/snapshot`                    | gateway                                   | `{ snapshot }` -> 204; `stale_snapshot` unless newer by (seq, issued_at)                           |
 | getSnapshot             | `GET /v1/claws/{claw_id}/snapshot`                    | user                                      | -> `{ snapshot }`                                                                                  |
@@ -148,23 +148,24 @@ same root and a binding at a higher binding_seq that names a new K_srv and K_gw.
 - **Who may publish it.** A descriptor that keeps the stored K_gw must be signed by it. A
   descriptor that names a new K_gw is signed by that new K_gw, because the old one may be lost.
 - **Owner-account code (new).** A descriptor that names a new K_gw must also carry `code`, a
-  one-time enrollment code from the claw's owner account (`createEnrollmentCode`). Discovery
-  spends it only when the publish succeeds; a wrong account, used or expired code is
-  `code_invalid`. Without it, anyone holding a leaked kit could move the claw to keys of their
-  choosing at Discovery and lock the machine out, since an owner reset at Discovery must then
-  be vouched for by the attacker's K_gw. This protects the mirror only: a client trusts any
-  binding R signed, whatever Discovery checked.
+  one-time enrollment code from the claw's owner account (`createEnrollmentCode`). A wrong
+  account, used or expired code is `code_invalid`. Without it, anyone holding a leaked kit could
+  move the claw to keys of their choosing at Discovery and lock the machine out, since an owner
+  reset at Discovery must then be vouched for by the attacker's K_gw. This protects the mirror
+  only: a client trusts any binding R signed, whatever Discovery checked.
+- **One write (new).** A descriptor that names a new K_gw must also carry `snapshot`, signed by
+  that K_gw for the new binding_seq. Discovery replaces the descriptor and the snapshot and
+  spends the code in one storage transaction, conditioned on the code being live for the
+  owner account and on the claw row version it read. A failed condition changes nothing and
+  leaves the code unspent. So there is never a stored descriptor without a usable snapshot,
+  and the member, owner, node and relay rows switch together.
+- **Snapshot order restarts.** The snapshot stored with a new K_gw replaces the old one
+  without the (`seq`, `issued_at`) comparison: the old one was signed by the retired key,
+  which may have signed an inflated `seq` or a future `issued_at`. Later snapshots are ordered
+  against it as before.
 - **After the switch.** The stored K_gw becomes the new one: the old K_gw's Gateway sessions
   are closed and its requests are treated like an unknown key (404). The relay admits the new
-  K_srv and no longer the old one. Owner, member and node relay rows drop until the Gateway
-  publishes a snapshot for the new binding_seq. Publish the descriptor first: a snapshot for a
-  binding that is not stored yet is `invalid_statement`.
-- **Snapshot.** Signed by the new K_gw, with the new binding_seq and the unchanged membership
-  `seq` at a newer `issued_at`. The existing ordering accepts it.
-- **Node descriptor during the gap.** Between the descriptor and the snapshot there is no
-  usable snapshot. `getNodeDescriptor` should then answer `unavailable` (503, `retry_after`),
-  not `forbidden`, so a node does not take the gap for its removal; `forbidden` stays for a W
-  missing from a usable snapshot.
+  K_srv and no longer the old one.
 
 ### Claw addresses
 

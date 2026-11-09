@@ -294,6 +294,11 @@ a client that verified the new binding refuses the old one (`rollback`), and a c
 stored the new snapshot's binding_seq refuses it (`stale_binding`). Snapshots signed by the
 retired K_gw do not verify under the new binding.
 
+The newest `(seq, issued_at)` is kept per K_gw (proposed): when the pin's K_gw changes, the
+client restarts that order with the first snapshot verified under the new binding, and keeps
+the highest binding_seq. A retired K_gw could have signed an inflated `seq` or a future
+`issued_at`; without the restart, honest snapshots from the new K_gw would look like replays.
+
 **Accepted v1 limitation:** an attacker holding both the old K_srv and the old K_gw can sign
 fresh snapshots for the old binding until the client has pinned the newer binding.
 A K_gw-signed answer to a client nonce would not close this: it shows that a holder of that K_gw

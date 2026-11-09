@@ -63,12 +63,14 @@ proof belongs to the consuming stack:
 Not implemented. When the re-bind lands (enrollment.md, "Re-bind"), the protocol vectors gain:
 a binding at binding_seq + 1 with new K_srv and K_gw that passes `verifyBindingForPin` and moves
 the pin's `k_gw`; a RootReset signed by the retired K_gw seen by that pin -> `root_mismatch`; a
-snapshot signed by the retired K_gw under the new binding -> refused; a client that missed
+snapshot signed by the retired K_gw under the new binding -> refused; an inflated `seq` signed
+by the retired K_gw does not block the new K_gw's snapshots; a client that missed
 several re-binds verifying the newest directly. Integration proof, by owner:
 
 - Gateway: `id-e2e: a linked Gateway whose key files are gone stays off with keys_missing and creates no key`;
   `id-e2e: re-bind over the tunnel is refused; direct loopback succeeds`; `id-e2e: a crash after
   the re-bind commit finishes promotion on the next start`.
-- Discovery: `id-e2e: a new K_gw needs the owner account's code; the old K_gw is refused after the switch`.
+- Discovery: `id-e2e: a new K_gw needs the owner account's code and its snapshot in the same write; a failed write leaves the code unspent; the old K_gw is refused after the switch`.
 - Loader, node host and native apps: `id-e2e: a client connected before a re-bind reconnects to the
-  new K_srv without being set up again, and keeps its device token`.
+  new K_srv without being set up again, and keeps its device token`; the same in the same second
+  as the previous snapshot.
