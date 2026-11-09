@@ -39,7 +39,7 @@ import {
   publishSessionTranscriptUpdateByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { consumeTurn } from "./src/events.js";
-import { MusePool, openMuseSession } from "./src/runtime.js";
+import { MUSE_STARTUP_TIMEOUT_MS, MusePool, openMuseSession } from "./src/runtime.js";
 import { MuseCatalogReader } from "./src/verify-setup.js";
 
 type MuseInputPart = Parameters<Session["sendUserTurn"]>[0]["input"][number];
@@ -643,7 +643,11 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       catalogs.delete(params.agentDir);
       const request = catalogReader.read({
         config: params.config,
-        signal: AbortSignal.any([catalogAbort.signal, AbortSignal.timeout(30_000)]),
+        // The catalog read may start a host, so its deadline must outlast host startup.
+        signal: AbortSignal.any([
+          catalogAbort.signal,
+          AbortSignal.timeout(MUSE_STARTUP_TIMEOUT_MS + 30_000),
+        ]),
         assertCurrent: () => {
           if (disposed) {
             throw new Error("Muse harness has been disposed.");
