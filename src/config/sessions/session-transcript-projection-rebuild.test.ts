@@ -260,23 +260,9 @@ it("binds interleaved session payloads in the reused single-row facts writer", (
     ["target", messageEvent("next", "first", { role: "assistant", content: "longer second" })],
   ] as const;
   for (const [index, [sessionId, event]] of inputs.entries()) {
-    runSqliteImmediateTransactionSync(db, () => {
-      const seq = index === 2 ? 1 : 0;
-      const eventJson = JSON.stringify(event);
-      const insert = createTranscriptEventInserter(db, sessionId);
-      const preparedPayload = insert.prepare({ seq, eventJson, createdAt: 1 });
-      insert({ seq, eventJson, createdAt: 1, preparedPayload });
-      const append = createIndexAppender(db, sessionId);
-      append.append({
-        seq,
-        event,
-        eventId: event.id,
-        createdAt: 1,
-        preparedPayload,
-        serializedBytes: transcriptSerializedBytes(db, eventJson),
-      });
-      append.flush();
-    });
+    runSqliteImmediateTransactionSync(db, () =>
+      appendIndexedEvent(db, sessionId, index === 2 ? 1 : 0, event),
+    );
   }
   const facts = rows(
     db,
@@ -293,6 +279,28 @@ it("binds interleaved session payloads in the reused single-row facts writer", (
   expect(facts.slice(1).map((row) => row.dependency_navigation_json)).toEqual(["{}", "{}"]);
 });
 
+function appendIndexedEvent(
+  db: DatabaseSync,
+  sessionId: string,
+  seq: number,
+  event: { id: string },
+) {
+  const eventJson = JSON.stringify(event);
+  const insert = createTranscriptEventInserter(db, sessionId);
+  const preparedPayload = insert.prepare({ seq, eventJson, createdAt: 1 });
+  insert({ seq, eventJson, createdAt: 1, preparedPayload });
+  const append = createIndexAppender(db, sessionId);
+  append.append({
+    seq,
+    event,
+    eventId: event.id,
+    createdAt: 1,
+    preparedPayload,
+    serializedBytes: transcriptSerializedBytes(db, eventJson),
+  });
+  append.flush();
+}
+
 it("leaves unprojectable legacy placement facts unknown on append and rebuild", () => {
   const db = projectionFixture(false);
   const event = {
@@ -303,21 +311,7 @@ it("leaves unprojectable legacy placement facts unknown on append and rebuild", 
     data: "not-json",
   };
   const eventJson = JSON.stringify(event);
-  runSqliteImmediateTransactionSync(db, () => {
-    const insert = createTranscriptEventInserter(db, "target");
-    const preparedPayload = insert.prepare({ seq: 0, eventJson, createdAt: 1 });
-    insert({ seq: 0, eventJson, createdAt: 1, preparedPayload });
-    const append = createIndexAppender(db, "target");
-    append.append({
-      seq: 0,
-      event,
-      eventId: event.id,
-      createdAt: 1,
-      preparedPayload,
-      serializedBytes: transcriptSerializedBytes(db, eventJson),
-    });
-    append.flush();
-  });
+  runSqliteImmediateTransactionSync(db, () => appendIndexedEvent(db, "target", 0, event));
   expect(rows(db, "SELECT * FROM session_transcript_active_event_facts")).toEqual([]);
   const plan = prepareProjection(db, "target")!;
   expect(plan.activeRows).toHaveLength(1);

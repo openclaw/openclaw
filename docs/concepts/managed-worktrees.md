@@ -81,15 +81,19 @@ with sandbox mode `all` or `non-main` in the background. Agents with sandbox mod
 still prepare dependencies on first use. A session arriving during preparation
 waits for the same build; later checkouts arrive with `node_modules`. Other selected commits
 still run dependency installation on first use. When the frozen lockfile and Git
-attributes are unchanged, an idle template imports only the new Git objects and
-checks out the source delta before reinstalling into its retained dependencies.
+attributes are unchanged, OpenClaw clones the idle template into a separate generation,
+imports only the new Git objects, and checks out the source delta before reinstalling
+into its retained dependencies.
 Repeat installation still runs repository lifecycle scripts when manifests and
 lockfiles are unchanged.
 Concurrent requests for that commit share the refresh. Lockfile or attribute changes
 build a fresh template; a template still being cloned cannot be refreshed. Each
 clone still receives only the selected source snapshot in its private Git object
 store. Shutdown cancels preparation and
-drains accepted installer cleanup. Before publishing a template, OpenClaw fences
+drains accepted installer cleanup. Validation leaves the last-good generation published;
+refreshes and replacement builds publish atomically after preparation succeeds. An
+interrupted build leaves that previous generation available for requests with matching
+inputs. Before publishing a template, OpenClaw fences
 the disposable installer against restart and verifies that it has stopped. Container
 removal runs serially in the background, so a slow Docker or Podman removal does
 not delay the prepared workspace. Failed removals remain registered, log a warning,

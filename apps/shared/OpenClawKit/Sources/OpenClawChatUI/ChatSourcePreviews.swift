@@ -277,13 +277,15 @@ struct ChatSourcePreviewProjector {
         return chatPreviewURLs(in: text).compactMap { Self.url($0.absoluteString) }
     }
 
+    private static let externalContentFrame = try? NSRegularExpression(
+        pattern: #"(?:^|\n)<<<EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})">>>\r?\n"# +
+            #"Source: ([^\r\n]+)\r?\n---\r?\n([\s\S]*?)\r?\n"# +
+            #"<<<END_EXTERNAL_UNTRUSTED_CONTENT id="\1">>>"#)
+
     private static func prose(_ value: String?, source: String) -> String? {
         guard let value, value.utf16.count <= 100_000 else { return nil }
         // Only the provenance-owned frame is removed; quoted markers remain source prose.
-        let pattern = #"(?:^|\n)<<<EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})">>>\r?\n"# +
-            #"Source: ([^\r\n]+)\r?\n---\r?\n([\s\S]*?)\r?\n"# +
-            #"<<<END_EXTERNAL_UNTRUSTED_CONTENT id="\1">>>"#
-        guard let regex = try? NSRegularExpression(pattern: pattern),
+        guard let regex = Self.externalContentFrame,
               let match = regex.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)),
               let nameRange = Range(match.range(at: 2), in: value),
               value[nameRange] == (source == "web_search" ? "Web Search" : "Web Fetch"),
