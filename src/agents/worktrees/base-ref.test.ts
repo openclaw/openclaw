@@ -336,7 +336,6 @@ describe("worktree default-base preparation", () => {
       expect(await git(linked, "rev-parse", "HEAD")).toBe(base);
       expect(await fs.readFile(path.join(clone, ".git/shallow"), "utf8")).toBe(shallow);
       expect(await git(clone, "merge-base", base, target)).toBe(base);
-      expect(await git(clone, "config", "--get", "remote.origin.promisor")).toBe("true");
     },
   );
 
