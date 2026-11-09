@@ -1,2 +1,2 @@
-# Existing Usage Display consumers: metrics, scope, timezone, phone Filter identity, and retained chart and reconnect behavior.
-22
+# Existing Usage coverage: Display controls, query ownership, phone layout, timezone/calendar boundaries and cost selection through their current menus.
+36
