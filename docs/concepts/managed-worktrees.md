@@ -148,7 +148,10 @@ refs and shallow boundaries stay unchanged. The first filtered fetch for a URL
 uses the original repository so Git can register it for later content hydration.
 Managed worktree default-branch refresh uses the same isolated object-store
 transport when a cached base commit is physically available and origin uses the
-standard branch mapping. Custom fetch mappings keep Git's normal source-side fetch. It preserves origin's
+standard all-branches mapping or the exact default-branch mapping used by a
+single-branch clone. These refreshes hold the shared repository's ref-mutation
+queue only when publishing the fetched tip, so other worktrees can register
+while transport runs. Other custom fetch mappings keep Git's normal source-side fetch. It preserves origin's
 effective Git transport settings and publishes only the fetched default tracking
 ref. Other branches and the source `FETCH_HEAD` remain unchanged; ordinary source
 fetch and repair still handle an unavailable cached base.

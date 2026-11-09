@@ -33,6 +33,7 @@ import {
 } from "./base-ref.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import { git, gitIdentity } from "./git-fixture.test-support.js";
+import { requireGit } from "./git.js";
 import * as preparation from "./service-preparation.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
@@ -281,9 +282,9 @@ describe("worktree default-base preparation", () => {
     expect(network.slice(-4)).toEqual(["ls-remote", "fetch", "ls-remote", "fetch"]);
   });
 
-  it.each(["sha1", "sha256"])(
-    "preserves shallow partial transport policy in a linked %s worktree",
-    async (format) => {
+  it.for(["sha1", "sha256"])(
+    "shares a shallow %s refresh without blocking another worktree registration",
+    async (format, { signal }) => {
       const source = path.join(root, "source");
       await git(root, "init", "--bare", `--object-format=${format}`, source);
       await git(source, "config", "uploadpack.allowFilter", "true");
@@ -328,10 +329,50 @@ describe("worktree default-base preparation", () => {
         included,
       );
       const shallow = await fs.readFile(path.join(clone, ".git/shallow"), "utf8");
-      await expect(resolveWorktreeBase(linked)).resolves.toMatchObject({
-        commit: target,
-        fetchSucceeded: true,
+      const entered = createDeferred();
+      const release = createDeferred();
+      const admission = trackBaseLookupCallers(linked, 2);
+      const execute = gitExec.executeGitCommand;
+      let fetches = 0;
+      vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+        admission.observeCommand(args);
+        if (args[0] === "fetch") {
+          fetches++;
+          entered.resolve();
+          await release.promise;
+        }
+        return await execute(cwd, args, options);
       });
+      const pending = [0, 1].map((index) =>
+        admission.run(index, () => resolveWorktreeBase(linked)),
+      );
+      try {
+        await withinTest(Promise.all([entered.promise, admission.ready]), signal);
+        // Registration must complete while the shared refresh is still waiting on transport.
+        const registered = path.join(root, "concurrent");
+        await withinTest(
+          requireGit(clone, [
+            "worktree",
+            "add",
+            "--no-checkout",
+            "-b",
+            "concurrent",
+            registered,
+            base,
+          ]),
+          signal,
+        );
+        expect(await git(registered, "rev-parse", "HEAD")).toBe(base);
+        release.resolve();
+        expect(await Promise.all(pending)).toMatchObject([
+          { commit: target, fetchSucceeded: true },
+          { commit: target, fetchSucceeded: true },
+        ]);
+        expect(fetches).toBe(1);
+      } finally {
+        release.resolve();
+        await Promise.allSettled(pending);
+      }
       expect(await git(clone, "rev-parse", "origin/main")).toBe(target);
       expect(await git(linked, "rev-parse", "HEAD")).toBe(base);
       expect(await fs.readFile(path.join(clone, ".git/shallow"), "utf8")).toBe(shallow);

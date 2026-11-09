@@ -140,7 +140,10 @@ async function fetchDefaultWithIsolatedRefs(
     entries.push([key, separator < 0 ? "true" : field.slice(separator + 1)]);
   }
   const mappings = entries.filter(([key]) => key === "remote.origin.fetch");
-  if (mappings.length !== 1 || mappings[0]?.[1] !== "+refs/heads/*:refs/remotes/origin/*") {
+  if (
+    mappings.length !== 1 ||
+    (mappings[0]?.[1] !== "+refs/heads/*:refs/remotes/origin/*" && mappings[0]?.[1] !== args.at(-1))
+  ) {
     // Custom mappings may publish additional destinations; let Git own those writes.
     return await runGit(repoRoot, args, options);
   }
