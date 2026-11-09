@@ -1611,11 +1611,6 @@ textarea.settings-input {
   .settings-secret > :is(input, textarea) {
     padding-right: calc(44px + var(--space-2));
   }
-
-  .settings-section__help-button > span {
-    width: var(--chrome-icon-size);
-    height: var(--chrome-icon-size);
-  }
 }
 
 @media (pointer: coarse), (max-width: 640px) {
@@ -1646,11 +1641,6 @@ textarea.settings-input {
 
     .settings-secret > :is(input, textarea) {
       padding-right: calc(var(--settings-touch-control-height) + var(--space-2));
-    }
-
-    .settings-section__help-button > span {
-      width: var(--chrome-icon-size);
-      height: var(--chrome-icon-size);
     }
   }
 }
@@ -1938,10 +1928,6 @@ textarea.settings-input {
     max-height: none;
     overflow: visible;
   }
-}
-
-.standing-grants-table td.mono {
-  overflow-wrap: anywhere;
 }
 
 /* The footnote starts where the log rows' text does, at every width. */

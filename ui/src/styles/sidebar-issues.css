@@ -410,7 +410,6 @@ footer.sidebar-issues-panel__mentions-note {
 .sidebar-issues-panel .sidebar-issues-panel__action--primary:active,
 .sidebar-issues-panel .sidebar-update-card__review--primary:active {
   background: var(--primary-active);
-  color: var(--primary-foreground);
 }
 
 .shell--mobile-nav .sidebar-issues-panel .sidebar-issues-panel__action,

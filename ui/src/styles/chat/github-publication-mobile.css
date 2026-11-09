@@ -250,7 +250,6 @@
 
 .github-publication-mobile__actions .chat-pr__create:active:not(:disabled) {
   background: var(--primary-active);
-  color: var(--primary-foreground);
 }
 
 .github-publication-mobile__actions .chat-pr__create:focus-visible {

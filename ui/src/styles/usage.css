@@ -2347,10 +2347,7 @@ select.usage-creator-filter {
     width: 100%;
   }
 
-  .usage-toolbar--phone .usage-presets > .settings-segmented__btn,
-  .usage-filter-sheet .oc-sheet__body > .settings-segmented > .settings-segmented__btn {
-    flex: 1 1 auto;
-    justify-content: center;
+  .usage-toolbar--phone .usage-presets > .settings-segmented__btn {
     min-width: 0;
     padding-inline: var(--space-1);
   }

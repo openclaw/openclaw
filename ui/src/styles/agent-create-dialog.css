@@ -3,11 +3,9 @@
 }
 
 .oc-dialog.agent-create-dialog {
-  display: grid;
   width: 100%;
   height: min(540px, calc(100dvh - 48px));
   max-height: calc(100dvh - 48px);
-  grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
   color: var(--text);
 }

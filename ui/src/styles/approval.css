@@ -433,11 +433,6 @@
     line-height: 1.45;
   }
 
-  .approval-page__preview + .approval-page__preview {
-    margin-top: 8px;
-  }
-
-  .approval-page__warning,
   .approval-page__callout {
     padding: 10px 12px;
   }
@@ -449,12 +444,10 @@
 
   .approval-page__actions {
     grid-template-columns: 1fr;
-    gap: 8px;
     margin-top: 14px;
   }
 
   .approval-page__action {
-    min-height: 44px;
     font-size: var(--control-ui-text-md);
     font-weight: 600;
   }

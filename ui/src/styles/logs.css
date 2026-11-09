@@ -184,7 +184,6 @@ main.content:where(.content--logs-page) .content-header {
 }
 
 .logs-toolbar__search input {
-  height: var(--settings-control-height);
   padding-left: 34px;
 }
 
@@ -212,7 +211,6 @@ main.content:where(.content--logs-page) .content-header {
   flex: 0 0 auto;
   align-items: center;
   gap: var(--space-2);
-  min-width: 0;
 }
 
 .logs-toolbar .logs-toolbar__levels {

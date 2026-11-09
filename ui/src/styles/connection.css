@@ -206,10 +206,7 @@ openclaw-connection-page
 }
 
 .connection-actions__buttons {
-  display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: var(--space-2);
 }
 
 /* Save sits in the session field's end. The field keeps its width and always
