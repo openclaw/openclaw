@@ -246,6 +246,7 @@ prepare_swift_package_root() {
   chmod 0400 "$SWIFT_PACKAGE_LOCK_BASELINE"
   ln -s "$ROOT_DIR/apps/macos/Sources" "$SWIFT_PACKAGE_ROOT/Sources"
   ln -s "$ROOT_DIR/apps/macos/Tests" "$SWIFT_PACKAGE_ROOT/Tests"
+  ln -s "$ROOT_DIR/apps/macos/ThirdParty" "$SWIFT_PACKAGE_ROOT/ThirdParty"
   ln -s "$ROOT_DIR/apps/shared" "$SWIFT_PACKAGE_CONTAINER/apps/shared"
   ln -s "$ROOT_DIR/apps/swabble" "$SWIFT_PACKAGE_CONTAINER/apps/swabble"
   MLX_TTS_HELPER_ROOT="$SWIFT_PACKAGE_CONTAINER/apps/macos-mlx-tts"

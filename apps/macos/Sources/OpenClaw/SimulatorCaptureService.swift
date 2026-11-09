@@ -49,6 +49,7 @@ final class SimulatorCaptureService {
     private var lastRead = Date.distantPast
     private var expiry: Task<Void, Never>?
     private var inputInProgress = false
+    private var heldTouch = false
 
     func start(executionId: String) async throws -> Frame {
         guard self.reservationId == nil else { throw CaptureError.busy }
@@ -56,7 +57,8 @@ final class SimulatorCaptureService {
         self.reservationId = reservation
         self.executionId = executionId
         do {
-            let udid = try Self.bootedIOSDevice()
+            let udid = try await Self.bootedIOSDevice()
+            guard self.reservationId == reservation else { throw CaptureError.staleSession }
             self.deviceUDID = udid
             let captureOutput = SimulatorFrameBuffer()
             let touchOutput = SimulatorTouchReadiness()
@@ -136,6 +138,9 @@ final class SimulatorCaptureService {
     func read(sessionId: String, after sequence: UInt64) throws -> Frame {
         guard self.sessionId == sessionId, let frames, let touchReady else { throw CaptureError.staleSession }
         if let failure = frames.failure ?? touchReady.failure { throw CaptureError.unavailable(failure) }
+        guard self.captureProcess?.isRunning == true else {
+            throw CaptureError.unavailable("device capture ended")
+        }
         guard let latest = frames.latest else { throw CaptureError.unavailable("device frame unavailable") }
         guard latest.isFresh(at: Date()) else {
             throw CaptureError.unavailable("device frames stopped arriving")
@@ -154,6 +159,7 @@ final class SimulatorCaptureService {
         guard self.sessionId == sessionId, !self.inputInProgress,
               self.touchReady?.ready == true, self.touchReady?.failure == nil,
               let pipe = self.touchInputPipe else { throw CaptureError.staleSession }
+        try self.requireHealthyCapture(sessionId: sessionId)
         self.inputInProgress = true
         defer { self.inputInProgress = false }
         func point(_ x: Double?, _ y: Double?) throws -> (Float, Float) {
@@ -163,6 +169,7 @@ final class SimulatorCaptureService {
         }
         func write(_ data: Data) throws {
             try validate()
+            try self.requireHealthyCapture(sessionId: sessionId)
             guard self.sessionId == sessionId, self.touchProcess?.isRunning == true else {
                 throw CaptureError.staleSession
             }
@@ -175,6 +182,8 @@ final class SimulatorCaptureService {
                 withUnsafeBytes(of: &bits) { data.append(contentsOf: $0) }
             }
             try write(data)
+            if kind == 1 { self.heldTouch = true }
+            if kind == 3 || kind == 13 { self.heldTouch = false }
         }
         func key(_ usage: UInt32, modifiers: UInt8 = 0) throws {
             var data = Data([9, modifiers, 0, 0, 0])
@@ -190,7 +199,7 @@ final class SimulatorCaptureService {
                 try await Task.sleep(for: .milliseconds(60))
                 try touch(3, target)
             } catch {
-                try? touch(13, target)
+                self.cancelHeldTouch(sessionId: sessionId)
                 throw error
             }
         case .leftClickDrag:
@@ -206,7 +215,7 @@ final class SimulatorCaptureService {
                 }
                 try touch(3, target)
             } catch {
-                try? touch(13, target)
+                self.cancelHeldTouch(sessionId: sessionId)
                 throw error
             }
         case .key:
@@ -237,9 +246,22 @@ final class SimulatorCaptureService {
                 inputError = error
             }
             do {
-                _ = try await Self.pasteboard("pbcopy", udid: udid, input: before)
+                // Cleanup runs outside the canceled viewer task: revocation may
+                // interrupt input after pbcopy but must not leave its text behind.
+                let restoration = Task.detached {
+                    let current = try await Self.pasteboard("pbpaste", udid: udid)
+                    guard current == Data(text.utf8) else { return }
+                    _ = try await Self.pasteboard("pbcopy", udid: udid, input: before)
+                }
+                try await restoration.value
             } catch {
-                _ = try? await Self.pasteboard("pbcopy", udid: udid, input: Data())
+                let clearing = Task.detached {
+                    let current = try? await Self.pasteboard("pbpaste", udid: udid)
+                    if current == Data(text.utf8) {
+                        _ = try? await Self.pasteboard("pbcopy", udid: udid, input: Data())
+                    }
+                }
+                await clearing.value
                 throw CaptureError.unavailable("device pasteboard could not be restored after typing")
             }
             if let inputError { throw inputError }
@@ -248,8 +270,29 @@ final class SimulatorCaptureService {
         }
     }
 
+    private func requireHealthyCapture(sessionId: String) throws {
+        guard self.sessionId == sessionId, let frames = self.frames else { throw CaptureError.staleSession }
+        if let failure = frames.failure { throw CaptureError.unavailable(failure) }
+        guard self.captureProcess?.isRunning == true,
+              let latest = frames.latest, latest.isFresh(at: Date()) else {
+            throw CaptureError.unavailable("device frames stopped arriving")
+        }
+    }
+
+    private func cancelHeldTouch(sessionId: String) {
+        guard self.sessionId == sessionId, self.heldTouch else { return }
+        self.heldTouch = false
+        guard self.touchProcess?.isRunning == true else { return }
+        _ = try? self.touchInputPipe?.fileHandleForWriting.write(contentsOf: Data([13, 0, 0, 0, 0, 0, 0, 0, 0]))
+    }
+
     func stop(sessionId: String? = nil) async {
         if let sessionId, self.sessionId != sessionId { return }
+        let hadHeldTouch = self.heldTouch
+        if let activeSession = self.sessionId { self.cancelHeldTouch(sessionId: activeSession) }
+        let touchProcess = self.touchProcess
+        let captureProcess = self.captureProcess
+        let touchInputPipe = self.touchInputPipe
         self.reservationId = nil
         self.sessionId = nil
         self.executionId = nil
@@ -258,9 +301,6 @@ final class SimulatorCaptureService {
         self.capturePipe?.fileHandleForReading.readabilityHandler = nil
         self.captureErrorPipe?.fileHandleForReading.readabilityHandler = nil
         self.touchErrorPipe?.fileHandleForReading.readabilityHandler = nil
-        try? self.touchInputPipe?.fileHandleForWriting.close()
-        if self.touchProcess?.isRunning == true { self.touchProcess?.terminate() }
-        if self.captureProcess?.isRunning == true { self.captureProcess?.terminate() }
         self.captureProcess = nil
         self.touchProcess = nil
         self.capturePipe = nil
@@ -270,6 +310,14 @@ final class SimulatorCaptureService {
         self.deviceUDID = nil
         self.frames = nil
         self.touchReady = nil
+        self.heldTouch = false
+        if hadHeldTouch, touchProcess?.isRunning == true, touchInputPipe != nil {
+            // Give the HID helper a bounded chance to process the owner cancel.
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        try? touchInputPipe?.fileHandleForWriting.close()
+        if touchProcess?.isRunning == true { touchProcess?.terminate() }
+        if captureProcess?.isRunning == true { captureProcess?.terminate() }
     }
 
     func stop(forExecutionId executionId: String) async {
@@ -295,7 +343,7 @@ final class SimulatorCaptureService {
         do {
             let result = try await BoundedProcess.run(
                 path: "/usr/bin/xcrun", arguments: ["simctl", action, udid],
-                input: input, outputLimit: 64 * 1024, timeout: 3)
+                input: input, outputLimit: 64 * 1024, timeout: 2.5)
             guard result.terminationStatus == 0 else {
                 throw CaptureError.unavailable("device pasteboard command failed")
             }
@@ -305,17 +353,20 @@ final class SimulatorCaptureService {
         }
     }
 
-    private static func bootedIOSDevice() throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = ["simctl", "list", "devices", "booted", "--json"]
-        let output = Pipe()
-        process.standardOutput = output
-        try process.run()
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0,
-              let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+    private static func bootedIOSDevice() async throws -> String {
+        let data: Data
+        do {
+            let result = try await BoundedProcess.run(
+                path: "/usr/bin/xcrun", arguments: ["simctl", "list", "devices", "booted", "--json"],
+                outputLimit: 64 * 1024, timeout: 3)
+            guard result.terminationStatus == 0 else {
+                throw CaptureError.unavailable("xcrun simctl could not list booted devices")
+            }
+            data = result.output
+        } catch {
+            throw CaptureError.unavailable("xcrun simctl could not list booted devices")
+        }
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let devices = root["devices"] as? [String: [[String: Any]]] else {
             throw CaptureError.unavailable("xcrun simctl could not list booted devices")
         }
