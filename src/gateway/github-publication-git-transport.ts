@@ -193,8 +193,8 @@ export async function requireGitHubPublicationCommit(
           "--recurse-submodules=no",
           // Match managed base refresh: omit unrelated session histories from negotiation.
           ...tips.map((tip) => `--negotiation-tip=${tip}`),
-          // Keep ancestry and tree metadata; callers request file contents below.
-          ...(missing ? ["--refetch", "--stdin"] : ["--filter=blob:none"]),
+          // Content wants need their complete tree closure, including in tree-filtered clones.
+          ...(missing ? ["--no-filter", "--refetch", "--stdin"] : ["--filter=blob:none"]),
           "--",
           githubRepositoryUrl(repository, host),
           ...(missing ? [] : [sha]),
@@ -215,8 +215,8 @@ export async function requireGitHubPublicationCommit(
             `remote.${githubRepositoryUrl(repository, host)}.promisor`,
           ])
         : "false";
-    // Without a cached base, retain Git's ordinary discovery of common history.
-    if (registered !== "true") {
+    // Unfiltered content needs no source promisor registration or history discovery.
+    if (!missing && registered !== "true") {
       await acquire(cwd, env);
     } else {
       const isolatedEnv = {

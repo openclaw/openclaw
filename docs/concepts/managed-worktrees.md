@@ -141,7 +141,11 @@ and an existing promisor registration for the publication URL are available,
 acquisition uses temporary Git metadata and writes directly to the existing
 object store. This avoids scanning every session ref before negotiation; local
 refs and shallow boundaries stay unchanged. The first filtered fetch for a URL
-uses the original repository so Git can register it for later content hydration.
+uses the original repository so Git can register it for later lazy fetching.
+Content hydration also uses temporary metadata, with an unfiltered fetch of the
+missing objects so missing trees include all their file contents. These complete
+content packs need no promisor marker; filtered metadata packs retain theirs.
+Both pack classes remain under the existing bounded Git maintenance owner.
 Managed worktree default-branch refresh uses the same isolated object-store
 transport when a cached base commit is physically available and origin uses the
 standard branch mapping. Custom fetch mappings keep Git's normal source-side fetch. It preserves origin's

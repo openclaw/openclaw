@@ -156,6 +156,57 @@ async function interruptAcceptedUpdate() {
 }
 
 describe("GitHub publication index update", () => {
+  it.each(["blob:none", "tree:0"])(
+    "hydrates missing contents offline without scanning promisor history (%s)",
+    async (filter) => {
+      await f.git("config", "uploadpack.allowFilter", "true");
+      const clone = await makeDirectory("content");
+      const url = pathToFileURL(f.cwd).href;
+      await git(clone, ["clone", "--no-checkout", "--depth=1", `--filter=${filter}`, url, "."]);
+      expect(await git(clone, ["rev-list", "--objects", "--missing=print", "HEAD"])).toContain("?");
+      if (filter === "tree:0") {
+        await git(clone, ["config", `remote.${url}.promisor`, "true"]);
+        await git(clone, ["config", `remote.${url}.partialclonefilter`, filter]);
+      }
+      const refs = await git(clone, ["show-ref"]);
+      const shallow = await fs.readFile(path.join(clone, ".git/shallow"), "utf8");
+      const packDirectory = path.join(clone, ".git/objects/pack");
+      const markers = (await fs.readdir(packDirectory)).filter((name) =>
+        name.endsWith(".promisor"),
+      );
+      const trace = testState.path("content.trace");
+      const run: typeof runPublicationCommand = (argv, options) =>
+        runPublicationCommand(
+          argv.map((arg) => arg.replace("https://github.com/example/project.git", url)),
+          {
+            ...options,
+            env: { ...options?.env, GIT_ALLOW_PROTOCOL: "file", GIT_TRACE2_PERF: trace },
+          },
+        );
+      await requireGitHubPublicationCommit(
+        run,
+        "example/project",
+        f.previousHead,
+        "github.com",
+        clone,
+        process.env,
+        "Publication contents unavailable",
+        { contents: true, commitPresent: true },
+      );
+      expect(await fs.readFile(trace, "utf8")).not.toContain("--exclude-promisor-objects");
+      expect(
+        await git(clone, ["show", "HEAD:artifact.txt"], undefined, {
+          ...process.env,
+          GIT_ALLOW_PROTOCOL: "",
+          GIT_NO_LAZY_FETCH: "1",
+        }),
+      ).toBe("base");
+      expect(await git(clone, ["show-ref"])).toBe(refs);
+      expect(await fs.readFile(path.join(clone, ".git/shallow"), "utf8")).toBe(shallow);
+      expect(await fs.readdir(packDirectory)).toEqual(expect.arrayContaining(markers));
+    },
+  );
+
   it.each(["full", "shallow", "uncached", "unregistered"])(
     "reuses commits and isolates cached-base fetches (%s)",
     async (mode) => {
