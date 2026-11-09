@@ -550,9 +550,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           // removes the header (exhausted history) compensates in one adjustment.
           const headerDelta = this.headerHeight - this.appliedHeaderHeight;
           this.appliedHeaderHeight = this.headerHeight;
-          commitTranscriptRows(this.virtualizer, nextKeys, headerDelta, (range) =>
-            this.initialRange.extract(range),
-          );
+          // Virtualizer retains this callback; a closure here also retains this render's rows.
+          const extractRange = this.initialRange.extract.bind(this.initialRange);
+          commitTranscriptRows(this.virtualizer, nextKeys, headerDelta, extractRange);
         } else {
           this.appliedHeaderHeight = reconcileTranscriptHeaderMargin(
             this.virtualizer,
