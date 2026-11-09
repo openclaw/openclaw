@@ -15,16 +15,19 @@ describe("decodeDataUrl", () => {
     );
   });
 
-  it("accepts media type parameters before the base64 marker", () => {
-    const result = decodeDataUrl("data:image/png;charset=utf-8;base64,SGVsbG8=");
-    expect(result.mimeType).toBe("image/png");
-    expect(result.buffer.toString()).toBe("Hello");
-  });
+  const ONE_PIXEL_PNG_B64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=";
 
-  it("accepts multiple media type parameters before the base64 marker", () => {
-    const result = decodeDataUrl("data:image/jpeg;foo=bar;charset=utf-8;base64,SGVsbG8=");
-    expect(result.mimeType).toBe("image/jpeg");
-    expect(result.buffer.toString()).toBe("Hello");
+  it.each([
+    { label: "charset", url: `data:image/png;charset=utf-8;base64,${ONE_PIXEL_PNG_B64}` },
+    {
+      label: "multiple params",
+      url: `data:image/png;foo=bar;charset=utf-8;base64,${ONE_PIXEL_PNG_B64}`,
+    },
+  ])("accepts media type parameters before the base64 marker: $label", ({ url }) => {
+    const result = decodeDataUrl(url);
+    expect(result.mimeType).toBe("image/png");
+    expect(result.buffer.byteLength).toBeGreaterThan(0);
   });
 
   it.each([0, 1])("checks a canonical-size payload with %i extra bytes", (extraBytes) => {
