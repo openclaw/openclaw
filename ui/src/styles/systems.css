@@ -33,6 +33,7 @@ openclaw-systems-page {
 }
 .simulator-preview__header span {
   flex: 1;
+  min-width: 0;
   color: var(--muted);
   font-size: 12px;
 }
@@ -709,6 +710,12 @@ openclaw-systems-page {
   }
 }
 @media (max-width: 768px) {
+  .simulator-preview__header {
+    flex-wrap: wrap;
+  }
+  .systems-toolbar > .systems-text-button {
+    display: none;
+  }
   .systems-heading {
     display: none;
   }
