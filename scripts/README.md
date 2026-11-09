@@ -331,6 +331,12 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
   --bundle-dir dist/control-ui --pairs 10 --viewport both
 ```
 
+Use `--fresh-browser` to start a new browser process for every observation when
+the host cannot reliably reuse a process after closing a context. Apply it to
+every comparison arm. The manifest records this mode; do not pool it with
+reused-process runs because browser caches and compilation state differ. Warm
+boot still reloads within the observation's own context.
+
 Continuous gestures are opt-in with `--steps gestures`: pointer sweeps and wheel
 scrolling over Sidebar, Chat, Advanced Settings and Sessions; transcript selection
 across the virtual window and within a message; sidebar/split dividers; window
