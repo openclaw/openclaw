@@ -1,2 +1,2 @@
-627
-# Topic queue concurrency, FIFO, missing-thread fallback, control lanes, failure, timeout, durable admission and upgrade recovery regressions.
+592
+# Topic queue concurrency, FIFO, missing-thread fallback, control lanes, failure, timeout, durable admission and stable recovery regressions.

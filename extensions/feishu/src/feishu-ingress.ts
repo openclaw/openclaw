@@ -14,9 +14,7 @@ import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
-import { resolveFeishuGroupSession } from "./bot-content.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { isFeishuGroupChatType, normalizeFeishuEventChatType } from "./types.js";
 
 const FEISHU_INGRESS_PAYLOAD_VERSION = 1;
 const FEISHU_INGRESS_POLL_INTERVAL_MS = 500;
@@ -121,8 +119,6 @@ function inspectFeishuIngressEnvelope(
   rawEnvelope: string,
   encryptKey: string | undefined,
   allowInvalidLane = false,
-  previousScope?: "group_topic" | "group_topic_sender",
-  previousReplyInThread: "enabled" | "disabled" = "disabled",
 ): FeishuIngressFacts | null {
   const envelope = decryptEnvelope(parseRawEnvelope(rawEnvelope), encryptKey);
   const nestedHeader = isRecord(envelope.header) ? envelope.header : null;
@@ -156,35 +152,7 @@ function inspectFeishuIngressEnvelope(
     if (!chatId) {
       return missingLane("Feishu message ingress envelope is missing event.message.chat_id.");
     }
-    let peerId = chatId;
-    const chatType = normalizeFeishuEventChatType(message?.chat_type);
-    if (previousScope && message && isFeishuGroupChatType(chatType)) {
-      const sender = isRecord(event.sender) ? event.sender : null;
-      const senderId = isRecord(sender?.sender_id) ? sender.sender_id : null;
-      // Missing native thread identity is hydrated only after durable admission.
-      // Keep that event in the conservative chat lane until the handler barrier.
-      if (message.chat_type !== "topic_group" || normalizeNullableString(message.thread_id)) {
-        const session = resolveFeishuGroupSession({
-          chatId,
-          senderOpenId:
-            normalizeNullableString(senderId?.open_id) ??
-            normalizeNullableString(senderId?.user_id) ??
-            "",
-          messageId: normalizeNullableString(message.message_id) ?? "",
-          rootId: normalizeNullableString(message.root_id) ?? undefined,
-          threadId: normalizeNullableString(message.thread_id) ?? undefined,
-          chatType: chatType ?? undefined,
-          feishuCfg: { groupSessionScope: previousScope, replyInThread: previousReplyInThread },
-        });
-        if (
-          session.groupSessionScope === "group_topic" ||
-          session.groupSessionScope === "group_topic_sender"
-        ) {
-          peerId = session.peerId;
-        }
-      }
-    }
-    return { eventId, laneKey: `chat:${peerId}` };
+    return { eventId, laneKey: `chat:${chatId}` };
   }
   const noticeMeta = isRecord(event.notice_meta) ? event.notice_meta : null;
   const fileType = normalizeNullableString(noticeMeta?.file_type);
@@ -341,8 +309,6 @@ export function buildFeishuFlushIngressLifecycle(
 }
 
 export function createFeishuDurableIngress(options: FeishuIngressOptions) {
-  const inspect = (rawEnvelope: string, allowInvalidLane: boolean) =>
-    inspectFeishuIngressEnvelope(rawEnvelope, options.encryptKey, allowInvalidLane);
   let socketTerminator: (() => void) | undefined;
   const activeLifecycles = new Map<string, FeishuIngressLifecycle>();
 
@@ -357,7 +323,8 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
         getFeishuRuntime().state.openChannelIngressQueue<FeishuIngressPayload>({
           accountId: options.accountId,
         })),
-    inspect: (rawEnvelope, context) => inspect(rawEnvelope, context.phase === "admission"),
+    inspect: (rawEnvelope, context) =>
+      inspectFeishuIngressEnvelope(rawEnvelope, options.encryptKey, context.phase === "admission"),
     payload: {
       version: FEISHU_INGRESS_PAYLOAD_VERSION,
       serialize: (rawEnvelope, { receivedAt }) => ({ receivedAt, rawEnvelope }),
@@ -448,42 +415,6 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
     pollIntervalMs: options.pollIntervalMs ?? FEISHU_INGRESS_POLL_INTERVAL_MS,
     retention: "standard",
     drain: {
-      // Durable receipt order is always per chat. The receiver registers topic
-      // reservations before handing off, so barriers include the entire backlog.
-      deriveLaneKey: (record) => {
-        const payload = record.payload;
-        try {
-          return isRecord(payload) && typeof payload.rawEnvelope === "string"
-            ? inspect(payload.rawEnvelope, true)?.laneKey
-            : undefined;
-        } catch {
-          // Claim validation owns terminal settlement for malformed retained rows.
-          return undefined;
-        }
-      },
-      reconcileStoredLaneKey: (record, storedLaneKey) => {
-        const payload = record.payload;
-        if (!isRecord(payload) || typeof payload.rawEnvelope !== "string") {
-          return false;
-        }
-        // Earlier topic-queue candidates persisted session-scoped lanes. Accept
-        // only identities derivable from the original event, independent of config.
-        for (const scope of ["group_topic", "group_topic_sender"] as const) {
-          for (const replyInThread of ["disabled", "enabled"] as const) {
-            const previous = inspectFeishuIngressEnvelope(
-              payload.rawEnvelope,
-              options.encryptKey,
-              true,
-              scope,
-              replyInThread,
-            );
-            if (previous?.laneKey === storedLaneKey) {
-              return true;
-            }
-          }
-        }
-        return false;
-      },
       deferredLaneOccupancy: "release",
       adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
       resolveNonRetryableFailure: resolveFeishuIngressNonRetryableFailure,
@@ -513,7 +444,7 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
     // Lark WS client invokes from its authenticated socket with needCheck=false.
     // Keep malformed recognized deliveries durable when their stable event id
     // exists. Claim-side validation then dead-letters them without retry.
-    const facts = inspect(rawEnvelope, true);
+    const facts = inspectFeishuIngressEnvelope(rawEnvelope, options.encryptKey, true);
     if (!facts) {
       return {
         kind: "non-durable",

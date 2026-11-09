@@ -28,22 +28,14 @@ import {
 type FeishuIngressQueue = NonNullable<Parameters<typeof createFeishuDurableIngress>[0]["queue"]>;
 type FeishuIngressPayload = Parameters<FeishuIngressQueue["enqueue"]>[1];
 
-function messageEnvelope(eventId: string, threadId?: string) {
+function messageEnvelope(eventId: string) {
   return {
     schema: "2.0",
     header: {
       event_id: eventId,
       event_type: "im.message.receive_v1",
     },
-    event: {
-      sender: { sender_id: { open_id: "ou-user" } },
-      message: {
-        chat_id: "oc-chat",
-        chat_type: "topic_group",
-        message_id: `om-${eventId}`,
-        thread_id: threadId,
-      },
-    },
+    event: { message: { chat_id: "oc-chat" } },
   };
 }
 
@@ -290,6 +282,7 @@ describe("Feishu durable ingress", () => {
   it("keeps buffered input in its chat lane until a lifecycle handoff", async () => {
     await withQueue(async (queue, startIngress) => {
       const buffered = createDeferred<FeishuIngressLifecycle>();
+      const otherChat = createDeferred<void>();
       const dispatched: string[] = [];
       const ingress = startIngress({
         queue,
@@ -304,18 +297,21 @@ describe("Feishu durable ingress", () => {
             return { kind: "deferred" };
           }
           await lifecycle.onAdopted();
+          if (data.header.event_id === "evt-other") {
+            otherChat.resolve();
+          }
           return undefined;
         },
       });
       ingress.start();
-      await ingress.invoke(messageEnvelope("evt-buffered", "omt-a"), { needCheck: false });
+      await ingress.invoke(messageEnvelope("evt-buffered"), { needCheck: false });
       const first = await buffered.promise;
       try {
-        await ingress.invoke(messageEnvelope("evt-later", "omt-a"), { needCheck: false });
-        const sentinel = messageEnvelope("evt-other", "omt-b");
+        await ingress.invoke(messageEnvelope("evt-later"), { needCheck: false });
+        const sentinel = messageEnvelope("evt-other");
         sentinel.event.message.chat_id = "oc-other-chat";
         await ingress.invoke(sentinel, { needCheck: false });
-        await vi.waitFor(() => expect(dispatched).toContain("evt-other"));
+        await otherChat.promise;
         expect((await queue.listPending()).map((row) => row.id)).toEqual(["evt-later"]);
         expect(dispatched).toEqual(["evt-buffered", "evt-other"]);
       } finally {
@@ -326,63 +322,32 @@ describe("Feishu durable ingress", () => {
     });
   });
 
-  it.each([
-    "chat:oc-chat",
-    "chat:oc-chat:topic:omt-a",
-    "chat:oc-chat:topic:omt-a:sender:ou-user",
-    "chat:oc-chat:topic:omt-other",
-  ])("recovers a retained lane independently of current session scope: %s", async (laneKey) => {
+  it("recovers retained stable chat-lane input after restart", async () => {
     await withQueue(async (queue, startIngress) => {
       await queue.enqueue(
         "evt-upgrade",
         {
           version: 1,
           receivedAt: Date.now(),
-          rawEnvelope: JSON.stringify(messageEnvelope("evt-upgrade", "omt-a")),
+          rawEnvelope: JSON.stringify(messageEnvelope("evt-upgrade")),
         },
-        { laneKey },
+        { laneKey: "chat:oc-chat" },
       );
       const dispatched: string[] = [];
-      const after = startIngress({
+      const ingress = startIngress({
         queue,
         dispatch: async (data) => {
           dispatched.push(data.header.event_id);
-          await after.resolveLifecycle({ event_id: data.header.event_id })?.onAdopted();
+          await ingress.resolveLifecycle({ event_id: data.header.event_id })?.onAdopted();
         },
       });
-      after.start();
-      await after.waitForIdle();
-      if (laneKey.endsWith("omt-other")) {
-        expect(dispatched).toEqual([]);
-        expect(await queue.listFailed?.()).toMatchObject([
-          { id: "evt-upgrade", reason: "invalid-event" },
-        ]);
-      } else {
-        expect(dispatched).toEqual(["evt-upgrade"]);
-      }
+      ingress.start();
+      await ingress.waitForIdle();
+      expect(dispatched).toEqual(["evt-upgrade"]);
       expect(await queue.listPending()).toEqual([]);
+      expect(await queue.listFailed?.()).toEqual([]);
     });
   });
-
-  it.each([undefined, 42, "not-json"])(
-    "settles an invalid retained envelope instead of blocking the drain: %s",
-    async (rawEnvelope) => {
-      await withQueue(async (queue, startIngress) => {
-        const payload = { version: 1 as const, receivedAt: Date.now(), rawEnvelope: "" };
-        Reflect.set(payload, "rawEnvelope", rawEnvelope);
-        await queue.enqueue("evt-corrupt", payload, { laneKey: "chat:oc-chat" });
-        const dispatch = vi.fn();
-        const ingress = startIngress({ queue, dispatch });
-        ingress.start();
-        await ingress.waitForIdle();
-        expect(dispatch).not.toHaveBeenCalled();
-        expect(await queue.listPending()).toEqual([]);
-        expect(await queue.listFailed?.()).toMatchObject([
-          { id: "evt-corrupt", reason: "invalid-event" },
-        ]);
-      });
-    },
-  );
 
   it("stops without stranding a buffered delivery or its durable claim", async () => {
     await withQueue(async (queue, startIngress) => {
