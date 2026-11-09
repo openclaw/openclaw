@@ -459,13 +459,14 @@ async function publishSqliteFile(
       expectedIdentity,
     );
     assertExpectedContent(publishedContent, expectedContent, options.targetPath);
-    await fs.rmdir(stagingDir);
+    // Retiring an open hard-link alias can leave an NFS .nfs file in staging.
+    await target.close();
+    target = undefined;
+    await removePublicationStagingDirectory(stagingDir, stagingIdentity);
     requireDirectorySync(
       await syncDirectory(targetDirectoryReceipt),
       "SQLite publication directory",
     );
-    await target.close();
-    target = undefined;
     targetPinFileDescriptor = fsSync.openSync(options.targetPath, "r");
     assertOpenFileIdentitySync(targetPinFileDescriptor, options.targetPath, expectedIdentity);
 
@@ -557,6 +558,7 @@ export async function createVerifiedSqliteSnapshot(
   options: CreateVerifiedSqliteSnapshotOptions,
 ): Promise<VerifiedSqliteSnapshot> {
   const retained = options.sourceAcquisition?.preparedSource;
+  const cleanupOptions = { cleanupFailure: options.sourceAcquisition?.cleanupFailure };
   // Take cleanup custody before any asynchronous admission; a rejected transfer
   // must retire this image rather than reacquire a different source generation.
   const create = async () => {
@@ -610,15 +612,13 @@ export async function createVerifiedSqliteSnapshot(
       return withPreparedSqliteSnapshot(
         prepared,
         (privateSourcePath) => verifyAndPublishSqliteSnapshot(options, privateSourcePath),
-        { bestEffortCleanup: options.sourceAcquisition.bestEffortCleanup },
+        cleanupOptions,
       );
     }
     return verifyAndPublishSqliteSnapshot(options);
   };
   return retained
-    ? withPreparedSqliteSnapshot(retained.prepared, create, {
-        bestEffortCleanup: options.sourceAcquisition?.bestEffortCleanup,
-      })
+    ? withPreparedSqliteSnapshot(retained.prepared, create, cleanupOptions)
     : create();
 }
 
