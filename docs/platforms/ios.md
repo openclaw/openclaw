@@ -217,6 +217,12 @@ sign-in alone does not grant operator admin access or replace Gateway pairing.
 The share extension asks you to send from OpenClaw for an Access-protected
 Gateway. Access credentials are not exported to Apple Watch or cloud workers.
 
+The share extension reuses the connected Gateway's approved TLS certificate pin
+and saved custom service headers. Header values stay in the shared Keychain,
+not App Group preferences. Reconnect the app after upgrading to refresh the
+extension's saved connection. The extension cannot approve a new certificate or
+complete browser sign-in; open OpenClaw to review changed trust or use Access.
+
 ## Share request admission
 
 The share extension shows **Sent** only after the Gateway explicitly accepts the

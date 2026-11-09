@@ -42,8 +42,13 @@ const model: SidebarSnapshotModel = {
   footer: { id: "profile-a", name: "Juniper" },
 };
 
-function fixture(initialAgentId = "main", initialPageScopeId: string | null = null) {
+function fixture(
+  initialAgentId = "main",
+  initialPageScopeId: string | null = null,
+  mode: "chip" | "roster" = "roster",
+) {
   let selectedAgentId = initialAgentId;
+  let sidebarMode = mode;
   let pageScopeId = initialPageScopeId;
   const publication = createApplicationGateway(
     createApplicationGatewaySnapshot({ phase: "connecting" }),
@@ -69,6 +74,9 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
   const capture = vi.fn(() => captured);
   const foreground = { foregroundReady: true };
   const host: Parameters<typeof createSidebarSnapshot>[0] = {
+    get sidebarAgentsMode() {
+      return sidebarMode;
+    },
     sidebarSnapshot: null,
     sessionDataContext: {
       gateway,
@@ -108,6 +116,10 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
     restored: restored.promise,
     selectPageScope(scopeId: string | null) {
       pageScopeId = scopeId;
+      snapshotOwner.synchronize();
+    },
+    selectMode(nextMode: "chip" | "roster") {
+      sidebarMode = nextMode;
       snapshotOwner.synchronize();
     },
     selectAgent(agentId: string) {
@@ -296,7 +308,7 @@ describe("sidebar snapshot lifecycle", () => {
         }),
       };
       await store.writeSidebar(sidebarSnapshotScopeKey(scope), chip, parseSidebarSnapshot);
-      const test = fixture(timing === "before" ? "other" : "main");
+      const test = fixture(timing === "before" ? "other" : "main", null, "chip");
       disposers.push(
         admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
         () => test.snapshotOwner.disconnect(),
@@ -318,6 +330,29 @@ describe("sidebar snapshot lifecycle", () => {
       }
       expect(test.host.sidebarSnapshot).toBeNull();
       expect(test.snapshotOwner.read().saved).toBe(false);
+    },
+  );
+
+  it.each(["before", "after"] as const)(
+    "rejects a cached roster when chip mode is selected %s restoration",
+    async (timing) => {
+      const store = new SessionSnapshotStore();
+      store.connect();
+      disposers.push(() => store.disconnect());
+      await store.writeSidebar(sidebarSnapshotScopeKey(scope), model, parseSidebarSnapshot);
+      const test = fixture("main", null, timing === "before" ? "chip" : "roster");
+      disposers.push(
+        admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
+        () => test.snapshotOwner.disconnect(),
+      );
+      test.snapshotOwner.connect();
+      if (timing === "after") {
+        await test.restored;
+        test.selectMode("chip");
+      } else {
+        await vi.waitFor(() => expect(test.snapshotOwner.read().pending).toBe(false));
+      }
+      expect(test.host.sidebarSnapshot).toBeNull();
     },
   );
 

@@ -97,6 +97,34 @@ roots; ordinary `.artifacts/` outputs remain available to saved message referenc
 Source filenames must be valid UTF-8; rename invalid Git paths
 before retrying preparation. Publication uses the same admission boundary.
 
+New private checkouts are shallow snapshots. For GitHub.com projects, their
+credential-free HTTPS `origin` and the matching HTTPS repository URLs (with and
+without `.git`) default to `blob:none` fetches: history arrives without historical
+file contents, and checkout or diff fetches missing contents as needed. These
+defaults are reapplied when creating a checkout from a retained dependency
+template, including templates created before these defaults existed. Host object
+stores and credentials remain outside the sandbox; private repository access
+still requires the existing authorized publication workflow.
+
+The agent Git wrapper also defaults GitHub fork URL fetches to `blob:none` in
+these blobless repositories. This covers HTTPS, `git@github.com:owner/repo`, and
+`ssh://git@github.com/owner/repo` addresses through the agent's normal `git`
+command on POSIX hosts and Docker/Podman sandboxes. Git records the fetched URL
+as a promisor so later checkout and diff can retrieve fork-only file contents.
+Explicit `--filter` and `--no-filter` choices are preserved. Full repositories,
+other hosts, and direct invocations of a Git binary outside the wrapper retain
+Git's normal defaults.
+
+Use `github_publish` with `action: "prepare_pr"` for eligible PR continuation and
+`refresh_base` for base updates. For separate commit inspection, prefer
+`git fetch --no-tags --depth=1 <url> <commit>...`; deepen explicitly if the task
+needs ancestry, or use `--filter=blob:none` when history is required. Existing
+checkouts without blobless defaults and commands outside the wrapper need these
+explicit flags for fork fetches.
+An unbounded fetch in a shallow checkout can otherwise download the repository's
+entire history, including obsolete blobs. Servers must support filtering;
+Git warns and falls back to an unfiltered fetch when they do not.
+
 A newly created filename containing a literal backslash cannot pass workspace
 checkpoint validation. Its bytes and the pending checkpoint remain preserved.
 The same authorized session can continue using its retained sandbox workspace
@@ -316,6 +344,9 @@ With the OpenShell backend, `mirror` mode still uses the local workspace as the 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 Later conversation turns load retained images from that same staged copy.
 Missing copies and paths outside the active sandbox remain unavailable.
+If a previously included image becomes unavailable, replay keeps a resend notice
+and stops retrying that image for the retained session decision. Resend the image
+as a new attachment to make another attempt; other attachments remain available.
 For a managed project session, attachments on follow-up messages use that
 session's private checkout, including after its worktree has been created.
 Attachment staging retains the managed workspace owner until the copy settles.

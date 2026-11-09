@@ -192,6 +192,11 @@ in the original repository. A new clone has a different lock/outcome namespace.
 
 ## Reuse the base and fetch only needed history
 
+Never use `fetch --depth`, `pull --depth`, `--shallow-since`, or
+`--shallow-exclude` in a managed base or its linked worktrees: their shallow
+boundary is shared. Fetch the required ref without a depth limit. If a managed
+base is already shallow, use `openclaw doctor --fix`; keep `blob:none`.
+
 Start in the assigned managed/task worktree. `scripts/pr review-init <PR>`
 provisions `.worktrees/pr-<PR>` through the worktree owner; it shares the canonical
 object store. Do not manually create that PR directory or clone into scratch to
