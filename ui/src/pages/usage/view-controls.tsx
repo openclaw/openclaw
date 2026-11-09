@@ -6,6 +6,11 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -244,8 +249,14 @@ export function createUsageControls(
         value={props.filters.queryDraft}
         aria-label={t("usage.query.placeholder")}
         placeholder={t("usage.query.placeholder")}
+        onBlur={clearCompositionEnd}
+        onCompositionEnd={recordCompositionEnd}
+        onKeyUp={clearCompositionEnd}
         onInput={(event) => props.callbacks.filters.onQueryDraftChange(event.currentTarget.value)}
         onKeyDown={(e: KeyboardEvent) => {
+          if (isComposingKeyboardEvent(e)) {
+            return;
+          }
           if (e.key === "Enter") {
             e.preventDefault();
             props.callbacks.filters.onApplyQuery();
