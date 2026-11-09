@@ -254,6 +254,19 @@ export interface QuotaSuspension {
   laneId?: string;
   expectedResumeBy?: number; // Reaper TTL (e.g. 30min)
   state: LaneExecutionState; // State machine check for hot-path
+  /** Gateway-owned automatic resume bookkeeping; absent until the first scheduled attempt. */
+  autoResume?: QuotaSuspensionAutoResume;
+}
+
+export interface QuotaSuspensionAutoResume {
+  /** Continuation launches attempted by the Gateway for this suspension. */
+  attempts: number;
+  /** Epoch ms of the latest launch attempt. */
+  lastAttemptAt?: number;
+  /** Epoch ms before which the Gateway must not launch again (provider reset plus margin). */
+  nextAttemptAt?: number;
+  /** Run id accepted for the latest launch, when the dispatcher reported one. */
+  lastRunId?: string;
 }
 
 export type {

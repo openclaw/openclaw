@@ -184,6 +184,12 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
     'Forces pre-compaction memory flush when the model-visible transcript window reaches this threshold (bytes or strings like "2mb"). After compaction, this includes the retained tail and subsequent turns rather than discarded history. Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
+  "agents.defaults.quotaResume":
+    "Automatic resume of sessions parked by a provider usage limit. The Gateway waits for the provider's reported reset time and then dispatches one trusted continuation turn so interrupted work finishes without a new prompt.",
+  "agents.defaults.quotaResume.enabled":
+    "Resume quota-suspended sessions automatically once the provider limit resets (default: true). Set false so parked sessions resume only when a new prompt arrives. The OPENCLAW_QUOTA_AUTO_RESUME environment variable overrides this field when set (0/false/off disables, 1/true enables).",
+  "agents.defaults.quotaResume.maxAttempts":
+    "Maximum automatic continuation attempts per quota suspension before the session waits for a human (default: 6). Each failed attempt backs off exponentially when the provider reports no reset time.",
   "agents.defaults.embeddedAgent":
     "Embedded OpenClaw runner hardening controls for how workspace-local agent settings are trusted and applied in OpenClaw sessions.",
   "agents.defaults.embeddedAgent.projectSettingsPolicy":

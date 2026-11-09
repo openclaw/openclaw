@@ -147,6 +147,28 @@ Leaving `agents.defaults.timeoutSeconds` unset gives each model attempt the 48-h
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save the current object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). By default, OpenClaw uses `max(8, available CPU parallelism * 4)`, based on `os.availableParallelism()` with `os.cpus().length` as a fallback. This allows 32 runs on 8 available CPUs and 192 on 48. An explicit value overrides the CPU-derived default, including after upgrades.
 
+<a id="agentsdefaultsquotaresume" />
+
+## `agents.defaults.quotaResume`
+
+Automatic resume of sessions that a provider usage limit parked when no fallback model could take over. See [Automatic resume after a usage limit](/concepts/model-failover#automatic-resume-after-a-usage-limit) for how the Gateway service decides when to continue a session.
+
+```json5
+{
+  agents: {
+    defaults: {
+      quotaResume: {
+        enabled: true, // resume parked sessions once the limit resets (default: true)
+        maxAttempts: 6, // automatic continuation attempts per suspension (default: 6)
+      },
+    },
+  },
+}
+```
+
+- `enabled`: when `false`, parked sessions resume only when a new prompt arrives. The `OPENCLAW_QUOTA_AUTO_RESUME` environment variable overrides this field when set: `0`, `false`, `off`, or `no` disables the service and `1`, `true`, `on`, or `yes` enables it regardless of config. Changes take effect at the next Gateway start.
+- `maxAttempts`: positive integer cap on automatic continuation attempts per suspension before the session waits for a human. Read on every scan, so a config reload applies to pending suspensions.
+
 <a id="agentsdefaultsmodelselectionscope" />
 
 ## `agents.defaults.modelSelectionScope`

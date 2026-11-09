@@ -9,10 +9,13 @@ type DrainPendingDeliveries =
   typeof import("../infra/outbound/delivery-queue-recovery.js").drainPendingDeliveriesCore;
 type RecoverPendingDeliveries =
   typeof import("../infra/outbound/delivery-queue-recovery.js").recoverPendingDeliveries;
+type StartQuotaResumeRuntime =
+  typeof import("./server-quota-resume-runtime.js").startQuotaResumeRuntime;
 
 const runtimeServiceMocks = vi.hoisted(() => {
   const stopSessionUpstreamMonitor = vi.fn();
   const stopSessionDeliveryRuntime = vi.fn(async () => {});
+  const stopQuotaResumeRuntime = vi.fn(async () => {});
   return {
     warmGatewayDatabasePageCache: vi.fn(async () => {}),
     startChannelHealthMonitor: vi.fn(() => ({
@@ -40,8 +43,19 @@ const runtimeServiceMocks = vi.hoisted(() => {
     settleQueuedSessionDelivery: vi.fn(async () => undefined),
     deliverOutboundPayloads: vi.fn(),
     withAuthorizedQueuedConversationDelivery: vi.fn(),
+    stopQuotaResumeRuntime,
+    startQuotaResumeRuntime: vi.fn<StartQuotaResumeRuntime>(() => ({
+      scanNow: vi.fn(async () => {}),
+      stop: stopQuotaResumeRuntime,
+    })),
   };
 });
+
+// Quota resume scans the real session stores; keep it inert under fake timers.
+vi.mock("./server-quota-resume-runtime.js", () => ({
+  isQuotaAutoResumeEnabled: () => true,
+  startQuotaResumeRuntime: runtimeServiceMocks.startQuotaResumeRuntime,
+}));
 
 // mock-isolation: Scheduler tests do not inspect or warm host database files.
 vi.mock("./server-database-page-cache.js", () => ({
@@ -167,6 +181,8 @@ export function resetRuntimeServiceMocks() {
   runtimeServiceMocks.stopSessionUpstreamMonitor.mockClear();
   runtimeServiceMocks.stopSessionDeliveryRuntime.mockClear();
   runtimeServiceMocks.startSessionDeliveryRuntime.mockClear();
+  runtimeServiceMocks.stopQuotaResumeRuntime.mockClear();
+  runtimeServiceMocks.startQuotaResumeRuntime.mockClear();
   runtimeServiceMocks.schedulePendingSessionDeliveries.mockClear();
   runtimeServiceMocks.recoverPendingDeliveries.mockReset();
   runtimeServiceMocks.recoverPendingDeliveries.mockResolvedValue({
