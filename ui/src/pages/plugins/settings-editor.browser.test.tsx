@@ -11,7 +11,11 @@ import {
   createSolidApplicationContextProvider,
 } from "../../test-helpers/solid-application-context.tsx";
 import { createContext } from "./plugins-page.test-support.ts";
-import { PluginSettingsEditor, type PluginSettingsEditorProps } from "./settings-editor.tsx";
+import {
+  PluginSettingsEditor,
+  pluginSettingsNodeOptions,
+  type PluginSettingsEditorProps,
+} from "./settings-editor.tsx";
 import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-inventory.tsx";
 import type { PluginSettingsEditorModel } from "./settings-model.ts";
 import "../../styles.css";
@@ -418,6 +422,67 @@ describe("grouped plugin settings", () => {
 });
 
 describe("grouped editor field discovery", () => {
+  it.each(["NFC", "NFD"] as const)(
+    "finds original %s grouping, ancestor, and permission text with an equivalent query",
+    async (form) => {
+      const equivalent = (text: string) => text.normalize(form === "NFC" ? "NFD" : "NFC");
+      const group = "Café section".normalize(form);
+      const ancestor = "Résumé parent".normalize(form);
+      const permission = "Gesprächskontext lesen".normalize(form);
+      const help = "Überprüfung".normalize(form);
+      const { editor, model, update, all } = await mount({
+        configHints: {
+          [prefix]: { groups: [{ id: "general", title: group, properties: ["enabled"] }] },
+        },
+        configValue: configValue({ enabled: true, storage: { path: "original" } }),
+        configSchema: objectSchema({
+          enabled: { type: "boolean", title: "Enabled" },
+          storage: {
+            ...objectSchema({ path: { type: "string", title: "Directory" } }),
+            title: ancestor,
+          },
+        }),
+      });
+      await update({
+        permissions: {
+          fields: [
+            {
+              ...pluginSettingsNodeOptions(model),
+              schema: { type: "boolean", title: "Allow context" },
+              path: ["plugins", "entries", "fixture", "hooks", "allowConversationAccess"],
+              property: "hooks",
+              value: false,
+              label: permission,
+              help,
+            },
+          ],
+        },
+      });
+      const initial = [...all(".plugin-editor__title")].map((row) => row.textContent);
+      for (const [query, expected] of [
+        [group, ["enabled"]],
+        [equivalent(group), ["enabled"]],
+        [equivalent(ancestor), ["storage.path"]],
+        [equivalent(permission), ["hooks.allowConversationAccess"]],
+        [equivalent(help), ["hooks.allowConversationAccess"]],
+        ["  ENABLED  ", ["enabled"]],
+        ["Cafè section", []],
+        ["Ｃａｆé section", []],
+      ] as const) {
+        await searchSettings(editor, query);
+        expect([...all("[data-setting]")].map((row) => row.getAttribute("data-setting"))).toEqual(
+          expected,
+        );
+      }
+      await searchSettings(editor, "");
+      expect([...all(".plugin-editor__title")].map((row) => row.textContent)).toEqual(initial);
+      expect(editor.textContent).toContain(ancestor);
+      expect(editor.textContent).toContain(help);
+      expect(model.onConfigPatch).not.toHaveBeenCalled();
+      expect(model.onConfigRemove).not.toHaveBeenCalled();
+    },
+  );
+
   it("associates visible field instructions with native controls", async () => {
     const { query } = await mount({
       configHints: {

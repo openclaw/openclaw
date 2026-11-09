@@ -1,0 +1,3 @@
+65
+# Exact net LF growth for the existing plugin settings browser discovery regression.
+# Both Unicode directions cover authored groups, ancestor labels, and displayed permission text.
