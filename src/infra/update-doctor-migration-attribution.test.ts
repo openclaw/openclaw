@@ -30,7 +30,9 @@ import { createUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run
 const directories = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it.runIf(process.platform !== "win32").each(["none", "before", "after", "other", "ordinary"])(
+it
+  .runIf(process.platform !== "win32")
+  .each(["none", "before", "after", "other", "ordinary", "verification"])(
   "retains the original capture through the real stop ledger and Doctor handoff: %s",
   async (interference) => {
     await withOpenClawTestState({ scenario: "minimal", applyEnv: true }, async ({ env }) => {
@@ -77,7 +79,7 @@ it.runIf(process.platform !== "win32").each(["none", "before", "after", "other",
         signal: new AbortController().signal,
         warn: vi.fn(),
       })!;
-      await capture.admit(true);
+      await capture.admit();
       const preparing = stopSupervisedPredecessorGateway(
         { runId, repair: true },
         {
@@ -93,6 +95,14 @@ it.runIf(process.platform !== "win32").each(["none", "before", "after", "other",
         expect(await preparing).toBe(true);
         if (interference === "after" || interference === "other") {
           foreignWrite(interference === "other" ? other : pathname);
+        }
+        if (interference === "verification") {
+          recordUpdateRunStep(
+            runId,
+            { step: "post-update verification", status: "in_progress" },
+            { env },
+          );
+          await closeOpenClawStateDatabaseAsync();
         }
         const repair = vi.fn(async () => {});
         const maintenance = await createDoctorMaintenanceState({
@@ -111,35 +121,32 @@ it.runIf(process.platform !== "win32").each(["none", "before", "after", "other",
           warn: vi.fn(),
         });
         try {
-          if (interference === "after" || interference === "other") {
-            await expect(maintenance.acquire()).rejects.toThrow("before Doctor repair handoff");
-            expect(repair).not.toHaveBeenCalled();
-          } else {
-            await maintenance.acquire();
-            await maintenance.prepareRepair();
-            expect(repair).toHaveBeenCalledOnce();
-            if (interference === "ordinary") {
-              // A non-opted-in native owner write inside Doctor remains unattributed.
-              maintenance.run(() =>
-                recordUpdateRunStep(
-                  runId,
-                  { step: "doctor:ordinary", status: "completed" },
-                  { env },
-                ),
-              );
-            }
+          await maintenance.acquire();
+          await maintenance.prepareRepair();
+          expect(repair).toHaveBeenCalledOnce();
+          if (interference === "ordinary") {
+            // A non-opted-in native owner write inside Doctor remains unattributed.
+            maintenance.run(() =>
+              recordUpdateRunStep(runId, { step: "doctor:ordinary", status: "completed" }, { env }),
+            );
           }
         } finally {
           await maintenance.release();
         }
-        if (interference === "after" || interference === "other") {
-          // Failed first admission cannot publish an accepted migration receipt.
-          expect(capture.receipt).toBeUndefined();
-        } else {
-          expect(capture.receipt).toMatchObject({
-            unchanged: interference === "none",
-            fromGenerations: generations,
-          });
+        expect(capture.receipt).toMatchObject({
+          unchanged: interference === "none",
+          fromGenerations: generations,
+        });
+        if (interference === "ordinary") {
+          // A second interval must not turn rollback uncertainty into a repair refusal.
+          try {
+            await maintenance.acquire();
+            await maintenance.prepareRepair();
+            expect(repair).toHaveBeenCalledTimes(2);
+          } finally {
+            await maintenance.release();
+          }
+          expect(capture.receipt).toMatchObject({ unchanged: false, fromGenerations: generations });
         }
       }
       if (interference === "before") {
@@ -159,9 +166,7 @@ it.runIf(process.platform !== "win32").each(["none", "before", "after", "other",
         expect(backup.migration?.from).toEqual(generations);
       } else {
         expect(backup.migration).toBeUndefined();
-        if (interference === "before" || interference === "ordinary") {
-          expect(backup.restoreRefusal).toContain("writer is unknown");
-        }
+        expect(backup.restoreRefusal).toContain("writer is unknown");
       }
       const receipts = getUpdateRun(runId, { env })?.steps.filter((step) =>
         step.step.startsWith("finalize:predecessor-stop:"),
@@ -268,7 +273,7 @@ it
         warn: vi.fn(),
       },
     )!;
-    await capture.admit(true);
+    await capture.admit();
     reader?.close();
     if (transition === "reader") {
       using db = new DatabaseSync(pathname, { readOnly: true });
@@ -292,22 +297,31 @@ it
       assertDatabaseAccess() {},
     });
     const db = new DatabaseSync(pathname);
+    const peerWrite = () =>
+      spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          'import { DatabaseSync } from "node:sqlite"; const db = new DatabaseSync(process.argv[1]); db.exec("PRAGMA busy_timeout=0; INSERT INTO retained VALUES(99)");',
+          pathname,
+        ],
+        { encoding: "utf8", timeout: 5_000 },
+      );
+    const assertPeerExcluded = () => {
+      const peer = peerWrite();
+      expect(peer.status).not.toBe(0);
+      expect(peer.stderr).toMatch(/locked/iu);
+    };
     const operation = vi.fn(() => {
+      expect(db.isTransaction).toBe(false);
       if (transition === "reader") {
-        const peer = spawnSync(
-          process.execPath,
-          [
-            "--input-type=module",
-            "-e",
-            'import { DatabaseSync } from "node:sqlite"; const db = new DatabaseSync(process.argv[1]); db.exec("PRAGMA busy_timeout=0; INSERT INTO retained VALUES(99)");',
-            pathname,
-          ],
-          { encoding: "utf8", timeout: 5_000 },
-        );
-        expect(peer.status).not.toBe(0);
-        expect(peer.stderr).toMatch(/locked/iu);
+        assertPeerExcluded();
       }
       db.exec("INSERT INTO retained VALUES(9)");
+      if (transition === "reader") {
+        assertPeerExcluded();
+      }
     });
     if (transition === "authority") {
       current = false;
@@ -350,6 +364,9 @@ it
     expect(capture.receipt?.unchanged).toBe(
       transition === "reader" || transition === "last-close" || transition === "alias",
     );
+    if (transition === "reader") {
+      expect(peerWrite().status).toBe(0);
+    }
     if (fs.existsSync(aliasRoot)) {
       fs.unlinkSync(aliasRoot);
     }

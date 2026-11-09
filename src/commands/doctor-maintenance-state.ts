@@ -50,7 +50,6 @@ export async function createDoctorMaintenanceState(options: {
     : env;
   let captureAdmitted = false;
   let liveAuthorityReadsAdmitted = false;
-  let firstCaptureAdmission = true;
   const capture =
     params.databaseWriteCapture ??
     createUpdateDoctorDatabaseWriteCapture(params.databaseGenerations, {
@@ -179,13 +178,8 @@ export async function createDoctorMaintenanceState(options: {
     }
     if (capture && !captureAdmitted) {
       acquired.assertCurrent(options.assertCurrent);
-      await settle(() =>
-        resources!.run(() =>
-          capture.admit(Boolean(params.databaseWriteCapture) && firstCaptureAdmission),
-        ),
-      );
+      await settle(() => resources!.run(() => capture.admit()));
       acquired.assertCurrent(options.assertCurrent);
-      firstCaptureAdmission = false;
       captureAdmitted = true;
     }
   };

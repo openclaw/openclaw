@@ -7,6 +7,7 @@ import { registerNodeSqliteKyselyQueryErrorHandler } from "../infra/kysely-sync-
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import {
   isSqliteCorruptionError,
   isSqliteLockError,
@@ -25,6 +26,7 @@ import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
 } from "../infra/sqlite-lifecycle-errors.js";
+import { beginSqliteConnectionExclusion } from "../infra/sqlite-native-exclusion.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
@@ -732,7 +734,8 @@ function retainSqliteDatabaseRemovalExclusion(
     maintenance.own(database, "shared-handles", close);
     // Exclusive connection mode obtains the main-file lock even in WAL mode.
     // Do not change journal_mode: a refused removal must preserve recovery bytes.
-    database.exec("PRAGMA busy_timeout = 0; PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE;"); // sqlite-allow-raw -- Native file-removal exclusion, without mutating journal mode.
+    setSqliteBusyTimeout(database, 0);
+    beginSqliteConnectionExclusion(database);
   } catch (error) {
     try {
       close();

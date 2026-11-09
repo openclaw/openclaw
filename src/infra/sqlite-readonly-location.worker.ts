@@ -60,6 +60,7 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       mode !== "async" &&
       mode !== "consolidated" &&
       mode !== "reclaim" &&
+      mode !== "update-generation" &&
       !isSqliteSnapshotStagingMode(mode)) ||
     !pathname
   ) {
@@ -73,6 +74,16 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       throw new Error(
         "SQLite source identity is supported only for artifact-preserving sync copies",
       );
+    }
+    if (mode === "update-generation") {
+      // Committed generation reads need SQLite; keep them off the lightweight
+      // source-revision worker and its standalone build graph.
+      const { readUpdateDatabaseGenerationObservation } =
+        await import("./update-database-generations.js");
+      return {
+        ok: true,
+        generation: JSON.stringify(readUpdateDatabaseGenerationObservation(pathname)),
+      };
     }
     const expectedSourceIdentity =
       args[3] === undefined ? undefined : readDatabaseFileIdentity(JSON.parse(args[3]));

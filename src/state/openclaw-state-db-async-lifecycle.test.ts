@@ -1,5 +1,6 @@
 import { existsSync, linkSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
@@ -567,6 +568,7 @@ describe("canonical shared-state resource drainage", () => {
       assertOwnerCurrent,
       assertDatabaseAccess: processOwner.assertDatabaseAccess,
     });
+    const ownedResources = vi.spyOn(maintenance, "own");
     const acquiring = maintenance.run(() =>
       prepareOpenClawStateDatabaseRemoval(owner.path, assertOwnerCurrent),
     );
@@ -579,6 +581,12 @@ describe("canonical shared-state resource drainage", () => {
       removal = await acquiring;
       expect(reader.database.db.isOpen).toBe(false);
       expect(owner.db.isOpen).toBe(false);
+      if (process.platform !== "win32") {
+        const exclusion = ownedResources.mock.calls
+          .map(([resource]) => resource)
+          .find((resource) => resource instanceof DatabaseSync);
+        expect(exclusion?.isTransaction).toBe(true);
+      }
       removal.assertCurrent();
       expect(() => captureOpenClawStateDatabaseReadAdmission(owner.path)).toThrow(/closed/);
       removal.release();
@@ -592,6 +600,7 @@ describe("canonical shared-state resource drainage", () => {
         removal.release();
         await maintenance.close();
       } finally {
+        ownedResources.mockRestore();
         processOwner.release();
       }
     }

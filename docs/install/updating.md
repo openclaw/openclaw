@@ -1449,7 +1449,8 @@ when its previous process has already released its lease. The native service
 adapter retains ownership checks; disabled or unloaded services are not started.
 The candidate records the stopped service identity through the existing update
 ledger and carries the original database capture into Doctor. Only this one-shot
-receipt write is attributed to that capture. Unrelated writes before the repair
-handoff refuse repair; ordinary Doctor database mutations still leave automatic
-database restoration unverified. Finalization restores only the matching stopped
-service, including necessary recovery when the parent requested --no-restart.
+receipt write is attributed to that capture and refuses attribution if its source
+has changed. Other writes before or during Doctor leave automatic database
+restoration unverified without preventing forward repair under maintenance custody.
+Finalization restores only the matching stopped service, including necessary
+recovery when the parent requested --no-restart.

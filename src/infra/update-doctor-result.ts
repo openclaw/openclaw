@@ -279,16 +279,14 @@ export function createUpdateDoctorDatabaseWriteCapture(
     run<T>(operation: () => T): T {
       return runWithUpdateDoctorMigrationCapture(authority, operation);
     },
-    async admit(strict = false) {
+    async admit() {
       receipt = undefined;
       const generations = await read();
       if (generations && expectedGenerations) {
         // Earlier receipts or another process's writes must never become our baseline.
         unchanged &&= matches(generations);
       }
-      if (strict && (!unchanged || !expectedGenerations)) {
-        throw new Error("Database changed before Doctor repair handoff.");
-      }
+      // Drift prevents automatic restoration, not forward repair under maintenance custody.
     },
     async settle() {
       const generations = await read();

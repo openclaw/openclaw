@@ -76,6 +76,7 @@ vi.mock("./worker-native-lifecycle.js", () => ({
 vi.mock("./update-finalization-budget.js", () => ({
   resolveUpdateFinalizationTimeoutMs: fixture.budget,
 }));
+// mock-isolation: Observe finalizer handoff calls without opening or mutating real databases.
 vi.mock("./update-doctor-result.js", () => ({
   createUpdateDoctorDatabaseWriteCapture: fixture.createCapture,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV: "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH",
@@ -784,6 +785,7 @@ it.each([
 
 it("passes the same original capture from worker admission into Doctor", async () => {
   const doctor = vi.fn();
+  // mock-isolation: Observe the original handoff capture without running real Doctor repairs.
   vi.doMock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: doctor }));
   const capture = { admit: vi.fn(async () => undefined) };
   fixture.createCapture.mockReturnValue(capture);
@@ -809,7 +811,7 @@ it("passes the same original capture from worker admission into Doctor", async (
     generations,
     expect.objectContaining({ assertCurrent: expect.any(Function) }),
   );
-  expect(capture.admit).toHaveBeenCalledExactlyOnceWith(true);
+  expect(capture.admit).toHaveBeenCalledExactlyOnceWith();
   expect(doctor).toHaveBeenCalledExactlyOnceWith(
     expect.anything(),
     expect.anything(),

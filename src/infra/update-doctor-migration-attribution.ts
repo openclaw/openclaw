@@ -5,7 +5,9 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import { SqliteCoordinatorError } from "./sqlite-lifecycle-errors.js";
+import { beginSqliteConnectionExclusion } from "./sqlite-native-exclusion.js";
 import { runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
+import { readSqliteSchemaCookie } from "./sqlite-schema-contract.js";
 import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
 
 export type UpdateDoctorMigrationCapture = {
@@ -84,8 +86,9 @@ export function runUpdateDoctorAttributedStateWrite<T>(
     }
     // Attach WAL coordination in normal mode first, then retain exclusion through
     // the existing owner's transaction, checkpoint, and exact one-shot close.
-    db.prepare("PRAGMA schema_version").get(); // sqlite-allow-raw -- Attach native coordination before exclusion.
-    db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;"); // sqlite-allow-raw -- One-shot native exclusion.
+    readSqliteSchemaCookie(db);
+    beginSqliteConnectionExclusion(db);
+    db.exec("ROLLBACK"); // sqlite-allow-raw -- Retain connection exclusion while the ledger starts its own transaction.
     const locked = readUpdateDoctorGeneration(pathname);
     assertCurrent();
     if (

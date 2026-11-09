@@ -12,28 +12,16 @@ if (process.argv[2] === SQLITE_READONLY_CHILD_ARG) {
   try {
     const pathname = process.argv[4];
     const mode = process.argv[3];
-    if (
-      (mode !== "content-version" && mode !== "file-generation" && mode !== "update-generation") ||
-      !pathname
-    ) {
+    if ((mode !== "content-version" && mode !== "file-generation") || !pathname) {
       throw new Error("SQLite content observation requires its mode and source path");
     }
-    if (mode === "update-generation") {
-      const { readUpdateDatabaseGenerationObservation } =
-        await import("./update-database-generations.js");
-      result = {
-        ok: true,
-        generation: JSON.stringify(readUpdateDatabaseGenerationObservation(pathname)),
-      };
-    } else {
-      result =
-        mode === "file-generation"
-          ? {
-              ok: true,
-              generation: serializeSqliteFileGeneration(readStableSqliteFileGeneration(pathname)),
-            }
-          : { ok: true, contentVersion: readSqliteSourceContentVersionInProcess(pathname) ?? "" };
-    }
+    result =
+      mode === "file-generation"
+        ? {
+            ok: true,
+            generation: serializeSqliteFileGeneration(readStableSqliteFileGeneration(pathname)),
+          }
+        : { ok: true, contentVersion: readSqliteSourceContentVersionInProcess(pathname) ?? "" };
   } catch (error) {
     process.exitCode = 1;
     result = { ok: false, message: error instanceof Error ? error.message : String(error) };

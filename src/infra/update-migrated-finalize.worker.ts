@@ -339,7 +339,7 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
           warn: (message) => process.stderr.write(message + "\n"),
         },
       );
-      await databaseWriteCapture?.admit(true);
+      await databaseWriteCapture?.admit();
       assertCurrent();
       await stopSupervisedPredecessorGateway(input, {
         databaseWriteCapture,
