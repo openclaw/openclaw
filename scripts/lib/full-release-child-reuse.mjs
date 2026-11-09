@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import process from "node:process";
+import { setTimeout as sleep } from "node:timers/promises";
 import {
   composeReleaseChildAttemptEvidence,
+  evidenceReadRetryDelay,
+  isReleaseGhServerError,
   readReleaseJobListing,
   releaseChildSpec,
   releaseCompositeJobsSha256,
@@ -73,21 +76,49 @@ function requestValue(request) {
 
 function dependencies(repository, deps) {
   const deadlineMs = deps.deadlineMs ?? Date.now() + 120_000;
-  const remaining = () => {
+  const remaining = (stage = "verification") => {
     const milliseconds = deadlineMs - Date.now();
-    requireEvidence(milliseconds > 0, "verification exceeded its time budget");
+    requireEvidence(milliseconds > 0, `${stage} exceeded its time budget`);
     return milliseconds;
   };
-  const github = async (endpoint) => {
-    const timeout = Math.min(60_000, remaining());
-    const load = async () =>
-      deps.github
-        ? JSON.stringify(await deps.github(endpoint))
-        : execGhReadAsync(["api", "repos/" + repository + "/" + endpoint], {
-            timeout,
-            maxBuffer: 4 * 1024 * 1024,
-            env: { ...process.env, OCTOPOOL_FRESH: "1" },
-          });
+  const github = async (endpoint, { smallerPageFallback = false } = {}) => {
+    const args = ["api", "repos/" + repository + "/" + endpoint];
+    const stage = `API GET ${args[1]}`;
+    remaining(stage);
+    const load = async () => {
+      for (let attempt = 0; ; attempt += 1) {
+        const timeout = Math.min(60_000, remaining(stage));
+        try {
+          return deps.github
+            ? JSON.stringify(await deps.github(endpoint))
+            : await execGhReadAsync(args, {
+                timeout,
+                maxBuffer: 4 * 1024 * 1024,
+                env: { ...process.env, OCTOPOOL_FRESH: "1" },
+              });
+        } catch (error) {
+          const serverError = isReleaseGhServerError(error);
+          if (smallerPageFallback && serverError) {
+            throw error;
+          }
+          let delay;
+          try {
+            delay = evidenceReadRetryDelay(args, error, attempt);
+          } catch {
+            // Report the read stage and endpoint, never raw CLI output or response bodies.
+            const status =
+              /HTTP [1-5][0-9]{2}\b/u.exec(
+                `${error?.message ?? ""}\n${error?.stderr ?? ""}`,
+              )?.[0] ?? (serverError ? "HTTP 5xx" : undefined);
+            throw new Error(
+              `Full release child evidence ${stage} failed${status ? ` (${status})` : ""}`,
+            );
+          }
+          requireEvidence(delay < remaining(stage), `${stage} exceeded its time budget`);
+          await sleep(delay);
+        }
+      }
+    };
     const value = JSON.parse(
       await (deps.immutableReads ? deps.immutableReads.text(endpoint, load) : load()),
     );
@@ -206,13 +237,14 @@ function validateRun(run, selection, request) {
 }
 
 async function readAttemptJobs(github, run, runAttempt) {
-  return readReleaseJobListing(async (perPage) => {
+  return readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
     const jobs = [];
     let total;
     const maxPages = Math.ceil((MAX_JOB_PAGES * 100) / perPage);
     for (let page = 1; page <= maxPages; page += 1) {
       const inventory = await github(
         `actions/runs/${run.id}/attempts/${runAttempt}/jobs?per_page=${perPage}&page=${page}`,
+        { smallerPageFallback },
       );
       total ??= inventory?.total_count;
       requireEvidence(

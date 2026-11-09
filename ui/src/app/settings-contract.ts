@@ -74,6 +74,32 @@ export function normalizeDashboardsDisplay(value: unknown): DashboardsDisplay | 
     : display;
 }
 
+const SESSION_FILES_VIEWS = ["list", "grid"] as const;
+const SESSION_FILES_SORTS = ["default", "date", "name", "type"] as const;
+export type SessionFilesDisplay = {
+  view: (typeof SESSION_FILES_VIEWS)[number];
+  sort: (typeof SESSION_FILES_SORTS)[number];
+};
+export const SESSION_FILES_DISPLAY_DEFAULTS: SessionFilesDisplay = {
+  view: "list",
+  sort: "default",
+};
+
+/** Browser-local Files panel display for session files and attachments; the defaults are not stored. */
+export function normalizeSessionFilesDisplay(value: unknown): SessionFilesDisplay | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const display: SessionFilesDisplay = {
+    view: normalizeChoice(SESSION_FILES_VIEWS, SESSION_FILES_DISPLAY_DEFAULTS.view)(value.view),
+    sort: normalizeChoice(SESSION_FILES_SORTS, SESSION_FILES_DISPLAY_DEFAULTS.sort)(value.sort),
+  };
+  return display.view === SESSION_FILES_DISPLAY_DEFAULTS.view &&
+    display.sort === SESSION_FILES_DISPLAY_DEFAULTS.sort
+    ? undefined
+    : display;
+}
+
 const CHAT_WORKSPACE_DOCKS = ["right", "bottom"] as const;
 type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
 
@@ -188,6 +214,7 @@ export type UiSettings = {
   chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
   boardSessionViews?: BoardSessionViews; // Per-device active dashboard tab and dock state
   dashboardsDisplay?: DashboardsDisplay; // Dashboards gallery view, ordering and grouping
+  sessionFilesDisplay?: SessionFilesDisplay; // Files panel session files view and ordering
   sidebarSessionLayouts?: SidebarSessionLayouts; // Sidebar columns and widths per session
   sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state

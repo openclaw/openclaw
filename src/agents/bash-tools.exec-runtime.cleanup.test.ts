@@ -210,6 +210,7 @@ it.each([
     markBackgrounded(guest.session);
     markBackgrounded(other.session);
     try {
+      expect(guest.session.sandboxContainerName).toBe("shared-fixture");
       expect(sandbox.buildExecSpec).toHaveBeenCalledWith(
         expect.objectContaining({
           env: expect.objectContaining({ CODEX_SANDBOX_EXEC_ID: "guest" }),

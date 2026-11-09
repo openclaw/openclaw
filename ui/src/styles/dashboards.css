@@ -1,5 +1,6 @@
+/* Header tools sit on the 32px control height, like the toolbar icons on Sessions and Usage. */
 .dashboards-header .hub-page-header__actions {
-  min-height: max(36px, var(--settings-control-height));
+  min-height: var(--settings-control-height);
 }
 
 .dashboards-gallery {
@@ -34,7 +35,7 @@
   display: flex;
   align-items: center;
   width: min(280px, calc(100vw - 140px));
-  height: 36px;
+  height: 32px;
   padding-inline-end: 4px;
   border-radius: var(--field-radius);
   background: var(--field-bg);
@@ -45,7 +46,7 @@
 .dashboards-search__icon {
   display: grid;
   flex: none;
-  width: 36px;
+  width: 32px;
   place-items: center;
 }
 
