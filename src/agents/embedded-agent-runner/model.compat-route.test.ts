@@ -489,7 +489,7 @@ describe("model route compatibility", () => {
     const catalogRow = {
       ...makeProviderModelFixture({ provider: providerId, id, ...route }),
       reasoning: true,
-      input: ["text", "image"] as const,
+      input: ["text", "image"] as Array<"text" | "image">,
       contextWindow: 1_000_000,
       // A discovered canonical row prepared while the capability cache was warm;
       // after a restart the /models fetch fails, so the provider hook declines
