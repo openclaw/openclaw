@@ -646,3 +646,7 @@ export const iconData = {
 } as const satisfies Record<string, IconData>;
 
 export type IconName = keyof typeof iconData;
+
+export function isIconName(name: string | undefined): name is IconName {
+  return Object.hasOwn(iconData, name ?? "");
+}

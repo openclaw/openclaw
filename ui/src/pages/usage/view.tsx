@@ -1,5 +1,4 @@
 import { For, Show, createMemo, onSettled } from "solid-js";
-import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
@@ -184,26 +183,6 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
               ) : (
                 <div class="usage-summary-strip__actions">
                   {controls.partialStatus()}
-                  <button
-                    class={[
-                      "btn btn--sm btn--icon usage-pin-btn",
-                      { active: props.display.headerPinned },
-                    ]}
-                    aria-label={
-                      props.display.headerPinned
-                        ? t("usage.filters.pinned")
-                        : t("usage.filters.pin")
-                    }
-                    aria-pressed={props.display.headerPinned ? "true" : "false"}
-                    title={
-                      props.display.headerPinned
-                        ? t("usage.filters.pinned")
-                        : t("usage.filters.pin")
-                    }
-                    onClick={() => props.callbacks.filters.onToggleHeaderPinned()}
-                  >
-                    <Icon name={props.display.headerPinned ? "pinOff" : "pin"} />
-                  </button>
                   <Menu
                     id="usage-export"
                     label={t("usage.export.label")}
@@ -274,9 +253,6 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
                 selectedDays={props.filters.selectedDays}
                 chartMode={props.display.chartMode}
                 dailyChartMode={props.display.dailyChartMode}
-                onDailyChartModeChange={(dailyChartMode) =>
-                  props.callbacks.display.onChange({ dailyChartMode })
-                }
                 onSelectDay={props.callbacks.filters.onSelectDay}
                 providerSeries={providerSeries()}
                 range={{

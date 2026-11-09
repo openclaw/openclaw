@@ -53,10 +53,14 @@ export function usageState(
   return { base, usage, setFilters, setDisplay, onChange, onDatesChange };
 }
 
-/** Open the desktop Filter menu through its real trigger and optional field submenu. */
-export function openUsageFilter(root: Pick<ParentNode, "querySelector">, field?: string) {
-  const mainTrigger = root.querySelector<HTMLButtonElement>(".usage-filter-menu__trigger")!;
-  const menu = root.querySelector<HTMLElement>(".usage-filter-menu")!;
+/** Open a Usage menu through its real trigger and optional field submenu. */
+function openUsageMenu(
+  root: Pick<ParentNode, "querySelector">,
+  name: "filter" | "display",
+  field?: string,
+) {
+  const mainTrigger = root.querySelector<HTMLButtonElement>(`.usage-${name}-menu__trigger`)!;
+  const menu = root.querySelector<HTMLElement>(`.usage-${name}-menu`)!;
   const open = (trigger: HTMLButtonElement) => {
     if (trigger.getAttribute("aria-expanded") === "true") {
       return;
@@ -85,4 +89,12 @@ export function openUsageFilter(root: Pick<ParentNode, "querySelector">, field?:
     `[id="${trigger.getAttribute("aria-controls")}"]`,
   )!;
   return { menu, trigger, surface };
+}
+
+export function openUsageFilter(root: Pick<ParentNode, "querySelector">, field?: string) {
+  return openUsageMenu(root, "filter", field);
+}
+
+export function openUsageDisplay(root: Pick<ParentNode, "querySelector">, field?: string) {
+  return openUsageMenu(root, "display", field);
 }
