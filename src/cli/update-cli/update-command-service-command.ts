@@ -1,4 +1,7 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { GatewayServiceDefinitionBackupReceiptSchema } from "../../daemon/service-stage.js";
@@ -8,16 +11,19 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
+import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.js";
+import type { DaemonActionResponse } from "../daemon-cli/response.js";
+import type { GatewayRestartSnapshot } from "../daemon-cli/restart-health.types.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import {
   requiresRetainedUpdateCommandOwner,
   withUpdateCommandExecutorChild,
   type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { withRetainedUpdateServiceAuthority } from "./update-command-retained-service.js";
 import type {
   OriginalManagedServiceRuntime,
@@ -27,11 +33,6 @@ import {
   resolveUpdatedInstallCommandEnv,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
-import {
-  runGatewayInstallWithLoadBoundary,
-  UpdateServiceLoadPreMutationError,
-  type UpdateServiceLoadBoundary,
-} from "./update-command-service-load.js";
 
 export const DEFINITION_DENIAL = /\bSERVICE_DEFINITION_(?:SEALED|UNKNOWN):[^\n]*/;
 
@@ -57,6 +58,50 @@ function formatCommandFailure(stdout: string, stderr: string): string {
   return detail ? detail.split("\n").slice(-3).join("\n") : "command returned a non-zero exit code";
 }
 
+async function runSettledGatewayCommand(argv: string[], options: CommandOptions) {
+  const result = await runCommandWithTimeout(argv, {
+    ...options,
+    // The complete owned env must not regain selectors removed during capture.
+    baseEnv: {},
+    killProcessTree: true,
+    requireProcessTreeExtinction: true,
+  });
+  if (result.cleanup === "forced" || result.cleanup === "uncertain") {
+    throw new CommandProcessCleanupError();
+  }
+  return result;
+}
+
+/** Failure reports carry closed status and field names, never the child's output. */
+function describeUnsupportedExecutorCheck(
+  check: Awaited<ReturnType<typeof runSettledGatewayCommand>>,
+  capability: Record<string, unknown> | undefined,
+  requiredBindings: readonly string[],
+): string | undefined {
+  if (check.code !== 0 || check.termination !== "exit" || check.signal !== null || check.killed) {
+    return `code=${check.code}, termination=${check.termination}${check.signal ? `, signal=${check.signal}` : ""}${check.killed ? ", killed=true" : ""}`;
+  }
+  // The child wrapper has joined the complete process tree before returning.
+  // Graceful descendant settlement is not an unsupported target capability.
+  if (check.cleanup !== "normal" && check.cleanup !== "cooperative") {
+    return `cleanup=${check.cleanup ?? "unreported"}`;
+  }
+  if (check.stdoutTruncatedBytes || check.outputLimitExceeded) {
+    return "output limit exceeded";
+  }
+  if (check.outputErrorStream) {
+    return `${check.outputErrorStream} stream error`;
+  }
+  if (!capability) {
+    return "output is not a JSON object";
+  }
+  if (capability.updateExecutor !== GATEWAY_UPDATE_EXECUTOR_CONTRACT) {
+    return "unsupported updateExecutor";
+  }
+  const missing = requiredBindings.find((binding) => capability[binding] !== true);
+  return missing ? `missing ${missing}` : undefined;
+}
+
 /** Probe the staged target before activation, retaining the original child owner. */
 export async function isUpdatedInstallGatewayExecutorSupported(params: {
   root: string;
@@ -66,6 +111,7 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
   nodeRunner?: string;
   signal?: AbortSignal;
   onDefinitionBackupCapability?: (supported: boolean) => void;
+  onUnsupported?: (condition: string) => void;
   requireOriginalDefinitionBinding?: boolean;
 }): Promise<boolean> {
   params.signal?.throwIfAborted();
@@ -74,69 +120,53 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
   const entrypoint = await resolveGatewayInstallEntrypoint(params.root);
   params.executor.assertCurrent();
   if (!entrypoint) {
+    params.onUnsupported?.("missing Gateway entrypoint");
     return false;
   }
-  const argv = [
-    params.nodeRunner ?? resolveNodeRunner(),
-    entrypoint,
-    "gateway",
-    "install",
-    "--update-executor",
-    "check",
-    "--json",
-  ];
+  const invocation = resolveOpenClawCliInvocation({
+    execPath: params.nodeRunner ?? resolveNodeRunner(),
+    entryPath: entrypoint,
+    execArgv: [],
+    args: ["gateway", "install", "--update-executor", "check", "--json"],
+  });
+  const argv = [invocation.command, ...invocation.args];
   const check = await withUpdateCommandExecutorChild(
     params.executor,
     params.root,
-    async (_grant, bindChild) => {
-      const result = await runCommandWithTimeout(argv, {
+    (_grant, bindChild) =>
+      runSettledGatewayCommand(argv, {
         input: "",
         beforeInput: bindChild,
-        baseEnv: {},
         cwd: params.root,
         env: { ...params.env, OPENCLAW_NO_RESPAWN: "1" },
         timeoutMs: params.timeoutMs,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
         ...(params.signal ? { signal: params.signal } : {}),
         maxOutputBytes: 64 * 1024,
-      });
-      if (result.cleanup === "forced" || result.cleanup === "uncertain") {
-        throw new CommandProcessCleanupError();
-      }
-      return result;
-    },
+      }),
   );
   params.signal?.throwIfAborted();
   params.executor.assertCurrent();
   const capability = safeParseJsonRecord(check.stdout);
-  const supported =
-    check.code === 0 &&
-    check.termination === "exit" &&
-    check.signal === null &&
-    !check.killed &&
-    // The child wrapper has joined the complete process tree before returning.
-    // Graceful descendant settlement is not an unsupported target capability.
-    (check.cleanup === "normal" || check.cleanup === "cooperative") &&
-    !check.stdoutTruncatedBytes &&
-    !check.outputLimitExceeded &&
-    !check.outputErrorStream &&
-    capability?.updateExecutor === GATEWAY_UPDATE_EXECUTOR_CONTRACT &&
-    capability.targetRootBinding === true &&
-    (!params.requireOriginalDefinitionBinding ||
-      (capability.originalDefinitionBinding === true &&
-        capability.originalRuntimePinBinding === true)) &&
-    (!requiresRetainedOwner || capability.retainedOwnerBinding === true);
-  params.onDefinitionBackupCapability?.(supported && capability?.definitionBackup === true);
-  return supported;
+  const unsupported = describeUnsupportedExecutorCheck(check, capability, [
+    "targetRootBinding",
+    ...(params.requireOriginalDefinitionBinding
+      ? ["originalDefinitionBinding", "originalRuntimePinBinding"]
+      : []),
+    ...(requiresRetainedOwner ? ["retainedOwnerBinding"] : []),
+  ]);
+  if (unsupported) {
+    params.onUnsupported?.(unsupported);
+  }
+  params.onDefinitionBackupCapability?.(!unsupported && capability?.definitionBackup === true);
+  return !unsupported;
 }
 
 // Loaded before package replacement: activation dependencies must stay eager.
 // Candidate version/preservation guards reject older targets before repair, without retry.
 export async function runUpdatedInstallGatewayCommand(
   params: {
-    result: { root?: string; mode?: UpdateRunResult["mode"] };
-    opts: Pick<UpdateCommandOptions, "json" | "run">;
+    result: Partial<Pick<UpdateRunResult, "root" | "mode">>;
+    opts: Pick<UpdateCommandOptions, "run">;
     invocationEnv: NodeJS.ProcessEnv;
     serviceEnv?: NodeJS.ProcessEnv;
     serviceInstallEnv?: NodeJS.ProcessEnv | null;
@@ -146,9 +176,12 @@ export async function runUpdatedInstallGatewayCommand(
     invocationCwd?: string;
     signal?: AbortSignal;
     assertCurrent?: () => void;
-    serviceLoadBoundary?: UpdateServiceLoadBoundary;
     definitionRecovery?: UpdateServiceDefinitionRecovery;
     onWarnings?: (warnings: string[]) => void;
+    /** Receives each completed probe or child phase with its measured wall time. */
+    onTimedStep?: (step: UpdateStepResult) => void;
+    onGatewayStartAttempted?: (action?: "install" | "restart") => void;
+    onReadiness?: (health: GatewayRestartSnapshot | undefined) => void;
     originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   },
   action: "install" | "restart",
@@ -156,6 +189,7 @@ export async function runUpdatedInstallGatewayCommand(
   const run = params.opts.run;
   const executor = run?.executorFence;
   const assertCurrent = () => {
+    run?.deadline?.signal.throwIfAborted();
     params.signal?.throwIfAborted();
     if (params.opts.run !== run || run?.executorFence !== executor) {
       throw new Error("Native command lost its original update executor.");
@@ -172,17 +206,11 @@ export async function runUpdatedInstallGatewayCommand(
       `updated install entrypoint not found under ${params.result.root ?? "unknown"}`,
     );
   }
-  const args = ["gateway", action];
-  if (installing) {
-    args.push("--force");
-    if (params.gatewayPort !== undefined) {
-      args.push("--port", String(params.gatewayPort));
-    }
-  } else {
-    // Update retries must not bypass the installer's backup and drift audit.
-    args.push("--preserve-definition");
+  // Update retries must not bypass the installer's backup and drift audit.
+  const args = ["gateway", action, installing ? "--force" : "--preserve-definition"];
+  if (installing && params.gatewayPort !== undefined) {
+    args.push("--port", String(params.gatewayPort));
   }
-  // Capture one structured child result in both outer output modes.
   args.push("--json");
   const nodeRunner = params.nodeRunner ?? resolveNodeRunner();
   // The child manages this service from outside it. Captured Gateway markers
@@ -199,16 +227,125 @@ export async function runUpdatedInstallGatewayCommand(
   if (executor) {
     commandEnv.OPENCLAW_NO_RESPAWN = "1";
   }
-  params.signal?.throwIfAborted();
   assertCurrent();
-  const receiveInstallResult = (stdout: string) => {
-    const response = safeParseJsonRecord(stdout);
-    if (!installing || !response) {
-      return;
+
+  const installTimeoutMs = params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS;
+  if (run && !executor) {
+    throw new UpdateCommandRecoveryPendingError(
+      "Native command requires its original update executor.",
+    );
+  }
+  if (executor) {
+    let definitionBackupSupported = false;
+    let unsupported = "missing install root";
+    const checkStartedAtMs = Date.now();
+    if (
+      !params.result.root ||
+      !(await isUpdatedInstallGatewayExecutorSupported({
+        root: params.result.root,
+        env: commandEnv,
+        executor,
+        timeoutMs: installTimeoutMs,
+        nodeRunner,
+        signal: params.signal,
+        onDefinitionBackupCapability: (supported) => {
+          definitionBackupSupported = supported;
+        },
+        onUnsupported: (condition) => {
+          unsupported = condition;
+        },
+        requireOriginalDefinitionBinding:
+          installing && Boolean(params.originalManagedServiceRuntime),
+      }))
+    ) {
+      if (installing && params.originalManagedServiceRuntime) {
+        throw new Error(
+          `Target cannot attest the original definition rewrite (executor check: ${unsupported}); original service compensation is required.`,
+        );
+      }
+      throw new UpdateCommandRecoveryPendingError(
+        `Target runtime cannot fence update-owned native commands (executor check: ${unsupported}).`,
+      );
     }
-    const warnings = Array.isArray(response.warnings)
-      ? response.warnings.filter((message): message is string => typeof message === "string")
-      : [];
+    assertCurrent();
+    params.onTimedStep?.({
+      name: "managed-service-executor-check",
+      command: "openclaw gateway install --update-executor check --json",
+      cwd: params.result.root,
+      durationMs: Math.max(0, Date.now() - checkStartedAtMs),
+      exitCode: 0,
+    });
+    if (installing && params.definitionRecovery && !definitionBackupSupported) {
+      params.definitionRecovery.preserved = true;
+      const message =
+        "The target installer cannot retain a service definition backup; the existing definition was preserved.";
+      params.onWarnings?.([message]);
+      throw new Error(`SERVICE_DEFINITION_UNKNOWN: ${message}`);
+    }
+  }
+
+  if (installing && params.definitionRecovery) {
+    params.definitionRecovery.unverified = true;
+  }
+
+  const runChild = async (
+    grant?: UpdateCommandChildGrant,
+    bindChild?: (pid: number, argv?: readonly string[]) => void,
+  ) => {
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: nodeRunner,
+      entryPath: entrypoint,
+      execArgv: [],
+      args: [...args, ...(grant ? ["--update-executor", "run"] : [])],
+    });
+    const argv = [invocation.command, ...invocation.args];
+    params.onGatewayStartAttempted?.(action);
+    return await runSettledGatewayCommand(argv, {
+      ...(grant
+        ? {
+            input: JSON.stringify({
+              executor: grant,
+              action,
+              ...(installing && params.originalManagedServiceRuntime
+                ? {
+                    originalDefinition: params.originalManagedServiceRuntime.definition.fingerprint,
+                    originalRuntimePin:
+                      params.originalManagedServiceRuntime.definition.runtimePin?.revision,
+                  }
+                : {}),
+              targetRoot: resolveUpdateInstallRoot(params.result.root!),
+            }),
+            beforeInput: bindChild,
+          }
+        : {}),
+      cwd: params.result.root,
+      env: commandEnv,
+      timeoutMs: run?.deadline?.remainingMs() ?? (installing ? installTimeoutMs : params.timeoutMs),
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+  };
+  const childStartedAtMs = Date.now();
+  const res = executor
+    ? await withUpdateCommandExecutorChild(executor, params.result.root!, runChild)
+    : await runChild();
+  assertCurrent();
+  const exited = res.termination === "exit" && res.signal === null && !res.killed;
+  const complete = !res.stdoutTruncatedBytes && !res.outputLimitExceeded && !res.outputErrorStream;
+  if (exited && res.code === 0) {
+    params.onTimedStep?.({
+      name: `managed-service-${action}`,
+      command: ["openclaw", ...args].join(" "),
+      cwd: params.result.root ?? "",
+      durationMs: Math.max(0, Date.now() - childStartedAtMs),
+      exitCode: 0,
+    });
+  }
+  // SAFETY: The admitted target owns this private response; result/identity gates below admit its facts.
+  const response = (complete ? safeParseJsonRecord(res.stdout) : undefined) as
+    | (Omit<DaemonActionResponse, "ok"> & { ok: unknown; rebind?: unknown })
+    | undefined;
+  if (installing && response) {
+    const warnings = filterStringEntries(response.warnings);
     if (warnings.length) {
       params.onWarnings?.(warnings);
     }
@@ -230,140 +367,16 @@ export async function runUpdatedInstallGatewayCommand(
         ]);
       }
     }
-  };
-  const boundary = params.serviceLoadBoundary;
-  const installTimeoutMs = params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS;
-  if (installing && boundary && params.originalManagedServiceRuntime) {
-    throw new UpdateServiceLoadPreMutationError(
-      "Retained rebind requires the original definition receipt; deferred load cannot provide it.",
-    );
-  }
-  if (run && !executor) {
-    throw new UpdateCommandRecoveryPendingError(
-      "Native command requires its original update executor.",
-    );
-  }
-  if (executor) {
-    let definitionBackupSupported = false;
-    if (
-      !params.result.root ||
-      !(await isUpdatedInstallGatewayExecutorSupported({
-        root: params.result.root,
-        env: commandEnv,
-        executor,
-        timeoutMs: installTimeoutMs,
-        nodeRunner,
-        signal: params.signal,
-        onDefinitionBackupCapability: (supported) => {
-          definitionBackupSupported = supported;
-        },
-        requireOriginalDefinitionBinding:
-          installing && Boolean(params.originalManagedServiceRuntime),
-      }))
-    ) {
-      if (installing && params.originalManagedServiceRuntime) {
-        throw new Error(
-          "Target cannot attest the original definition rewrite; original service compensation is required.",
-        );
-      }
-      throw new UpdateCommandRecoveryPendingError(
-        "Target runtime cannot fence update-owned native commands.",
-      );
-    }
-    assertCurrent();
-    if (installing && params.definitionRecovery && !definitionBackupSupported) {
-      params.definitionRecovery.preserved = true;
-      const message =
-        "The target installer cannot retain a service definition backup; the existing definition was preserved.";
-      params.onWarnings?.([message]);
-      throw new Error(`SERVICE_DEFINITION_UNKNOWN: ${message}`);
-    }
-  }
-
-  if (installing && params.definitionRecovery) {
-    params.definitionRecovery.unverified = true;
-  }
-  if (installing && boundary) {
-    return await runGatewayInstallWithLoadBoundary({
-      onResult: receiveInstallResult,
-      argv: [nodeRunner, entrypoint, ...args, "--defer-activation"],
-      cwd: params.result.root,
-      env: commandEnv,
-      signal: params.signal,
-      timeoutMs: installTimeoutMs,
-      boundary: {
-        ...boundary,
-        // The handoff adds an executor fence; it must not replace the repair owner.
-        assertCurrent: () => {
-          assertCurrent();
-          boundary.assertCurrent();
-        },
-      },
-    });
-  }
-
-  const runChild = async (
-    grant?: UpdateCommandChildGrant,
-    bindChild?: (pid: number, argv?: readonly string[]) => void,
-  ) => {
-    const argv = [nodeRunner, entrypoint, ...args, ...(grant ? ["--update-executor", "run"] : [])];
-    const result = await runCommandWithTimeout(argv, {
-      // The complete owned env must not regain selectors removed during capture.
-      baseEnv: {},
-      ...(grant
-        ? {
-            input: JSON.stringify({
-              executor: grant,
-              action,
-              ...(installing && params.originalManagedServiceRuntime
-                ? {
-                    originalDefinition: params.originalManagedServiceRuntime.definition.fingerprint,
-                    originalRuntimePin:
-                      params.originalManagedServiceRuntime.definition.runtimePin.revision,
-                  }
-                : {}),
-              targetRoot: resolveUpdateInstallRoot(params.result.root!),
-            }),
-            beforeInput: bindChild,
-          }
-        : {}),
-      cwd: params.result.root,
-      env: commandEnv,
-      timeoutMs: installing ? installTimeoutMs : params.timeoutMs,
-      ...(params.signal ? { signal: params.signal } : {}),
-      killProcessTree: true,
-      requireProcessTreeExtinction: true,
-    });
-    if (result.cleanup === "forced" || result.cleanup === "uncertain") {
-      throw new CommandProcessCleanupError();
-    }
-    return result;
-  };
-  const res = executor
-    ? await withUpdateCommandExecutorChild(executor, params.result.root!, runChild)
-    : await runChild();
-  params.signal?.throwIfAborted();
-  assertCurrent();
-  const exited =
-    res.termination === "exit" &&
-    res.signal === null &&
-    !res.killed &&
-    res.cleanup !== "forced" &&
-    res.cleanup !== "uncertain";
-  const complete = !res.stdoutTruncatedBytes && !res.outputLimitExceeded && !res.outputErrorStream;
-  const response = complete ? safeParseJsonRecord(res.stdout) : undefined;
-  if (complete) {
-    receiveInstallResult(res.stdout);
   }
 
   const original = params.originalManagedServiceRuntime;
   if (installing && original && exited && complete) {
-    const receipt = response && safeParseJsonRecord(JSON.stringify(response.rebind));
+    const receipt = asOptionalRecord(response?.rebind);
     if (
       receipt?.before === original.definition.fingerprint &&
       typeof receipt.after === "string" &&
       /^[a-f0-9]{64}$/.test(receipt.after) &&
-      receipt.runtimePinBefore === original.definition.runtimePin.revision &&
+      receipt.runtimePinBefore === original.definition.runtimePin?.revision &&
       typeof receipt.runtimePinAfter === "string" &&
       /^[a-f0-9]{64}$/.test(receipt.runtimePinAfter)
     ) {
@@ -384,15 +397,21 @@ export async function runUpdatedInstallGatewayCommand(
     }
   }
   if (exited && res.code === 0) {
-    return response?.action === action &&
+    if (
+      response?.action === action &&
       response.ok === true &&
       action === "restart" &&
       (response.result === "restarted" || response.result === "scheduled")
-      ? "accepted"
-      : "unverified";
+    ) {
+      if (response.result === "restarted") {
+        params.onReadiness?.(response.readiness);
+      }
+      return "accepted";
+    }
+    return "unverified";
   }
   const operation = installing ? "refresh" : action;
-  const message = `updated install ${operation} failed (${entrypoint}): ${formatCommandFailure(res.stdout, res.stderr)}`;
+  const message = `updated install ${operation} failed: ${formatCommandFailure(res.stdout, res.stderr)} (${entrypoint})`;
   if (
     exited &&
     res.code === 1 &&
@@ -419,6 +438,7 @@ export async function restartRetainedUpdateGatewayService(params: {
   stdout: NodeJS.WritableStream;
   assertCurrent: () => void;
   revalidate: () => Promise<void>;
+  onGatewayStartAttempted?: () => void;
   signal?: AbortSignal;
 }): Promise<GatewayServiceRestartResult> {
   const env = { ...params.env };
@@ -431,12 +451,14 @@ export async function restartRetainedUpdateGatewayService(params: {
         stdout: params.stdout,
         env,
         beforeMutation: params.revalidate,
+        onRestartAttempted: params.onGatewayStartAttempted,
         assertCurrent: () => {
           assertNative();
           assertCurrent();
         },
         preserveDefinition: true,
         preserveAutoStart: true,
+        deadline: params.run.deadline,
       });
     }),
   );

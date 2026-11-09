@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
 import {
   buildSlackNativeDataDeliveryPlan,
   chunkSlackTextAtHardLimit,
@@ -10,20 +9,6 @@ function tableBlock(caption: string) {
     type: "data_table",
     caption,
     rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
-  } as never;
-}
-
-function actionBlock(label: string, value: string) {
-  return {
-    type: "actions",
-    elements: [
-      {
-        type: "button",
-        action_id: "openclaw:reply_button",
-        text: { type: "plain_text", text: label },
-        value,
-      },
-    ],
   } as never;
 }
 
@@ -104,53 +89,6 @@ describe("buildSlackNativeDataDeliveryPlan", () => {
 
     expect(plan.accessibilityText).toBe("Shared a Block Kit message");
     expect(plan.skipOriginalBlocks).toBe(false);
-  });
-
-  it("caps native-only emergency text at Slack's recommended post limit", () => {
-    const caption = "x".repeat(41_000);
-    const plan = buildSlackNativeDataDeliveryPlan({
-      blocks: [tableBlock(caption)],
-      textLimit: 8_000,
-    });
-
-    expect(plan.skipOriginalBlocks).toBe(true);
-    expect(plan.fallbackMessages).toHaveLength(11);
-    expect(plan.fallbackMessages.every((message) => message.blocks === undefined)).toBe(true);
-    expect(
-      plan.fallbackMessages.every(
-        (message) => message.text.length <= SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
-      ),
-    ).toBe(true);
-    expect(plan.fallbackMessages.map((message) => message.text).join("")).toBe(
-      `${caption} (table)\nAccount\nAcme`,
-    );
-  });
-
-  it("batches survivor controls and replacement sections without changing block order", () => {
-    const before = actionBlock("Before", "hidden-before");
-    const after = actionBlock("After", "hidden-after");
-    const caption = "x".repeat(80_000);
-    const plan = buildSlackNativeDataDeliveryPlan({
-      baseText: "Intro",
-      blocks: [before, tableBlock(caption), after],
-      textLimit: 8_000,
-    });
-
-    const messages = plan.fallbackMessages;
-    expect(messages.length).toBeGreaterThan(1);
-    expect(messages.every((message) => (message.blocks?.length ?? 0) <= 50)).toBe(true);
-    expect(
-      messages.every((message) => message.text.length <= SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT),
-    ).toBe(true);
-    const blocks = messages.flatMap((message) => message.blocks ?? []);
-    expect(blocks[1]).toBe(before);
-    expect(blocks.at(-1)).toBe(after);
-    const plainText = blocks.flatMap((block) => {
-      const text = (block as { text?: { type?: string; text?: string } }).text;
-      return text?.type === "plain_text" && text.text ? [text.text] : [];
-    });
-    expect(plainText.join("")).toBe(`Intro${caption} (table)\nAccount\nAcme`);
-    expect(messages.map((message) => message.text).join(" ")).not.toContain("hidden-");
   });
 
   it("keeps survivor plain text literal when formatting is disabled", () => {

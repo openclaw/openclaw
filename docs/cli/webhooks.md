@@ -9,7 +9,7 @@ title: "Webhooks"
 
 # `openclaw webhooks`
 
-`openclaw webhooks` sets up and runs the Gmail Pub/Sub transport through `gog` (gogcli). It does not register [internal `HOOK.md` hooks](/automation/hooks), manage arbitrary [Gateway hook mappings](/automation/cron-jobs#webhooks), or manage the [TaskFlow Webhooks plugin](/plugins/webhooks).
+`openclaw webhooks` sets up and runs the Gmail Pub/Sub transport through `gog` (gogcli). It does not register [internal `HOOK.md` hooks](/automation/hooks) or manage arbitrary [Gateway hook mappings](/automation/cron-jobs#webhooks).
 
 ## Subcommands
 
@@ -106,7 +106,17 @@ Command failures show bounded tails from both stdout and stderr, with terminal c
 openclaw webhooks gmail run --account you@example.com
 ```
 
-Starts the Gmail watch and runs `gog gmail watch serve` plus periodic watch renewal in the foreground. Unexpected serve-process exits continue to restart after 5 seconds. A bind conflict stops restarts. Run only one watcher per listener and stop the other watcher before retrying. Ctrl-C or SIGTERM cancels pending restarts and renewal work and shuts down the serve process tree. Investigate repeated exits in the logs.
+Checks the selected Gog executable, starts the Gmail watch, and runs `gog gmail watch serve` plus periodic renewal in the foreground. Gog v0.48.0 and builds exposing both `--token-env` and `--hook-token-env` receive tokens through child-only environment sources. OpenClaw supplies the values from existing config; no manual environment exports are needed. A started message means launched, not registered or ready.
+
+Older Gog continues using the existing token arguments, with one warning per watcher lifecycle. Other local users with process visibility can read both the Gmail push token and the shared OpenClaw hook token, which authorizes enabled hook routes. An inconclusive capability check also preserves the existing connection, with a distinct “could not verify” warning. These connections remain affected until Gog is upgraded. Once environment transport is selected, serve failures and automatic restarts never switch back to token arguments. Canceling startup stops it.
+
+Interactive `setup` and `run` can offer a Homebrew upgrade when the executable actually selected on PATH belongs to a supported, unpinned Gog formula. Declining keeps the existing connection working. Custom wrappers, pinned formulae, and other installations receive manual upgrade guidance. OpenClaw rechecks the executable and both capabilities after an upgrade, including a failed package operation; it does not assume success or rollback. A formula that has not yet published a supporting build leaves the warning in place. If Gog is no longer executable, repair its installation before retrying.
+
+`openclaw doctor` reports this for configured Gmail connections. Run `openclaw doctor --repair` to upgrade an eligible Homebrew installation explicitly. Gateway startup, diagnostic checks, and the Doctor pass inside `openclaw update` do not upgrade Gog. You can also upgrade with your installation manager; for Homebrew, run `brew update` and `brew upgrade gogcli` (or the installed tap-qualified formula). Restart the Gmail watcher afterward, or restart the Gateway for a Gateway-managed watcher. Restart other already-running Gog watchers separately.
+
+Transient serve exits restart after 5 seconds. Bind conflicts retry after 5, 10, and 20 seconds. Ctrl-C or SIGTERM cancels pending startup, restarts, and renewal work and shuts down the process tree.
+
+Prefer config-held tokens: existing `--hook-token` and `--push-token` overrides remain accepted, but secrets manually placed on the parent CLI command line remain visible there. Environment handoff does not protect against the process owner or root. One-time setup separately passes a token-bearing Pub/Sub push endpoint to `gcloud`; this serve-launch change does not remove that setup exposure.
 
 `run` accepts the same Pub/Sub, OpenClaw delivery, `gog gmail watch serve`, and Tailscale flags as `setup`, except:
 

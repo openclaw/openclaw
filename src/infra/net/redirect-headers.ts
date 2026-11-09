@@ -1,5 +1,4 @@
 // Redirect header helpers retain only cross-origin-safe request headers.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeHeadersInitForFetch } from "../fetch-headers.js";
 
 const CROSS_ORIGIN_REDIRECT_SAFE_HEADERS = new Set([
@@ -31,10 +30,35 @@ export function retainSafeHeadersForCrossOriginRedirect(
   const incoming = new Headers(normalizeHeadersInitForFetch(headers));
   const safeHeaders: Record<string, string> = {};
   for (const [key, value] of incoming.entries()) {
-    // Normalize lookup only; preserve the outgoing casing produced by Headers.
-    if (CROSS_ORIGIN_REDIRECT_SAFE_HEADERS.has(normalizeLowercaseStringOrEmpty(key))) {
+    if (CROSS_ORIGIN_REDIRECT_SAFE_HEADERS.has(key)) {
       safeHeaders[key] = value;
     }
   }
   return safeHeaders;
+}
+
+export function restoreRedirectAuthorization(params: {
+  init?: RequestInit;
+  authorization?: string;
+}): RequestInit | undefined {
+  if (!params.authorization) {
+    return params.init;
+  }
+  const headers = new Headers(params.init?.headers);
+  headers.set("Authorization", params.authorization);
+  return { ...params.init, headers };
+}
+
+export function dropBodyHeaders(headers?: HeadersInit): HeadersInit | undefined {
+  if (!headers) {
+    return headers;
+  }
+  const nextHeaders = new Headers(normalizeHeadersInitForFetch(headers));
+  nextHeaders.delete("content-encoding");
+  nextHeaders.delete("content-language");
+  nextHeaders.delete("content-length");
+  nextHeaders.delete("content-location");
+  nextHeaders.delete("content-type");
+  nextHeaders.delete("transfer-encoding");
+  return nextHeaders;
 }

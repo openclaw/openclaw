@@ -1,4 +1,3 @@
-// Resolves filesystem paths for installed plugin index storage.
 import path from "node:path";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -51,7 +50,7 @@ export function resolveInstalledPluginIndexStateDatabaseOptions(
   return { env: resolveStoreEnv(options) };
 }
 
-/** Resolves the legacy JSON installed plugin index path for migration/doctor use. */
+/** Locates unsupported JSON state without importing or changing it. */
 export function resolveLegacyInstalledPluginIndexStorePath(
   options: InstalledPluginIndexStoreOptions = {},
 ): string {
@@ -61,4 +60,8 @@ export function resolveLegacyInstalledPluginIndexStorePath(
   const env = options.env ?? process.env;
   const stateDir = options.stateDir ?? resolveActivePluginInstallRoots(env).stateDir;
   return path.join(stateDir, LEGACY_INSTALLED_PLUGIN_INDEX_STORE_PATH);
+}
+
+export function legacyInstalledPluginIndexUnsupportedMessage(sourcePath: string): string {
+  return `Plugin install index ${sourcePath} uses a retired JSON format and was left unchanged. Run openclaw doctor --fix to archive the original bytes in the retired-state recovery archive and continue.`;
 }

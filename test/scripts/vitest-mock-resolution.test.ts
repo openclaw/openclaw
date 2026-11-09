@@ -1,7 +1,13 @@
-import { sep } from "node:path";
+import fs from "node:fs";
+import { createRequire } from "node:module";
+import path, { sep } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const nativeRequire = createRequire(import.meta.url);
 
 // Vitest publishes the active mocker. Gate its real resolver to exercise the
 // installed dependency's fetch boundary, rather than emulating its queue.
@@ -21,6 +27,36 @@ afterEach(async () => {
   vi.doUnmock("node:os");
   await __vitest_mocker__.resolveMocks();
   vi.resetModules();
+});
+
+it("loads one native source graph while preserving Vitest module mocks", async () => {
+  const root = tempDirs.make("openclaw-vitest-native-source-");
+  fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+  fs.writeFileSync(
+    path.join(root, "leaf.ts"),
+    "export enum State { Waiting, Ready }\nexport const token = {};",
+  );
+  fs.writeFileSync(
+    path.join(root, "sdk.ts"),
+    'import { State, token } from "./leaf.js"; export { token }; export const state = State.Ready;',
+  );
+  const probePath = path.join(root, "probe.cjs");
+  fs.writeFileSync(
+    probePath,
+    `module.exports = async () => {
+      const required = require("./sdk.ts");
+      const imported = await import("./sdk.ts");
+      return { sameOwner: required.token === imported.token, state: required.state };
+    };`,
+  );
+  vi.doMock("node:path", () => ({ sep: "mocked" }));
+  expect((await import("node:path")).sep).toBe("mocked");
+  const probe: unknown = nativeRequire(probePath);
+  if (typeof probe !== "function") {
+    throw new Error("Native source fixture did not export its probe");
+  }
+  expect(await probe()).toEqual({ sameOwner: true, state: 1 });
+  expect((await import("node:path")).sep).toBe("mocked");
 });
 
 it("waits for an in-flight unmock before another import reads its registry", async () => {

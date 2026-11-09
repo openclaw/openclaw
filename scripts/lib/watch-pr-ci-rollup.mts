@@ -158,7 +158,20 @@ function readGraphqlRollup(
     const response = RollupResponseSchema.safeParse(execGhJson(queryArgs, readOptions(deadline)));
     return response.success ? response.data.data.repository?.pullRequest : undefined;
   };
-  return (details ? collectRollupContexts(fetchPage) : fetchPage(null)) ?? {};
+  const page = (details ? collectRollupContexts(fetchPage) : fetchPage(null)) ?? {};
+  const contexts = page.statusCheckRollup?.contexts;
+  if (
+    details &&
+    page.statusCheckRollup &&
+    (!contexts?.nodes ||
+      contexts.totalCount !== contexts.nodes.length ||
+      contexts.pageInfo?.hasNextPage !== false ||
+      (contexts.totalCount === 0 &&
+        ["FAILURE", "ERROR"].includes(page.statusCheckRollup.state ?? "")))
+  ) {
+    throw new Error("rollup detail evidence is incomplete");
+  }
+  return page;
 }
 
 const restId = z.number().int().positive();
@@ -195,13 +208,13 @@ const successful = (status: string | undefined, conclusion: string | null | unde
 function readRestRollup(
   repo: string,
   deadline: number,
-  details: boolean,
+  requestedDetails: boolean,
   readPr: (deadline: number) => RollupPage,
   readOptions: ReadOptions,
-): RollupPage {
+) {
   const before = readPr(deadline);
   if (before.state !== "OPEN" || !/^[0-9a-f]{40}$/.test(before.headRefOid ?? "")) {
-    return before;
+    return { page: before, details: requestedDetails };
   }
   const sha = before.headRefOid;
   const read = (endpoint: string) =>
@@ -268,8 +281,17 @@ function readRestRollup(
   ) {
     throw new Error("REST check evidence has inconsistent identities or aggregate");
   }
+  const failed =
+    statuses.some((status) => ["ERROR", "FAILURE"].includes(status.state.toUpperCase())) ||
+    checks.some((check) => FAILURE_CONCLUSIONS.has(check.conclusion?.toUpperCase() ?? ""));
+  // REST already collected the check rows; finish failure analysis in this snapshot.
+  const details = requestedDetails || failed;
   const runs = details
-    ? pages(`actions/runs?head_sha=${sha}`, "workflow_runs", RestRunSchema).items
+    ? pages(
+        `actions/runs?head_sha=${sha}&exclude_pull_requests=true`,
+        "workflow_runs",
+        RestRunSchema,
+      ).items
     : [];
   if (
     runs.some((run) => run.head_sha !== sha) ||
@@ -309,11 +331,6 @@ function readRestRollup(
       state: status.state.toUpperCase(),
     })),
   ];
-  const failed = nodes.some((check) =>
-    check.kind === "StatusContext"
-      ? ["ERROR", "FAILURE"].includes(check.state ?? "")
-      : FAILURE_CONCLUSIONS.has(check.conclusion ?? ""),
-  );
   const success =
     nodes.length > 0 &&
     nodes.every((check) =>
@@ -359,7 +376,7 @@ function readRestRollup(
   }
   const current = readPr(deadline);
   if (JSON.stringify(current) !== JSON.stringify(before)) {
-    return current;
+    return { page: current, details };
   }
   const counts = (states: string[]) => {
     const totals = new Map<string, number>();
@@ -369,24 +386,27 @@ function readRestRollup(
     return [...totals].map(([state, count]) => ({ state, count }));
   };
   return {
-    ...current,
-    statusCheckRollup: {
-      state: failed ? "FAILURE" : success ? "SUCCESS" : "PENDING",
-      contexts: {
-        totalCount: nodes.length,
-        checkRunCountsByState: counts(
-          checks.map((check) =>
-            (check.status === "completed"
-              ? (check.conclusion ?? "UNKNOWN")
-              : check.status
-            ).toUpperCase(),
+    page: {
+      ...current,
+      statusCheckRollup: {
+        state: failed ? "FAILURE" : success ? "SUCCESS" : "PENDING",
+        contexts: {
+          totalCount: nodes.length,
+          checkRunCountsByState: counts(
+            checks.map((check) =>
+              (check.status === "completed"
+                ? (check.conclusion ?? "UNKNOWN")
+                : check.status
+              ).toUpperCase(),
+            ),
           ),
-        ),
-        statusContextCountsByState: counts(statuses.map((status) => status.state.toUpperCase())),
-        nodes,
-        pageInfo: { hasNextPage: false, endCursor: null },
+          statusContextCountsByState: counts(statuses.map((status) => status.state.toUpperCase())),
+          nodes,
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
       },
     },
+    details,
   };
 }
 
@@ -397,10 +417,10 @@ export function createPrRollupReader(
   readOptions: ReadOptions,
 ) {
   let rest = false;
-  return (deadline: number, details = true): RollupPage => {
+  return (deadline: number, details = true) => {
     if (!rest) {
       try {
-        return readGraphqlRollup(pr, repo, deadline, details, readOptions);
+        return { page: readGraphqlRollup(pr, repo, deadline, details, readOptions), details };
       } catch (error) {
         if (!isGraphqlQuotaExhausted(error)) {
           throw error;

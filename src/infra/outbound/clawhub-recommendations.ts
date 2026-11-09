@@ -11,7 +11,7 @@ import {
   CLAWHUB_RECOMMENDATION_LIMIT,
   type ClawHubRecommendation,
 } from "../../shared/clawhub-recommendations.js";
-import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
+import { prepareWorkspaceSkillStatus } from "../../skills/discovery/status.js";
 import { resolveClawHubBaseUrl, resolveClawHubImageUrl } from "../clawhub-client.js";
 import { fetchClawHubPluginCatalog } from "../clawhub-plugin-catalog.js";
 import { searchClawHubSkills } from "../clawhub-skills.js";
@@ -52,24 +52,21 @@ export async function resolveClawHubRecommendations(params: {
     cards = joinClawHubPluginCatalog({ remote: remote.items, local })
       .filter((entry) => entry.catalog.official)
       .slice(0, CLAWHUB_RECOMMENDATION_LIMIT)
-      .map((entry) => {
-        const iconUrl = entry.catalog.imageUrl
+      .map((entry) => ({
+        type: "clawhub",
+        kind: "plugin",
+        id: entry.id,
+        name: truncateUtf16Safe(entry.catalog.name, 120),
+        description: entry.catalog.summary
+          ? truncateUtf16Safe(entry.catalog.summary, 240)
+          : undefined,
+        iconUrl: entry.catalog.imageUrl
           ? resolveClawHubCatalogIconUrl(entry.catalog.imageUrl)
-          : undefined;
-        return {
-          type: "clawhub",
-          kind: "plugin",
-          id: entry.id,
-          name: truncateUtf16Safe(entry.catalog.name, 120),
-          description: entry.catalog.summary
-            ? truncateUtf16Safe(entry.catalog.summary, 240)
-            : undefined,
-          iconUrl,
-          installed: entry.local.installed,
-          official: true,
-          pluginId: entry.local.pluginId,
-        };
-      });
+          : undefined,
+        installed: entry.local.installed,
+        official: true,
+        pluginId: entry.local.pluginId,
+      }));
   }
   if (request.kind !== "plugin" && cards.length === 0) {
     const remote = await searchClawHubSkills({ query: request.query, limit: 20 }).catch(
@@ -86,34 +83,33 @@ export async function resolveClawHubRecommendations(params: {
     }
     const local =
       params.workspaceDir && official.length > 0
-        ? buildWorkspaceSkillStatus(params.workspaceDir, {
-            config: params.config,
-            agentId: params.agentId,
-          }).skills
+        ? (
+            await prepareWorkspaceSkillStatus(params.workspaceDir, {
+              config: params.config,
+              agentId: params.agentId,
+            })
+          ).report.skills
         : [];
-    cards = official.map((entry) => {
-      const iconUrl = resolveClawHubImageUrl(entry.icon);
-      return {
-        type: "clawhub",
-        kind: "skill",
-        registry: resolveClawHubBaseUrl(),
-        id: entry.installRef,
-        skillRef: entry.installRef,
-        name: truncateUtf16Safe(entry.displayName, 120),
-        description: entry.summary ? truncateUtf16Safe(entry.summary, 240) : undefined,
-        iconUrl,
-        installed: local.some((skill) => {
-          const link = skill.clawhub;
-          return (
-            link?.valid === true &&
-            !link.requestedReference &&
-            link.registry === resolveClawHubBaseUrl() &&
-            `@${link.ownerHandle}/${link.slug}` === entry.installRef
-          );
-        }),
-        official: true,
-      };
-    });
+    cards = official.map((entry) => ({
+      type: "clawhub",
+      kind: "skill",
+      registry: resolveClawHubBaseUrl(),
+      id: entry.installRef,
+      skillRef: entry.installRef,
+      name: truncateUtf16Safe(entry.displayName, 120),
+      description: entry.summary ? truncateUtf16Safe(entry.summary, 240) : undefined,
+      iconUrl: resolveClawHubImageUrl(entry.icon),
+      installed: local.some((skill) => {
+        const link = skill.clawhub;
+        return (
+          link?.valid === true &&
+          !link.requestedReference &&
+          link.registry === resolveClawHubBaseUrl() &&
+          `@${link.ownerHandle}/${link.slug}` === entry.installRef
+        );
+      }),
+      official: true,
+    }));
     registerClawHubCatalogIconUrls(cards.map((card) => card.iconUrl));
   }
   return {

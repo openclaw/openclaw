@@ -27,9 +27,10 @@ import {
 import { isRecord } from "./lib/record-shared.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import {
+  authenticatePreparedNpmArtifact,
   consumePreparedNpmPackage,
   downloadPreparedNpmRelease,
-  preparedNpmArtifactName,
+  validatePreparedNpmArtifactDescriptor,
 } from "./plugin-npm-prepared-release.mjs";
 import { runReleaseToolingGh, verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 
@@ -45,7 +46,6 @@ const INPUTS = new Set([
   "plugin_sdk_api_acknowledgement",
   "full_release_validation_run_id",
   "full_release_validation_run_attempt",
-  "stable_soak_waiver",
   "windows_node_tag",
   "windows_node_installer_digests",
   "npm_telegram_run_id",
@@ -127,10 +127,13 @@ export function validateReleaseButtonInputs(value) {
     version !== null && inputs.tag === `v${version.version}`,
     "Prepared release requires an exact version tag.",
   );
+  if (version.channel === "alpha" || inputs.npm_dist_tag === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   requireValue(
     ["beta", "stable"].includes(classifyReleaseTrain(version)) &&
       inputs.npm_dist_tag !== "extended-stable",
-    "Alpha and extended-stable releases retain their existing owner workflows.",
+    "Extended-stable releases retain their existing owner workflow.",
   );
   const expectedChannel = version.channel === "stable" ? ["beta", "latest"] : [version.channel];
   requireValue(
@@ -226,14 +229,34 @@ export function readyArtifactName(sourceSha, runId, runAttempt) {
 function artifactFor(run, workflow, tooling, name) {
   const identity = producer(run, workflow, tooling);
   const artifacts = [];
+  let totalCount;
   for (let page = 1; page <= 20; page++) {
     const result = api(`actions/runs/${run.id}/artifacts?per_page=100&page=${page}`);
-    requireValue(result.total_count <= 2000, "Prepared release artifact list exceeds its limit.");
+    requireValue(
+      Number.isSafeInteger(result.total_count) &&
+        result.total_count >= 0 &&
+        result.total_count <= 2000 &&
+        Array.isArray(result.artifacts),
+      "Prepared release artifact list is invalid or exceeds its limit.",
+    );
+    totalCount ??= result.total_count;
+    requireValue(
+      result.total_count === totalCount,
+      "Prepared release artifact count changed while reading it.",
+    );
     artifacts.push(...result.artifacts);
-    if (artifacts.length >= result.total_count) {
+    if (artifacts.length === result.total_count) {
       break;
     }
+    requireValue(
+      result.artifacts.length > 0 && artifacts.length < result.total_count,
+      "Prepared release artifact list is incomplete.",
+    );
   }
+  requireValue(
+    artifacts.length === totalCount && artifacts.length > 0,
+    "Prepared release artifact list is incomplete.",
+  );
   const matches = artifacts.filter((artifact) => artifact.name === name);
   requireValue(matches.length === 1, `Expected one exact prepared artifact: ${name}.`);
   const [artifact] = matches;
@@ -253,7 +276,7 @@ function artifactFor(run, workflow, tooling, name) {
   };
 }
 
-async function waitForRun(runId, attempt, workflow, tooling) {
+async function waitForRun(runId, attempt, workflow, tooling, { allowFailure = false } = {}) {
   const deadline = Date.now() + 110 * 60_000;
   while (Date.now() < deadline) {
     const run = api(`actions/runs/${runId}`);
@@ -264,7 +287,7 @@ async function waitForRun(runId, attempt, workflow, tooling) {
     );
     if (run.status === "completed") {
       requireValue(
-        run.conclusion === "success",
+        run.conclusion === "success" || (allowFailure && run.conclusion === "failure"),
         `${workflow} run ${runId}/${attempt} ended ${run.conclusion}; ${
           workflow === PUBLISH_WORKFLOW
             ? "inspect child outcomes for owner recovery, then start a new button run with the same readiness receipt and openclaw_npm_resume_run_id when core npm succeeded. A published core version without a successful child requires core-owner reconciliation. This button remains bound to its original parent attempt."
@@ -280,13 +303,7 @@ async function waitForRun(runId, attempt, workflow, tooling) {
   );
 }
 
-function dispatch(workflow, inputs, tooling) {
-  verifyReleaseToolingIdentity({
-    repository: REPOSITORY,
-    workflowRef: tooling.ref,
-    workflowFullRef: tooling.fullRef,
-    workflowSha: tooling.sha,
-  });
+async function dispatch(workflow, inputs, tooling, revalidateAuthority) {
   const args = [
     "--method",
     "POST",
@@ -300,6 +317,14 @@ function dispatch(workflow, inputs, tooling) {
   }
   // Dispatch is a mutation: never retry an uncertain response. A new request
   // could create a second publisher even when the first response was lost.
+  verifyReleaseToolingIdentity({
+    repository: REPOSITORY,
+    workflowRef: tooling.ref,
+    workflowFullRef: tooling.fullRef,
+    workflowSha: tooling.sha,
+  });
+  // Finish remote reads before checking the operator permission that authorizes POST.
+  await revalidateAuthority?.();
   const result = api(`actions/workflows/${workflow}/dispatches`, args);
   requireValue(
     Number.isSafeInteger(result.workflow_run_id) && result.workflow_run_id > 0,
@@ -340,40 +365,88 @@ export function validateReadyRelease(value, expected) {
     const descriptor = value.plugins[target];
     requireValue(
       descriptor?.repository === REPOSITORY &&
-        descriptor.workflowSha === value.tooling.sha &&
-        descriptor.workflowHeadBranch === value.tooling.ref &&
+        descriptor.workflowSha ===
+          (target === "npm" ? (expected.npmWorkflowSha ?? value.tooling.sha) : value.tooling.sha) &&
+        (target === "npm" || descriptor.workflowHeadBranch === value.tooling.ref) &&
         descriptor.workflowPath === path,
       `Prepared ${target} producer differs from the release tooling.`,
     );
   }
+  validatePreparedNpmArtifactDescriptor(value.plugins.npm, {
+    repository: REPOSITORY,
+    sourceSha: value.sourceSha,
+    workflowSha: expected.npmWorkflowSha ?? value.tooling.sha,
+  });
   return value;
 }
 
-export async function loadPreparedPlugins({
+function authenticateReadyNpm({
+  artifact,
+  inputs,
+  sourceSha,
+  toolingSha,
+  toolingFullRef,
+  evidenceClient,
+}) {
+  return authenticatePreparedNpmArtifact({
+    artifact,
+    repository: REPOSITORY,
+    sourceSha,
+    workflowSha: toolingSha,
+    workflowFullRef: toolingFullRef,
+    releaseTag: inputs.tag,
+    selectionMode: "all-publishable",
+    plugins: "",
+    npmDistTag: inputs.npm_dist_tag === "extended-stable" ? "extended-stable" : "default",
+    fullReleaseValidationRunId: inputs.full_release_validation_run_id,
+    fullReleaseValidationRunAttempt: inputs.full_release_validation_run_attempt,
+    publisherPolicySha256: createHash("sha256")
+      .update(readFileSync(new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url)))
+      .digest("hex"),
+    evidenceClient,
+    isTrustedMainAncestor: (sha) => {
+      const comparison = api(`compare/${sha}...main`, ["--jq", "{status,merge_base_commit}"]);
+      return (
+        ["ahead", "identical"].includes(comparison.status) &&
+        comparison.merge_base_commit?.sha === sha
+      );
+    },
+  });
+}
+
+async function loadPreparedPlugins({
   plugins,
   inputs,
   sourceSha,
   toolingSha,
+  toolingFullRef,
   sourceRoot,
   outputDir,
   token,
   fetchImpl,
+  evidenceClient,
 }) {
   requireValue(
     isRecord(plugins) && Object.keys(plugins).toSorted().join(",") === "clawhub,npm",
     "Both npm and ClawHub preparation artifacts are required.",
   );
   mkdirSync(outputDir, { recursive: true });
-  const publisherPolicySha256 = createHash("sha256")
-    .update(readFileSync(new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url)))
-    .digest("hex");
+  const adoption = await authenticateReadyNpm({
+    artifact: plugins.npm,
+    inputs,
+    sourceSha,
+    toolingSha,
+    toolingFullRef,
+    evidenceClient,
+  });
+  const { publisherPolicySha256 } = adoption;
   const common = { token, fetchImpl, sourceRoot, selectionMode: "all-publishable", plugins: "" };
   const results = await Promise.allSettled([
     downloadPreparedNpmRelease({
       ...common,
       artifact: plugins.npm,
       sourceSha,
-      workflowSha: toolingSha,
+      workflowSha: adoption.workflowSha,
       repository: REPOSITORY,
       npmDistTag: inputs.npm_dist_tag === "extended-stable" ? "extended-stable" : "default",
       publisherPolicySha256,
@@ -392,10 +465,12 @@ export async function loadPreparedPlugins({
     throw failure.reason;
   }
   const [npm, clawhub] = results.map((result) => result.value);
+  await adoption.revalidateAuthority?.();
   return {
     npm,
     clawhub: { packages: clawhub.map((entry) => entry.prepared) },
     publisherPolicySha256,
+    adoption,
   };
 }
 
@@ -411,7 +486,7 @@ export async function prefetchPreparedPlugins(options) {
           package: entry,
           repository: REPOSITORY,
           sourceSha,
-          workflowSha: toolingSha,
+          workflowSha: manifests.adoption.workflowSha,
           npmDistTag: manifests.npm.npmDistTag,
           publisherPolicySha256: manifests.publisherPolicySha256,
           sourcePackageJson: join(sourceRoot, entry.packageDir, "package.json"),
@@ -443,6 +518,7 @@ export async function prefetchPreparedPlugins(options) {
       throw failure.reason;
     }
   }
+  await manifests.adoption.revalidateAuthority?.();
   writeJson(join(admissionDir, "verified.json"), {
     sourceSha,
     toolingSha,
@@ -479,7 +555,22 @@ async function readReady(descriptor, directory, tooling, token) {
     "Release readiness artifact name mismatch.",
   );
   const sourceSha = api(`commits/${encodeURIComponent(value.inputs?.tag)}`, ["--jq", "{sha}"]).sha;
-  return validateReadyRelease(value, { sourceSha, tooling });
+  const adoption = await authenticateReadyNpm({
+    artifact: value.plugins?.npm,
+    inputs: value.inputs,
+    sourceSha,
+    toolingSha: tooling.sha,
+    toolingFullRef: tooling.fullRef,
+  });
+  await adoption.revalidateAuthority?.();
+  return {
+    ready: validateReadyRelease(value, {
+      sourceSha,
+      tooling,
+      npmWorkflowSha: adoption.workflowSha,
+    }),
+    revalidateAuthority: adoption.revalidateAuthority,
+  };
 }
 
 function publicationInputs(ready, resumeRunId) {
@@ -528,7 +619,7 @@ async function readPublicationRequest(path, directory, tooling, token) {
       }),
     "Publication request is unknown, unverified, malformed, or inconsistent; do not redispatch.",
   );
-  const ready = await readReady(request.preparedArtifact, directory, tooling, token);
+  const { ready } = await readReady(request.preparedArtifact, directory, tooling, token);
   const inputs = publicationInputs(ready, request.openclawNpmResumeRunId ?? "");
   requireValue(
     ready.sourceSha === request.sourceSha &&
@@ -537,6 +628,34 @@ async function readPublicationRequest(path, directory, tooling, token) {
     "Publication request differs from the frozen readiness inputs.",
   );
   return request;
+}
+
+async function verifyPublicationOutcome(run, request, tooling, token, directory) {
+  if (run.conclusion === "failure") {
+    const { verifyOpenClawCorePostpublish } = await import("./openclaw-core-postpublish.mjs");
+    const artifact = artifactFor(
+      run,
+      PUBLISH_WORKFLOW,
+      tooling,
+      `openclaw-release-postpublish-evidence-${request.inputs.tag}`,
+    );
+    await verifyOpenClawCorePostpublish({
+      parent: run,
+      artifact,
+      releaseTag: request.inputs.tag,
+      npmDistTag: request.inputs.npm_dist_tag,
+      token,
+      outputDir: join(directory, "core-postpublish-verification"),
+    });
+  }
+  const { verifyClawHubPostpublish } = await import("./clawhub-postpublish.mjs");
+  await verifyClawHubPostpublish({
+    event: { workflow_run: run },
+    parentStatePolicy: "sealed-producer",
+    verifierSha: tooling.sha,
+    token,
+    outputDir: join(directory, "clawhub-public-verification"),
+  });
 }
 
 async function main() {
@@ -569,51 +688,18 @@ async function main() {
       inputs.tag === `v${packageJson.version}`,
       "Release tag and source package version differ.",
     );
-    const request = {
-      schema: "openclaw.release-ready/v1",
+    const adoption = await authenticatePreparedNpmArtifact({
       repository: REPOSITORY,
       sourceSha,
-      tooling,
-      inputs,
-      npmRunId: null,
-      clawhubRunId: null,
-    };
-    const requestPath = join(directory, "request.json");
-    if (values.request !== undefined) {
-      const recovered = readJson(values.request);
-      requireValue(
-        isRecord(recovered) &&
-          isDeepStrictEqual({ ...recovered, npmRunId: null, clawhubRunId: null }, request),
-        "Preparation recovery differs from the frozen source, tooling, or publication inputs.",
-      );
-      for (const [key, workflow] of [
-        ["npmRunId", ".github/workflows/plugin-npm-release.yml"],
-        ["clawhubRunId", ".github/workflows/plugin-clawhub-release.yml"],
-      ]) {
-        requireValue(
-          Number.isSafeInteger(recovered[key]) && recovered[key] > 0,
-          `Preparation recovery requires an explicitly identified ${key}; inspect Actions before selecting it.`,
-        );
-        producer(api(`actions/runs/${recovered[key]}`), workflow, tooling);
-        request[key] = recovered[key];
-      }
-      // Adoption is read-only. The seal still proves each selected run's source,
-      // complete package roster, producer attempt, and exact qualified bytes.
-    }
-    const { authenticateFullReleaseValidationEvidence } =
-      await import("./validate-full-release-validation-evidence.mjs");
-    await authenticateFullReleaseValidationEvidence({
-      run: api(
-        `actions/runs/${inputs.full_release_validation_run_id}/attempts/${inputs.full_release_validation_run_attempt}`,
-      ),
-      expectedRepository: REPOSITORY,
-      expectedRunId: inputs.full_release_validation_run_id,
-      expectedRunAttempt: inputs.full_release_validation_run_attempt,
-      expectedTargetSha: sourceSha,
-      expectedReleaseTag: inputs.tag,
-      expectedTrustedWorkflowFullRef: tooling.fullRef,
-      expectedTrustedWorkflowSha: tooling.sha,
-      expectedPublicationSelection: {
+      workflowSha: tooling.sha,
+      workflowFullRef: tooling.fullRef,
+      fullReleaseValidationRunId: inputs.full_release_validation_run_id,
+      fullReleaseValidationRunAttempt: inputs.full_release_validation_run_attempt,
+      releaseTag: inputs.tag,
+      selectionMode: "all-publishable",
+      plugins: "",
+      npmDistTag: inputs.npm_dist_tag === "extended-stable" ? "extended-stable" : "default",
+      publicationSelection: {
         route: "prepared",
         npmDistTag: inputs.npm_dist_tag,
         publishOpenclawNpm: true,
@@ -626,8 +712,11 @@ async function main() {
             }
           : {}),
       },
-      verifierSourceSha: tooling.sha,
-      verifierSourceContent: readFileSync(new URL("./release-ci-summary.mjs", import.meta.url)),
+      publisherPolicySha256: createHash("sha256")
+        .update(
+          readFileSync(new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url)),
+        )
+        .digest("hex"),
       isTrustedMainAncestor: (sha) => {
         const comparison = api(`compare/${sha}...main`, ["--jq", "{status,merge_base_commit}"]);
         return (
@@ -636,32 +725,48 @@ async function main() {
         );
       },
     });
+    const npmArtifact = adoption.artifact;
+    const request = {
+      schema: "openclaw.release-ready/v1",
+      repository: REPOSITORY,
+      sourceSha,
+      tooling,
+      inputs,
+      npmArtifact,
+      clawhubRunId: null,
+    };
+    const requestPath = join(directory, "request.json");
+    if (values.request !== undefined) {
+      const recovered = readJson(values.request);
+      requireValue(
+        isRecord(recovered) &&
+          isDeepStrictEqual({ ...recovered, clawhubRunId: null }, request) &&
+          Number.isSafeInteger(recovered.clawhubRunId) &&
+          recovered.clawhubRunId > 0,
+        "Preparation recovery differs from the frozen source, tooling, or publication inputs.",
+      );
+      producer(
+        api(`actions/runs/${recovered.clawhubRunId}`),
+        ".github/workflows/plugin-clawhub-release.yml",
+        tooling,
+      );
+      request.clawhubRunId = recovered.clawhubRunId;
+    }
     writeJson(requestPath, request);
     if (values.request === undefined) {
-      // Persist before either mutation, then after each acknowledged run. A null
-      // ID means unconfirmed, never proof that a lost dispatch created no run.
-      request.npmRunId = dispatch(
-        "plugin-npm-release.yml",
-        {
-          ref: sourceSha,
-          publish_scope: "all-publishable",
-          npm_dist_tag: inputs.npm_dist_tag === "extended-stable" ? "extended-stable" : "default",
-          preflight_only: "true",
-          trusted_publisher_preflight: "false",
-        },
-        tooling,
-      ).workflow_run_id;
-      replaceJson(requestPath, request);
-      reportDispatch("plugin-npm-release.yml", request.npmRunId);
-      request.clawhubRunId = dispatch(
-        "plugin-clawhub-release.yml",
-        { ref: sourceSha, publish_scope: "all-publishable", dry_run: "true" },
-        tooling,
+      // npm bytes are already qualified by FRV. Persist before the remaining
+      // mutation so an uncertain ClawHub dispatch is never repeated blindly.
+      request.clawhubRunId = (
+        await dispatch(
+          "plugin-clawhub-release.yml",
+          { ref: sourceSha, publish_scope: "all-publishable", dry_run: "true" },
+          tooling,
+          adoption.revalidateAuthority,
+        )
       ).workflow_run_id;
       replaceJson(requestPath, request);
       reportDispatch("plugin-clawhub-release.yml", request.clawhubRunId);
     }
-    output("npm_run_id", String(request.npmRunId));
     output("clawhub_run_id", String(request.clawhubRunId));
     output("request", request);
     output("source_sha", sourceSha);
@@ -675,30 +780,31 @@ async function main() {
     );
     // Retrying a failed seal job may follow an explicit rerun of the original
     // producers. Resolve each current attempt once, never fall back to an older success.
-    const npmAttempt = api(`actions/runs/${request.npmRunId}`).run_attempt;
     const clawhubAttempt = api(`actions/runs/${request.clawhubRunId}`).run_attempt;
-    const [npmRun, clawhubRun] = await Promise.all([
-      waitForRun(request.npmRunId, npmAttempt, ".github/workflows/plugin-npm-release.yml", tooling),
-      waitForRun(
-        request.clawhubRunId,
-        clawhubAttempt,
-        ".github/workflows/plugin-clawhub-release.yml",
-        tooling,
-      ),
-    ]);
-    const npmProducer = producer(npmRun, ".github/workflows/plugin-npm-release.yml", tooling);
+    const clawhubRun = await waitForRun(
+      request.clawhubRunId,
+      clawhubAttempt,
+      ".github/workflows/plugin-clawhub-release.yml",
+      tooling,
+    );
     const clawhubProducer = producer(
       clawhubRun,
       ".github/workflows/plugin-clawhub-release.yml",
       tooling,
     );
+    const adoption = await authenticateReadyNpm({
+      artifact: request.npmArtifact,
+      inputs: request.inputs,
+      sourceSha: request.sourceSha,
+      toolingSha: tooling.sha,
+      toolingFullRef: tooling.fullRef,
+    });
     const plugins = {
-      npm: artifactFor(
-        npmRun,
-        npmProducer.workflowPath,
-        tooling,
-        preparedNpmArtifactName(request.sourceSha, npmProducer),
-      ),
+      npm: validatePreparedNpmArtifactDescriptor(request.npmArtifact, {
+        repository: REPOSITORY,
+        sourceSha: request.sourceSha,
+        workflowSha: adoption.workflowSha,
+      }),
       clawhub: artifactFor(
         clawhubRun,
         clawhubProducer.workflowPath,
@@ -715,17 +821,19 @@ async function main() {
         tooling,
         plugins,
       },
-      request,
+      { ...request, npmWorkflowSha: adoption.workflowSha },
     );
     await prefetchPreparedPlugins({
       plugins,
       inputs: ready.inputs,
       sourceSha: ready.sourceSha,
       toolingSha: tooling.sha,
+      toolingFullRef: tooling.fullRef,
       sourceRoot: resolve(values["source-root"]),
       outputDir: join(directory, "packages"),
       token,
     });
+    await adoption.revalidateAuthority?.();
     writeJson(join(directory, READY_FILE), ready);
     output(
       "artifact_name",
@@ -749,7 +857,7 @@ async function main() {
       "openclaw_npm_resume_run_id must be a positive safe integer.",
     );
     const descriptor = readJson(values.artifact);
-    const ready = await readReady(descriptor, directory, tooling, token);
+    const { ready, revalidateAuthority } = await readReady(descriptor, directory, tooling, token);
     // Recovery changes only the existing owner's resume selector. The parent
     // verifies its authority and canonical core bytes before starting writers.
     const inputs = publicationInputs(ready, resumeRunId);
@@ -782,10 +890,8 @@ async function main() {
     // non-execution. Existing intent never authorizes another mutation.
     writeJson(requestPath, request);
     try {
-      request.releaseRunId = dispatch(
-        "openclaw-release-publish.yml",
-        inputs,
-        tooling,
+      request.releaseRunId = (
+        await dispatch("openclaw-release-publish.yml", inputs, tooling, revalidateAuthority)
       ).workflow_run_id;
       request.state = "unverified";
       replaceJson(requestPath, request);
@@ -825,9 +931,12 @@ async function main() {
       requireValue(
         isDeepStrictEqual(observed, request.producer) &&
           run.status === "completed" &&
-          run.conclusion === "success",
-        "Publication request no longer identifies a successful exact publisher.",
+          ["success", "failure"].includes(run.conclusion),
+        "Publication request no longer identifies an allowed terminal exact publisher.",
       );
+      if (run.conclusion === "failure") {
+        await verifyPublicationOutcome(run, request, tooling, token, directory);
+      }
       return;
     }
     const run = await waitForRun(
@@ -835,14 +944,9 @@ async function main() {
       request.releaseRunAttempt,
       PUBLISH_WORKFLOW,
       tooling,
+      { allowFailure: true },
     );
-    const { verifyClawHubPostpublish } = await import("./clawhub-postpublish.mjs");
-    await verifyClawHubPostpublish({
-      event: { workflow_run: run },
-      verifierSha: tooling.sha,
-      token,
-      outputDir: join(directory, "clawhub-public-verification"),
-    });
+    await verifyPublicationOutcome(run, request, tooling, token, directory);
     output("verified", "true");
     return;
   }

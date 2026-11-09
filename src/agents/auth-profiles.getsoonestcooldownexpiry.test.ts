@@ -1,185 +1,95 @@
-/**
- * Soonest cooldown expiry tests.
- * Verifies timestamp selection across cooldown, blocked, disabled, invalid, and
- * model-scoped usage-state combinations.
- */
 import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { getSoonestCooldownExpiry } from "./auth-profiles/usage-state.js";
 
-function makeStore(usageStats?: AuthProfileStore["usageStats"]): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {},
-    usageStats,
-  };
+const now = 1_700_000_000_000;
+function expiry(usageStats: AuthProfileStore["usageStats"], forModel?: string) {
+  return getSoonestCooldownExpiry(
+    { version: 1, profiles: {}, usageStats },
+    ["missing", ...Object.keys(usageStats ?? {})],
+    { now, forModel },
+  );
 }
 
 describe("getSoonestCooldownExpiry", () => {
-  it("returns null when no cooldown timestamps exist", () => {
-    const store = makeStore();
-    expect(getSoonestCooldownExpiry(store, ["openai:p1"])).toBeNull();
-  });
-
-  it("returns earliest unusable time across profiles", () => {
-    const store = makeStore({
-      "openai:p1": {
-        cooldownUntil: 1_700_000_002_000,
-        disabledUntil: 1_700_000_004_000,
-      },
-      "openai:p2": {
-        cooldownUntil: 1_700_000_003_000,
-      },
-      "openai:p3": {
-        disabledUntil: 1_700_000_001_000,
-      },
-    });
-
-    expect(getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2", "openai:p3"])).toBe(
-      1_700_000_001_000,
-    );
-  });
-
-  it("ignores unknown profiles and invalid cooldown values", () => {
-    const store = makeStore({
-      "openai:p1": {
-        cooldownUntil: -1,
-      },
-      "openai:p2": {
-        cooldownUntil: Infinity,
-      },
-      "openai:p3": {
-        disabledUntil: Number.NaN,
-      },
-      "openai:p4": {
-        cooldownUntil: 1_700_000_005_000,
-      },
-    });
-
+  it("selects the earliest valid unusable timestamp, including expired windows", () => {
     expect(
-      getSoonestCooldownExpiry(store, [
-        "missing",
-        "openai:p1",
-        "openai:p2",
-        "openai:p3",
-        "openai:p4",
-      ]),
-    ).toBe(1_700_000_005_000);
+      expiry({
+        invalid: { cooldownUntil: -1 },
+        infinite: { cooldownUntil: Infinity },
+        nan: { disabledUntil: Number.NaN },
+        later: { cooldownUntil: now + 2_000, disabledUntil: now + 4_000 },
+        expired: { cooldownUntil: now - 1_000 },
+        disabled: { disabledUntil: now + 1_000 },
+      }),
+    ).toBe(now - 1_000);
   });
 
-  it("returns past timestamps when cooldown already expired", () => {
-    const store = makeStore({
-      "openai:p1": {
-        cooldownUntil: 1_700_000_000_000,
-      },
-      "openai:p2": {
-        disabledUntil: 1_700_000_010_000,
-      },
-    });
-
-    expect(getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"])).toBe(1_700_000_000_000);
-  });
-
-  it("ignores unrelated model-scoped rate limits for the requested model", () => {
-    const now = 1_700_000_000_000;
-    const store = makeStore({
-      "openai:p1": {
-        cooldownUntil: now + 10_000,
-        cooldownReason: "rate_limit",
-        cooldownModel: "gpt-5.4",
-      },
-      "openai:p2": {
-        cooldownUntil: now + 30_000,
-        cooldownReason: "rate_limit",
-        cooldownModel: "gpt-5.4",
-      },
-    });
-
+  it("waits for the latest matching model rate limit", () => {
     expect(
-      getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"], { now, forModel: "gpt-5.4" }),
+      expiry(
+        {
+          first: {
+            cooldownUntil: now + 10_000,
+            cooldownReason: "rate_limit",
+            cooldownModel: "model",
+          },
+          last: {
+            cooldownUntil: now + 30_000,
+            cooldownReason: "rate_limit",
+            cooldownModel: "model",
+          },
+        },
+        "model",
+      ),
     ).toBe(now + 30_000);
   });
 
-  it("uses the earliest matching timeout cooldown for the requested model", () => {
-    const now = 1_700_000_000_000;
-    const store = makeStore({
-      "openai:p1": {
-        cooldownUntil: now + 10_000,
-        cooldownReason: "timeout",
-        cooldownModel: "gpt-5.4",
-      },
-      "openai:p2": {
-        cooldownUntil: now + 30_000,
-        cooldownReason: "timeout",
-        cooldownModel: "gpt-5.4",
-      },
-    });
-
+  it("uses the earliest non-rate-limit cooldown for the requested model", () => {
     expect(
-      getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"], { now, forModel: "gpt-5.4" }),
+      expiry(
+        {
+          timeout: {
+            cooldownUntil: now + 10_000,
+            cooldownReason: "timeout",
+            cooldownModel: "model",
+          },
+          missingModel: {
+            cooldownUntil: now + 30_000,
+            cooldownReason: "model_not_found",
+            cooldownModel: "model",
+          },
+        },
+        "model",
+      ),
     ).toBe(now + 10_000);
   });
 
-  it("uses the earliest matching model_not_found cooldown for the requested model", () => {
-    const now = 1_700_000_000_000;
-    const store = makeStore({
-      "openai:p1": {
-        cooldownUntil: now + 10_000,
-        cooldownReason: "model_not_found",
-        cooldownModel: "gpt-5.4",
-      },
-      "openai:p2": {
-        cooldownUntil: now + 30_000,
-        cooldownReason: "model_not_found",
-        cooldownModel: "gpt-5.4",
-      },
-    });
-
+  it("honors profile-wide blocks and disables alongside model cooldowns", () => {
     expect(
-      getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"], { now, forModel: "gpt-5.4" }),
-    ).toBe(now + 10_000);
-  });
-
-  it("still counts profile-wide disables for other models", () => {
-    const now = 1_700_000_000_000;
-    const store = makeStore({
-      "openai:p1": {
-        cooldownUntil: now + 10_000,
-        cooldownReason: "rate_limit",
-        cooldownModel: "gpt-5.4",
-        disabledUntil: now + 20_000,
-      },
-      "openai:p2": {
-        cooldownUntil: now + 30_000,
-        cooldownReason: "rate_limit",
-        cooldownModel: "gpt-5.4",
-      },
-    });
-
-    expect(
-      getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"], { now, forModel: "gpt-5.4" }),
-    ).toBe(now + 20_000);
-  });
-
-  it("still counts profile-wide blocked windows for other models", () => {
-    const now = 1_700_000_000_000;
-    const store = makeStore({
-      "openai:p1": {
-        blockedUntil: now + 20_000,
-        blockedReason: "subscription_limit",
-        cooldownUntil: now + 10_000,
-        cooldownReason: "timeout",
-        cooldownModel: "gpt-5.4",
-      },
-      "openai:p2": {
-        cooldownUntil: now + 30_000,
-        cooldownReason: "timeout",
-        cooldownModel: "gpt-5.4",
-      },
-    });
-
-    expect(
-      getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"], { now, forModel: "gpt-5.4" }),
+      expiry(
+        {
+          disabled: {
+            disabledUntil: now + 20_000,
+            cooldownUntil: now + 10_000,
+            cooldownReason: "rate_limit",
+            cooldownModel: "model",
+          },
+          blocked: {
+            blockedUntil: now + 25_000,
+            blockedReason: "subscription_limit",
+            cooldownUntil: now + 10_000,
+            cooldownReason: "timeout",
+            cooldownModel: "model",
+          },
+          rateLimit: {
+            cooldownUntil: now + 30_000,
+            cooldownReason: "rate_limit",
+            cooldownModel: "model",
+          },
+        },
+        "model",
+      ),
     ).toBe(now + 20_000);
   });
 });

@@ -5,8 +5,8 @@ import Testing
 @MainActor
 struct ChatSessionAttentionTests {
     @Test func `group attention selects the globally oldest kind and counts only that kind`() {
-        let child = OpenClawChatSessionEntry.placeholder(key: "agent:main:child")
-        let parent = OpenClawChatSessionEntry.placeholder(key: "agent:main:parent")
+        let child = OpenClawChatSessionEntry(key: "agent:main:child")
+        let parent = OpenClawChatSessionEntry(key: "agent:main:parent")
         let oldestQuestion = self.request("question-old", kind: .question, key: child.key, created: 1)
         let oldestApproval = self.request("approval-old", kind: .approval, key: parent.key, created: 2)
         let requests = [
@@ -29,7 +29,7 @@ struct ChatSessionAttentionTests {
     }
 
     @Test func `attention source aliases respect the active agent and missing provenance stays unassigned`() {
-        var global = OpenClawChatSessionEntry.placeholder(key: "global")
+        var global = OpenClawChatSessionEntry(key: "global")
         global.agentId = "work"
         let requests = [
             self.request("owned", kind: .question, key: "global", agentID: "work"),
@@ -40,14 +40,14 @@ struct ChatSessionAttentionTests {
         #expect(summary?.oldest.id == "owned")
         #expect(summary?.count == 1)
         #expect(self.summary(requests, sessions: [global], agentID: "main")?.oldest.id == "owned")
-        let main = OpenClawChatSessionEntry.placeholder(key: "agent:main:main")
+        let main = OpenClawChatSessionEntry(key: "agent:main:main")
         #expect(self.summary([
             self.request("main-alias", kind: .approval, key: "main"),
         ], sessions: [main])?.oldest.id == "main-alias")
     }
 
     @Test func `equal creation times have deterministic preview ordering and expiry removes the badge`() {
-        let session = OpenClawChatSessionEntry.placeholder(key: "main")
+        let session = OpenClawChatSessionEntry(key: "main")
         let requests = [
             self.request("b", kind: .approval, key: "main", expires: 1001),
             self.request("a", kind: .approval, key: "main", expires: 1001),
@@ -60,7 +60,7 @@ struct ChatSessionAttentionTests {
     }
 
     @Test func `opaque approval ids remain byte distinct across Unicode normalization`() {
-        let session = OpenClawChatSessionEntry.placeholder(key: "main")
+        let session = OpenClawChatSessionEntry(key: "main")
         let summary = self.summary([
             self.request("approval-é", kind: .approval, key: "main"),
             self.request("approval-e\u{0301}", kind: .approval, key: "main"),
@@ -83,7 +83,7 @@ struct ChatSessionAttentionTests {
     }
 
     @Test func `disclosure identity follows its owner and request while ignoring background count changes`() throws {
-        let session = OpenClawChatSessionEntry.placeholder(key: "main")
+        let session = OpenClawChatSessionEntry(key: "main")
         func summary(
             ownerID: String = "gateway-a",
             id: String = "oldest",

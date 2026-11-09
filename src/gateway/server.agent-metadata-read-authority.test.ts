@@ -1,0 +1,148 @@
+import { randomBytes } from "node:crypto";
+import { addAbortListener } from "node:events";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import * as sessionMeta from "../acp/runtime/session-meta.js";
+import { isMissingPathError } from "../infra/errors.js";
+import { ATTACHMENT_OFFLOAD_THRESHOLD_BYTES } from "../media/attachment-processor.runtime.js";
+import { encodePngRgb } from "../media/png-encode.js";
+import * as mediaStore from "../media/store.js";
+import { isRpcSourceExecuting } from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
+import { createAgentDedupeLifecycle } from "./agent-turn/agent-dedupe-lifecycle.js";
+import {
+  holdExecution,
+  installAgentAuthorityProofFixture,
+  reach,
+  type Response,
+} from "./server.agent-runtime-authority-proof.test-support.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
+import { agentCommandMock } from "./test-helpers.js";
+
+async function inboundMediaFiles(): Promise<string[]> {
+  try {
+    return (await fs.readdir(path.join(mediaStore.getMediaDir(), "inbound"))).toSorted();
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+const fixture = installAgentAuthorityProofFixture();
+
+it.for(["live", "stopped", "replaced"] as const)(
+  "retains the request through joined metadata before media effects: %s",
+  async (mode, { signal }) => {
+    const f = await fixture({ imageCapable: true });
+    const execution = await holdExecution(signal);
+    // Incompressible pixels exercise the real parser's offload write before admission.
+    const image = encodePngRgb(randomBytes(1024 * 1024 * 3), 1024, 1024);
+    expect(image.byteLength).toBeGreaterThan(ATTACHMENT_OFFLOAD_THRESHOLD_BYTES);
+    expect(image.byteLength).toBeLessThan(MAX_IMAGE_BYTES);
+    const beforeEntry = (await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry;
+    const beforeMedia = await inboundMediaFiles();
+    const entered =
+      createDeferred<Awaited<ReturnType<typeof sessionMeta.readAcpSessionEntryAsync>>>();
+    const release = createDeferred();
+    using _ = addAbortListener(signal, () => release.resolve());
+    const read = sessionMeta.readAcpSessionEntryAsync;
+    let held = false;
+    const readObserver = vi
+      .spyOn(sessionMeta, "readAcpSessionEntryAsync")
+      .mockImplementation(async (input) => {
+        const result = await read(input);
+        if (input.sessionKey === f.sessionKey && !held) {
+          held = true;
+          entered.resolve(result);
+          await release.promise;
+        }
+        return result;
+      });
+    using writeObserver = vi.spyOn(mediaStore, "saveMediaBuffer");
+    const params = {
+      message: "Inspect this synthetic offloaded image",
+      attachments: [{ mimeType: "image/png", content: image.toString("base64") }],
+    };
+    let request: Promise<Response> | undefined;
+    let replacement: ReturnType<typeof createAgentDedupeLifecycle> | undefined;
+    try {
+      request = f.dispatch(params);
+      // Keep observing effects when the broken continuation rejects before an RPC response.
+      const outcome = Promise.allSettled([request]);
+      const joined = await reach(entered.promise, request);
+      expect(joined?.entry?.sessionId).toBe(f.sessionId);
+      expect(f.context.dedupe.get(`agent:${f.runId}`)?.payload).toMatchObject({
+        status: "accepted",
+      });
+      const acceptedSource = rpcSourceTesting.get(f.runId);
+      expect(acceptedSource).toBeDefined();
+      expect(isRpcSourceExecuting(acceptedSource)).toBe(false);
+      expect(writeObserver).not.toHaveBeenCalled();
+      if (mode === "stopped") {
+        expect(await f.stop()).toMatchObject({ ok: true, payload: { aborted: true } });
+      } else if (mode === "replaced") {
+        replacement = createAgentDedupeLifecycle({
+          cfg: f.context.getRuntimeConfig(),
+          request: { message: params.message, idempotencyKey: f.runId },
+          runId: f.runId,
+          agentDedupeKeys: [`agent:${f.runId}`],
+          suppressVisibleSessionEffects: false,
+          context: f.context,
+          io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
+        });
+        replacement.reserve(f.sessionKey, "main");
+      }
+      const retained = f.context.dedupe.get(`agent:${f.runId}`);
+      release.resolve();
+      const [result] = await outcome;
+      if (mode === "live") {
+        expect(result).toMatchObject({
+          status: "fulfilled",
+          value: { ok: true, payload: { status: "accepted" } },
+        });
+        await execution.entered;
+        expect(writeObserver).toHaveBeenCalledOnce();
+        expect(await inboundMediaFiles()).not.toEqual(beforeMedia);
+      } else {
+        // Both observations matter: cleanup must not conceal an unauthorized write.
+        expect.soft(writeObserver).not.toHaveBeenCalled();
+        expect.soft(await inboundMediaFiles()).toEqual(beforeMedia);
+        expect
+          .soft((await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry)
+          .toEqual(beforeEntry);
+        expect.soft(await f.effects()).toMatchObject({ transcriptChanged: false, pendingCount: 0 });
+        expect.soft(execution.observer).not.toHaveBeenCalled();
+        expect.soft(agentCommandMock).not.toHaveBeenCalled();
+        await f.drain();
+        expect.soft(rpcSourceTesting.has(f.runId)).toBe(false);
+        expect.soft(f.context.dedupe.get(`agent:${f.runId}`)).toBe(retained);
+        const response = {
+          ok: true,
+          meta: { cached: true },
+          payload: {
+            status: mode === "stopped" ? "timeout" : "in_flight",
+            ...(mode === "stopped" ? { stopReason: "rpc" } : {}),
+          },
+        };
+        expect.soft(result).toMatchObject({ status: "fulfilled", value: response });
+        const [retry] = await Promise.allSettled([f.dispatch(params)]);
+        expect.soft(retry).toMatchObject({ status: "fulfilled", value: response });
+        expect.soft(f.context.dedupe.get(`agent:${f.runId}`)).toBe(retained);
+        expect.soft(writeObserver).not.toHaveBeenCalled();
+        expect.soft(await f.effects()).toMatchObject({ transcriptChanged: false, pendingCount: 0 });
+      }
+    } finally {
+      release.resolve();
+      await execution.cleanup();
+      await Promise.allSettled([request]);
+      replacement?.clearUnaccepted();
+      await f.cleanup();
+      readObserver.mockRestore();
+    }
+  },
+);

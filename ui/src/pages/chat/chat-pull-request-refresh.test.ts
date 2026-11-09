@@ -34,7 +34,7 @@ describe("PR refresh emission receipts", () => {
     emit();
     emit();
     expect(refresh).toHaveBeenCalledTimes(2);
-    expect(refresh).toHaveBeenLastCalledWith({ refresh: true });
+    expect(refresh).toHaveBeenLastCalledWith({ refresh: true, automatic: true });
   });
 
   it("does not consume a final before its refresh callback is installed", () => {
@@ -155,7 +155,7 @@ describe("PR refresh emission receipts", () => {
     expect(refresh).toHaveBeenCalledTimes(1_001);
   });
 
-  it("does not retain or truncate large content identities", () => {
+  it("deduplicates large replies without merging a different suffix", () => {
     const { state, refresh } = createHost();
     const largeText = text + "x".repeat(50_000);
     const large = {
@@ -167,6 +167,19 @@ describe("PR refresh emission receipts", () => {
     refreshPullRequestsForFinalReply(state, "run-1", {
       ...large,
       content: [{ type: "text", text: largeText + "different" }],
+    });
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retain or truncate oversized persisted identities", () => {
+    const { state, refresh } = createHost();
+    const id = "persisted-" + "x".repeat(5_000);
+    const large = { ...message, __openclaw: { id } };
+    refreshPullRequestsForFinalReply(state, "run-1", large);
+    refreshPullRequestsForFinalReply(state, "run-1", large);
+    refreshPullRequestsForFinalReply(state, "run-1", {
+      ...large,
+      __openclaw: { id: id + "different" },
     });
     expect(refresh).toHaveBeenCalledTimes(3);
   });

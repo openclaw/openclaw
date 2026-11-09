@@ -5,6 +5,7 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-mention-gating";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   OpenAsyncKeyedStoreOptions,
@@ -13,10 +14,13 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginBlobStoreForTests,
+  resetPluginBlobStoreForTests,
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, vi } from "vitest";
 import { setMatrixRuntime } from "./runtime.js";
@@ -25,8 +29,14 @@ const defaultStateDir = fs.realpathSync(
   fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-test-state-")),
 );
 
-afterAll(() => {
+export async function resetMatrixTestStores(): Promise<void> {
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginBlobStoreForTests({ closeDatabase: false });
   resetPluginStateStoreForTests();
+}
+
+afterAll(async () => {
+  await resetMatrixTestStores();
   fs.rmSync(defaultStateDir, {
     recursive: true,
     force: true,
@@ -42,13 +52,32 @@ type MatrixTestRuntimeOptions = {
   stateDir?: string;
 };
 
+type MatrixNoticeCall = [roomId: string, payload: { body?: string }];
+type MatrixNoticeSendMock = { mock: { calls: MatrixNoticeCall[] } };
+
+export function getSentNoticeBody(sendMessage: MatrixNoticeSendMock, index = 0): string {
+  return getSentNoticeBodyFromCall(sendMessage.mock.calls[index]);
+}
+
+export function getSentNoticeBodyFromCall(call: MatrixNoticeCall | undefined): string {
+  return call?.[1].body ?? "";
+}
+
+export function getSentNoticeBodies(sendMessage: MatrixNoticeSendMock): string[] {
+  return sendMessage.mock.calls.map(getSentNoticeBodyFromCall);
+}
+
 type MatrixRuntimeStub = {
   config: Pick<PluginRuntime["config"], "current" | "mutateConfigFile" | "replaceConfigFile">;
   channel?: PluginRuntime["channel"];
   logging?: PluginRuntime["logging"];
   state: Pick<
     NonNullable<PluginRuntime["state"]>,
-    "openBlobStore" | "openKeyedStore" | "openSyncKeyedStore" | "resolveStateDir"
+    | "openBlobStore"
+    | "openKeyedStore"
+    | "openKeyedStoreV2"
+    | "openSyncKeyedStore"
+    | "resolveStateDir"
   >;
 };
 
@@ -73,6 +102,9 @@ function createMatrixRuntimeMediaMock(
       path: "/tmp/test-media.jpg",
       contentType: "image/jpeg",
     }) as NonNullable<PluginRuntime["channel"]>["media"]["saveMediaBuffer"],
+    deleteMediaBuffer: vi
+      .fn<NonNullable<PluginRuntime["channel"]>["media"]["deleteMediaBuffer"]>()
+      .mockResolvedValue(),
     ...overrides,
   };
 }
@@ -123,6 +155,15 @@ export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {})
           ...storeOptions,
           env: resolvePluginStateEnv(storeOptions),
         }),
+      openKeyedStoreV2: <T>(
+        storeOptions: OpenAsyncKeyedStoreOptions,
+        authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
+      ) =>
+        createPluginStateKeyedStoreV2ForTests<T>(
+          "matrix",
+          { ...storeOptions, env: resolvePluginStateEnv(storeOptions) },
+          authority ?? { assertCurrent() {} },
+        ),
       openSyncKeyedStore: (<T>(storeOptions: OpenKeyedStoreOptions) =>
         createPluginStateSyncKeyedStoreForTests<T>("matrix", {
           ...storeOptions,
@@ -145,7 +186,9 @@ export function installMatrixMonitorTestRuntime(
   installMatrixTestRuntime({
     cfg: options.cfg,
     stateDir: options.stateDir,
+    logging: {},
     channel: {
+      inbound: createPluginRuntimeMock().channel.inbound,
       mentions: {
         buildMentionRegexes: () => [],
         matchesMentionPatterns:

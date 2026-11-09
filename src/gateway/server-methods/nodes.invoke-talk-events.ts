@@ -3,11 +3,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { GatewayRequestContext } from "./shared-types.js";
 
-const TALK_PTT_COMMANDS = new Set([
-  "talk.ptt.start",
-  "talk.ptt.stop",
-  "talk.ptt.cancel",
-  "talk.ptt.once",
+const TALK_PTT_EVENT_TYPES = new Map([
+  ["talk.ptt.start", "capture.started"],
+  ["talk.ptt.stop", "capture.stopped"],
+  ["talk.ptt.cancel", "capture.cancelled"],
+  ["talk.ptt.once", "capture.once"],
 ]);
 const talkPttEventSeqBySessionId = new Map<string, number>();
 
@@ -17,7 +17,8 @@ export function emitTalkPttNodeEvent(params: {
   command: string;
   payload: unknown;
 }): void {
-  if (!TALK_PTT_COMMANDS.has(params.command)) {
+  const type = TALK_PTT_EVENT_TYPES.get(params.command);
+  if (!type) {
     return;
   }
   const payloadObj =
@@ -30,14 +31,6 @@ export function emitTalkPttNodeEvent(params: {
   talkPttEventSeqBySessionId.set(sessionId, seq);
   pruneMapToMaxSize(talkPttEventSeqBySessionId, 2048);
 
-  const type =
-    params.command === "talk.ptt.start"
-      ? "capture.started"
-      : params.command === "talk.ptt.cancel"
-        ? "capture.cancelled"
-        : params.command === "talk.ptt.once"
-          ? "capture.once"
-          : "capture.stopped";
   const final = params.command !== "talk.ptt.start";
   const talkEvent = {
     id: `${sessionId}:${seq}`,

@@ -2,6 +2,32 @@
 const CHILD_MARKER = Symbol.for("openclaw.node-host.launcher-child");
 const MANAGED_STATE_MARKER = Symbol.for("openclaw.node-host.managed-state-path");
 
+/** A companion retains stdin's write end; EOF also retires the node after an app crash. */
+export function watchNodeHostParentStdin(onClose: () => void): () => void {
+  const input = process.stdin;
+  let closed = false;
+  const close = () => {
+    if (!closed) {
+      closed = true;
+      onClose();
+    }
+  };
+  input.once("end", close);
+  input.once("error", close);
+  input.once("close", close);
+  input.resume();
+  if (input.readableEnded || input.destroyed) {
+    queueMicrotask(close);
+  }
+  return () => {
+    closed = true;
+    input.off("end", close);
+    input.off("error", close);
+    input.off("close", close);
+    input.pause();
+  };
+}
+
 export function isNodeHostLauncherChild(): boolean {
   return Reflect.get(process, CHILD_MARKER) === true && process.connected;
 }

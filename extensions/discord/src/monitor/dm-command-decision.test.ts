@@ -1,69 +1,40 @@
-// Discord tests cover dm command decision plugin behavior.
 import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 
-function buildSenderAccess(
-  overrides: Pick<Partial<ResolvedChannelMessageIngress["senderAccess"]>, "decision">,
-): Pick<ResolvedChannelMessageIngress["senderAccess"], "decision"> {
-  return {
-    decision: "allow",
-    ...overrides,
-  };
-}
+const { upsertPairingRequestMock } = vi.hoisted(() => ({ upsertPairingRequestMock: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
+  upsertChannelPairingRequest: upsertPairingRequestMock,
+}));
 
 const TEST_ACCOUNT_ID = "default";
 const TEST_SENDER = { id: "123", tag: "alice#0001", name: "alice" };
 
-function createDmDecisionHarness(params?: { pairingCreated?: boolean }) {
-  const onPairingCreated = vi.fn(async () => {});
-  const onUnauthorized = vi.fn(async () => {});
-  const upsertPairingRequest = vi.fn(async () => ({
-    code: "PAIR-1",
-    created: params?.pairingCreated ?? true,
-  }));
-  return { onPairingCreated, onUnauthorized, upsertPairingRequest };
-}
-
-async function runPairingDecision(params?: { pairingCreated?: boolean }) {
-  const harness = createDmDecisionHarness({ pairingCreated: params?.pairingCreated });
-  const allowed = await handleDiscordDmCommandDecision({
-    senderAccess: buildSenderAccess({
-      decision: "pairing",
-    }),
+async function runDecision(
+  decision: ResolvedChannelMessageIngress["senderAccess"]["decision"],
+  pairingCreated = true,
+) {
+  upsertPairingRequestMock
+    .mockReset()
+    .mockResolvedValue({ code: "PAIR-1", created: pairingCreated });
+  const harness = {
+    onPairingCreated: vi.fn(async () => {}),
+    onUnauthorized: vi.fn(async () => {}),
+  };
+  await handleDiscordDmCommandDecision({
+    senderAccess: { decision },
     accountId: TEST_ACCOUNT_ID,
     sender: TEST_SENDER,
-    onPairingCreated: harness.onPairingCreated,
-    onUnauthorized: harness.onUnauthorized,
-    upsertPairingRequest: harness.upsertPairingRequest,
+    ...harness,
   });
-  return { allowed, ...harness };
+  return { ...harness, upsertPairingRequest: upsertPairingRequestMock };
 }
 
 describe("handleDiscordDmCommandDecision", () => {
-  it("returns true for allowed DM access", async () => {
-    const { onPairingCreated, onUnauthorized, upsertPairingRequest } = createDmDecisionHarness();
-
-    const allowed = await handleDiscordDmCommandDecision({
-      senderAccess: buildSenderAccess({ decision: "allow" }),
-      accountId: TEST_ACCOUNT_ID,
-      sender: TEST_SENDER,
-      onPairingCreated,
-      onUnauthorized,
-      upsertPairingRequest,
-    });
-
-    expect(allowed).toBe(true);
-    expect(upsertPairingRequest).not.toHaveBeenCalled();
-    expect(onPairingCreated).not.toHaveBeenCalled();
-    expect(onUnauthorized).not.toHaveBeenCalled();
-  });
-
   it("creates pairing reply for new pairing requests", async () => {
-    const { allowed, onPairingCreated, onUnauthorized, upsertPairingRequest } =
-      await runPairingDecision();
+    const { onPairingCreated, onUnauthorized, upsertPairingRequest } = await runDecision("pairing");
 
-    expect(allowed).toBe(false);
     expect(upsertPairingRequest).toHaveBeenCalledWith({
       channel: "discord",
       id: "123",
@@ -78,30 +49,15 @@ describe("handleDiscordDmCommandDecision", () => {
   });
 
   it("skips pairing reply when pairing request already exists", async () => {
-    const { allowed, onPairingCreated, onUnauthorized } = await runPairingDecision({
-      pairingCreated: false,
-    });
+    const { onPairingCreated, onUnauthorized } = await runDecision("pairing", false);
 
-    expect(allowed).toBe(false);
     expect(onPairingCreated).not.toHaveBeenCalled();
     expect(onUnauthorized).not.toHaveBeenCalled();
   });
 
   it("runs unauthorized handler for blocked DM access", async () => {
-    const { onPairingCreated, onUnauthorized, upsertPairingRequest } = createDmDecisionHarness();
+    const { onPairingCreated, onUnauthorized, upsertPairingRequest } = await runDecision("block");
 
-    const allowed = await handleDiscordDmCommandDecision({
-      senderAccess: buildSenderAccess({
-        decision: "block",
-      }),
-      accountId: TEST_ACCOUNT_ID,
-      sender: TEST_SENDER,
-      onPairingCreated,
-      onUnauthorized,
-      upsertPairingRequest,
-    });
-
-    expect(allowed).toBe(false);
     expect(onUnauthorized).toHaveBeenCalledTimes(1);
     expect(upsertPairingRequest).not.toHaveBeenCalled();
     expect(onPairingCreated).not.toHaveBeenCalled();

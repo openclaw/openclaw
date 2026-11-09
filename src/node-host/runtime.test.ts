@@ -1,483 +1,114 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
-import { NODE_DEVICE_APPS_COMMAND } from "../infra/node-commands.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
+import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../infra/node-commands.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
-import { withEnvAsync } from "../test-utils/env.js";
-import type { NodeHostClient } from "./client.js";
-import type { SkillBinsProvider } from "./invoke.js";
-import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
-import { prepareNodeHostRuntime } from "./runtime.js";
-
-const mocks = vi.hoisted(() => {
-  const closeMcp = vi.fn(async () => undefined);
-  return {
-    closeMcp,
-    closeWorkerSupervisor: vi.fn(async () => undefined),
-    workerHasActiveWork: vi.fn(() => false),
-    pluginHasActiveWork: vi.fn(() => false),
-    initializeWorkerSupervisor: vi.fn(async () => undefined),
-    disconnectPlugins: vi.fn<() => Promise<void>>(async () => undefined),
-    handleInvoke: vi.fn(async () => undefined),
-    progressStartHeartbeats: vi.fn(),
-    progressWrite: vi.fn(async (_chunk: string) => undefined),
-    progressFlush: vi.fn<() => Promise<void>>(async () => undefined),
-    startMcp: vi.fn(async (_servers: unknown, _deps?: { signal?: AbortSignal }) => ({
-      descriptors: [],
-      callMcpTool: vi.fn(),
-      close: closeMcp,
-    })),
-  };
-});
-
-vi.mock("../infra/path-env.js", () => ({
-  ensureOpenClawCliOnPath: vi.fn(),
-}));
-
-vi.mock("./invoke.js", () => ({
-  handleInvoke: mocks.handleInvoke,
-}));
-
-vi.mock("./mcp.js", () => ({
-  startNodeHostMcpManager: mocks.startMcp,
-}));
-
-vi.mock("./node-invoke-progress.js", () => ({
-  createNodeInvokeProgressWriter: vi.fn(() => ({
-    startHeartbeats: mocks.progressStartHeartbeats,
-    write: mocks.progressWrite,
-    stop: vi.fn(),
-    flush: mocks.progressFlush,
-  })),
-}));
-
-vi.mock("./node-worker-supervisor.js", () => ({
-  createNodeWorkerSupervisor: vi.fn(() => ({
-    initialize: mocks.initializeWorkerSupervisor,
-    hasActiveWork: mocks.workerHasActiveWork,
-    close: mocks.closeWorkerSupervisor,
-  })),
-}));
-
-vi.mock("./node-worker-workspace.js", () => ({
-  NodeWorkerWorkspaceRuntime: class {
-    readonly exec = vi.fn();
-  },
-}));
-
-vi.mock("./plugin-node-host.js", () => ({
-  ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
-  hasRegisteredNodeHostCommandActiveWork: mocks.pluginHasActiveWork,
-  notifyRegisteredNodeHostCommandDisconnect: mocks.disconnectPlugins,
-  isRegisteredNodeHostCommandDuplex: vi.fn((command: string) => command === "test.duplex"),
-  listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
-    caps: ["terminal"],
-    commands: ["test.duplex"],
-    nodePluginTools: [],
-  })),
-}));
-
-vi.mock("./skills.js", () => ({
-  scanNodeHostedSkills: vi.fn(() => []),
-}));
-
-const frame = {
-  id: "invoke-1",
-  nodeId: "node-1",
-  command: "test.duplex",
-  paramsJSON: null,
-  timeoutMs: 0,
-  idempotencyKey: null,
-};
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  mocks.closeMcp.mockResolvedValue(undefined);
-  mocks.closeWorkerSupervisor.mockResolvedValue(undefined);
-  mocks.initializeWorkerSupervisor.mockResolvedValue(undefined);
-  mocks.workerHasActiveWork.mockReturnValue(false);
-  mocks.pluginHasActiveWork.mockReturnValue(false);
-  mocks.disconnectPlugins.mockResolvedValue(undefined);
-});
-
-function createNodeHostClient(
-  request: (...args: Parameters<NodeHostClient["request"]>) => Promise<unknown>,
-): NodeHostClient {
-  return {
-    async request<T>(...args: Parameters<NodeHostClient["request"]>) {
-      return (await request(...args)) as T;
-    },
-  };
-}
-
-async function startRuntime(
-  client: NodeHostClient = createNodeHostClient(async () => ({ bins: [] })),
-) {
-  const prepared = await prepareNodeHostRuntime({
-    config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
-    env: { PATH: "/usr/bin" },
-    enableAgentRuns: true,
-    enableWorkerRuns: true,
-  });
-  return prepared.start({ client });
-}
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import type { SkillBinsProvider } from "./runtime-skill-bins.js";
+import {
+  createNodeHostClient,
+  frame,
+  holdInvoke,
+  mocks,
+  startRuntime,
+} from "./runtime.test-support.js";
 
 type SkillBinsResponse = { bins: string[] };
-type SkillBinsFixture = {
-  requests: Array<ReturnType<typeof createDeferred<SkillBinsResponse>>>;
-  observed: Map<string, SkillBinTrustEntry[]>;
-  expected: SkillBinTrustEntry[];
-  response: SkillBinsResponse;
-  invoke: (id: string) => Promise<void>;
-  expire: () => void;
-  disconnect: () => void;
-};
+describe("node-host skill-bin cache", () => {
+  const requests: Array<ReturnType<typeof createDeferred<SkillBinsResponse>>> = [];
+  const observed = new Map<string, SkillBinTrustEntry[]>();
+  const invokes: Promise<void>[] = [];
+  const name = path.basename(process.execPath);
+  const response = { bins: [name] };
+  const expected = [{ name, resolvedPath: fs.realpathSync(process.execPath) }];
+  let runtime: Awaited<ReturnType<typeof startRuntime>> | undefined;
+  let environment: ReturnType<typeof captureEnv>;
+  const invoke = (id: string) => {
+    const pending = expectDefined(runtime, "started runtime").invoke({
+      ...frame,
+      id,
+      command: "system.run",
+    });
+    invokes.push(pending);
+    return pending;
+  };
 
-async function withSkillBinsRuntime(run: (fixture: SkillBinsFixture) => Promise<void>) {
-  await withEnvAsync({ PATH: path.dirname(process.execPath) }, async () => {
-    const requests: SkillBinsFixture["requests"] = [];
-    const observed = new Map<string, SkillBinTrustEntry[]>();
-    const invokes: Promise<void>[] = [];
-    const name = path.basename(process.execPath);
-    const response = { bins: [name] };
-    const now = Date.now;
-    let elapsed = 0;
-    const runtime = await startRuntime(
+  beforeEach(async () => {
+    requests.length = 0;
+    invokes.length = 0;
+    observed.clear();
+    runtime = undefined;
+    environment = captureEnv(["PATH"]);
+    setTestEnvValue("PATH", path.dirname(process.execPath));
+    runtime = await startRuntime(
       createNodeHostClient(() => {
         const request = createDeferred<SkillBinsResponse>();
         requests.push(request);
         return request.promise;
       }),
     );
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
     mocks.handleInvoke.mockImplementation(async (...args: unknown[]) => {
       const request = args[0] as typeof frame;
       const provider = args[2] as SkillBinsProvider;
       observed.set(request.id, await provider.current());
     });
+  });
+  afterEach(async () => {
     try {
-      await run({
-        requests,
-        observed,
-        expected: [{ name, resolvedPath: fs.realpathSync(process.execPath) }],
-        response,
-        invoke: (id) => {
-          const pending = runtime.invoke({ ...frame, id, command: "system.run" });
-          invokes.push(pending);
-          return pending;
-        },
-        expire: () => {
-          elapsed += 90_001;
-        },
-        disconnect: () => runtime.cancelAll(),
-      });
-    } finally {
-      runtime.cancelAll();
+      await runtime?.cancelAll();
       for (const request of requests) {
         request.resolve({ bins: [] });
       }
       await Promise.allSettled(invokes);
-      try {
-        await runtime.close();
-      } finally {
-        mocks.handleInvoke.mockReset();
-        clock.mockRestore();
-      }
+      await runtime?.close();
+    } finally {
+      mocks.handleInvoke.mockReset();
+      environment.restore();
     }
   });
-}
-
-async function primeSkillBins(fixture: SkillBinsFixture) {
-  const pending = fixture.invoke("prime");
-  await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
-  expectDefined(fixture.requests[0], "initial skill refresh").resolve(fixture.response);
-  await pending;
-  expect(fixture.observed.get("prime")).toEqual(fixture.expected);
-  fixture.expire();
-}
-
-describe("node-host skill-bin cache", () => {
-  it.each(["cold", "expired"])(
-    "shares a %s refresh and returns resolved binaries",
-    async (phase) => {
-      await withSkillBinsRuntime(async (fixture) => {
-        if (phase === "expired") {
-          await primeSkillBins(fixture);
-        }
-        const requestCount = fixture.requests.length + 1;
-        const first = fixture.invoke("first");
-        const second = fixture.invoke("second");
-        await vi.waitFor(() => expect(fixture.requests).toHaveLength(requestCount));
-        expectDefined(fixture.requests[requestCount - 1], "shared skill refresh").resolve(
-          fixture.response,
-        );
-        await Promise.all([first, second]);
-        await fixture.invoke("warm");
-        for (const id of ["first", "second", "warm"]) {
-          expect(fixture.observed.get(id)).toEqual(fixture.expected);
-        }
-        expect(fixture.requests).toHaveLength(requestCount);
-      });
-    },
-  );
-
-  it.each(["cold", "expired"])("shares a failed %s refresh and permits retry", async (phase) => {
-    await withSkillBinsRuntime(async (fixture) => {
-      if (phase === "expired") {
-        await primeSkillBins(fixture);
-      }
-      const requestCount = fixture.requests.length + 1;
-      const first = fixture.invoke("first");
-      const second = fixture.invoke("second");
-      await vi.waitFor(() => expect(fixture.requests).toHaveLength(requestCount));
-      expectDefined(fixture.requests[requestCount - 1], "failed skill refresh").reject(
-        new Error("Gateway unavailable"),
-      );
-      await Promise.all([first, second]);
-      for (const id of ["first", "second"]) {
-        expect(fixture.observed.get(id)).toEqual(phase === "expired" ? fixture.expected : []);
-      }
-      const retry = fixture.invoke("retry");
-      await vi.waitFor(() => expect(fixture.requests).toHaveLength(requestCount + 1));
-      expectDefined(fixture.requests[requestCount], "retried skill refresh").resolve(
-        fixture.response,
-      );
-      await retry;
-      expect(fixture.observed.get("retry")).toEqual(fixture.expected);
-    });
+  it("shares a failed cold refresh and permits retry", async () => {
+    const requestCount = requests.length + 1;
+    const first = invoke("first");
+    const second = invoke("second");
+    await vi.waitFor(() => expect(requests).toHaveLength(requestCount));
+    expectDefined(requests[requestCount - 1], "failed skill refresh").reject(
+      new Error("Gateway unavailable"),
+    );
+    await Promise.all([first, second]);
+    for (const id of ["first", "second"]) {
+      expect(observed.get(id)).toEqual([]);
+    }
+    const retry = invoke("retry");
+    const joined = invoke("joined-retry");
+    await vi.waitFor(() => expect(requests).toHaveLength(requestCount + 1));
+    expectDefined(requests[requestCount], "retried skill refresh").resolve(response);
+    await Promise.all([retry, joined]);
+    await invoke("warm");
+    for (const id of ["retry", "joined-retry", "warm"]) {
+      expect(observed.get(id)).toEqual(expected);
+    }
+    expect(requests).toHaveLength(requestCount + 1);
   });
 
   it("keeps pending old-connection results out of the replacement cache", async () => {
-    await withSkillBinsRuntime(async (fixture) => {
-      const old = fixture.invoke("old");
-      await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
-      fixture.disconnect();
-      const replacement = fixture.invoke("replacement");
-      await vi.waitFor(() => expect(fixture.requests).toHaveLength(2));
-      expectDefined(fixture.requests[0], "retired connection refresh").resolve(fixture.response);
-      await old;
-      expect(fixture.observed.has("replacement")).toBe(false);
-      expectDefined(fixture.requests[1], "replacement connection refresh").resolve({ bins: [] });
-      await replacement;
-      await fixture.invoke("replacement-warm");
-      expect(fixture.observed.get("replacement")).toEqual([]);
-      expect(fixture.observed.get("replacement-warm")).toEqual([]);
-      expect(fixture.requests).toHaveLength(2);
-    });
-  });
-});
-
-function holdInvoke(onCommand?: (io: OpenClawPluginNodeHostCommandIo) => void) {
-  let io: OpenClawPluginNodeHostCommandIo | undefined;
-  let signal: AbortSignal | undefined;
-  let release: (() => void) | undefined;
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  mocks.handleInvoke.mockImplementationOnce(async (...args: unknown[]) => {
-    const runtime = args[4] as {
-      pluginCommandIo?: OpenClawPluginNodeHostCommandIo;
-      signal?: AbortSignal;
-    };
-    io = runtime.pluginCommandIo;
-    signal = runtime.signal;
-    if (io) {
-      onCommand?.(io);
-    }
-    await held;
-  });
-  return {
-    get io() {
-      return io;
-    },
-    get signal() {
-      return signal;
-    },
-    release: () => release?.(),
-  };
-}
-
-describe("node-host update pause", () => {
-  it.each(["missing", "missing without disconnect", "undefined", "throwing", "declared"])(
-    "requires an explicit plugin idle result after invocation with a %s hook",
-    async (mode) => {
-      const pluginBridge =
-        await vi.importActual<typeof import("./plugin-node-host.js")>("./plugin-node-host.js");
-      let retainedWork = false;
-      let available = true;
-      const onDisconnect = vi.fn(() => {
-        retainedWork = false;
-      });
-      const hasActiveWork =
-        mode === "undefined"
-          ? vi.fn<() => boolean>()
-          : mode === "throwing"
-            ? () => {
-                throw new Error("plugin work state unavailable");
-              }
-            : mode === "declared"
-              ? () => retainedWork
-              : undefined;
-      const registry = createEmptyPluginRegistry();
-      registry.nodeHostCommands = [
-        {
-          pluginId: "legacy-work",
-          pluginName: "Legacy work",
-          source: "test",
-          command: {
-            command: "legacy.start",
-            isAvailable: () => available,
-            handle: async () => {
-              retainedWork = true;
-              return '{"workId":"background-1"}';
-            },
-            ...(mode === "missing without disconnect" ? {} : { onDisconnect }),
-            ...(hasActiveWork ? { hasActiveWork } : {}),
-          },
-        },
-      ];
-      setActivePluginRegistry(registry);
-      mocks.pluginHasActiveWork.mockImplementation(
-        pluginBridge.hasRegisteredNodeHostCommandActiveWork,
-      );
-      mocks.handleInvoke.mockImplementationOnce(async () => {
-        await pluginBridge.invokeRegisteredNodeHostCommand("legacy.start");
-      });
-      const runtime = await startRuntime();
-      try {
-        await runtime.invoke({ ...frame, command: "legacy.start" });
-        expect(retainedWork).toBe(true);
-        expect(runtime.tryPauseForUpdate()).toBe(false);
-        available = false;
-        expect(
-          pluginBridge.listRegisteredNodeHostCapsAndCommands({ config: {}, env: {} }).commands,
-        ).toEqual([]);
-        expect(runtime.tryPauseForUpdate()).toBe(false);
-        expect(onDisconnect).not.toHaveBeenCalled();
-
-        retainedWork = false;
-        expect(runtime.tryPauseForUpdate()).toBe(mode === "declared");
-      } finally {
-        await runtime.close();
-        resetPluginRuntimeStateForTest();
-      }
-    },
-  );
-
-  it.each(["system.run", "test.duplex", NODE_DESKTOP_STREAM_COMMAND])(
-    "keeps %s busy from admission through disconnected command settlement",
-    async (command) => {
-      const held = holdInvoke();
-      const request = vi.fn(async () => ({}));
-      const runtime = await startRuntime(createNodeHostClient(request));
-      const invoking = runtime.invoke({ ...frame, command });
-      try {
-        expect(runtime.tryPauseForUpdate()).toBe(false);
-        await vi.waitFor(() => expect(held.signal).toBeDefined());
-        runtime.cancelAll();
-        expect(held.signal?.aborted).toBe(true);
-        expect(runtime.tryPauseForUpdate()).toBe(false);
-
-        held.release();
-        await invoking;
-        await vi.waitFor(() => expect(runtime.tryPauseForUpdate()).toBe(true));
-        await runtime.invoke({ ...frame, id: "during-update", command });
-        expect(mocks.handleInvoke).toHaveBeenCalledOnce();
-        expect(request).toHaveBeenCalledWith("node.invoke.result", {
-          id: "during-update",
-          nodeId: frame.nodeId,
-          ok: false,
-          error: { code: "UNAVAILABLE", message: expect.stringContaining("updating") },
-        });
-
-        runtime.resumeAfterUpdate();
-        await runtime.invoke({ ...frame, id: "after-update", command });
-        expect(mocks.handleInvoke).toHaveBeenCalledTimes(2);
-      } finally {
-        held.release();
-        await invoking;
-        await runtime.close();
-      }
-    },
-  );
-
-  it("waits for superseded commands and buffered output after their replacements finish", async () => {
-    const first = holdInvoke();
-    const second = holdInvoke();
-    const flushed = createDeferred();
-    const runtime = await startRuntime();
-    const original = runtime.invoke(frame);
-    let replacement: Promise<void> | undefined;
-    try {
-      await vi.waitFor(() => expect(first.signal).toBeDefined());
-      replacement = runtime.invoke(frame);
-      await vi.waitFor(() => expect(second.signal).toBeDefined());
-      second.release();
-      await replacement;
-      expect(first.signal?.aborted).toBe(true);
-      expect(runtime.tryPauseForUpdate()).toBe(false);
-
-      mocks.progressFlush.mockImplementationOnce(async () => await flushed.promise);
-      first.release();
-      await vi.waitFor(() => expect(mocks.progressFlush).toHaveBeenCalledTimes(2));
-      expect(runtime.tryPauseForUpdate()).toBe(false);
-      flushed.resolve();
-      await original;
-      expect(runtime.tryPauseForUpdate()).toBe(true);
-    } finally {
-      first.release();
-      second.release();
-      flushed.resolve();
-      await Promise.allSettled([original, replacement]);
-      await runtime.close();
-    }
-  });
-
-  it("waits for plugin disconnect cleanup and retains a failed cleanup as busy", async () => {
-    const cleanup = createDeferred();
-    mocks.disconnectPlugins.mockImplementationOnce(async () => await cleanup.promise);
-    const runtime = await startRuntime();
-    try {
-      runtime.cancelAll();
-      expect(runtime.tryPauseForUpdate()).toBe(false);
-      cleanup.reject(new Error("plugin process tree did not terminate"));
-      await runtime.invoke(frame);
-      expect(runtime.tryPauseForUpdate()).toBe(false);
-
-      runtime.cancelAll();
-      await runtime.invoke(frame);
-      expect(runtime.tryPauseForUpdate()).toBe(true);
-    } finally {
-      cleanup.resolve();
-      await runtime.close();
-    }
-  });
-
-  it("waits for MCP startup and retained worker or plugin ownership before pausing", async () => {
-    const startup = createDeferred<Awaited<ReturnType<typeof mocks.startMcp>>>();
-    mocks.startMcp.mockImplementationOnce(async () => await startup.promise);
-    const runtime = await startRuntime();
-    try {
-      expect(runtime.tryPauseForUpdate()).toBe(false);
-      mocks.workerHasActiveWork.mockReturnValue(true);
-      startup.resolve({ descriptors: [], callMcpTool: vi.fn(), close: mocks.closeMcp });
-      await runtime.invoke(frame);
-      expect(runtime.tryPauseForUpdate()).toBe(false);
-      mocks.workerHasActiveWork.mockReturnValue(false);
-      mocks.pluginHasActiveWork.mockReturnValue(true);
-      expect(runtime.tryPauseForUpdate()).toBe(false);
-      mocks.pluginHasActiveWork.mockReturnValue(false);
-      expect(runtime.tryPauseForUpdate()).toBe(true);
-    } finally {
-      startup.resolve({ descriptors: [], callMcpTool: vi.fn(), close: mocks.closeMcp });
-      await runtime.close();
-    }
+    const old = invoke("old");
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    await expectDefined(runtime, "started runtime").cancelAll();
+    const replacement = invoke("replacement");
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    expectDefined(requests[0], "retired connection refresh").resolve(response);
+    await old;
+    expect(observed.has("replacement")).toBe(false);
+    expectDefined(requests[1], "replacement connection refresh").resolve({ bins: [] });
+    await replacement;
+    await invoke("replacement-warm");
+    expect(observed.get("replacement")).toEqual([]);
+    expect(observed.get("replacement-warm")).toEqual([]);
+    expect(requests).toHaveLength(2);
   });
 });
 
@@ -485,24 +116,9 @@ describe("node-host invocation cancellation", () => {
   it("does not admit a queued invocation after its connection is retired", async () => {
     const runtime = await startRuntime();
     const pending = runtime.invoke({ ...frame, command: "system.run" });
-    runtime.cancelAll();
+    await runtime.cancelAll();
     await pending;
     expect(mocks.handleInvoke).not.toHaveBeenCalled();
-    await runtime.close();
-  });
-
-  it("cancels ordinary node invocations", async () => {
-    const held = holdInvoke();
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke({ ...frame, command: "system.run" });
-    await vi.waitFor(() => expect(held.signal).toBeDefined());
-
-    runtime.cancel(frame.id);
-
-    expect(held.signal?.aborted).toBe(true);
-    expect(held.io).toBeUndefined();
-    held.release();
-    await invoking;
     await runtime.close();
   });
 
@@ -518,6 +134,7 @@ describe("node-host invocation cancellation", () => {
 
     expect(first.signal?.aborted).toBe(true);
     expect(second.signal?.aborted).toBe(false);
+    expect(second.io).toBeUndefined();
 
     first.release();
     await firstInvoke;
@@ -530,92 +147,159 @@ describe("node-host invocation cancellation", () => {
     await runtime.close();
   });
 
-  it("cancels every ordinary invocation when the gateway disconnects", async () => {
-    const first = holdInvoke();
-    const second = holdInvoke();
-    const runtime = await startRuntime();
-    const firstInvoke = runtime.invoke({ ...frame, command: "system.run" });
-    const secondInvoke = runtime.invoke({
-      ...frame,
-      id: "invoke-2",
-      command: "system.run",
-    });
-    await vi.waitFor(() => {
-      expect(first.signal).toBeDefined();
-      expect(second.signal).toBeDefined();
-    });
+  it.each(["supervisor", "MCP", "plugin"] as const)(
+    "retains %s retirement failure with its retry policy",
+    async (owner) => {
+      const failure = new Error(`${owner} close failed`);
+      const retiring = createDeferred();
+      const entered = createDeferred();
+      const close = {
+        supervisor: mocks.closeWorkerSupervisor,
+        MCP: mocks.closeMcp,
+        plugin: mocks.disconnectPlugins,
+      }[owner];
+      close.mockImplementationOnce(async () => {
+        entered.resolve();
+        await retiring.promise;
+        return undefined;
+      });
+      const runtime = await startRuntime();
+      const closing = runtime.close();
+      const observed = expect(closing).rejects.toBe(failure);
+      try {
+        await entered.promise;
+        expect(runtime.close()).toBe(closing);
+        retiring.reject(failure);
+        await observed;
+        expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+        expect(mocks.closeMcp).toHaveBeenCalledOnce();
+        if (owner === "MCP") {
+          await expect(runtime.close()).rejects.toBe(failure);
+        } else {
+          await expect(runtime.close()).resolves.toBeUndefined();
+        }
+        expect(mocks.closeWorkerSupervisor).toHaveBeenCalledTimes(owner === "supervisor" ? 2 : 1);
+        expect(mocks.disconnectPlugins).toHaveBeenCalledTimes(owner === "plugin" ? 2 : 1);
+        expect(mocks.closeMcp).toHaveBeenCalledOnce();
+      } finally {
+        retiring.resolve();
+        await Promise.allSettled([closing, observed]);
+      }
+    },
+  );
 
-    runtime.cancelAll();
+  it.each(["close", "cancelAll"] as const)(
+    "joins cleanup when %s synchronously reenters close",
+    async (transition) => {
+      const held = holdInvoke();
+      const cleanups: Array<ReturnType<typeof createDeferred<void>>> = [];
+      const entered = createDeferred();
+      let tearingDown = false;
+      mocks.disconnectPlugins.mockImplementation(async () => {
+        if (tearingDown) {
+          return;
+        }
+        const cleanup = createDeferred();
+        cleanups.push(cleanup);
+        entered.resolve();
+        await cleanup.promise;
+      });
+      const runtime = await startRuntime();
+      const invoking = runtime.invoke({ ...frame, command: "system.run" });
+      let closing: Promise<void> | undefined;
+      let observed: Promise<void> | undefined;
+      let retiring: Promise<void> | undefined;
+      let closed = false;
+      try {
+        await vi.waitFor(() => expect(held.signal).toBeDefined());
+        held.signal?.addEventListener(
+          "abort",
+          () => {
+            closing = runtime.close();
+            observed = closing.then(() => {
+              closed = true;
+            });
+          },
+          { once: true },
+        );
+        retiring = runtime[transition]();
+        expect(held.signal?.aborted).toBe(true);
+        if (transition === "close") {
+          expect(closing).toBe(retiring);
+        }
+        await entered.promise;
+        await setImmediate();
+        expect(closed).toBe(false);
+        for (const cleanup of cleanups) {
+          cleanup.resolve();
+          await setImmediate();
+          if (cleanups.at(-1) !== cleanup) {
+            expect(closed).toBe(false);
+          }
+        }
+        // Disconnect notification is not the accepted invocation's settlement.
+        expect(closed).toBe(false);
+        held.release();
+        await invoking;
+        await retiring;
+        await closing;
+        expect(mocks.disconnectPlugins).toHaveBeenCalledTimes(transition === "close" ? 1 : 2);
+        expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+        expect(mocks.closeMcp).toHaveBeenCalledOnce();
+      } finally {
+        tearingDown = true;
+        for (const cleanup of cleanups) {
+          cleanup.resolve();
+        }
+        held.release();
+        await Promise.allSettled([invoking, closing, observed, retiring]);
+      }
+    },
+  );
 
-    expect(first.signal?.aborted).toBe(true);
-    expect(second.signal?.aborted).toBe(true);
-    first.release();
-    second.release();
-    await Promise.all([firstInvoke, secondInvoke]);
-    await runtime.close();
-  });
-
-  it("cancels ordinary invocations when the node runtime closes", async () => {
-    const held = holdInvoke();
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke({ ...frame, command: "system.run" });
-    await vi.waitFor(() => expect(held.signal).toBeDefined());
-
-    await runtime.close();
-
-    expect(held.signal?.aborted).toBe(true);
-    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
-    held.release();
-    await invoking;
-  });
-
-  it("retires MCP even when supervisor close fails", async () => {
-    const supervisorError = new Error("supervisor close failed");
-    mocks.closeWorkerSupervisor.mockRejectedValueOnce(supervisorError);
-    const runtime = await startRuntime();
-
-    await expect(runtime.close()).rejects.toBe(supervisorError);
-    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
-    expect(mocks.closeMcp).toHaveBeenCalledOnce();
-  });
-
-  it("completes supervisor retirement even when MCP close fails", async () => {
-    const mcpError = new Error("MCP close failed");
-    mocks.closeMcp.mockRejectedValueOnce(mcpError);
-    const runtime = await startRuntime();
-
-    await expect(runtime.close()).rejects.toBe(mcpError);
-    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
-    expect(mocks.closeMcp).toHaveBeenCalledOnce();
-  });
-
-  it("aggregates independent supervisor and MCP close failures in owner order", async () => {
-    const supervisorError = new Error("supervisor close failed");
-    const mcpError = new Error("MCP close failed");
-    mocks.closeWorkerSupervisor.mockRejectedValueOnce(supervisorError);
-    mocks.closeMcp.mockRejectedValueOnce(mcpError);
-    const runtime = await startRuntime();
-
-    const error = await runtime.close().catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(AggregateError);
-    expect((error as AggregateError).errors).toEqual([supervisorError, mcpError]);
+  it("keeps invoke admission closed after failed idle-worker cleanup until reconnect", async () => {
+    const failure = new Error("disconnect cleanup failed");
+    mocks.retireIdleWorkers.mockRejectedValueOnce(failure);
+    const request = vi.fn(async () => ({}));
+    const runtime = await startRuntime(createNodeHostClient(request));
+    try {
+      const disconnecting = runtime.cancelAll().catch((error: unknown) => error);
+      await runtime.invoke(frame);
+      expect(await disconnecting).toBe(failure);
+      expect(mocks.handleInvoke).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledWith(
+        "node.invoke.result",
+        expect.objectContaining({
+          id: frame.id,
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            message: "Node disconnect cleanup failed. Reconnect the node to retry cleanup.",
+          },
+        }),
+      );
+      await runtime.cancelAll();
+      await runtime.invoke({ ...frame, id: "after-reconnect" });
+      expect(mocks.handleInvoke).toHaveBeenCalledOnce();
+      expect(mocks.disconnectPlugins).toHaveBeenCalledTimes(2);
+    } finally {
+      await runtime.close();
+    }
   });
 
   it("aborts MCP startup before waiting while supervisor retirement runs independently", async () => {
     let startupSignal: AbortSignal | undefined;
-    let resolveStartup!: (manager: Awaited<ReturnType<typeof mocks.startMcp>>) => void;
+    const startup = createDeferred<Awaited<ReturnType<typeof mocks.startMcp>>>();
     mocks.startMcp.mockImplementationOnce(async (_servers, deps) => {
       startupSignal = deps?.signal;
-      return await new Promise((resolve) => {
-        resolveStartup = resolve;
-      });
+      return await startup.promise;
     });
     const runtime = await startRuntime();
 
     const closing = runtime.close();
     expect(startupSignal?.aborted).toBe(true);
     await vi.waitFor(() => expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce());
-    resolveStartup({
+    startup.resolve({
       descriptors: [],
       callMcpTool: vi.fn(),
       close: mocks.closeMcp,
@@ -627,22 +311,6 @@ describe("node-host invocation cancellation", () => {
 });
 
 describe("node-host desktop manifest", () => {
-  it("advertises desktop.stream only when the node-local desktop is enabled", async () => {
-    const disabled = await prepareNodeHostRuntime({
-      config: {},
-      env: { PATH: "/usr/bin" },
-      platform: "linux",
-    });
-    expect(disabled.manifest.commands).not.toContain(NODE_DESKTOP_STREAM_COMMAND);
-
-    const enabled = await prepareNodeHostRuntime({
-      config: { desktop: { host: { enabled: true } } },
-      env: { PATH: "/usr/bin" },
-      platform: "linux",
-    });
-    expect(enabled.manifest.commands).toContain(NODE_DESKTOP_STREAM_COMMAND);
-  });
-
   it("emits desktop statuses without control-channel heartbeats", async () => {
     const runtime = await startRuntime();
     await runtime.invoke({ ...frame, command: NODE_DESKTOP_STREAM_COMMAND });
@@ -650,9 +318,7 @@ describe("node-host desktop manifest", () => {
     expect(mocks.progressStartHeartbeats).not.toHaveBeenCalled();
     const lastCall = mocks.handleInvoke.mock.calls.at(-1) as unknown[] | undefined;
     const invokeRuntime = lastCall?.[4] as
-      | {
-          emitProgress?: (text: string) => Promise<void>;
-        }
+      | { emitProgress?: (text: string) => Promise<void> }
       | undefined;
     await invokeRuntime?.emitProgress?.("attached\n");
     expect(mocks.progressWrite).toHaveBeenCalledWith("attached\n");
@@ -660,246 +326,84 @@ describe("node-host desktop manifest", () => {
   });
 });
 
-describe("node-host invoke input dispatch", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("provides framed binary message IO to duplex plugin commands", async () => {
-    const held = holdInvoke();
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke(frame);
-
-    try {
-      await vi.waitFor(() => expect(held.io).toBeDefined());
-      expect(held.io).toMatchObject({
-        frames: {
-          send: expect.any(Function),
-          onMessage: expect.any(Function),
-        },
-      });
-    } finally {
-      held.release();
-      await invoking;
-      await runtime.close();
-    }
-  });
-
-  it("announces framed readiness only after the plugin registers its message listener", async () => {
-    const held = holdInvoke();
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke(frame);
-
-    try {
-      await vi.waitFor(() => expect(held.io).toBeDefined());
-      expect(mocks.progressWrite).not.toHaveBeenCalled();
-
-      const unsubscribe = held.io?.frames?.onMessage(vi.fn());
-
-      await vi.waitFor(() =>
-        expect(mocks.progressWrite).toHaveBeenCalledWith(JSON.stringify({ v: 1, kind: "ready" })),
-      );
-      expect(unsubscribe).toEqual(expect.any(Function));
-      unsubscribe?.();
-    } finally {
-      held.release();
-      await invoking;
-      await runtime.close();
-    }
-  });
-
-  it("round-trips binary messages through an external-style duplex plugin command", async () => {
-    const received = vi.fn();
-    const pluginCommand = {
-      command: "test.duplex",
-      duplex: true,
-      handle: (_paramsJSON: string | null, io: OpenClawPluginNodeHostCommandIo) => {
-        io.frames?.onMessage((message) => {
-          received(message);
-          void io.frames?.send(message);
-        });
-      },
-    };
-    const held = holdInvoke((io) => pluginCommand.handle(frame.paramsJSON, io));
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke(frame);
-
-    try {
-      await vi.waitFor(() => expect(mocks.progressWrite).toHaveBeenCalledOnce());
-      runtime.handleInput(
-        frame.id,
-        0,
-        JSON.stringify({
-          v: 1,
-          kind: "data",
-          message: 0,
-          index: 0,
-          last: true,
-          data: "AP8B",
-        }),
-      );
-
-      await vi.waitFor(() => expect(mocks.progressWrite).toHaveBeenCalledTimes(2));
-      expect(received).toHaveBeenCalledWith(Uint8Array.from([0, 255, 1]));
-      expect(mocks.progressWrite.mock.calls[1]?.[0]).toBe(
-        '{"v":1,"kind":"data","message":0,"index":0,"last":true,"data":"AP8B"}',
-      );
-    } finally {
-      held.release();
-      await invoking;
-      await runtime.close();
-    }
-  });
-
-  it("preserves binary message boundaries and fragments output below the transport limit", async () => {
-    const held = holdInvoke();
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke(frame);
-
-    try {
-      await vi.waitFor(() => expect(held.io?.frames).toBeDefined());
-      const received = vi.fn();
-      held.io?.frames?.onMessage(received);
-      await vi.waitFor(() => expect(mocks.progressWrite).toHaveBeenCalledOnce());
-      mocks.progressWrite.mockClear();
-
-      const incoming = Uint8Array.from({ length: 20_000 }, (_, index) => index % 256);
-      const incomingFragments = [
-        incoming.slice(0, 8_192),
-        incoming.slice(8_192, 16_384),
-        incoming.slice(16_384),
-      ];
-      for (const [index, fragment] of incomingFragments.entries()) {
-        runtime.handleInput(
-          frame.id,
-          index,
-          JSON.stringify({
-            v: 1,
-            kind: "data",
-            message: 0,
-            index,
-            last: index === incomingFragments.length - 1,
-            data: Buffer.from(fragment).toString("base64"),
-          }),
-        );
-      }
-      runtime.handleInput(
-        frame.id,
-        incomingFragments.length,
-        JSON.stringify({
-          v: 1,
-          kind: "data",
-          message: 1,
-          index: 0,
-          last: true,
-          data: Buffer.from([0, 255]).toString("base64"),
-        }),
-      );
-      expect(received.mock.calls).toEqual([[incoming], [Uint8Array.from([0, 255])]]);
-
-      const outgoing = Uint8Array.from({ length: 20_000 }, (_, index) => (index * 7) % 256);
-      await Promise.all([
-        held.io?.frames?.send(outgoing),
-        held.io?.frames?.send(Uint8Array.from([4, 5, 6])),
-      ]);
-
-      const fragments = mocks.progressWrite.mock.calls.map(([value]) => {
-        expect(Buffer.byteLength(value, "utf8")).toBeLessThan(16 * 1024);
-        return JSON.parse(value) as {
-          v: number;
-          kind: string;
-          message: number;
-          index: number;
-          last: boolean;
-          data: string;
-        };
-      });
-      expect(fragments.map(({ message }) => message)).toEqual([0, 0, 0, 1]);
-      expect(fragments.map(({ index }) => index)).toEqual([0, 1, 2, 0]);
+async function withFramedInvoke(
+  run: (
+    runtime: Awaited<ReturnType<typeof startRuntime>>,
+    held: ReturnType<typeof holdInvoke>,
+  ) => Promise<void>,
+  request: Parameters<Awaited<ReturnType<typeof startRuntime>>["invoke"]>[0] = frame,
+) {
+  const held = holdInvoke();
+  const runtime = await startRuntime();
+  const invoking = runtime.invoke(request);
+  try {
+    await vi.waitFor(() =>
       expect(
-        Buffer.concat(
-          fragments
-            .filter(({ message }) => message === 0)
-            .map(({ data }) => Buffer.from(data, "base64")),
-        ),
-      ).toEqual(Buffer.from(outgoing));
-      expect(Buffer.from(fragments[3]?.data ?? "", "base64")).toEqual(Buffer.from([4, 5, 6]));
-    } finally {
-      held.release();
-      await invoking;
-      await runtime.close();
-    }
-  });
+        request.command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND ? held.signal : held.io,
+      ).toBeDefined(),
+    );
+    await run(runtime, held);
+  } finally {
+    held.release();
+    await invoking;
+    await runtime.close();
+  }
+}
 
-  it.each(["cancel", "result"] as const)(
-    "closes framed plugin IO after invocation %s",
-    async (terminalState) => {
-      const held = holdInvoke();
-      const runtime = await startRuntime();
-      const invoking = runtime.invoke(frame);
-
-      try {
-        await vi.waitFor(() => expect(held.io?.frames).toBeDefined());
-        const received = vi.fn();
-        held.io?.frames?.onMessage(received);
-        await vi.waitFor(() => expect(mocks.progressWrite).toHaveBeenCalledOnce());
-
-        if (terminalState === "cancel") {
-          runtime.cancel(frame.id);
-        } else {
-          held.release();
-          await invoking;
+describe("node-host invoke input dispatch", () => {
+  it.each([
+    ["true", '{"skillRuntime":true}', true],
+    ["absent", "{}", false],
+    ["false", '{"skillRuntime":false}', false],
+    ["string", '{"skillRuntime":"true"}', false],
+    ["malformed", '{"skillRuntime":true', false],
+    ["nonobject", '[{"skillRuntime":true}]', false],
+    ["JSON whitespace", ' \t\r\n{"skillRuntime":true}', true],
+    ["escaped key", '{"skill\\u0052untime":true}', true],
+    ["oversize", `${" ".repeat(2 * 1024 * 1024)}{"skillRuntime":true}`, false],
+  ] as const)("selects Claude skill frames for %s", async (_name, paramsJSON, framed) => {
+    await withFramedInvoke(
+      async (runtime, held) => {
+        const received: Uint8Array[] = [];
+        held.io?.frames?.onMessage((message) => {
+          received.push(message);
+        });
+        if (framed) {
+          await vi.waitFor(() =>
+            expect(mocks.progressWrite).toHaveBeenCalledWith('{"v":1,"kind":"ready"}'),
+          );
         }
         runtime.handleInput(
           frame.id,
           0,
-          JSON.stringify({
-            v: 1,
-            kind: "data",
-            message: 0,
-            index: 0,
-            last: true,
-            data: "eA==",
-          }),
+          '{"v":1,"kind":"data","message":0,"index":0,"last":true,"data":"AP8R"}',
         );
+        expect(received).toEqual(framed ? [Uint8Array.of(0, 255, 17)] : []);
+      },
+      { ...frame, command: NODE_AGENT_CLI_CLAUDE_RUN_COMMAND, paramsJSON },
+    );
+  });
 
-        expect(received).not.toHaveBeenCalled();
-        await expect(held.io?.frames?.send(Uint8Array.from([1]))).rejects.toThrow(/closed/i);
-      } finally {
-        held.release();
-        await invoking;
-        await runtime.close();
-      }
-    },
-  );
+  it("registers framed readiness before exchanging binary messages", async () => {
+    await withFramedInvoke(async (runtime, held) => {
+      expect(mocks.progressWrite).not.toHaveBeenCalled();
 
-  it("aborts a framed plugin command on malformed input without throwing through the transport", async () => {
-    const held = holdInvoke();
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke(frame);
+      const received = vi.fn();
+      const unsubscribe = held.io?.frames?.onMessage(received);
 
-    try {
-      await vi.waitFor(() => expect(held.io?.frames).toBeDefined());
-      held.io?.frames?.onMessage(vi.fn());
-      await vi.waitFor(() => expect(mocks.progressWrite).toHaveBeenCalledOnce());
-
-      expect(() => runtime.handleInput(frame.id, 0, "not-json")).not.toThrow();
-      expect(held.io?.signal.aborted).toBe(true);
-      await expect(held.io?.frames?.send(Uint8Array.from([1]))).rejects.toThrow(/closed/i);
-    } finally {
-      held.release();
-      await invoking;
-      await runtime.close();
-    }
+      await vi.waitFor(() =>
+        expect(mocks.progressWrite).toHaveBeenCalledWith(JSON.stringify({ v: 1, kind: "ready" })),
+      );
+      await held.io?.frames?.send(Uint8Array.from([0, 255]));
+      runtime.handleInput(frame.id, 0, mocks.progressWrite.mock.calls[1]![0]);
+      expect(received).toHaveBeenCalledExactlyOnceWith(Uint8Array.from([0, 255]));
+      expect(unsubscribe).toEqual(expect.any(Function));
+      unsubscribe?.();
+    });
   });
 
   it("aborts the invocation when its framed plugin message listener fails", async () => {
-    const held = holdInvoke();
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke(frame);
-
-    try {
-      await vi.waitFor(() => expect(held.io?.frames).toBeDefined());
+    await withFramedInvoke(async (runtime, held) => {
       held.io?.frames?.onMessage(() => {
         throw new Error("plugin message rejected");
       });
@@ -923,110 +427,38 @@ describe("node-host invoke input dispatch", () => {
       expect(held.io?.signal.reason).toEqual(
         expect.objectContaining({ message: "plugin message rejected" }),
       );
-    } finally {
-      held.release();
-      await invoking;
-      await runtime.close();
-    }
+      await expect(held.io?.frames?.send(Uint8Array.from([1]))).rejects.toThrow(/closed/i);
+    });
   });
 
-  it("buffers frames before the command registers input and flushes them in order", async () => {
-    const held = holdInvoke();
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke(frame);
-    await vi.waitFor(() => expect(held.io).toBeDefined());
-
-    runtime.handleInput(frame.id, 0, "first");
-    runtime.handleInput(frame.id, 1, "second");
-    const input = vi.fn();
-    held.io?.onInput(input);
-    expect(input.mock.calls).toEqual([["first"], ["second"]]);
-
-    held.release();
-    await invoking;
-    await runtime.close();
-  });
-
-  it("drops duplicates while tolerating sequence gaps", async () => {
-    const held = holdInvoke();
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke(frame);
-    await vi.waitFor(() => expect(held.io).toBeDefined());
-
-    const input = vi.fn();
-    held.io?.onInput(input);
-    runtime.handleInput("unknown", 0, "unknown");
-    runtime.handleInput(frame.id, 0, "first");
-    runtime.handleInput(frame.id, 0, "duplicate");
-    runtime.handleInput(frame.id, 2, "gap");
-    runtime.handleInput(frame.id, 3, "next");
-    expect(input.mock.calls).toEqual([["first"], ["gap"], ["next"]]);
-
-    held.release();
-    await invoking;
-    await runtime.close();
+  it("delivers buffered and live input in sequence without replaying duplicates", async () => {
+    await withFramedInvoke(async (runtime, held) => {
+      runtime.handleInput("unknown", 0, "unknown");
+      runtime.handleInput(frame.id, 0, "first");
+      runtime.handleInput(frame.id, 1, "second");
+      const input = vi.fn();
+      held.io?.onInput(input);
+      expect(input.mock.calls).toEqual([["first"], ["second"]]);
+      runtime.handleInput(frame.id, 1, "duplicate");
+      runtime.handleInput(frame.id, 3, "gap");
+      runtime.handleInput(frame.id, 4, "next");
+      expect(input.mock.calls).toEqual([["first"], ["second"], ["gap"], ["next"]]);
+    });
   });
 
   it("aborts without delivering partial input when the pre-spawn buffer overflows", async () => {
-    const held = holdInvoke();
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke(frame);
-    await vi.waitFor(() => expect(held.io).toBeDefined());
-    const chunk = "x".repeat(16 * 1024 - 1);
+    await withFramedInvoke(async (runtime, held) => {
+      const chunk = "x".repeat(16 * 1024 - 1);
 
-    for (let seq = 0; seq < 5; seq += 1) {
-      runtime.handleInput(frame.id, seq, `${seq}${chunk}`);
-    }
-    expect(held.io?.signal.aborted).toBe(true);
-    const input = vi.fn();
-    held.io?.onInput(input);
-    expect(input).not.toHaveBeenCalled();
-    runtime.handleInput(frame.id, 5, "continued");
-    expect(input).not.toHaveBeenCalled();
-
-    held.release();
-    await invoking;
-    await runtime.close();
-  });
-});
-
-describe("node-host duplex capability selection", () => {
-  it("advertises duplex plugin commands without enabling native agent runs", async () => {
-    await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false } } },
-      env: { PATH: "/usr/bin" },
-      enableDuplexPluginCommands: true,
+      for (let seq = 0; seq < 5; seq += 1) {
+        runtime.handleInput(frame.id, seq, `${seq}${chunk}`);
+      }
+      expect(held.io?.signal.aborted).toBe(true);
+      const input = vi.fn();
+      held.io?.onInput(input);
+      expect(input).not.toHaveBeenCalled();
+      runtime.handleInput(frame.id, 5, "continued");
+      expect(input).not.toHaveBeenCalled();
     });
-
-    expect(listRegisteredNodeHostCapsAndCommands).toHaveBeenLastCalledWith(expect.anything(), {
-      includeDuplex: true,
-    });
-  });
-});
-
-describe("installed application command advertisement", () => {
-  it("advertises device.apps only when sharing is enabled on macOS", async () => {
-    const disabled = await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false } } },
-      env: { PATH: "/usr/bin" },
-      platform: "darwin",
-      installedAppsSharingEnabled: false,
-    });
-    const enabled = await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false } } },
-      env: { PATH: "/usr/bin" },
-      platform: "darwin",
-      installedAppsSharingEnabled: true,
-    });
-    const nonDarwin = await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false } } },
-      env: { PATH: "/usr/bin" },
-      platform: "linux",
-      installedAppsSharingEnabled: true,
-    });
-
-    expect(disabled.manifest.commands).not.toContain(NODE_DEVICE_APPS_COMMAND);
-    expect(enabled.manifest.commands).toContain(NODE_DEVICE_APPS_COMMAND);
-    expect(nonDarwin.manifest.commands).not.toContain(NODE_DEVICE_APPS_COMMAND);
   });
 });

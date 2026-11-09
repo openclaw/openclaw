@@ -1,4 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionTranscriptActiveFacts } from "./session-transcript-active-facts.js";
+import type { PreparedTranscriptPayload, TranscriptPayloadRecord } from "./transcript-payload.js";
 import {
   isCanonicalSessionTranscriptEntry,
   isSessionTranscriptLeafControl,
@@ -13,11 +15,24 @@ export type TranscriptIndexEntry = {
   timestamp: number;
 };
 
+export type TranscriptIndexAppend = {
+  preparedPayload?: PreparedTranscriptPayload;
+  serializedBytes?: number;
+  seq: number;
+  event: unknown;
+  eventId: string | null;
+  createdAt: number;
+};
+
 export type SessionTranscriptProjectionCursor = {
   activeEventCount: number;
   activeMessageCount: number;
   indexedSeq: number;
   leafEventId: string | null;
+};
+
+export type SessionTranscriptProjectionState = SessionTranscriptProjectionCursor & {
+  needsRebuild: boolean;
 };
 
 export type PreparedSessionTranscriptProjectionAppend = {
@@ -26,6 +41,7 @@ export type PreparedSessionTranscriptProjectionAppend = {
     contextEligible: 0 | 1;
     eventSeq: number;
     messagePosition: number | null;
+    facts?: SessionTranscriptActiveFacts;
   };
   cursor: SessionTranscriptProjectionCursor;
   ftsRow?: TranscriptIndexEntry;
@@ -94,9 +110,8 @@ export function hasTranscriptMessage(event: unknown): boolean {
 
 /** Control facts still belong in bounded context acquisition, even without a replay message. */
 export function transcriptEventContextEligibility(event: unknown): 0 | 1 {
-  return isRecord(event) && isRecord(event.message) && event.message.excludeFromContext === true
-    ? 0
-    : 1;
+  const message = isRecord(event) && (event.type === "custom_message" ? event : event.message);
+  return isRecord(message) && message.excludeFromContext === true ? 0 : 1;
 }
 
 export function shouldProjectActiveEvent(event: unknown): boolean {
@@ -109,14 +124,32 @@ export function shouldProjectActiveEvent(event: unknown): boolean {
   );
 }
 
+/** Inputs come from the payload writer; no payload-table lookup is needed. */
+function prepareSessionTranscriptActiveFacts(
+  payload: TranscriptPayloadRecord,
+  contextEligible: number | null,
+  serializedBytes: number,
+): SessionTranscriptActiveFacts | undefined {
+  // Invalid or native-depth-exceeding input keeps its existing read-time behavior.
+  if (payload.navigation_valid === 0) {
+    return undefined;
+  }
+  const candidate =
+    payload.navigation_type === null ||
+    payload.navigation_type === "custom" ||
+    payload.navigation_type === "reset" ||
+    (payload.navigation_type === "message" &&
+      contextEligible === 0 &&
+      payload.message_role === "assistant");
+  return candidate
+    ? { serializedBytes, payload }
+    : { serializedBytes, dependencyNavigationJson: "{}" };
+}
+
 /** Resolves one append against an already-complete projection without mutating storage. */
-export function prepareSessionTranscriptProjectionAppend(params: {
-  createdAt: number;
-  cursor: SessionTranscriptProjectionCursor;
-  event: unknown;
-  eventId: string | null;
-  seq: number;
-}): PreparedSessionTranscriptProjectionAppend | undefined {
+export function prepareSessionTranscriptProjectionAppend(
+  params: TranscriptIndexAppend & { cursor: SessionTranscriptProjectionCursor },
+): PreparedSessionTranscriptProjectionAppend | undefined {
   const { cursor } = params;
   const treeEntry = parseSessionTranscriptTreeEntry(params.event);
   const isCanonicalEvent = isCanonicalSessionTranscriptEntry(params.event);
@@ -137,7 +170,7 @@ export function prepareSessionTranscriptProjectionAppend(params: {
   const ftsRow = extractTranscriptIndexEntry(params.event, params.createdAt);
   const projectsActiveEvent = shouldProjectActiveEvent(params.event);
   const projectsMessage = projectsActiveEvent && hasTranscriptMessage(params.event);
-  const activeRow = projectsActiveEvent
+  const activeRow: PreparedSessionTranscriptProjectionAppend["activeRow"] = projectsActiveEvent
     ? {
         activePosition: cursor.activeEventCount,
         contextEligible: transcriptEventContextEligibility(params.event),
@@ -145,6 +178,13 @@ export function prepareSessionTranscriptProjectionAppend(params: {
         messagePosition: projectsMessage ? cursor.activeMessageCount : null,
       }
     : undefined;
+  if (activeRow && params.preparedPayload && params.serializedBytes !== undefined) {
+    activeRow.facts = prepareSessionTranscriptActiveFacts(
+      params.preparedPayload.payload,
+      activeRow.contextEligible,
+      params.serializedBytes,
+    );
+  }
   return {
     ...(activeRow ? { activeRow } : {}),
     cursor: {

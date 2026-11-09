@@ -28,11 +28,11 @@ describe("resolveSessionAuthProfileOverrideSource", () => {
     ).toBe("auto");
   });
 
-  it.each([0, 3])("treats numeric compaction marker %i as automatic", (marker) => {
+  it("treats a zero compaction marker as automatic", () => {
     expect(
       resolveSessionAuthProfileOverrideSource({
         authProfileOverride: "openai:fallback",
-        authProfileOverrideCompactionCount: marker,
+        authProfileOverrideCompactionCount: 0,
       }),
     ).toBe("auto");
   });

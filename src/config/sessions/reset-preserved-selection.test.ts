@@ -2,6 +2,19 @@ import { describe, expect, it } from "vitest";
 import { resolveResetPreservedSelection } from "./reset-preserved-selection.js";
 
 describe("resolveResetPreservedSelection", () => {
+  it("preserves communication overrides while dropping a temporary model fallback", () => {
+    expect(
+      resolveResetPreservedSelection({
+        entry: {
+          sessionId: "policy",
+          updatedAt: 1,
+          modelOverride: "fallback",
+          modelOverrideSource: "auto",
+          communication: { send: "never", receive: "ask" },
+        },
+      }),
+    ).toEqual({ communication: { send: "never", receive: "ask" } });
+  });
   it("does not stamp legacy raw aliases as resolved during reset", () => {
     expect(
       resolveResetPreservedSelection({
@@ -10,11 +23,13 @@ describe("resolveResetPreservedSelection", () => {
           updatedAt: 1,
           providerOverride: "anthropic",
           modelOverride: "sonnet",
+          agentRuntimeOverride: "native-runtime",
         },
       }),
     ).toEqual({
       providerOverride: "anthropic",
       modelOverride: "sonnet",
+      agentRuntimeOverride: "native-runtime",
       modelOverrideSource: "user",
     });
   });
@@ -29,11 +44,13 @@ describe("resolveResetPreservedSelection", () => {
           modelOverride: "claude-sonnet-4-6",
           modelOverrideSource: "user",
           modelOverrideRouteResolution: "resolved",
+          agentRuntimeOverride: "native-runtime",
         },
       }),
     ).toMatchObject({
       modelOverride: "claude-sonnet-4-6",
       modelOverrideRouteResolution: "resolved",
+      agentRuntimeOverride: "native-runtime",
     });
   });
 
@@ -47,6 +64,22 @@ describe("resolveResetPreservedSelection", () => {
         },
       }),
     ).toEqual({ modelOverrideSource: "default" });
+  });
+
+  it("preserves a person-linked account pin with its link provenance", () => {
+    expect(
+      resolveResetPreservedSelection({
+        entry: {
+          sessionId: "linked",
+          updatedAt: 1,
+          authProfileOverride: "openai:alice",
+          authProfileOverrideSource: "user-link",
+        },
+      }),
+    ).toEqual({
+      authProfileOverride: "openai:alice",
+      authProfileOverrideSource: "user-link",
+    });
   });
 
   it("preserves legacy user auth pins while dropping legacy automatic pins", () => {
@@ -67,6 +100,10 @@ describe("resolveResetPreservedSelection", () => {
       resolveResetPreservedSelection({
         entry: {
           sessionId: "legacy-auto",
+          providerOverride: "provider-a",
+          modelOverride: "model",
+          modelOverrideSource: "auto",
+          agentRuntimeOverride: "native-runtime",
           updatedAt: 1,
           authProfileOverride: "openai:fallback",
           authProfileOverrideCompactionCount: 0,

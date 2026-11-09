@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
+import { formatCliCommand } from "../cli/command-format.js";
 import { renderGatewayServiceStartHints } from "../cli/daemon-cli/shared.js";
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
-import { readFileWindowFully } from "../infra/file-read.js";
+import { resolveLaunchAgentLabel } from "../daemon/launchd-label.js";
 import { executeGitCommand } from "../infra/git-exec.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { resolveDiagnosticProcessEnv } from "../infra/process-env.js";
@@ -9,6 +11,25 @@ import { resolveUpdateInstallKind } from "../infra/update-check.js";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.js";
 import { getChildLogger } from "../logging/logger.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import type { RuntimeEnv } from "../runtime.js";
+
+export async function formatUpdateDoctorServiceStopRefusal(
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  const stop = formatCliCommand("openclaw gateway stop", env);
+  const lines = [
+    "The update parent must stop the managed Gateway before Doctor maintenance; Doctor left the service unchanged.",
+    "The managed Gateway is still loaded or running. If the stop command already returned successfully, its managed-service shutdown did not complete.",
+    `After the current update exits, run ${stop} from an independent shell, then retry ${formatCliCommand("openclaw update repair", env)}.`,
+  ];
+  if (process.platform === "darwin") {
+    const { resolveLaunchAgentGuiDomain } = await import("../daemon/launchd-runtime.js");
+    lines.push(
+      `If that command cannot unload the LaunchAgent, run launchctl bootout ${resolveLaunchAgentGuiDomain()}/${resolveLaunchAgentLabel(env)} from a terminal in the owning user's logged-in macOS GUI session.`,
+    );
+  }
+  return lines.join("\n");
+}
 
 async function readParentStartTime(parentPid: number): Promise<number | null> {
   if (process.platform === "win32") {
@@ -181,6 +202,28 @@ export async function resolveUpdateDoctorGitRecovery(
       "Fix the refusal cause, then rerun openclaw update. Once the upgrade succeeds, subsequent updates validate before activation.",
     ].join("\n"),
   };
+}
+
+/** Without a Doctor result channel, the deferral stays visible in the run's update history. */
+export async function recordDeferredUpdateDoctorWarning(
+  message: string,
+  runtime: Pick<RuntimeEnv, "error">,
+): Promise<void> {
+  const runId = process.env.OPENCLAW_UPDATE_RUN_ID?.trim();
+  if (!runId) {
+    return;
+  }
+  try {
+    const { recordUpdateRunStep } = await import("../infra/update-run-ledger.js");
+    recordUpdateRunStep(runId, {
+      step: "warning:doctor-maintenance",
+      status: "completed",
+      endedAtMs: Date.now(),
+      detail: message,
+    });
+  } catch {
+    runtime.error("Doctor maintenance warning could not be saved to update history.");
+  }
 }
 
 export function recordUpdateDoctorRefusal(message: string): void {

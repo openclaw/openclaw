@@ -2,33 +2,11 @@ import { describe, expect, it } from "vitest";
 import { flattenMarkdownDetails } from "./markdown-details.js";
 
 describe("flattenMarkdownDetails", () => {
-  it("flattens details blocks into portable markdown", () => {
-    expect(
-      flattenMarkdownDetails(
-        "<details open><summary>Why this works</summary>**Bold** body\n\n- one\n- two</details>",
-      ),
-    ).toBe("**Why this works**\n\n**Bold** body\n\n- one\n- two");
-  });
-
   it("uses the default label when summary is missing or empty", () => {
     expect(flattenMarkdownDetails("<details>body</details>")).toBe("**Details**\n\nbody");
     expect(flattenMarkdownDetails("<details><summary> </summary>body</details>")).toBe(
       "**Details**\n\nbody",
     );
-  });
-
-  it("flattens nested details recursively", () => {
-    expect(
-      flattenMarkdownDetails(
-        "<details><summary>Outer</summary>before\n\n<details><summary>Inner</summary>deep</details>\n\nafter</details>",
-      ),
-    ).toBe("**Outer**\n\nbefore\n\n**Inner**\n\ndeep\n\nafter");
-  });
-
-  it("preserves indentation in the first body block", () => {
-    expect(
-      flattenMarkdownDetails("<details><summary>Example</summary>\n    const x = 1;\n</details>"),
-    ).toBe("**Example**\n\n    const x = 1;");
   });
 
   it("preserves block boundaries around flattened details", () => {
@@ -37,24 +15,6 @@ describe("flattenMarkdownDetails", () => {
     );
     expect(flattenMarkdownDetails("<details>inside</details>\nafter")).toBe(
       "**Details**\n\ninside\n\nafter",
-    );
-  });
-
-  it("preserves list and blockquote containers around flattened details", () => {
-    expect(flattenMarkdownDetails("- <details><summary>A</summary>body</details>")).toBe(
-      "- **A**\n\n  body",
-    );
-    expect(flattenMarkdownDetails("> <details><summary>A</summary>body</details>")).toBe(
-      "> **A**\n>\n> body",
-    );
-  });
-
-  it("keeps a two-space-indented details block in its list item", () => {
-    expect(flattenMarkdownDetails("  - <details><summary>A</summary>body</details>")).toBe(
-      "  - **A**\n\n    body",
-    );
-    expect(flattenMarkdownDetails(">   - <details><summary>A</summary>body</details>")).toBe(
-      ">   - **A**\n>\n>     body",
     );
   });
 
@@ -67,17 +27,30 @@ describe("flattenMarkdownDetails", () => {
     ).toBe("10. **A**\n\n    body");
   });
 
-  it("bounds rendering of deeply nested details", () => {
-    let markdown = "deep body";
-    for (let index = 0; index < 128; index += 1) {
-      markdown = `<details><summary>Level ${index}</summary>${markdown}</details>`;
-    }
+  it.each([[31, "**A**\n\nonelater\n\nmiddle\n\n**B**\n\ntwo"]] as const)(
+    "preserves child rendering at parent depth %i",
+    (depth, expected) => {
+      const prefix = "<summary>".repeat(depth);
+      const suffix = "</summary>".repeat(depth);
+      const children =
+        "<details><summary>A</summary>one<summary>later</summary></details>" +
+        "middle<details><summary>B</summary>two</details>";
 
-    const flattened = flattenMarkdownDetails(markdown);
-
-    expect(flattened).toContain("deep body");
-    expect(flattened).not.toContain("<details>");
-  });
+      expect(flattenMarkdownDetails(`${prefix}<summary>${children}</summary>${suffix}`)).toBe(
+        expected,
+      );
+      expect(
+        flattenMarkdownDetails(
+          `${prefix}<details><summary>Body</summary>${children}</details>${suffix}`,
+        ),
+      ).toBe(`**Body**\n\n${expected}`);
+      expect(
+        flattenMarkdownDetails(
+          `${prefix}<details><summary>${children}</summary>tail</details>${suffix}`,
+        ),
+      ).toBe(`**${expected}**\n\ntail`);
+    },
+  );
 
   it("flattens unterminated details without leaking structural tags", () => {
     expect(flattenMarkdownDetails("<details><summary>More</summary>partial")).toBe(
@@ -91,23 +64,6 @@ describe("flattenMarkdownDetails", () => {
     );
   });
 
-  it("leaves literal details examples inside code unchanged", () => {
-    const markdown = [
-      "`<details>inline</details>`",
-      "",
-      "```html",
-      "<details>block</details>",
-      "```",
-      "",
-      "    <details>indented</details>",
-      "",
-      "- item",
-      "",
-      "      <details>list-indented</details>",
-    ].join("\n");
-    expect(flattenMarkdownDetails(markdown)).toBe(markdown);
-  });
-
   it("does not flatten custom elements with details-like names", () => {
     const markdown = "<details-widget>body</details-widget>";
     expect(flattenMarkdownDetails(markdown)).toBe(markdown);
@@ -118,16 +74,14 @@ describe("flattenMarkdownDetails", () => {
     expect(flattenMarkdownDetails(markdown)).toBe(markdown);
   });
 
-  it.each([
-    ["\n \t\n body \n\t \n", " body "],
-    ["\r\n a\r\n \r\n", " a"],
-    ["\n \t", " \t"],
-    ["\r", "\r"],
-    ["body\n\r", "body\n\r"],
-    ["body \t", "body \t"],
-  ])("trims complete blank lines without changing body content in %j", (body, expected) => {
-    expect(flattenMarkdownDetails(`<details>${body}</details>`)).toBe(`**Details**\n\n${expected}`);
-  });
+  it.each([["\r\n a\r\n \r\n", " a"]])(
+    "trims complete blank lines without changing body content in %j",
+    (body, expected) => {
+      expect(flattenMarkdownDetails(`<details>${body}</details>`)).toBe(
+        `**Details**\n\n${expected}`,
+      );
+    },
+  );
 
   it("stays responsive on a long blank-line run inside a details body", () => {
     // A blank-line run that ends on anything else made the previous

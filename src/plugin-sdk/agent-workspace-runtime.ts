@@ -11,4 +11,9 @@ export {
 } from "../agents/workspace-access.js";
 export { createWorkspaceBootstrapFilePolicy } from "../agents/workspace-bootstrap-policy.js";
 export { createWorkspaceMemoryFileClient } from "../agents/workspace-memory-client.js";
-export { readWorkspaceSkillResources } from "../agents/workspace-worker.js";
+export {
+  resolveWorkspaceWorkerArgv,
+  resolveWorkspaceWorkerExecArgv,
+  resolveWorkspaceWorkerUrl,
+  readWorkspaceSkillResources,
+} from "../agents/workspace-worker.js";

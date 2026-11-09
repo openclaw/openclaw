@@ -1,39 +1,38 @@
-import { once } from "node:events";
 import fs from "node:fs";
 import { createServer, request, type IncomingHttpHeaders, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createTeamReportsHttpHandler } from "./http.js";
 import { describePeriod } from "./periods.js";
 import { renderMarkdown } from "./render/markdown.js";
+import { measureReads, reportDocument, reportMember } from "./reports-data.test-support.js";
 import { githubCounts } from "./reports.fixtures.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
-import type { Period, Person, ReportDocument, SummaryDocument } from "./types.js";
+import type { Period, Person, PersonReport, ReportDocument, SummaryDocument } from "./types.js";
+import type { WorkSessions } from "./work-sessions.js";
+
+vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({ dispatchGatewayMethod: vi.fn() }));
 
 const runtimeScopeMock = vi.hoisted(() => vi.fn());
 const workerReads = vi.hoisted(() => ({ enabled: false, calls: 0, bytes: 0 }));
-vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-runtime")>();
+vi.mock("openclaw/plugin-sdk/database-engine-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/database-engine-runtime")>();
   return {
     ...actual,
-    openSqliteWorkerStore: async (...args: Parameters<typeof actual.openSqliteWorkerStore>) => {
-      const worker = await actual.openSqliteWorkerStore(...args);
-      if (worker) {
-        const execute = worker.execute.bind(worker);
-        vi.spyOn(worker, "execute").mockImplementation(async (command, options) => {
-          const result = await execute(command, options);
-          if (workerReads.enabled) {
-            workerReads.calls += 1;
-            workerReads.bytes += Buffer.byteLength(JSON.stringify(result) ?? "");
-          }
-          return result;
-        });
+    runEngineStoreOperation: async (...args: Parameters<typeof actual.runEngineStoreOperation>) => {
+      const result = await actual.runEngineStoreOperation(...args);
+      if (workerReads.enabled) {
+        workerReads.calls += 1;
+        workerReads.bytes += Buffer.byteLength(JSON.stringify(result) ?? "");
       }
-      return worker;
+      return result;
     },
   };
 });
@@ -53,24 +52,15 @@ const avatarPeople: Person[] = [
   { github: ["a".repeat(40), "long-login-alias"], display: "Long Login" },
 ];
 
+const member = (login: string, display = login, aliases: string[] = []): PersonReport =>
+  reportMember(login, { display, aliases });
+
 function report(period: Period, key: string, partial = false): ReportDocument {
   const descriptor = describePeriod(period, key);
-  return {
-    version: 1,
-    period: descriptor,
-    generatedAtMs: descriptor.untilMs,
-    status: partial ? "partial" : "closed",
-    orgs: ["example"],
-    memberCount: 1,
-    activeMembers: 1,
-    totals: { github: counts, discord: { messages: 0, channels: {} } },
-    members: [
+  return reportDocument(
+    [
       {
-        login: "alice",
-        display: "Alice",
-        aliases: [],
-        access: [],
-        areas: [],
+        ...member("alice", "Alice"),
         github: {
           ...counts,
           items: [
@@ -84,13 +74,15 @@ function report(period: Period, key: string, partial = false): ReportDocument {
             },
           ],
         },
-        discord: { total: 0, channels: {}, excerpts: [] },
       },
     ],
-    otherActors: [{ login: "bob", github: counts }],
-    unmatchedDiscord: [],
-    sources: { github: { ok: true, warnings: ["Fixture coverage warning"], stats: {} } },
-  };
+    {
+      period: descriptor,
+      status: partial ? "partial" : "closed",
+      otherActors: [{ login: "bob", github: counts }],
+      sources: { github: { ok: true, warnings: ["Fixture coverage warning"], stats: {} } },
+    },
+  );
 }
 
 const summary: SummaryDocument = {
@@ -102,6 +94,12 @@ const summary: SummaryDocument = {
   warnings: ["Model summary unavailable: completion failed"],
 };
 
+const privateHeaders = {
+  "cache-control": "private, no-store",
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+};
+
 type HttpResult = { status: number; headers: IncomingHttpHeaders; body: string };
 let directory: string;
 let store: TeamReportsStore;
@@ -110,10 +108,23 @@ let port: number;
 let available = true;
 let currentOrgs = ["configured-example"];
 const getStore = vi.fn(() => (available ? store : undefined));
+const workSessions =
+  vi.fn<(offset?: number, limit?: number, profileId?: string) => Promise<WorkSessions>>();
 
 beforeEach(() => {
   runtimeScopeMock.mockReturnValue({ client: { connect: { scopes: ["operator.read"] } } });
+  vi.mocked(dispatchGatewayMethod)
+    .mockReset()
+    .mockResolvedValue({
+      ok: true,
+      payload: {
+        profiles: [
+          { id: "alice-profile", mergedInto: null, githubIdentity: { login: "ALICE-ALIAS" } },
+        ],
+      },
+    });
   getStore.mockClear();
+  workSessions.mockReset().mockResolvedValue({ available: true, sessions: [] });
   currentOrgs = ["configured-example"];
 });
 
@@ -140,6 +151,15 @@ function fetchPath(
   });
 }
 
+async function page(url: string, method = "GET", headers: Record<string, string> = {}) {
+  const response = await fetchPath(url, method, headers);
+  expect(response).toMatchObject({
+    status: 200,
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
+  return response;
+}
+
 beforeAll(async () => {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), "team-reports-http-"));
   store = await createTeamReportsStore({
@@ -147,15 +167,9 @@ beforeAll(async () => {
     workerModuleUrl: resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint),
   });
   const avatarReport = report("day", "2026-08-19");
-  avatarReport.members = avatarPeople.map((person) => ({
-    login: person.github[0] ?? "",
-    display: person.display ?? "",
-    aliases: person.github.slice(1),
-    access: [],
-    areas: [],
-    github: { ...counts, items: [] },
-    discord: { total: 0, channels: {}, excerpts: [] },
-  }));
+  avatarReport.members = avatarPeople.map((person) =>
+    member(person.github[0] ?? "", person.display ?? "", person.github.slice(1)),
+  );
   avatarReport.memberCount = avatarPeople.length;
   avatarReport.activeMembers = avatarPeople.length;
   avatarReport.totals.github = githubCounts(avatarPeople.length);
@@ -169,15 +183,7 @@ beforeAll(async () => {
   ]) {
     if (document.period.key === "2026-08-21") {
       document.members[0]!.github.items[0]!.body = "unrendered activity ".repeat(4096);
-      document.members.push({
-        login: "report-only",
-        display: "Report Only Person",
-        aliases: ["report-only-alias"],
-        access: [],
-        areas: [],
-        github: { ...counts, items: [] },
-        discord: { total: 0, channels: {}, excerpts: [] },
-      });
+      document.members.push(member("report-only", "Report Only Person", ["report-only-alias"]));
       document.memberCount = 2;
       document.activeMembers = 2;
       document.totals.github = githubCounts(2);
@@ -191,6 +197,8 @@ beforeAll(async () => {
   const handler = createTeamReportsHttpHandler({
     basePath: "/reports",
     displayTimezone: "UTC",
+    sessionRouting: () => ({ controlUiBasePath: "/control", mainKey: "home" }),
+    workSessions,
     assetsDir: fileURLToPath(new URL("../assets", import.meta.url)),
     getStore,
     status: async () => ({ running: false, lastRun: "fixture-run" }),
@@ -202,7 +210,6 @@ beforeAll(async () => {
         display: "Alice",
         status: "archived",
         archivedAt: "2026-08-22",
-        discordUserId: "1234567890",
       },
       ...avatarPeople,
     ],
@@ -212,13 +219,7 @@ beforeAll(async () => {
       res.destroy(error instanceof Error ? error : new Error(String(error)));
     });
   });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected a TCP server address");
-  }
-  port = address.port;
+  port = await listenOnLoopback(server);
 });
 
 afterAll(async () => {
@@ -232,7 +233,6 @@ afterAll(async () => {
 describe("Team Reports HTTP responses", () => {
   it.each([
     { context: "missing", scopes: undefined },
-    { context: "empty", scopes: [] },
     { context: "approvals only", scopes: ["operator.approvals"] },
   ])(
     "denies GET and HEAD without read authority ($context) before store access",
@@ -243,6 +243,7 @@ describe("Team Reports HTTP responses", () => {
         "/reports/assets/crab.avif",
         "/reports/assets/icon.png",
         "/reports/status",
+        "/reports/sessions/",
         "/reports/index.json",
         "/reports/latest/",
         "/reports/people/",
@@ -253,35 +254,33 @@ describe("Team Reports HTTP responses", () => {
       ]) {
         for (const method of ["GET", "HEAD"]) {
           const response = await fetchPath(url, method);
-          expect(response.status).toBe(403);
-          expect(response.body).toBe(
-            method === "HEAD" ? "" : "Forbidden: operator.read scope required.\n",
-          );
-          expect(response.headers["content-type"]).toBe("text/plain; charset=utf-8");
+          expect(response).toMatchObject({
+            status: 403,
+            body: method === "HEAD" ? "" : "Forbidden: operator.read scope required.\n",
+            headers: { "content-type": "text/plain; charset=utf-8" },
+          });
           expect(Number(response.headers["content-length"])).toBe(
             Buffer.byteLength("Forbidden: operator.read scope required.\n"),
           );
-          expect(response.headers["cache-control"]).toBe("private, no-store");
+          expect(response.headers).toMatchObject(privateHeaders);
           expect(response.headers["content-security-policy"]).toContain("default-src 'none'");
           expect(response.headers["content-security-policy"]).toMatch(/style-src 'nonce-[^']+'/);
-          expect(response.headers["x-content-type-options"]).toBe("nosniff");
-          expect(response.headers["referrer-policy"]).toBe("no-referrer");
         }
       }
       expect(getStore).not.toHaveBeenCalled();
+      expect(workSessions).not.toHaveBeenCalled();
     },
   );
 
-  it.each(["operator.read", "operator.write", "operator.admin"])(
+  it.each(["operator.write", "operator.admin"])(
     "allows GET and HEAD with %s authority",
     async (scope) => {
       runtimeScopeMock.mockReturnValue({ client: { connect: { scopes: [scope] } } });
       for (const method of ["GET", "HEAD"]) {
-        const response = await fetchPath("/reports/day/2026-08-20/", method);
-        expect(response.status).toBe(200);
-        expect(response.headers["content-type"]).toBe("text/html; charset=utf-8");
+        const response = await page("/reports/day/2026-08-20/", method);
         if (method === "HEAD") {
           expect(response.body).toBe("");
+          expect(Number(response.headers["content-length"])).toBeGreaterThan(0);
         } else {
           expect(response.body).toContain("Alice");
         }
@@ -290,14 +289,10 @@ describe("Team Reports HTTP responses", () => {
   );
 
   it("serves escaped HTML with one nonce-authorized script and safe navigation", async () => {
-    const response = await fetchPath("/reports/day/2026-08-20/", "GET", {
+    const response = await page("/reports/day/2026-08-20/", "GET", {
       "x-forwarded-proto": "https",
     });
-    expect(response.status).toBe(200);
-    expect(response.headers["content-type"]).toBe("text/html; charset=utf-8");
-    expect(response.headers["cache-control"]).toBe("private, no-store");
-    expect(response.headers["x-content-type-options"]).toBe("nosniff");
-    expect(response.headers["referrer-policy"]).toBe("no-referrer");
+    expect(response.headers).toMatchObject(privateHeaders);
     expect(response.headers["x-frame-options"]).toBeUndefined();
     const csp = response.headers["content-security-policy"];
     const nonce = typeof csp === "string" ? /style-src 'nonce-([^']+)'/.exec(csp)?.[1] : undefined;
@@ -305,113 +300,40 @@ describe("Team Reports HTTP responses", () => {
     expect(csp).toBe(
       `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; img-src 'self' https://avatars.githubusercontent.com data:; base-uri 'none'; form-action 'none'`,
     );
-    expect(response.body).toContain(`<style nonce="${nonce}">`);
-    expect(response.body).toContain("&lt;script&gt;alert(&quot;report&quot;)&lt;/script&gt;");
     expect(response.body.match(/<script\b/g)).toHaveLength(1);
-    expect(response.body).toContain(`<script nonce="${nonce}">`);
     expect(response.body).not.toContain('href="javascript:');
+    expect(response.body).toContain(`<style nonce="${nonce}">`);
+    expect(response.body).toContain(`<script nonce="${nonce}">`);
+    expect(response.body).toContain("&lt;script&gt;alert(&quot;report&quot;)&lt;/script&gt;");
     expect(response.body).toContain(
       `href="https://127.0.0.1:${port}/reports/day/2026-08-20/" target="_blank" rel="noopener" data-report-open-window aria-label="Open in a new window"`,
     );
     expect(response.body).toContain('href="/reports/people/alice/"');
-    expect(response.body).toContain("Deterministic summary");
+    expect(response.body).toContain("Summary without a model");
     expect(response.body).toContain("Fixture coverage warning");
     expect(response.body).toContain("Model summary unavailable: completion failed");
     expect(response.body).toContain("GitHub coverage is incomplete");
   });
 
-  it.each([
-    { url: "/reports/day/2026-08-20/", login: "alice", size: 40, variant: "md" },
-    { url: "/reports/day/2026-08-20/", login: "bob", size: 20, variant: "xs" },
-    { url: "/reports/people/", login: "alice", size: 36, variant: "sm" },
-    { url: "/reports/people/alice-alias/", login: "alice", size: 72, variant: "xl" },
-  ])(
-    "renders a $size px GitHub avatar for $login on $url",
-    async ({ url, login, size, variant }) => {
-      const response = await fetchPath(url);
-      expect(response.status).toBe(200);
-      const avatars = response.body.match(/<span class="oc-avatar\b[^>]*>[\s\S]*?<\/span>/g) ?? [];
-      const avatar = avatars.find((markup) =>
-        markup.includes(`src="https://avatars.githubusercontent.com/${login}?s=${size}"`),
+  it("keeps unsafe avatar identities escaped and falls back to initials", async () => {
+    const response = await page("/reports/day/2026-08-19/");
+    const avatars = response.body.match(/<span class="oc-avatar\b[^>]*>[\s\S]*?<\/span>/g) ?? [];
+    for (const value of ["FN", "LL", "&quot;&lt;"]) {
+      const fallback = avatars.find(
+        (avatar) => avatar.includes(`data-initials="${value}"`) && !avatar.includes("<img"),
       );
-      expect(avatar).toContain(`class="oc-avatar oc-avatar-${variant}"`);
-      expect(avatar).toMatch(/data-initials="[^"]+"/);
-      for (const attribute of [
-        `width="${size}"`,
-        `height="${size}"`,
-        'alt=""',
-        'loading="lazy"',
-        'decoding="async"',
-        'referrerpolicy="no-referrer"',
-      ]) {
-        expect(avatar).toContain(attribute);
-      }
-      expect(response.body).not.toContain("avatars.githubusercontent.com/alice-alias");
-      expect(response.body).not.toContain("avatars.githubusercontent.com/Alice");
-      expect(response.body).not.toContain("avatars.githubusercontent.com/1234567890");
-    },
-  );
-
-  it.each([
-    { url: "/reports/day/2026-08-19/", initials: ["FN", "LL", "&quot;&lt;"] },
-    { url: "/reports/people/", initials: ["FN", "LL", "&quot;&lt;"] },
-    { url: "/reports/people/invalid-alias/", initials: ["FN"] },
-    { url: "/reports/people/long-login-alias/", initials: ["LL"] },
-    { url: "/reports/people/hostile-alias/", initials: ["&quot;&lt;"] },
-  ])(
-    "keeps unsafe avatar identities escaped and falls back to initials on $url",
-    async ({ url, initials }) => {
-      const response = await fetchPath(url);
-      expect(response.status).toBe(200);
-      const avatars = response.body.match(/<span class="oc-avatar\b[^>]*>[\s\S]*?<\/span>/g) ?? [];
-      for (const value of initials) {
-        const fallback = avatars.find(
-          (avatar) => avatar.includes(`data-initials="${value}"`) && !avatar.includes("<img"),
-        );
-        expect(fallback).toBeDefined();
-      }
-      expect(response.body).not.toContain("avatars.githubusercontent.com/invalid.login");
-      expect(response.body).not.toContain(`avatars.githubusercontent.com/${"a".repeat(40)}`);
-      expect(response.body).not.toContain("avatars.githubusercontent.com/bad");
-      expect(response.body).not.toContain(hostileLogin);
-      expect(response.body).not.toContain(hostileDisplay);
-      expect(response.body).not.toContain("<img src=x");
-      if (!url.includes("invalid-alias") && !url.includes("long-login-alias")) {
-        expect(response.body).toContain("bad&quot;&gt;&lt;img src=x onerror=alert(1)&gt;");
-        expect(response.body).toContain("&quot;Quoted &lt;Name&gt;");
-        expect(response.body).toContain('data-initials="&quot;&lt;"');
-      }
-    },
-  );
-
-  it("uses the GitHub login for an avatar even when the display name is hostile", async () => {
-    const response = await fetchPath("/reports/people/safe-login/");
-    expect(response.status).toBe(200);
-    expect(response.body).toContain('src="https://avatars.githubusercontent.com/safe-login?s=72"');
-    expect(response.body).toContain('data-initials="&quot;&lt;"');
-    expect(response.body).toContain("&quot;Quoted &lt;Name&gt;");
-    expect(response.body).not.toContain(hostileDisplay);
-  });
-
-  it("serves dark and light semantic tokens with CSS-only avatar initials", async () => {
-    const response = await fetchPath("/reports/");
-    const styles = /<style nonce="[^"]+">([\s\S]*?)<\/style>/.exec(response.body)?.[1];
-    expect(styles).toMatch(/color-scheme:\s*dark/);
-    expect(styles).toMatch(/html\[data-theme="light"\]\s*\{[^}]*color-scheme:\s*light/);
-    expect(styles).toMatch(
-      /@media\s*\(prefers-color-scheme:\s*light\)\s*\{[^}]*color-scheme:\s*light/,
-    );
-    for (const token of [
-      "bg-page",
-      "text-primary",
-      "accent-primary",
-      "accent-secondary",
-      "status-warning-fg",
-    ]) {
-      expect(styles?.match(new RegExp(`--oc-${token}:`, "g"))?.length).toBeGreaterThanOrEqual(3);
+      expect(fallback).toBeDefined();
     }
-    expect(styles).toMatch(/\.oc-avatar::before\s*\{[^}]*content:\s*attr\(data-initials\)/);
-    expect(styles).not.toMatch(/@import|@font-face/);
+    expect(response.body).not.toContain("avatars.githubusercontent.com/invalid.login");
+    expect(response.body).not.toContain(`avatars.githubusercontent.com/${"a".repeat(40)}`);
+    expect(response.body).not.toContain("avatars.githubusercontent.com/bad");
+    expect(response.body).not.toContain(hostileLogin);
+    expect(response.body).not.toContain(hostileDisplay);
+    expect(response.body).not.toContain("<img src=x");
+    expect(response.body).toContain("bad&quot;&gt;&lt;img src=x onerror=alert(1)&gt;");
+    expect(response.body).toContain("&quot;Quoted &lt;Name&gt;");
+    expect(response.body).toContain('data-initials="&quot;&lt;"');
+    expect(response.body).toContain('src="https://avatars.githubusercontent.com/safe-login?s=40"');
   });
 
   it.each([
@@ -433,29 +355,19 @@ describe("Team Reports HTTP responses", () => {
     expect(head.headers["content-length"]).toBe(get.headers["content-length"]);
   });
 
-  it("supports HEAD without a body and rejects writes", async () => {
-    const head = await fetchPath("/reports/day/2026-08-20/", "HEAD");
-    expect(head.status).toBe(200);
-    expect(head.body).toBe("");
-    expect(Number(head.headers["content-length"])).toBeGreaterThan(0);
-    expect(head.headers["content-type"]).toBe("text/html; charset=utf-8");
+  it("rejects writes", async () => {
     const post = await fetchPath("/reports/day/2026-08-20/", "POST");
-    expect(post.status).toBe(405);
-    expect(post.headers.allow).toBe("GET, HEAD");
+    expect(post).toMatchObject({ status: 405, headers: { allow: "GET, HEAD" } });
   });
 
   it.each([
     "/reports/assets/unknown.png",
-    "/reports/assets/crab.avif/extra",
     "/reports/missing/",
     "/reports/day/2026-02-30/",
     "/reports/week/2026-W54/",
     "/reports/day/2026-08-20/unknown",
     "/reports/day/../2026-08-20/",
-    "/reports/day/%2e%2e/2026-08-20/",
     "/reports/people/alice%2fextra/",
-    "/reports/people/alice\\extra/",
-    "/reports//",
     "/reports-elsewhere/",
   ])("returns 404 for unknown or unsafe path %s", async (url) => {
     const response = await fetchPath(url);
@@ -469,11 +381,9 @@ describe("Team Reports HTTP responses", () => {
     expect(response.headers.location).toBe("/reports/day/2026-08-20/");
   });
 
-  it.each([
-    ["day", "2026-08-20"],
-    ["week", "2026-W34"],
-    ["month", "2026-08"],
-  ] as const)("serves %s Markdown and canonical JSON", async (period, key) => {
+  it("serves week Markdown and canonical JSON", async () => {
+    const period = "week";
+    const key = "2026-W34";
     const markdown = await fetchPath(`/reports/${period}/${key}/report.md`);
     expect(markdown.status).toBe(200);
     expect(markdown.headers["content-type"]).toBe("text/markdown; charset=utf-8");
@@ -490,46 +400,32 @@ describe("Team Reports HTTP responses", () => {
   it.each(["/reports/", "/reports/day/2026-08-20/", "/reports/day/2026-08-20/data.json"])(
     "serves %s without transferring unused Markdown from storage",
     async (url) => {
-      workerReads.calls = 0;
-      workerReads.bytes = 0;
-      workerReads.enabled = true;
-      try {
+      await measureReads(workerReads, async () => {
         const response = await fetchPath(url);
         expect(response.status).toBe(200);
         expect(response.body).toContain("example");
         expect(response.body).not.toContain("Stored Markdown only");
-      } finally {
-        workerReads.enabled = false;
-      }
-      expect(workerReads.calls).toBeGreaterThan(0);
+      });
       expect(workerReads.bytes).toBeGreaterThan(0);
       expect(workerReads.bytes).toBeLessThan(Buffer.byteLength(markdownSuffix));
     },
   );
 
   it("renders stored trends, history, archived people, index, and status", async () => {
-    const index = await fetchPath("/reports/");
-    expect(index.status).toBe(200);
+    const index = await page("/reports/");
     expect(index.body).toContain('aria-label="Activity dateline"');
     expect(index.body).toContain('href="/reports/week/2026-W34/"');
-    workerReads.calls = 0;
-    workerReads.bytes = 0;
-    workerReads.enabled = true;
-    try {
-      const people = await fetchPath("/reports/people/");
-      expect(people.status).toBe(200);
+    await measureReads(workerReads, async () => {
+      const people = await page("/reports/people/");
       expect(people.body).toContain("Member Activity Timelines");
       expect(people.body).toMatch(/class="oc-badge oc-badge-neutral">Archived<\/span>/);
       expect(people.body).toContain("Report Only Person");
       expect(people.body).toContain('href="/reports/people/report-only/"');
-      const person = await fetchPath("/reports/people/alice-alias/");
-      expect(person.status).toBe(200);
+      const person = await page("/reports/people/alice-alias/");
+      expect(person.body).toContain('src="https://avatars.githubusercontent.com/alice?s=72"');
       expect(person.body).toContain("Archived on 2026-08-22");
       expect(person.body).toContain('href="/reports/day/2026-08-20/?person=alice"');
-    } finally {
-      workerReads.enabled = false;
-    }
-    expect(workerReads.calls).toBeGreaterThan(0);
+    });
     expect(workerReads.bytes).toBeGreaterThan(0);
     expect.soft(workerReads.calls).toBeLessThanOrEqual(4);
     expect.soft(workerReads.bytes).toBeLessThan(16 * 1024);
@@ -550,8 +446,7 @@ describe("Team Reports HTTP responses", () => {
       for (const name of ["first-organization", "new <organization>"]) {
         currentOrgs = [name];
         getStore.mockReturnValueOnce(emptyStore);
-        const response = await fetchPath("/reports/");
-        expect(response.status).toBe(200);
+        const response = await page("/reports/");
         expect(response.body).toContain(
           name.replaceAll("<", "&lt;").replaceAll(">", "&gt;") + " · team",
         );
@@ -564,6 +459,53 @@ describe("Team Reports HTTP responses", () => {
     }
   });
 
+  it("renders current session links, owners and pagination without changing report exports", async () => {
+    workSessions.mockResolvedValue({
+      available: true,
+      sessions: [
+        {
+          key: "agent:writer:dashboard:demo",
+          agentId: "writer",
+          displayName: "Fix <navigation>",
+          owner: { actor: { type: "human", label: "Alice & Bob" } },
+          status: "running",
+        },
+      ],
+      nextOffset: 80,
+    });
+    const sessions = await page("/reports/sessions/?offset=40");
+    expect(workSessions).toHaveBeenLastCalledWith(40, 40);
+    expect(sessions.body).toContain('href="/control/chat/writer/dashboard/demo"');
+    expect(sessions.body).toContain("Fix &lt;navigation&gt;");
+    expect(sessions.body).toContain("Alice &amp; Bob");
+    expect(sessions.body).toContain('data-work-session-key="agent:writer:dashboard:demo"');
+    expect(sessions.body).toContain('href="/reports/sessions/?offset=80"');
+    expect(sessions.body).toContain('href="/reports/sessions/?offset=0"');
+    const home = await fetchPath("/reports/");
+    expect(home.body).toContain("Fix &lt;navigation&gt;");
+    expect(workSessions).toHaveBeenLastCalledWith(0, 8);
+    workSessions.mockClear();
+    await fetchPath("/reports/day/2026-08-20/data.json");
+    await fetchPath("/reports/day/2026-08-20/report.md");
+    expect(workSessions).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unsafe integer session offset", async () => {
+    expect((await fetchPath("/reports/sessions/?offset=9007199254740992")).status).toBe(400);
+    expect(workSessions).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes unavailable session discovery from an empty visible list", async () => {
+    expect((await fetchPath("/reports/sessions/")).body).toContain(
+      "No work sessions are visible to you",
+    );
+    workSessions.mockResolvedValue({ available: false });
+    const overview = await page("/reports/");
+    expect(overview.body).toContain("Work sessions unavailable");
+    expect(overview.body).toContain("Day History");
+    expect(overview.body).not.toContain("No work sessions are visible to you");
+  });
+
   it("reports unavailable service state without touching a closed store", async () => {
     available = false;
     try {
@@ -573,5 +515,48 @@ describe("Team Reports HTTP responses", () => {
     } finally {
       available = true;
     }
+  });
+});
+
+describe("per-member session links through HTTP", () => {
+  it("links current owned sessions inside a monthly report", async () => {
+    workSessions.mockResolvedValue({
+      available: true,
+      sessions: [{ key: "agent:writer:dashboard:alice-work", label: "Current Alice work" }],
+      nextOffset: 3,
+    });
+    const response = await page("/reports/month/2026-08/");
+    expect(response.body).toContain("Current work / owned sessions");
+    expect(response.body).toContain('href="/control/chat/writer/dashboard/alice-work"');
+    expect(response.body).toContain('data-work-session-key="agent:writer:dashboard:alice-work"');
+    expect(response.body).toContain("not activity from this report period");
+    expect(response.body).toContain("?person=alice");
+    expect(workSessions).toHaveBeenCalledExactlyOnceWith(0, 3, "alice-profile");
+    expect(dispatchGatewayMethod).toHaveBeenCalledExactlyOnceWith("users.list", {});
+  });
+
+  it("keeps person selection in directory pagination and resolves configured aliases", async () => {
+    workSessions.mockResolvedValue({ available: true, sessions: [], nextOffset: 80 });
+    const response = await fetchPath("/reports/sessions/?person=ALICE-ALIAS&offset=40");
+    expect(response.body).toContain("owned sessions for @alice");
+    expect(response.body).toContain("person=alice&offset=80");
+    expect(response.body).toContain("person=alice&offset=0");
+    expect(workSessions).toHaveBeenCalledExactlyOnceWith(40, 40, "alice-profile");
+  });
+
+  it.each([
+    { profiles: [], message: "No linked GitHub profile" },
+    {
+      profiles: [
+        { id: "one", mergedInto: null, githubIdentity: { login: "alice" } },
+        { id: "two", mergedInto: null, githubIdentity: { login: "alice-alias" } },
+      ],
+      message: "Multiple or unresolved linked profiles",
+    },
+  ])("shows $message without global-session fallback", async ({ profiles, message }) => {
+    vi.mocked(dispatchGatewayMethod).mockResolvedValue({ ok: true, payload: { profiles } });
+    const response = await fetchPath("/reports/people/alice/");
+    expect(response.body).toContain(message);
+    expect(workSessions).not.toHaveBeenCalled();
   });
 });

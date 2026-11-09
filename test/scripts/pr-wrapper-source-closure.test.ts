@@ -1,8 +1,13 @@
-import { readFileSync, statSync } from "node:fs";
-import { dirname, relative, resolve } from "node:path";
-import ts from "typescript";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
-import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
+import { createRuntimeImportGraph } from "../../scripts/lib/runtime-import-closure.mts";
+import {
+  acceptsWorkflowPaths,
+  readWorkflow,
+  testNodeExecPath,
+  TSX_IMPORT,
+} from "./ci-workflow.test-support.js";
 
 const components = [
   "scripts/pr",
@@ -10,113 +15,82 @@ const components = [
   ...readFileSync("scripts/pr-lib/wrapper-components.txt", "utf8").trim().split("\n"),
 ];
 
-it.each([
-  "src/state/openclaw-state.worker.ts",
-  "src/state/openclaw-state-lease-worker.ts",
-  "src/infra/sqlite-store.worker.ts",
-])("retains %s and its eager runtime dependencies in the wrapper inventory", (entrypoint) => {
-  const closure = collectRuntimeImportClosure(process.cwd(), [entrypoint]);
-  expect(
-    closure.filter(
-      (file) =>
-        !components.some((component) => file === component || file.startsWith(`${component}/`)),
-    ),
-  ).toEqual([]);
-});
-
-it.each([
-  "src/infra/sqlite-coordinator.ts",
+const wrapperRoots = [
+  "src/infra/gateway-state-owner.ts",
   "src/plugins/discovery.ts",
   "src/infra/sqlite-readonly-location.worker.ts",
-])(
-  "retains %s and its relative ESM runtime dependencies in the wrapper inventory",
-  (entrypoint) => {
-    const root = process.cwd();
-    const pending = [entrypoint];
-    const visited = new Set<string>();
-    const missing = new Set<string>();
-    while (pending.length > 0) {
-      const file = pending.pop();
-      if (!file || visited.has(file)) {
-        continue;
-      }
-      visited.add(file);
-      if (!components.some((component) => file === component || file.startsWith(`${component}/`))) {
-        missing.add(file);
-      }
-      const absolute = resolve(root, file);
-      const source = ts.createSourceFile(
-        file,
-        readFileSync(absolute, "utf8"),
-        ts.ScriptTarget.Latest,
-      );
-      const enqueue = (specifier: string) => {
-        if (!specifier.startsWith(".")) {
-          return;
-        }
-        const literal = resolve(dirname(absolute), specifier);
-        // Explicit runtime files win over adjacent declarations selected by TypeScript.
-        const target = statSync(literal, { throwIfNoEntry: false })?.isFile()
-          ? literal
-          : ts.resolveModuleName(
-              specifier,
-              absolute,
-              {
-                allowJs: true,
-                module: ts.ModuleKind.NodeNext,
-                moduleResolution: ts.ModuleResolutionKind.NodeNext,
-                resolveJsonModule: true,
-              },
-              ts.sys,
-            ).resolvedModule?.resolvedFileName;
-        if (!target || /\.d\.[cm]?ts$/.test(target)) {
-          throw new Error(`Cannot resolve wrapper runtime dependency ${file}: ${specifier}`);
-        }
-        pending.push(relative(root, target).replaceAll("\\", "/"));
-      };
-      const visit = (node: ts.Node): void => {
-        if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-          const clause = node.importClause;
-          const bindings = clause?.namedBindings;
-          if (
-            !clause ||
-            (!clause.isTypeOnly &&
-              (clause.name ||
-                !bindings ||
-                ts.isNamespaceImport(bindings) ||
-                bindings.elements.some((element) => !element.isTypeOnly)))
-          ) {
-            enqueue(node.moduleSpecifier.text);
-          }
-          return;
-        }
-        if (ts.isExportDeclaration(node)) {
-          const clause = node.exportClause;
-          if (
-            node.moduleSpecifier &&
-            ts.isStringLiteral(node.moduleSpecifier) &&
-            !node.isTypeOnly &&
-            (!clause ||
-              ts.isNamespaceExport(clause) ||
-              clause.elements.some((element) => !element.isTypeOnly))
-          ) {
-            enqueue(node.moduleSpecifier.text);
-          }
-          return;
-        }
-        if (ts.isImportTypeNode(node)) {
-          return;
-        }
-        if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-          const argument = node.arguments[0];
-          if (argument && ts.isStringLiteralLike(argument)) {
-            enqueue(argument.text);
-          }
-        }
-        ts.forEachChild(node, visit);
-      };
-      visit(source);
-    }
-    expect([...missing].toSorted()).toEqual([]);
-  },
-);
+];
+
+// Native preparation also compiles string-named workers. Query both inventories
+// in one graph while retaining their separate closure and routing assertions.
+it("retains wrapper runtime dependencies and Darwin inputs inside excluded namespaces", () => {
+  const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
+  const paths = workflow.on.pull_request.paths as string[];
+  const dependencyInputs = JSON.parse(
+    readFileSync("scripts/pr-lib/dependency-inputs.json", "utf8"),
+  ) as { files: string[] };
+  // Read descriptors in a source Node process: Vitest redirects some descriptor
+  // imports into its compiled generation, whose URLs are not source inputs.
+  const workerInputs = JSON.parse(
+    execFileSync(
+      testNodeExecPath,
+      [
+        "--import",
+        TSX_IMPORT,
+        "--input-type=module",
+        "-e",
+        `import {
+          preservedModuleBuildAssets, preservedModuleBuildSources, vitestWorkerBuildEntries,
+        } from "./scripts/lib/vitest-worker-build-entries.mts";
+        import { vitestWorkerDeclarationEntries } from "./scripts/lib/vitest-worker-declarations.mts";
+        import { vitestWorkerRuntimeAssets } from "./scripts/lib/package-root-modules.mts";
+        console.log(JSON.stringify([
+          ...Object.values(vitestWorkerBuildEntries),
+          ...Object.values(vitestWorkerDeclarationEntries),
+          ...preservedModuleBuildSources,
+          ...preservedModuleBuildAssets.filter(file => /\\.[cm]?[jt]s$/u.test(file)),
+          ...vitestWorkerRuntimeAssets,
+        ]));`,
+      ],
+      { encoding: "utf8", timeout: 30_000 },
+    ),
+  ) as string[];
+  const roots = [
+    "scripts/run-vitest.mjs",
+    "scripts/run-vitest-child.mts",
+    "scripts/lib/vitest-worker-bootstrap.mts",
+    "scripts/lib/vitest-worker-compiler.mts",
+    "test/vitest/vitest.tooling.config.ts",
+    "test/non-isolated-runner.ts",
+    "test/setup.ts",
+    "test/vitest/vitest.node-policy.global-setup.ts",
+    "test/vitest/vitest.jsdom-preload.mts",
+    ...workflow.jobs.darwin.steps.flatMap((step: { run?: string }) =>
+      step.run?.startsWith("node scripts/run-vitest.mjs ")
+        ? step.run.split(/\s+/u).filter((arg) => arg.endsWith(".test.ts"))
+        : [],
+    ),
+    ...workerInputs,
+  ];
+  using graph = createRuntimeImportGraph(process.cwd(), [...wrapperRoots, ...roots], {
+    includeDynamicImports: true,
+  });
+  expect(
+    graph
+      .collect(wrapperRoots)
+      .filter(
+        (file) =>
+          !components.some((component) => file === component || file.startsWith(`${component}/`)),
+      ),
+  ).toEqual([]);
+  const inputs = new Set([...components, ...dependencyInputs.files, ...graph.collect(roots)]);
+  const excludedInputs = [...inputs].filter(
+    (file) =>
+      /^scripts\/lib\/ci-.*\.(?:mts|mjs)$/u.test(file) ||
+      file.startsWith("test/scripts/pr-ci-sweeper") ||
+      file.startsWith("test/helpers/") ||
+      /^test\/scripts\/pr-.*\.test\.ts$/u.test(file),
+  );
+  expect(excludedInputs.length).toBeGreaterThan(0);
+  expect(excludedInputs.filter((file) => !acceptsWorkflowPaths(paths, [file]))).toEqual([]);
+});

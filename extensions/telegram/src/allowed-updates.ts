@@ -11,11 +11,10 @@ export function resolveTelegramAllowedUpdates(): ReadonlyArray<TelegramUpdateTyp
   const updates = DEFAULT_TELEGRAM_UPDATE_TYPES.filter(
     (type) => type !== "stopped_message_generation",
   );
-  if (!updates.includes("message_reaction")) {
-    updates.push("message_reaction");
-  }
-  if (!updates.includes("channel_post")) {
-    updates.push("channel_post");
+  for (const type of ["message_reaction", "channel_post"] as const) {
+    if (!updates.includes(type)) {
+      updates.push(type);
+    }
   }
   return updates;
 }

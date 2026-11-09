@@ -10,7 +10,7 @@ import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerUserHomeDir,
 } from "./auth-start-options.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./config.js";
 import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { isJsonObject } from "./protocol.js";
 import { runCodexAppServerAttempt } from "./run-attempt.js";
@@ -49,7 +49,7 @@ describeLive("Codex async questions real-binary bridge", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     setManagedCodexPluginRoot(path.resolve(import.meta.dirname, "../.."));
 
-    const pluginConfig = { appServer: { homeScope: "agent" } };
+    const pluginConfig: CodexPluginConfig = { appServer: { homeScope: "agent" } };
     const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig, env: {} });
     const client = await createIsolatedCodexAppServerClient({
       startOptions: runtime.start,
@@ -164,6 +164,7 @@ describeLive("Codex async questions real-binary bridge", () => {
       const host = await createAgentHarnessHostCapabilitiesForTest({
         attempt: params,
         pluginId: "codex",
+        nativeModelPolicySupport: "exact",
       });
       params.hostCapabilities = host.capabilities;
       closeHost = host.close;
@@ -232,6 +233,7 @@ describeLive("Codex async questions real-binary bridge", () => {
       const answerHost = await createAgentHarnessHostCapabilitiesForTest({
         attempt: followUp,
         pluginId: "codex",
+        nativeModelPolicySupport: "exact",
       });
       followUp.hostCapabilities = answerHost.capabilities;
       closeHost = answerHost.close;

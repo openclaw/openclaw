@@ -1,65 +1,270 @@
 import { spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  cpSync,
+  existsSync,
+  globSync,
+  mkdirSync,
+  realpathSync,
+  readFileSync,
+  lstatSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "tsdown";
 import { afterEach, expect, it, vi } from "vitest";
+import { collectPackageDistImportErrors } from "../../scripts/lib/package-dist-imports.mjs";
+import { withUpdateCommandExecutor } from "../../src/cli/update-cli/update-command-executor.js";
+import { resolvePackageActivationHelper } from "../../src/infra/package-update-activation-journal.js";
+import { preparePackageActivationJournal } from "../../src/infra/package-update-activation-prepare.js";
+import { packageActivationRuntimeEntrypoint } from "../../src/infra/package-update-activation-runtime-assets.js";
+import { packageActivationRuntimeForTest } from "../../src/infra/package-update-activation-runtime.test-support.js";
+import { createPackageIntegrityReader } from "../../src/infra/package-update-integrity.js";
+import { createPackageSwapFixture } from "../../src/infra/package-update-swap.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "../../src/infra/update-managed-service-handoff-runtime-assets.js";
 import { stageManagedHandoffRuntime } from "../../src/infra/update-managed-service-handoff-runtime.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import buildConfigs from "../../tsdown.config.ts";
+import {
+  installPrivateUpdateHandoffStore,
+  writePrivateUpdateHandoffChildGuard,
+} from "../helpers/private-update-handoff-store.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-vi.mock("../../src/infra/runtime-worker-url.js", () => ({
-  resolveRuntimeWorkerUrl: vi.fn(),
-}));
+// The test runner relocates worker declarations; the production factory needs source metadata.
+vi.mock(
+  "../../src/infra/update-managed-service-handoff-runtime-assets.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../src/infra/update-managed-service-handoff-runtime-assets.js")
+      >();
+    return {
+      ...actual,
+      managedHandoffRuntimeEntrypoint: {
+        ...actual.managedHandoffRuntimeEntrypoint,
+        currentModuleUrl: new URL(
+          "../../src/infra/update-managed-service-handoff-runtime-assets.ts",
+          import.meta.url,
+        ).href,
+      },
+    };
+  },
+);
+
+vi.mock("../../src/infra/package-update-activation-runtime-assets.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../src/infra/package-update-activation-runtime-assets.js")
+    >();
+  return {
+    ...actual,
+    packageActivationRuntimeEntrypoint: {
+      ...actual.packageActivationRuntimeEntrypoint,
+      currentModuleUrl: new URL(
+        "../../src/infra/package-update-activation-runtime-assets.ts",
+        import.meta.url,
+      ).href,
+    },
+  };
+});
+
+vi.mock("../../src/infra/runtime-worker-url.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/infra/runtime-worker-url.js")>();
+  return { ...actual, resolveRuntimeWorkerUrl: vi.fn(actual.resolveRuntimeWorkerUrl) };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const require = createRequire(import.meta.url);
+const packageDir = (name: string) => path.dirname(require.resolve(`${name}/package.json`));
+function commandOutput(result: ReturnType<typeof spawnSync>, status = 0) {
+  expect({ error: result.error, status: result.status }, String(result.stderr)).toEqual({
+    error: undefined,
+    status,
+  });
+  return String(result.stdout);
+}
+const commandFacts = (result: ReturnType<typeof spawnSync>) => JSON.parse(commandOutput(result));
+const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+const freebsd = process.platform === "freebsd";
+const windows = process.platform === "win32";
 
-it("loads the staged production handoff runtime without neighboring SQL or JSON assets", async () => {
-  const entryName = MANAGED_HANDOFF_RUNTIME_ENTRY.replace(/\.mjs$/u, "");
+afterEach(() => vi.restoreAllMocks());
+
+it.each(
+  (["managed", "package"] as const).filter(
+    (kind) => kind === "managed" || process.platform !== "win32",
+  ),
+)("loads the staged production %s runtime without neighboring assets", async (kind) => {
+  const runtimeEntry =
+    kind === "managed"
+      ? MANAGED_HANDOFF_RUNTIME_ENTRY
+      : packageActivationRuntimeEntrypoint.distWorkerPath;
+  const entryName = runtimeEntry.replace(/\.mjs$/u, "");
   const config = buildConfigs.find(
     ({ entry }) => typeof entry === "object" && entry !== null && Object.hasOwn(entry, entryName),
   );
   if (!config) {
     throw new Error("Missing production managed handoff build config");
   }
-  const outDir = tempDirs.make("openclaw-handoff-build-");
-  const directory = tempDirs.make("openclaw-handoff-stage-");
+  const root = realpathSync(tempDirs.make("openclaw-handoff-build-"));
+  const outDir = path.join(root, "build");
+  const directory = path.join(root, "stage");
+  const control = path.join(root, "authority");
+  for (const dir of [outDir, directory, control]) {
+    mkdirSync(dir, { mode: 0o700 });
+  }
+  const { databasePath } = installPrivateUpdateHandoffStore(control);
+  const guardEnv = writePrivateUpdateHandoffChildGuard(databasePath, control);
+  const childEnv = guardEnv({
+    HOME: directory,
+    USERPROFILE: directory,
+    TMPDIR: control,
+    TMP: control,
+    TEMP: control,
+    OPENCLAW_STATE_DIR: path.join(control, "state"),
+    OPENCLAW_CONFIG_PATH: path.join(control, "state", "openclaw.json"),
+    SystemRoot: process.env.SystemRoot,
+    WINDIR: process.env.WINDIR,
+  });
+  const commands: string[] = [];
+  let preparedPackage: Awaited<ReturnType<typeof preparePackageActivationJournal>> | undefined;
+  const childOptions = {
+    encoding: "utf8",
+    timeout: 30_000,
+    cwd: directory,
+    env: childEnv,
+  } as const;
+  const runCommand = (command: string, action: string) =>
+    spawnSync("/bin/sh", ["-c", command.replace(/ status$/u, ` ${action}`)], {
+      ...childOptions,
+      killSignal: "SIGKILL",
+    });
+  const assertPhases = (command: string, operationId: string, phases: string[][]) => {
+    for (const [action, phase] of phases) {
+      expect(commandFacts(runCommand(command, action!))).toMatchObject({ operationId, phase });
+    }
+  };
   // Use the production graph unchanged, not the invocation compiler's extra plugins.
   const { bundles } = await build({ ...config, config: false, outDir, logLevel: "silent" });
   try {
-    const modules = bundles.flatMap(({ chunks }) =>
-      chunks.flatMap((chunk) => (chunk.type === "chunk" ? chunk.moduleIds : [])),
+    const runtimeWorker = await vi.importActual<
+      typeof import("../../src/infra/runtime-worker-url.js")
+    >("../../src/infra/runtime-worker-url.js");
+    vi.mocked(resolveRuntimeWorkerUrl).mockImplementation((entry) =>
+      entry.distWorkerPath === runtimeEntry
+        ? pathToFileURL(path.join(outDir, runtimeEntry))
+        : runtimeWorker.resolveRuntimeWorkerUrl(entry),
     );
-    expect(modules).toContain(
-      path.resolve("src/infra/update-managed-service-handoff-native-loader.ts"),
+    const helperName = "windows-security-helper.exe";
+    const publishedHelper = readFileSync(
+      path.join(packageDir("@openclaw/fs-safe"), "dist", helperName),
     );
-    expect(modules).not.toContain(path.resolve("src/shared/freebsd-process-identity-native.ts"));
-    vi.mocked(resolveRuntimeWorkerUrl).mockReturnValue(
-      pathToFileURL(path.join(outDir, MANAGED_HANDOFF_RUNTIME_ENTRY)),
-    );
-    const staged = stageManagedHandoffRuntime(directory);
-    const entry = path.join(directory, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
-    const nativeAssets =
-      process.platform === "freebsd"
-        ? [
-            "package.json",
-            "indirect.cjs",
-            "src/koffi/indirect.cjs",
-            "LICENSE.txt",
-            `build/koffi/freebsd_${process.arch}/koffi.node`,
-          ].map((file) => path.join(directory, "runtime", "node_modules", "koffi", file))
-        : [];
-    expect(staged).toEqual([entry, ...nativeAssets]);
-    expect(readdirSync(directory)).toEqual(["runtime"]);
-    expect(readdirSync(path.dirname(entry))).toEqual(
-      process.platform === "freebsd"
-        ? [MANAGED_HANDOFF_RUNTIME_ENTRY, "node_modules"]
-        : [MANAGED_HANDOFF_RUNTIME_ENTRY],
-    );
+    expect(readFileSync(path.join(outDir, helperName))).toEqual(publishedHelper);
+    const packageFiles = globSync("**/*", { cwd: outDir })
+      .filter((name) => lstatSync(path.join(outDir, name)).isFile())
+      .map((name) => `dist/${name.replaceAll(path.sep, "/")}`);
+    const readPackageText = (name: string) =>
+      readFileSync(path.join(outDir, name.slice("dist/".length)), "utf8");
+    expect(
+      collectPackageDistImportErrors({ files: packageFiles, readText: readPackageText }),
+    ).toEqual([]);
+    // Reproduce the original archive defect without compiling an unchanged baseline.
+    expect(
+      collectPackageDistImportErrors({
+        files: packageFiles.filter((name) => name !== `dist/${helperName}`),
+        readText: readPackageText,
+      }),
+    ).toContain(`dist/${runtimeEntry} imports missing dist/${helperName}`);
+    let entry: string;
+    if (kind === "managed") {
+      // The repository runner compiles a separate graph from this production build.
+      const invocationAssets = await vi.importActual<
+        typeof import("../../src/infra/update-managed-service-handoff-runtime-assets.js")
+      >("../../src/infra/update-managed-service-handoff-runtime-assets.js");
+      const invocationEntry = runtimeWorker.resolveRuntimeWorkerUrl(
+        invocationAssets.managedHandoffRuntimeEntrypoint,
+      );
+      expect(readFileSync(new URL(`./${helperName}`, invocationEntry))).toEqual(publishedHelper);
+      const manifest = JSON.parse(
+        readFileSync(new URL("../manifest.json", invocationEntry), "utf8"),
+      );
+      const helperHash = sha256(publishedHelper);
+      expect(manifest.outputs[helperName]).toBe(helperHash);
+      if (manifest.cacheSignature) {
+        for (const file of [`dist/${helperName}`, "package.json"]) {
+          const source = realpathSync(path.join(packageDir("@openclaw/fs-safe"), file));
+          expect(manifest.inputs[source]).toBe(sha256(readFileSync(source)));
+        }
+      }
+      if (windows) {
+        rmSync(path.join(outDir, helperName));
+        try {
+          expect(() => stageManagedHandoffRuntime(directory)).toThrow(/ENOENT/);
+        } finally {
+          rmSync(path.join(directory, "runtime"), { recursive: true, force: true });
+          writeFileSync(path.join(outDir, helperName), publishedHelper);
+        }
+      }
+      stageManagedHandoffRuntime(directory);
+      entry = path.join(directory, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
+      if (windows) {
+        expect(readFileSync(path.join(path.dirname(entry), helperName))).toEqual(publishedHelper);
+      }
+    } else {
+      const base = path.join(realpathSync(directory), "literal-$HOME-`id`-'quoted'");
+      mkdirSync(base, { mode: 0o700 });
+      const prepare = async () => {
+        const fixture = await createPackageSwapFixture(base);
+        // npm nests proc-safe and its FreeBSD addon inside the installed package.
+        const nativeModules = path.join(fixture.packageRoot, "node_modules");
+        if (freebsd && !existsSync(nativeModules)) {
+          const procSafe = realpathSync(packageDir("@openclaw/proc-safe"));
+          const platformName = `@openclaw/proc-safe-freebsd-${process.arch}`;
+          const addon = path.dirname(
+            createRequire(path.join(procSafe, "package.json")).resolve(
+              `${platformName}/package.json`,
+            ),
+          );
+          cpSync(procSafe, path.join(nativeModules, "@openclaw", "proc-safe"), {
+            recursive: true,
+          });
+          cpSync(realpathSync(addon), path.join(nativeModules, platformName), {
+            recursive: true,
+          });
+        }
+        return withUpdateCommandExecutor(randomUUID(), async (executor) =>
+          preparePackageActivationJournal({
+            options: {
+              fence: await executor.enter(fixture.packageRoot),
+              runtime: packageActivationRuntimeForTest(),
+              onPrepared: (command) => {
+                expect(commandFacts(runCommand(command, "status"))).toMatchObject({
+                  phase: "preparing",
+                });
+                commands.push(command);
+              },
+            },
+            liveRoot: fixture.packageRoot,
+            stageRoot: fixture.params.stage.packageRoot,
+            launcherRoot: fixture.params.stage.layout.binDir,
+            binDir: path.dirname(fixture.launcher),
+            previous: await createPackageIntegrityReader().tree(fixture.packageRoot),
+            launchers: [],
+          }),
+        );
+      };
+      const prepared = (preparedPackage = await prepare());
+      entry = resolvePackageActivationHelper(prepared.anchor);
+    }
 
+    // Recovery must survive loss of the old package and all its neighboring assets.
+    // The POSIX activation helper intentionally has no Windows executable in custody.
+    rmSync(outDir, { recursive: true });
     const result = spawnSync(
       resolveTestNodeExecPath(),
       [
@@ -67,47 +272,92 @@ it("loads the staged production handoff runtime without neighboring SQL or JSON 
         "--eval",
         `
           import assert from "node:assert/strict";
-          import { isBuiltin, registerHooks } from "node:module";
-          import { pathToFileURL } from "node:url";
-          const entry = pathToFileURL(process.argv[1]).href;
+          import { isBuiltin, registerHooks, syncBuiltinESMExports } from "node:module";
+          import childProcess from "node:child_process";
+          import path from "node:path";
+          import { fileURLToPath, pathToFileURL } from "node:url";
+          const kind = process.argv[2];
+          const entryPath = process.argv[1];
+          const entry = pathToFileURL(entryPath).href;
+          if (kind === "package") process.argv = [process.execPath, entryPath, "--anchor", process.argv[3], "--operation", process.argv[4], "status"];
           registerHooks({ resolve(specifier, context, nextResolve) {
-            assert(isBuiltin(specifier) || specifier === entry,
-              "Unexpected sealed runtime dependency: " + specifier);
-            return nextResolve(specifier, context);
+            if (isBuiltin(specifier) || specifier === entry) return nextResolve(specifier, context);
+            assert.equal(kind, "managed", "Unexpected package recovery dependency");
+            assert.equal(process.platform, "freebsd", "Unexpected native dependency");
+            const resolved = nextResolve(specifier, context);
+            const privateRoot = path.join(path.dirname(entryPath), "node_modules") + path.sep;
+            assert(fileURLToPath(resolved.url).startsWith(privateRoot),
+              "Dependency escaped private runtime: " + specifier);
+            return resolved;
           } });
-          const runtime = await import(entry);
-          for (const name of [
-            "assertOpenClawStateWriteAllowed",
-            "resolveImmutableSqliteFileUri",
-            "createManagedHandoffLeaseStore",
-            "hasManagedUpdateRecoveryRecord",
-            "resolveUpdateRestartNoticeMeta",
-            "shouldPublishUpdateRestartNotice",
-          ]) {
-            assert.equal(typeof runtime[name], "function", name);
+          const helperCalls = [];
+          for (const method of ["spawn", "spawnSync"]) {
+            const original = childProcess[method];
+            childProcess[method] = function(file, ...args) {
+              if (String(file).endsWith("windows-security-helper.exe")) helperCalls.push(String(file));
+              return Reflect.apply(original, this, [file, ...args]);
+            };
           }
-          console.log("staged production handoff runtime loaded");
+          syncBuiltinESMExports();
+          const runtime = await import(entry);
+          if (kind === "managed") {
+          if (process.platform === "win32") {
+            const store = await runtime.prepareManagedHandoffLeaseStore({
+              databasePath: process.argv[5], serviceManagerEnv: {},
+            });
+            assert.deepEqual(store.read(process.cwd()), { kind: "absent" });
+            const acquired = store.acquire(process.cwd(), "fixture-owner", { kind: "update" });
+            assert.equal(acquired.kind, "acquired");
+            try {
+              assert.equal(store.read(process.cwd()).kind, "current");
+            } finally {
+              assert.equal(store.release(acquired.lease), true);
+            }
+            assert.deepEqual(store.read(process.cwd()), { kind: "absent" });
+            assert(helperCalls.length > 0, "Windows handoff did not execute the packaged ACL helper");
+            assert(helperCalls.every(file => file === path.join(path.dirname(entryPath), "windows-security-helper.exe")));
+            console.log("staged Windows ACL helper executed");
+          }
+          if (process.platform === "freebsd") {
+            const options = { databasePath: path.join(process.cwd(), "identity.sqlite"), serviceManagerEnv: {} };
+            const store = runtime.createManagedHandoffLeaseStore(options);
+            const current = store.processIdentity(process.pid);
+            assert.match(current.startIdentity, /^[0-9]+$/);
+            assert.equal(store.inspectProcessIdentity(current), "live");
+            const { Worker } = await import("node:worker_threads");
+            const { once } = await import("node:events");
+            const worker = new Worker(new URL("data:text/javascript," + encodeURIComponent(
+              'import { parentPort } from "node:worker_threads"; import { createManagedHandoffLeaseStore } from ' + JSON.stringify(entry) + ';' +
+              'parentPort.postMessage(createManagedHandoffLeaseStore(' + JSON.stringify(options) + ').processIdentity(process.pid));'
+            )));
+            try { const [observed] = await once(worker, "message"); assert.deepEqual(observed, current); }
+            finally { await worker.terminate(); }
+          }
+          }
+          console.log("staged production runtime loaded");
         `,
         entry,
+        kind,
+        preparedPackage?.anchor ?? "",
+        preparedPackage?.journal.read().descriptor.operationId ?? "",
+        databasePath,
       ],
-      {
-        cwd: directory,
-        encoding: "utf8",
-        timeout: 30_000,
-        env: {
-          HOME: directory,
-          USERPROFILE: directory,
-          TMPDIR: directory,
-          TMP: directory,
-          TEMP: directory,
-          SystemRoot: process.env.SystemRoot,
-          WINDIR: process.env.WINDIR,
-        },
-      },
+      childOptions,
     );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("staged production handoff runtime loaded");
+    const output = commandOutput(result).trim();
+    expect(output).toContain("staged production runtime loaded");
+    if (kind === "package") {
+      expect(JSON.parse(output.split("\n")[0]!)).toMatchObject({ phase: "prepared" });
+      if (!preparedPackage || commands.length !== 1) {
+        throw new Error("First package recovery command was not published exactly once.");
+      }
+      const commandA = commands[0]!;
+      const first = preparedPackage.journal.read();
+      assertPhases(commandA, first.descriptor.operationId, [
+        ["repair", "aborted"],
+        ["retire", "complete"],
+      ]);
+    }
   } finally {
     for (const bundle of bundles) {
       await bundle[Symbol.asyncDispose]();

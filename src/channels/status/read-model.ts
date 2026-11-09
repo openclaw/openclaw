@@ -1,24 +1,13 @@
-// Read-model helpers that merge gateway channel status with local config snapshots.
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
-import { hasConfiguredUnavailableCredentialStatus } from "../account-snapshot-fields.js";
+import {
+  CREDENTIAL_STATUS_KEYS,
+  hasConfiguredUnavailableCredentialStatus,
+} from "../account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "../plugins/types.public.js";
 
-export type RuntimeChannelStatusPayload = {
-  channelAccounts?: unknown;
-};
-
 type RuntimeChannelAccount = Record<string, unknown>;
-
-const CREDENTIAL_STATUS_KEYS = [
-  "tokenStatus",
-  "botTokenStatus",
-  "appTokenStatus",
-  "signingSecretStatus",
-  "userTokenStatus",
-] as const;
 
 function readRuntimeAccountsByChannel(payload: unknown): Record<string, unknown> {
   return asRecord(asRecord(payload).channelAccounts);
@@ -55,37 +44,22 @@ export function normalizeRuntimeChannelAccountSnapshots(
   return out;
 }
 
-/** Resolves a stable account id from runtime status record fallbacks. */
-function resolveRuntimeChannelAccountId(account: RuntimeChannelAccount): string {
-  return (
-    normalizeOptionalString(account.accountId) ??
-    normalizeOptionalString(account.id) ??
-    normalizeOptionalString(account.name) ??
-    DEFAULT_ACCOUNT_ID
-  );
-}
-
-/** Finds a runtime account, including singleton default-account fallback. */
-function findRuntimeChannelAccount(params: {
-  liveAccounts: RuntimeChannelAccount[];
-  accountId: string;
-}): RuntimeChannelAccount | null {
-  return (
-    params.liveAccounts.find(
-      (account) => resolveRuntimeChannelAccountId(account) === params.accountId,
-    ) ??
-    (params.accountId === DEFAULT_ACCOUNT_ID && params.liveAccounts.length === 1
-      ? (params.liveAccounts[0] ?? null)
-      : null)
-  );
-}
-
 /** Reports whether a runtime account has usable live credentials. */
 export function hasRuntimeCredentialAvailable(params: {
   liveAccounts: RuntimeChannelAccount[];
   accountId: string;
 }): boolean {
-  const account = findRuntimeChannelAccount(params);
+  const account =
+    params.liveAccounts.find(
+      (candidate) =>
+        (normalizeOptionalString(candidate.accountId) ??
+          normalizeOptionalString(candidate.id) ??
+          normalizeOptionalString(candidate.name) ??
+          DEFAULT_ACCOUNT_ID) === params.accountId,
+    ) ??
+    (params.accountId === DEFAULT_ACCOUNT_ID && params.liveAccounts.length === 1
+      ? params.liveAccounts[0]
+      : undefined);
   if (!account) {
     return false;
   }
@@ -106,38 +80,4 @@ export function markConfiguredUnavailableCredentialStatusesAvailable(
     }
   }
   return record;
-}
-
-/** Merges local and runtime accounts into display rows with source metadata. */
-export async function resolveChannelAccountStatusRows(params: {
-  localAccountIds: string[];
-  runtimeAccounts: ChannelAccountSnapshot[];
-  resolveLocalSnapshot: (accountId: string) => Promise<ChannelAccountSnapshot>;
-}): Promise<
-  Array<{
-    accountId: string;
-    snapshot: ChannelAccountSnapshot;
-    source: "gateway" | "config";
-  }>
-> {
-  const mergedAccountIds = uniqueStrings([
-    ...params.localAccountIds,
-    ...params.runtimeAccounts.map((account) => account.accountId),
-  ]);
-  const rows: Array<{
-    accountId: string;
-    snapshot: ChannelAccountSnapshot;
-    source: "gateway" | "config";
-  }> = [];
-  for (const accountId of mergedAccountIds) {
-    const runtimeSnapshot = params.runtimeAccounts.find(
-      (account) => account.accountId === accountId,
-    );
-    rows.push({
-      accountId,
-      snapshot: runtimeSnapshot ?? (await params.resolveLocalSnapshot(accountId)),
-      source: runtimeSnapshot ? "gateway" : "config",
-    });
-  }
-  return rows;
 }

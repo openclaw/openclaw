@@ -2,15 +2,17 @@
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { detectRespawnSupervisor } from "../infra/supervisor-markers.js";
-import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
+import type {
+  GatewayServiceInstallArgs,
+  GatewayServiceEnvironmentValueSource,
+} from "./service-types.js";
 
 const MANAGED_SERVICE_ENV_KEYS_VAR = "OPENCLAW_SERVICE_MANAGED_ENV_KEYS";
 
-// Tracks which service environment keys OpenClaw owns across reinstall/start flows.
-type ServiceEnvCommand = {
-  environment?: Record<string, string | undefined>;
-  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
-} | null;
+type ServiceEnvCommand = Pick<
+  GatewayServiceInstallArgs,
+  "environment" | "environmentValueSources"
+> | null;
 
 export function normalizeServiceEnvKey(key: string): string | null {
   return normalizeEnvVarKey(key, { portable: true })?.toUpperCase() ?? null;
@@ -90,12 +92,10 @@ export function clearMissingManagedServiceEnvKeys(params: {
   presentKeys: Iterable<string>;
   preserveKeys?: Iterable<string>;
 }): void {
-  const presentKeys = new Set(
-    [...params.presentKeys, ...(params.preserveKeys ?? [])].flatMap((key) => {
-      const normalized = normalizeServiceEnvKey(key);
-      return normalized ? [normalized] : [];
-    }),
-  );
+  const presentKeys = normalizeServiceEnvKeys([
+    ...params.presentKeys,
+    ...(params.preserveKeys ?? []),
+  ]);
   const missingKeys = [...params.managedKeys].filter((key) => {
     const normalized = normalizeServiceEnvKey(key);
     return normalized !== null && !presentKeys.has(normalized);

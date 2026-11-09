@@ -1,99 +1,159 @@
-/* ── Escape hatch: Gateway host identity + metered stats grid ──
-   A genuine two-column stat grid with usage meters; stays flat (no nested
-   borders/surfaces) inside one .settings-group with row-matched paddings. */
+/* Every measurement on this page is one row: label and detail at the start, the
+   reading after them, then a fixed trend slot holding a sparkline or a usage
+   meter. Sparkline hosts lay out their own parts through the same grid, so a
+   chart arriving later never moves anything. */
 
-.config-host {
+.connection-metric,
+.connection-activity .gateway-vital:not(.connection-ping__trend) {
   display: grid;
-  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
-  gap: var(--space-4) var(--space-5);
+  grid-template-columns: minmax(0, 1fr) auto var(--connection-trend-width, 140px);
+  grid-template-rows: auto minmax(calc(var(--control-ui-text-sm) * 1.45), auto);
+  grid-template-areas:
+    "label value trend"
+    "detail aside trend";
+  column-gap: var(--space-4);
   align-items: start;
-  padding: var(--space-3) var(--space-4);
+  min-height: var(--list-row-min-height);
+  padding: var(--list-row-padding);
 }
 
-.config-host__identity {
-  display: grid;
-  align-content: start;
-  gap: var(--space-1);
-  min-width: 0;
+.connection-activity .gateway-vital {
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 
-.config-host__name {
-  font-size: var(--control-ui-text-md);
-  font-weight: 600;
-  line-height: 1.3;
+.connection-ping__trend.gateway-vital,
+.connection-activity .sparkline-tile__head {
+  display: contents;
+}
+
+.connection-activity .sparkline-tile__label,
+.config-host__stat-label {
+  grid-area: label;
+  overflow: visible;
   color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  font-weight: var(--list-row-title-weight);
+  line-height: 1.35;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 
-.config-host__meta {
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.4;
+.connection-activity .sparkline-tile__sub,
+.config-host__stat-detail {
+  grid-area: detail;
+  overflow: visible;
   color: var(--muted);
+  font-family: inherit;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.connection-activity .sparkline-tile__value,
+.config-host__stat-value {
+  grid-area: value;
+  margin: 0;
+  color: var(--text-strong);
+  font-family: inherit;
+  font-size: var(--control-ui-text-md);
+  font-weight: var(--list-row-title-weight);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  text-align: end;
+  white-space: nowrap;
+}
+
+.connection-activity .sparkline-tile__age,
+.config-host__stat-unit {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 400;
+}
+
+.connection-activity .sparkline-tile__secondary {
+  grid-area: aside;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
+.connection-activity .sparkline-tile__chart,
+.config-host__meter {
+  grid-area: trend;
+  align-self: center;
+  margin: 0;
+}
+
+.connection-activity .gateway-vital .sparkline-tile__chart svg {
+  height: 32px;
+}
+
+.connection-activity .sparkline-tile__chart polyline {
+  filter: none;
+}
+
+.connection-activity .sparkline-tile__dot--now {
+  box-shadow: none;
+  animation: none;
+}
+
+.connection-activity .gateway-cpu-tooltip {
+  display: block;
+}
+
+.connection-ping__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-3);
+  grid-row: 2;
+  grid-column: 1 / span 2;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+
+.connection-ping__stats > div {
+  display: flex;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+.connection-ping__stats dd {
+  margin: 0;
+}
+
+.connection-ping__error {
+  grid-row: 3;
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--warn);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+}
+
+.connection-activity__note {
+  margin: 0;
+  padding: var(--list-row-padding);
 }
 
 .config-host__placeholder {
   display: inline-block;
-  width: 65%;
+  width: 12ch;
   height: 1em;
   vertical-align: -0.1em;
 }
 
-.config-host__address {
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
-  color: var(--text);
-  overflow-wrap: anywhere;
-}
-
-.config-host__stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
-  gap: var(--space-3);
-}
-
-.config-host__stat {
-  display: grid;
-  align-content: start;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
-.config-host__stat-label {
-  font-size: var(--control-ui-text-xs);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.config-host__stat-value {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-1);
-  font-size: var(--control-ui-text-lg);
-  font-weight: 600;
-  line-height: 1.2;
-  color: var(--text-strong);
-  font-variant-numeric: tabular-nums;
-}
-
 .config-host__stat-path {
-  font-family: var(--mono);
-  letter-spacing: normal;
-  text-transform: none;
-  overflow-wrap: anywhere;
-}
-
-.config-host__stat-unit {
-  font-size: var(--control-ui-text-xs);
-  font-weight: 500;
-  color: var(--muted);
-}
-
-.config-host__stat-detail {
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.35;
-  color: var(--muted);
   overflow-wrap: anywhere;
 }
 
@@ -119,10 +179,30 @@
   background: var(--danger);
 }
 
-@media (max-width: 640px) {
-  .config-host {
-    grid-template-columns: 1fr;
-  }
+/* The state is the row's title, so it reads at title size. */
+openclaw-connection-page .settings-row__title > .settings-status {
+  color: inherit;
+  font: inherit;
+  white-space: normal;
+}
+
+/* Addresses and keys are read from their start. */
+openclaw-connection-page .settings-row__control input.settings-input:not(.picker-select__search) {
+  text-align: start;
+}
+
+openclaw-connection-page
+  .settings-row:not(.settings-row--stacked)
+  .settings-row__control
+  > :is(.settings-input, .settings-input-with-hint, .connection-session-field) {
+  width: 400px;
+}
+
+/* The connection action slot always holds a button and reserves its hint's two
+   lines, so the first edit swaps what is in it without moving the page. */
+.connection-actions .settings-row__text {
+  justify-content: center;
+  min-height: calc(var(--control-ui-text-sm) * 1.45 * 2);
 }
 
 .connection-actions__buttons {
@@ -132,80 +212,169 @@
   gap: var(--space-2);
 }
 
-.settings-row.connection-ping,
-.settings-row.connection-activity {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-2);
+/* Save sits in the session field's end. The field keeps its width and always
+   reserves that end, so the buttons appearing never move the value. */
+.connection-session-field {
+  position: relative;
+  min-width: 0;
 }
 
-.connection-ping__trend.gateway-vital,
-.connection-activity .gateway-vital {
+.connection-session-field > input.settings-input {
+  padding-inline-end: 6.5rem;
+}
+
+.connection-session-field__actions {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 4px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.connection-session-field__actions .settings-row__desc:not(:empty) {
+  padding-inline-end: var(--space-2);
+}
+
+.settings-row__control .connection-session-field__actions .btn {
+  height: calc(var(--settings-control-height) - 8px);
+  min-height: 0;
+  padding-inline: var(--space-2);
+  border-radius: max(0px, calc(var(--field-radius) - 4px));
+  font-size: var(--control-ui-text-sm);
+  pointer-events: auto;
+}
+
+.settings-row__control .connection-session-field__actions .connection-session-field__discard {
+  width: calc(var(--settings-control-height) - 8px);
+  padding-inline: 0;
+  border-color: transparent;
   background: transparent;
-  border: 0;
   box-shadow: none;
-}
-
-.connection-ping__trend.gateway-vital {
-  min-height: 92px;
-}
-
-.connection-ping__stats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--space-3);
-  margin: 0;
-}
-
-.connection-ping__stats dt {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-}
 
-.connection-ping__stats dd {
-  margin: var(--space-1) 0 0;
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-lg);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
-}
+  svg {
+    width: 14px;
+    height: 14px;
+  }
 
-.connection-ping__stats dd span {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 400;
-}
-
-.connection-ping__error {
-  display: block;
-  color: var(--warn);
-}
-
-@media (max-width: 400px) {
-  .connection-ping__stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  span {
+    display: none;
   }
 }
 
-.connection-details {
-  border-top: 1px solid var(--border);
-  padding: var(--space-3) var(--space-4);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+/* Uptime stays beside the machine name instead of taking a line of its own. */
+#settings-connection-host .settings-row {
+  flex-wrap: nowrap;
+
+  .settings-row__control {
+    width: auto;
+    flex-wrap: nowrap;
+  }
 }
 
-.connection-details summary {
-  width: fit-content;
+/* Each fact carries its separator at its start, and the first fact of every line
+   has that start clipped away, so no line begins or ends with one. */
+.connection-facts {
+  --connection-facts-gap: 0.9em;
+
+  display: block;
+  overflow: hidden;
 }
 
-.connection-details__body {
-  display: grid;
-  justify-items: start;
-  gap: var(--space-2);
-  padding-top: var(--space-3);
+.connection-facts__items {
+  display: flex;
+  flex-wrap: wrap;
+  margin-inline-start: calc(var(--connection-facts-gap) * -1);
+
+  > * {
+    position: relative;
+    padding-inline-start: var(--connection-facts-gap);
+
+    &::before {
+      content: "·";
+      position: absolute;
+      inset-inline-start: 0;
+      width: var(--connection-facts-gap);
+      text-align: center;
+    }
+  }
 }
 
-.connection-details__body p {
-  margin: 0;
+@media (pointer: coarse), (max-width: 640px) {
+  .connection-session-field > input.settings-input {
+    padding-inline-end: var(--field-padding-inline);
+  }
+
+  .connection-session-field__actions {
+    position: static;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    min-height: var(--settings-control-height);
+    margin-block-start: var(--space-2);
+    pointer-events: auto;
+  }
+
+  .settings-row__control .connection-session-field__actions .btn {
+    height: var(--settings-control-height);
+    padding-inline: var(--space-3);
+    border-radius: var(--radius-md);
+    font-size: inherit;
+  }
+
+  .settings-row__control .connection-session-field__actions .connection-session-field__discard {
+    width: auto;
+
+    svg {
+      display: none;
+    }
+
+    span {
+      display: inline;
+    }
+  }
+}
+
+@media (max-width: 640px) {
+  .connection-metric,
+  .connection-activity .gateway-vital:not(.connection-ping__trend) {
+    --connection-trend-width: 72px;
+
+    column-gap: var(--space-3);
+  }
+
+  .connection-ping__stats {
+    display: grid;
+    grid-template-columns: repeat(2, max-content);
+  }
+
+  openclaw-connection-page
+    .settings-row:not(.settings-row--stacked)
+    .settings-row__control
+    > .connection-session-field {
+    width: 100%;
+  }
+
+  /* One action sits at the row's end at its own width; only the Discard and
+     Apply decision fills the row. */
+  .settings-row.connection-actions .connection-actions__buttons {
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+  }
+
+  .settings-row.connection-actions .connection-actions__buttons .btn:not(:only-child) {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding-inline: var(--space-2);
+  }
+
+  .settings-row.connection-forget {
+    flex-wrap: nowrap;
+
+    .settings-row__control {
+      width: auto;
+      flex-wrap: nowrap;
+    }
+  }
 }

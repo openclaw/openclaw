@@ -1,0 +1,40 @@
+import type { ManagedWorktreeGcReceipt, ManagedWorktreeGcResult } from "./types.js";
+
+export function formatWorktreeGcResult(
+  result: ManagedWorktreeGcResult | ManagedWorktreeGcReceipt,
+): string {
+  const outcome = "state" in result && result.state !== "completed" ? result.state : result.outcome;
+  const limits =
+    result.limitsSatisfied === null ? "unknown" : result.limitsSatisfied ? "satisfied" : "exceeded";
+  const shown = result.issues
+    .map((issue) => `${issue.id ?? issue.stage}: ${issue.reason}`)
+    .join("; ");
+  const omitted = result.issueCount - result.issues.length;
+  return (
+    [
+      `Managed worktree cleanup ${outcome}: removed ${result.removed.length}`,
+      `deleted ${result.orphansDeleted} orphans`,
+      `retired ${result.orphansRetired} orphan records`,
+      ...result.retiredCheckoutPaths.map((checkoutPath) => `preserved checkout: ${checkoutPath}`),
+      `pruned ${result.snapshotsPruned} snapshots`,
+      result.scratch &&
+        `scratch (24 h): removed ${result.scratch.entriesRemoved} entries / ${result.scratch.bytesRemoved} bytes, skipped-live ${result.scratch.skippedLive}, deferred ${result.scratch.deferred}`,
+      ...(result.scratch?.errors ?? []),
+      result.gitMaintenance &&
+        `Git ${result.gitMaintenance.stage}: ${result.gitMaintenance.repoRoot}`,
+      result.gitMaintenance?.packsBefore !== undefined &&
+        `packs ${result.gitMaintenance.packsBefore} → ${result.gitMaintenance.packsAfter ?? "pending"}`,
+      result.packsRemoved !== undefined && `removed ${result.packsRemoved} packs`,
+      result.eligibleCount !== undefined && `eligible ${result.eligibleCount}`,
+      result.deferredCount !== undefined && `deferred ${result.deferredCount}`,
+      result.failedCount !== undefined && `failed ${result.failedCount}`,
+      `protected ${result.protectedCount}`,
+      ...Object.entries(result.protectionReasons).map(([reason, count]) => `${reason}: ${count}`),
+      `limits ${limits}`,
+      ...Object.entries(result.evictions ?? {}).map(([reason, count]) => `${reason}: ${count}`),
+      shown && `${shown}${omitted > 0 ? `; plus ${omitted} more` : ""}`,
+    ]
+      .filter(Boolean)
+      .join("; ") + "."
+  );
+}

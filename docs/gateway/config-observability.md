@@ -40,14 +40,14 @@ and coverage limits.
 
 - `enabled`: record new audit events (default: `true`). The ledger is on by
   default because an audit trail enabled only after an incident cannot explain
-  the incident. Setting `false` stops new event inserts after the Gateway restarts;
+  the incident. Setting `false` stops new event collection immediately;
   existing records stay readable until they expire. Turning it back on resumes
   recording from that point — the gap is not backfilled.
 - `executionIdentity`: retain bounded attribution context for exact execution
   inspection (default: `false`). This privacy-sensitive metadata is disabled
   on fresh installs and upgrades. Collection requires `enabled: true`; use
-  `openclaw config set logging.audit.executionIdentity true`, then restart the
-  Gateway. There is no environment-variable alias.
+  `openclaw config set logging.audit.executionIdentity true` to enable it for
+  newly admitted runs. There is no environment-variable alias.
 - `messages`: message metadata scope (default: `"off"`). `"direct"` records
   known direct conversations only. `"all"` also records group, channel, and
   unknown conversation kinds. Both modes remain content-free and replace raw
@@ -55,13 +55,13 @@ and coverage limits.
   available. These are correlation aids rather than anonymization; the state
   database stores the derivation key, but RPC and CLI exports do not.
 
-A root-level `audit` block is retired; the canonical path is `logging.audit`.
+A root-level `audit` block is retired; the current path is `logging.audit`.
 The root config object is strict, so an old top-level `audit` block is rejected.
 Run [`openclaw doctor --fix`](/cli/doctor) to move it to `logging.audit`.
 
-The running Gateway captures `logging.audit.enabled`,
-`logging.audit.executionIdentity`, and `logging.audit.messages` at startup;
-restart it after changing any of these settings. Message coverage includes
+All three settings apply live. Accepted writes still drain through the same
+writer, and retained identity contexts remain unchanged. Enabling collection
+does not backfill activity or add identity to already admitted runs. Message coverage includes
 accepted inbound messages that reach core dispatch and one terminal row per
 original logical outbound reply payload that reaches shared durable delivery.
 Plugin-local and direct-send paths that bypass those shared boundaries are not
@@ -89,8 +89,9 @@ writer is best-effort, not a lossless compliance archive.
 - `consoleLevel` bumps to `debug` when `--verbose`.
 - `consoleStyle`: `"pretty"` or `"json"`. The earlier `"compact"` value is retired; [`openclaw doctor --fix`](/cli/doctor) maps it to `"pretty"`.
 - `maxFileBytes`: maximum active log file size in bytes before rotation (positive integer; default: `104857600` = 100 MB). OpenClaw keeps up to five numbered archives beside the active file.
-- `redactPatterns`: regexes for best-effort masking of console output, file logs, OTLP log records, and persisted session transcript text. Setting this **replaces** only the default string regex list for log and transcript output. Built-in form-body, structured auth-header, and bare AWS key protections always apply. Tool payload redaction is separate and always merges your patterns with the default string list.
-- Redaction is always on and is no longer configurable. [`openclaw doctor --fix`](/cli/doctor) removes the retired switch from older config files; the runtime always applies `tools`-mode redaction to logs and transcripts. UI, tool, and diagnostic safety surfaces redact secrets independently of this policy.
+- File logs store raw records with owner-only (`0600`) permissions. Direct file reads bypass redaction; protect them like the agent/state databases.
+- `redactPatterns`: regexes for best-effort masking of console output, log tails, diagnostic exports, and OTLP log records. Setting this **replaces** only the default string regex list for log output. Built-in form-body, structured auth-header, and bare AWS key protections always apply. Diagnostic helpers merge your patterns with the default string list. Tool arguments, tool results, and session transcript text are not secret-masked.
+- Egress log and diagnostic redaction is always on and is no longer configurable. [`openclaw doctor --fix`](/cli/doctor) removes the retired switch from older config files. Configuration snapshots, audit output, command-line diagnostics, and credential-bearing URLs retain their masking.
 
 ---
 
@@ -161,6 +162,7 @@ writer is best-effort, not a lossless compliance archive.
 ```
 
 - `enabled`: include public configured channel and provider names, plugin inventory names and count, and a retained session-creation count in the existing daily update-check request (default: `false`). These fields do not measure per-plugin usage or active sessions. Interactive setup can offer an explicit opt-in with **No thanks** selected by default; non-interactive setup does not enable it automatically but can retain an explicitly enabled preference. `DO_NOT_TRACK=1` or `DO_NOT_TRACK=true` always disables feature statistics without disabling the update check.
+- Update outcomes are on by default under `update.checkOnStart` and the automatic update-request controls, independently of `telemetry.enabled` and `DO_NOT_TRACK`. Set `update.checkOnStart: false` or `OPENCLAW_NO_AUTO_UPDATE=1` to stop both daily checks and outcome reports. See [update outcomes](/gateway/telemetry#update-outcomes) for fields, local limits, CI/Nix suppression, and coverage gaps.
 - `consentedAt`: ISO timestamp recording when the operator accepted or declined feature statistics. Prevents interactive setup from asking again.
 - `openclaw telemetry show` previews the request using the CLI process's current context, which can differ from the running Gateway; `openclaw telemetry on` and `openclaw telemetry off` update the preference and consent timestamp.
 - `OPENCLAW_TELEMETRY_ENDPOINT`: optional full endpoint URL for testing or a self-hosted service. Defaults to `https://telemetry.openclaw.ai/api/latest-version`.

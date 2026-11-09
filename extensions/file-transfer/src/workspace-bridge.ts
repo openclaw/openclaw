@@ -1,17 +1,27 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import type { AgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawPluginServiceContext,
+  OpenClawPluginApi,
+} from "openclaw/plugin-sdk/plugin-entry";
+import type { SandboxFsBridge } from "openclaw/plugin-sdk/sandbox";
 import {
   asOptionalRecord,
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectStrictBase64 } from "./shared/base64.js";
 import { throwFromNodePayload } from "./shared/errors.js";
+import { FILE_FETCH_CHUNK_BYTES } from "./shared/file-fetch-protocol.js";
 import type { FileTransferNodeInvokeCommand } from "./shared/node-invoke-policy-commands.js";
+import { createWorkspaceFile } from "./workspace-file-create.js";
 
 const MAX_BYTES = 16 * 1024 * 1024;
 const DIRECTORY_PAGE_SIZE = 4096;
+
+class FileFetchTooLargeError extends Error {
+  readonly code = "FILE_TOO_LARGE";
+}
 
 function relativeWithin(root: string, target: string, paths = path): string {
   const relative = paths.relative(root, target);
@@ -28,7 +38,9 @@ export function createNodeWorkspaceBridge(options: {
   remoteRoot: string;
   invoke: OpenClawPluginApi["runtime"]["nodes"]["invoke"];
   signal: AbortSignal;
-}): AgentWorkspaceAccess["bridge"] {
+  openDuplex?: OpenClawPluginServiceContext["openNodeDuplex"];
+  assertCurrent?: () => void;
+}): AgentWorkspaceAccess["bridge"] & Required<Pick<SandboxFsBridge, "createFileExclusive">> {
   const workspaceDir = path.resolve(options.workspaceDir);
   const remoteRoot = path.posix.resolve(options.remoteRoot);
   const remotePath = (params: { filePath: string; cwd?: string }) => {
@@ -45,6 +57,7 @@ export function createNodeWorkspaceBridge(options: {
   ) => {
     const signal = callerSignal ? AbortSignal.any([options.signal, callerSignal]) : options.signal;
     signal.throwIfAborted();
+    options.assertCurrent?.();
     const result = asOptionalRecord(
       await options.invoke({
         nodeId: options.nodeId,
@@ -55,11 +68,17 @@ export function createNodeWorkspaceBridge(options: {
       }),
     );
     signal.throwIfAborted();
+    options.assertCurrent?.();
     const payload = asOptionalRecord(result?.payload);
     if (!payload) {
       throw new Error(`Invalid ${command} response`);
     }
     if (payload.ok !== true) {
+      if (command === "file.fetch" && payload.code === "FILE_TOO_LARGE") {
+        const message =
+          typeof payload.message === "string" ? payload.message : "file exceeds limit";
+        throw new FileFetchTooLargeError(`file.fetch FILE_TOO_LARGE: ${message}`);
+      }
       if (payload.code === "NOT_FOUND") {
         if (command === "file.stat") {
           return null;
@@ -69,7 +88,7 @@ export function createNodeWorkspaceBridge(options: {
       throwFromNodePayload(command, payload);
     }
     if (typeof payload.path !== "string" || !path.posix.isAbsolute(payload.path)) {
-      throw new Error(`Missing canonical path in ${command} response`);
+      throw new Error(`Missing resolved path in ${command} response`);
     }
     relativeWithin(remoteRoot, payload.path, path.posix);
     return payload;
@@ -79,19 +98,100 @@ export function createNodeWorkspaceBridge(options: {
     params: Parameters<NonNullable<AgentWorkspaceAccess["bridge"]["readFileWithSource"]>>[0],
     followParentSymlinks = false,
   ) => {
-    const maxBytes = Math.min(params.maxBytes ?? MAX_BYTES, MAX_BYTES);
+    const maxBytes = params.maxBytes ?? MAX_BYTES;
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
       throw new Error("maxBytes must be a non-negative safe integer");
     }
-    const payload = await invoke(
-      "file.fetch",
-      {
-        path: remotePath(params),
-        maxBytes: Math.max(1, maxBytes),
-        ...(followParentSymlinks ? { rootPath: remoteRoot, followSymlinks: true } : {}),
-      },
-      params.signal,
-    );
+    const fetchParams = {
+      path: remotePath(params),
+      maxBytes: Math.max(1, Math.min(maxBytes, MAX_BYTES)),
+      followSymlinks: false,
+      ...(followParentSymlinks ? { rootPath: remoteRoot, followSymlinks: true } : {}),
+    };
+    let payload: Awaited<ReturnType<typeof invoke>>;
+    try {
+      payload = await invoke("file.fetch", fetchParams, params.signal);
+    } catch (error) {
+      // Old nodes retain small-file support even when the caller grants a larger budget.
+      // Only the structured unary size refusal admits a fresh policy-checked binary read.
+      if (
+        !(error instanceof FileFetchTooLargeError) ||
+        maxBytes <= MAX_BYTES ||
+        !options.openDuplex
+      ) {
+        throw error;
+      }
+      const signal = params.signal
+        ? AbortSignal.any([options.signal, params.signal])
+        : options.signal;
+      const assertCurrent = () => {
+        signal.throwIfAborted();
+        options.assertCurrent?.();
+      };
+      assertCurrent();
+      const channel = await options.openDuplex({
+        nodeId: options.nodeId,
+        command: "file.fetch",
+        params: { ...fetchParams, transport: "binary", maxBytes },
+        maxMessageBytes: FILE_FETCH_CHUNK_BYTES,
+        signal,
+        assertCurrent,
+        timeoutMs: 60_000,
+      });
+      void channel.closed.catch(() => {});
+      let unsubscribe: (() => void) | undefined;
+      let result: { data: Buffer; canonicalPath: string };
+      try {
+        assertCurrent();
+        const chunks: Buffer[] = [];
+        const hash = crypto.createHash("sha256");
+        let receivedSize = 0;
+        unsubscribe = channel.onMessage(async (message) => {
+          assertCurrent();
+          if (
+            !message.byteLength ||
+            message.byteLength > FILE_FETCH_CHUNK_BYTES ||
+            message.byteLength > maxBytes - receivedSize
+          ) {
+            throw new Error("Invalid or oversized binary file.fetch payload", { cause: error });
+          }
+          const chunk = Buffer.from(message);
+          receivedSize += chunk.byteLength;
+          hash.update(chunk);
+          chunks.push(chunk);
+          await channel.send(Buffer.from("ack"));
+          assertCurrent();
+        });
+        await channel.send(Buffer.from("start"));
+        const received = asOptionalRecord(await channel.closed);
+        assertCurrent();
+        const receipt = asOptionalRecord(received?.payload);
+        if (!receipt || receipt.ok !== true) {
+          throwFromNodePayload("file.fetch", receipt ?? {});
+        }
+        if (
+          receipt.transport !== "binary" ||
+          typeof receipt.path !== "string" ||
+          receipt.size !== receivedSize ||
+          receipt.sha256 !== hash.digest("hex")
+        ) {
+          throw new Error("Binary file.fetch receipt does not match the received bytes", {
+            cause: error,
+          });
+        }
+        result = { data: Buffer.concat(chunks, receivedSize), canonicalPath: receipt.path };
+      } finally {
+        unsubscribe?.();
+        channel.close();
+      }
+      if (!path.posix.isAbsolute(result.canonicalPath)) {
+        throw new Error("Missing resolved path in file.fetch response", { cause: error });
+      }
+      return {
+        ...result,
+        workspaceRelativePath: relativeWithin(remoteRoot, result.canonicalPath, path.posix),
+      };
+    }
     const base64 = typeof payload?.base64 === "string" ? payload.base64 : "";
     const size = inspectStrictBase64(base64);
     if (
@@ -117,6 +217,49 @@ export function createNodeWorkspaceBridge(options: {
   };
 
   return {
+    async createFileExclusive(params) {
+      if (!options.openDuplex) {
+        throw new Error("Node workspace attachments require service-owned duplex access");
+      }
+      const signal = params.signal
+        ? AbortSignal.any([options.signal, params.signal])
+        : options.signal;
+      const assertCurrent = () => {
+        signal.throwIfAborted();
+        options.assertCurrent?.();
+      };
+      const data = Buffer.isBuffer(params.data)
+        ? params.data
+        : Buffer.from(params.data, params.encoding ?? "utf8");
+      const { result, sha256 } = await createWorkspaceFile({
+        openDuplex: options.openDuplex,
+        nodeId: options.nodeId,
+        path: remotePath(params),
+        data,
+        mkdir: params.mkdir !== false,
+        signal,
+        assertCurrent,
+      });
+      const payload = asOptionalRecord(asOptionalRecord(result)?.payload);
+      if (!payload || payload.ok !== true) {
+        throwFromNodePayload("file.create", payload ?? {});
+      }
+      if (typeof payload?.path !== "string" || !path.posix.isAbsolute(payload.path)) {
+        throw new Error("Missing resolved path in file.create response");
+      }
+      relativeWithin(remoteRoot, payload.path, path.posix);
+      if (payload.status === "exists") {
+        return "exists";
+      }
+      if (
+        payload.status !== "created" ||
+        payload.size !== data.byteLength ||
+        payload.sha256 !== sha256
+      ) {
+        throw new Error("file.create receipt does not match the submitted bytes");
+      }
+      return "created";
+    },
     // Bootstrap permits parent aliases inside the workspace; document RPCs
     // use readFile and keep their existing no-alias semantics.
     readFileWithSource: (params) => readFileWithSource(params, true),
@@ -170,7 +313,7 @@ export function createNodeWorkspaceBridge(options: {
       return { type: payload.type, size: payload.size, mtimeMs: payload.mtimeMs };
     },
     async readDirectory(params) {
-      const entries: { name: string; isDirectory: boolean }[] = [];
+      const entries: Awaited<ReturnType<NonNullable<SandboxFsBridge["readDirectory"]>>> = [];
       let offset = 0;
       while (true) {
         const payload = await invoke(
@@ -200,11 +343,23 @@ export function createNodeWorkspaceBridge(options: {
             entry.name.includes("/") ||
             entry.name.includes("\0") ||
             (path.sep === "\\" && entry.name.includes("\\")) ||
-            typeof entry.isDir !== "boolean"
+            typeof entry.isDir !== "boolean" ||
+            (entry.isFile !== undefined && typeof entry.isFile !== "boolean") ||
+            typeof entry.size !== "number" ||
+            !Number.isSafeInteger(entry.size) ||
+            entry.size < 0 ||
+            typeof entry.mtime !== "number" ||
+            !Number.isFinite(entry.mtime)
           ) {
             throw new Error("Invalid dir.list entry");
           }
-          entries.push({ name: entry.name, isDirectory: entry.isDir });
+          entries.push({
+            name: entry.name,
+            isDirectory: entry.isDir,
+            ...(typeof entry.isFile === "boolean" ? { isFile: entry.isFile } : {}),
+            size: entry.size,
+            mtimeMs: entry.mtime,
+          });
         }
         if (payload.truncated === false) {
           return entries;

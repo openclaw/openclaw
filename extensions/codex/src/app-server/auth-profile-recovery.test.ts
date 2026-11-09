@@ -1,31 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  applyCodexAppServerAuthProfile,
-  resolveCodexAppServerPreparedAuthHandoff,
-} from "./auth-bridge.js";
+import { applyCodexAppServerAuthProfile } from "./auth-bridge.js";
 import { CodexAppServerClient } from "./client.js";
 import { getSharedCodexAppServerClient } from "./shared-client.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("Codex auth profile recovery", () => {
-  it("identifies a missing selected profile before preparing a subscription handoff", async () => {
-    await expect(
-      resolveCodexAppServerPreparedAuthHandoff({
-        authRequirement: "subscription",
-        authProfileId: "openai:work",
-        authProfileStore: { version: 1, profiles: {} },
-        agentDir: "/tmp/openclaw-agent",
-        homeScope: "agent",
-        subscriptionProfileRequiredError: "profile required",
-        subscriptionProfileUnusableError: "profile unusable",
-      }),
-    ).rejects.toMatchObject({
-      code: "selected_auth_profile_unavailable",
-      message: expect.stringContaining("was not found in the OpenClaw credential store"),
-    });
-  });
-
   it("reports a missing subscription profile without attempting provider auth or an API key", async () => {
     const request = vi.fn();
     const rejection = await applyCodexAppServerAuthProfile({

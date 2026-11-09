@@ -1,18 +1,26 @@
-// Google provider module implements model/runtime integration.
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/core";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
+import type {
+  ModelProviderConfig,
+  ProviderFastModePolicyContext,
+} from "openclaw/plugin-sdk/provider-model-types";
 import {
   isGoogleGemini3ProModel,
   isGoogleGemini3ThinkingLevelModel,
 } from "openclaw/plugin-sdk/provider-thinking-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeFastMode,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
+import { isGoogleGeminiTextModelId } from "./provider-models.js";
 import {
   isGoogleGenerativeAiApi,
   isGoogleVertexBaseUrl,
+  isOfficialGoogleAiStudioBaseUrl,
   normalizeGoogleApiBaseUrl,
   normalizeGoogleGenerativeAiBaseUrl,
 } from "./src/google-api-base-url.js";
@@ -100,7 +108,7 @@ function normalizeProviderModels(
   normalizeId: (id: string) => string,
 ): ModelProviderConfig {
   const models = provider.models;
-  if (!Array.isArray(models) || models.length === 0) {
+  if (!models?.length) {
     return provider;
   }
 
@@ -121,27 +129,20 @@ export function normalizeGoogleProviderConfig(
   providerKey: string,
   provider: ModelProviderConfig,
 ): ModelProviderConfig {
-  let nextProvider = provider;
-  const shouldNormalizeModelIds = GOOGLE_MODEL_ID_PROVIDERS.has(providerKey);
-
-  if (shouldNormalizeModelIds) {
-    const modelNormalized = normalizeProviderModels(nextProvider, normalizeGoogleModelId);
-    if (shouldNormalizeGoogleGenerativeAiProviderConfig(providerKey, modelNormalized)) {
-      const normalizedBaseUrl = normalizeGoogleGenerativeAiBaseUrl(modelNormalized.baseUrl);
-      nextProvider =
-        normalizedBaseUrl !== modelNormalized.baseUrl
-          ? { ...modelNormalized, baseUrl: normalizedBaseUrl ?? modelNormalized.baseUrl }
-          : modelNormalized;
-    } else {
-      nextProvider = modelNormalized;
-    }
-  }
-
   if (providerKey === "google-antigravity") {
-    nextProvider = normalizeProviderModels(nextProvider, normalizeAntigravityModelId);
+    return normalizeProviderModels(provider, normalizeAntigravityModelId);
   }
-
-  return nextProvider;
+  if (!GOOGLE_MODEL_ID_PROVIDERS.has(providerKey)) {
+    return provider;
+  }
+  const normalized = normalizeProviderModels(provider, normalizeGoogleModelId);
+  if (!shouldNormalizeGoogleGenerativeAiProviderConfig(providerKey, normalized)) {
+    return normalized;
+  }
+  const baseUrl = normalizeGoogleGenerativeAiBaseUrl(normalized.baseUrl);
+  return baseUrl !== normalized.baseUrl
+    ? { ...normalized, baseUrl: baseUrl ?? normalized.baseUrl }
+    : normalized;
 }
 
 export function resolveGoogleThinkingProfile({
@@ -169,4 +170,56 @@ export function resolveGoogleThinkingProfile({
     levels,
     ...(isGemini3ThinkingModel ? { preserveWhenCatalogReasoningFalse: true } : {}),
   };
+}
+
+export type GoogleServiceTier = "standard" | "flex" | "priority";
+
+function normalizeGoogleServiceTier(value: unknown): GoogleServiceTier | undefined {
+  const normalized = normalizeOptionalString(value)?.toLowerCase();
+  return normalized === "standard" || normalized === "flex" || normalized === "priority"
+    ? normalized
+    : undefined;
+}
+
+export function resolveGoogleServiceTier(
+  extraParams?: Record<string, unknown>,
+): GoogleServiceTier | undefined {
+  const explicitTier = normalizeGoogleServiceTier(
+    extraParams?.serviceTier ?? extraParams?.service_tier,
+  );
+  if (explicitTier) {
+    return explicitTier;
+  }
+  const rawFastMode = extraParams?.fastMode ?? extraParams?.fast_mode;
+  const resolvedFastMode = normalizeFastMode(
+    // SAFETY: the runtime passes per-request Fast mode as a zero-argument resolver.
+    typeof rawFastMode === "function" ? (rawFastMode as () => unknown)() : rawFastMode,
+  );
+  return resolvedFastMode === true || resolvedFastMode === "ultrafast" ? "priority" : undefined;
+}
+
+export function resolveGoogleFastModeSupport(
+  ctx: ProviderFastModePolicyContext,
+): boolean | undefined {
+  if (ctx.runtimeId !== undefined && ctx.runtimeId !== "auto" && ctx.runtimeId !== "openclaw") {
+    return false;
+  }
+  if (normalizeLowercaseStringOrEmpty(ctx.provider) !== "google") {
+    return false;
+  }
+  if (!ctx.api) {
+    return undefined;
+  }
+  const isInteractionsRoute =
+    ctx.api === "google-interactions" ||
+    (ctx.api === "google-generative-ai" &&
+      isOfficialGoogleAiStudioBaseUrl(ctx.baseUrl) &&
+      isGoogleGeminiTextModelId(ctx.modelId));
+  if (!isInteractionsRoute || isGoogleVertexBaseUrl(ctx.baseUrl)) {
+    return false;
+  }
+  if (normalizeGoogleServiceTier(ctx.params?.serviceTier ?? ctx.params?.service_tier)) {
+    return false;
+  }
+  return true;
 }

@@ -1,4 +1,5 @@
 /** Host-owned availability guard shared by every speech runtime entrypoint. */
+import { assertionSucceeds } from "../shared/assertion.js";
 
 let assertRuntimeAvailable: (() => void) | undefined;
 
@@ -14,10 +15,5 @@ export function assertSpeechRuntimeAvailable(): void {
 
 /** Returns false only when the installed host guard rejects speech execution. */
 export function isSpeechRuntimeAvailable(): boolean {
-  try {
-    assertSpeechRuntimeAvailable();
-    return true;
-  } catch {
-    return false;
-  }
+  return assertionSucceeds(assertSpeechRuntimeAvailable);
 }

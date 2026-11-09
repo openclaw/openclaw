@@ -1,4 +1,3 @@
-// Builds provider auth choice lists from plugin setup metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
@@ -16,6 +15,7 @@ import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { isProviderAuthChoicePlatformSupported } from "./provider-auth-choice-platform.js";
 import { parseProviderPluginMethodChoice } from "./provider-plugin-choice.js";
+import { groupPluginRecords, PLUGIN_ORIGIN_PRIORITIES } from "./record-groups.js";
 
 export type ProviderAuthChoiceMetadata = Omit<
   PluginManifestProviderAuthChoice,
@@ -55,12 +55,6 @@ type ManifestProviderAuthChoiceParams = {
   includeUnsupportedPlatforms?: boolean;
 };
 
-const PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
-  config: 0,
-  bundled: 1,
-  global: 2,
-  workspace: 3,
-};
 const DESCRIPTOR_LABEL_ACRONYMS: ReadonlyMap<string, string> = new Map([
   ["api", "API"],
   ["jwt", "JWT"],
@@ -71,11 +65,8 @@ const DESCRIPTOR_LABEL_ACRONYMS: ReadonlyMap<string, string> = new Map([
   ["sso", "SSO"],
 ] as const);
 
-function resolveProviderAuthChoiceOriginPriority(origin: PluginOrigin | undefined): number {
-  if (!origin) {
-    return Number.MAX_SAFE_INTEGER;
-  }
-  return PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY[origin] ?? Number.MAX_SAFE_INTEGER;
+function resolveProviderAuthChoiceOriginPriority(origin: PluginOrigin): number {
+  return PLUGIN_ORIGIN_PRIORITIES[origin]?.provider ?? Number.MAX_SAFE_INTEGER;
 }
 
 function projectProviderAuthChoice(
@@ -133,20 +124,6 @@ function normalizeManifestAuthDescriptorId(value: string): string {
   return sanitizeForLog(value).trim();
 }
 
-function toSetupProviderAuthChoiceCandidate(params: {
-  plugin: PluginManifestRecord;
-  providerId: string;
-  methodId: string;
-}): ProviderAuthChoiceCandidate {
-  return {
-    pluginId: params.plugin.id,
-    origin: params.plugin.origin,
-    providerId: params.providerId,
-    methodId: params.methodId,
-    choiceId: `${params.providerId}-${params.methodId}`,
-  };
-}
-
 function listSetupProviderAuthChoiceCandidates(plugin: PluginManifestRecord) {
   if (plugin.setup?.requiresRuntime !== false && plugin.setupSource) {
     return [];
@@ -163,13 +140,13 @@ function listSetupProviderAuthChoiceCandidates(plugin: PluginManifestRecord) {
       .map(normalizeManifestAuthDescriptorId)
       .filter(Boolean)
       .filter((methodId) => !explicitProviderMethods.has(`${providerId}::${methodId}`))
-      .map((methodId) =>
-        toSetupProviderAuthChoiceCandidate({
-          plugin,
-          providerId,
-          methodId,
-        }),
-      );
+      .map((methodId) => ({
+        pluginId: plugin.id,
+        origin: plugin.origin,
+        providerId,
+        methodId,
+        choiceId: `${providerId}-${methodId}`,
+      }));
   });
 }
 
@@ -236,41 +213,24 @@ function pickPreferredManifestAuthChoice(
   candidates: readonly ProviderAuthChoiceCandidate[],
 ): ProviderAuthChoiceCandidate | undefined {
   let preferred: ProviderAuthChoiceCandidate | undefined;
-  let ambiguous = false;
+  let priority = Infinity;
   for (const candidate of candidates) {
-    if (!preferred) {
+    const candidatePriority = resolveProviderAuthChoiceOriginPriority(candidate.origin);
+    if (candidatePriority < priority) {
       preferred = candidate;
-      continue;
-    }
-    if (
-      resolveProviderAuthChoiceOriginPriority(candidate.origin) <
-      resolveProviderAuthChoiceOriginPriority(preferred.origin)
-    ) {
-      preferred = candidate;
-      ambiguous = false;
-    } else if (
-      resolveProviderAuthChoiceOriginPriority(candidate.origin) ===
-      resolveProviderAuthChoiceOriginPriority(preferred.origin)
-    ) {
-      ambiguous = true;
+      priority = candidatePriority;
+    } else if (candidatePriority === priority) {
+      preferred = undefined;
     }
   }
-  return ambiguous ? undefined : preferred;
+  return preferred;
 }
 
 function resolvePreferredManifestAuthChoicesByChoiceId(
   candidates: readonly ProviderAuthChoiceCandidate[],
 ): ProviderAuthChoiceCandidate[] {
-  const byChoiceId = new Map<string, ProviderAuthChoiceCandidate[]>();
-  for (const candidate of candidates) {
-    const normalizedChoiceId = candidate.choiceId.trim();
-    if (!normalizedChoiceId) {
-      continue;
-    }
-    const group = byChoiceId.get(normalizedChoiceId) ?? [];
-    group.push(candidate);
-    byChoiceId.set(normalizedChoiceId, group);
-  }
+  const byChoiceId = groupPluginRecords(candidates, (candidate) => candidate.choiceId.trim());
+  byChoiceId.delete("");
   return [...byChoiceId.values()].flatMap((group) => {
     const preferred = pickPreferredManifestAuthChoice(group);
     return preferred ? [preferred] : [];
@@ -342,7 +302,8 @@ export function resolveManifestDeprecatedProviderAuthChoice(
   });
 }
 
-function resolveManifestProviderOnboardAuthFlags(
+/** Resolves onboard auth flags from installed manifests and official cold-install metadata. */
+export function resolveProviderOnboardAuthFlags(
   params?: ManifestProviderAuthChoiceParams,
 ): ProviderOnboardAuthFlag[] {
   const preferredByFlag = new Map<
@@ -375,11 +336,8 @@ function resolveManifestProviderOnboardAuthFlags(
       },
     });
   }
-  return [...preferredByFlag.values()].map(({ flag }) => flag);
-}
-
-function resolveOfficialExternalProviderOnboardAuthFlags(): ProviderOnboardAuthFlag[] {
-  const flags: ProviderOnboardAuthFlag[] = [];
+  const flags = [...preferredByFlag.values()].map(({ flag }) => flag);
+  const seen = new Set(flags.map((flag) => `${flag.optionKey}::${flag.cliFlag}`));
   for (const entry of listOfficialExternalProviderCatalogEntries()) {
     const manifest = getOfficialExternalPluginCatalogManifest(entry);
     for (const provider of manifest?.providers ?? []) {
@@ -394,6 +352,11 @@ function resolveOfficialExternalProviderOnboardAuthFlags(): ProviderOnboardAuthF
         if (!optionKey || !authChoice || !cliFlag || !cliOption) {
           continue;
         }
+        const dedupeKey = `${optionKey}::${cliFlag}`;
+        if (seen.has(dedupeKey)) {
+          continue;
+        }
+        seen.add(dedupeKey);
         flags.push({
           optionKey,
           authChoice,
@@ -403,23 +366,6 @@ function resolveOfficialExternalProviderOnboardAuthFlags(): ProviderOnboardAuthF
         });
       }
     }
-  }
-  return flags;
-}
-
-/** Resolves onboard auth flags from installed manifests and official cold-install metadata. */
-export function resolveProviderOnboardAuthFlags(
-  params?: ManifestProviderAuthChoiceParams,
-): ProviderOnboardAuthFlag[] {
-  const flags = resolveManifestProviderOnboardAuthFlags(params);
-  const seen = new Set(flags.map((flag) => `${flag.optionKey}::${flag.cliFlag}`));
-  for (const flag of resolveOfficialExternalProviderOnboardAuthFlags()) {
-    const dedupeKey = `${flag.optionKey}::${flag.cliFlag}`;
-    if (seen.has(dedupeKey)) {
-      continue;
-    }
-    seen.add(dedupeKey);
-    flags.push(flag);
   }
   return flags;
 }

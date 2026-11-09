@@ -1,17 +1,15 @@
 import { normalizeOpenRouterModelPricing } from "openclaw/plugin-sdk/model-catalog-pricing";
-import {
-  buildLiveModelProviderConfig,
-  type LiveModelCatalogFetchGuard,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { normalizeOpenRouterModelReasoning } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   normalizeBaseUrl,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
-import type {
-  ModelDefinitionConfig,
-  ModelProviderConfig,
+import {
+  resolveDefaultModelMaxTokens,
+  type ModelDefinitionConfig,
+  type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   fetchWithSsrFGuard,
@@ -30,7 +28,6 @@ const OPENROUTER_LEGACY_BASE_URL = "https://openrouter.ai/v1";
 const OPENROUTER_MODELS_CACHE_TTL_MS = 60_000;
 const OPENROUTER_DEFAULT_MODEL_ID = "openrouter/auto";
 const OPENROUTER_DEFAULT_CONTEXT_WINDOW = 200000;
-const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_DEFAULT_COST = {
   input: 0,
   output: 0,
@@ -66,7 +63,7 @@ export function resolveOpenRouterApiBaseUrl(baseUrl: string | undefined): string
   // Credentialed catalog, inference, and usage paths must share one validated provider destination.
   const normalized =
     normalizeOpenRouterBaseUrl(baseUrl) ?? normalizeBaseUrl(baseUrl, OPENROUTER_BASE_URL);
-  const parsed = URL.canParse(normalized) ? new URL(normalized) : undefined;
+  const parsed = URL.parse(normalized);
   if (
     !parsed ||
     (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
@@ -97,9 +94,6 @@ export function resolveOpenRouterSsrfPolicy(
 
 export function isOpenRouterProxyReasoningUnsupportedModel(modelId: string | undefined): boolean {
   const normalized = (modelId ?? "").trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
   return (
     OPENROUTER_PROXY_REASONING_UNSUPPORTED_MODEL_IDS.has(normalized) ||
     normalized.startsWith("openrouter/hunter-alpha:")
@@ -118,7 +112,7 @@ export function buildOpenrouterProvider(): ModelProviderConfig {
         input: ["text", "image"],
         cost: OPENROUTER_DEFAULT_COST,
         contextWindow: OPENROUTER_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: OPENROUTER_DEFAULT_MAX_TOKENS,
+        maxTokens: resolveDefaultModelMaxTokens(OPENROUTER_DEFAULT_CONTEXT_WINDOW),
       },
       {
         id: "moonshotai/kimi-k2.6",
@@ -169,6 +163,10 @@ function buildOpenRouterLiveModel(row: unknown): ModelDefinitionConfig | undefin
   const inputModalities = readOpenRouterModalities(architecture, "input");
   const supportedParameters = filterStringEntries(record?.supported_parameters);
   const topProvider = asOptionalRecord(record?.top_provider);
+  const contextWindow =
+    asPositiveSafeInteger(topProvider?.context_length) ??
+    asPositiveSafeInteger(record?.context_length) ??
+    OPENROUTER_DEFAULT_CONTEXT_WINDOW;
   const reasoning = normalizeOpenRouterModelReasoning(record?.reasoning);
   return {
     id,
@@ -182,15 +180,12 @@ function buildOpenRouterLiveModel(row: unknown): ModelDefinitionConfig | undefin
       ? { compat: { ...reasoning?.compat, supportsTools: supportedParameters.includes("tools") } }
       : {}),
     cost: normalizeOpenRouterModelPricing(record?.pricing) ?? { ...OPENROUTER_DEFAULT_COST },
-    contextWindow:
-      asPositiveSafeInteger(topProvider?.context_length) ??
-      asPositiveSafeInteger(record?.context_length) ??
-      OPENROUTER_DEFAULT_CONTEXT_WINDOW,
+    contextWindow,
     maxTokens:
       asPositiveSafeInteger(topProvider?.max_completion_tokens) ??
       asPositiveSafeInteger(record?.max_completion_tokens) ??
       asPositiveSafeInteger(record?.max_output_tokens) ??
-      OPENROUTER_DEFAULT_MAX_TOKENS,
+      resolveDefaultModelMaxTokens(contextWindow),
   };
 }
 
@@ -199,7 +194,6 @@ export async function buildOpenrouterLiveProvider(params: {
   discoveryApiKey?: string;
   baseUrl?: string;
   request?: ModelProviderConfig["request"];
-  fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
   const fallback = buildOpenrouterProvider();
@@ -232,7 +226,7 @@ export async function buildOpenrouterLiveProvider(params: {
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
     fetchGuard: async (fetchParams) =>
-      await (params.fetchGuard ?? fetchWithSsrFGuard)({
+      await fetchWithSsrFGuard({
         ...fetchParams,
         ...(requestConfig.dispatcherPolicy
           ? { dispatcherPolicy: requestConfig.dispatcherPolicy }

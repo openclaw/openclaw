@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { disposePluginRegistryInstances } from "./runtime.js";
 
 const fixture = vi.hoisted(() => ({

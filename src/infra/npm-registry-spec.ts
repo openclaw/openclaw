@@ -1,45 +1,17 @@
-// Parses npm registry specs into package, version, and tag references.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { prerelease as parseSemverPrerelease, valid as validSemver } from "semver";
 import {
-  parse as parseSemver,
-  prerelease as parseSemverPrerelease,
-  type SemVer,
-  valid as validSemver,
-} from "semver";
-import { compareOpenClawSemver, isOpenClawCorrectionSemver } from "./semver.js";
+  compareOpenClawReleaseVersions,
+  compareValidSemver,
+  isOpenClawCorrectionSemver,
+  normalizeLegacyDotBetaVersion,
+  parseOpenClawReleaseVersion,
+} from "./semver.js";
 
-const OPENCLAW_RELEASE_PREFIX_RE = /^\d{4}\./;
+export { compareOpenClawReleaseVersions };
+export { resolveNpmJsonEntries } from "../../scripts/lib/npm-json-output.mts";
+
 const DIST_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-/**
- * npm ≤11 prints `npm view`/`npm pack` `--json` results as a bare entry object
- * or an entry array; npm 12 wraps view results in a singleton array and keys
- * pack results by package name. Normalize both shapes to the entry list, or
- * metadata reads mistake the wrapper for an entry and fail closed with
- * incomplete-metadata errors.
- */
-export function resolveNpmJsonEntries(value: unknown): unknown[] {
-  if (Array.isArray(value)) {
-    return value;
-  }
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    const looksLikeEntry =
-      typeof record.id === "string" ||
-      typeof record.name === "string" ||
-      typeof record.version === "string" ||
-      typeof record.filename === "string";
-    if (!looksLikeEntry) {
-      const entries = Object.values(record).filter(
-        (entry) => Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
-      );
-      if (entries.length > 0) {
-        return entries;
-      }
-    }
-  }
-  return [value];
-}
 
 /**
  * Parsed registry-only npm spec accepted by plugin install flows.
@@ -54,7 +26,7 @@ export type ParsedRegistryNpmSpec = {
   selectorIsPrerelease: boolean;
 };
 
-function parseRegistryNpmSpecInternal(
+export function parseRegistryNpmSpecResult(
   rawSpec: string,
 ): { ok: true; parsed: ParsedRegistryNpmSpec } | { ok: false; error: string } {
   const spec = rawSpec.trim();
@@ -92,101 +64,52 @@ function parseRegistryNpmSpecInternal(
       error: "unsupported npm spec: expected <name> or <name>@<version> from the npm registry",
     };
   }
-  if (!hasSelector) {
-    return {
-      ok: true,
-      parsed: {
-        name,
-        raw: spec,
-        selectorKind: "none",
-        selectorIsPrerelease: false,
-      },
-    };
-  }
-  if (!selector) {
-    return { ok: false, error: "unsupported npm spec: missing version/tag after @" };
-  }
-  if (/[\\/]/.test(selector)) {
-    return { ok: false, error: "unsupported npm spec: invalid version/tag" };
-  }
-  const exactVersion = validSemver(selector);
-  if (exactVersion) {
-    return {
-      ok: true,
-      parsed: {
-        name,
-        raw: spec,
-        selector,
-        selectorKind: "exact-version",
-        selectorIsPrerelease:
-          parseSemverPrerelease(exactVersion) !== null &&
-          !isOpenClawStableCorrectionVersion(selector),
-      },
-    };
-  }
-  if (!DIST_TAG_RE.test(selector)) {
-    return {
-      ok: false,
-      error: "unsupported npm spec: use an exact version or dist-tag (ranges are not allowed)",
-    };
+  let exactVersion: string | null = null;
+  if (hasSelector) {
+    if (!selector) {
+      return { ok: false, error: "unsupported npm spec: missing version/tag after @" };
+    }
+    if (/[\\/]/.test(selector)) {
+      return { ok: false, error: "unsupported npm spec: invalid version/tag" };
+    }
+    exactVersion = validSemver(selector);
+    if (!exactVersion && !DIST_TAG_RE.test(selector)) {
+      return {
+        ok: false,
+        error: "unsupported npm spec: use an exact version or dist-tag (ranges are not allowed)",
+      };
+    }
   }
   return {
     ok: true,
     parsed: {
       name,
       raw: spec,
-      selector,
-      selectorKind: "tag",
-      selectorIsPrerelease: false,
+      ...(hasSelector ? { selector } : {}),
+      selectorKind: !hasSelector ? "none" : exactVersion ? "exact-version" : "tag",
+      selectorIsPrerelease:
+        exactVersion !== null &&
+        parseSemverPrerelease(exactVersion) !== null &&
+        !isOpenClawStableCorrectionVersion(selector),
     },
   };
 }
 
 /** Parses a registry-only npm package spec into package name and optional selector metadata. */
 export function parseRegistryNpmSpec(rawSpec: string): ParsedRegistryNpmSpec | null {
-  const parsed = parseRegistryNpmSpecInternal(rawSpec);
+  const parsed = parseRegistryNpmSpecResult(rawSpec);
   return parsed.ok ? parsed.parsed : null;
 }
 
 /** Validates a registry-only npm spec and returns a user-facing error when rejected. */
 export function validateRegistryNpmSpec(rawSpec: string): string | null {
-  const parsed = parseRegistryNpmSpecInternal(rawSpec);
+  const parsed = parseRegistryNpmSpecResult(rawSpec);
   return parsed.ok ? null : parsed.error;
 }
 
 /** Returns whether a value is an exact semver selector, with optional leading `v`. */
 export function isExactSemverVersion(value: string): boolean {
   return validSemver(value.trim()) !== null;
-}
-
-/** Parses OpenClaw's monthly patch stable/alpha/beta/correction version format. */
-function parseOpenClawReleaseVersion(value: string): SemVer | null {
-  const trimmed = value.trim();
-  const parsed = OPENCLAW_RELEASE_PREFIX_RE.test(trimmed) ? parseSemver(trimmed) : null;
-  if (!parsed || parsed.build.length > 0) {
-    return null;
-  }
-  if (parsed.minor < 1 || parsed.minor > 12 || parsed.patch < 1) {
-    return null;
-  }
-
-  const [label, sequence] = parsed.prerelease;
-  const isStable = parsed.prerelease.length === 0;
-  const isCorrection = isOpenClawCorrectionSemver(parsed) && typeof label === "number" && label > 0;
-  const isAlpha =
-    parsed.prerelease.length === 2 &&
-    label === "alpha" &&
-    typeof sequence === "number" &&
-    sequence > 0;
-  const isBeta =
-    parsed.prerelease.length === 2 &&
-    label === "beta" &&
-    typeof sequence === "number" &&
-    sequence > 0;
-  if (!isStable && !isCorrection && !isAlpha && !isBeta) {
-    return null;
-  }
-  return parsed;
 }
 
 /** Returns whether a version is an OpenClaw monthly patch stable correction release. */
@@ -204,11 +127,17 @@ export function resolveOpenClawReleaseCohortVersion(value: string): string {
     : trimmed;
 }
 
-/** Compares OpenClaw monthly patch release versions across alpha, beta, stable, and corrections. */
-export function compareOpenClawReleaseVersions(left: string, right: string): number | null {
-  const parsedLeft = parseOpenClawReleaseVersion(left);
-  const parsedRight = parseOpenClawReleaseVersion(right);
-  return parsedLeft && parsedRight ? compareOpenClawSemver(parsedLeft, parsedRight) : null;
+/** Compares update versions, preserving monthly corrections and legacy dot-beta tags. */
+export function compareSemverStrings(a: string | null, b: string | null): number | null {
+  if (a && b) {
+    const openClawReleaseCmp = compareOpenClawReleaseVersions(a, b);
+    if (openClawReleaseCmp != null) {
+      return openClawReleaseCmp;
+    }
+  }
+  const normalizedA = a ? normalizeLegacyDotBetaVersion(a) : null;
+  const normalizedB = b ? normalizeLegacyDotBetaVersion(b) : null;
+  return normalizedA && normalizedB ? compareValidSemver(normalizedA, normalizedB) : null;
 }
 
 /** Returns whether an exact semver value is a prerelease, excluding stable correction releases. */
@@ -248,7 +177,7 @@ export function formatPrereleaseResolutionError(params: {
   const selectorHint =
     params.spec.selectorKind === "none" ||
     normalizeLowercaseStringOrEmpty(params.spec.selector) === "latest"
-      ? `Use "${params.spec.name}@beta" (or another prerelease tag) or an exact prerelease version to opt in explicitly.`
+      ? `Use "npm:${params.spec.name}@beta" (or another prerelease tag) or an exact prerelease version to opt in explicitly.`
       : `Use an explicit prerelease tag or exact prerelease version if you want prerelease installs.`;
   return `Resolved ${params.spec.raw} to prerelease version ${params.resolvedVersion}, but prereleases are only installed when explicitly requested. ${selectorHint}`;
 }

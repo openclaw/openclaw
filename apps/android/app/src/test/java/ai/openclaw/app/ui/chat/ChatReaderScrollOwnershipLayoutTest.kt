@@ -3,6 +3,7 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawTheme
 import android.app.Application
@@ -40,6 +41,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotDisplayed
@@ -59,9 +61,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -76,6 +81,7 @@ import java.io.ByteArrayOutputStream
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], qualifiers = "w360dp-h800dp-420dpi", application = Application::class)
 class ChatReaderScrollOwnershipLayoutTest {
+  private val imageDecodeDispatcher = StandardTestDispatcher(TestCoroutineScheduler())
   private val animationScale =
     object : MotionDurationScale {
       override val scaleFactor = 1f
@@ -87,6 +93,11 @@ class ChatReaderScrollOwnershipLayoutTest {
   private lateinit var reader: ChatReaderScrollController
   private var observedScale: Float? = null
   private var olderReadingDisposals = 0
+
+  @Before
+  fun setUp() {
+    NativeStringResources.install(RuntimeEnvironment.getApplication())
+  }
 
   @Test
   fun manualNavigationStopsAnAlreadyMovingAutomaticScroll() {
@@ -482,7 +493,13 @@ class ChatReaderScrollOwnershipLayoutTest {
     var viewportHeight by mutableStateOf(480.dp)
     var viewportWidth by mutableStateOf(360.dp)
     showReader(initialStreamingLines = 2, inlineImage = base64, viewportWidth = { viewportWidth }, viewportHeight = { viewportHeight })
-    composeRule.waitUntil { composeRule.onAllNodesWithContentDescription("image/png").fetchSemanticsNodes().size == 1 }
+    // Compose idleness does not include the decoder's background work. Drain it
+    // separately so image readiness never depends on wall time or advances reader animations.
+    composeRule.waitForIdle()
+    composeRule.onAllNodesWithContentDescription("image/png").assertCountEquals(0)
+    imageDecodeDispatcher.scheduler.advanceUntilIdle()
+    composeRule.waitForIdle()
+    composeRule.onAllNodesWithContentDescription("image/png").assertCountEquals(1)
     val initialImage = composeRule.onNodeWithContentDescription("image/png").fetchSemanticsNode()
     println("READER_IMAGE_ARMING initial=${initialImage.positionInRoot} size=${initialImage.size}")
     val transcript = composeRule.onNode(hasScrollToIndexAction()).assertIsDisplayed()
@@ -1024,7 +1041,10 @@ class ChatReaderScrollOwnershipLayoutTest {
         val current = rememberChatReaderScrollController("animation-owner", timeline, historyLoading = historyLoading)
         SideEffect { reader = current }
         LaunchedEffect(Unit) { observedScale = currentCoroutineContext()[MotionDurationScale]?.scaleFactor }
-        CompositionLocalProvider(LocalChatReaderNavigation provides current.navigation) {
+        CompositionLocalProvider(
+          LocalChatReaderNavigation provides current.navigation,
+          LocalChatImageDecodeDispatcher provides imageDecodeDispatcher,
+        ) {
           val navigation = checkNotNull(LocalChatReaderNavigation.current)
           Column(Modifier.size(360.dp, 700.dp).clipToBounds()) {
             Row(horizontalArrangement = Arrangement.SpaceBetween) {
@@ -1087,9 +1107,9 @@ class ChatReaderScrollOwnershipLayoutTest {
                       Text("Working")
                     }
 
-                    is ChatTimelineItem.PendingTools -> {
+                    is ChatTimelineItem.ToolActivity -> {
                       // Controlled sibling geometry; this test exercises timeline insertion, not tool UI.
-                      Box(Modifier.fillMaxWidth().height(120.dp)) { Text(item.toolCalls.single().name) }
+                      Box(Modifier.fillMaxWidth().height(120.dp)) { Text(item.tools.single().name) }
                     }
 
                     is ChatTimelineItem.Message -> {

@@ -1,5 +1,9 @@
 import type { GatewayRequestEntry } from "../server-request-entry.js";
-import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
+import type {
+  GatewayRequestHandler,
+  GatewayRequestHandlers,
+  GatewayRequestOptions,
+} from "./types.js";
 
 const preparations = new WeakMap<GatewayRequestHandler, () => Promise<GatewayRequestHandler>>();
 
@@ -7,6 +11,7 @@ const preparations = new WeakMap<GatewayRequestHandler, () => Promise<GatewayReq
 export async function prepareGatewayRequestHandler(
   handler: GatewayRequestHandler,
   entry?: GatewayRequestEntry,
+  options?: Pick<GatewayRequestOptions, "prepareDispatchCurrent">,
 ): Promise<GatewayRequestHandler> {
   let preparedHandler = handler;
   let prepare = preparations.get(preparedHandler);
@@ -14,6 +19,9 @@ export async function prepareGatewayRequestHandler(
     entry?.assertOpen();
     preparedHandler = await prepare();
     prepare = preparations.get(preparedHandler);
+  }
+  if (options?.prepareDispatchCurrent) {
+    await options.prepareDispatchCurrent();
   }
   return preparedHandler;
 }

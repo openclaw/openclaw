@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveOAuthDir } from "../../config/paths.js";
 import { resolveUserPath } from "../../utils.js";
+import { authProfileSourceExists } from "./file-state.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 
 export type LegacyAuthProfileSourceKind =
@@ -50,7 +51,7 @@ export function listLegacyAuthProfileSources(params: {
   env?: NodeJS.ProcessEnv;
 }): LegacyAuthProfileSource[] {
   return resolveLegacyAuthProfileSourceCandidates(params).filter((candidate) =>
-    fs.existsSync(candidate.path),
+    authProfileSourceExists(candidate.path),
   );
 }
 

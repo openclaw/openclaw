@@ -1,156 +1,167 @@
-import { generateUUID } from "../../../lib/uuid.ts";
+import { createContext, createSignal, createUniqueId, onCleanup, onSettled } from "solid-js";
+import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 
-export function pickerMenu(target: EventTarget | null): HTMLElement | null {
-  return target instanceof Element
-    ? target.closest<HTMLElement>(".chat-controls__model-menu")
-    : null;
-}
+export type ChatModelSearchRow = {
+  key: string;
+  list?: string;
+  name: string;
+  keywords?: string;
+  providerLabel: string;
+  reference: string;
+  disabled: boolean;
+  selected: boolean;
+  /** Rows without keycaps still consume digit positions, but do not advertise global shortcuts. */
+  hasShortcut: boolean;
+  provider?: string;
+  more?: boolean;
+  visible?: boolean;
+};
 
-function visibleModelRows(root: HTMLElement): HTMLButtonElement[] {
-  return [...root.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")]
-    .filter((row) => !row.hidden)
-    .toSorted(
-      (left, right) =>
-        Number(left.dataset.chatModelRank ?? left.dataset.chatModelIndex ?? 0) -
-        Number(right.dataset.chatModelRank ?? right.dataset.chatModelIndex ?? 0),
-    );
-}
+export type ChatModelSearchCatalog = {
+  activeProvider?: string;
+  providers: readonly string[];
+  lists: readonly string[];
+  rows: readonly ChatModelSearchRow[];
+};
 
-function isSelectableModelRow(row: HTMLButtonElement): boolean {
-  return !row.disabled && row.getAttribute("aria-disabled") !== "true";
-}
+type SearchMatch = { row: ChatModelSearchRow; rank: number };
+export type ChatModelSearchView = {
+  matches(): SearchMatch[];
+  selectable(): SearchMatch[];
+  reveal(key: string): void;
+  highlighted(): string | undefined;
+  isHighlighted(key: string): boolean;
+  highlight(value: string | undefined): void;
+  providerOpen(provider: string): boolean;
+  moreOpen(provider: string): boolean;
+  filtering(): boolean;
+  empty(): boolean;
+  controls(): string;
+  row(key: string): {
+    hidden: boolean;
+    rank: number | undefined;
+    shortcut: number | undefined;
+    position?: number;
+    size?: number;
+  };
+  toggleProvider(provider: string): void;
+  expandMore(provider: string, event: MouseEvent): void;
+};
+type ModelSearchState = {
+  details?: HTMLDetailsElement;
+  summary?: HTMLElement;
+  input?: HTMLInputElement;
+  focusRow?: string;
+  rows: Map<string, HTMLButtonElement>;
+  query(): string;
+  setQuery(value: string): void;
+  view?: ChatModelSearchView;
+};
+const pickers = new WeakMap<HTMLDetailsElement, ModelSearchState>();
 
-function selectableModelRows(root: HTMLElement): HTMLButtonElement[] {
-  return visibleModelRows(root).filter(isSelectableModelRow);
-}
-
-function ensureModelPickerIds(menu: HTMLElement): void {
-  const details = menu.closest<HTMLDetailsElement>(".chat-controls__model-picker");
-  const input = menu.querySelector<HTMLInputElement>("[data-chat-model-search]");
-  const listboxes = [...menu.querySelectorAll<HTMLElement>("[data-chat-model-list]")];
-  if (!details || !input || listboxes.length === 0) {
-    return;
-  }
-  const prefix = details.dataset.chatModelPickerId ?? `chat-model-picker-${generateUUID()}`;
-  details.dataset.chatModelPickerId = prefix;
-  listboxes.forEach((listbox, index) => {
-    listbox.id = `${prefix}-listbox-${index}`;
-  });
-  menu.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]").forEach((row, index) => {
-    row.id = `${prefix}-option-${index}`;
-  });
-  input.setAttribute("aria-controls", listboxes.map((listbox) => listbox.id).join(" "));
-  input.setAttribute("aria-expanded", details.open ? "true" : "false");
-}
-
-export function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined): void {
-  menu.querySelectorAll<HTMLElement>("[data-chat-model-option]").forEach((candidate) => {
-    candidate.toggleAttribute("data-chat-model-highlighted", candidate === row);
-  });
-  const input = menu.querySelector<HTMLInputElement>("[data-chat-model-search]");
-  if (row?.id) {
-    input?.setAttribute("aria-activedescendant", row.id);
-  } else {
-    input?.removeAttribute("aria-activedescendant");
-  }
-}
-
-// Numbers follow the filtered order because digit selection reads that same row list.
-// Search inputs and nested dropdowns own digits instead. The :focus-within rule
-// in styles/chat/composer.css hides these keycaps while the search input has focus.
-function updateModelShortcuts(menu: HTMLElement, rows: readonly HTMLButtonElement[]): void {
-  menu.querySelectorAll<HTMLElement>("[data-chat-model-shortcut]").forEach((shortcut) => {
-    shortcut.hidden = true;
-    shortcut.removeAttribute("data-shortcut");
-    shortcut.removeAttribute("data-chat-model-shortcut-number");
-  });
-  rows.slice(0, 9).forEach((row, index) => {
-    const shortcut = row.querySelector<HTMLElement>("[data-chat-model-shortcut]");
-    if (!shortcut) {
-      return;
-    }
-    shortcut.hidden = false;
-    shortcut.setAttribute("data-shortcut", String(index + 1));
-    shortcut.setAttribute("data-chat-model-shortcut-number", String(index + 1));
-  });
-}
-
-function modelMatchRank(row: HTMLButtonElement, query: string): number | null {
-  const model = row.dataset.chatModelName ?? "";
-  const keywords = row.dataset.chatModelKeywords ?? "";
-  const provider = row.dataset.chatModelProviderLabel ?? "";
-  if (model.startsWith(query)) {
-    return 0;
-  }
-  if (model.includes(query)) {
-    return 1;
-  }
-  if (keywords.includes(query)) {
-    return 2;
-  }
-  if (provider.startsWith(query)) {
-    return 3;
-  }
-  return provider.includes(query) ? 4 : null;
-}
-
-export function updateModelSearch(input: HTMLInputElement, preserveHighlight = false): void {
-  const menu = pickerMenu(input);
-  if (!menu) {
-    return;
-  }
-  ensureModelPickerIds(menu);
-  const query = input.value.trim().toLocaleLowerCase();
-  menu.toggleAttribute("data-chat-model-filtering", Boolean(query));
-  const rows = [...menu.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
-  const matches: Array<{ row: HTMLButtonElement; score: number; index: number }> = [];
-  rows.forEach((row, index) => {
-    const accountCollapsed =
-      row.hasAttribute("data-chat-account-option") &&
-      row
-        .closest("section")
-        ?.querySelector("[data-chat-account-group-toggle]")
-        ?.getAttribute("aria-expanded") !== "true";
-    const score = query ? modelMatchRank(row, query) : accountCollapsed ? null : 0;
-    row.hidden = score === null;
-    row.style.removeProperty("--chat-model-rank");
-    delete row.dataset.chatModelRank;
-    if (score !== null) {
-      matches.push({ row, score, index });
-    }
-  });
-  const selectableRows: HTMLButtonElement[] = [];
-  matches
-    .toSorted((left, right) => left.score - right.score || left.index - right.index)
-    .forEach(({ row }, rank) => {
-      row.dataset.chatModelRank = String(rank);
-      row.style.setProperty("--chat-model-rank", String(rank));
-      if (isSelectableModelRow(row)) {
-        selectableRows.push(row);
-      }
-    });
-  updateModelShortcuts(menu, selectableRows);
-  const selected = selectableRows.find((row) => row.getAttribute("aria-selected") === "true");
-  const highlighted = preserveHighlight
-    ? selectableRows.find((row) => row.hasAttribute("data-chat-model-highlighted"))
-    : undefined;
-  highlightModelRow(
-    menu,
-    highlighted ?? (query ? selectableRows[0] : (selected ?? selectableRows[0])),
+/** The lazy panel supplies a catalog accessor; only focus and activation retain DOM refs. */
+export function createChatModelSearch() {
+  const prefix = `chat-model-picker-${createUniqueId()}`;
+  const [query, setQuery] = createSignal("");
+  const [open, setOpen] = createSignal(false);
+  const state: ModelSearchState = { rows: new Map(), query, setQuery };
+  const optionId = (key: string) => `${prefix}-option-${encodeURIComponent(key)}`;
+  const listId = (key: string) => `${prefix}-list-${encodeURIComponent(key)}`;
+  onSettled(() =>
+    state.details
+      ? registerMenuShortcuts(state.details, () =>
+          (state.view?.selectable() ?? []).slice(0, 9).flatMap(({ row }, index) => {
+            const element = state.rows.get(row.key);
+            return row.hasShortcut && element ? [{ element, key: String(index + 1) }] : [];
+          }),
+        )
+      : undefined,
   );
-  const empty = menu.querySelector<HTMLElement>("[data-chat-model-search-empty]");
-  if (empty) {
-    empty.hidden = !query || matches.length > 0;
-  }
+  return {
+    query,
+    open,
+    optionId,
+    listId,
+    setOpen,
+    detailsRef: elementRef<HTMLDetailsElement>((element) => {
+      state.details = element;
+      pickers.set(element, state);
+      return () => pickers.delete(element);
+    }),
+    summaryRef(this: void, element: HTMLElement) {
+      state.summary = element;
+    },
+    inputRef() {
+      return elementRef<HTMLInputElement>((element) => {
+        state.input = element;
+        return () => {
+          if (state.input === element) {
+            state.input = undefined;
+          }
+        };
+      });
+    },
+    rowRef(readKey: () => string) {
+      let element: HTMLButtonElement;
+      onSettled(() => {
+        // The keyed row keeps this identity for its mounted lifetime.
+        const initialKey = readKey();
+        state.rows.set(initialKey, element);
+        if (state.focusRow === initialKey) {
+          state.focusRow = undefined;
+          if (state.details?.open) {
+            element.focus({ preventScroll: true });
+          }
+        }
+        return () => {
+          if (state.rows.get(initialKey) === element) {
+            state.rows.delete(initialKey);
+          }
+        };
+      });
+      return (node: HTMLButtonElement) => (element = node);
+    },
+    row(key: string) {
+      return state.view?.row(key);
+    },
+    highlighted: () => state.view?.highlighted(),
+    isHighlighted: (key: string) => state.view?.isHighlighted(key) ?? false,
+    bindView(view: ChatModelSearchView) {
+      // Rows read this synchronous bridge while mounting; cleanup belongs to this primitive.
+      state.view = view;
+      onCleanup(() => {
+        if (state.view === view) {
+          state.view = undefined;
+        }
+      });
+    },
+  };
+}
+
+// Account sections also render independently outside a model picker.
+export const ChatModelSearchContext = createContext<ReturnType<
+  typeof createChatModelSearch
+> | null>(null);
+
+export function chatModelSearchState(target: EventTarget | null): ModelSearchState | undefined {
+  const details =
+    target instanceof Element
+      ? target.closest<HTMLDetailsElement>(".chat-controls__model-picker")
+      : null;
+  return details ? pickers.get(details) : undefined;
 }
 
 export function resetModelSearch(details: HTMLDetailsElement): void {
-  const input = details.querySelector<HTMLInputElement>("[data-chat-model-search]");
-  if (!input) {
-    return;
+  const state = pickers.get(details);
+  if (state) {
+    state.focusRow = undefined;
   }
-  input.value = "";
-  updateModelSearch(input);
+  const rows = state?.view?.selectable() ?? [];
+  // An unchanged empty query cannot invalidate the writable highlight derivation.
+  const fallback = rows.find(({ row }) => row.selected) ?? rows[0];
+  state?.view?.highlight(state.query().trim() ? undefined : fallback?.row.key);
+  state?.setQuery("");
 }
 
 export function clearChatModelSearchOnEscape(event: KeyboardEvent): boolean {
@@ -166,74 +177,38 @@ export function clearChatModelSearchOnEscape(event: KeyboardEvent): boolean {
   if (!input?.value) {
     return false;
   }
-  input.value = "";
-  updateModelSearch(input);
+  const details = chatModelSearchState(input)?.details;
+  if (details) {
+    resetModelSearch(details);
+  }
   event.preventDefault();
   event.stopPropagation();
   return true;
 }
 
-export function handleModelSearchKeydown(event: KeyboardEvent): void {
-  if (event.isComposing || event.keyCode === 229) {
-    return;
-  }
-  if (event.key !== "Enter" && event.key !== "ArrowDown" && event.key !== "ArrowUp") {
-    return;
-  }
-  // SAFETY: Bound only to the model-search input’s keydown event.
-  const input = event.currentTarget as HTMLInputElement;
-  const menu = pickerMenu(input);
-  if (!menu) {
-    return;
-  }
-  const rows = selectableModelRows(menu);
-  if (rows.length === 0) {
-    return;
-  }
-  if (event.key === "Enter") {
-    const highlighted = rows.find((row) => row.hasAttribute("data-chat-model-highlighted"));
-    if (highlighted) {
-      event.preventDefault();
-      highlighted.click();
-    }
-    return;
-  }
-  event.preventDefault();
-  const currentIndex = rows.findIndex((row) => row.hasAttribute("data-chat-model-highlighted"));
-  const offset = event.key === "ArrowDown" ? 1 : rows.length - 1;
-  const nextIndex = currentIndex < 0 ? 0 : (currentIndex + offset) % rows.length;
-  highlightModelRow(menu, rows[nextIndex]);
-  rows[nextIndex]?.scrollIntoView?.({ block: "nearest" });
-}
-
 export function handleModelPickerKeydown(event: KeyboardEvent): void {
-  // SAFETY: Bound only to the model picker’s details element.
-  const details = event.currentTarget as HTMLDetailsElement;
+  const state = chatModelSearchState(event.currentTarget);
+  const details = state?.details;
   if (
-    !details.open ||
+    !state ||
+    event.defaultPrevented ||
+    !details?.open ||
     event.target instanceof HTMLInputElement ||
     event
       .composedPath()
-      .some((target) => target instanceof HTMLElement && target.localName === "wa-dropdown") ||
+      .some(
+        (target) =>
+          target instanceof HTMLElement &&
+          target !== details &&
+          target.matches('[role="menu"][popover], details[data-chat-native-picker]'),
+      ) ||
     !/^[1-9]$/u.test(event.key)
   ) {
     return;
   }
-  const row = selectableModelRows(details)[Number(event.key) - 1];
   event.preventDefault();
-  row?.click();
-}
-
-export function syncChatModelSearch(details: Element | undefined): void {
-  if (!(details instanceof HTMLDetailsElement) || !details.open) {
-    return;
+  const row = state.view?.selectable()[Number(event.key) - 1]?.row;
+  if (row) {
+    state.rows.get(row.key)?.click();
   }
-  // Keyed catalog rows commit after the details binding; project the retained
-  // query onto the new DOM without resetting a still-valid keyboard selection.
-  queueMicrotask(() => {
-    const input = details.querySelector<HTMLInputElement>("[data-chat-model-search]");
-    if (input) {
-      updateModelSearch(input, true);
-    }
-  });
 }

@@ -1,5 +1,6 @@
 import { ErrorCodes } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveGatewayReadRetryDelayMs } from "../gateway-availability.ts";
 
 /**
  * Acknowledges unread state at most once per unread episode: the pending flag
@@ -11,12 +12,20 @@ export class SessionUnreadPatchGuard {
   private activationObserved = false;
   private activationMarkedUnreadAt: number | undefined;
   private requested = false;
+  private pending: object | null = null;
+  private observedRead = false;
+  private retryAt = 0;
+  private failures = 0;
 
   beginActivation(activeSessionKey: string) {
     this.activeSessionKey = activeSessionKey.trim();
     this.activationObserved = false;
     this.activationMarkedUnreadAt = undefined;
     this.requested = false;
+    this.pending = null;
+    this.observedRead = false;
+    this.retryAt = 0;
+    this.failures = 0;
   }
 
   shouldPatch(
@@ -36,6 +45,12 @@ export class SessionUnreadPatchGuard {
       this.activationObserved = true;
       this.activationMarkedUnreadAt = marker;
     }
+    // Preserve the read observation when newer activity arrives before settlement.
+    // Optimistic reads and rollback publish synchronously before the request settles.
+    if (this.pending) {
+      this.observedRead ||= unread === false && marker === undefined;
+      return false;
+    }
     if (unread === false) {
       // An optimistic read keeps the observed marker until the Gateway confirms it.
       // Clearing the latch here would let rollback synchronously dispatch a duplicate.
@@ -44,26 +59,49 @@ export class SessionUnreadPatchGuard {
       }
       this.activationMarkedUnreadAt = undefined;
       this.requested = false;
+      this.retryAt = 0;
+      this.failures = 0;
       return false;
     }
     if (marker !== undefined && marker !== this.activationMarkedUnreadAt) {
       return false;
     }
-    if (unread !== true || this.requested) {
+    if (unread !== true || this.requested || Date.now() < this.retryAt) {
       return false;
     }
     this.requested = true;
+    this.observedRead = false;
+    this.pending = {};
     return true;
   }
 
-  /** Permanent rejections latch this episode; transport failures may retry. */
-  patchFailed(activeSessionKey: string, error?: unknown) {
-    if (activeSessionKey.trim() === this.activeSessionKey) {
-      const code = asNullableRecord(error)?.gatewayCode;
-      this.requested =
-        code === ErrorCodes.INVALID_REQUEST ||
-        code === ErrorCodes.FORBIDDEN ||
-        code === ErrorCodes.APPROVAL_NOT_FOUND;
-    }
+  /** Bind settlement to this activation, including a return to the same session. */
+  settlePatch() {
+    const pending = this.pending;
+    return (succeeded: boolean, error?: unknown) => {
+      if (pending !== this.pending) {
+        return false;
+      }
+      this.pending = null;
+      this.requested = succeeded ? !this.observedRead : isPermanentUnreadAckFailure(error);
+      if (succeeded) {
+        this.retryAt = 0;
+        this.failures = 0;
+      } else if (error !== undefined && !this.requested) {
+        const delay = resolveGatewayReadRetryDelayMs(error, this.failures++);
+        this.retryAt = Date.now() + Math.ceil(delay * (1 + Math.random() * 0.2));
+      }
+      return true;
+    };
   }
+}
+
+/** Invalid state and missing access persist; transport failures may succeed on retry. */
+function isPermanentUnreadAckFailure(error: unknown): boolean {
+  const code = asNullableRecord(error)?.gatewayCode;
+  return (
+    code === ErrorCodes.INVALID_REQUEST ||
+    code === ErrorCodes.FORBIDDEN ||
+    code === ErrorCodes.APPROVAL_NOT_FOUND
+  );
 }

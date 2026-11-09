@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type { RealtimeVoiceBridge } from "./provider-types.js";
 
 export function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): RealtimeVoiceBridge {
@@ -12,5 +13,16 @@ export function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): Realti
     submitToolResult: vi.fn(),
     triggerGreeting: vi.fn(),
     ...overrides,
+  };
+}
+
+export function makeVoiceProvider(
+  createBridge: RealtimeVoiceProviderPlugin["createBridge"],
+): RealtimeVoiceProviderPlugin {
+  return {
+    id: "test",
+    label: "Test",
+    isConfigured: () => true,
+    createBridge,
   };
 }

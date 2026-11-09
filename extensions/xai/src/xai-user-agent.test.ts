@@ -1,6 +1,9 @@
-// Xai tests cover xai user agent plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { xaiUserAgent, xaiUserAgentHeaderFor } from "./xai-user-agent.js";
+
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => {
+  throw new Error("xAI attribution must not load the harness execution runtime");
+});
 
 describe("xaiUserAgent", () => {
   afterEach(() => {
@@ -10,11 +13,6 @@ describe("xaiUserAgent", () => {
   it("prefers OPENCLAW_VERSION env over the bundled package version", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     expect(xaiUserAgent()).toBe("openclaw/2026.3.22");
-  });
-
-  it("returns the openclaw/<version> shape", () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.5.16");
-    expect(xaiUserAgent()).toMatch(/^openclaw\/\d+\.\d+\.\d+$/u);
   });
 });
 

@@ -1,6 +1,11 @@
-import { getPublicKeyAsync, hashes, signAsync, utils } from "@noble/ed25519";
+/// <reference lib="es2026.typedarrays" />
+
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  DEVICE_AUTH_STORAGE_KEY_PREFIX,
+  LEGACY_DEVICE_AUTH_STORAGE_KEY,
+} from "../../../../src/shared/control-ui-storage.js";
 import {
   type DeviceAuthEntry,
   type DeviceAuthStore,
@@ -8,32 +13,20 @@ import {
   normalizeDeviceAuthScopes,
 } from "../../../../src/shared/device-auth.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
+import { base64ToBytes } from "../bytes-base64.ts";
 
 export type {
-  DevicePairingList,
   DeviceTokenSummary,
   PairedDevice,
   PendingDevice,
 } from "../../../../src/gateway/device-pairing-list.types.js";
 
-// @noble/ed25519 defaults its SHA-512 to crypto.subtle, which browsers gate to
-// secure contexts. On plain-HTTP origins the pure-JS digests load lazily so
-// device identity keeps working there — the signing key is the one credential
-// that never crosses the wire — while secure contexts pay no startup bytes.
+// Plain-HTTP origins lack crypto.subtle; load the pure-JS digest only when
+// fingerprinting an identity there. Secure contexts use the platform digest.
 const loadPureSha2 = () => import("@noble/hashes/sha2.js");
-const subtleSha512Async = hashes.sha512Async;
-hashes.sha512Async = async (message: Uint8Array) => {
-  if (globalThis.crypto?.subtle && subtleSha512Async) {
-    return await subtleSha512Async(message);
-  }
-  return Uint8Array.from((await loadPureSha2()).sha512(message));
-};
 
-type StoredIdentity = {
+type StoredIdentity = DeviceIdentity & {
   version: 1;
-  deviceId: string;
-  publicKey: string;
-  privateKey: string;
   createdAtMs: number;
 };
 
@@ -43,8 +36,6 @@ type DeviceIdentity = {
   privateKey: string;
 };
 
-const LEGACY_DEVICE_AUTH_STORAGE_KEY = "openclaw.device.auth.v1";
-const DEVICE_AUTH_STORAGE_KEY_PREFIX = `${LEGACY_DEVICE_AUTH_STORAGE_KEY}:`;
 const DEVICE_IDENTITY_STORAGE_KEY = "openclaw-device-identity-v1";
 
 function deviceAuthStorageKey(gatewayUrl: string): string {
@@ -212,28 +203,13 @@ export function clearDeviceAuthToken(params: {
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+  return bytes.toBase64({ alphabet: "base64url", omitPadding: true });
 }
 
 function base64UrlDecode(input: string): Uint8Array {
   const normalized = input.replaceAll("-", "+").replaceAll("_", "/");
   const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
-  const binary = atob(padded);
-  const out = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    out[i] = binary.charCodeAt(i);
-  }
-  return out;
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  return base64ToBytes(padded);
 }
 
 async function fingerprintPublicKey(publicKey: Uint8Array): Promise<string> {
@@ -242,13 +218,16 @@ async function fingerprintPublicKey(publicKey: Uint8Array): Promise<string> {
   const subtle = globalThis.crypto?.subtle;
   if (subtle) {
     const hash = await subtle.digest("SHA-256", publicKey.slice().buffer);
-    return bytesToHex(new Uint8Array(hash));
+    return new Uint8Array(hash).toHex();
   }
-  return bytesToHex((await loadPureSha2()).sha256(publicKey));
+  return (await loadPureSha2()).sha256(publicKey).toHex();
 }
 
 async function generateIdentity(): Promise<DeviceIdentity> {
-  const privateKey = utils.randomSecretKey();
+  // Ed25519 uses a 32-byte random seed. An unavailable RNG must fail before
+  // loading the signer so the Gateway's device-less fallback stays immediate.
+  const privateKey = globalThis.crypto.getRandomValues(new Uint8Array(32));
+  const { getPublicKeyAsync } = await import("./device-signing.runtime.ts");
   const publicKey = await getPublicKeyAsync(privateKey);
   const deviceId = await fingerprintPublicKey(publicKey);
   return {
@@ -318,14 +297,9 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
           deviceId: derivedId,
         };
         storage?.setItem(DEVICE_IDENTITY_STORAGE_KEY, JSON.stringify(updated));
-        return {
-          deviceId: derivedId,
-          publicKey: parsed.publicKey,
-          privateKey: parsed.privateKey,
-        };
       }
       return {
-        deviceId: parsed.deviceId,
+        deviceId: derivedId,
         publicKey: parsed.publicKey,
         privateKey: parsed.privateKey,
       };
@@ -340,9 +314,7 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
   const identity = await generateIdentity();
   const stored: StoredIdentity = {
     version: 1,
-    deviceId: identity.deviceId,
-    publicKey: identity.publicKey,
-    privateKey: identity.privateKey,
+    ...identity,
     createdAtMs: Date.now(),
   };
   try {
@@ -355,6 +327,7 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
 }
 
 export async function signDevicePayload(privateKeyBase64Url: string, payload: string) {
+  const { signAsync } = await import("./device-signing.runtime.ts");
   const key = base64UrlDecode(privateKeyBase64Url);
   const data = new TextEncoder().encode(payload);
   const sig = await signAsync(data, key);

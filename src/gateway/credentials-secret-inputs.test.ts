@@ -1,368 +1,107 @@
-// Gateway credential resolver tests document token/password precedence for local,
-// remote, CLI override, env override, and config-secret connection flows.
-import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveConfigForRead } from "../config/io.read-helpers.js";
-import { setConfigResolutionFacts } from "../config/resolution-facts.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  type DatabaseEngineSelection,
+  getDatabaseEngineSelection,
+  withDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
+import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
+import { GatewaySecretRefUnavailableError } from "./credentials.js";
 
-type ResolvedAuth = { token?: string; password?: string };
-type GatewayConnectionAuthOptions = Parameters<typeof resolveGatewayCredentialsWithSecretInputs>[0];
+const mocks = vi.hoisted(() => ({
+  resolveDatabaseEngineSelection: vi.fn(),
+}));
 
-type ConnectionAuthCase = {
-  name: string;
-  cfgLocal: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  options?: Partial<Omit<GatewayConnectionAuthOptions, "config" | "env">>;
-  expected: ResolvedAuth;
-};
+vi.mock("../infra/database-engine/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/database-engine/config.js")>()),
+  resolveDatabaseEngineSelection: mocks.resolveDatabaseEngineSelection,
+}));
 
-function cfg(input: Partial<OpenClawConfig>): OpenClawConfig {
-  return input as OpenClawConfig;
-}
+const storeMocks = vi.hoisted(() => ({ sqliteToken: undefined as string | undefined }));
 
-function createRemoteModeConfig() {
-  return {
-    gateway: {
-      mode: "remote" as const,
-      auth: {
-        token: "local-token",
-        password: "local-password", // pragma: allowlist secret
-      },
-      remote: {
-        url: "wss://remote.example",
-        token: "remote-token",
-        password: "remote-password", // pragma: allowlist secret
-      },
+// PostgreSQL state holds "store-token"; the default SQLite store holds sqliteToken, if any.
+vi.mock("../secrets/resolve-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../secrets/resolve-store.js")>()),
+  resolveStoreRefs: async (params: { refs: Array<{ id: string }> }) => {
+    const token =
+      getDatabaseEngineSelection()?.effectiveEngines.state === "postgres"
+        ? "store-token"
+        : storeMocks.sqliteToken;
+    return new Map(token ? params.refs.map((ref) => [ref.id, token]) : []);
+  },
+}));
+
+const postgresSelection: DatabaseEngineSelection = Object.freeze({
+  effectiveEngines: Object.freeze(
+    resolveDatabaseFamilyEngines({ database: { families: { state: { engine: "postgres" } } } }),
+  ),
+  postgres: { connection: "postgresql://127.0.0.1/openclaw", schemaPrefix: "openclaw" },
+});
+
+const config = {
+  gateway: {
+    mode: "local",
+    auth: {
+      mode: "token",
+      token: { source: "store", provider: "default", id: "GATEWAY_AUTH_TOKEN" },
     },
-  };
-}
+  },
+  database: { families: { state: { engine: "postgres" } } },
+} as OpenClawConfig;
 
-const DEFAULT_ENV = {
-  OPENCLAW_GATEWAY_TOKEN: "env-token",
-  OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
-} as NodeJS.ProcessEnv;
+afterEach(() => {
+  mocks.resolveDatabaseEngineSelection.mockReset();
+  storeMocks.sqliteToken = undefined;
+});
 
-describe("resolveGatewayCredentialsWithSecretInputs", () => {
-  const cases: ConnectionAuthCase[] = [
-    {
-      name: "local mode defaults to config-first token/password",
-      cfgLocal: cfg({
-        gateway: {
-          mode: "local",
-          auth: {
-            token: "config-token",
-            password: "config-password", // pragma: allowlist secret
-          },
-          remote: {
-            token: "remote-token",
-            password: "remote-password", // pragma: allowlist secret
-          },
-        },
-      }),
-      env: DEFAULT_ENV,
-      expected: {
-        token: "config-token",
-        password: "config-password", // pragma: allowlist secret
-      },
-    },
-    {
-      name: "local mode supports explicit env-first token/password",
-      cfgLocal: cfg({
-        gateway: {
-          mode: "local",
-          auth: {
-            token: "config-token",
-            password: "config-password", // pragma: allowlist secret
-          },
-        },
-      }),
-      env: DEFAULT_ENV,
-      options: {
-        localPrecedence: "env-first",
-      },
-      expected: {
-        token: "env-token",
-        password: "env-password", // pragma: allowlist secret
-      },
-    },
-    {
-      name: "remote mode defaults to remote-first token and env-first password",
-      cfgLocal: cfg(createRemoteModeConfig()),
-      env: DEFAULT_ENV,
-      expected: {
-        token: "remote-token",
-        password: "env-password", // pragma: allowlist secret
-      },
-    },
-    {
-      name: "remote mode supports env-first token with remote-first password",
-      cfgLocal: cfg(createRemoteModeConfig()),
-      env: DEFAULT_ENV,
-      options: {
-        remoteTokenPrecedence: "env-first",
-        remotePasswordPrecedence: "remote-first", // pragma: allowlist secret
-      },
-      expected: {
-        token: "env-token",
-        password: "remote-password", // pragma: allowlist secret
-      },
-    },
-    {
-      name: "remote-only fallback can suppress env/local password fallback",
-      cfgLocal: cfg({
-        gateway: {
-          mode: "remote",
-          auth: {
-            token: "local-token",
-            password: "local-password", // pragma: allowlist secret
-          },
-          remote: {
-            url: "wss://remote.example",
-            token: "remote-token",
-          },
-        },
-      }),
-      env: DEFAULT_ENV,
-      options: {
-        remoteTokenFallback: "remote-only",
-        remotePasswordFallback: "remote-only", // pragma: allowlist secret
-      },
-      expected: {
-        token: "remote-token",
-        password: undefined,
-      },
-    },
-    {
-      name: "modeOverride can force remote precedence while config gateway.mode is local",
-      cfgLocal: cfg({
-        gateway: {
-          mode: "local",
-          auth: {
-            token: "local-token",
-            password: "local-password", // pragma: allowlist secret
-          },
-          remote: {
-            url: "wss://remote.example",
-            token: "remote-token",
-            password: "remote-password", // pragma: allowlist secret
-          },
-        },
-      }),
-      env: DEFAULT_ENV,
-      options: {
-        modeOverride: "remote",
-        remoteTokenPrecedence: "remote-first",
-        remotePasswordPrecedence: "remote-first", // pragma: allowlist secret
-      },
-      expected: {
-        token: "remote-token",
-        password: "remote-password", // pragma: allowlist secret
-      },
-    },
-  ];
+describe("resolveGatewayCredentialsWithSecretInputs store refs", () => {
+  it("reads store refs from the configured engine when the process has none selected", async () => {
+    mocks.resolveDatabaseEngineSelection.mockResolvedValue(postgresSelection);
+    const env = { OPENCLAW_GATEWAY_TOKEN: "env-token" };
 
-  it.each(cases)("$name", async ({ cfgLocal, env, options, expected }) => {
-    const asyncResolved = await resolveGatewayCredentialsWithSecretInputs({
-      config: cfgLocal,
-      env,
-      ...options,
-    });
-    expect(asyncResolved).toEqual(expected);
-  });
-
-  it("resolves local SecretRef token when OPENCLAW env is absent", async () => {
-    const config = cfg({
-      gateway: {
-        mode: "local",
-        auth: {
-          token: { source: "env", provider: "default", id: "LOCAL_SECRET_TOKEN" },
-        },
-      },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    });
-    const env = {
-      LOCAL_SECRET_TOKEN: "resolved-from-secretref", // pragma: allowlist secret
-    } as NodeJS.ProcessEnv;
-
-    const resolved = await resolveGatewayCredentialsWithSecretInputs({
-      config,
-      env,
-    });
-    expect(resolved).toEqual({
-      token: "resolved-from-secretref",
+    await expect(resolveGatewayCredentialsWithSecretInputs({ config, env })).resolves.toEqual({
+      token: "store-token",
       password: undefined,
     });
-  });
-
-  it("resolves an env-template local token through the configured auth path", async () => {
-    await expect(
-      resolveGatewayCredentialsWithSecretInputs({
-        config: cfg({
-          gateway: {
-            mode: "local",
-            auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" },
-          },
-        }),
-        env: { OPENCLAW_GATEWAY_TOKEN: "env-token" },
-      }),
-    ).resolves.toEqual({ token: "env-token", password: undefined });
-  });
-
-  it.each([
-    {
-      name: "pending bare shorthand",
-      authored: "$SOURCE",
-      readEnv: {},
-      runtimeEnv: { SOURCE: "${OTHER}" },
-    },
-    {
-      name: "substituted template-looking literal",
-      authored: "${SOURCE}",
-      readEnv: { SOURCE: "${OTHER}" },
-      runtimeEnv: {},
-    },
-  ])(
-    "materializes authored provenance atomically: $name",
-    async ({ authored, readEnv, runtimeEnv }) => {
-      const read = resolveConfigForRead(
-        { gateway: { mode: "local", auth: { mode: "token", token: authored } } },
-        readEnv,
-      );
-      const config = cfg(read.resolvedConfigRaw as OpenClawConfig);
-      setConfigResolutionFacts(config, read.resolutionFacts);
-
-      await expect(
-        resolveGatewayCredentialsWithSecretInputs({ config, env: runtimeEnv }),
-      ).resolves.toEqual({ token: "${OTHER}", password: undefined });
-    },
-  );
-
-  it("preserves escaped literal credentials through async resolution clones", async () => {
-    const config = cfg({
-      gateway: { mode: "local", auth: { mode: "token", token: "${LITERAL_TOKEN}" } },
-    });
-    setConfigResolutionFacts(config, new Set());
-
-    await expect(resolveGatewayCredentialsWithSecretInputs({ config, env: {} })).resolves.toEqual({
-      token: "${LITERAL_TOKEN}",
-      password: undefined,
-    });
-  });
-
-  it("resolves config-first token SecretRef even when OPENCLAW env token exists", async () => {
-    const config = cfg({
-      gateway: {
-        mode: "local",
-        auth: {
-          token: { source: "env", provider: "default", id: "CONFIG_FIRST_TOKEN" },
-        },
-      },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    });
-    const env = {
-      OPENCLAW_GATEWAY_TOKEN: "env-token",
-      CONFIG_FIRST_TOKEN: "config-first-token",
-    } as NodeJS.ProcessEnv;
-
-    const resolved = await resolveGatewayCredentialsWithSecretInputs({
-      config,
+    expect(mocks.resolveDatabaseEngineSelection).toHaveBeenCalledWith(
+      expect.objectContaining({ database: config.database }),
       env,
-    });
-    expect(resolved).toEqual({
-      token: "config-first-token",
-      password: undefined,
-    });
+    );
+    expect(getDatabaseEngineSelection()).toBeUndefined();
   });
 
-  it("resolves config-first password SecretRef even when OPENCLAW env password exists", async () => {
-    const config = cfg({
-      gateway: {
-        mode: "local",
-        auth: {
-          mode: "password",
-          password: { source: "env", provider: "default", id: "CONFIG_FIRST_PASSWORD" },
-        },
+  it("reads SQLite state directly when only another family uses PostgreSQL", async () => {
+    mocks.resolveDatabaseEngineSelection.mockRejectedValue(new Error("DSN env ref unavailable"));
+    storeMocks.sqliteToken = "sqlite-token";
+    const mixed = {
+      ...config,
+      database: {
+        postgres: { connection: { source: "env", provider: "default", id: "SERVICE_ONLY_DSN" } },
+        families: { state: { engine: "sqlite" }, workboard: { engine: "postgres" } },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    });
-    const env = {
-      OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
-      CONFIG_FIRST_PASSWORD: "config-first-password", // pragma: allowlist secret
-    } as NodeJS.ProcessEnv;
-
-    const resolved = await resolveGatewayCredentialsWithSecretInputs({
-      config,
-      env,
-    });
-    expect(resolved).toEqual({
-      token: undefined,
-      password: "config-first-password", // pragma: allowlist secret
-    });
-  });
-
-  it("throws when config-first token SecretRef cannot resolve even if env token exists", async () => {
-    const config = cfg({
-      gateway: {
-        mode: "local",
-        auth: {
-          token: { source: "env", provider: "default", id: "MISSING_CONFIG_FIRST_TOKEN" },
-        },
-      },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    });
-    const env = {
-      OPENCLAW_GATEWAY_TOKEN: "env-token",
-    } as NodeJS.ProcessEnv;
+    } as OpenClawConfig;
 
     await expect(
-      resolveGatewayCredentialsWithSecretInputs({
-        config,
-        env,
-      }),
-    ).rejects.toThrow("gateway.auth.token");
+      resolveGatewayCredentialsWithSecretInputs({ config: mixed, env: {} }),
+    ).resolves.toEqual({ token: "sqlite-token", password: undefined });
+    expect(mocks.resolveDatabaseEngineSelection).not.toHaveBeenCalled();
   });
 
-  it("throws when config-first password SecretRef cannot resolve even if env password exists", async () => {
-    const config = cfg({
-      gateway: {
-        mode: "local",
-        auth: {
-          mode: "password",
-          password: { source: "env", provider: "default", id: "MISSING_CONFIG_FIRST_PASSWORD" },
-        },
-      },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    });
-    const env = {
-      OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
-    } as NodeJS.ProcessEnv;
-
+  it("keeps the selection a process already owns", async () => {
     await expect(
-      resolveGatewayCredentialsWithSecretInputs({
-        config,
-        env,
-      }),
-    ).rejects.toThrow("gateway.auth.password");
+      withDatabaseEngineSelection(postgresSelection, () =>
+        resolveGatewayCredentialsWithSecretInputs({ config, env: {} }),
+      ),
+    ).resolves.toEqual({ token: "store-token", password: undefined });
+    expect(mocks.resolveDatabaseEngineSelection).not.toHaveBeenCalled();
+  });
+
+  it("reports the ref unavailable when the configured engine cannot be selected", async () => {
+    mocks.resolveDatabaseEngineSelection.mockRejectedValue(new Error("DSN file missing"));
+
+    const result = resolveGatewayCredentialsWithSecretInputs({ config, env: {} });
+    await expect(result).rejects.toBeInstanceOf(GatewaySecretRefUnavailableError);
+    await expect(result).rejects.toThrow("gateway.auth.token");
   });
 });

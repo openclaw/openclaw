@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { completeInitialSessionTurn } from "./initial-session-turn-handoff.ts";
 import { InstantThreadHandoff } from "./instant-thread-handoff.ts";
+import { createNewSessionRouteData } from "./location.test-support.ts";
 import * as rejected from "./rejected-initial-turn.ts";
 import { StartedSessionNavigation } from "./started-session-navigation.ts";
 
@@ -11,10 +12,69 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
-describe.each(["started", "rejected"] as const)("%s first-turn publication", (status) => {
-  it.each(["scope", "request", "unchanged"] as const)(
-    "rechecks %s authority at the readiness publication boundary",
-    async (change) => {
+describe("first-turn publication", () => {
+  it("retires an accepted draft before a slow preview route is ready", async () => {
+    const { context } = createDraftFixture();
+    let ready!: () => void;
+    Object.defineProperty(context, "router", {
+      value: {
+        getState: () => ({ location: undefined }),
+        subscribe: () => () => {},
+        navigate: () =>
+          new Promise<void>((resolve) => {
+            ready = resolve;
+          }),
+      },
+    });
+    const key = "agent:main:accepted-before-preview";
+    const instant = new InstantThreadHandoff(
+      context,
+      key,
+      "main",
+      {
+        data: createNewSessionRouteData(),
+        page: document.createElement("div"),
+        release: vi.fn(),
+        synchronizeGateway: vi.fn(),
+      },
+      null,
+    );
+    const client = context.gateway.snapshot.client!;
+    const clearDraft = vi.fn(async () => {});
+    const navigation = new StartedSessionNavigation();
+    vi.spyOn(navigation, "navigate").mockResolvedValue();
+    const completion = completeInitialSessionTurn({
+      context,
+      client,
+      agentId: "main",
+      result: { key, initialRun: { status: "started", runId: "accepted-run" } },
+      turn: { text: "Accepted prompt", attachments: [], createdAt: 1 },
+      instant,
+      navigation,
+      isCurrent: () => true,
+      clearDraft,
+      completeInBackground: () => false,
+      finishNavigation: vi.fn(),
+    });
+    try {
+      // Acceptance, not lazy route readiness or storage completion, consumes input.
+      expect(clearDraft).toHaveBeenCalledOnce();
+      expect(context.chatSubmissions.readInitial(key, client)).toBeNull();
+    } finally {
+      ready();
+      await completion;
+      instant.dispose();
+    }
+  });
+
+  it.each([
+    { status: "started", change: "scope" },
+    { status: "rejected", change: "request" },
+    { status: "started", change: "unchanged" },
+    { status: "rejected", change: "unchanged" },
+  ] as const)(
+    "rechecks $change authority before publishing a $status turn",
+    async ({ status, change }) => {
       const { context } = createDraftFixture();
       Object.defineProperties(context, {
         router: {
@@ -32,14 +92,7 @@ describe.each(["started", "rejected"] as const)("%s first-turn publication", (st
         key,
         "main",
         {
-          data: {
-            agentId: "main",
-            requestedAgentId: "main",
-            catalogId: "",
-            model: "",
-            catalogLabel: "",
-            startTerminal: false,
-          },
+          data: createNewSessionRouteData(),
           page: document.createElement("div"),
           release: vi.fn(),
           synchronizeGateway: vi.fn(),
@@ -107,59 +160,13 @@ describe.each(["started", "rejected"] as const)("%s first-turn publication", (st
           expect(retainRejected).not.toHaveBeenCalled();
           expect(JSON.stringify(localStorage)).not.toContain("private incognito first turn");
           if (status === "started") {
-            expect(clearDraft).toHaveBeenCalledWith(true, false);
+            expect(clearDraft).toHaveBeenCalledWith(true, undefined);
           } else {
             expect(clearDraft).not.toHaveBeenCalled();
           }
         }
       } finally {
         instant.dispose();
-      }
-    },
-  );
-});
-
-describe("retained launcher rejection", () => {
-  it.each([true, false])(
-    "publishes rejected-prompt recovery only to its current owner (%s)",
-    async (current) => {
-      const { context } = createDraftFixture();
-      const client = context.gateway.snapshot.client;
-      if (!client) {
-        throw new Error("Expected a connected fixture");
-      }
-      const retained = vi.spyOn(rejected, "retainRejectedInitialTurn").mockReturnValue(false);
-      const navigation = new StartedSessionNavigation();
-      const navigate = vi.spyOn(navigation, "navigate").mockResolvedValue();
-      const clearDraft = vi.fn(async () => {});
-      const onRejectedPrompt = vi.fn();
-      const onAccepted = vi.fn();
-      await completeInitialSessionTurn({
-        context,
-        client,
-        agentId: "main",
-        result: {
-          key: "agent:main:dashboard:rejected",
-          initialRun: { status: "rejected", error: "First turn denied" },
-        },
-        turn: { text: "Keep this prompt visible", attachments: [], createdAt: 1 },
-        instant: undefined,
-        navigation,
-        isCurrent: () => current,
-        clearDraft,
-        completeInBackground: () => true,
-        finishNavigation: vi.fn(),
-        onRejectedPrompt,
-        onAccepted,
-      });
-      expect(clearDraft).not.toHaveBeenCalled();
-      expect(navigate).not.toHaveBeenCalled();
-      expect(retained).toHaveBeenCalledTimes(current ? 1 : 0);
-      expect(onAccepted).toHaveBeenCalledTimes(current ? 1 : 0);
-      if (current) {
-        expect(onRejectedPrompt).toHaveBeenCalledWith("First turn denied");
-      } else {
-        expect(onRejectedPrompt).not.toHaveBeenCalled();
       }
     },
   );

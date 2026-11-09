@@ -1,0 +1,13 @@
+{
+  "id": "cloudflare",
+  "name": "Cloudflare",
+  "description": "Cloudflare R2 storage for named OpenClaw storage locations.",
+  "categories": ["infrastructure"],
+  "activation": { "onStartup": false },
+  "contracts": { "storageProviders": ["r2"] },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

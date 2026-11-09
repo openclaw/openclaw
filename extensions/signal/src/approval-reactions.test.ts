@@ -1,13 +1,8 @@
 import { addApprovalReactionHintToText } from "openclaw/plugin-sdk/approval-reaction-runtime";
-import {
-  buildExecApprovalPendingReplyPayload,
-  buildPluginApprovalPendingReplyPayload,
-} from "openclaw/plugin-sdk/approval-reply-runtime";
-// Signal tests cover approval reactions plugin behavior.
+import type { ExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addSignalApprovalReactionHintToStructuredPayload,
-  clearSignalApprovalReactionTargetsForTest,
   maybeResolveSignalApprovalReaction,
   registerSignalApprovalReactionTargetForDeliveredPayload,
   registerSignalApprovalReactionTarget,
@@ -15,175 +10,162 @@ import {
 } from "./approval-reactions.js";
 import * as signalRuntime from "./runtime.js";
 
-const resolverMocks = vi.hoisted(() => ({
-  resolveSignalApproval: vi.fn(),
-  isApprovalNotFoundError: vi.fn(() => false),
-}));
+const reactionStores = await vi.hoisted(() => import("./approval-reactions.test-support.js"));
+const resolveApproval = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Resolve approvals offline without loading the Gateway client.
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
-  resolveApprovalOverGateway: resolverMocks.resolveSignalApproval,
+  resolveApprovalOverGateway: resolveApproval,
 }));
-vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
-    "openclaw/plugin-sdk/error-runtime",
-  );
-  return {
-    ...actual,
-    isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
-  };
-});
 
-const approvalRoute = {
-  deliveryMode: "session" as const,
+const sessionIdentity = {
   agentId: "main",
   sessionKey: "agent:main:signal:direct:+15551230000",
 };
+const approvalRoute = { deliveryMode: "session" as const, ...sessionIdentity };
+
+const sessionConfig = {
+  channels: { signal: { allowFrom: ["+15551230000"] } },
+  approvals: { exec: { enabled: true, mode: "session" as const } },
+};
+const targetConfig = {
+  ...sessionConfig,
+  approvals: {
+    exec: {
+      enabled: true,
+      mode: "targets" as const,
+      targets: [{ channel: "signal", to: "+15551230000" }],
+    },
+  },
+};
+const lookupIdentity = {
+  accountId: "default",
+  conversationKey: "+15551230000",
+  reactionKey: "👍",
+  targetAuthor: "+15550009999",
+};
+const deliveryTarget = { channel: "signal", to: "+15551230000", accountId: "default" };
+const reactionHint = "React with:\n\n👍 Allow Once\n👎 Deny";
+const messageId = "1700000000001";
+
+function delivered(id: string, signalVisibleText?: string): Delivery["results"][number] {
+  return {
+    channel: "signal",
+    messageId: id,
+    ...(signalVisibleText === undefined ? {} : { meta: { signalVisibleText } }),
+  };
+}
+
+function lookup(
+  overrides: Partial<Parameters<typeof resolveSignalApprovalReactionTargetWithPersistence>[0]> = {},
+) {
+  return resolveSignalApprovalReactionTargetWithPersistence({
+    ...lookupIdentity,
+    messageId,
+    ...overrides,
+  });
+}
+
+type Delivery = Parameters<typeof registerSignalApprovalReactionTargetForDeliveredPayload>[0];
+function registerDelivery(
+  payload: Delivery["payload"],
+  results: Delivery["results"] = [delivered(messageId)],
+  cfg: Delivery["cfg"] = targetConfig,
+) {
+  return registerSignalApprovalReactionTargetForDeliveredPayload({
+    cfg,
+    target: deliveryTarget,
+    payload,
+    results,
+    targetAuthor: lookupIdentity.targetAuthor,
+  });
+}
+
+function withHint(payload: Delivery["payload"], cfg: Delivery["cfg"] = targetConfig) {
+  return addSignalApprovalReactionHintToStructuredPayload({
+    cfg,
+    accountId: deliveryTarget.accountId,
+    to: deliveryTarget.to,
+    payload,
+    targetAuthor: lookupIdentity.targetAuthor,
+  });
+}
+
+function react(overrides: Partial<Parameters<typeof maybeResolveSignalApprovalReaction>[0]> = {}) {
+  return maybeResolveSignalApprovalReaction({
+    ...lookupIdentity,
+    cfg: sessionConfig,
+    actorId: deliveryTarget.to,
+    messageId,
+    ...overrides,
+  });
+}
+
+function registerTarget(
+  overrides: Partial<Parameters<typeof registerSignalApprovalReactionTarget>[0]> = {},
+) {
+  return registerSignalApprovalReactionTarget({
+    accountId: "default",
+    conversationKey: "+15551230000",
+    messageId,
+    approvalId: "exec-1",
+    approvalKind: "exec",
+    allowedDecisions: ["allow-once", "deny"],
+    targetAuthorKeys: ["+15550009999"],
+    route: approvalRoute,
+    ...overrides,
+  });
+}
+
+function approvalPayload(approvalId: string, metadata: Partial<ExecApprovalReplyMetadata> = {}) {
+  return {
+    text: "Approval required.",
+    channelData: {
+      execApproval: {
+        approvalId,
+        approvalSlug: approvalId,
+        approvalKind: "exec",
+        allowedDecisions: ["allow-once", "deny"],
+        ...metadata,
+      },
+    },
+  };
+}
 
 describe("Signal approval reactions", () => {
   beforeEach(() => {
-    clearSignalApprovalReactionTargetsForTest();
-    resolverMocks.resolveSignalApproval.mockReset();
-    resolverMocks.resolveSignalApproval.mockResolvedValue({
+    reactionStores.clearSignalApprovalReactionStoresForTest();
+    resolveApproval.mockReset().mockResolvedValue({
       applied: true,
       approval: { status: "allowed", decision: "allow-once" },
     });
-    resolverMocks.isApprovalNotFoundError.mockReset();
-    resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
   });
 
-  it("registers delivered structured approval payloads for reactions", async () => {
-    const cfg = {
-      channels: {
-        signal: {
-          allowFrom: ["+15551230000"],
-        },
-      },
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets" as const,
-          targets: [{ channel: "signal", to: "+15551230000" }],
-        },
-      },
-    };
-    const payload = buildExecApprovalPendingReplyPayload({
-      approvalId: "exec-structured-approval",
-      approvalSlug: "exec-str",
-      allowedDecisions: ["allow-once", "deny"],
-      command: "printf test",
-      host: "gateway",
-      agentId: "main",
-      sessionKey: "agent:main:signal:direct:+15551230000",
-    });
-    const deliveredPayload = addSignalApprovalReactionHintToStructuredPayload({
-      cfg,
-      accountId: "default",
-      to: "+15551230000",
-      payload,
-      targetAuthor: "+15550009999",
-    });
-
-    expect(
-      await registerSignalApprovalReactionTargetForDeliveredPayload({
-        cfg,
-        target: {
-          channel: "signal",
-          to: "+15551230000",
-          accountId: "default",
-        },
-        payload: deliveredPayload!,
-        results: [
-          {
-            channel: "signal",
-            messageId: "1700000000012",
-            toJid: "+15551230000",
-          },
-        ],
-        targetAuthor: "+15550009999",
-      }),
-    ).toBe(true);
-
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000012",
-        reactionKey: "👍",
-        targetAuthor: "+15550009999",
-      }),
-    ).resolves.toEqual({
-      approvalId: "exec-structured-approval",
-      approvalKind: "exec",
-      decision: "allow-once",
-      route: {
-        deliveryMode: "target",
-        to: "+15551230000",
-        accountId: "default",
-        agentId: "main",
-        sessionKey: "agent:main:signal:direct:+15551230000",
-      },
-    });
-  });
-
-  it("does not register metadata-only approval payloads without visible reaction hints", async () => {
-    const cfg = {
-      channels: {
-        signal: {
-          allowFrom: ["+15551230000"],
-        },
-      },
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets" as const,
-          targets: [{ channel: "signal", to: "+15551230000" }],
-        },
-      },
-    };
-    const payload = buildExecApprovalPendingReplyPayload({
-      approvalId: "exec-hidden-reaction",
-      approvalSlug: "exec-hid",
-      allowedDecisions: ["allow-once", "deny"],
-      command: "printf hidden",
-      host: "gateway",
-      agentId: "main",
-      sessionKey: "agent:main:signal:direct:+15551230000",
-    });
-
-    expect(
-      await registerSignalApprovalReactionTargetForDeliveredPayload({
-        cfg,
-        target: {
-          channel: "signal",
-          to: "+15551230000",
-          accountId: "default",
-        },
-        payload,
-        results: [
-          {
-            channel: "signal",
-            messageId: "1700000000015",
-          },
-        ],
-        targetAuthor: "+15550009999",
-      }),
-    ).toBe(false);
-
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000015",
-        reactionKey: "👍",
-        targetAuthor: "+15550009999",
-      }),
-    ).resolves.toBeNull();
+  it.each([
+    { name: "visible reaction hints", hint: false, cfg: targetConfig, metadata: sessionIdentity },
+    {
+      name: "explicit approvers",
+      hint: true,
+      cfg: { ...targetConfig, channels: { signal: {} } },
+      metadata: {},
+    },
+  ])("does not register delivered payloads without $name", async ({ hint, cfg, metadata }) => {
+    const payload = approvalPayload("exec-1", metadata);
+    if (hint) {
+      payload.text = addApprovalReactionHintToText({
+        text: payload.text,
+        allowedDecisions: ["allow-once", "deny"],
+      });
+    }
+    expect(await registerDelivery(payload, undefined, cfg)).toBe(false);
+    await expect(lookup()).resolves.toBeNull();
   });
 
   it("rejects persisted targets containing an invalid approval decision", async () => {
+    await registerTarget();
     const runtime = vi.spyOn(signalRuntime, "getOptionalSignalRuntime").mockReturnValue({
       state: {
-        openKeyedStore: () => ({
+        openKeyedStoreV2: () => ({
           register: async () => {},
           lookup: async () => ({
             version: 1,
@@ -200,185 +182,42 @@ describe("Signal approval reactions", () => {
       },
     } as never);
     try {
-      clearSignalApprovalReactionTargetsForTest();
-      await expect(
-        resolveSignalApprovalReactionTargetWithPersistence({
-          accountId: "default",
-          conversationKey: "+15551230000",
-          messageId: "corrupt-message",
-          reactionKey: "👍",
-          targetAuthor: "+15550009999",
-        }),
-      ).resolves.toBeNull();
+      reactionStores.clearSignalApprovalReactionStoresForTest();
+      await expect(lookup()).resolves.toBeNull();
     } finally {
-      clearSignalApprovalReactionTargetsForTest();
+      reactionStores.clearSignalApprovalReactionStoresForTest();
       runtime.mockRestore();
     }
   });
 
   it("registers only delivered chunks that contain visible reaction hints", async () => {
-    const cfg = {
-      channels: {
-        signal: {
-          allowFrom: ["+15551230000"],
-        },
-      },
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets" as const,
-          targets: [{ channel: "signal", to: "+15551230000" }],
-        },
-      },
-    };
-    const payload = buildExecApprovalPendingReplyPayload({
-      approvalId: "exec-chunked-reaction",
-      approvalSlug: "exec-ch",
-      allowedDecisions: ["allow-once", "deny"],
-      command: "printf chunked",
-      host: "gateway",
-      agentId: "main",
-      sessionKey: "agent:main:signal:direct:+15551230000",
-    });
-    const deliveredPayload = addSignalApprovalReactionHintToStructuredPayload({
-      cfg,
-      accountId: "default",
-      to: "+15551230000",
-      payload,
-      targetAuthor: "+15550009999",
-    });
+    const deliveredPayload = withHint(approvalPayload("exec-chunked-reaction", sessionIdentity));
 
     expect(
-      await registerSignalApprovalReactionTargetForDeliveredPayload({
-        cfg,
-        target: {
-          channel: "signal",
-          to: "+15551230000",
-          accountId: "default",
-        },
-        payload: deliveredPayload!,
-        results: [
-          {
-            channel: "signal",
-            messageId: "1700000000016",
-            meta: {
-              signalVisibleText: "Exec approval required\n\nReact with:\n\n👍 Allow Once\n👎 Deny",
-            },
-          },
-          {
-            channel: "signal",
-            messageId: "1700000000017",
-            meta: {
-              signalVisibleText: "Continuation chunk without controls",
-            },
-          },
-        ],
-        targetAuthor: "+15550009999",
-      }),
+      await registerDelivery(deliveredPayload!, [
+        delivered(messageId, `Exec approval required\n\n${reactionHint}`),
+        delivered("1700000000017", "Continuation chunk without controls"),
+      ]),
     ).toBe(true);
 
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000016",
-        reactionKey: "👍",
-        targetAuthor: "+15550009999",
-      }),
-    ).resolves.toMatchObject({
+    await expect(lookup()).resolves.toEqual({
       approvalId: "exec-chunked-reaction",
+      approvalKind: "exec",
       decision: "allow-once",
-    });
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
+      route: {
+        ...approvalRoute,
+        deliveryMode: "target",
+        to: deliveryTarget.to,
         accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000017",
-        reactionKey: "👍",
-        targetAuthor: "+15550009999",
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("registers delivered structured plugin approval payloads using metadata kind", async () => {
-    const cfg = {
-      channels: {
-        signal: {
-          allowFrom: ["+15551230000"],
-        },
       },
-      approvals: {
-        plugin: {
-          enabled: true,
-          mode: "targets" as const,
-          targets: [{ channel: "signal", to: "+15551230000" }],
-        },
-      },
-    };
-    const payload = buildPluginApprovalPendingReplyPayload({
-      request: {
-        id: "plugin-structured-approval",
-        request: {
-          title: "Sensitive plugin action",
-          description: "Needs approval",
-          allowedDecisions: ["allow-once", "deny"],
-        },
-        createdAtMs: 1_000,
-        expiresAtMs: 61_000,
-      },
-      nowMs: 1_000,
     });
-    const deliveredPayload = addSignalApprovalReactionHintToStructuredPayload({
-      cfg,
-      accountId: "default",
-      to: "+15551230000",
-      payload,
-      targetAuthor: "+15550009999",
-    });
-
-    expect(
-      await registerSignalApprovalReactionTargetForDeliveredPayload({
-        cfg,
-        target: {
-          channel: "signal",
-          to: "+15551230000",
-          accountId: "default",
-        },
-        payload: deliveredPayload!,
-        results: [
-          {
-            channel: "signal",
-            messageId: "1700000000013",
-          },
-        ],
-        targetAuthor: "+15550009999",
-      }),
-    ).toBe(true);
-
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000013",
-        reactionKey: "👍",
-        targetAuthor: "+15550009999",
-      }),
-    ).resolves.toMatchObject({
-      approvalId: "plugin-structured-approval",
-      approvalKind: "plugin",
-      decision: "allow-once",
-    });
+    await expect(lookup({ messageId: "1700000000017" })).resolves.toBeNull();
   });
 
   it("registers alias-configured delivered prompts under the canonical target", async () => {
     const cfg = {
       channels: {
-        signal: {
-          allowFrom: ["+15551230000"],
-          aliases: {
-            me: "+15551230000",
-          },
-        },
+        signal: { ...sessionConfig.channels.signal, aliases: { me: deliveryTarget.to } },
       },
       approvals: {
         plugin: {
@@ -388,491 +227,82 @@ describe("Signal approval reactions", () => {
         },
       },
     };
-    const payload = buildPluginApprovalPendingReplyPayload({
-      request: {
-        id: "plugin:abc",
-        request: {
-          title: "Sensitive plugin action",
-          description: "Needs approval",
-          allowedDecisions: ["allow-once", "deny"],
-          pluginId: "demo",
-          toolName: "dangerousTool",
-          agentId: "main",
-          sessionKey: "agent:main:signal:direct:+15551230000",
-        },
-        createdAtMs: 1_000,
-        expiresAtMs: 61_000,
-      },
-      nowMs: 1_000,
-    });
-    const deliveredPayload = addSignalApprovalReactionHintToStructuredPayload({
-      cfg,
-      accountId: "default",
-      to: "+15551230000",
-      payload,
-      targetAuthor: "+15550009999",
-    });
+    const payload = approvalPayload("plugin:abc", { approvalKind: "plugin" });
+    const deliveredPayload = withHint(payload, cfg);
 
-    expect(deliveredPayload?.text).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
-    expect(
-      await registerSignalApprovalReactionTargetForDeliveredPayload({
-        cfg,
-        target: {
-          channel: "signal",
-          to: "+15551230000",
-          accountId: "default",
-        },
-        payload: deliveredPayload!,
-        results: [
-          {
-            channel: "signal",
-            messageId: "1700000000010",
-          },
-        ],
-        targetAuthor: "+15550009999",
-      }),
-    ).toBe(true);
+    expect(deliveredPayload?.text).toContain(reactionHint);
+    expect(await registerDelivery(deliveredPayload!, undefined, cfg)).toBe(true);
 
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000010",
-        reactionKey: "👍",
-        targetAuthor: "+15550009999",
-      }),
-    ).resolves.toMatchObject({
+    await expect(lookup()).resolves.toMatchObject({
       approvalId: "plugin:abc",
       approvalKind: "plugin",
       decision: "allow-once",
-      route: {
-        deliveryMode: "target",
-        to: "+15551230000",
-        accountId: "default",
-      },
+      route: { deliveryMode: "target", to: deliveryTarget.to, accountId: "default" },
     });
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "me",
-        messageId: "1700000000010",
-        reactionKey: "👍",
-        targetAuthor: "+15550009999",
-      }),
-    ).resolves.toBeNull();
+    await expect(lookup({ conversationKey: "me" })).resolves.toBeNull();
   });
 
-  it("does not register delivered structured approval payloads without explicit approvers", async () => {
-    const payload = buildExecApprovalPendingReplyPayload({
-      approvalId: "exec-no-approvers",
-      approvalSlug: "exec-no",
-      allowedDecisions: ["allow-once", "deny"],
-      command: "printf test",
-      host: "gateway",
-    });
-    const deliveredPayload = {
-      ...payload,
-      text: addApprovalReactionHintToText({
-        text: payload.text ?? "",
-        allowedDecisions: ["allow-once", "deny"],
-      }),
-    };
-
+  it("rejects reaction registration with an undefined approval kind", async () => {
     expect(
-      await registerSignalApprovalReactionTargetForDeliveredPayload({
-        cfg: {
-          channels: {
-            signal: {},
-          },
-          approvals: {
-            exec: {
-              enabled: true,
-              mode: "targets",
-              targets: [{ channel: "signal", to: "+15551230000" }],
-            },
-          },
-        },
-        target: {
-          channel: "signal",
-          to: "+15551230000",
-          accountId: "default",
-        },
-        payload: deliveredPayload,
-        results: [
-          {
-            channel: "signal",
-            messageId: "1700000000014",
-          },
-        ],
-        targetAuthor: "+15550009999",
-      }),
-    ).toBe(false);
-  });
-
-  it("registers reaction state when only allow-always is available", async () => {
-    expect(
-      await registerSignalApprovalReactionTarget({
-        accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000000",
-        approvalId: "exec-allow-always",
-        approvalKind: "exec",
-        allowedDecisions: ["allow-always"],
-        targetAuthorKeys: ["+15550009999"],
-        route: approvalRoute,
-        routeAllowed: true,
-      }),
-    ).toEqual({
-      approvalId: "exec-allow-always",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-always"],
-      targetAuthorKeys: ["+15550009999"],
-      route: approvalRoute,
-    });
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000000",
-        reactionKey: "♾️",
-        targetAuthor: "+15550009999",
-      }),
-    ).resolves.toEqual({
-      approvalId: "exec-allow-always",
-      approvalKind: "exec",
-      decision: "allow-always",
-      route: approvalRoute,
-    });
-  });
-
-  it("rejects reaction registration without a valid explicit approval kind", async () => {
-    expect(
-      await registerSignalApprovalReactionTarget({
-        accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000099",
+      await registerTarget({
         approvalId: "approval-without-owner",
         approvalKind: undefined as never,
         allowedDecisions: ["deny"],
-        targetAuthorKeys: ["+15550009999"],
-        route: approvalRoute,
-        routeAllowed: true,
       }),
     ).toBeNull();
   });
 
-  it("resolves a registered reaction target", async () => {
-    await registerSignalApprovalReactionTarget({
-      accountId: "default",
-      conversationKey: "+15551230000",
-      messageId: "1700000000000",
-      approvalId: "exec-1",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once", "deny"],
-      targetAuthorKeys: ["+15550009999"],
-      route: approvalRoute,
-      routeAllowed: true,
-    });
+  it.each([{ conversationKey: "username:kevin" }, { targetAuthor: "+15550008888" }])(
+    "binds reactions to their conversation and bot identity: %j",
+    async (overrides) => {
+      await registerTarget({ allowedDecisions: ["allow-once"] });
+      await expect(lookup(overrides)).resolves.toBeNull();
+      await expect(lookup()).resolves.toEqual({
+        approvalId: "exec-1",
+        approvalKind: "exec",
+        decision: "allow-once",
+        route: approvalRoute,
+      });
+    },
+  );
 
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000000",
-        reactionKey: "👎",
-        targetAuthor: "+15550009999",
-      }),
-    ).resolves.toEqual({
-      approvalId: "exec-1",
-      approvalKind: "exec",
-      decision: "deny",
-      route: approvalRoute,
-    });
-  });
-
-  it("does not match timestamp-only bindings when the inbound conversation id differs", async () => {
-    await registerSignalApprovalReactionTarget({
-      accountId: "default",
-      conversationKey: "username:kevin",
-      messageId: "1700000000001",
-      approvalId: "exec-1",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once", "deny"],
-      targetAuthorKeys: ["+15550009999"],
-      route: approvalRoute,
-      routeAllowed: true,
-    });
-
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000001",
-        reactionKey: "👍",
-        targetAuthor: "+15550009999",
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("normalizes UUID target-author casing before matching", async () => {
-    await registerSignalApprovalReactionTarget({
-      accountId: "default",
-      conversationKey: "+15551230000",
-      messageId: "1700000000001",
-      approvalId: "exec-1",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once"],
-      targetAuthorKeys: ["uuid:ABCDEF12-3456-7890-ABCD-EF1234567890"],
-      route: approvalRoute,
-      routeAllowed: true,
-    });
-
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000001",
-        reactionKey: "👍",
-        targetAuthorUuid: "abcdef12-3456-7890-abcd-ef1234567890",
-      }),
-    ).resolves.toEqual({
-      approvalId: "exec-1",
-      approvalKind: "exec",
-      decision: "allow-once",
-      route: approvalRoute,
-    });
-  });
-
-  it("ignores unsupported numeric approval reaction choices", async () => {
-    await registerSignalApprovalReactionTarget({
-      accountId: "default",
-      conversationKey: "+15551230000",
-      messageId: "1700000000002",
-      approvalId: "exec-1",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once", "deny"],
-      targetAuthorKeys: ["+15550009999"],
-      route: approvalRoute,
-      routeAllowed: true,
-    });
-    for (const reactionKey of ["1️⃣", "2️⃣", "3️⃣", "1", "2", "3"]) {
-      await expect(
-        resolveSignalApprovalReactionTargetWithPersistence({
-          accountId: "default",
-          conversationKey: "+15551230000",
-          messageId: "1700000000002",
-          reactionKey,
-          targetAuthor: "+15550009999",
-        }),
-      ).resolves.toBeNull();
-    }
-  });
-
-  it("requires the reaction target author to match the outbound bot identity", async () => {
-    await registerSignalApprovalReactionTarget({
-      accountId: "default",
-      conversationKey: "+15551230000",
-      messageId: "1700000000006",
-      approvalId: "exec-1",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once"],
-      targetAuthorKeys: ["+15550009999"],
-      route: approvalRoute,
-      routeAllowed: true,
-    });
-
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000006",
-        reactionKey: "👍",
-        targetAuthor: "+15550008888",
-      }),
-    ).resolves.toBeNull();
-
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000006",
-        reactionKey: "👍",
-        targetAuthor: "+15550009999",
-      }),
-    ).resolves.toEqual({
-      approvalId: "exec-1",
-      approvalKind: "exec",
-      decision: "allow-once",
-      route: approvalRoute,
-    });
-  });
-
-  it("authorizes reactions using Signal approval approvers", async () => {
-    await registerSignalApprovalReactionTarget({
-      accountId: "default",
+  it("authorizes system-agent reactions using Signal approval approvers", async () => {
+    const approvalKind = "system-agent";
+    const approvalId = "system-agent:abc";
+    await registerTarget({
       conversationKey: "group:g1",
-      messageId: "1700000000003",
-      approvalId: "plugin:abc",
-      approvalKind: "plugin",
-      allowedDecisions: ["allow-once", "allow-always", "deny"],
-      targetAuthorKeys: ["+15550009999"],
-      route: approvalRoute,
-      routeAllowed: true,
+      approvalId,
+      approvalKind,
     });
 
-    const handled = await maybeResolveSignalApprovalReaction({
-      cfg: {
-        channels: {
-          signal: {
-            allowFrom: ["+15551230000"],
-          },
-        },
-        approvals: {
-          plugin: {
-            enabled: true,
-            mode: "session",
-          },
-        },
-      },
-      accountId: "default",
-      conversationKey: "group:g1",
-      messageId: "1700000000003",
-      reactionKey: "👍",
-      actorId: "+15551230000",
-      targetAuthor: "+15550009999",
-    });
+    const reaction = { conversationKey: "group:g1" };
 
-    expect(handled).toBe(true);
-    expect(resolverMocks.resolveSignalApproval).toHaveBeenCalledWith({
-      cfg: {
-        channels: {
-          signal: {
-            allowFrom: ["+15551230000"],
-          },
-        },
-        approvals: {
-          plugin: {
-            enabled: true,
-            mode: "session",
-          },
-        },
-      },
-      approvalId: "plugin:abc",
-      approvalKind: "plugin",
+    await expect(react({ ...reaction, actorId: "+15551239999" })).resolves.toBe(true);
+    expect(resolveApproval).not.toHaveBeenCalled();
+
+    await expect(react(reaction)).resolves.toBe(true);
+    expect(resolveApproval).toHaveBeenCalledExactlyOnceWith({
+      cfg: sessionConfig,
+      approvalId,
+      approvalKind,
       decision: "allow-once",
       channel: "signal",
       accountId: "default",
       senderId: "+15551230000",
-      gatewayUrl: undefined,
-    });
-  });
-
-  it("authorizes reactions using Signal defaultTo approvers", async () => {
-    await registerSignalApprovalReactionTarget({
-      accountId: "default",
-      conversationKey: "+15551230000",
-      messageId: "1700000000008",
-      approvalId: "exec-default-to",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once"],
-      targetAuthorKeys: ["+15550009999"],
-      route: approvalRoute,
-      routeAllowed: true,
-    });
-
-    const handled = await maybeResolveSignalApprovalReaction({
-      cfg: {
-        channels: {
-          signal: {
-            allowFrom: [],
-            defaultTo: "+15551230000",
-          },
-        },
-        approvals: {
-          exec: {
-            enabled: true,
-            mode: "session",
-          },
-        },
-      },
-      accountId: "default",
-      conversationKey: "+15551230000",
-      messageId: "1700000000008",
-      reactionKey: "👍",
-      actorId: "+15551230000",
-      targetAuthor: "+15550009999",
-    });
-
-    expect(handled).toBe(true);
-    expect(resolverMocks.resolveSignalApproval).toHaveBeenCalledWith({
-      cfg: {
-        channels: {
-          signal: {
-            allowFrom: [],
-            defaultTo: "+15551230000",
-          },
-        },
-        approvals: {
-          exec: {
-            enabled: true,
-            mode: "session",
-          },
-        },
-      },
-      approvalId: "exec-default-to",
-      approvalKind: "exec",
-      decision: "allow-once",
-      channel: "signal",
-      accountId: "default",
-      senderId: "+15551230000",
-      gatewayUrl: undefined,
     });
   });
 
   it("consumes a losing surface and logs the canonical winning decision", async () => {
-    await registerSignalApprovalReactionTarget({
-      accountId: "default",
-      conversationKey: "+15551230000",
-      messageId: "1700000000019",
-      approvalId: "exec-losing-surface",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once", "deny"],
-      targetAuthorKeys: ["+15550009999"],
-      route: approvalRoute,
-      routeAllowed: true,
-    });
-    resolverMocks.resolveSignalApproval.mockResolvedValueOnce({
+    await registerTarget({ approvalId: "exec-losing-surface" });
+    resolveApproval.mockResolvedValueOnce({
       applied: false,
       approval: { status: "denied", decision: "deny" },
     });
     const logVerboseMessage = vi.fn();
 
-    await expect(
-      maybeResolveSignalApprovalReaction({
-        cfg: {
-          channels: {
-            signal: {
-              allowFrom: ["+15551230000"],
-            },
-          },
-          approvals: {
-            exec: {
-              enabled: true,
-              mode: "session",
-            },
-          },
-        },
-        accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000019",
-        reactionKey: "👍",
-        actorId: "+15551230000",
-        targetAuthor: "+15550009999",
-        logVerboseMessage,
-      }),
-    ).resolves.toBe(true);
+    await expect(react({ logVerboseMessage })).resolves.toBe(true);
 
-    expect(resolverMocks.resolveSignalApproval).toHaveBeenCalledWith(
+    expect(resolveApproval).toHaveBeenCalledWith(
       expect.objectContaining({
         approvalId: "exec-losing-surface",
         approvalKind: "exec",
@@ -886,91 +316,21 @@ describe("Signal approval reactions", () => {
     expect(logVerboseMessage).not.toHaveBeenCalledWith(
       expect.stringContaining("decision=allow-once"),
     );
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000019",
-        reactionKey: "👍",
-        targetAuthor: "+15550009999",
-      }),
-    ).resolves.toBeNull();
+    await expect(lookup()).resolves.toBeNull();
   });
 
-  it("requires explicit approvers for approval reactions", async () => {
-    await registerSignalApprovalReactionTarget({
-      accountId: "default",
-      conversationKey: "+15551230000",
-      messageId: "1700000000004",
-      approvalId: "exec-1",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once"],
-      targetAuthorKeys: ["+15550009999"],
-      route: approvalRoute,
-      routeAllowed: true,
-    });
-
-    const handled = await maybeResolveSignalApprovalReaction({
+  it.each([
+    { name: "explicit approvers", cfg: { ...sessionConfig, channels: { signal: {} } } },
+    {
+      name: "the current top-level approval route",
       cfg: {
-        channels: {
-          signal: {},
-        },
-        approvals: {
-          exec: {
-            enabled: true,
-            mode: "session",
-          },
-        },
+        ...sessionConfig,
+        approvals: { exec: { ...sessionConfig.approvals.exec, agentFilter: ["other-agent"] } },
       },
-      accountId: "default",
-      conversationKey: "+15551230000",
-      messageId: "1700000000004",
-      reactionKey: "👍",
-      actorId: "+15551230000",
-      targetAuthor: "+15550009999",
-    });
-
-    expect(handled).toBe(true);
-    expect(resolverMocks.resolveSignalApproval).not.toHaveBeenCalled();
-  });
-
-  it("re-checks the top-level approval route before resolving reactions", async () => {
-    await registerSignalApprovalReactionTarget({
-      accountId: "default",
-      conversationKey: "+15551230000",
-      messageId: "1700000000007",
-      approvalId: "exec-1",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once"],
-      targetAuthorKeys: ["+15550009999"],
-      route: approvalRoute,
-      routeAllowed: true,
-    });
-
-    const handled = await maybeResolveSignalApprovalReaction({
-      cfg: {
-        channels: {
-          signal: {
-            allowFrom: ["+15551230000"],
-          },
-        },
-        approvals: {
-          exec: {
-            enabled: true,
-            mode: "session",
-            agentFilter: ["other-agent"],
-          },
-        },
-      },
-      accountId: "default",
-      conversationKey: "+15551230000",
-      messageId: "1700000000007",
-      reactionKey: "👍",
-      actorId: "+15551230000",
-      targetAuthor: "+15550009999",
-    });
-
-    expect(handled).toBe(true);
-    expect(resolverMocks.resolveSignalApproval).not.toHaveBeenCalled();
+    },
+  ])("requires $name before resolving reactions", async ({ cfg }) => {
+    await registerTarget({ allowedDecisions: ["allow-once"] });
+    await expect(react({ cfg })).resolves.toBe(true);
+    expect(resolveApproval).not.toHaveBeenCalled();
   });
 });

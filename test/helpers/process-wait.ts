@@ -1,76 +1,103 @@
-import type { spawn } from "node:child_process";
 import fs, { existsSync, readFileSync } from "node:fs";
 import { isPidAlive } from "../../src/shared/pid-alive.js";
 
 export { isPidAlive as isProcessAlive };
 
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
+type AbortEventPolicy = "recheck" | "reject";
+
+function waitForObservation<T>(
+  observe: () => T | undefined,
+  signal: AbortSignal,
+  diagnostic: string,
+  delay?: (ms: number) => Promise<unknown>,
+  abortEventPolicy: AbortEventPolicy = "recheck",
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const cleanup = () => {
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    };
+    const fail = (error: unknown) => {
+      cleanup();
+      reject(error instanceof Error ? error : new Error(diagnostic, { cause: error }));
+    };
+    const abort = () => fail(new Error(diagnostic, { cause: signal.reason }));
+    function check() {
+      if (settled) {
+        return;
+      }
+      try {
+        // A producer can finish before an aborted worker wakes. Observe once more first.
+        const value = observe();
+        if (value !== undefined) {
+          cleanup();
+          resolve(value);
+        } else if (signal.aborted) {
+          abort();
+        } else if (delay) {
+          // The injected delay owns its timer; its late completion cannot restart polling.
+          void delay(5).then(check, fail);
+        } else {
+          timer = setTimeout(check, 5);
+        }
+      } catch (error) {
+        fail(error);
+      }
+    }
+    const onAbort = abortEventPolicy === "reject" ? abort : check;
+    signal.addEventListener("abort", onAbort, { once: true });
+    check();
   });
 }
 
-export async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  // Observe readiness before the deadline: a delayed wake can outlive both.
-  while (!existsSync(filePath)) {
-    if (Date.now() >= deadlineAt) {
-      throw new Error(`timeout waiting for ${filePath}`);
-    }
-    await sleep(5);
-  }
+export async function waitForFile(filePath: string, signal: AbortSignal): Promise<void> {
+  await waitForObservation(
+    () => (existsSync(filePath) ? true : undefined),
+    signal,
+    `aborted waiting for ${filePath}`,
+  );
 }
 
 // writeFileSync can expose an open-truncate window, so wait for valid contents, not existence.
 // Inject a real delay when the caller controls execution deadlines with fake timers.
-export async function waitForPidFile(
+export function waitForPidFile(
   filePath: string,
-  timeoutMs: number,
-  delay: (ms: number) => Promise<unknown> = sleep,
+  signal: AbortSignal,
+  delay?: (ms: number) => Promise<unknown>,
 ): Promise<number> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (true) {
-    if (existsSync(filePath)) {
-      const pid = Number.parseInt(readFileSync(filePath, "utf8"), 10);
-      if (Number.isInteger(pid) && pid > 0) {
-        return pid;
+  return waitForObservation(
+    () => {
+      if (existsSync(filePath)) {
+        const pid = Number.parseInt(readFileSync(filePath, "utf8"), 10);
+        if (Number.isInteger(pid) && pid > 0) {
+          return pid;
+        }
       }
-    }
-    if (Date.now() >= deadlineAt) {
-      throw new Error(`timeout waiting for pid in ${filePath}`);
-    }
-    await delay(5);
-  }
+      return undefined;
+    },
+    signal,
+    `aborted waiting for pid in ${filePath}`,
+    delay,
+  );
 }
 
-export async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!isPidAlive(pid)) {
-      return;
-    }
-    await sleep(5);
-  }
-  // A delayed worker wake can outlive both the deadline and the process.
-  if (isPidAlive(pid)) {
-    throw new Error(`process still alive: ${pid}`);
-  }
-}
-
-export function waitForChildClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs = 5_000,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error("child did not close before timeout")),
-      timeoutMs,
-    );
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
+// An already-aborted signal still gets the initial observation. "reject" skips
+// only an abort event's final observation for foreign-process cleanup.
+export async function waitForDead(
+  pid: number,
+  signal: AbortSignal,
+  abortEventPolicy: AbortEventPolicy = "recheck",
+): Promise<void> {
+  await waitForObservation(
+    () => (!isPidAlive(pid) ? true : undefined),
+    signal,
+    `process still alive: ${pid}`,
+    undefined,
+    abortEventPolicy,
+  );
 }
 
 export function waitForFixtureFile(

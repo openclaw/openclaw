@@ -3,7 +3,7 @@ summary: "Wait on a pull request head, recover a stuck run, and clear the eviden
 title: "Watch a CI run"
 read_when:
   - You are debugging a failing GitHub Actions check
-  - You need to rerun or recover a pull request run
+  - You need to diagnose failures or recover a pull request run
 ---
 
 ## Watching pull request CI
@@ -83,6 +83,13 @@ after CI succeeds still collect complete details, reporting the effective
 the PR lifecycle and head; a summary success also requires the aggregate to remain
 successful after observing the attached run.
 
+After a poll needs detailed failure analysis, the next poll can request details
+directly instead of first repeating the summary query. This remembers only the
+query shape: every poll still collects fresh evidence, and reads made during
+history or queued-job reconciliation still require a new observation. Incomplete
+detailed responses remain blocking and are retried; missing contexts cannot be
+treated as an empty successful set.
+
 If the primary GraphQL budget is exhausted, the watcher switches to REST for the
 rest of that invocation. It collects check runs, latest status contexts, and
 workflow identities with complete, bounded pagination, then revalidates the PR.
@@ -90,6 +97,8 @@ REST uses more requests and response data; the normal path retains the compact
 GraphQL query. In REST mode the raw aggregate and counts are derived from the
 collected checks. Missing or ambiguous workflow identity never permits dropping
 a check, and GitHub's check-suite limit cannot silently turn a partial list green.
+When those collected rows show a failure, REST adds workflow identity to that
+same observation instead of downloading the check and status pages again.
 Secondary throttling, authentication failures, malformed responses, and transport
 errors do not trigger this fallback or change the CLI's authentication route.
 
@@ -167,10 +176,32 @@ admission.
 only reconciles that outcome, even if the original body file was removed; it
 never dispatches another request or changes an accepted message.
 
+### Fix failed tests locally
+
+PR CI runs the broad suites to completion and publishes a failure table comparing
+failed jobs with scheduled `main` CI. After a run fails:
+
+1. Run `pnpm test:ci-failed <pr>` to read the failed jobs, their
+   pre-existing/new/unknown classification, failed test files, and one local
+   rerun command.
+2. Fix new failures and investigate unknown ones. Use
+   `pnpm test:ci-failed <pr> --run` until the selected tests pass locally.
+3. Push the repair once. Let the new head's PR CI provide broad proof.
+
+Do not run the full local suite or use `gh run rerun` to chase green. Pre-existing
+failures follow the
+[failure-table landing rule](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-pr-maintainer/references/landing.md#red-main-and-inherited-failures):
+matching signatures provide attribution; a job-name-only match still requires
+comparing the failed tests with the main run. The table does not waive a gate.
+See [failed CI test selection](/reference/scripts/pr-tooling#rerun-failed-ci-tests)
+for run targets, non-Vitest jobs, and options.
+
 ### Recover an existing PR run first
 
 For an existing terminal PR run with a diagnosed infrastructure failure or
-cancellation, prefer one failed-job retry over a new full-CI dispatch:
+cancellation that requires infrastructure recovery, prefer one failed-job retry
+over a new full-CI dispatch. This is infrastructure recovery after identifying
+the cause, not a retry of failed tests to obtain green:
 
 ```bash
 gh run rerun <original-run-id> --failed --repo openclaw/openclaw
@@ -216,6 +247,11 @@ redacted log, or artifact link. The body provides intent and useful validation;
 reviewers inspect the code, tests, and CI to assess correctness.
 
 When the check fails, update the PR body instead of pushing another code commit.
+
+## Adaptive test observations
+
+See [adaptive CI experiments](/ci/adaptive-testing) to export test observations
+from resource-reporter logs without changing which tests CI runs.
 
 ## Related
 

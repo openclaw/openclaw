@@ -1,4 +1,3 @@
-// Mattermost plugin module implements doctor behavior.
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import {
   buildMutableAllowEntryDetector,
@@ -18,7 +17,7 @@ const collectMattermostMutableAllowlistWarnings =
   createDangerousNameMatchingMutableAllowlistWarningCollector({
     channel: "mattermost",
     detector: isMattermostMutableAllowEntry,
-    collectLists: (scope) => collectStandardAllowlistLists(scope),
+    collectLists: collectStandardAllowlistLists,
   });
 
 export const mattermostDoctor: ChannelDoctorAdapter = {

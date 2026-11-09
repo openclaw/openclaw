@@ -1,13 +1,63 @@
-// Covers provider catalog entries derived from plugin metadata.
+import { normalizeModelCatalogProviderRows } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import {
-  buildPairedProviderApiKeyCatalog,
+  buildEffectiveManifestProviderConfig,
+  buildManifestModelProviderConfig,
+  buildManifestProviderCatalogFamily,
   buildSingleProviderApiKeyCatalog,
   findCatalogTemplate,
 } from "./provider-catalog.js";
-import type { ProviderCatalogContext } from "./types.js";
+
+describe("manifest model projection", () => {
+  const providerId = "family-host";
+  const catalog: ModelCatalogProvider = {
+    baseUrl: "http://127.0.0.1:1234/v1",
+    api: "openai-completions",
+    family: "meta",
+    models: [
+      {
+        id: "compact-chat",
+        contextWindow: 32_768,
+        maxTokens: 8192,
+        parameterCount: 4_000_000_000,
+      },
+      { id: "declares", family: "zai", contextWindow: 32_768, maxTokens: 8192 },
+    ],
+  };
+
+  it.each([
+    ["raw manifest", () => buildManifestModelProviderConfig({ providerId, catalog }).models],
+    [
+      "effective manifest",
+      () =>
+        buildEffectiveManifestProviderConfig(
+          normalizeModelCatalogProviderRows({
+            provider: providerId,
+            providerCatalog: catalog,
+            source: "manifest",
+          }),
+        )?.models,
+    ],
+    [
+      "family augmentation",
+      () =>
+        buildManifestProviderCatalogFamily({
+          surfaces: [{ id: providerId, label: "Family host", catalog }],
+        }).augmentModelCatalog(),
+    ],
+  ])("keeps parameters and declared or inherited families through %s", (_name, project) => {
+    expect(project()).toEqual([
+      expect.objectContaining({
+        id: "compact-chat",
+        parameterCount: 4_000_000_000,
+        family: "meta",
+      }),
+      expect.objectContaining({ id: "declares", family: "zai" }),
+    ]);
+  });
+});
 
 function createProviderConfig(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
   return {
@@ -16,48 +66,6 @@ function createProviderConfig(overrides: Partial<ModelProviderConfig> = {}): Mod
     models: [],
     ...overrides,
   };
-}
-
-function createCatalogContext(params: {
-  config?: OpenClawConfig;
-  apiKeys?: Record<string, string | undefined>;
-}): ProviderCatalogContext {
-  return {
-    config: params.config ?? {},
-    env: {},
-    resolveProviderApiKey: (providerId) => ({
-      apiKey: providerId ? params.apiKeys?.[providerId] : undefined,
-    }),
-    resolveProviderAuth: (providerId) => ({
-      apiKey: providerId ? params.apiKeys?.[providerId] : undefined,
-      mode: providerId && params.apiKeys?.[providerId] ? "api_key" : "none",
-      source: providerId && params.apiKeys?.[providerId] ? "env" : "none",
-    }),
-  };
-}
-
-function expectCatalogTemplateMatch(params: {
-  entries: Parameters<typeof findCatalogTemplate>[0]["entries"];
-  providerId: string;
-  templateIds: readonly string[];
-  expected: ReturnType<typeof findCatalogTemplate>;
-}) {
-  expect(
-    findCatalogTemplate({
-      entries: params.entries,
-      providerId: params.providerId,
-      templateIds: params.templateIds,
-    }),
-  ).toEqual(params.expected);
-}
-
-function expectPairedCatalogProviders(
-  result: Awaited<ReturnType<typeof buildPairedProviderApiKeyCatalog>>,
-  expected: Record<string, ModelProviderConfig & { apiKey: string }>,
-) {
-  expect(result).toEqual({
-    providers: expected,
-  });
 }
 
 describe("findCatalogTemplate", () => {
@@ -76,12 +84,8 @@ describe("findCatalogTemplate", () => {
     ).toBe(preferred);
   });
 
-  const sparseTemplateIds: string[] = [];
-  sparseTemplateIds.length = 1;
-
   it.each([
     { name: "empty", templateIds: [], matches: false },
-    { name: "sparse", templateIds: sparseTemplateIds, matches: false },
     { name: "missing", templateIds: ["missing"], matches: false },
     { name: "explicitly blank", templateIds: [""], matches: true },
   ])("preserves $name template selection", ({ templateIds, matches }) => {
@@ -92,198 +96,54 @@ describe("findCatalogTemplate", () => {
   });
 });
 
-function createSingleCatalogProvider(overrides: Partial<ModelProviderConfig> & { apiKey: string }) {
-  return {
-    provider: {
-      ...createProviderConfig(overrides),
-      apiKey: overrides.apiKey,
-    },
-  };
-}
-
-function createPairedCatalogProviders(
-  apiKey: string,
-  overrides: Partial<ModelProviderConfig> = {},
-) {
-  return {
-    alpha: {
-      ...createProviderConfig(overrides),
-      apiKey,
-    },
-    beta: {
-      ...createProviderConfig(overrides),
-      apiKey,
-    },
-  };
-}
-
-async function expectSingleCatalogResult(params: {
-  ctx: ProviderCatalogContext;
-  providerId?: string;
-  allowExplicitBaseUrl?: boolean;
-  buildProvider?: () => ModelProviderConfig;
-  expected: Awaited<ReturnType<typeof buildSingleProviderApiKeyCatalog>>;
-}) {
-  const result = await buildSingleProviderApiKeyCatalog({
-    ctx: params.ctx,
-    providerId: params.providerId ?? "test-provider",
-    buildProvider: params.buildProvider ?? (() => createProviderConfig()),
-    allowExplicitBaseUrl: params.allowExplicitBaseUrl,
-  });
-
-  expect(result).toEqual(params.expected);
-}
-
-async function expectPairedCatalogResult(params: {
-  ctx: ProviderCatalogContext;
-  expected: Record<string, ModelProviderConfig & { apiKey: string }>;
-}) {
-  const result = await buildPairedProviderApiKeyCatalog({
-    ctx: params.ctx,
-    providerId: "test-provider",
-    buildProviders: async () => ({
-      alpha: createProviderConfig(),
-      beta: createProviderConfig(),
-    }),
-  });
-
-  expectPairedCatalogProviders(result, params.expected);
-}
-
 describe("buildSingleProviderApiKeyCatalog", () => {
+  it("does not alias provider IDs when selecting templates", () => {
+    expect(
+      findCatalogTemplate({
+        entries: [{ provider: "z.ai", id: "glm-4.7" }],
+        providerId: "z-ai",
+        templateIds: ["GLM-4.7"],
+      }),
+    ).toBeUndefined();
+  });
   it.each([
-    {
-      name: "matches provider templates case-insensitively",
-      entries: [
-        { provider: "Demo Provider", id: "demo-model" },
-        { provider: "other", id: "fallback" },
-      ],
-      providerId: "demo provider",
-      templateIds: ["missing", "DEMO-MODEL"],
-      expected: { provider: "Demo Provider", id: "demo-model" },
-    },
-    {
-      name: "does not match provider templates across provider id variants",
-      entries: [
-        { provider: "z.ai", id: "glm-4.7" },
-        { provider: "other", id: "fallback" },
-      ],
-      providerId: "z-ai",
-      templateIds: ["GLM-4.7"],
-      expected: undefined,
-    },
-  ] as const)("$name", ({ entries, providerId, templateIds, expected }) => {
-    expectCatalogTemplateMatch({
-      entries,
+    ["missing key", "test-provider", undefined, undefined, undefined],
+    ["key injection", "test-provider", "secret-key", undefined, "https://default.example/v1"],
+    [
+      "explicit URL",
+      "test-provider",
+      "secret-key",
+      " https://override.example/v1/ ",
+      "https://override.example/v1/",
+    ],
+    [
+      "exact provider ID",
+      "z.ai",
+      "secret-key",
+      " https://api.z.ai/custom ",
+      "https://api.z.ai/custom",
+    ],
+  ] as const)("%s", async (_name, providerId, apiKey, explicitUrl, expectedUrl) => {
+    const result = await buildSingleProviderApiKeyCatalog({
+      ctx: {
+        config: explicitUrl
+          ? { models: { providers: { [providerId]: { baseUrl: explicitUrl, models: [] } } } }
+          : {},
+        env: {},
+        resolveProviderApiKey: (id) => ({ apiKey: id === providerId ? apiKey : undefined }),
+        resolveProviderAuth: () => {
+          throw new Error("Catalog must use API-key resolution");
+        },
+      },
       providerId,
-      templateIds,
-      expected,
+      allowExplicitBaseUrl: explicitUrl ? true : undefined,
+      buildProvider: () =>
+        createProviderConfig(
+          providerId === "z.ai" ? { baseUrl: "https://default.example/zai" } : {},
+        ),
     });
-  });
-  it.each([
-    {
-      name: "returns null when api key is missing",
-      ctx: createCatalogContext({}),
-      expected: null,
-    },
-    {
-      name: "adds api key to the built provider",
-      ctx: createCatalogContext({
-        apiKeys: { "test-provider": "secret-key" },
-      }),
-      expected: createSingleCatalogProvider({
-        apiKey: "secret-key",
-      }),
-    },
-    {
-      name: "prefers explicit base url when allowed",
-      ctx: createCatalogContext({
-        apiKeys: { "test-provider": "secret-key" },
-        config: {
-          models: {
-            providers: {
-              "test-provider": {
-                baseUrl: " https://override.example/v1/ ",
-                models: [],
-              },
-            },
-          },
-        },
-      }),
-      allowExplicitBaseUrl: true,
-      expected: createSingleCatalogProvider({
-        baseUrl: "https://override.example/v1/",
-        apiKey: "secret-key",
-      }),
-    },
-    {
-      name: "matches explicit base url config for exact provider ids",
-      ctx: createCatalogContext({
-        apiKeys: { "z.ai": "secret-key" },
-        config: {
-          models: {
-            providers: {
-              "z.ai": {
-                baseUrl: " https://api.z.ai/custom ",
-                models: [],
-              },
-            },
-          },
-        },
-      }),
-      allowExplicitBaseUrl: true,
-      expected: createSingleCatalogProvider({
-        baseUrl: "https://api.z.ai/custom",
-        apiKey: "secret-key",
-      }),
-      providerId: "z.ai",
-      buildProvider: () => createProviderConfig({ baseUrl: "https://default.example/zai" }),
-    },
-  ] as const)(
-    "$name",
-    async ({ ctx, allowExplicitBaseUrl, expected, providerId, buildProvider }) => {
-      await expectSingleCatalogResult({
-        ctx,
-        ...(providerId ? { providerId } : {}),
-        allowExplicitBaseUrl,
-        ...(buildProvider ? { buildProvider } : {}),
-        expected,
-      });
-    },
-  );
-
-  it("adds api key to each paired provider", async () => {
-    await expectPairedCatalogResult({
-      ctx: createCatalogContext({
-        apiKeys: { "test-provider": "secret-key" },
-      }),
-      expected: createPairedCatalogProviders("secret-key"),
-    });
-  });
-
-  it("omits unreadable paired provider catalog entries", async () => {
-    const unreadableProvider = new Proxy(createProviderConfig(), {
-      ownKeys() {
-        throw new Error("mockplugin provider config keys failed");
-      },
-    });
-    const result = await buildPairedProviderApiKeyCatalog({
-      ctx: createCatalogContext({
-        apiKeys: { fuzzplugin: "secret-key" },
-      }),
-      providerId: "fuzzplugin",
-      buildProviders: async () =>
-        ({
-          readable: createProviderConfig({ baseUrl: "https://fuzzplugin.test/v1" }),
-          unreadable: unreadableProvider,
-        }) as Record<string, ModelProviderConfig>,
-    });
-
-    expectPairedCatalogProviders(result, {
-      readable: {
-        ...createProviderConfig({ baseUrl: "https://fuzzplugin.test/v1" }),
-        apiKey: "secret-key",
-      },
-    });
+    expect(result).toEqual(
+      apiKey ? { provider: createProviderConfig({ baseUrl: expectedUrl, apiKey }) } : null,
+    );
   });
 });

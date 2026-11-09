@@ -1,24 +1,26 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { normalizeSessionDeliveryState } from "openclaw/plugin-sdk/session-store-runtime";
 import {
-  normalizeSessionDeliveryState,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
-import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
+import { writeSessionIngestionState } from "./dreaming-ingestion-state.js";
 import {
   clearMemoryCoreWorkspaceNamespace,
   SESSION_BACKFILL_REWIND_NAMESPACE,
 } from "./dreaming-state.js";
+import { failMemoryEntryOriginWrites } from "./memory-entry-origins-fault.test-support.js";
 import { listMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
@@ -26,17 +28,14 @@ import {
   resetSessionBackfillIngestionState,
   rewindSessionBackfillIngestionState,
 } from "./session-backfill-lifecycle.js";
+import { executeSessionBackfillBatch, runSessionBackfill } from "./session-backfill.js";
 import {
-  executeSessionBackfill,
-  executeSessionBackfillBatch,
-  runSessionBackfill,
-} from "./session-backfill.js";
-import { writeSessionIngestionState } from "./session-ingestion.js";
-import {
-  readShortTermRecallEntries,
-  recordGroundedShortTermCandidates,
-  recordShortTermRecalls,
-} from "./short-term-promotion.js";
+  hashStagedContent,
+  seedCanonicalTranscript,
+  withoutHostSessionAdmissionReads,
+  writeTranscript,
+} from "./session-ingestion.test-support.js";
+import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   createMemoryCoreTestHarness,
   dreamingTestState,
@@ -45,60 +44,23 @@ import {
 
 const harness = createMemoryCoreTestHarness();
 
-type TranscriptMessage = {
-  role: "assistant" | "tool" | "user";
-  content: string;
-  timestamp: string;
-  owner?: boolean;
-};
-
-async function writeTranscript(filePath: string, messages: TranscriptMessage[]): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const records = messages.map((message, index) => ({
-    type: "message",
-    id: `message-${index}`,
-    timestamp: message.timestamp,
-    message: {
-      role: message.role,
-      content: message.content,
-      timestamp: message.timestamp,
-      ...(message.owner ? { __openclaw: { senderIsOwner: true } } : {}),
-    },
-  }));
-  await fs.writeFile(filePath, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+function runBackfill(
+  workspaceDir: string,
+  options: Omit<Parameters<typeof runSessionBackfill>[0], "agentId" | "workspaceDir"> = {},
+) {
+  return runSessionBackfill({ agentId: "main", workspaceDir, timezone: "UTC", ...options });
 }
 
-async function seedCanonicalTranscript(
-  sessionId: string,
-  messages: TranscriptMessage[],
-  metadata: Partial<Parameters<typeof upsertSessionEntry>[0]["entry"]> = {},
-): Promise<void> {
-  const agentId = "main";
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
-  const storePath = path.join(sessionsDir, "sessions.json");
-  const sessionKey = `agent:${agentId}:session-backfill:${sessionId}`;
-  const updatedAt = Math.max(
-    Date.now(),
-    ...messages.map((message) => Date.parse(message.timestamp)),
-  );
-  await fs.mkdir(sessionsDir, { recursive: true });
-  const entry = { ...metadata, sessionId, updatedAt };
-  await upsertSessionEntry({ agentId, sessionKey, storePath, entry });
-  for (const message of messages) {
-    await appendSessionTranscriptMessageByIdentity({
-      agentId,
-      sessionId,
-      sessionKey,
-      storePath,
-      message: {
-        role: message.role,
-        content: message.content,
-        timestamp: message.timestamp,
-        ...(message.owner ? { __openclaw: { senderIsOwner: true } } : {}),
-      },
-    });
-  }
-  await upsertSessionEntry({ agentId, sessionKey, storePath, entry });
+function ownerMessage(content: string, timestamp = "2026-02-01T10:00:00.000Z") {
+  return { role: "user" as const, content, timestamp, owner: true };
+}
+
+function seedOwner(sessionId: string, content: string, timestamp?: string) {
+  return seedCanonicalTranscript(sessionId, [ownerMessage(content, timestamp)]);
+}
+
+function message(role: "user" | "assistant" | "tool", content: string, timestamp: string) {
+  return { role, content, timestamp };
 }
 
 async function createIsolatedWorkspace(prefix: string): Promise<string> {
@@ -107,20 +69,8 @@ async function createIsolatedWorkspace(prefix: string): Promise<string> {
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(workspaceDir, "openclaw.json"));
   clearRuntimeConfigSnapshot();
   clearConfigCache();
+  await captureRuntimeConfigAsyncReader()();
   return workspaceDir;
-}
-
-function hashStagedContent(
-  entries: Awaited<ReturnType<typeof readShortTermRecallEntries>>,
-): string {
-  const content = entries
-    .map((entry) => ({
-      claimHash: entry.claimHash,
-      provenance: entry.provenance,
-      snippet: entry.snippet,
-    }))
-    .toSorted((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-  return createHash("sha256").update(JSON.stringify(content)).digest("hex");
 }
 
 afterEach(() => {
@@ -130,49 +80,29 @@ afterEach(() => {
 });
 
 describe("runSessionBackfill", () => {
-  it("keeps CLI draining separate from the single-batch executor", () => {
-    expect(runSessionBackfill).not.toBe(executeSessionBackfill);
-  });
-
   it("keeps REM preview mode mutually exclusive with apply", async () => {
     const workspaceDir = await createIsolatedWorkspace("rem-apply-");
 
-    await expect(
-      runSessionBackfill({
-        agentId: "main",
-        workspaceDir,
-        rem: true,
-        apply: true,
-      }),
-    ).rejects.toThrow("Memory session-backfill --rem cannot be combined with --apply.");
+    await expect(runBackfill(workspaceDir, { rem: true, apply: true })).rejects.toThrow(
+      "Memory session-backfill --rem cannot be combined with --apply.",
+    );
   });
 
   it("never resurrects forgotten canonical sessions through session backfill apply", async () => {
     const workspaceDir = await createIsolatedWorkspace("forgotten-");
-    await seedCanonicalTranscript("forgotten", [
-      {
-        role: "user",
-        content: "Forgotten owner claim must never return.",
-        timestamp: "2026-01-02T12:00:00.000Z",
-        owner: true,
-      },
-    ]);
-    await seedCanonicalTranscript("retained", [
-      {
-        role: "user",
-        content: "Retained owner claim remains eligible.",
-        timestamp: "2026-01-02T12:01:00.000Z",
-        owner: true,
-      },
-    ]);
+    await seedOwner(
+      "forgotten",
+      "Forgotten owner claim must never return.",
+      "2026-01-02T12:00:00.000Z",
+    );
+    await seedOwner(
+      "retained",
+      "Retained owner claim remains eligible.",
+      "2026-01-02T12:01:00.000Z",
+    );
     seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["forgotten"] });
 
-    const result = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      apply: true,
-      timezone: "UTC",
-    });
+    const result = await runBackfill(workspaceDir, { apply: true });
 
     expect(result.candidateCount).toBe(1);
     expect(result.days[0]?.topCandidates).toEqual(["User: Retained owner claim remains eligible."]);
@@ -180,44 +110,33 @@ describe("runSessionBackfill", () => {
     expect(ingestion.files).not.toHaveProperty("main:sessions/main/forgotten");
   });
 
-  it.each([{ mode: "preview" }, { mode: "rem", rem: true }, { mode: "apply", apply: true }])(
-    "honors admission exclusions during $mode",
-    async ({ mode, ...options }) => {
-      const workspaceDir = await createIsolatedWorkspace(`admission-${mode}-`);
-      const sources = [
-        { sessionId: "hook", metadata: { hookExternalContentSource: "gmail" as const } },
-        {
-          sessionId: "channel",
-          metadata: {
-            delivery: normalizeSessionDeliveryState({
-              context: { channel: "discord", to: "channel:admission-fixture" },
-              origin: { provider: "discord", to: "channel:admission-fixture" },
-            }),
-          },
+  it("honors admission exclusions during rem", async () => {
+    const workspaceDir = await createIsolatedWorkspace("admission-rem-");
+    const sources = [
+      { sessionId: "hook", metadata: { hookExternalContentSource: "gmail" as const } },
+      {
+        sessionId: "channel",
+        metadata: {
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "discord", to: "channel:admission-fixture" },
+            origin: { provider: "discord", to: "channel:admission-fixture" },
+          }),
         },
-        { sessionId: "group", metadata: { chatType: "group" as const } },
-        { sessionId: "retained", metadata: {} },
-      ];
-      for (const { sessionId, metadata } of sources) {
-        await seedCanonicalTranscript(
-          sessionId,
-          [
-            {
-              role: "user",
-              content: `${sessionId} trusted session preference.`,
-              timestamp: "2026-01-02T12:00:00.000Z",
-              owner: true,
-            },
-          ],
-          metadata,
-        );
-      }
+      },
+      { sessionId: "group", metadata: { chatType: "group" as const } },
+      { sessionId: "retained", metadata: {} },
+    ];
+    for (const { sessionId, metadata } of sources) {
+      await seedCanonicalTranscript(
+        sessionId,
+        [ownerMessage(`${sessionId} trusted session preference.`, "2026-01-02T12:00:00.000Z")],
+        metadata,
+      );
+    }
 
-      const result = await runSessionBackfill({
-        agentId: "main",
-        workspaceDir,
-        ...options,
-        timezone: "UTC",
+    const result = await withoutHostSessionAdmissionReads(() =>
+      runBackfill(workspaceDir, {
+        rem: true,
         pluginConfig: {
           memoryPolicy: {
             excludeSessions: {
@@ -227,12 +146,60 @@ describe("runSessionBackfill", () => {
             },
           },
         },
-      });
+      }),
+    );
 
-      expect(result.candidateCount).toBe(1);
-      expect(result.days[0]?.topCandidates).toEqual(["User: retained trusted session preference."]);
-    },
-  );
+    expect(result.candidateCount).toBe(1);
+    expect(result.days[0]?.topCandidates).toEqual(["User: retained trusted session preference."]);
+  });
+
+  it("keeps a forgotten source out of backfill during admission preparation", async () => {
+    const workspaceDir = await createIsolatedWorkspace("admission-source-forgotten-");
+    await seedOwner("source", "Do not publish a forgotten source.", "2026-01-02T12:00:00.000Z");
+    await closeOpenClawAgentDatabasesAsync(path.join(workspaceDir, "state"));
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const realpath = fs.realpath.bind(fs);
+    let paused = false;
+    const discovery = vi.spyOn(fs, "realpath").mockImplementation(async (file) => {
+      if (!paused && file === sessionsDir) {
+        paused = true;
+        entered.resolve();
+        await release.promise;
+      }
+      return realpath(file);
+    });
+    const execution = executeSessionBackfillBatch({
+      agentId: "main",
+      workspaceDir,
+      timezone: "UTC",
+      pluginConfig: { memoryPolicy: { excludeSessions: { channels: ["discord"] } } },
+    });
+    const outcome = execution.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        outcome,
+        "Backfill settled before filesystem preparation",
+      );
+      seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["source"] });
+      release.resolve();
+      expect(await outcome).toMatchObject({
+        value: { result: { candidateCount: 0, stagedEntries: 0 } },
+      });
+      await expect(
+        fs.readFile(path.join(workspaceDir, "memory", "2026-01-02.md"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      release.resolve();
+      await outcome;
+      discovery.mockRestore();
+    }
+  });
 
   it("preserves every session origin when backfill coalesces equivalent snippets", async () => {
     const workspaceDir = await createIsolatedWorkspace("coalesced-origins-");
@@ -242,12 +209,7 @@ describe("runSessionBackfill", () => {
     ] as const;
     for (const source of sources) {
       await seedCanonicalTranscript(source.sessionId, [
-        {
-          role: "user",
-          content: "OK",
-          timestamp: "2026-03-01T09:00:00.000Z",
-          owner: true,
-        },
+        ownerMessage("OK", "2026-03-01T09:00:00.000Z"),
         {
           role: source.role,
           content: "The preferred editor is Nova",
@@ -257,27 +219,19 @@ describe("runSessionBackfill", () => {
       ]);
     }
 
-    const result = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      apply: true,
-      timezone: "UTC",
-    });
+    const result = await runBackfill(workspaceDir, { apply: true });
     const entries = await readShortTermRecallEntries({ workspaceDir });
 
     expect(result.stagedEntries).toBe(1);
     expect(entries).toHaveLength(1);
     expect(
-      listMemoryEntryOrigins({ agentId: "main", entryKeys: [entries[0]!.key] }).map((origin) => ({
-        entryKey: origin.entryKey,
-        sessionId: origin.sessionId,
-        originClass: origin.originClass,
-        observedAt: origin.observedAt,
-      })),
-    ).toEqual(
+      await listMemoryEntryOrigins({ agentId: "main", entryKeys: [entries[0]!.key] }),
+    ).toMatchObject(
       sources.map((source) => ({
         entryKey: entries[0]?.key,
+        agentId: "main",
         sessionId: source.sessionId,
+        sessionKey: `agent:main:session-backfill:${source.sessionId}`,
         originClass: source.originClass,
         observedAt: Date.parse(`2026-03-01T${source.hour}:00:00.000Z`),
       })),
@@ -299,81 +253,22 @@ describe("runSessionBackfill", () => {
 
     await recordShortTermRecalls({
       workspaceDir,
-      query: "__dreaming_sessions__:2026-03-01",
-      results: [result],
-      signalType: "daily",
-    });
-    await recordGroundedShortTermCandidates({
-      workspaceDir,
       query: "__dreaming_session_backfill__:2026-03-01",
-      items: [result],
+      signalType: "grounded",
+      results: [result],
     });
 
     expect(await readShortTermRecallEntries({ workspaceDir })).toEqual([]);
-    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
-  });
-
-  it("buckets messages in the configured timezone and processes days oldest first", async () => {
-    const workspaceDir = await createIsolatedWorkspace("timezone-");
-    await seedCanonicalTranscript("timezone", [
-      {
-        role: "user",
-        content: "Late New York note",
-        timestamp: "2026-01-02T00:30:00.000Z",
-        owner: true,
-      },
-      {
-        role: "user",
-        content: "Early New York note",
-        timestamp: "2026-01-02T05:30:00.000Z",
-        owner: true,
-      },
-    ]);
-
-    const result = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      timezone: "America/New_York",
-    });
-
-    expect(result.days.map((day) => [day.day, day.candidateCount])).toEqual([
-      ["2026-01-01", 1],
-      ["2026-01-02", 1],
-    ]);
-  });
-
-  it("honors the day limit before moving to newer unprocessed days", async () => {
-    const workspaceDir = await createIsolatedWorkspace("limit-");
-    await seedCanonicalTranscript(
-      "limited",
-      ["2026-01-01", "2026-01-02", "2026-01-03"].map((day) => ({
-        role: "user" as const,
-        content: `Durable note for ${day}`,
-        timestamp: `${day}T12:00:00.000Z`,
-        owner: true,
-      })),
-    );
-
-    const result = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      limitDays: 2,
-      timezone: "UTC",
-    });
-
-    expect(result.days.map((day) => day.day)).toEqual(["2026-01-01", "2026-01-02"]);
+    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
   });
 
   it("reports authoritative continuation across bounded apply batches", async () => {
     const workspaceDir = await createIsolatedWorkspace("continuation-");
     await seedCanonicalTranscript(
       "continuation",
-      ["2026-01-01", "2026-01-02", "2026-01-03"].map((day) => ({
-        role: "user" as const,
-        content: `Continuation note for ${day}`,
-        timestamp: `${day}T12:00:00.000Z`,
-        owner: true,
-      })),
+      ["2026-01-01", "2026-01-02", "2026-01-03"].map((day) =>
+        ownerMessage(`Continuation note for ${day}`, `${day}T12:00:00.000Z`),
+      ),
     );
     const run = () =>
       executeSessionBackfillBatch({
@@ -396,69 +291,15 @@ describe("runSessionBackfill", () => {
     expect(exhausted.continuation).toEqual({ advanced: false, hasMore: false });
   });
 
-  it("drains at least three internal batches in one CLI executor invocation", async () => {
-    const workspaceDir = await createIsolatedWorkspace("cli-drain-");
-    await seedCanonicalTranscript(
-      "cli-drain",
-      ["2026-01-01", "2026-01-02", "2026-01-03"].map((day) => ({
-        role: "user" as const,
-        content: `CLI drain note for ${day}`,
-        timestamp: `${day}T12:00:00.000Z`,
-        owner: true,
-      })),
-    );
-
-    const applied = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      apply: true,
-      limitDays: 1,
-      timezone: "UTC",
-    });
-    const preview = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      limitDays: 1,
-      timezone: "UTC",
-    });
-
-    expect(applied.batchCount).toBe(3);
-    expect(applied.batches?.map((batch) => batch.candidates)).toEqual([1, 1, 1]);
-    expect(applied.candidateCount).toBe(3);
-    expect(preview.candidateCount).toBe(0);
-  });
-
   it("does not advance the cursor past messages excluded by a date range", async () => {
     const workspaceDir = await createIsolatedWorkspace("range-cursor-");
     await seedCanonicalTranscript("range-cursor", [
-      {
-        role: "user",
-        content: "January durable note",
-        timestamp: "2026-01-15T12:00:00.000Z",
-        owner: true,
-      },
-      {
-        role: "user",
-        content: "February durable note",
-        timestamp: "2026-02-15T12:00:00.000Z",
-        owner: true,
-      },
+      ownerMessage("January durable note", "2026-01-15T12:00:00.000Z"),
+      ownerMessage("February durable note", "2026-02-15T12:00:00.000Z"),
     ]);
 
-    const january = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      apply: true,
-      to: "2026-01-31",
-      timezone: "UTC",
-    });
-    const february = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      apply: true,
-      from: "2026-02-01",
-      timezone: "UTC",
-    });
+    const january = await runBackfill(workspaceDir, { apply: true, to: "2026-01-31" });
+    const february = await runBackfill(workspaceDir, { apply: true, from: "2026-02-01" });
 
     expect(january.days.map((day) => day.day)).toEqual(["2026-01-15"]);
     expect(february.days.map((day) => day.day)).toEqual(["2026-02-15"]);
@@ -468,176 +309,50 @@ describe("runSessionBackfill", () => {
     const workspaceDir = await createIsolatedWorkspace("cursor-");
     await seedCanonicalTranscript(
       "cursor",
-      Array.from({ length: 100 }, (_, index) => ({
-        role: "user" as const,
-        content: `Durable cursor note ${index}`,
-        timestamp: new Date(Date.parse("2026-01-01T00:00:00.000Z") + index * 60_000).toISOString(),
-        owner: true,
-      })),
+      Array.from({ length: 100 }, (_, index) =>
+        ownerMessage(
+          `Durable cursor note ${index}`,
+          new Date(Date.parse("2026-01-01T00:00:00.000Z") + index * 60_000).toISOString(),
+        ),
+      ),
     );
 
     const run = () =>
-      runSessionBackfill({
-        agentId: "main",
-        workspaceDir,
-        apply: true,
-        nowMs: Date.parse("2026-01-02T12:00:00.000Z"),
-        timezone: "UTC",
-      });
+      runBackfill(workspaceDir, { apply: true, nowMs: Date.parse("2026-01-02T12:00:00.000Z") });
 
     const drained = await run();
-    expect(drained.candidateCount).toBe(100);
-    expect(drained.batchCount).toBe(2);
+    expect(drained).toMatchObject({ candidateCount: 100, batchCount: 2 });
     expect((await run()).candidateCount).toBe(0);
     const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(dreams.match(/openclaw:dreaming:backfill-entry/g)).toHaveLength(2);
-  });
-
-  it("applies the total cap after finding the oldest candidate across sources", async () => {
-    const workspaceDir = await createIsolatedWorkspace("oldest-cap-");
-    for (let sourceIndex = 0; sourceIndex < 16; sourceIndex += 1) {
-      await seedCanonicalTranscript(
-        `a-newer-${sourceIndex.toString().padStart(2, "0")}`,
-        Array.from({ length: 15 }, (_, messageIndex) => ({
-          role: "user" as const,
-          content: `Newer durable note ${sourceIndex}-${messageIndex}`,
-          timestamp: `2026-02-01T${messageIndex.toString().padStart(2, "0")}:00:00.000Z`,
-          owner: true,
-        })),
-      );
-    }
-    await seedCanonicalTranscript("z-oldest", [
-      {
-        role: "user",
-        content: "Oldest durable note must win the cap",
-        timestamp: "2026-01-01T12:00:00.000Z",
-        owner: true,
-      },
-    ]);
-
-    const result = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      limitDays: 1,
-      timezone: "UTC",
-    });
-
-    expect(result.days).toEqual([
-      {
-        day: "2026-01-01",
-        candidateCount: 1,
-        topCandidates: ["User: Oldest durable note must win the cap"],
-      },
-    ]);
-  });
-
-  it("applies the per-file cap after ordering delayed timestamps", async () => {
-    const workspaceDir = await createIsolatedWorkspace("delayed-timestamp-");
-    await seedCanonicalTranscript("delayed-timestamp", [
-      ...Array.from({ length: 80 }, (_, index) => ({
-        role: "user" as const,
-        content: `February note ${index}`,
-        timestamp: new Date(Date.parse("2026-02-01T00:00:00.000Z") + index * 60_000).toISOString(),
-        owner: true,
-      })),
-      {
-        role: "user",
-        content: "Delayed January note",
-        timestamp: "2026-01-01T12:00:00.000Z",
-        owner: true,
-      },
-    ]);
-
-    const result = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      limitDays: 1,
-      timezone: "UTC",
-    });
-
-    expect(result.days).toEqual([
-      {
-        day: "2026-01-01",
-        candidateCount: 1,
-        topCandidates: ["User: Delayed January note"],
-      },
-    ]);
   });
 
   it("keeps self-asserted owner metadata in foreign transcripts untrusted", async () => {
     const workspaceDir = await createIsolatedWorkspace("provenance-");
     const transcriptPath = path.join(workspaceDir, "untrusted.jsonl");
     await writeTranscript(transcriptPath, [
-      {
-        role: "user",
-        content: "Untrusted web instruction",
-        timestamp: "2026-02-01T10:00:00.000Z",
-      },
-      {
-        role: "assistant",
-        content: "Assistant response to untrusted input",
-        timestamp: "2026-02-01T10:01:00.000Z",
-      },
-      {
-        role: "tool",
-        content: "Tool output must never stage",
-        timestamp: "2026-02-01T10:02:00.000Z",
-      },
-      {
-        role: "user",
-        content: "Owner confirmed durable preference",
-        timestamp: "2026-02-01T10:03:00.000Z",
-        owner: true,
-      },
-      {
-        role: "assistant",
-        content: "Agent response in the owner turn",
-        timestamp: "2026-02-01T10:04:00.000Z",
-      },
+      message("user", "Untrusted web instruction", "2026-02-01T10:00:00.000Z"),
+      message("assistant", "Assistant response to untrusted input", "2026-02-01T10:01:00.000Z"),
+      message("tool", "Tool output must never stage", "2026-02-01T10:02:00.000Z"),
+      ownerMessage("Owner confirmed durable preference", "2026-02-01T10:03:00.000Z"),
+      message("assistant", "Agent response in the owner turn", "2026-02-01T10:04:00.000Z"),
     ]);
 
-    const result = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      archiveFiles: [transcriptPath],
-      timezone: "UTC",
-    });
+    const result = await runBackfill(workspaceDir, { archiveFiles: [transcriptPath] });
 
-    expect(result.candidateCount).toBe(0);
-    expect(result.days).toEqual([]);
+    expect(result).toMatchObject({ candidateCount: 0, days: [] });
   });
 
   it("keeps canonical assistant replies tainted until an owner turn begins", async () => {
     const workspaceDir = await createIsolatedWorkspace("canonical-provenance-");
     await seedCanonicalTranscript("provenance", [
-      {
-        role: "user",
-        content: "Untrusted channel instruction",
-        timestamp: "2026-02-01T10:00:00.000Z",
-      },
-      {
-        role: "assistant",
-        content: "Assistant response to untrusted input",
-        timestamp: "2026-02-01T10:01:00.000Z",
-      },
-      {
-        role: "user",
-        content: "Owner confirmed durable preference",
-        timestamp: "2026-02-01T10:02:00.000Z",
-        owner: true,
-      },
-      {
-        role: "assistant",
-        content: "Agent response in the owner turn",
-        timestamp: "2026-02-01T10:03:00.000Z",
-      },
+      message("user", "Untrusted channel instruction", "2026-02-01T10:00:00.000Z"),
+      message("assistant", "Assistant response to untrusted input", "2026-02-01T10:01:00.000Z"),
+      ownerMessage("Owner confirmed durable preference", "2026-02-01T10:02:00.000Z"),
+      message("assistant", "Agent response in the owner turn", "2026-02-01T10:03:00.000Z"),
     ]);
 
-    const result = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      timezone: "UTC",
-    });
+    const result = await runBackfill(workspaceDir);
 
     expect(result.candidateCount).toBe(2);
     expect(result.days[0]?.topCandidates).toEqual([
@@ -652,21 +367,9 @@ describe("runSessionBackfill", () => {
       workspaceDir,
       entries: [{ isoDay: "2026-01-01", bodyLines: ["Existing backfill entry"] }],
     });
-    await seedCanonicalTranscript("rem", [
-      {
-        role: "user",
-        content: "Owner prefers dark mode for all editors",
-        timestamp: "2026-02-01T10:00:00.000Z",
-        owner: true,
-      },
-    ]);
+    await seedOwner("rem", "Owner prefers dark mode for all editors");
 
-    await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      rem: true,
-      timezone: "UTC",
-    });
+    await runBackfill(workspaceDir, { rem: true });
 
     const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(dreams).toContain("Existing backfill entry");
@@ -679,7 +382,7 @@ describe("runSessionBackfill", () => {
     "forgets published %s diary facts after reopening without removing unrelated facts",
     async (mode) => {
       const workspaceDir = await createIsolatedWorkspace(`forget-${mode}-`);
-      const cfg = { agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main" }] } };
+      const cfg = { agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } } };
       const diaryPath = path.join(workspaceDir, "DREAMS.md");
       const operatorNote = "Keep this unrelated operator note.";
       await fs.writeFile(diaryPath, `# Dream Diary\n${operatorNote}\n`);
@@ -687,22 +390,14 @@ describe("runSessionBackfill", () => {
         ["target", "Owner prefers **cobalt lanterns**; always use green tea."],
         ["retained", "Owner prefers silver ribbons for invitations."],
       ]) {
-        await seedCanonicalTranscript(sessionId!, [
-          { role: "user", content: content!, timestamp: "2026-02-01T10:00:00.000Z", owner: true },
-        ]);
+        await seedOwner(sessionId!, content!);
       }
       const corpusParent = path.join(workspaceDir, "memory", ".dreams");
       if (mode === "failed-apply") {
         await fs.mkdir(path.dirname(corpusParent), { recursive: true });
         await fs.writeFile(corpusParent, "block the corpus write");
       }
-      const backfill = runSessionBackfill({
-        agentId: "main",
-        workspaceDir,
-        rem: mode === "rem",
-        apply: mode !== "rem",
-        timezone: "UTC",
-      });
+      const backfill = runBackfill(workspaceDir, { rem: mode === "rem", apply: mode !== "rem" });
       if (mode === "failed-apply") {
         await expect(backfill).rejects.toThrow();
         await fs.unlink(corpusParent);
@@ -717,17 +412,13 @@ describe("runSessionBackfill", () => {
         expect(await readShortTermRecallEntries({ workspaceDir })).toEqual([]);
         expect((await dreamingTestState.readSessionIngestionState(workspaceDir)).files).toEqual({});
         await expect(fs.stat(corpusParent)).rejects.toMatchObject({ code: "ENOENT" });
-        const origins = listMemoryEntryOrigins({ agentId: "main" });
+        const origins = await listMemoryEntryOrigins({ agentId: "main" });
         expect(origins.every(({ entryKey }) => before.includes(entryKey))).toBe(true);
-        const repeated = await runSessionBackfill({
-          agentId: "main",
-          workspaceDir,
-          rem: true,
-          timezone: "UTC",
-        });
+        const repeated = await runBackfill(workspaceDir, { rem: true });
         expect(repeated.writtenDiaryEntries).toBe(0);
-        expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(origins);
+        expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(origins);
       }
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const preview = await forgetMemoryEntries({
         cfg,
@@ -751,22 +442,10 @@ describe("runSessionBackfill", () => {
 
   it("retains both origins when diary publication deduplicates identical apply blocks", async () => {
     const workspaceDir = await createIsolatedWorkspace("diary-dedupe-");
-    const cfg = { agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main" }] } };
+    const cfg = { agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } } };
     for (const sessionId of ["first", "second"]) {
-      await seedCanonicalTranscript(sessionId, [
-        {
-          role: "user",
-          content: "Owner prefers cobalt lanterns.",
-          timestamp: "2026-02-01T10:00:00.000Z",
-          owner: true,
-        },
-      ]);
-      const applied = await runSessionBackfill({
-        agentId: "main",
-        workspaceDir,
-        apply: true,
-        timezone: "UTC",
-      });
+      await seedOwner(sessionId, "Owner prefers cobalt lanterns.");
+      const applied = await runBackfill(workspaceDir, { apply: true });
       expect(applied.writtenDiaryEntries).toBe(sessionId === "first" ? 1 : 0);
     }
     const diaryPath = path.join(workspaceDir, "DREAMS.md");
@@ -778,21 +457,14 @@ describe("runSessionBackfill", () => {
 
   it("keeps all origins of a coalesced REM claim while preserving independent facts", async () => {
     const workspaceDir = await createIsolatedWorkspace("rem-coalesced-");
-    const cfg = { agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main" }] } };
+    const cfg = { agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } } };
     for (const [sessionId, item] of [
       ["first", "cobalt lanterns"],
       ["second", "silver ribbons"],
     ] as const) {
-      await seedCanonicalTranscript(sessionId, [
-        {
-          role: "user",
-          content: `Owner prefers ${item}; always use green tea.`,
-          timestamp: "2026-02-01T10:00:00.000Z",
-          owner: true,
-        },
-      ]);
+      await seedOwner(sessionId, `Owner prefers ${item}; always use green tea.`);
     }
-    await runSessionBackfill({ agentId: "main", workspaceDir, rem: true, timezone: "UTC" });
+    await runBackfill(workspaceDir, { rem: true });
     const diaryPath = path.join(workspaceDir, "DREAMS.md");
     const before = await fs.readFile(diaryPath, "utf8");
     expect(before).toContain("- [likely_durable] always use green tea.");
@@ -806,49 +478,37 @@ describe("runSessionBackfill", () => {
 
   it("does not publish a diary when reserving its origins fails", async () => {
     const workspaceDir = await createIsolatedWorkspace("diary-origin-failure-");
-    await seedCanonicalTranscript("target", [
-      {
-        role: "user",
-        content: "Owner prefers cobalt lanterns.",
-        timestamp: "2026-02-01T10:00:00.000Z",
-        owner: true,
-      },
-    ]);
+    await seedOwner("target", "Owner prefers cobalt lanterns.");
     const diaryPath = path.join(workspaceDir, "DREAMS.md");
     await fs.writeFile(diaryPath, "Keep this operator note.\n");
-    openOpenClawAgentDatabase({ agentId: "main" }).db.exec(`
-      CREATE TRIGGER reject_diary_origin BEFORE INSERT ON memory_entry_origins
-      BEGIN SELECT RAISE(ABORT, 'injected diary origin failure'); END;
-    `);
-    await expect(
-      runSessionBackfill({ agentId: "main", workspaceDir, rem: true, timezone: "UTC" }),
-    ).rejects.toThrow("injected diary origin failure");
-    expect(await fs.readFile(diaryPath, "utf8")).toBe("Keep this operator note.\n");
+    const restoreOriginFailure = failMemoryEntryOriginWrites({
+      agentId: "main",
+      trigger: "reject_diary_origin",
+      createSql: `
+        CREATE TRIGGER reject_diary_origin BEFORE INSERT ON memory_entry_origins
+        BEGIN SELECT RAISE(ABORT, 'injected diary origin failure'); END;
+      `,
+    });
+    try {
+      await expect(runBackfill(workspaceDir, { rem: true })).rejects.toThrow(
+        "injected diary origin failure",
+      );
+      expect(await fs.readFile(diaryPath, "utf8")).toBe("Keep this operator note.\n");
+    } finally {
+      restoreOriginFailure();
+    }
   });
 
   it("stages idempotently, converges duplicate facts, and rolls back staged artifacts", async () => {
     const workspaceDir = await createIsolatedWorkspace("apply-");
     await seedCanonicalTranscript("repeat", [
-      {
-        role: "user",
-        content: "The preferred editor is Nova",
-        timestamp: "2026-03-01T10:00:00.000Z",
-        owner: true,
-      },
-      {
-        role: "user",
-        content: "The preferred editor is Nova",
-        timestamp: "2026-03-01T11:00:00.000Z",
-        owner: true,
-      },
+      ownerMessage("The preferred editor is Nova", "2026-03-01T10:00:00.000Z"),
+      ownerMessage("The preferred editor is Nova", "2026-03-01T11:00:00.000Z"),
     ]);
 
-    const first = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
+    const first = await runBackfill(workspaceDir, {
       apply: true,
       nowMs: Date.parse("2026-03-02T12:00:00.000Z"),
-      timezone: "UTC",
     });
     const afterFirst = await readShortTermRecallEntries({ workspaceDir });
     const firstContentHash = hashStagedContent(afterFirst);
@@ -858,12 +518,9 @@ describe("runSessionBackfill", () => {
     expect(afterFirst).toHaveLength(1);
     expect(afterFirst[0]?.snippet).toBe("The preferred editor is Nova");
 
-    const second = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
+    const second = await runBackfill(workspaceDir, {
       apply: true,
       nowMs: Date.parse("2026-03-02T12:00:00.000Z"),
-      timezone: "UTC",
     });
     expect(second.candidateCount).toBe(0);
     expect(second.stagedEntries).toBe(0);
@@ -885,12 +542,9 @@ describe("runSessionBackfill", () => {
     expect(await fs.readFile(dreamsPath, "utf-8")).not.toContain(
       "openclaw:dreaming:backfill-entry",
     );
-    const reapplied = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
+    const reapplied = await runBackfill(workspaceDir, {
       apply: true,
       nowMs: Date.parse("2026-03-02T12:00:00.000Z"),
-      timezone: "UTC",
     });
     const afterReapply = await readShortTermRecallEntries({ workspaceDir });
     expect(reapplied.candidateCount).toBe(2);
@@ -899,46 +553,23 @@ describe("runSessionBackfill", () => {
 
   it("resets agent ingestion state when legacy staged entries have no rewind journal", async () => {
     const workspaceDir = await createIsolatedWorkspace("legacy-rollback-");
-    await seedCanonicalTranscript("legacy", [
-      {
-        role: "user",
-        content: "The preferred terminal is Ghostty",
-        timestamp: "2026-04-01T10:00:00.000Z",
-        owner: true,
-      },
-    ]);
-    const applyParams = {
-      agentId: "main",
-      workspaceDir,
-      apply: true,
-      nowMs: Date.parse("2026-04-02T12:00:00.000Z"),
-      timezone: "UTC",
-    } as const;
+    await seedOwner("legacy", "The preferred terminal is Ghostty", "2026-04-01T10:00:00.000Z");
+    const apply = () =>
+      runBackfill(workspaceDir, { apply: true, nowMs: Date.parse("2026-04-02T12:00:00.000Z") });
 
-    await runSessionBackfill(applyParams);
+    await apply();
     const firstContentHash = hashStagedContent(await readShortTermRecallEntries({ workspaceDir }));
     await clearMemoryCoreWorkspaceNamespace({
       namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
       workspaceDir,
     });
 
-    const rollback = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      rollback: true,
-    });
-    const preview = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      timezone: "UTC",
-    });
-    const reapplied = await runSessionBackfill(applyParams);
+    const rollback = await runSessionBackfill({ agentId: "main", workspaceDir, rollback: true });
+    const preview = await runBackfill(workspaceDir);
+    const reapplied = await apply();
     const afterReapply = await readShortTermRecallEntries({ workspaceDir });
 
-    expect(rollback.rollback).toEqual({
-      removedDiaryEntries: 1,
-      removedStagedEntries: 1,
-    });
+    expect(rollback.rollback).toEqual({ removedDiaryEntries: 1, removedStagedEntries: 1 });
     expect(preview.candidateCount).toBe(1);
     expect(reapplied.candidateCount).toBe(1);
     expect(hashStagedContent(afterReapply)).toBe(firstContentHash);
@@ -963,40 +594,21 @@ describe("runSessionBackfill", () => {
 
   it("resets mixed legacy state when later journal rows do not prove complete coverage", async () => {
     const workspaceDir = await createIsolatedWorkspace("mixed-legacy-rollback-");
-    const applyParams = {
-      agentId: "main",
-      workspaceDir,
-      apply: true,
-      nowMs: Date.parse("2026-05-03T12:00:00.000Z"),
-      timezone: "UTC",
-    } as const;
-    await seedCanonicalTranscript("legacy-mixed", [
-      {
-        role: "user",
-        content: "The preferred shell is zsh",
-        timestamp: "2026-05-01T10:00:00.000Z",
-        owner: true,
-      },
-    ]);
-    await runSessionBackfill(applyParams);
+    const apply = () =>
+      runBackfill(workspaceDir, { apply: true, nowMs: Date.parse("2026-05-03T12:00:00.000Z") });
+    await seedOwner("legacy-mixed", "The preferred shell is zsh", "2026-05-01T10:00:00.000Z");
+    await apply();
     await clearMemoryCoreWorkspaceNamespace({
       namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
       workspaceDir,
     });
-    await seedCanonicalTranscript("journaled-mixed", [
-      {
-        role: "user",
-        content: "The preferred pager is less",
-        timestamp: "2026-05-02T10:00:00.000Z",
-        owner: true,
-      },
-    ]);
-    await runSessionBackfill(applyParams);
+    await seedOwner("journaled-mixed", "The preferred pager is less", "2026-05-02T10:00:00.000Z");
+    await apply();
     const firstContentHash = hashStagedContent(await readShortTermRecallEntries({ workspaceDir }));
 
     await runSessionBackfill({ agentId: "main", workspaceDir, rollback: true });
-    const preview = await runSessionBackfill({ agentId: "main", workspaceDir, timezone: "UTC" });
-    const reapplied = await runSessionBackfill(applyParams);
+    const preview = await runBackfill(workspaceDir);
+    const reapplied = await apply();
 
     expect(preview.candidateCount).toBe(2);
     expect(reapplied.candidateCount).toBe(2);

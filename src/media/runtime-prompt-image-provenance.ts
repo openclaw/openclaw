@@ -7,22 +7,12 @@ export function finalizeRuntimePromptImages<TImage extends object>(
 ): { images: TImage[]; imageFactIndexes: RuntimePromptImageFactIndex[] } {
   const images = entries.map((entry) => entry.image);
   const imageFactIndexes = entries.map((entry) => entry.factIndex);
-  attachRuntimePromptImageFactIndexes(images, imageFactIndexes);
-  return { images, imageFactIndexes };
-}
-
-/** Carries fact ownership on image blocks without changing provider-visible bytes. */
-function attachRuntimePromptImageFactIndexes(
-  images: readonly object[],
-  factIndexes: readonly RuntimePromptImageFactIndex[],
-): void {
-  if (images.length !== factIndexes.length) {
-    return;
-  }
+  // Carry fact ownership without changing provider-visible bytes.
   Object.defineProperty(images, RUNTIME_PROMPT_IMAGE_FACT_INDEXES, {
     configurable: true,
-    value: [...factIndexes],
+    value: [...imageFactIndexes],
   });
+  return { images, imageFactIndexes };
 }
 
 export function readRuntimePromptImageFactIndexes(

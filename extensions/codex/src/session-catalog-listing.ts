@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -15,6 +16,7 @@ import {
   MAX_SESSION_ID_LENGTH,
   MAX_TRANSCRIPT_PAGE_LIMIT,
   NODE_INVOKE_TIMEOUT_MS,
+  normalizeLimit,
   parseJsonParams,
   parseTranscriptPage,
   readBoundedOptionalString,
@@ -27,11 +29,7 @@ import {
   createCodexTerminalNodeHostCommand,
   createCodexTerminalStartNodeHostCommand,
 } from "./session-catalog-terminal.js";
-import {
-  parseCodexCatalogTranscriptPage,
-  readCodexCatalogTranscriptPage,
-  readLegacyCodexTranscriptPage,
-} from "./session-catalog-transcript.js";
+import type { readCodexCatalogTranscriptPage } from "./session-catalog-transcript.js";
 import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,
@@ -39,7 +37,13 @@ import type {
 } from "./session-catalog-types.js";
 import { listVisiblePage } from "./session-catalog-visible-page.js";
 
-/** Builds the node-local read-only Codex app-server catalog command. */
+const loadCatalogTranscript = createLazyRuntimeModule(
+  () => import("./session-catalog-transcript.js"),
+);
+const loadNodeContinue = createLazyRuntimeModule(
+  () => import("./session-catalog-node-continue.js"),
+);
+
 export function createCodexSessionCatalogNodeHostCommands(
   controlFactory: CodexSessionCatalogControlFactory,
   bindingStore?: CodexAppServerBindingStore,
@@ -67,6 +71,31 @@ export function createCodexSessionCatalogNodeHostCommands(
       paramsJSON: JSON.stringify(request),
     };
   };
+  const transcriptCommand = (
+    command: string,
+    read: (
+      control: CodexSessionCatalogControl,
+      action: CodexNodeSessionTranscriptParams,
+    ) => Promise<object>,
+  ): OpenClawPluginNodeHostCommand => ({
+    command,
+    cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
+    dangerous: false,
+    hasActiveWork: controlFactory.hasActiveWork,
+    onDisconnect: controlFactory.disconnect,
+    handle: async (paramsJSON) => {
+      const request = await bindRequest(paramsJSON);
+      const action = readNodeTranscriptParams(request.params);
+      try {
+        return JSON.stringify(await read(request.control, action));
+      } catch (error) {
+        if (error instanceof CatalogParamsError) {
+          throw error;
+        }
+        throw new Error("Codex app-server transcript is unavailable", { cause: error });
+      }
+    },
+  });
   const commands: OpenClawPluginNodeHostCommand[] = [
     {
       command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
@@ -113,54 +142,22 @@ export function createCodexSessionCatalogNodeHostCommands(
         }
       },
     },
-    {
-      command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
-      cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
-      dangerous: false,
-      hasActiveWork: controlFactory.hasActiveWork,
-      onDisconnect: controlFactory.disconnect,
-      handle: async (paramsJSON) => {
-        const request = await bindRequest(paramsJSON);
-        const action = readNodeTranscriptParams(request.params);
-        try {
-          await request.control.requireEligibleThread(action.threadId);
-          const page = parseTranscriptPage(
-            await request.control.listTurnPage({
-              threadId: action.threadId,
-              limit: action.limit,
-              sortDirection: "desc",
-              itemsView: "full",
-              ...(action.cursor ? { cursor: action.cursor } : {}),
-            }),
-          );
-          return JSON.stringify(page);
-        } catch (error) {
-          if (error instanceof CatalogParamsError) {
-            throw error;
-          }
-          throw new Error("Codex app-server transcript is unavailable", { cause: error });
-        }
-      },
-    },
-    {
-      command: CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
-      cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
-      dangerous: false,
-      hasActiveWork: controlFactory.hasActiveWork,
-      onDisconnect: controlFactory.disconnect,
-      handle: async (paramsJSON) => {
-        const request = await bindRequest(paramsJSON);
-        const action = readNodeTranscriptParams(request.params);
-        try {
-          return JSON.stringify(await readCodexCatalogTranscriptPage(request.control, action));
-        } catch (error) {
-          if (error instanceof CatalogParamsError) {
-            throw error;
-          }
-          throw new Error("Codex app-server transcript is unavailable", { cause: error });
-        }
-      },
-    },
+    transcriptCommand(CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND, async (control, action) => {
+      await control.requireEligibleThread(action.threadId);
+      return parseTranscriptPage(
+        await control.listTurnPage({
+          threadId: action.threadId,
+          limit: action.limit,
+          sortDirection: "desc",
+          itemsView: "full",
+          ...(action.cursor ? { cursor: action.cursor } : {}),
+        }),
+      );
+    }),
+    transcriptCommand(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND, async (control, action) => {
+      const { readCodexCatalogTranscriptPage } = await loadCatalogTranscript();
+      return readCodexCatalogTranscriptPage(control, action);
+    }),
     createCodexTerminalNodeHostCommand(bindRequest),
     createCodexTerminalStartNodeHostCommand(),
   ];
@@ -171,23 +168,18 @@ export function createCodexSessionCatalogNodeHostCommands(
     : commands;
 }
 
-type CodexNodeSessionTranscriptParams = {
-  threadId: string;
-  cursor?: string;
-  limit: number;
-};
+type CodexNodeSessionTranscriptParams = Parameters<typeof readCodexCatalogTranscriptPage>[1];
 
-function readNodeTranscriptParams(value: unknown): CodexNodeSessionTranscriptParams {
-  if (!isRecord(value)) {
-    throw new CatalogParamsError("Codex session read parameters must be an object");
-  }
+function readNodeTranscriptParams(
+  value: Record<string, unknown>,
+): CodexNodeSessionTranscriptParams {
   requireOnlyKeys(value, new Set(["threadId", "cursor", "limit"]));
   const threadId = readBoundedOptionalString(value, "threadId", MAX_SESSION_ID_LENGTH);
   if (!threadId) {
     throw new CatalogParamsError("threadId is required");
   }
   const cursor = readBoundedOptionalString(value, "cursor", MAX_CURSOR_LENGTH);
-  const limit = readBoundedLimit(
+  const limit = normalizeLimit(
     value.limit,
     "limit",
     DEFAULT_TRANSCRIPT_PAGE_LIMIT,
@@ -196,17 +188,6 @@ function readNodeTranscriptParams(value: unknown): CodexNodeSessionTranscriptPar
   return { threadId, limit, ...(cursor ? { cursor } : {}) };
 }
 
-function readBoundedLimit(value: unknown, key: string, fallback: number, max: number): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > max) {
-    throw new CatalogParamsError(`${key} must be an integer from 1 to ${max}`);
-  }
-  return value as number;
-}
-
-/** Reads the persisted transcript for a Gateway-local or paired-node Codex session. */
 export async function readCodexSessionTranscript(params: {
   agentId: string;
   runtime: PluginRuntime;
@@ -220,12 +201,19 @@ export async function readCodexSessionTranscript(params: {
 }): Promise<CodexSessionTranscriptPage> {
   const cursor = readControlCursor(params.cursor, "transcript request");
   // The read RPC leaves `limit` open-ended; every provider owns its own ceiling.
-  const limit = readBoundedLimit(
+  const limit = normalizeLimit(
     params.limit,
     "limit",
     DEFAULT_TRANSCRIPT_PAGE_LIMIT,
     MAX_TRANSCRIPT_PAGE_LIMIT,
   );
+  // Transcript presentation uses the harness runtime; listing/registration stays lightweight.
+  const {
+    parseCodexCatalogTranscriptPage,
+    readCodexCatalogTranscriptPage,
+    readLegacyCodexTranscriptPage,
+    projectCodexCatalogTranscriptPageForDisplay,
+  } = await loadCatalogTranscript();
   if (params.source || params.hostId === CODEX_LOCAL_SESSION_HOST_ID) {
     const page = await readCodexCatalogTranscriptPage(params.control, {
       threadId: params.threadId,
@@ -236,7 +224,7 @@ export async function readCodexSessionTranscript(params: {
       hostId: params.hostId,
       label: params.source?.label ?? "Local Codex",
       threadId: params.threadId,
-      ...page,
+      ...projectCodexCatalogTranscriptPageForDisplay(page),
     };
   }
 
@@ -272,20 +260,18 @@ export async function readCodexSessionTranscript(params: {
         await invoke(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND, { cursor, limit }),
       )
     : await readLegacyCodexTranscriptPage(
-        async ({ cursor: turnCursor, limit: turnLimit }) =>
-          parseTranscriptPage(
-            await invoke(CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND, {
-              cursor: turnCursor,
-              limit: turnLimit,
-            }),
-          ),
+        ({ cursor: turnCursor, limit: turnLimit }) =>
+          invoke(CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND, {
+            cursor: turnCursor,
+            limit: turnLimit,
+          }),
         { threadId: params.threadId, cursor, limit },
       );
-  const { nodeLabel } = await import("./session-catalog-node-continue.js");
+  const { nodeLabel } = await loadNodeContinue();
   return {
     hostId: params.hostId,
     label: nodeLabel(node),
     threadId: params.threadId,
-    ...page,
+    ...projectCodexCatalogTranscriptPageForDisplay(page),
   };
 }

@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import {
   downloadActionsArtifactArchive,
   inspectActionsArtifactZipWithPolicy,
@@ -21,7 +22,10 @@ import {
 } from "./lib/npm-publish-plan.mjs";
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import { isPluginPublicationEnabled } from "./lib/plugin-publication-target.mjs";
+import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
+import { createReleaseEvidenceReplay } from "./lib/release-evidence-replay.mjs";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
+import { loadNpmEvidenceReplay, npmEvidenceBinding } from "./plugin-npm-evidence-reuse.mjs";
 import {
   inspectPackageTarballBytes,
   verifyPluginPublicationArtifact,
@@ -62,7 +66,7 @@ function normalizeProducer(value) {
       Number.isSafeInteger(value.runAttempt) &&
       value.runAttempt > 0 &&
       typeof value.workflowHeadBranch === "string" &&
-      /^(?:main|release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33|release-publish\/[a-f0-9]{12}-[1-9][0-9]*)$/u.test(
+      /^(?:main|release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33|release-ci\/[a-f0-9]{12}-[1-9][0-9]*|release-publish\/[a-f0-9]{12}-[1-9][0-9]*)$/u.test(
         value.workflowHeadBranch,
       ),
     "Prepared npm producer must bind an exact trusted workflow run and attempt.",
@@ -137,6 +141,165 @@ export function preparedNpmArtifactName(sourceSha, producer) {
   requireValue(SHA.test(sourceSha), "Prepared npm source must be a full lowercase SHA.");
   const identity = normalizeProducer(producer);
   return `plugin-npm-prepared-${sourceSha}-${identity.runId}-${identity.runAttempt}`;
+}
+
+export function validatePreparedNpmArtifactDescriptor(value, expected) {
+  const producer = normalizeProducer(value);
+  requireValue(
+    producer.repository === expected.repository &&
+      producer.workflowSha === expected.workflowSha &&
+      value.artifactName === preparedNpmArtifactName(expected.sourceSha, producer),
+    "Prepared npm artifact descriptor differs from the approved source or tooling.",
+  );
+  return artifactTuple(
+    {
+      id: value.artifactId,
+      name: value.artifactName,
+      digest: value.artifactDigest,
+      size_in_bytes: value.artifactSizeBytes,
+    },
+    producer,
+  );
+}
+
+// P consumes Q's bytes as data. Neither a caller-supplied Q SHA nor a matching
+// artifact name grants authority: the original successful FRV attempt owns it.
+export async function authenticatePreparedNpmArtifact(params) {
+  return authenticatePreparedNpmArtifactEvidence(params, true);
+}
+
+// Only the CLI owns the deferred boundary: every successful load, consume or
+// authorize below revalidates after its last acquisition and before its output.
+// Public callers retain the return-time authority check.
+async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnReturn) {
+  const { repository, sourceSha, workflowSha, artifact } = params;
+  if (!params.fullReleaseValidationRunId && !params.fullReleaseValidationRunAttempt) {
+    return {
+      artifact: validatePreparedNpmArtifactDescriptor(artifact, params),
+      workflowSha,
+      publisherPolicySha256: params.publisherPolicySha256,
+      revalidateAuthority: undefined,
+    };
+  }
+  requireValue(
+    [params.fullReleaseValidationRunId, params.fullReleaseValidationRunAttempt].every(
+      (value) => /^[1-9][0-9]*$/u.test(String(value)) && Number.isSafeInteger(Number(value)),
+    ),
+    "Prepared npm adoption requires the exact FRV run and attempt.",
+  );
+  const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
+  const { authenticateFullReleaseValidationEvidence } =
+    await import("./validate-full-release-validation-evidence.mjs");
+  const client =
+    params.evidenceClient ??
+    createReleaseEvidenceClient(repository, { immutableReads: params.immutableReads });
+  const runId = String(params.fullReleaseValidationRunId);
+  const runAttempt = Number(params.fullReleaseValidationRunAttempt);
+  const { manifest } = await client.loadManifest(runId, runAttempt);
+  const selected = manifest.sourceAdmission?.publicationSelection;
+  // The child checks the npm operation it actually performs; the parent also
+  // supplies its complete selection (including route and optional Windows).
+  if (selected) {
+    const names = (params.plugins ?? "")
+      .split(/[,\s]+/u)
+      .filter(Boolean)
+      .toSorted();
+    requireValue(
+      selected.pluginPublishScope === params.selectionMode &&
+        (selected.npmDistTag === "extended-stable" ? "extended-stable" : "default") ===
+          params.npmDistTag &&
+        isDeepStrictEqual(
+          [...selected.plugins].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+          names,
+        ),
+      "Prepared npm adoption differs from the admitted publication selection.",
+    );
+  }
+  const authenticated = await authenticateFullReleaseValidationEvidence(
+    {
+      run: await client.getRunAttempt(runId, runAttempt),
+      manifest,
+      expectedRepository: repository,
+      expectedRunId: runId,
+      expectedRunAttempt: runAttempt,
+      expectedTargetSha: sourceSha,
+      expectedReleaseTag: params.releaseTag ?? `v${manifest.sourceAdmission?.projection?.version}`,
+      expectedTrustedWorkflowFullRef: params.workflowFullRef,
+      expectedTrustedWorkflowSha: workflowSha,
+      expectedPublicationSelection: params.publicationSelection ?? selected,
+      verifierSourceSha: workflowSha,
+      verifierSourceContent: readFileSync(new URL("./release-ci-summary.mjs", import.meta.url)),
+      isTrustedMainAncestor:
+        params.isTrustedMainAncestor ??
+        ((sha) => {
+          const comparison = client.compareCommits(sha, "main");
+          return (
+            ["ahead", "identical"].includes(comparison.status) &&
+            comparison.merge_base_commit?.sha === sha
+          );
+        }),
+    },
+    client,
+  );
+  const current = authenticated.evidence.current;
+  const producerSha =
+    retainedPublicationArtifactSource(current.manifest)?.workflow.sha ??
+    current.manifest.workflowSha;
+  if (producerSha !== workflowSha) {
+    requireValue(
+      producerSha === sourceSha &&
+        current.workflowRefProof ===
+          (current.manifest.receiptRecovery
+            ? "receipt-backed-recovery-v1"
+            : "candidate-owned-admission-v1") &&
+        typeof authenticated.revalidateAuthority === "function",
+      "Prepared npm Q != P adoption requires live candidate-owned qualification.",
+    );
+  }
+  const descriptor = validatePreparedNpmArtifactDescriptor(
+    current.manifest.publicationArtifacts?.pluginNpm,
+    { repository, sourceSha, workflowSha: producerSha },
+  );
+  if (artifact) {
+    requireValue(
+      isDeepStrictEqual(
+        validatePreparedNpmArtifactDescriptor(artifact, {
+          repository,
+          sourceSha,
+          workflowSha: producerSha,
+        }),
+        descriptor,
+      ),
+      "Prepared npm artifact differs from the authenticated FRV descriptor.",
+    );
+  }
+  const publisherPolicySha256 =
+    producerSha === workflowSha && params.publisherPolicySha256 && !params.immutableReads
+      ? params.publisherPolicySha256
+      : sha256(client.getWorkflowSource(producerSha, WORKFLOW_PATH));
+  if (params.immutableReads && producerSha === workflowSha && params.publisherPolicySha256) {
+    requireValue(
+      publisherPolicySha256 === params.publisherPolicySha256,
+      "Prepared npm publisher policy differs from immutable source",
+    );
+  }
+  // Replay validation is asynchronous; live qualification authority is synchronous.
+  /** @type {(() => void | Promise<void>) | undefined} */
+  const revalidateAuthority = params.immutableReads
+    ? async () => {
+        await params.immutableReads.revalidate(client);
+        authenticated.revalidateAuthority?.();
+      }
+    : authenticated.revalidateAuthority;
+  if (revalidateOnReturn) {
+    await revalidateAuthority?.();
+  }
+  return {
+    artifact: descriptor,
+    workflowSha: producerSha,
+    publisherPolicySha256,
+    revalidateAuthority,
+  };
 }
 
 function sourcePackageRoster(sourceRoot, npmDistTag, selectedNames) {
@@ -411,11 +574,41 @@ export async function verifyPreparedNpmRegistry(params) {
     label: "qualified plugin tarball",
     maxBytes: MAX_PACKAGE_BYTES,
   });
-  return verifyNpmRegistryPublication(params, tarball);
+  const { distTags } = await verifyNpmRegistryPublication(params, tarball);
+  if (distTags) {
+    requireNpmDistTagSelection(params, distTags);
+  }
+  return { alreadyPublished: distTags !== null };
 }
 
+// A version this run never published may already be superseded: a later
+// release owns the primary selector, so no tag is verified or repaired for it.
 export async function verifyPublishedNpmRegistry(params) {
-  return verifyNpmRegistryPublication({ ...params, route: "npm-readback", allowMissing: false });
+  const { distTags } = await verifyNpmRegistryPublication({
+    ...params,
+    route: "npm-readback",
+    allowMissing: false,
+  });
+  const [primaryTag] = params.publishTags;
+  const supersededBy = distTags[primaryTag];
+  if (classifyNpmDistTagVersion(supersededBy, params.version) === "ahead") {
+    return { alreadyPublished: true, supersededBy };
+  }
+  requireNpmDistTagSelection(params, distTags);
+  return { alreadyPublished: true, supersededBy: null };
+}
+
+function requireNpmDistTagSelection(params, distTags) {
+  for (const publishTag of params.publishTags) {
+    const selectorState = classifyNpmDistTagVersion(distTags[publishTag], params.version);
+    if (selectorState !== "match") {
+      const message = `${params.packageName}: ${publishTag} differs from the prepared version; use authorized tag repair.`;
+      if (selectorState === "missing" || selectorState === "lagging") {
+        throw new NpmRegistryUnavailableError(message);
+      }
+      throw new Error(message);
+    }
+  }
 }
 
 async function verifyNpmRegistryPublication(params, tarball) {
@@ -463,7 +656,7 @@ async function verifyNpmRegistryPublication(params, tarball) {
         registry.status !== 404 || params.route === "npm-token-bootstrap",
         "Prepared OIDC package no longer exists; obtain an explicitly approved bootstrap.",
       );
-      return { alreadyPublished: false };
+      return { distTags: null };
     }
     const remainingMs = deadlineMs - Date.now();
     if (remainingMs <= 0) {
@@ -516,20 +709,7 @@ async function verifyNpmRegistryPublication(params, tarball) {
       "Published npm archive package identity differs from the requested version.",
     );
   }
-  for (const publishTag of params.publishTags) {
-    const selectorState = classifyNpmDistTagVersion(
-      registry.packument["dist-tags"][publishTag],
-      params.version,
-    );
-    if (selectorState !== "match") {
-      const message = `${params.packageName}: ${publishTag} differs from the prepared version; use authorized tag repair.`;
-      if (selectorState === "missing" || selectorState === "lagging") {
-        throw new NpmRegistryUnavailableError(message);
-      }
-      throw new Error(message);
-    }
-  }
-  return { alreadyPublished: true };
+  return { distTags: registry.packument["dist-tags"] };
 }
 
 function outputValues(file, values) {
@@ -542,7 +722,7 @@ function outputValues(file, values) {
   );
 }
 
-async function main(argv) {
+export async function main(argv) {
   const [command, ...args] = argv;
   const options = {};
   for (let index = 0; index < args.length; index += 2) {
@@ -555,9 +735,9 @@ async function main(argv) {
   }
   const common = {
     repository: process.env.GITHUB_REPOSITORY,
-    workflowSha: process.env.GITHUB_SHA,
+    workflowSha: process.env.GITHUB_WORKFLOW_SHA ?? process.env.GITHUB_SHA,
     sourceSha: options["--source-sha"],
-    npmDistTag: options["--npm-dist-tag"] ?? "default",
+    npmDistTag: options["--npm-dist-tag"] ?? process.env.PREPARED_NPM_DIST_TAG ?? "default",
     selectionMode: options["--selection-mode"],
     plugins: options["--plugins"] ?? "",
     publisherPolicySha256: options["--policy-file"]
@@ -565,7 +745,48 @@ async function main(argv) {
       : undefined,
     token: process.env.GH_TOKEN,
   };
-  if (command === "seal") {
+  let adoption;
+  let writeEvidenceOutput;
+  if (["load", "consume", "authorize"].includes(command)) {
+    const adoptionParams = {
+      ...common,
+      selectionMode: common.selectionMode ?? process.env.PREPARED_NPM_SELECTION_MODE,
+      plugins: options["--plugins"] ?? process.env.PREPARED_NPM_PLUGINS ?? "",
+      artifact: JSON.parse(options["--artifact"] ?? process.env.PREPARED_NPM_ARTIFACT),
+      workflowFullRef: process.env.GITHUB_REF,
+      fullReleaseValidationRunId: process.env.PREPARED_NPM_FRV_RUN_ID,
+      fullReleaseValidationRunAttempt: process.env.PREPARED_NPM_FRV_RUN_ATTEMPT,
+    };
+    if (options["--evidence-output"] || process.env.PREPARED_NPM_EVIDENCE_ID) {
+      const binding = npmEvidenceBinding(adoptionParams);
+      const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
+      adoptionParams.immutableReads = options["--evidence-output"]
+        ? createReleaseEvidenceReplay(binding)
+        : await loadNpmEvidenceReplay({
+            binding,
+            artifactId: process.env.PREPARED_NPM_EVIDENCE_ID,
+            artifactDigest: process.env.PREPARED_NPM_EVIDENCE_DIGEST,
+            token: common.token,
+            archivePath: process.env.RUNNER_TEMP + "/plugin-npm-evidence.zip",
+            client: createReleaseEvidenceClient(common.repository),
+          });
+    }
+    adoption = await authenticatePreparedNpmArtifactEvidence(adoptionParams, false);
+    if (options["--evidence-output"]) {
+      requireValue(command === "load", "Only trusted preview load can write an evidence handoff");
+      writeEvidenceOutput = () =>
+        writeFileSync(options["--evidence-output"], adoptionParams.immutableReads.serialize(), {
+          flag: "wx",
+        });
+    }
+    Object.assign(common, {
+      workflowSha: adoption.workflowSha,
+      publisherPolicySha256: adoption.publisherPolicySha256,
+    });
+  }
+  if (command === "authorize") {
+    await adoption.revalidateAuthority?.();
+  } else if (command === "seal") {
     const producer = {
       repository: common.repository,
       runId: Number(process.env.GITHUB_RUN_ID),
@@ -595,9 +816,11 @@ async function main(argv) {
     const manifest = await downloadPreparedNpmRelease({
       ...common,
       sourceRoot: options["--source-root"] ?? process.cwd(),
-      artifact: JSON.parse(options["--artifact"]),
+      artifact: adoption.artifact,
       archivePath: options["--archive-path"],
     });
+    await adoption.revalidateAuthority?.();
+    writeEvidenceOutput?.();
     writeFileSync(options["--output"], JSON.stringify(manifest));
     outputValues(options["--github-output"], {
       has_candidates: true,
@@ -608,14 +831,20 @@ async function main(argv) {
       all_matrix: JSON.stringify(manifest.packages),
     });
   } else if (command === "consume") {
+    const entry = JSON.parse(options["--package"]);
+    requireValue(
+      isDeepStrictEqual(normalizeProducer(entry.artifact), normalizeProducer(adoption.artifact)),
+      "Prepared npm package differs from the admitted manifest producer.",
+    );
     const result = await consumePreparedNpmPackage({
       ...common,
-      package: JSON.parse(options["--package"]),
+      package: entry,
       sourcePackageJson: options["--source-package-json"],
       cacheDir: options["--cache-dir"],
       outputDir: options["--output-dir"],
       verificationOutput: options["--verification-output"],
     });
+    await adoption.revalidateAuthority?.();
     outputValues(options["--github-output"], {
       package_name: result.manifest.package.name,
       package_version: result.manifest.package.version,
@@ -661,7 +890,7 @@ async function main(argv) {
     );
   } else {
     throw new Error(
-      "Usage: plugin-npm-prepared-release.mjs <seal|load|consume|registry> [options]",
+      "Usage: plugin-npm-prepared-release.mjs <seal|load|consume|authorize|registry> [options]",
     );
   }
 }

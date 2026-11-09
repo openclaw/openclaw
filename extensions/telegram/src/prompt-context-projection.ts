@@ -21,6 +21,25 @@ function parseTranscriptMessageId(value: unknown): string | undefined {
   return typeof id === "string" && id.trim() ? id : undefined;
 }
 
+export function isTelegramTextOnlyChannelData(
+  channelData: NonNullable<ReplyPayload["channelData"]>,
+): boolean {
+  if (Object.keys(channelData).length !== 1 || !isRecord(channelData.telegram)) {
+    return false;
+  }
+  const telegram = channelData.telegram;
+  if (Object.keys(telegram).length !== 1 || !isRecord(telegram.promptContextSource)) {
+    return false;
+  }
+  const source = telegram.promptContextSource;
+  // Preparation may stale the correlation signature; it still has no transport effects.
+  return (
+    Object.keys(source).length === 2 &&
+    typeof source.transcriptMessageId === "string" &&
+    typeof source.deliverySignature === "string"
+  );
+}
+
 export function resolveTelegramPromptContextDeliverySignature(payload: ReplyPayload): string {
   const parts = resolveSendableOutboundReplyParts(payload);
   const spokenText = payload.spokenText ?? "";

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 364198,
-  "reason": "Peter approved the measured 364198 B startup gzip baseline and 356 KiB cap for #152510 on 2026-09-19: ancestor-session snapshot reuse is 215 B above the previous enforced budget. The existing 512 B growth and 64 B build-variance allowances are unchanged.",
-  "updatedAt": "2026-09-20"
+  "startupJsGzipBytes": 90908,
+  "reason": "PR #194142 (L293): Details first-frame prewarm loader in startup; lead byte exception",
+  "updatedAt": "2026-11-07"
 }

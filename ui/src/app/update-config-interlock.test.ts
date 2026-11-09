@@ -6,6 +6,7 @@ import {
   createConfigServerMock,
 } from "../lib/config/config-test-harness.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
+import { flushMicrotasks } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { bindUpdateConfigWriteInterlock } from "./update-config-interlock.ts";
 import { updateRunHarness } from "./update-run.test-support.ts";
@@ -34,6 +35,7 @@ describe("update config-write interlock", () => {
       const terminal = kind === "legacy-driver-expired" || kind === "superseded";
       try {
         await overlays.refreshUpdateStatus();
+        await flushMicrotasks();
         expect(overlays.snapshot.updateRunning).toBe(true);
         request.mockClear();
         if (terminal) {

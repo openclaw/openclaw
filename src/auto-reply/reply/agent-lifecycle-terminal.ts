@@ -1,13 +1,18 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { classifyOAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
+import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
 import { getFailoverErrorCode } from "../../agents/failover/error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
+import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 
 export type AgentLifecycleTerminalBackstop = {
   beginAttempt: () => void;
+  replaceAttemptTerminal: () => void;
   capture: AgentLifecycleTerminalBackstop["emit"];
   emit: (
     phase: "end" | "error",
@@ -33,11 +38,13 @@ const DEFERRED_TERMINAL_METADATA_KEYS = [
   "stopReason",
   "yielded",
   "timeoutPhase",
+  "executionStarted",
   "providerStarted",
   "aborted",
   "livenessState",
   "replayInvalid",
   "errorObservation",
+  "suppressErrorNotice",
   "assistantTranscriptIdempotencyKey",
 ] as const;
 
@@ -67,6 +74,7 @@ export function createAgentLifecycleTerminalBackstop(params: {
     timeoutPhase?: string;
   };
 }): AgentLifecycleTerminalBackstop {
+  const workspaceReadiness = captureAgentWorkspaceReadiness(params.sessionKey);
   let state: LifecycleTerminalState = { kind: "pending", metadata: {} };
   // Preparation can fail before a lifecycle start. Capture its real boundary
   // without signaling readiness; an observed model start replaces it below.
@@ -103,25 +111,30 @@ export function createAgentLifecycleTerminalBackstop(params: {
     resultOrError: unknown,
     extraData?: Record<string, unknown>,
   ): Parameters<typeof emitAgentEvent>[0] => {
-    const terminationFields = params.resolveTerminationFields(
-      phase === "error" ? resultOrError : undefined,
-    );
+    const workspaceFailure = workspaceReadiness?.getFailure?.();
+    const terminalPhase = workspaceFailure ? "error" : phase;
+    const terminalValue = workspaceFailure ?? resultOrError;
+    const terminationFields: ReturnType<typeof params.resolveTerminationFields> = workspaceFailure
+      ? {}
+      : params.resolveTerminationFields(terminalPhase === "error" ? terminalValue : undefined);
     const restartAbort = terminationFields.stopReason === AGENT_RUN_RESTART_ABORT_STOP_REASON;
     const data: Record<string, unknown> = {
       ...pending.metadata,
-      phase: restartAbort ? "end" : phase,
+      phase: restartAbort ? "end" : terminalPhase,
       endedAt: Date.now(),
       startedAt,
     };
     if (restartAbort) {
       data.aborted = true;
       data.stopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
-    } else if (phase === "error") {
-      const oauthFailure = classifyOAuthRefreshFailureError(resultOrError);
+    } else if (terminalPhase === "error") {
+      const oauthFailure = classifyOAuthRefreshFailureError(terminalValue);
       data.error =
-        renderFailoverCodeUserCopy(getFailoverErrorCode(resultOrError)) ??
+        renderStorageFailureSummary(classifyGatewayStorageFailure(terminalValue)) ??
+        renderAgentHarnessPreflightUserMessage(terminalValue) ??
+        renderFailoverCodeUserCopy(getFailoverErrorCode(terminalValue)) ??
         (oauthFailure?.summary ? `⚠️ ${oauthFailure.summary}` : undefined) ??
-        formatErrorMessage(resultOrError);
+        formatErrorMessage(terminalValue);
       if (oauthFailure?.summary) {
         data.errorObservation = {
           ...(oauthFailure.provider ? { provider: oauthFailure.provider } : {}),
@@ -134,8 +147,8 @@ export function createAgentLifecycleTerminalBackstop(params: {
       Object.assign(data, terminationFields);
     } else {
       const meta =
-        resultOrError && typeof resultOrError === "object" && "meta" in resultOrError
-          ? (resultOrError as { meta?: Record<string, unknown> }).meta
+        terminalValue && typeof terminalValue === "object" && "meta" in terminalValue
+          ? (terminalValue as { meta?: Record<string, unknown> }).meta
           : undefined;
       Object.assign(data, resolveAgentLifecycleTerminalMetadata(meta));
       if (terminationFields.aborted === true) {
@@ -145,8 +158,17 @@ export function createAgentLifecycleTerminalBackstop(params: {
         data.stopReason = terminationFields.stopReason;
       }
     }
-    if (extraData) {
-      Object.assign(data, extraData);
+    Object.assign(data, extraData);
+    if (workspaceFailure) {
+      // Cancellation stops inference; preparation's original error owns the
+      // one terminal outcome, rather than reporting a user-requested Stop.
+      data.phase = "error";
+      data.error = workspaceFailure.message;
+      delete data.aborted;
+      delete data.stopReason;
+      delete data.timeoutPhase;
+      delete data.providerStarted;
+      delete data.yielded;
     }
     return {
       runId: params.runId,
@@ -184,6 +206,8 @@ export function createAgentLifecycleTerminalBackstop(params: {
 
   return {
     beginAttempt,
+    // Accepted recovery replaces pending attempt facts, never a published terminal.
+    replaceAttemptTerminal: beginAttempt,
     capture,
     emit,
     getDeferredError: () => (state.kind === "pending" ? state.deferredError : undefined),

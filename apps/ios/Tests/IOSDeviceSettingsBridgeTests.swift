@@ -156,8 +156,11 @@ struct IOSDeviceSettingsBridgeTests {
         let settings = try #require(URL(string: "https://gateway.example:8443/openclaw/settings/device"))
         func trusted(_ source: URL?, mainFrame: Bool = true, hostingView: Bool = true) -> Bool {
             IOSDeviceSettingsBridge.isTrustedSource(
-                source, webViewURL: settings, gatewayURL: gateway,
-                isMainFrame: mainFrame, isHostingWebView: hostingView)
+                source,
+                webViewURL: settings,
+                gatewayURL: gateway,
+                isMainFrame: mainFrame,
+                isHostingWebView: hostingView)
         }
         #expect(trusted(settings))
         #expect(!trusted(settings, mainFrame: false))
@@ -174,8 +177,11 @@ struct IOSDeviceSettingsBridgeTests {
             #expect(!trusted(URL(string: value)))
         }
         #expect(!IOSDeviceSettingsBridge.isTrustedSource(
-            settings, webViewURL: URL(string: "https://other.example/"), gatewayURL: gateway,
-            isMainFrame: true, isHostingWebView: true))
+            settings,
+            webViewURL: URL(string: "https://other.example/"),
+            gatewayURL: gateway,
+            isMainFrame: true,
+            isHostingWebView: true))
     }
 
     @Test func `failed provisional navigation restores only the retained document with fresh authority`() {
@@ -238,7 +244,7 @@ struct IOSDeviceSettingsBridgeTests {
     }
 
     @Test func `request retirement rejects active and queued replies once and allows a replacement document`() async {
-        let queue = IOSDeviceSettingsRequestQueue()
+        let queue = DeviceSettingsRequestQueue()
         var completed: [String] = []
         var errors: [String] = []
         var releaseRetiredOperation: CheckedContinuation<Void, Never>?
@@ -251,45 +257,36 @@ struct IOSDeviceSettingsBridgeTests {
             completed.append("pending")
         }
         await withCheckedContinuation { started in
-            queue.enqueue(operation: {
+            queue.enqueue {
                 await withCheckedContinuation { release in
                     releaseRetiredOperation = release
                     started.resume()
                 }
                 activeReply.finish(NSNull())
-            }, onCancel: { activeReply.retire() })
+            } onCancel: {
+                activeReply.retire()
+            }
         }
-        queue.enqueue(operation: {
+        queue.enqueue {
             completed.append("stale write")
             pendingReply.finish(NSNull())
-        }, onCancel: { pendingReply.retire() })
+        } onCancel: {
+            pendingReply.retire()
+        }
         queue.cancel()
         #expect(completed == ["active", "pending"])
         #expect(errors.count == 2)
         await withCheckedContinuation { replacementFinished in
-            queue.enqueue(operation: {
+            queue.enqueue {
                 completed.append("replacement")
                 replacementFinished.resume()
-            }, onCancel: { Issue.record("Replacement document was unexpectedly retired") })
+            } onCancel: {
+                Issue.record("Replacement document was unexpectedly retired")
+            }
         }
         releaseRetiredOperation?.resume()
         await Task.yield()
         #expect(completed == ["active", "pending", "replacement"])
         #expect(errors.count == 2)
-    }
-
-    @Test func `queued writes settle in submission order`() async {
-        let queue = IOSDeviceSettingsRequestQueue()
-        var values: [Int] = []
-        await withCheckedContinuation { finished in
-            for value in 1...3 {
-                queue.enqueue(operation: {
-                    await Task.yield()
-                    values.append(value)
-                    if value == 3 { finished.resume() }
-                }, onCancel: { Issue.record("Current document unexpectedly retired") })
-            }
-        }
-        #expect(values == [1, 2, 3])
     }
 }

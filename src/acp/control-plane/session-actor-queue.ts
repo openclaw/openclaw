@@ -1,7 +1,6 @@
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 
 type ActorLane = {
-  id: number;
   queue: KeyedAsyncQueue;
   users: number;
   retired: boolean;
@@ -10,7 +9,6 @@ type ActorLane = {
 /** Serializes each current actor lane without retaining a history of retired lanes. */
 export class SessionActorQueue {
   private readonly lanes = new Map<string, ActorLane>();
-  private nextLaneId = 0;
   private pendingCount = 0;
 
   getTotalPendingCount(): number {
@@ -21,14 +19,13 @@ export class SessionActorQueue {
   capture(actorKey: string) {
     let lane = this.lanes.get(actorKey);
     if (!lane) {
-      lane = { id: ++this.nextLaneId, queue: new KeyedAsyncQueue(), users: 0, retired: false };
+      lane = { queue: new KeyedAsyncQueue(), users: 0, retired: false };
       this.lanes.set(actorKey, lane);
     }
     const captured = lane;
     captured.users += 1;
     let released = false;
     return {
-      id: captured.id,
       queue: captured.queue,
       isCurrent: () => !released && !captured.retired,
       release: () => {
@@ -48,7 +45,7 @@ export class SessionActorQueue {
     const captured = this.capture(actorKey);
     try {
       return await captured.queue.enqueue(
-        `${actorKey}\u0000${captured.id}`,
+        actorKey,
         async () => {
           if (!captured.isCurrent()) {
             throw new Error(`ACP session actor was superseded for ${actorKey}.`);

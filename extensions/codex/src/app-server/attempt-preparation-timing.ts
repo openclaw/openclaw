@@ -2,17 +2,14 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  createCodexDynamicToolBuildStageTracker,
-  formatCodexDynamicToolBuildStageSummary,
-} from "./dynamic-tool-build.js";
+import { createStageTimingTracker, formatStageTimings } from "openclaw/plugin-sdk/time-runtime";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 
 /** Records startup before the native turn owns inference and tool execution. */
 export function createCodexAttemptPreparationTiming(
   params: Pick<EmbeddedRunAttemptParamsV2, "runId" | "sessionId" | "sessionKey" | "config">,
 ) {
-  const tracker = createCodexDynamicToolBuildStageTracker();
+  const tracker = createStageTimingTracker();
   const profilerEnabled = isCodexAppServerProfilerEnabled(params.config);
   const totalWarnMs = profilerEnabled ? 1_000 : 10_000;
   const stageWarnMs = profilerEnabled ? 500 : 5_000;
@@ -25,7 +22,7 @@ export function createCodexAttemptPreparationTiming(
       return;
     }
     embeddedAgentLog.warn(
-      `codex app-server preparation timings runId=${params.runId} sessionId=${params.sessionId} stage=${stage} outcome=${outcome} totalMs=${summary.totalMs} stages=${formatCodexDynamicToolBuildStageSummary(summary)}`,
+      `codex app-server preparation timings runId=${params.runId} sessionId=${params.sessionId} stage=${stage} outcome=${outcome} totalMs=${summary.totalMs} stages=${formatStageTimings(summary.stages)}`,
       {
         runId: params.runId,
         sessionId: params.sessionId,

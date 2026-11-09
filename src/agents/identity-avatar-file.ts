@@ -5,34 +5,33 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
+import { resolveUserPath } from "../infra/home-dir.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import {
   AVATAR_MAX_BYTES,
   hasAvatarUriScheme,
   isAvatarDataUrl,
   isAvatarHttpUrl,
-  isPathWithinRoot,
   isSupportedLocalAvatarExtension,
   isWindowsAbsolutePath,
   resolveAvatarMime,
 } from "../shared/avatar-policy.js";
-import { resolveUserPath } from "../utils.js";
-import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 
-type LocalAgentAvatarFailureReason =
+export type LocalAgentAvatarFailureReason =
   | "missing"
   | "outside_workspace"
   | "too_large"
   | "unreadable"
   | "unsupported_extension";
 
-export type OpenedLocalAgentAvatarFile = {
+type OpenedLocalAgentAvatarFile = {
   path: string;
   fd: number;
   stat: {
     ctimeMs: number;
-    dev: number;
-    ino: number;
+    dev: string;
+    ino: string;
     mtimeMs: number;
     size: number;
   };
@@ -43,6 +42,12 @@ type LocalAgentAvatarPath = {
   workspaceRoot: string;
 };
 
+function resolveLocalAgentAvatarSource(workspaceRoot: string, raw: string): string {
+  return raw.startsWith("~") || path.isAbsolute(raw)
+    ? resolveUserPath(raw)
+    : path.resolve(workspaceRoot, raw);
+}
+
 /** Resolve one local avatar source while retaining its canonical workspace root. */
 export function resolveLocalAgentAvatarPath(params: {
   raw: string;
@@ -51,12 +56,9 @@ export function resolveLocalAgentAvatarPath(params: {
   | { ok: true; value: LocalAgentAvatarPath }
   | { ok: false; reason: LocalAgentAvatarFailureReason } {
   const workspaceRoot = resolveRealpathOrAbsolute(params.workspaceDir);
-  const resolved =
-    params.raw.startsWith("~") || path.isAbsolute(params.raw)
-      ? resolveUserPath(params.raw)
-      : path.resolve(workspaceRoot, params.raw);
+  const resolved = resolveLocalAgentAvatarSource(workspaceRoot, params.raw);
   const filePath = resolveRealpathOrAbsolute(resolved);
-  if (!isPathWithinRoot(workspaceRoot, filePath)) {
+  if (!isPathInside(workspaceRoot, filePath)) {
     return { ok: false, reason: "outside_workspace" };
   }
   if (!isSupportedLocalAvatarExtension(filePath)) {
@@ -70,10 +72,10 @@ export function resolveLocalAgentAvatarPath(params: {
     if (stat.size > AVATAR_MAX_BYTES) {
       return { ok: false, reason: "too_large" };
     }
+    return { ok: true, value: { filePath, workspaceRoot } };
   } catch {
     return { ok: false, reason: "missing" };
   }
-  return { ok: true, value: { filePath, workspaceRoot } };
 }
 
 function openResolvedLocalAgentAvatarFile(
@@ -101,8 +103,8 @@ function openResolvedLocalAgentAvatarFile(
       fd: opened.fd,
       stat: {
         ctimeMs: opened.stat.ctimeMs,
-        dev: opened.stat.dev,
-        ino: opened.stat.ino,
+        dev: opened.exactIdentity.dev.toString(),
+        ino: opened.exactIdentity.ino.toString(),
         mtimeMs: opened.stat.mtimeMs,
         size: opened.stat.size,
       },
@@ -112,50 +114,184 @@ function openResolvedLocalAgentAvatarFile(
   }
 }
 
-/**
- * Open one selected local avatar under its agent workspace.
- * A successful caller owns `file.fd` and must close it exactly once.
- */
-export function openLocalAgentAvatarFile(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
+export type PreparedLocalAgentAvatarFile = Omit<OpenedLocalAgentAvatarFile, "fd"> & {
+  body?: Buffer;
+};
+
+// Native realpath and ordinary admission disagree on symlink parent traversal.
+// Leave those aliases to admission; inspect ordinary aliases without blocking the Gateway.
+async function resolveLocalAgentAvatarFreshnessPath(value: string): Promise<string | undefined> {
+  let remaining = path.resolve(value);
+  // An already-canonical spelling has no aliases whose resolution could disagree.
+  if ((await fs.promises.realpath(remaining)) === remaining) {
+    return remaining;
+  }
+  for (let hops = 0; hops < 40; hops += 1) {
+    let current = path.parse(remaining).root;
+    const segments = remaining.slice(current.length).split(path.sep).filter(Boolean);
+    let redirected = false;
+    for (const [index, segment] of segments.entries()) {
+      const next = path.join(current, segment);
+      const stat = await fs.promises.lstat(next);
+      if (stat.isSymbolicLink()) {
+        await fs.promises.stat(next);
+        const target = await fs.promises.readlink(next);
+        if (target.split(/[\\/]/).includes("..")) {
+          return undefined;
+        }
+        remaining = path.resolve(current, target, ...segments.slice(index + 1));
+        redirected = true;
+        break;
+      }
+      current = next;
+    }
+    if (!redirected) {
+      return current;
+    }
+  }
+  return undefined;
+}
+
+/** Re-resolve aliases as well as identity: a cached canonical path can outlive its source. */
+export async function isLocalAgentAvatarFileCurrent(
+  input: LocalAgentAvatarRead,
+  file: PreparedLocalAgentAvatarFile,
+): Promise<boolean> {
+  let stat: fs.BigIntStats;
+  try {
+    const workspaceRoot = await resolveLocalAgentAvatarFreshnessPath(input.workspaceDir);
+    if (!workspaceRoot) {
+      return false;
+    }
+    const filePath = await resolveLocalAgentAvatarFreshnessPath(
+      resolveLocalAgentAvatarSource(workspaceRoot, input.source),
+    );
+    if (filePath !== file.path || !isPathInside(workspaceRoot, filePath)) {
+      return false;
+    }
+    stat = await fs.promises.stat(filePath, { bigint: true });
+  } catch {
+    return false;
+  }
+  // Match fs-safe's fractional-millisecond view of its pinned bigint observation.
+  const milliseconds = (ns: bigint) => {
+    const remainder = ((ns % 1_000_000_000n) + 1_000_000_000n) % 1_000_000_000n;
+    return Number((ns - remainder) / 1_000_000_000n) * 1_000 + Number(remainder) / 1_000_000;
+  };
+  return (
+    stat.isFile() &&
+    stat.size <= AVATAR_MAX_BYTES &&
+    stat.nlink === 1n &&
+    stat.dev.toString() === file.stat.dev &&
+    stat.ino.toString() === file.stat.ino &&
+    Number(stat.size) === file.stat.size &&
+    milliseconds(stat.mtimeNs) === file.stat.mtimeMs &&
+    milliseconds(stat.ctimeNs) === file.stat.ctimeMs
+  );
+}
+
+const inlineFiles = new WeakMap<PreparedLocalAgentAvatarFile, string>();
+
+/** An unchanged, revalidated file retains its prepared object and inline representation. */
+export function localAgentAvatarDataUrl(file: PreparedLocalAgentAvatarFile): string | undefined {
+  if (!file.body) {
+    return undefined;
+  }
+  let dataUrl = inlineFiles.get(file);
+  if (!dataUrl) {
+    dataUrl = `data:${resolveAvatarMime(file.path)};base64,${file.body.toString("base64")}`;
+    inlineFiles.set(file, dataUrl);
+  }
+  return dataUrl;
+}
+
+export type LocalAgentAvatarResult =
+  | { ok: true; file: PreparedLocalAgentAvatarFile }
+  | { ok: false; reason: LocalAgentAvatarFailureReason };
+
+export type LocalAgentAvatarRead = {
+  workspaceDir: string;
   source: string;
-}):
-  | { ok: true; file: OpenedLocalAgentAvatarFile }
-  | { ok: false; reason: LocalAgentAvatarFailureReason } {
+  readBody: boolean;
+  knownRevision?: string;
+};
+
+export type LocalAgentAvatarSnapshot =
+  | {
+      ok: true;
+      file: Omit<PreparedLocalAgentAvatarFile, "body"> & { body?: Uint8Array<ArrayBuffer> };
+    }
+  | Extract<LocalAgentAvatarResult, { ok: false }>
+  | { kind: "unchanged" };
+
+export function localAgentAvatarRevision(
+  file: Pick<PreparedLocalAgentAvatarFile, "path" | "stat">,
+): string {
+  const { ctimeMs, dev, ino, mtimeMs, size } = file.stat;
+  return JSON.stringify([file.path, ctimeMs, dev, ino, mtimeMs, size]);
+}
+
+/** Worker-side admission keeps the descriptor pinned until the optional read completes. */
+export function readLocalAgentAvatarSnapshot(
+  params: LocalAgentAvatarRead,
+): LocalAgentAvatarSnapshot {
   const resolved = resolveLocalAgentAvatarPath({
     raw: params.source,
-    workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
+    workspaceDir: params.workspaceDir,
   });
   if (!resolved.ok) {
     return resolved;
   }
-  const file = openResolvedLocalAgentAvatarFile(resolved.value);
-  return file ? { ok: true, file } : { ok: false, reason: "unreadable" };
-}
-
-/** Consume a pinned local avatar descriptor into a data URL. Always closes it. */
-export function readOpenedLocalAgentAvatarDataUrl(
-  opened: OpenedLocalAgentAvatarFile,
-): string | undefined {
+  const opened = openResolvedLocalAgentAvatarFile(resolved.value);
+  if (!opened) {
+    return { ok: false, reason: "unreadable" };
+  }
   try {
-    // Keep the validated inode pinned through the read. Reopening by path
-    // would restore the symlink/rename race that openRootFileSync closes.
-    const buffer = readFileDescriptorBoundedSync(opened.fd, AVATAR_MAX_BYTES);
-    return `data:${resolveAvatarMime(opened.path)};base64,${buffer.toString("base64")}`;
+    const file = { path: opened.path, stat: opened.stat };
+    if (params.knownRevision === localAgentAvatarRevision(file)) {
+      return { kind: "unchanged" };
+    }
+    return {
+      ok: true,
+      file: {
+        ...file,
+        body: params.readBody
+          ? Uint8Array.from(readFileDescriptorBoundedSync(opened.fd, AVATAR_MAX_BYTES))
+          : undefined,
+      },
+    };
   } catch {
-    return undefined;
+    return { ok: false, reason: "unreadable" };
   } finally {
     fs.closeSync(opened.fd);
   }
 }
 
+export async function prepareLocalAgentAvatarFile(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  source: string;
+  readBody: boolean;
+}): Promise<LocalAgentAvatarResult> {
+  try {
+    const { prepareLocalAgentAvatar } = await import("./identity-avatar-file-runtime.js");
+    const { resolveAgentWorkspaceDir } = await import("./agent-scope-config.js");
+    return await prepareLocalAgentAvatar({
+      workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
+      source: params.source,
+      readBody: params.readBody,
+    });
+  } catch {
+    return { ok: false, reason: "unreadable" };
+  }
+}
+
 /** Resolve one configured avatar source for agent-list projections. */
-export function resolveAgentAvatarUrlFromSource(
+export async function resolveAgentAvatarUrlFromSource(
   cfg: OpenClawConfig,
   agentId: string,
   source: string | null | undefined,
-): string | undefined {
+): Promise<string | undefined> {
   const normalized = normalizeOptionalString(source);
   if (!normalized) {
     return undefined;
@@ -169,6 +305,11 @@ export function resolveAgentAvatarUrlFromSource(
   ) {
     return undefined;
   }
-  const opened = openLocalAgentAvatarFile({ cfg, agentId, source: normalized });
-  return opened.ok ? readOpenedLocalAgentAvatarDataUrl(opened.file) : undefined;
+  const prepared = await prepareLocalAgentAvatarFile({
+    cfg,
+    agentId,
+    source: normalized,
+    readBody: true,
+  });
+  return prepared.ok ? localAgentAvatarDataUrl(prepared.file) : undefined;
 }

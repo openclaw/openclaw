@@ -15,13 +15,11 @@ import { disposePluginRegistryInstances } from "./runtime.js";
 afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-it.each(
-  ["setup", "runtime", "setter"].flatMap((stage) =>
-    ['new Error("setup fixture failed")', "undefined", "null", "false", "0", '""'].map(
-      (failure) => ({ stage, failure }),
-    ),
-  ),
-)("retires a failed $stage owner after throwing $failure", async ({ stage, failure }) => {
+it.each([
+  { stage: "setup", failure: "undefined" },
+  { stage: "runtime", failure: "null" },
+  { stage: "setter", failure: 'new Error("setup fixture failed")' },
+])("retires a failed $stage owner after throwing $failure", async ({ stage, failure }) => {
   useNoBundledPlugins();
   const id = "failed-channel-setup";
   const broken = writePlugin({

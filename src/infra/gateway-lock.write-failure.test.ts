@@ -1,107 +1,103 @@
-// Protects descriptor cleanup and competing sidecars after a Gateway lock write failure.
-import type { BigIntStats } from "node:fs";
+import fsSync, { type BigIntStats, chmodSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as nativeSleep } from "node:timers/promises";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { withEnvAsync } from "../test-utils/env.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 
-const fixtureRootTracker = createSuiteTempRootTracker({
-  prefix: "openclaw-gateway-write-failure-",
+vi.mock("node:fs", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs")>();
+  return { ...original, chmodSync: vi.fn(original.chmodSync) };
 });
-const realNow = Date.now.bind(Date);
 
-describe("gateway lock write failure", () => {
-  beforeAll(async () => {
-    await fixtureRootTracker.setup();
-  });
-  beforeEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
-  afterAll(async () => {
-    await fixtureRootTracker.cleanup();
-  });
+const roots = useAutoCleanupTempDirTracker(afterEach);
+const acquire = (options: Parameters<typeof acquireGatewayLock>[0]) =>
+  acquireGatewayLock({ allowInTests: true, timeoutMs: 0, ...options });
 
-  it("closes handle and preserves an unowned lock file when writeFile fails after open succeeds", async () => {
-    vi.useRealTimers();
-    const stateDir = await fixtureRootTracker.make("case");
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, "{}", "utf8");
-    const env = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: configPath,
+beforeEach(() => {
+  vi.mocked(chmodSync).mockImplementation(fsSync.chmodSync);
+});
+afterEach(() => vi.restoreAllMocks());
+
+it.skipIf(process.platform === "win32")(
+  "acquires a writable database on a filesystem that rejects chmod",
+  async () => {
+    const stateDir = roots.make("chmod-unsupported");
+    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+    const options = {
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      listenerMode: "supervised" as const,
+      supervisor: { kind: "systemd" as const, name: null },
+      port: 12345,
     };
-    const lockDir = path.join(stateDir, "__locks");
-    await fs.mkdir(lockDir, { recursive: true });
-    const stateLockPath = path.join(lockDir, "gateway.state.lock");
-
-    const writeError = Object.assign(new Error("ENOSPC: no space left on device"), {
-      code: "ENOSPC",
-    });
-    const open = fs.open;
-    const opened: Awaited<ReturnType<typeof fs.open>>[] = [];
-    let closeCalls = 0;
-    let foreignIdentity: BigIntStats | undefined;
-    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await open(...args);
-      if (args[1] === "wx") {
-        opened.push(handle);
-        const close = handle.close.bind(handle);
-        vi.spyOn(handle, "close").mockImplementation(async () => {
-          closeCalls += 1;
-          await close();
-        });
-        vi.spyOn(handle, "writeFile").mockImplementation(async () => {
-          // A competing writer replaces the pathname while the admitted inode stays open.
-          await fs.rename(stateLockPath, `${stateLockPath}.opened`);
-          await fs.writeFile(stateLockPath, "partial", "utf8");
-          foreignIdentity = await fs.lstat(stateLockPath, { bigint: true });
-          throw writeError;
-        });
+    await (await acquire(options))?.release();
+    await fs.chmod(databasePath, 0o666);
+    const chmod = fsSync.chmodSync.bind(fsSync);
+    vi.mocked(chmodSync).mockImplementation((pathname, mode) => {
+      if (String(pathname).startsWith(path.dirname(databasePath))) {
+        throw Object.assign(new Error("filesystem does not support chmod"), { code: "EPERM" });
       }
-      return handle;
+      chmod(pathname, mode);
     });
-
-    await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, async () => {
-      await expect(
-        acquireGatewayLock({
-          env,
-          allowInTests: true,
-          timeoutMs: 30,
-          pollIntervalMs: 2,
-          now: realNow,
-          sleep: async (ms) => {
-            await nativeSleep(ms);
-          },
-          lockDir,
-        }),
-      ).rejects.toMatchObject({
-        name: "GatewayLockError",
-        cause: writeError,
-      });
-    });
-
-    expect(opened).toHaveLength(1);
-    expect(closeCalls).toBe(1);
-    for (const handle of opened) {
-      await expect(handle.stat()).rejects.toMatchObject({ code: "EBADF" });
+    const lock = await acquire(options);
+    try {
+      expect(lock).not.toBeNull();
+      expect((await fs.stat(databasePath)).mode & 0o777).toBe(0o666);
+    } finally {
+      await lock?.release();
     }
-    expect(foreignIdentity).toBeDefined();
-    await expect(fs.lstat(stateLockPath, { bigint: true })).resolves.toMatchObject({
-      dev: foreignIdentity?.dev,
-      ino: foreignIdentity?.ino,
-    });
-    await expect(fs.readFile(stateLockPath, "utf8")).resolves.toBe("partial");
+  },
+);
 
-    openSpy.mockRestore();
+it("closes handle and preserves an unowned lock file when writeFile fails after open succeeds", async () => {
+  const stateDir = roots.make("gateway-write-failure");
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const lockDir = path.join(stateDir, "__locks");
+  await fs.mkdir(lockDir, { recursive: true });
+  const lockPath = path.join(lockDir, "gateway.state.lock");
+
+  const writeError = Object.assign(new Error("disk full"), { code: "ENOSPC" });
+  const open = fsSync.openSync.bind(fsSync);
+  const write = fsSync.writeFileSync.bind(fsSync);
+  const close = fsSync.closeSync.bind(fsSync);
+  const descriptors = { opened: 0, closed: 0 };
+  const activeDescriptors = new Set<number>();
+  let foreignIdentity: BigIntStats | undefined;
+  vi.spyOn(fsSync, "openSync").mockImplementation((pathname, flags, mode) => {
+    const fd = open(pathname, flags, mode);
+    if (pathname === lockPath && typeof flags === "number" && flags & fsSync.constants.O_EXCL) {
+      descriptors.opened += 1;
+      activeDescriptors.add(fd);
+    }
+    return fd;
   });
+  vi.spyOn(fsSync, "closeSync").mockImplementation((fd) => {
+    close(fd);
+    // A closed descriptor number can be reused before acquisition rejects.
+    if (activeDescriptors.delete(fd)) {
+      descriptors.closed += 1;
+    }
+  });
+  vi.spyOn(fsSync, "writeFileSync").mockImplementation((file, data, options) => {
+    if (typeof file === "number" && activeDescriptors.has(file)) {
+      // A competing writer replaces the pathname while the admitted inode stays open.
+      fsSync.renameSync(lockPath, `${lockPath}.opened`);
+      write(lockPath, "partial", "utf8");
+      foreignIdentity = fsSync.lstatSync(lockPath, { bigint: true });
+      throw writeError;
+    }
+    write(file, data, options);
+  });
+
+  const failure = await acquire({ env, lockDir }).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(GatewayLockError);
+  expect(failure).toMatchObject({ cause: writeError, databasePath: undefined });
+
+  expect(descriptors).toEqual({ opened: 1, closed: 1 });
+  expect(foreignIdentity).toBeDefined();
+  await expect(fs.lstat(lockPath, { bigint: true })).resolves.toMatchObject({
+    dev: foreignIdentity?.dev,
+    ino: foreignIdentity?.ino,
+  });
+  await expect(fs.readFile(lockPath, "utf8")).resolves.toBe("partial");
 });

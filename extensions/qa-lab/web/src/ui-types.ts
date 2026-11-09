@@ -1,12 +1,20 @@
 import type {
+  CaptureQueryPreset as StoredCaptureQueryPreset,
+  CaptureQueryRow,
+  DebugProxyCaptureStore,
+  CaptureSessionSummary,
+} from "openclaw/plugin-sdk/proxy-capture";
+import type {
   QaBusConversationKind,
   QaBusStateSnapshot,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
+import type { QaLabLatestReport, QaLabScenarioRun } from "../../api.js";
 import type {
   QaLabExecutionKind,
   QaLabResolvedRunPlan,
   QaLabRunnerSnapshot,
   QaLabRunSelection,
+  QaRunnerModelOption,
 } from "../../runner-contract.js";
 import type {
   QaEvidenceArtifactView,
@@ -18,11 +26,7 @@ import type {
 } from "../../shared/evidence-gallery-types.js";
 
 export type ReportEnvelope = {
-  report: null | {
-    outputPath: string;
-    markdown: string;
-    generatedAt: string;
-  };
+  report: QaLabLatestReport | null;
 };
 
 export type SeedScenario = {
@@ -56,7 +60,7 @@ export type Bootstrap = {
   runner: RunnerSnapshot;
   runnerCatalog: {
     status: "loading" | "ready" | "failed";
-    real: RunnerModelOption[];
+    real: QaRunnerModelOption[];
     channels: string[];
     profiles: Array<{
       id: string;
@@ -67,62 +71,14 @@ export type Bootstrap = {
   };
 };
 
-type ScenarioStep = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
-};
-
-export type ScenarioOutcome = {
-  id: string;
-  name: string;
-  status: "pending" | "running" | "pass" | "fail" | "skip";
-  details?: string;
-  steps?: ScenarioStep[];
-  startedAt?: string;
-  finishedAt?: string;
-};
-
-type ScenarioRun = {
-  kind: "suite" | "self-check";
-  status: "idle" | "running" | "completed";
-  startedAt?: string;
-  finishedAt?: string;
-  scenarios: ScenarioOutcome[];
-  counts: {
-    total: number;
-    pending: number;
-    running: number;
-    passed: number;
-    failed: number;
-    skipped: number;
-  };
-};
+type ScenarioRun = QaLabScenarioRun;
 
 export type RunnerSelection = QaLabRunSelection;
 export type RunnerResolvedPlan = QaLabResolvedRunPlan;
 type RunnerSnapshot = QaLabRunnerSnapshot;
 
-export type RunnerModelOption = {
-  key: string;
-  name: string;
-  provider: string;
-  input: string;
-  preferred: boolean;
-};
-
 export type OutcomesEnvelope = {
   run: ScenarioRun | null;
-};
-
-type CaptureSessionSummary = {
-  id: string;
-  startedAt: number;
-  endedAt?: number;
-  mode: string;
-  sourceProcess: string;
-  proxyUrl?: string;
-  eventCount: number;
 };
 
 export type CaptureEventView = {
@@ -149,14 +105,7 @@ export type CaptureEventView = {
   captureOrigin?: string;
 };
 
-export type CaptureQueryPreset =
-  | "none"
-  | "double-sends"
-  | "retry-storms"
-  | "cache-busting"
-  | "ws-duplicate-frames"
-  | "missing-ack"
-  | "error-bursts";
+type CaptureQueryPreset = "none" | StoredCaptureQueryPreset;
 
 export type CaptureSessionsEnvelope = {
   sessions: CaptureSessionSummary[];
@@ -167,24 +116,10 @@ export type CaptureEventsEnvelope = {
 };
 
 export type CaptureQueryEnvelope = {
-  rows: Array<Record<string, string | number | null>>;
+  rows: CaptureQueryRow[];
 };
 
-type CaptureObservedDimension = {
-  value: string;
-  count: number;
-};
-
-type CaptureCoverageSummary = {
-  sessionId: string;
-  totalEvents: number;
-  unlabeledEventCount: number;
-  providers: CaptureObservedDimension[];
-  apis: CaptureObservedDimension[];
-  models: CaptureObservedDimension[];
-  hosts: CaptureObservedDimension[];
-  localPeers: CaptureObservedDimension[];
-};
+type CaptureCoverageSummary = ReturnType<DebugProxyCaptureStore["summarizeSessionCoverage"]>;
 
 export type CaptureCoverageEnvelope = {
   coverage: CaptureCoverageSummary;
@@ -251,25 +186,20 @@ export type UiState = {
   captureSessions: CaptureSessionSummary[];
   captureEvents: CaptureEventView[];
   captureQueryPreset: CaptureQueryPreset;
-  captureQueryRows: Array<Record<string, string | number | null>>;
+  captureQueryRows: CaptureQueryRow[];
   captureKindFilter: string[];
   captureProviderFilter: string[];
   captureHostFilter: string[];
   captureSearchText: string;
-  captureHeaderMode: "key" | "all" | "hidden";
-  captureViewMode: "list" | "timeline";
-  captureGroupMode: "none" | "flow" | "host-path" | "burst";
-  captureTimelineLaneMode: "domain" | "provider" | "flow";
-  captureTimelineLaneSort: "most-events" | "most-errors" | "severity" | "alphabetical";
-  captureTimelinePreviousLaneSort:
-    | "most-events"
-    | "most-errors"
-    | "severity"
-    | "alphabetical"
-    | null;
+  captureHeaderMode: CaptureSavedView["headerMode"];
+  captureViewMode: CaptureSavedView["viewMode"];
+  captureGroupMode: CaptureSavedView["groupMode"];
+  captureTimelineLaneMode: CaptureSavedView["timelineLaneMode"];
+  captureTimelineLaneSort: CaptureSavedView["timelineLaneSort"];
+  captureTimelinePreviousLaneSort: CaptureSavedView["timelineLaneSort"] | null;
   captureTimelineLaneSearch: string;
-  captureTimelineZoom: 75 | 100 | 150 | 200 | 300;
-  captureTimelineSparklineMode: "session-relative" | "lane-relative";
+  captureTimelineZoom: CaptureSavedView["timelineZoom"];
+  captureTimelineSparklineMode: CaptureSavedView["timelineSparklineMode"];
   captureTimelineWindowStartPct: number | null;
   captureTimelineWindowEndPct: number | null;
   captureTimelineBrushAnchorPct: number | null;
@@ -277,18 +207,17 @@ export type UiState = {
   captureTimelineFocusSelectedFlow: boolean;
   captureTimelineFocusedLaneMode: "all" | "only-matching" | "collapse-background";
   captureTimelineFocusedLaneThreshold: "any" | "events-2" | "percent-10" | "percent-25";
-  captureDetailPlacement: "right" | "bottom";
+  captureDetailPlacement: CaptureSavedView["detailPlacement"];
   captureDetailSplitPct: number;
   captureDetailSplitDragging: boolean;
   captureDetailView: "overview" | "flow" | "payload" | "headers";
-  capturePreferredDetailView: "overview" | "flow" | "payload" | "headers" | null;
   captureFlowDetailLayout: "nav-first" | "pair-first" | null;
-  capturePayloadDetailLayout: "formatted" | "raw" | null;
-  capturePayloadExtent: "preview" | "full";
+  capturePayloadDetailLayout: CaptureSavedView["payloadLayout"];
+  capturePayloadExtent: CaptureSavedView["payloadExtent"];
   capturePayloadEventSort: "stream" | "name" | "size";
   capturePayloadEventFilter: string;
   captureErrorsOnly: boolean;
-  captureCoverage: CaptureCoverageSummary | null;
+  captureCoverage: Omit<CaptureCoverageSummary, "localPeers"> | null;
   captureStartupStatus: CaptureStartupStatus | null;
   evidence: EvidenceGalleryModel | null;
   evidenceArtifactFilter: "all" | EvidenceArtifactView["mediaKind"];

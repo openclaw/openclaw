@@ -1,4 +1,3 @@
-/** Coordinates one direct compaction attempt through explicit lifecycle phases. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -7,6 +6,7 @@ import {
   getAsyncWorkSignal,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { hasModelFallbackStop } from "../failover-error.js";
 import { executePreparedCompactionSession } from "./compaction-session-execution.js";
 import {
   prepareDirectCompactionAttempt,
@@ -33,6 +33,7 @@ export async function compactEmbeddedAgentSessionDirectOnce(
   const cleanupWork = new AsyncWorkScope();
   const cleanupContext = cleanupWork.run(() => AsyncLocalStorage.snapshot());
   let cleanup: PreparedCompactionCleanup | undefined;
+  let releaseSandbox = () => {};
   const runAttempt = async () => {
     const preparation = await prepareDirectCompactionAttempt({
       ...params,
@@ -41,12 +42,16 @@ export async function compactEmbeddedAgentSessionDirectOnce(
     if (!preparation.ok) {
       return preparation.result;
     }
+    releaseSandbox = preparation.value.releaseSandbox;
     try {
       const runtime = await buildPreparedCompactionRuntime(preparation.value, (preparedCleanup) => {
         cleanup = preparedCleanup;
       });
       return await executePreparedCompactionSession(runtime);
     } catch (err) {
+      if (hasModelFallbackStop(err)) {
+        throw err;
+      }
       return preparation.value.fail(formatErrorMessage(err), err);
     } finally {
       cleanup?.restoreSkillEnvironment();
@@ -88,6 +93,7 @@ export async function compactEmbeddedAgentSessionDirectOnce(
               Promise.all([context(() => work.drain()), cleanupContext(() => cleanupWork.drain())]),
           );
         } finally {
+          releaseSandbox();
           cancellationSignal?.removeEventListener("abort", closeWork);
         }
       }

@@ -15,11 +15,12 @@ Daily, weekly, and monthly team activity reports from GitHub and Discord, with m
 ## Distribution
 
 - Package: `@openclaw/team-reports`
-- Install route: npm or ClawHub: `clawhub:@openclaw/team-reports`
+- Install route: npm or ClawHub: `@openclaw/team-reports`
 
 ## Surface
 
 - CLI commands: `openclaw team-reports`
+- Contracts: `gatewayMethodDispatch`
 
 ## Related docs
 

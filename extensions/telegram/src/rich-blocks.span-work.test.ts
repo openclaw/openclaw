@@ -25,40 +25,41 @@ describe("rich-message span work", () => {
     const sort = Array.prototype.sort;
     // Observe the real compositor's range reads without replacing its parser,
     // span ordering, or output. Sorting itself is outside the sweep budget.
-    const observer = vi
-      .spyOn(Array.prototype, "sort")
-      .mockImplementation(function (this: unknown[], compare) {
-        const result = sort.call(this, compare);
-        if (
-          this.length !== count + 1 ||
-          !this.every(
-            (span): span is { kind: "style" | "html"; start: number; end: number } =>
-              typeof span === "object" &&
-              span !== null &&
-              "kind" in span &&
-              (span.kind === "style" || span.kind === "html") &&
-              "start" in span &&
-              typeof span.start === "number" &&
-              "end" in span &&
-              typeof span.end === "number",
-          )
-        ) {
-          return result;
-        }
-        for (const span of this) {
-          const end = span.end;
-          observedSpans += 1;
-          Object.defineProperty(span, "end", {
-            configurable: true,
-            enumerable: true,
-            get: () => {
-              endReads += 1;
-              return end;
-            },
-          });
-        }
+    const observer = vi.spyOn(Array.prototype, "sort").mockImplementation(function (
+      this: unknown[],
+      compare,
+    ) {
+      const result = sort.call(this, compare);
+      if (
+        this.length !== count + 1 ||
+        !this.every(
+          (span): span is { kind: "style" | "html"; start: number; end: number } =>
+            typeof span === "object" &&
+            span !== null &&
+            "kind" in span &&
+            (span.kind === "style" || span.kind === "html") &&
+            "start" in span &&
+            typeof span.start === "number" &&
+            "end" in span &&
+            typeof span.end === "number",
+        )
+      ) {
         return result;
-      });
+      }
+      for (const span of this) {
+        const end = span.end;
+        observedSpans += 1;
+        Object.defineProperty(span, "end", {
+          configurable: true,
+          enumerable: true,
+          get: () => {
+            endReads += 1;
+            return end;
+          },
+        });
+      }
+      return result;
+    });
     try {
       expect(buildTelegramRichMarkdownPlan(markdown, { skipEntityDetection: true })).toEqual({
         richMessage,

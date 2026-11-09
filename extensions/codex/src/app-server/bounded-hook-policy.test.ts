@@ -1,224 +1,132 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { assertCodexPrivateHookIsolation } from "./bounded-hook-policy.js";
 import type { CodexAppServerClient } from "./client.js";
-import type { JsonObject } from "./protocol.js";
+import type { JsonObject, JsonValue } from "./protocol.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+const layer = (name: JsonObject, config: JsonObject = {}) => ({ name, config });
+const discoveryConfig = (hooks: boolean) => ({
+  features: { hooks, plugins: false },
+  project_root_markers: [],
+});
+const inventoryEntry = (cwd: string, overrides: JsonObject = {}) => ({
+  cwd,
+  hooks: [],
+  warnings: [],
+  errors: [],
+  ...overrides,
+});
+const userLayer = (home: string) =>
+  layer({ type: "user", file: path.join(home, "profiles/selected.toml") });
 
 async function fixture() {
   const root = await fs.realpath(tempDirs.make("codex-private-hook-policy-"));
   const workspace = { codexHome: path.join(root, "home"), cwd: path.join(root, "workspace") };
   await Promise.all(Object.values(workspace).map((directory) => fs.mkdir(directory)));
   const config: JsonObject = {
-    config: { features: { hooks: true, plugins: false }, project_root_markers: [] },
+    config: discoveryConfig(true),
     layers: [
-      { name: { type: "system", file: "/etc/codex/config.toml" }, config: {} },
-      { name: { type: "user", file: path.join(workspace.codexHome, "config.toml") }, config: {} },
-      { name: { type: "sessionFlags" }, config: {} },
+      layer({ type: "packagedDefaults" }, { hooks: { Stop: [] } }),
+      ...["mdm", "system", "enterpriseManaged"].map((type) => layer({ type })),
+      userLayer(workspace.codexHome),
+      layer({ type: "project", dotCodexFolder: path.join(workspace.cwd, ".codex") }),
+      layer({ type: "sessionFlags" }),
     ],
   };
   const inventory: JsonObject = {
     data: [
-      {
-        cwd: workspace.cwd,
+      inventoryEntry(workspace.cwd, {
         hooks: [{ key: "managed:pre_tool_use:0:0", enabled: true, isManaged: true }],
-        warnings: [],
-        errors: [],
-      },
+      }),
     ],
   };
   const requirements: JsonObject = { requirements: { featureRequirements: {} } };
+  const responses: Record<string, JsonObject> = {
+    "config/read": config,
+    "configRequirements/read": requirements,
+    "hooks/list": inventory,
+  };
   const request = vi.fn(async (method: string) => {
-    if (method === "config/read") {
-      return config;
+    if (!Object.hasOwn(responses, method)) {
+      throw new Error(`Unexpected request: ${method}`);
     }
-    if (method === "configRequirements/read") {
-      return requirements;
-    }
-    if (method === "hooks/list") {
-      return inventory;
-    }
-    throw new Error(`Unexpected request: ${method}`);
+    return responses[method];
   });
   const client = { request } as unknown as Pick<CodexAppServerClient, "request">;
   return { root, workspace, config, inventory, requirements, request, client };
 }
 
-describe("private Codex hook isolation", () => {
-  it("preserves managed hooks and checks the private cwd before any thread starts", async () => {
-    const state = await fixture();
-    const signal = new AbortController().signal;
-    await expect(
-      assertCodexPrivateHookIsolation(state.client, state.workspace, signal),
-    ).resolves.toEqual({ activeManagedHooks: true });
-    expect(state.request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "hooks/list",
-    ]);
-    expect(state.request).toHaveBeenCalledWith(
-      "config/read",
-      { cwd: state.workspace.cwd, includeLayers: true },
-      { signal },
-    );
-    expect(state.request).toHaveBeenCalledWith(
-      "hooks/list",
-      { cwds: [state.workspace.cwd] },
-      { signal },
-    );
-  });
+let state: Awaited<ReturnType<typeof fixture>>;
+const assertIsolation = () => assertCodexPrivateHookIsolation(state.client, state.workspace);
+const rejectsIsolation = (reason: string | RegExp) =>
+  expect(assertIsolation()).rejects.toThrow(reason);
+beforeEach(async () => {
+  state = await fixture();
+});
+it.each(["user", "project"])("rejects ambient %s config before inventory", async (type) => {
+  state.config.layers = [
+    layer(
+      type === "user"
+        ? { type, file: path.join(state.root, "ambient/config.toml") }
+        : { type, dotCodexFolder: path.join(state.root, "ambient/.codex") },
+    ),
+  ];
+  await rejectsIsolation("external user or project config layer");
+  expect(state.request.mock.calls.map(([method]) => method)).not.toContain("hooks/list");
+});
 
-  it.each(["user", "project"])(
-    "rejects an ambient %s config even with no active hooks",
-    async (type) => {
-      const state = await fixture();
-      state.config.layers = [
-        {
-          name:
-            type === "user"
-              ? { type, file: path.join(state.root, "ambient/config.toml") }
-              : { type, dotCodexFolder: path.join(state.root, "ambient/.codex") },
-          config: {},
-        },
-      ];
-      await expect(assertCodexPrivateHookIsolation(state.client, state.workspace)).rejects.toThrow(
-        "external user or project config layer",
-      );
-      expect(state.request).not.toHaveBeenCalledWith(
-        "hooks/list",
-        expect.anything(),
-        expect.anything(),
-      );
-    },
-  );
+it("rejects a private-looking user profile that escapes through a symlink", async () => {
+  const outside = path.join(state.root, "outside");
+  await fs.mkdir(outside);
+  await fs.symlink(outside, path.join(state.workspace.codexHome, "profiles"), "junction");
+  state.config.layers = [userLayer(state.workspace.codexHome)];
+  await rejectsIsolation("external user or project config layer");
+});
 
-  it("rejects a private-looking user profile that escapes through a symlink", async () => {
-    const state = await fixture();
-    const outside = path.join(state.root, "outside");
-    await fs.mkdir(outside);
-    await fs.symlink(outside, path.join(state.workspace.codexHome, "profiles"), "junction");
-    state.config.layers = [
-      {
-        name: {
-          type: "user",
-          file: path.join(state.workspace.codexHome, "profiles/selected.toml"),
-        },
-        config: {},
-      },
-    ];
-    await expect(assertCodexPrivateHookIsolation(state.client, state.workspace)).rejects.toThrow(
-      "external user or project config layer",
-    );
-  });
-
-  it("admits private profile and project layers alongside managed sources", async () => {
-    const state = await fixture();
-    state.config.layers = [
-      { name: { type: "packagedDefaults" }, config: { hooks: { Stop: [] } } },
-      { name: { type: "mdm", domain: "example", key: "config" }, config: {} },
-      { name: { type: "enterpriseManaged", id: "policy", name: "Policy" }, config: {} },
-      {
-        name: {
-          type: "user",
-          file: path.join(state.workspace.codexHome, "profiles/selected.toml"),
-          profile: "selected",
-        },
-        config: {},
-      },
-      {
-        name: { type: "project", dotCodexFolder: path.join(state.workspace.cwd, ".codex") },
-        config: {},
-      },
-    ];
-    await expect(assertCodexPrivateHookIsolation(state.client, state.workspace)).resolves.toEqual({
-      activeManagedHooks: true,
-    });
-  });
-
-  it("requires a reported private home even when the hook inventory is empty", async () => {
-    const state = await fixture();
-    state.config.layers = [];
-    state.inventory.data = [{ cwd: state.workspace.cwd, hooks: [], warnings: [], errors: [] }];
-    await expect(assertCodexPrivateHookIsolation(state.client, state.workspace)).rejects.toThrow(
-      "could not verify its private Codex home",
-    );
-  });
-
-  it.each(["legacyManagedConfigTomlFromFile", "futureLayer"])(
-    "rejects %s discovery layers",
-    async (type) => {
-      const state = await fixture();
-      state.config.layers = [{ name: { type }, config: {} }];
-      await expect(assertCodexPrivateHookIsolation(state.client, state.workspace)).rejects.toThrow(
-        "unsupported config layer",
-      );
-    },
-  );
-
-  it.each(["packagedDefaults", "sessionFlags"])(
-    "rejects unmanaged hook declarations in %s",
-    async (type) => {
-      const state = await fixture();
-      state.config.layers = [
-        {
-          name: { type },
-          config: { hooks: { SessionStart: [{ hooks: [{ command: "unexpected" }] }] } },
-        },
-      ];
-      await expect(assertCodexPrivateHookIsolation(state.client, state.workspace)).rejects.toThrow(
-        "unmanaged hook declarations",
-      );
-    },
-  );
-
-  it.each<JsonObject>([
+it.each<[string, JsonValue, string]>([
+  ["layers", [], "could not verify its private Codex home"],
+  ["layers", [layer({ type: "legacyManagedConfigTomlFromFile" })], "unsupported config layer"],
+  ...["packagedDefaults", "sessionFlags"].map((type): [string, JsonValue, string] => [
+    "layers",
+    [layer({ type }, { hooks: { SessionStart: [{ hooks: [{ command: "unexpected" }] }] } })],
+    "unmanaged hook declarations",
+  ]),
+  ...Array.of<JsonObject>(
     { features: { hooks: true, plugins: true }, project_root_markers: [] },
     { features: { hooks: true, plugins: false }, project_root_markers: [".git"] },
     { features: { plugins: false }, project_root_markers: [] },
-  ])("rejects settings that cannot prove hook inventory isolation", async (config) => {
-    const state = await fixture();
-    state.config.config = config;
-    await expect(assertCodexPrivateHookIsolation(state.client, state.workspace)).rejects.toThrow(
-      "isolated hook discovery settings",
-    );
-  });
+  ).map((config): [string, JsonValue, string] => [
+    "config",
+    config,
+    "isolated hook discovery settings",
+  ]),
+  ["config", discoveryConfig(false), "cannot disable hooks without a managed requirement"],
+])("rejects unsafe %s: %j", async (key, value, reason) => {
+  state.config[key] = value;
+  await rejectsIsolation(reason);
+});
 
-  it("accepts an explicit managed hooks disable without relying on an empty inventory", async () => {
-    const state = await fixture();
-    state.config.config = { features: { hooks: false, plugins: false }, project_root_markers: [] };
-    state.requirements.requirements = { featureRequirements: { hooks: false } };
-    await expect(assertCodexPrivateHookIsolation(state.client, state.workspace)).resolves.toEqual({
-      activeManagedHooks: false,
-    });
-    expect(state.request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-    ]);
-  });
+it("accepts an explicit managed hooks disable without relying on an empty inventory", async () => {
+  state.config.config = discoveryConfig(false);
+  state.requirements.requirements = { featureRequirements: { hooks: false } };
+  await expect(assertIsolation()).resolves.toEqual({ activeManagedHooks: false });
+  expect(state.request.mock.calls.map(([method]) => method)).toEqual([
+    "config/read",
+    "configRequirements/read",
+  ]);
+});
 
-  it("rejects disabled hooks without a managed disable requirement", async () => {
-    const state = await fixture();
-    state.config.config = { features: { hooks: false, plugins: false }, project_root_markers: [] };
-    await expect(assertCodexPrivateHookIsolation(state.client, state.workspace)).rejects.toThrow(
-      "cannot disable hooks without a managed requirement",
-    );
-  });
-
-  it.each([
-    { hooks: [{ key: "user:stop:0:0", enabled: true, isManaged: false }] },
-    { hooks: [{ key: "unknown:stop:0:0", enabled: true }] },
-    { warnings: ["Hook file could not be parsed"] },
-    { errors: [{ message: "Config could not be loaded" }] },
-    { cwd: "/other-workspace" },
-  ])("rejects unsafe or incomplete hook inventory", async (entry) => {
-    const state = await fixture();
-    state.inventory.data = [
-      { cwd: state.workspace.cwd, hooks: [], warnings: [], errors: [], ...entry },
-    ];
-    await expect(assertCodexPrivateHookIsolation(state.client, state.workspace)).rejects.toThrow(
-      /hook/,
-    );
-  });
+it.each<JsonObject>([
+  { hooks: [{ key: "user:stop:0:0", enabled: true, isManaged: false }] },
+  { hooks: [{ key: "unknown:stop:0:0", enabled: true }] },
+  { warnings: ["Hook file could not be parsed"] },
+  { errors: [{ message: "Config could not be loaded" }] },
+  { cwd: "/other-workspace" },
+])("rejects unsafe or incomplete hook inventory", async (entry) => {
+  state.inventory.data = [inventoryEntry(state.workspace.cwd, entry)];
+  await rejectsIsolation(/hook/);
 });

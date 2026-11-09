@@ -127,6 +127,9 @@ export async function createWorktreeSetupPlan({ rootDir, workload = "source", en
     }
     filters.add(pkg.name + "...");
     filters.add("./packages/*...");
+    if (fs.existsSync(path.join(rootDir, "ui/package.json"))) {
+      filters.add("./ui...");
+    }
     for (const entry of collectSourceCheckoutPluginBuildEntries({ cwd: rootDir, env })) {
       if (entry.hasPackageJson) {
         filters.add("./extensions/" + entry.id + "...");

@@ -17,11 +17,17 @@ are most likely present.
 
 This is a recent-activity hint, not proof of which computer sent a particular
 chat message. The active Mac can differ from the computer running the Gateway
-or agent, and another person's input can change the selection.
+or agent. Device status and connection-alert routing select the freshest eligible
+Mac across the Gateway. The agent's prompt hint instead selects among nodes
+associated with the authenticated requester. It never falls back to another
+person's machine. Shared-owner and unidentified turns can receive an unassigned
+node hint, explicitly marked with unknown person identity.
 
-This is separate from [system presence](/concepts/presence), which is the live
-roster of Gateway clients, and from durable `node.presence.alive` beacons, which
-record when a mobile node last woke without treating it as connected.
+The core [presence tool](/concepts/presence#ask-the-agent-about-presence) combines
+these observations with the live roster of people and clients. It preserves the
+activity source and identifies shared or unassigned machines separately.
+Durable `node.presence.alive` beacons record when a mobile node last woke without
+treating it as connected or establishing user activity.
 
 ## Requirements
 
@@ -112,7 +118,7 @@ preparation, the dynamic context contains a compact hint with only the
 authenticated node id:
 
 ```text
-active_node=<node-id>
+active_node=<node-id> active_node_identity=requester
 ```
 
 When no eligible connected Mac has current presence, the hint is
@@ -120,10 +126,18 @@ When no eligible connected Mac has current presence, the hint is
 agent to reuse a disconnected Mac. It does not identify the message's source
 device or imply that no one is using a computer.
 
+For shared-owner or unidentified turns the identity marker is
+`active_node_identity=unknown`; activity on that machine does not establish who
+used it. A named person's hint requires a matching authenticated node profile.
+Device names, IP addresses, and a single visible person cannot establish that
+association.
+
 Exact timestamps and node-controlled display names stay out of the prompt to
 avoid prompt injection and cache churn. The hint stays byte-for-byte identical
 while the selected node id is unchanged. When the agent needs current details,
-the `nodes` tool can read `node.list` or `node.describe` instead.
+the `presence` tool can inspect the requester and their devices. The `nodes`
+tool continues to read device status and control capabilities through
+`node.list` or `node.describe`.
 
 ## How connection alerts are routed
 

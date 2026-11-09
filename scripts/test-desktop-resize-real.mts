@@ -5,6 +5,8 @@ import net from "node:net";
 import { userInfo } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { WORKER_PROTOCOL_FEATURES } from "../packages/gateway-protocol/src/schema/worker-admission.ts";
+import { createWorkerBundleProducer } from "../src/gateway/worker-environments/bundle.ts";
 import { getFreePort } from "../src/test-utils/ports.ts";
 import { assertPrebuiltUiE2eRuntime } from "../test/vitest/vitest.ui-e2e-prebuilt.global-setup.ts";
 import { desktopReadinessLines } from "./lib/desktop-readiness-proof.mts";
@@ -18,7 +20,11 @@ import {
   readDesktopProofTestReport,
   withDesktopProofCleanup,
 } from "./lib/desktop-resize-proof.mts";
-import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
+import {
+  type ManagedCommandTimeoutObservation,
+  hasUnjoinedWork,
+  runManagedCommand,
+} from "./lib/managed-child-process.mts";
 
 const root = process.cwd();
 const output = path.join(root, ".artifacts/control-ui-e2e/real-gateway/desktop-resize");
@@ -66,7 +72,12 @@ const receipt = {
     packages: [] as Array<{ name: string; version: string; sha256: string }>,
     serverBinarySha256: "",
   },
-  commands: [] as Array<{ label: string; exitCode: number | null; elapsedMs: number }>,
+  commands: [] as Array<{
+    label: string;
+    exitCode: number | null;
+    elapsedMs: number;
+    timeoutObservation?: ManagedCommandTimeoutObservation | null;
+  }>,
   carriers: [] as string[],
   testDiagnostics: [] as Array<{
     carrier: "node" | "ssh";
@@ -130,6 +141,7 @@ async function run(
   const log: Buffer[] = [];
   let bytes = 0;
   let exitCode: number | null = null;
+  let timeoutObservation: ManagedCommandTimeoutObservation | null = null;
   const started = Date.now();
   return withDesktopProofCleanup(
     async () => {
@@ -148,6 +160,12 @@ async function run(
         timeoutMs: options.timeoutMs ?? 30_000,
         signal: options.cleanup ? cap.signal : AbortSignal.any([lifetime.signal, cap.signal]),
         requireProcessTreeExit: true,
+        onTimeout:
+          label === "apt-install"
+            ? (observation) => {
+                timeoutObservation = observation;
+              }
+            : undefined,
         onReady(child) {
           const append = (data: Buffer, target?: Buffer[]) => {
             bytes += data.length;
@@ -167,7 +185,12 @@ async function run(
       return Buffer.concat(stdout);
     },
     async () => {
-      receipt.commands.push({ label, exitCode, elapsedMs: Date.now() - started });
+      receipt.commands.push({
+        label,
+        exitCode,
+        elapsedMs: Date.now() - started,
+        ...(label === "apt-install" ? { timeoutObservation } : {}),
+      });
       await withDesktopProofCleanup(
         async () => {
           if (label === "sshd-config" && exitCode !== 0) {
@@ -526,7 +549,17 @@ async function main() {
     await waitFor(() => tcpReady(sshPort));
     sshd.pid = Number((await readFile(pidFile, "utf8")).trim());
     assert(Number.isSafeInteger(sshd.pid) && sshd.pid > 1);
+    const bundle = await createWorkerBundleProducer({
+      packageRoot: root,
+      cacheDir: path.join(privateRoot, "worker-bundles"),
+      protocolFeatures: WORKER_PROTOCOL_FEATURES,
+    }).prepare();
     const fixture = {
+      bootstrapReceipt: {
+        bundleHash: bundle.bundleHash,
+        openclawVersion: bundle.openclawVersion,
+        protocolFeatures: [...bundle.protocolFeatures],
+      },
       ssh: {
         host: "127.0.0.1",
         port: sshPort,
@@ -574,6 +607,7 @@ async function main() {
               "--configLoader",
               "runner",
               "--reporter=json",
+              "--reporter=./scripts/lib/vitest-resource-reporter.mts",
               "--outputFile",
               reportFile,
               "--includeTaskLocation",
@@ -607,7 +641,10 @@ async function main() {
                   checkpoint.owners.endpointTap !== "owned",
               );
               try {
-                diagnostic.report = await readDesktopProofTestReport(reportFile);
+                diagnostic.report = await readDesktopProofTestReport(
+                  reportFile,
+                  path.join(privateRoot, `test-${carrier}.log`),
+                );
                 diagnostic.status = "available";
                 for (const file of diagnostic.report.files) {
                   for (const test of file.assertions) {

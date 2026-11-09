@@ -29,7 +29,7 @@ class FileProviderPathsTest {
 
   @Test
   fun activeExportRootsServeTheirOriginalBytes() {
-    for (root in listOf("exports", "workspace-files")) {
+    for (root in listOf("exports", "workspace-files", "chat-camera")) {
       withCacheFile(root) { file ->
         val uri = FileProvider.getUriForFile(application, authority, file)
         val bytes = checkNotNull(application.contentResolver.openInputStream(uri)).use { it.readBytes() }

@@ -1,7 +1,7 @@
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import {
   attachBlockMetadata,
-  attachListItemMetadata,
+  copyMarkdownListItem,
   copyHtmlTags,
   sliceListMarker,
   type MarkdownIRWithMetadata,
@@ -66,32 +66,21 @@ function sliceNormalizedMarkdownIR(
         : undefined;
     return listMarker || taskMarker
       ? [
-          attachListItemMetadata(
-            {
-              kind: item.kind,
-              ...(listMarker ? { listMarker } : {}),
-              ...(item.task ? { task: true as const } : {}),
-              ...(taskMarker ? { taskMarker } : {}),
-              ...(item.listId !== undefined ? { listId: item.listId } : {}),
-              ...(item.parentListId !== undefined ? { parentListId: item.parentListId } : {}),
-              ...(item.depth !== undefined ? { depth: item.depth } : {}),
-              ...(item.start !== undefined
-                ? { start: Math.max(item.start, normalizedStart) - normalizedStart }
-                : {}),
-              ...(item.end !== undefined
-                ? { end: Math.min(item.end, normalizedEnd) - normalizedStart }
-                : {}),
-            },
-            {
-              ...(content ? { contentStart: content.start, contentEnd: content.end } : {}),
-              ...(item.markerOnly ? { markerOnly: true as const } : {}),
-              sourceMarker: item.sourceMarker,
-              sourceContent: item.sourceContent,
-              sourceIndent: item.sourceIndent,
-              sourceStartLine: item.sourceStartLine,
-              sourceEndLine: item.sourceEndLine,
-            },
-          ),
+          copyMarkdownListItem(item, {
+            listMarker,
+            taskMarker,
+            start:
+              item.start !== undefined
+                ? Math.max(item.start, normalizedStart) - normalizedStart
+                : undefined,
+            end:
+              item.end !== undefined
+                ? Math.min(item.end, normalizedEnd) - normalizedStart
+                : undefined,
+            contentStart: content?.start,
+            contentEnd: content?.end,
+            markerOnly: item.markerOnly,
+          }),
         ]
       : [];
   });
@@ -126,23 +115,27 @@ export function sliceMarkdownIRRanges(ir: MarkdownIR, ranges: MarkdownIRRange[])
       metadata: { text: ir.text, styles: [], links: [] },
     }));
 
-  function visitRanges(
-    start: number,
-    end: number,
-    visit: (metadata: MarkdownIRWithMetadata, index: number) => void,
-  ) {
+  function firstRangeEndingAtOrAfter(offset: number): number {
     let low = 0;
     let high = partitions.length;
     while (low < high) {
       const middle = Math.floor((low + high) / 2);
       const partition = partitions[middle];
-      if (partition && partition.range.end < start) {
+      if (partition && partition.range.end < offset) {
         low = middle + 1;
       } else {
         high = middle;
       }
     }
-    for (let index = low; index < partitions.length; index += 1) {
+    return low;
+  }
+
+  function visitRanges(
+    start: number,
+    end: number,
+    visit: (metadata: MarkdownIRWithMetadata, index: number) => void,
+  ) {
+    for (let index = firstRangeEndingAtOrAfter(start); index < partitions.length; index += 1) {
       const partition = partitions[index];
       if (!partition || partition.range.start > end) {
         break;
@@ -182,18 +175,7 @@ export function sliceMarkdownIRRanges(ir: MarkdownIR, ranges: MarkdownIRRange[])
   }
   for (const tag of ir.htmlTags ?? []) {
     // Search by the tag's end so a long tag split across many chunks costs O(log n).
-    let low = 0;
-    let high = partitions.length;
-    while (low < high) {
-      const middle = Math.floor((low + high) / 2);
-      const partition = partitions[middle];
-      if (partition && partition.range.end < tag.end) {
-        low = middle + 1;
-      } else {
-        high = middle;
-      }
-    }
-    for (let index = low; index < partitions.length; index += 1) {
+    for (let index = firstRangeEndingAtOrAfter(tag.end); index < partitions.length; index += 1) {
       const partition = partitions[index];
       if (!partition || partition.range.start > tag.start) {
         break;

@@ -1,4 +1,5 @@
 import Foundation
+import Markdown
 import OpenClawProtocol
 import SwiftUI
 
@@ -31,11 +32,32 @@ private struct ChatProgressCardSurface: ViewModifier {
     }
 }
 
+/// The keyboard hides when a context menu opens, and everything above it moves down. A message row's lifted
+/// copy moves too, because it sits in the transcript's scroll view; without a scroll container of its own the
+/// card's copy stayed where the press began, over the transcript. A scroll view that never scrolls is one.
+private struct ChatProgressCardMenuAnchor: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        // Only this container is fixed; wide tables and code inside the card still pan.
+        ScrollView { content.scrollDisabled(false) }
+            .scrollDisabled(true)
+            .scrollClipDisabled()
+            .fixedSize(horizontal: false, vertical: true)
+        #else
+        content
+        #endif
+    }
+}
+
 struct ChatProgressCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let steps: [ProgressCardStep]
     let markdown: String?
     var isInline = false
+    var isRefreshing = false
+    var onRefresh: (() -> Void)?
+    var onClearSaved: (() -> Void)?
+    var onDismiss: (() -> Void)?
 
     @State private var isExpanded = false
 
@@ -49,12 +71,17 @@ struct ChatProgressCard: View {
             ?? self.steps.first
     }
 
+    private var parsedMarkdown: ChatProgressCardMarkdown {
+        ChatProgressCardMarkdown(self.markdown ?? "")
+    }
+
     private var markdownSummary: String? {
-        guard let line = self.markdown?
+        let parsed = self.parsedMarkdown
+        guard let line = parsed.text
             .split(whereSeparator: \.isNewline)
             .map(String.init)
             .first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
-        else { return nil }
+        else { return parsed.bars.first?.label }
         var summary = line.trimmingCharacters(in: .whitespacesAndNewlines)
         while let first = summary.first,
               first.isWhitespace || "#-*>".contains(first)
@@ -69,8 +96,18 @@ struct ChatProgressCard: View {
             if self.isInline {
                 self.content
             } else {
+                // The menu is the message rows' own, on the whole card: the system times the press and lifts
+                // all of it. On the header alone it lifted the header out of the card.
+                let cornerRadius: CGFloat = self.isExpanded ? 16 : 18
                 self.content
-                    .modifier(ChatProgressCardSurface(cornerRadius: self.isExpanded ? 16 : 18))
+                    .modifier(ChatProgressCardSurface(cornerRadius: cornerRadius))
+                    #if os(iOS)
+                    .contentShape(
+                        .contextMenuPreview,
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    .contextMenu { self.actionMenu }
+                    #endif
+                    .modifier(ChatProgressCardMenuAnchor())
             }
         }
         .foregroundStyle(OpenClawChatTheme.assistantText)
@@ -78,28 +115,77 @@ struct ChatProgressCard: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(self.reduceMotion ? nil : .easeInOut(duration: 0.2)) {
-                    self.isExpanded.toggle()
+            HStack(spacing: 0) {
+                Button(action: self.toggle) {
+                    self.summary
+                        .padding(.horizontal, self.isInline ? 0 : 12)
+                        .padding(.vertical, self.isInline ? 4 : (self.isExpanded ? 11 : 9))
+                        .contentShape(Rectangle())
                 }
-            } label: {
-                self.summary
-                    .padding(.horizontal, self.isInline ? 0 : 12)
-                    .padding(.vertical, self.isInline ? 4 : (self.isExpanded ? 11 : 9))
-                    .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityLabel(self.summaryAccessibilityLabel)
+                .accessibilityHint(self.isExpanded ? "Collapse plan" : "Expand plan")
+                // VoiceOver and Switch Control reach the menu's actions here, without the long press.
+                .accessibilityActions {
+                    if !self.isInline, !Self.showsHeaderActions { self.actionMenu }
+                }
+
+                // Same order as the web client: refresh, clear saved, dismiss, collapse.
+                if !self.isInline {
+                    if self.isRefreshing {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .frame(width: 32, height: 36)
+                            .accessibilityLabel("Refreshing plan")
+                    } else if Self.showsHeaderActions, let onRefresh {
+                        self.headerButton(
+                            symbol: "arrow.clockwise",
+                            label: "Refresh plan",
+                            id: "refresh",
+                            action: onRefresh)
+                    }
+                    if Self.showsHeaderActions, let onClearSaved {
+                        self.headerButton(
+                            symbol: "trash",
+                            label: "Clear saved plan for everyone",
+                            id: "clear-saved",
+                            action: onClearSaved)
+                    }
+                    if Self.showsHeaderActions, let onDismiss {
+                        self.headerButton(symbol: "xmark", label: "Dismiss plan", id: "dismiss", action: onDismiss)
+                    }
+                    Button(action: self.toggle) {
+                        Image(systemName: "chevron.down")
+                            .font(OpenClawChatTypography.caption2)
+                            .foregroundStyle(OpenClawChatTheme.muted)
+                            .rotationEffect(.degrees(self.isExpanded ? 180 : 0))
+                            .modifier(HeaderHitArea())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHidden(true)
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(self.summaryAccessibilityLabel)
-            .accessibilityHint(self.isExpanded ? "Collapse plan" : "Expand plan")
 
             if self.isExpanded {
                 Divider()
                     .overlay(OpenClawChatTheme.divider)
                     .padding(.horizontal, 12)
                 VStack(alignment: .leading, spacing: 9) {
-                    if let markdown {
+                    let parsed = self.parsedMarkdown
+                    ForEach(Array(parsed.bars.enumerated()), id: \.offset) { _, bar in
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let label = bar.label {
+                                Text(verbatim: label)
+                                    .font(OpenClawChatTypography.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            ProgressView(value: bar.value, total: bar.total)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                    if !parsed.text.isEmpty {
                         ChatMarkdownRenderer(
-                            text: markdown,
+                            text: parsed.text,
                             context: .assistant,
                             variant: .compact,
                             textColor: OpenClawChatTheme.assistantText)
@@ -116,6 +202,62 @@ struct ChatProgressCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func toggle() {
+        withAnimation(self.reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+            self.isExpanded.toggle()
+        }
+    }
+
+    /// A pointer can aim at small controls; a finger cannot, and the header is one line tall. On touch the
+    /// header keeps only the collapse caret and a long press offers the same actions.
+    private static var showsHeaderActions: Bool {
+        #if os(macOS)
+        true
+        #else
+        false
+        #endif
+    }
+
+    @ViewBuilder
+    private var actionMenu: some View {
+        if let onRefresh {
+            Button(action: onRefresh) {
+                Label("Refresh plan", systemImage: "arrow.clockwise")
+            }
+            .disabled(self.isRefreshing)
+            .accessibilityIdentifier("chat-progress-card-refresh")
+        }
+        if let onDismiss {
+            Button(action: onDismiss) {
+                Label("Dismiss plan", systemImage: "xmark")
+            }
+            .accessibilityIdentifier("chat-progress-card-dismiss")
+        }
+        if let onClearSaved {
+            Button(role: .destructive, action: onClearSaved) {
+                Label("Clear saved plan for everyone", systemImage: "trash")
+            }
+            .accessibilityIdentifier("chat-progress-card-clear-saved")
+        }
+    }
+
+    private func headerButton(
+        symbol: String,
+        label: LocalizedStringKey,
+        id: String,
+        action: @escaping () -> Void) -> some View
+    {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+                .modifier(HeaderHitArea())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier("chat-progress-card-\(id)")
     }
 
     private var summaryAccessibilityLabel: String {
@@ -159,11 +301,11 @@ struct ChatProgressCard: View {
                     .font(OpenClawChatTypography.captionSemiBold)
                     .foregroundStyle(OpenClawChatTheme.muted)
             }
-            Image(systemName: self.isInline ? "chevron.right" : "chevron.down")
-                .font(OpenClawChatTypography.caption2)
-                .foregroundStyle(OpenClawChatTheme.muted)
-                .rotationEffect(.degrees(self.isExpanded ? (self.isInline ? 90 : 180) : 0))
             if self.isInline {
+                Image(systemName: "chevron.right")
+                    .font(OpenClawChatTypography.caption2)
+                    .foregroundStyle(OpenClawChatTheme.muted)
+                    .rotationEffect(.degrees(self.isExpanded ? 90 : 0))
                 Spacer(minLength: 0)
             }
         }
@@ -212,5 +354,206 @@ struct ChatProgressCard: View {
         case .inProgress: "In progress"
         case .pending: "Pending"
         }
+    }
+}
+
+/// Each control owns 36 points of width, so neighbors never share a touch area and a near miss cannot land
+/// on the bin. The touch area is 44 points tall on 36 points of layout, so the card keeps its height.
+private struct HeaderHitArea: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(width: 36, height: 44)
+            .contentShape(Rectangle())
+            .padding(.vertical, -4)
+    }
+}
+
+/// The card's Markdown with its `<progress aria-label="…" value="3" max="5"></progress>` tags taken out.
+/// The Control UI draws those as bars; shown as text they are noise.
+struct ChatProgressCardMarkdown: Equatable {
+    struct Bar: Equatable {
+        let label: String?
+        let value: Double?
+        let total: Double
+    }
+
+    let bars: [Bar]
+    let text: String
+
+    init(_ markdown: String) {
+        // Built per call: the card is short and a shared Regex is not Sendable.
+        guard let tag = try? Regex(#"<progress(?=\s|>)((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>"#).ignoresCase(),
+              let closingTag = try? Regex(#"\s*</progress\s*>"#).ignoresCase()
+        else {
+            self.bars = []
+            self.text = markdown
+            return
+        }
+        // Only rendered HTML can carry progress: link destinations, titles, and image text cannot.
+        // Code examples and literal HTML contexts stay untouched. The Markdown parser
+        // ends lines at LF, CR, and CRLF alike and reads each NUL byte as the three-byte
+        // replacement character, so its line and column numbers address that expanded source.
+        // Parse the same expansion and map its offsets back: lone-CR endings would otherwise
+        // index this array out of range and trap the app, and NUL bytes would shift protection.
+        let expanded = markdown.replacingOccurrences(of: "\u{0}", with: "\u{FFFD}")
+        var expandedToOriginal = [Int]()
+        expandedToOriginal.reserveCapacity(expanded.utf8.count)
+        for (originalOffset, byte) in markdown.utf8.enumerated() {
+            if byte == 0 {
+                expandedToOriginal.append(contentsOf: [originalOffset, originalOffset, originalOffset])
+            } else {
+                expandedToOriginal.append(originalOffset)
+            }
+        }
+        var lineStarts = [0]
+        let utf8 = Array(expanded.utf8)
+        var offset = 0
+        while offset < utf8.count {
+            if utf8[offset] == 13, offset + 1 < utf8.count, utf8[offset + 1] == 10 { offset += 1 }
+            if utf8[offset] == 10 || utf8[offset] == 13 { lineStarts.append(offset + 1) }
+            offset += 1
+        }
+        func sourceRange(_ node: any Markup, html: String) -> Range<String.Index>? {
+            guard let range = node.range,
+                  lineStarts.indices.contains(range.lowerBound.line - 1),
+                  lineStarts.indices.contains(range.upperBound.line - 1),
+                  range.lowerBound.column > 0, range.upperBound.column > 0 else { return nil }
+            let startOffset = lineStarts[range.lowerBound.line - 1] + range.lowerBound.column - 1
+            let endOffset = lineStarts[range.upperBound.line - 1] + range.upperBound.column - 1
+            guard startOffset >= 0, endOffset > startOffset,
+                  endOffset <= expandedToOriginal.count else { return nil }
+            // Cmark can retain a container's column offset on lazy continuation lines.
+            // Even in-bounds inline locations must identify the HTML that was parsed.
+            if node is InlineHTML,
+               String(bytes: utf8[startOffset..<endOffset], encoding: .utf8)?
+                   .replacingOccurrences(of: "\r\n", with: "\n")
+                   .replacingOccurrences(of: "\r", with: "\n") != html
+            {
+                return nil
+            }
+            let start = markdown.utf8.index(
+                markdown.utf8.startIndex, offsetBy: expandedToOriginal[startOffset])
+            let end = markdown.utf8.index(
+                markdown.utf8.startIndex, offsetBy: expandedToOriginal[endOffset - 1] + 1)
+            return start..<end
+        }
+        var htmlRanges: [Range<String.Index>] = []
+        var literalRanges: [Range<String.Index>] = []
+        var invalidHTMLRange = false
+        func collectHTML(_ node: any Markup) {
+            guard !invalidHTMLRange, !(node is Markdown.Image) else { return }
+            let html = (node as? HTMLBlock)?.rawHTML ?? (node as? InlineHTML)?.rawHTML
+            let literalHTML = html.map { raw in
+                let start = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                return ["<!--", "<!", "<?", "<pre", "<script", "<style", "<textarea"].contains {
+                    start.hasPrefix($0)
+                }
+            } ?? false
+            if let html {
+                guard let range = sourceRange(node, html: html) else {
+                    invalidHTMLRange = true
+                    return
+                }
+                htmlRanges.append(range)
+                if literalHTML {
+                    literalRanges.append(range)
+                }
+            } else {
+                for child in node.children {
+                    collectHTML(child)
+                }
+            }
+        }
+        collectHTML(Document(parsing: expanded))
+        // Preserve the complete card when upstream positions cannot identify its source safely.
+        guard !invalidHTMLRange else {
+            self.bars = []
+            self.text = markdown
+            return
+        }
+        // A raw element can span several inline nodes. Only an owned opener starts that
+        // context: tag-like text in a quoted attribute or a code example cannot start one.
+        if let rawTag = try? NSRegularExpression(
+            pattern: #"<(pre|script|style|textarea)(?=\s|>)(?:[^>"']|"[^"]*"|'[^']*')*>"#,
+            options: [.caseInsensitive])
+        {
+            for owner in htmlRanges {
+                guard let startIndex = markdown[owner].firstIndex(where: { !$0.isWhitespace }),
+                      let match = rawTag.firstMatch(
+                          in: markdown, options: [.anchored], range: NSRange(startIndex..., in: markdown)),
+                      let range = Range(match.range, in: markdown),
+                      let nameRange = Range(match.range(at: 1), in: markdown) else { continue }
+                let start = range.lowerBound
+                guard !literalRanges.contains(where: { $0.lowerBound < start && $0.contains(start) }),
+                      !ChatMarkdownBlockSyntax.isEscaped(at: range.lowerBound, in: markdown) else { continue }
+                let closing = try? NSRegularExpression(
+                    pattern: "</" + markdown[nameRange] + #"\s*>"#,
+                    options: [.caseInsensitive])
+                let tail = NSRange(range.upperBound..<markdown.endIndex, in: markdown)
+                let end = closing?.firstMatch(in: markdown, range: tail)
+                    .flatMap { Range($0.range, in: markdown) }?.upperBound ?? markdown.endIndex
+                literalRanges.append(start..<end)
+            }
+        }
+        var matches: [(range: Range<String.Index>, attributes: String)] = []
+        for owner in htmlRanges {
+            var cursor = owner.lowerBound
+            // A block may contain a leading run of empty progress elements. Do not scan
+            // through other HTML or text: that would promote attributes or fallback content.
+            while cursor < owner.upperBound,
+                  let start = markdown[cursor..<owner.upperBound].firstIndex(where: { !$0.isWhitespace })
+            {
+                guard !literalRanges.contains(where: { $0.contains(start) }),
+                      !ChatMarkdownBlockSyntax.isEscaped(at: start, in: markdown),
+                      let match = markdown[start..<owner.upperBound].prefixMatch(of: tag) else { break }
+                var end = match.range.upperBound
+                if let closing = markdown[end...].prefixMatch(of: closingTag),
+                   let closeStart = markdown[closing.range].firstIndex(of: "<"),
+                   htmlRanges.contains(where: { $0.contains(closeStart) })
+                {
+                    end = closing.range.upperBound
+                }
+                matches.append((start..<end, match.output[1].substring.map(String.init) ?? ""))
+                if end >= owner.upperBound { break }
+                cursor = end
+            }
+        }
+        let attributePattern = #"(?:^|\s)([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#
+        let attributeRegex = try? Regex(attributePattern)
+        self.bars = matches.map { match in
+            let source = match.attributes
+            var attributes: [String: String] = [:]
+            for found in attributeRegex.map({ source.matches(of: $0) }) ?? [] {
+                guard let name = found.output[1].substring?.lowercased(), attributes[name] == nil else { continue }
+                attributes[name] = (found.output[2].substring ?? found.output[3].substring
+                    ?? found.output[4].substring).map(String.init)
+            }
+            let total = attributes["max"].flatMap(Double.init).flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? 1
+            let value = attributes["value"].map { raw in
+                let number = Double(raw).flatMap { $0.isFinite ? $0 : nil } ?? 0
+                return min(max(number, 0), total)
+            }
+            let label = attributes["aria-label"].map(Self.decodedLabel)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return Bar(label: label?.isEmpty == false ? label : nil, value: value, total: total)
+        }
+        var text = markdown
+        for match in matches.reversed() {
+            text.removeSubrange(match.range)
+        }
+        self.text = matches.isEmpty ? markdown : text.trimmingCharacters(in: .newlines)
+    }
+
+    private static func decodedLabel(_ label: String) -> String {
+        // Preserve literal punctuation while allowing CommonMark's entity decoding.
+        let escaped = label.replacingOccurrences(
+            of: #"([\\`*_\[\]<>])"#,
+            with: #"\\$1"#,
+            options: .regularExpression)
+        guard let parsed = try? AttributedString(
+            markdown: escaped,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+        else { return label }
+        return String(parsed.characters)
     }
 }

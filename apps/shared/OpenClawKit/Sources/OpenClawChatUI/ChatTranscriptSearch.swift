@@ -29,6 +29,7 @@ struct ChatTranscriptSearch: ViewModifier {
     let rows: [ChatTranscriptRow]
     let sessionKey: String
     let isEnabled: Bool
+    let focusRequest: Int
     @Binding var selectedMessageID: UUID?
     @Binding var isPresented: Bool
     let onSelect: (UUID) -> Void
@@ -54,6 +55,10 @@ struct ChatTranscriptSearch: ViewModifier {
                         .help("Find in conversation (⌘F)")
                     }
                 }
+            }
+            .onChange(of: self.focusRequest) { _, _ in
+                self.isPresented = true
+                self.isFocused = true
             }
             .onChange(of: results) { _, results in
                 guard self.isPresented else { return }

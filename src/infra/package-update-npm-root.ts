@@ -8,6 +8,8 @@ import {
   type PackageRootIntegrityFingerprint,
   type PackageLauncherFingerprint,
   packageLauncherDifferences,
+  packageIntegrityDifferences,
+  PackageIntegrityMismatchError,
 } from "./package-update-integrity.js";
 import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
 
@@ -99,17 +101,16 @@ export async function createNpmPackageRootLinkLifecycle(params: {
         return null;
       } catch (error) {
         assertCurrent();
-        return `Could not retire retained npm package link at ${params.backupRoot}: ${formatErrorMessage(error)}`;
+        return `Could not retire retained npm package link: ${formatErrorMessage(error)}; backup retained at ${params.backupRoot}`;
       }
     },
   };
 }
 
-/** Verify the same retained/restored npm root and launcher baseline without inference. */
-export async function verifyNpmRootRecovery(
+/** Verify retained recovery material before replacing the candidate. */
+export async function verifyRetainedNpmRootRecovery(
   params: {
     root: string;
-    fromBackup: boolean;
     hadPackage: boolean;
     previousRoot: PackageRootIntegrityFingerprint | undefined;
     previousIdentity?: PackageDirectoryIdentity;
@@ -122,46 +123,35 @@ export async function verifyNpmRootRecovery(
   },
   timeoutMs?: number,
   verifyGitRuntime?: () => Promise<void>,
-): Promise<boolean> {
-  const { root, fromBackup, hadPackage, previousRoot, targetSwapRoot, shims } = params;
+): Promise<void> {
+  const { root, hadPackage, previousRoot, targetSwapRoot, shims } = params;
   const reader = createPackageIntegrityReader(timeoutMs);
-  return await reader.observe(fromBackup ? "retained" : "restored", async () => {
-    if (
-      hadPackage
-        ? previousRoot
-          ? !isDeepStrictEqual(
-              await reader.rootEntry(root, targetSwapRoot, previousRoot.kind),
-              previousRoot,
-            )
-          : !params.previousIdentity ||
-            !isDeepStrictEqual(await reader.directoryIdentity(root), params.previousIdentity)
-        : !fromBackup && (await reader.exists(root))
-    ) {
-      throw new Error(
-        `Package rollback verification failed: ${fromBackup ? "retained" : "restored"} package ${previousRoot?.kind === "link" ? "link" : "tree"} changed at ${root}. Inspect this ${fromBackup ? "backup" : "installation"} and resolve the changes before retrying recovery.`,
-      );
-    }
-    for (const shim of shims) {
-      const target = fromBackup ? shim.backup : shim.destination;
-      if (
-        shim.backup
-          ? !target ||
-            !shim.fingerprint ||
-            packageLauncherDifferences(shim.fingerprint, await reader.launcher(target)).length > 0
-          : !fromBackup && (await reader.exists(shim.destination))
-      ) {
-        throw new Error(
-          `Package rollback verification failed: launcher ${shim.destination} changed`,
-        );
-      }
-    }
-    await verifyGitRuntime?.();
-    // Restoring absence or an unverified external link does not establish a runnable runtime.
-    return (
-      hadPackage &&
-      (previousRoot?.kind === "directory" ||
-        verifyGitRuntime !== undefined ||
-        (!previousRoot && params.previousIdentity !== undefined))
+  const actual =
+    hadPackage && previousRoot
+      ? await reader.rootEntry(root, targetSwapRoot, previousRoot.kind)
+      : undefined;
+  if (
+    hadPackage &&
+    (previousRoot
+      ? !isDeepStrictEqual(actual, previousRoot)
+      : !params.previousIdentity ||
+        !isDeepStrictEqual(await reader.directoryIdentity(root), params.previousIdentity))
+  ) {
+    throw new PackageIntegrityMismatchError(
+      `Package rollback verification failed: retained package ${previousRoot?.kind === "link" ? "link" : "tree"} changed at ${root}. Inspect this backup and resolve the changes before retrying recovery.`,
+      previousRoot?.kind === "directory" && actual?.kind === "directory"
+        ? packageIntegrityDifferences(previousRoot.tree, actual.tree)
+        : [],
     );
-  });
+  }
+  for (const shim of shims) {
+    if (
+      shim.backup &&
+      (!shim.fingerprint ||
+        packageLauncherDifferences(shim.fingerprint, await reader.launcher(shim.backup)).length > 0)
+    ) {
+      throw new Error(`Package rollback verification failed: launcher ${shim.destination} changed`);
+    }
+  }
+  await verifyGitRuntime?.();
 }

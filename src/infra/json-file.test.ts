@@ -74,6 +74,25 @@ describe("json-file helpers", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")("ignores links through a regular file", async () => {
+    await withJsonSymlink(({ root, linkPath }) => {
+      const target = path.join(root, "regular");
+      fs.writeFileSync(target, "regular file");
+      fs.symlinkSync(path.join(target, "credentials.json"), linkPath);
+      expect(loadJsonFileThroughSymlink(linkPath)).toBeUndefined();
+    });
+  });
+
+  it.each(["EACCES", "EISDIR", "EPERM"])("propagates path resolution errors: %s", (code) => {
+    const error = Object.assign(new Error(`synthetic ${code}`), { code });
+    vi.spyOn(fs, "realpathSync").mockImplementationOnce(() => {
+      throw error;
+    });
+    expect(() => loadJsonFileThroughSymlink("credentials.json")).toThrow(
+      expect.objectContaining({ code }),
+    );
+  });
+
   it("creates parent dirs, writes a trailing newline, and loads the saved object", async () => {
     await withTestDir({ prefix: "openclaw-json-file-" }, async (root) => {
       const pathname = path.join(root, "nested", "config.json");
@@ -94,23 +113,6 @@ describe("json-file helpers", () => {
     });
   });
 
-  it.each([
-    {
-      name: "new files",
-      setup: () => {},
-    },
-    {
-      name: "existing JSON files",
-      setup: writeExistingJson,
-    },
-  ])("writes the latest payload for $name", async ({ setup }) => {
-    await withJsonPath(({ pathname }) => {
-      setup(pathname);
-      writeJsonTarget(pathname, SAVED_PAYLOAD);
-      expect(loadJsonFileThroughSymlink(pathname)).toEqual(SAVED_PAYLOAD);
-    });
-  });
-
   it("writes through a sibling temp file before replacing the destination", async () => {
     await withJsonPath(({ pathname }) => {
       writeExistingJson(pathname);
@@ -127,17 +129,21 @@ describe("json-file helpers", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
-    "preserves symlink destinations when replacing existing JSON files",
-    async () => {
-      await withJsonSymlink(({ targetDir, targetPath, linkPath }) => {
+  it.runIf(process.platform !== "win32").each([1, 2])(
+    "preserves %i-level symlink destinations when replacing existing JSON files",
+    async (levels) => {
+      await withJsonSymlink(({ root, targetDir, targetPath, linkPath }) => {
         fs.mkdirSync(targetDir, { recursive: true });
         writeExistingJson(targetPath);
         fs.symlinkSync(targetPath, linkPath);
+        const configuredPath = levels === 1 ? linkPath : path.join(root, "config-outer.json");
+        if (levels === 2) {
+          fs.symlinkSync(path.basename(linkPath), configuredPath);
+        }
 
-        writeJsonTarget(linkPath, SAVED_PAYLOAD);
+        writeJsonTarget(configuredPath, SAVED_PAYLOAD);
 
-        expectSavedPayloadThroughSymlink(linkPath, targetPath);
+        expectSavedPayloadThroughSymlink(configuredPath, targetPath);
       });
     },
   );

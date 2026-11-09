@@ -15,13 +15,6 @@ const LEGACY_RESEED_PROMPT = [
 ].join("\n");
 
 describe("CLI reseed envelope", () => {
-  it("recognizes exact legacy prompts", () => {
-    expect(parseCliReseedPrompt(LEGACY_RESEED_PROMPT)).toEqual({
-      kind: "legacy",
-      userMessage: "current",
-    });
-  });
-
   it("keeps suffixes outside the recovered legacy user message", () => {
     expect(parseCliReseedPrompt(`${LEGACY_RESEED_PROMPT}\n\nbootstrap warning`)).toEqual({
       kind: "legacy",

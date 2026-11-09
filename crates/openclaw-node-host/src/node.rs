@@ -1,4 +1,5 @@
 use openclaw_gateway_client::{
+    protocol::{MIN_NODE_PROTOCOL_VERSION, PROTOCOL_VERSION},
     ClientError as GatewayClientError, ConnectAttempt as GatewayConnectAttempt, GatewayClient,
     GatewayClientConfig, GatewaySession, TlsTrust,
 };
@@ -16,8 +17,6 @@ use thiserror::Error;
 
 use crate::identity::{DeviceSigningRequest, IdentityError, NodeIdentity};
 
-const PROTOCOL_VERSION: u32 = 4;
-const MINIMUM_NODE_PROTOCOL_VERSION: u32 = 3;
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_CHALLENGE_TIMEOUT: Duration = Duration::from_secs(15);
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -28,7 +27,7 @@ const DEFAULT_MAX_EVENT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
 /// Node wire dialect selected for one Gateway session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NodeProtocolVersion {
-    /// Released legacy node envelope with direct invocation `params`.
+    /// Released legacy node envelope with serialized invocation `paramsJSON`.
     V3,
     /// Current node envelope with serialized invocation `paramsJSON`.
     V4,
@@ -37,7 +36,7 @@ pub enum NodeProtocolVersion {
 impl NodeProtocolVersion {
     const fn number(self) -> u32 {
         match self {
-            Self::V3 => MINIMUM_NODE_PROTOCOL_VERSION,
+            Self::V3 => MIN_NODE_PROTOCOL_VERSION,
             Self::V4 => PROTOCOL_VERSION,
         }
     }
@@ -278,7 +277,7 @@ impl NodeConnectOptions {
     #[must_use]
     pub fn new(version: impl Into<String>, platform: impl Into<String>) -> Self {
         Self {
-            min_protocol: MINIMUM_NODE_PROTOCOL_VERSION,
+            min_protocol: MIN_NODE_PROTOCOL_VERSION,
             max_protocol: PROTOCOL_VERSION,
             client: ClientInfo {
                 id: "node-host",
@@ -489,6 +488,7 @@ pub struct NodeInvocation {
     pub idempotency_key: Option<String>,
     pub session_key: Option<String>,
     received_params_bytes: Option<usize>,
+    received_params_json: Option<String>,
     received_at: Option<Instant>,
 }
 
@@ -538,8 +538,16 @@ impl NodeInvocation {
             idempotency_key: None,
             session_key: None,
             received_params_bytes: None,
+            received_params_json: None,
             received_at: None,
         }
+    }
+
+    /// Original Gateway parameter bytes, for native owners whose receipts distinguish
+    /// absent parameters and preserve the exact serialized invocation identity.
+    #[must_use]
+    pub fn received_params_json(&self) -> Option<&str> {
+        self.received_params_json.as_deref()
     }
 
     pub(crate) fn input_bytes(&self) -> Option<usize> {
@@ -619,6 +627,97 @@ pub enum ClientError {
 pub struct NodeClient;
 
 impl NodeClient {
+    /// Connect with an exact challenge-signed envelope supplied by a native credential owner.
+    /// This preserves product client metadata and platform-owned key storage; the Gateway
+    /// still authorizes the node and the runtime remains bound to the advertised commands.
+    ///
+    /// # Errors
+    /// Returns malformed native envelopes, rejected handshakes, or transport failures.
+    pub async fn connect_signed<F, Fut, E>(
+        config: GatewayClientConfig,
+        make_params: F,
+    ) -> Result<NodeSession, ClientError>
+    where
+        F: FnOnce(openclaw_gateway_client::ConnectChallenge) -> Fut,
+        Fut: Future<Output = Result<Value, E>>,
+        E: std::fmt::Display + Send + Sync + 'static,
+    {
+        let mut commands = BTreeSet::new();
+        let commands_ref = &mut commands;
+        let mut offered_protocols = (0, 0);
+        let offered_protocols_ref = &mut offered_protocols;
+        let gateway = GatewayClient::connect(config, |challenge| async move {
+            let params = make_params(challenge)
+                .await
+                .map_err(|error| error.to_string())?;
+            if params["role"] != "node" || params["client"]["mode"] != "node" {
+                return Err("signed envelope must establish a node connection".to_owned());
+            }
+            let min = params["minProtocol"]
+                .as_u64()
+                .ok_or("missing minimum protocol")?;
+            let max = params["maxProtocol"]
+                .as_u64()
+                .ok_or("missing maximum protocol")?;
+            if min < u64::from(MIN_NODE_PROTOCOL_VERSION)
+                || max > u64::from(PROTOCOL_VERSION)
+                || min > max
+            {
+                return Err("unsupported signed node protocol range".to_owned());
+            }
+            *offered_protocols_ref = (min, max);
+            // Gateway ConnectParams makes commands optional. Preserve the signed bytes
+            // while treating an omitted manifest as an empty capability surface.
+            let advertised = params
+                .get("commands")
+                .map(|value| value.as_array().ok_or("node commands must be an array"))
+                .transpose()?;
+            for command in advertised.into_iter().flatten() {
+                let command = command
+                    .as_str()
+                    .filter(|name| {
+                        !name.is_empty()
+                            && name.len() <= 128
+                            && name.bytes().all(|byte| {
+                                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                            })
+                    })
+                    .ok_or("node command names must use the shared ASCII grammar")?;
+                if !commands_ref.insert(command.to_owned()) {
+                    return Err("duplicate node command".to_owned());
+                }
+            }
+            Ok(params)
+        })
+        .await
+        .map_err(map_gateway_error)?;
+        // Hello reports the server version, which can exceed a compatible node's range.
+        let server_protocol = gateway.hello()["protocol"].as_u64().unwrap_or(0);
+        if server_protocol < offered_protocols.0 || server_protocol > u64::from(PROTOCOL_VERSION) {
+            gateway.close().await;
+            return Err(ClientError::InvalidFrame(
+                "hello protocol does not support the signed range".into(),
+            ));
+        }
+        let protocol = match server_protocol.min(offered_protocols.1) {
+            version if version == u64::from(MIN_NODE_PROTOCOL_VERSION) => NodeProtocolVersion::V3,
+            version if version == u64::from(PROTOCOL_VERSION) => NodeProtocolVersion::V4,
+            _ => {
+                gateway.close().await;
+                return Err(ClientError::InvalidFrame(
+                    "unsupported node hello protocol".into(),
+                ));
+            }
+        };
+        Ok(NodeSession {
+            gateway,
+            activated: true,
+            advertised_commands: Arc::new(commands),
+            protocol,
+            runtime_marker: Arc::new(()),
+        })
+    }
+
     /// Connect a node profile using challenge-bound connect parameters.
     /// # Errors
     ///
@@ -657,12 +756,12 @@ impl NodeClient {
         let mut make_options = make_options;
         let gateway = GatewayClient::connect_with_protocol_fallback(
             gateway_config,
-            MINIMUM_NODE_PROTOCOL_VERSION,
+            MIN_NODE_PROTOCOL_VERSION,
             move |challenge, attempt| {
                 let protocol = match attempt {
                     GatewayConnectAttempt::Current => NodeProtocolVersion::V4,
                     GatewayConnectAttempt::ProtocolFallback { expected_protocol } => {
-                        debug_assert_eq!(expected_protocol, MINIMUM_NODE_PROTOCOL_VERSION);
+                        debug_assert_eq!(expected_protocol, MIN_NODE_PROTOCOL_VERSION);
                         NodeProtocolVersion::V3
                     }
                 };
@@ -700,9 +799,11 @@ impl NodeClient {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        if gateway.hello()["protocol"].as_u64() != Some(u64::from(protocol.number())) {
+        if !gateway.hello()["protocol"].as_u64().is_some_and(|version| {
+            (u64::from(protocol.number())..=u64::from(PROTOCOL_VERSION)).contains(&version)
+        }) {
             return Err(ClientError::InvalidFrame(
-                "Gateway hello protocol did not match the node connect envelope".into(),
+                "Gateway hello protocol does not support the node connect envelope".into(),
             ));
         }
         Ok(NodeSession {
@@ -729,6 +830,17 @@ pub struct NodeSession {
 }
 
 impl NodeSession {
+    pub fn command_names(&self) -> impl Iterator<Item = &str> {
+        self.advertised_commands.iter().map(String::as_str)
+    }
+
+    /// Await the matching WebSocket pong.
+    ///
+    /// # Errors
+    /// Returns timeout, transport, or closed-session failures.
+    pub async fn ping(&self) -> Result<(), ClientError> {
+        self.gateway.ping().await.map_err(map_gateway_error)
+    }
     pub(crate) fn runtime_scope(&self) -> (usize, std::sync::Weak<()>) {
         (
             Arc::as_ptr(&self.runtime_marker) as usize,
@@ -847,6 +959,21 @@ impl NodeSession {
     ) -> Result<Value, ClientError> {
         self.gateway
             .request(method, params)
+            .await
+            .map_err(map_gateway_error)
+    }
+
+    /// Send a request whose caller owns cancellation and any deadline.
+    /// # Errors
+    ///
+    /// Returns validation, Gateway, transport, or closed-session errors.
+    pub async fn request_until_cancelled(
+        &self,
+        method: impl Into<String>,
+        params: Value,
+    ) -> Result<Value, ClientError> {
+        self.gateway
+            .request_until_cancelled(method, params)
             .await
             .map_err(map_gateway_error)
     }
@@ -1003,6 +1130,7 @@ fn parse_invocation(payload: Value, received_at: Instant) -> Result<NodeInvocati
         idempotency_key,
         session_key,
         received_params_bytes: payload.received_params_bytes,
+        received_params_json: payload.received_params_json,
         received_at: Some(received_at),
     })
 }
@@ -1013,6 +1141,7 @@ struct DecodedInvocation {
     command: String,
     params: Value,
     received_params_bytes: Option<usize>,
+    received_params_json: Option<String>,
     timeout_ms: Option<u64>,
     idempotency_key: Option<String>,
     session_key: Option<String>,
@@ -1049,10 +1178,10 @@ fn decode_invocation(payload: Value) -> Result<DecodedInvocation, ClientError> {
             "invalid node.invoke.request: direct params are unsupported; use paramsJSON".into(),
         ));
     }
-    let (params, received_params_bytes) = match payload.params_json {
+    let (params, received_params_bytes) = match &payload.params_json {
         Some(value) => {
             let received_params_bytes = value.len();
-            let params = serde_json::from_str(&value).map_err(|error| {
+            let params = serde_json::from_str(value).map_err(|error| {
                 ClientError::InvalidFrame(format!("invalid invocation paramsJSON: {error}"))
             })?;
             (params, Some(received_params_bytes))
@@ -1065,6 +1194,7 @@ fn decode_invocation(payload: Value) -> Result<DecodedInvocation, ClientError> {
         command: payload.command,
         params,
         received_params_bytes,
+        received_params_json: payload.params_json,
         timeout_ms: payload.timeout_ms,
         idempotency_key: payload.idempotency_key,
         session_key: payload.session_key,
@@ -1198,43 +1328,38 @@ mod tests {
     }
 
     #[test]
-    fn parses_gateway_invocation_cancellation() {
-        assert_eq!(
-            parse_invocation_cancel(json!({"invokeId": "invoke-1", "nodeId": "node-1"}))
-                .expect("valid Gateway cancellation"),
-            NodeSessionEvent::InvocationCancelled {
-                invoke_id: "invoke-1".into(),
-                node_id: "node-1".into(),
-            }
-        );
-    }
-
-    #[test]
     fn external_signing_request_uses_final_connect_metadata_and_auth() {
-        let options = NodeConnectOptions::new("test", "Windows")
-            .device_family("Desktop")
+        let options = NodeConnectOptions::new("test", "windows")
+            .device_family("Windows")
             .auth(ConnectAuth::token("test-token"));
         let public_key = ed25519_dalek::SigningKey::from_bytes(&[7; 32])
             .verifying_key()
             .to_bytes();
-        let request = options
-            .external_signing_request(
-                public_key,
-                &ConnectChallenge {
-                    nonce: "nonce-1".into(),
-                    issued_at_ms: 1_700_000_000_000,
-                    protocol: NodeProtocolVersion::V4,
-                },
-            )
-            .expect("external signing request");
-        assert_eq!(
-            request.payload(),
-            format!(
-                "v3|{}|node-host|node|node||{}|test-token|nonce-1|windows|desktop",
-                request.device_id(),
-                request.signed_at()
-            )
-        );
+        for protocol in [NodeProtocolVersion::V3, NodeProtocolVersion::V4] {
+            let request = options
+                .external_signing_request(
+                    public_key,
+                    &ConnectChallenge {
+                        nonce: "nonce-1".into(),
+                        issued_at_ms: 1_700_000_000_000,
+                        protocol,
+                    },
+                )
+                .expect("external signing request");
+            let metadata = if protocol == NodeProtocolVersion::V3 {
+                "win32|"
+            } else {
+                "windows|windows"
+            };
+            assert_eq!(
+                request.payload(),
+                format!(
+                    "v3|{}|node-host|node|node||{}|test-token|nonce-1|{metadata}",
+                    request.device_id(),
+                    request.signed_at()
+                )
+            );
+        }
     }
     #[test]
     fn invocation_accepts_gateway_null_params_and_session_key() {
@@ -1252,7 +1377,24 @@ mod tests {
 
         assert_eq!(invocation.params, Value::Null);
         assert_eq!(invocation.input_bytes(), Some(0));
+        assert_eq!(invocation.received_params_json(), None);
         assert_eq!(invocation.session_key.as_deref(), Some("agent:main:main"));
+    }
+
+    #[test]
+    fn native_invocation_preserves_original_parameter_identity() {
+        for raw in ["null", "{ \"z\": 1, \"a\": 2 }"] {
+            let invocation = parse_invocation(
+                json!({"id":"native", "nodeId":"node", "command":"computer.act", "paramsJSON":raw}),
+                Instant::now(),
+            )
+            .unwrap();
+            assert_eq!(invocation.received_params_json(), Some(raw));
+            assert_eq!(
+                invocation.params,
+                serde_json::from_str::<Value>(raw).unwrap()
+            );
+        }
     }
 
     #[test]

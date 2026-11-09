@@ -49,6 +49,7 @@ struct OnboardingAISetupSheet: View {
         .frame(width: 500)
         .frame(minHeight: 220)
         .interactiveDismissDisabled()
+        .environment(\.openURL, AppActivation.shared.openURLAction)
         .onAppear {
             self.openProviderAuthURLIfNeeded(self.model.authStep?.externalurl)
         }
@@ -185,7 +186,7 @@ struct OnboardingAISetupSheet: View {
               url != openedProviderAuthURL
         else { return }
         self.openedProviderAuthURL = url
-        NSWorkspace.shared.open(url)
+        AppActivation.shared.open(url)
     }
 
     @ViewBuilder

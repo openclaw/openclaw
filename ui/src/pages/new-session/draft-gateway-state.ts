@@ -1,20 +1,24 @@
-import { initialState, Task, TaskStatus } from "@lit/task";
-import type { ReactiveControllerHost } from "lit";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type {
+  EnvironmentsListResult,
+  EnvironmentsAdoptSuggestedProfileResult,
+} from "../../../../packages/gateway-protocol/src/schema/environments.ts";
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
 import * as catalog from "./catalog-target.ts";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "./cloud-profile-discovery.ts";
 import { requestPlaceCatalog } from "./cloud-target.ts";
 import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
+import type { DraftGatewayCallbacks, DraftGatewaySnapshot } from "./draft-gateway-contract.ts";
 import {
   DraftPreferenceState,
   type SubmittedWorktreePreference,
 } from "./draft-preference-state.ts";
-import { discoverGatewayName } from "./gateway-name-discovery.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import {
   acquirePaletteIdentityPreferences,
@@ -30,45 +34,18 @@ registerNewSessionSetupEnglish();
 
 const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
 
-type DraftGatewaySnapshot = Readonly<{
-  context: ApplicationContext | undefined;
-  data: NewSessionRouteData | undefined;
-  isConnected: boolean;
-  isAdmin: boolean;
-  canStartAsDraft: boolean;
-  visibility: "normal" | "draft" | "incognito";
-  cloudProfileId: string;
-  pendingPlacement: Readonly<{
-    sessionKey: string;
-    gatewayUrl: string;
-    recoveryScope: string;
-  }>;
-  agentsHydrated: boolean;
-  runtimeId: string;
-}>;
-
-export type DraftPreferenceOptions = {
-  preferenceScope?: "palette";
-  readPalettePreference?: () => PaletteSessionPreference | null;
-};
-
-type DraftGatewayCallbacks = DraftPreferenceOptions & {
-  requestUpdate: () => void;
-  updateComplete: () => Promise<unknown>;
-  onInvalidate: (resetHostSelection: boolean, outcome: SubmissionOutcomeReason) => void;
-  onVisibilityRetired: () => void;
-  onCloudProfileCleared: () => void;
-  onCloudState: (error: string | null) => void;
-  onPendingPlacementReset: () => void;
-  onRecoveryReady: (gatewayUrl: string, recoveryScope: string) => void;
-  onAdoptAgentDefaults: () => void;
-};
-
 export class DraftGatewayState {
+  static requiredPlacement(gateway: DraftGatewayState, data: NewSessionRouteData | undefined) {
+    return Boolean(gateway.requiredProfile) && !catalog.isTarget(data);
+  }
+
   private cloudProfilesValue: DraftCloudProfile[] = [];
+  private suggestedProfileValue: EnvironmentsListResult["suggestedProfile"];
+  private gatewayAuthorityValue = "";
   private environmentsValue: DraftEnvironment[] | null = null;
   private cloudProfilesReadyValue = false;
   private catalogRetryingValue = false;
+  private catalogRevalidation: Promise<void> | undefined;
   private catalogRevalidationPending = false;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayClientValue: ApplicationContext["gateway"]["snapshot"]["client"] = null;
@@ -88,14 +65,15 @@ export class DraftGatewayState {
   private identityPreferences: PaletteIdentityPreferences | undefined;
   private stopPreferences: (() => void) | undefined;
 
-  private readonly gatewayNameTask: Task<readonly unknown[], string>;
-  private readonly cloudProfileTask: Task<
-    readonly unknown[],
-    { profiles: DraftCloudProfile[]; environments: DraftEnvironment[] }
-  >;
+  private gatewayNameValue = "";
+  private gatewayNameArgs: readonly unknown[] = [];
+  private gatewayNameRequest: AbortController | undefined;
+  private cloudProfileArgs: readonly unknown[] = [];
+  private cloudProfileStatus: "initial" | "pending" | "complete" | "error" = "initial";
+  private cloudProfileRequest: object | undefined;
+  private cloudProfileComplete: Promise<void> = Promise.resolve();
 
   constructor(
-    host: ReactiveControllerHost,
     private readonly read: () => DraftGatewaySnapshot,
     private readonly callbacks: DraftGatewayCallbacks,
   ) {
@@ -114,59 +92,187 @@ export class DraftGatewayState {
       }),
       callbacks,
     );
-    this.gatewayNameTask = new Task(host, {
-      args: () =>
-        [
-          this.read().isConnected && this.gatewayConnectedValue ? this.gatewayClientValue : null,
-          isGatewayMethodAdvertised(this.read().context?.gateway.snapshot ?? {}, "system.info") ===
-            true,
-          this.gatewayConnectionEpochValue,
-        ] as const,
-      task: ([client, advertised, _connectionEpoch], { signal }) =>
-        discoverGatewayName(client, advertised, signal),
-    });
-    this.cloudProfileTask = new Task(host, {
-      args: () =>
-        [
-          this.read().isConnected && this.gatewayConnectedValue ? this.gatewayClientValue : null,
-          this.gatewayConnectionEpochValue,
-          hasOperatorWriteAccess(this.read().context?.gateway.snapshot.hello?.auth ?? null),
-          this.read().isAdmin,
-          this.gatewayRecoveryScopeValue,
-          this.read().runtimeId,
-        ] as const,
-      task: async ([client, _connectionEpoch, canWrite, isAdmin, _recoveryScope, runtimeId]) => {
-        if (!client) {
-          return initialState;
+  }
+
+  synchronizeMetadata() {
+    this.synchronizeGatewayName();
+    this.synchronizeCloudProfiles();
+  }
+
+  private synchronizeGatewayName() {
+    const gateway =
+      this.read().isConnected && this.gatewayConnectedValue ? this.gatewaySource : null;
+    const available =
+      canReadSystemInfo(this.read().context?.gateway.snapshot) &&
+      document.visibilityState !== "hidden";
+    const args = [gateway, available, this.gatewayConnectionEpochValue];
+    if (args.every((arg, index) => Object.is(arg, this.gatewayNameArgs[index]))) {
+      return;
+    }
+    this.gatewayNameArgs = args;
+    this.gatewayNameRequest?.abort();
+    this.gatewayNameRequest = undefined;
+    this.gatewayNameValue = "";
+    if (!gateway || !available) {
+      return;
+    }
+    const request = new AbortController();
+    this.gatewayNameRequest = request;
+    void readSystemInfo(gateway, request.signal)
+      .then(({ value: result }) => {
+        if (!request.signal.aborted) {
+          this.gatewayNameValue =
+            normalizeOptionalString(result.machineName) ??
+            normalizeOptionalString(result.hostname)?.split(".", 1)[0] ??
+            "";
         }
-        if (!canWrite) {
-          return { profiles: [], environments: [] };
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.gatewayNameRequest === request) {
+          this.gatewayNameRequest = undefined;
+          this.callbacks.changed();
         }
-        const result = await requestPlaceCatalog(client, runtimeId);
-        return { ...result, profiles: isAdmin ? result.profiles : [] };
-      },
-      onComplete: (placeCatalog) => {
+      });
+  }
+
+  private cloudProfileInput() {
+    return [
+      this.read().isConnected && this.gatewayConnectedValue ? this.gatewayClientValue : null,
+      this.gatewayConnectionEpochValue,
+      hasOperatorWriteAccess(this.read().context?.gateway.snapshot.hello?.auth ?? null),
+      this.read().isAdmin,
+      this.gatewayRecoveryScopeValue,
+      this.read().runtimeId,
+      this.placementPolicy(),
+    ] as const;
+  }
+
+  private synchronizeCloudProfiles() {
+    const args = this.cloudProfileInput();
+    if (!args.every((arg, index) => Object.is(arg, this.cloudProfileArgs[index]))) {
+      void this.readCloudProfiles(args);
+    }
+  }
+
+  private readCloudProfiles(args = this.cloudProfileInput()): Promise<void> {
+    this.cloudProfileArgs = args;
+    const [client, _connectionEpoch, canWrite, isAdmin, _recoveryScope, runtimeId, policy] = args;
+    const request = {};
+    this.cloudProfileRequest = request;
+    this.cloudProfileStatus = client && policy ? "pending" : "initial";
+    if (!client || !policy) {
+      this.callbacks.changed();
+      return Promise.resolve();
+    }
+    const required = policy.requiredProfile;
+    const result =
+      required || !canWrite
+        ? Promise.resolve({
+            profiles: required?.providerId
+              ? [{ ...required, providerId: required.providerId }]
+              : [],
+            environments: [],
+            suggestedProfile: undefined,
+          })
+        : requestPlaceCatalog(client, runtimeId).then((placeCatalog) => ({
+            ...placeCatalog,
+            profiles: placeCatalog.profiles,
+            suggestedProfile: isAdmin ? placeCatalog.suggestedProfile : undefined,
+          }));
+    this.cloudProfileComplete = result
+      .then((placeCatalog) => {
+        if (this.cloudProfileRequest !== request) {
+          return;
+        }
+        this.cloudProfileStatus = "complete";
         this.resetCloudProfileRetry();
         this.environmentsValue = placeCatalog.environments;
         this.applyCloudProfiles(placeCatalog.profiles);
+        this.suggestedProfileValue =
+          placeCatalog.profiles.length === 0 ? placeCatalog.suggestedProfile : undefined;
         this.cloudProfilesReadyValue = true;
-      },
-      onError: () => {
-        // A failed refresh cannot invalidate this Gateway's last successful place catalog.
-        this.scheduleCloudProfileRetry();
-      },
-    });
+      })
+      .catch(() => {
+        if (this.cloudProfileRequest === request) {
+          this.cloudProfileStatus = "error";
+          // Keep this Gateway's last successful catalog while its retry is pending.
+          this.scheduleCloudProfileRetry();
+        }
+      })
+      .finally(() => {
+        if (this.cloudProfileRequest === request) {
+          this.callbacks.changed();
+        }
+      });
+    this.callbacks.changed();
+    return this.cloudProfileComplete;
+  }
+
+  private retireCloudProfiles() {
+    this.cloudProfileRequest = undefined;
+    this.cloudProfileArgs = [];
+    this.cloudProfileStatus = "initial";
   }
 
   get gatewayName(): string {
-    // Recovery-scope discovery does not retire this connection's machine identity.
-    return this.gatewayNameTask.status === TaskStatus.COMPLETE
-      ? (this.gatewayNameTask.value ?? "")
-      : "";
+    return this.gatewayNameValue;
   }
 
   get cloudProfiles(): readonly DraftCloudProfile[] {
     return this.cloudProfilesValue;
+  }
+
+  get suggestedProfile(): EnvironmentsListResult["suggestedProfile"] {
+    return this.suggestedProfileValue;
+  }
+
+  async adoptSuggestedProfile(): Promise<string | undefined> {
+    const client = this.gatewayClientValue;
+    const epoch = this.gatewayConnectionEpochValue;
+    const scope = this.sessionCreateScope;
+    if (
+      !client ||
+      !this.gatewayConnectedValue ||
+      !this.read().isAdmin ||
+      !this.suggestedProfileValue
+    ) {
+      return undefined;
+    }
+    const { profile } = await client.request<EnvironmentsAdoptSuggestedProfileResult>(
+      "environments.adoptSuggestedProfile",
+      {},
+    );
+    if (
+      client !== this.gatewayClientValue ||
+      epoch !== this.gatewayConnectionEpochValue ||
+      scope !== this.sessionCreateScope ||
+      !this.gatewayConnectedValue ||
+      !this.read().isAdmin
+    ) {
+      return undefined;
+    }
+    // Retire an older catalog read before publishing the saved profile.
+    void this.readCloudProfiles();
+    this.applyCloudProfiles([profile]);
+    this.suggestedProfileValue = undefined;
+    this.callbacks.changed();
+    return profile.id;
+  }
+
+  /** The agent roster carries the policy, so it needs no request or wait of its own. */
+  private placementPolicy() {
+    return this.callbacks.readAgents()?.state.agentsList?.sessionPlacement;
+  }
+
+  get requiredProfile(): string | undefined {
+    return this.placementPolicy()?.requiredProfile?.id;
+  }
+
+  get placementPolicyReady(): boolean {
+    const policy = this.placementPolicy();
+    // Required starts need their profile applied before an accepted cold Send can resume.
+    return policy !== undefined && (!policy.requiredProfile || this.cloudProfilesReadyValue);
   }
 
   get environments(): readonly DraftEnvironment[] | null {
@@ -177,19 +283,27 @@ export class DraftGatewayState {
     return this.cloudProfilesReadyValue;
   }
 
+  get cloudProfilesRead(): Promise<void> | undefined {
+    return this.cloudProfileStatus === "initial" ? undefined : this.cloudProfileComplete;
+  }
+
   get cloudProfilesPending(): boolean {
-    return this.cloudProfileTask.status === TaskStatus.PENDING;
+    return this.cloudProfileStatus === "pending";
   }
 
   get deviceCatalogDisabledReason(): string | undefined {
     // Cached cloud profiles survive refresh failures; live node capacity does not.
-    return this.cloudProfilesReadyValue && this.cloudProfileTask.status === TaskStatus.COMPLETE
+    return this.cloudProfilesReadyValue && this.cloudProfileStatus === "complete"
       ? undefined
       : t("newSession.placementNotReady");
   }
 
   get catalogRetrying(): boolean {
     return this.catalogRetryingValue;
+  }
+
+  get catalogRetryRead(): Promise<void> | undefined {
+    return this.catalogRevalidation;
   }
 
   get client(): ApplicationContext["gateway"]["snapshot"]["client"] {
@@ -221,21 +335,11 @@ export class DraftGatewayState {
     return this.preferences.loading || this.identityPreferences?.mode === "loading";
   }
 
-  resolvedGroupCategory(): string | undefined {
-    const snapshot = this.read();
-    return isGatewayMethodAdvertised(
-      snapshot.context?.gateway.snapshot ?? {},
-      "sessions.groups.defaults",
-    ) === true
-      ? catalog.resolvedGroupName(snapshot.data, snapshot.context?.sessions)
-      : undefined;
-  }
-
   refreshCloudProfiles(): Promise<void> {
-    if (this.cloudProfileTask.status === TaskStatus.PENDING) {
+    if (this.cloudProfileStatus === "pending") {
       const queued =
         this.cloudProfileRefresh ??
-        this.cloudProfileTask.taskComplete
+        this.cloudProfileComplete
           .catch(() => undefined)
           .then(() => {
             if (this.cloudProfileRefresh === queued) {
@@ -249,7 +353,13 @@ export class DraftGatewayState {
     }
     globalThis.clearTimeout(this.cloudProfileRetryTimer);
     this.cloudProfileRetryTimer = undefined;
-    return this.cloudProfileTask.run();
+    return this.readCloudProfiles();
+  }
+
+  /** A missing required worker is a policy fact, so Retry rereads the roster that owns it. */
+  async retryRequiredPlacement(): Promise<void> {
+    await this.callbacks.readAgents()?.refreshList();
+    await this.refreshCloudProfiles();
   }
 
   synchronize(gateway: ApplicationContext["gateway"]) {
@@ -267,8 +377,17 @@ export class DraftGatewayState {
       bootId !== this.gatewayBootIdValue;
     const gatewayUrlChanged = !firstBind && this.gatewayUrlValue !== gateway.connection.gatewayUrl;
     const gatewaySourceChanged = !firstBind && this.gatewaySource !== gateway;
+    const authority = connected
+      ? JSON.stringify([
+          snapshot.selfUser?.id,
+          snapshot.hello?.auth?.role,
+          snapshot.hello?.auth?.scopes?.toSorted(),
+        ])
+      : this.gatewayAuthorityValue;
+    const authorityChanged = !firstBind && this.gatewayAuthorityValue !== authority;
     const identityChanged =
-      !firstBind && (gatewaySourceChanged || this.gatewayClientValue !== snapshot.client);
+      !firstBind &&
+      (gatewaySourceChanged || this.gatewayClientValue !== snapshot.client || authorityChanged);
     const connectionChanged = !firstBind && this.gatewayConnectedValue !== connected;
     const becameConnected = connected && (identityChanged || !this.gatewayConnectedValue);
     const recoveryScopeBecameReady =
@@ -277,8 +396,9 @@ export class DraftGatewayState {
     // Delaying this binding revokes live starts and lets reconnects replay under the old scope.
     const recoveryScope = connected
       ? (snapshot.hello?.auth?.recoveryScope ?? "")
-      : this.gatewayRecoveryScopeValue;
+      : (readOfflineStorageScope({ client: snapshot.client }) ?? "");
     const recoveryScopeChanged = !firstBind && this.gatewayRecoveryScopeValue !== recoveryScope;
+    this.gatewayAuthorityValue = authority;
     this.gatewaySource = gateway;
     this.gatewayClientValue = snapshot.client;
     this.gatewayUrlValue = gateway.connection.gatewayUrl;
@@ -286,9 +406,6 @@ export class DraftGatewayState {
     this.gatewayRecoveryScopeValue = recoveryScope;
     this.gatewayRecoveryScopeReady = snapshot.client?.recoveryScopeReady === true;
     this.gatewayConnectedValue = connected;
-    if (this.read().visibility === "draft" && !this.read().canStartAsDraft) {
-      this.callbacks.onVisibilityRetired();
-    }
     if (
       gatewayUrlChanged ||
       gatewayBootChanged ||
@@ -296,7 +413,8 @@ export class DraftGatewayState {
       connectionChanged ||
       recoveryScopeChanged
     ) {
-      const ownerChanged = gatewaySourceChanged || gatewayUrlChanged || recoveryScopeChanged;
+      const ownerChanged =
+        gatewaySourceChanged || gatewayUrlChanged || recoveryScopeChanged || authorityChanged;
       const gatewayIdentityChanged = gatewayUrlChanged || recoveryScopeChanged;
       this.invalidateDiscovery(
         ownerChanged,
@@ -321,7 +439,7 @@ export class DraftGatewayState {
       ) {
         this.callbacks.onPendingPlacementReset();
       }
-      if (connected && snapshot.client?.recoveryScopeReady) {
+      if (recoveryScope && (!connected || snapshot.client?.recoveryScopeReady)) {
         this.callbacks.onRecoveryReady(this.gatewayUrlValue, this.gatewayRecoveryScopeValue);
       }
     }
@@ -335,21 +453,22 @@ export class DraftGatewayState {
     }
     this.preferences.synchronize();
     this.synchronizeIdentityPreferences(snapshot.selfUser?.id);
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
   }
 
   invalidateDiscovery(resetHostSelection: boolean, submissionOutcome: SubmissionOutcomeReason) {
     this.cloudProfileRefresh = null;
-    // Retire pending results synchronously; Lit may not run hostUpdate before they settle.
-    void this.cloudProfileTask.run([null, -1, false, false, ""]);
+    // Retire pending results synchronously before the next render can observe them.
+    this.retireCloudProfiles();
     this.cloudProfilesValue = [];
+    this.suggestedProfileValue = undefined;
     this.cloudProfilesReadyValue = false;
     if (resetHostSelection) {
       this.environmentsValue = null;
     }
     this.resetCloudProfileRetry();
     this.callbacks.onInvalidate(resetHostSelection, submissionOutcome);
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
   }
 
   retryPendingCatalogTarget() {
@@ -429,7 +548,9 @@ export class DraftGatewayState {
     globalThis.clearTimeout(this.catalogRetryTimer);
     this.catalogRetryTimer = undefined;
     this.catalogRetryingValue = true;
-    this.callbacks.requestUpdate();
+    // Readiness excludes updateComplete: rendering must not await its own completion.
+    this.catalogRevalidation = revalidation;
+    this.callbacks.changed();
     void revalidation
       .catch(() => undefined)
       .then(() => this.callbacks.updateComplete())
@@ -441,7 +562,7 @@ export class DraftGatewayState {
         } else {
           this.retryPendingCatalogTarget();
         }
-        this.callbacks.requestUpdate();
+        this.callbacks.changed();
       });
   };
 
@@ -471,26 +592,7 @@ export class DraftGatewayState {
   }
 
   readPreference(agentId: string): NewSessionPreference | null {
-    const snapshot = this.read();
-    if (
-      catalog.isTarget(snapshot.data) ||
-      snapshot.data?.group ||
-      snapshot.pendingPlacement.sessionKey
-    ) {
-      return null;
-    }
-    const ordinary = this.preferences.readPreference(agentId);
-    if (this.callbacks.preferenceScope !== "palette") {
-      return ordinary;
-    }
-    const palette = this.callbacks.readPalettePreference?.();
-    // Name is one-use input belonging to the foreground draft, not a default
-    // the lightweight launcher can silently borrow or consume.
-    return {
-      ...ordinary,
-      ...(palette?.agentId === normalizeAgentId(agentId) ? palette.selection : {}),
-      worktreeName: "",
-    };
+    return this.preferences.readPreference(agentId);
   }
 
   capturePreferenceConsumption(
@@ -516,8 +618,13 @@ export class DraftGatewayState {
     this.stopPreferences?.();
     this.stopPreferences = undefined;
     this.identityPreferences = undefined;
+    this.cloudProfilesValue = [];
+    this.suggestedProfileValue = undefined;
+    this.cloudProfilesReadyValue = false;
+    this.environmentsValue = null;
     this.cloudProfileRefresh = null;
     this.gatewaySource = null;
+    this.gatewayAuthorityValue = "";
     this.gatewayClientValue = null;
     this.gatewayConnectedValue = false;
     this.gatewayConnectionEpochValue = 0;
@@ -525,8 +632,11 @@ export class DraftGatewayState {
     this.catalogRetryAttempt = 0;
     globalThis.clearTimeout(this.catalogRetryTimer);
     this.catalogRetryTimer = undefined;
-    void this.gatewayNameTask.run([null, false, -1]);
-    void this.cloudProfileTask.run([null, -1, false, false, ""]);
+    this.gatewayNameRequest?.abort();
+    this.gatewayNameRequest = undefined;
+    this.gatewayNameArgs = [];
+    this.gatewayNameValue = "";
+    this.retireCloudProfiles();
     this.resetCloudProfileRetry();
   }
 
@@ -563,10 +673,7 @@ export class DraftGatewayState {
       return;
     }
     if (this.cloudProfileRetryAttempt >= CLOUD_PROFILE_RETRY_DELAYS_MS.length) {
-      if (!this.cloudProfilesReadyValue) {
-        this.applyCloudProfiles([]);
-        this.cloudProfilesReadyValue = true;
-      }
+      // Unknown policy is not an optional empty catalog: keep new starts closed.
       return;
     }
     const delayMs = CLOUD_PROFILE_RETRY_DELAYS_MS[this.cloudProfileRetryAttempt];
@@ -574,7 +681,7 @@ export class DraftGatewayState {
     this.cloudProfileRetryTimer = globalThis.setTimeout(() => {
       this.cloudProfileRetryTimer = undefined;
       if (this.gatewayConnectedValue) {
-        void this.cloudProfileTask.run();
+        void this.readCloudProfiles();
       }
     }, delayMs);
   }
@@ -605,19 +712,13 @@ export class DraftGatewayState {
     if (!preferences) {
       return;
     }
-    const notify = (event: "loaded" | "changed") => {
+    const notify = () => {
       if (this.identityPreferences !== preferences) {
         return;
       }
-      if (
-        event === "loaded" &&
-        this.read().agentsHydrated &&
-        this.callbacks.preferenceScope !== "palette"
-      ) {
-        this.callbacks.onAdoptAgentDefaults();
-      }
-      this.callbacks.requestUpdate();
+      this.callbacks.changed();
     };
+    // The preference lease requires this live-authority predicate when publishing results.
     this.stopPreferences = preferences.subscribe(
       notify,
       () =>
@@ -628,7 +729,7 @@ export class DraftGatewayState {
         this.read().context?.gateway.connection.gatewayUrl === this.gatewayUrlValue,
     );
     if (preferences.mode !== "loading") {
-      notify("loaded");
+      notify();
     }
   }
 }

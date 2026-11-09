@@ -5,7 +5,7 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct GatewayConnectionMediaAuthorityTests {
     private nonisolated static let artifactID = "artifact_managed_image_authority"
@@ -15,7 +15,7 @@ struct GatewayConnectionMediaAuthorityTests {
     func `cancellation before transport creation cannot dispatch or invalidate its session`(
         afterAdmission: Bool) async throws
     {
-        let tls = try DashboardTLSFixture()
+        let tls = try await DashboardTLSFixture()
         var requests: [String] = []
         let server = try await DashboardHTTPFixture.start(tlsIdentity: tls.identity, requestHandler: { request in
             requests.append(request)
@@ -54,7 +54,7 @@ struct GatewayConnectionMediaAuthorityTests {
 
     @Test(arguments: ["current", "redirect", "expired", "wrong-origin"])
     func `browser authority controls the actual media HTTP request`(_ scenario: String) async throws {
-        let tls = try DashboardTLSFixture()
+        let tls = try await DashboardTLSFixture()
         var otherRequests = 0
         let other = try await DashboardHTTPFixture.start(tlsIdentity: tls.identity, requestHandler: { _ in
             otherRequests += 1
@@ -86,7 +86,7 @@ struct GatewayConnectionMediaAuthorityTests {
         }
         let browser = try gatewayBrowserSessionFixture(
             origin: (scenario == "wrong-origin" ? other.url() : server.url()).absoluteString,
-            expiresAt: scenario == "expired" ? Date(timeIntervalSince1970: 1) : Date().addingTimeInterval(300))
+            expiresAt: scenario == "expired" ? Date(timeIntervalSince1970: 1) : .fixtureSessionExpiry)
         let source = GatewayConnectionEndpointSource(endpoint: Self.endpoint(server, tls: tls, browser: browser))
         let connection = Self.connection(source)
         let outcome: Result<Void, Error>
@@ -128,11 +128,18 @@ struct GatewayConnectionMediaAuthorityTests {
 
     @Test(arguments: ["manual-upgrade", "browser-replacement", "expiry"])
     func `retiring authority cancels media waiting for HTTP headers`(_ retirement: String) async throws {
-        let tls = try DashboardTLSFixture()
+        let tls = try await DashboardTLSFixture()
         let gate = GatewayConnectionSuspensionGate()
+        let progress = AsyncTestSignal()
+        var requestStarted = false
+        var mediaFinished = false
         var requests: [String] = []
         let server = try await DashboardHTTPFixture.start(
-            beforeResponse: { await gate.suspend() },
+            beforeResponse: {
+                requestStarted = true
+                progress.notify()
+                await gate.suspend()
+            },
             tlsIdentity: tls.identity,
             requestHandler: { request in
                 requests.append(request)
@@ -141,38 +148,56 @@ struct GatewayConnectionMediaAuthorityTests {
         defer { server.stop() }
         let browser = try gatewayBrowserSessionFixture(
             origin: server.url().absoluteString,
-            expiresAt: Date().addingTimeInterval(retirement == "expiry" ? 3 : 300))
+            expiresAt: retirement == "expiry" ? Date().addingTimeInterval(3) : .fixtureSessionExpiry)
         let source = GatewayConnectionEndpointSource(endpoint: Self.endpoint(
             server, tls: tls, browser: retirement == "manual-upgrade" ? nil : browser))
         let connection = Self.connection(source)
-        let lease = try await connection.acquireServerLease()
-        let media = Task { try await Self.load(connection, lease: lease) }
+        let media = Task { () -> Result<Void, Error> in
+            defer {
+                mediaFinished = true
+                progress.notify()
+            }
+            do {
+                let lease = try await connection.acquireServerLease()
+                _ = try await Self.load(connection, lease: lease)
+                return .success(())
+            } catch {
+                return .failure(error)
+            }
+        }
         let outcome: Result<Void, Error>
         do {
-            try await AsyncTimeout.withTimeout(
-                seconds: 2,
-                onTimeout: { URLError(.timedOut) },
-                operation: { await gate.waitUntilStarted() })
+            try await progress.wait("media request headers or expiry rejection") {
+                requestStarted || mediaFinished
+            }
             if retirement != "expiry" {
+                try #require(requestStarted)
                 let successor = try gatewayBrowserSessionFixture(
                     origin: server.url().absoluteString, token: "successor-browser-session")
                 source.setEndpoint(Self.endpoint(server, tls: tls, browser: successor))
                 _ = try await connection.request(method: "health", params: nil)
             }
-            // The fixture withholds headers: rejection must come from retirement,
-            // not a completed response discarded by the later lease check.
-            let cancelled = try await AsyncTimeout.withTimeout(
-                seconds: retirement == "expiry" ? 4 : 2,
-                onTimeout: { URLError(.timedOut) },
-                operation: {
-                    do {
-                        _ = try await media.value
-                        return false
-                    } catch {
-                        return error is CancellationError || (error as? URLError)?.code == .cancelled
-                    }
-                })
-            #expect(cancelled)
+            // Expiry can reject admission before the starved HTTP task reaches the server.
+            // Once it reaches the server, headers stay withheld until authority cancels it.
+            let result = try await TestWait.value(of: media, "media authority cancellation")
+            let cancelled: Bool
+            if case let .failure(error) = result {
+                cancelled = error is CancellationError || (error as? URLError)?.code == .cancelled
+                if retirement == "expiry", !requestStarted {
+                    await gate.open()
+                    try await server.waitUntilIdle("expired media transport closure")
+                    #expect(browser.expiresAt <= Date())
+                    #expect(!requestStarted)
+                    #expect(requests.isEmpty)
+                    #expect(cancelled || (error as? GatewayBrowserSessionError) == .expired ||
+                        error is OpenClawChatTransportSendError)
+                } else {
+                    #expect(cancelled)
+                }
+            } else {
+                cancelled = false
+                #expect(cancelled)
+            }
             await gate.open()
             if retirement != "expiry" {
                 let current = try await connection.acquireServerLease()

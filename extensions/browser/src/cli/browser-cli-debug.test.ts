@@ -1,20 +1,13 @@
-// Browser tests cover browser cli debug plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   createBrowserProgram,
   mockBrowserGateway,
-  getBrowserCliRuntime,
+  mockBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } from "./browser-cli.test-support.js";
-import * as cliCoreApiModule from "./core-api.js";
 
 const gatewayMock = mockBrowserGateway();
-const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
-  browserCliRuntime.writeJson,
-);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+mockBrowserCliRuntime();
 
 const { registerBrowserDebugCommands } = await import("./browser-cli-debug.js");
 
@@ -29,7 +22,7 @@ describe("browser debug command timeouts", () => {
     { args: ["errors"], path: "/errors" },
     { args: ["requests"], path: "/requests" },
     { args: ["trace", "start"], path: "/trace/start" },
-    { args: ["trace", "stop"], path: "/trace/stop" },
+    { args: ["trace", "stop", "--out", " trace.zip "], path: "/trace/stop" },
   ])("inherits the parent timeout for $path", async ({ args, path }) => {
     for (const timeout of ["30000", "60000"]) {
       const { program, browser, parentOpts } = createBrowserProgram();
@@ -41,10 +34,13 @@ describe("browser debug command timeouts", () => {
 
       expect(gatewayMock).toHaveBeenLastCalledWith(
         "browser.request",
-        expect.objectContaining({ timeout }),
+        expect.objectContaining({ timeout: String(Number(timeout) + 130_000) }),
         expect.objectContaining({ path, timeoutMs: Number(timeout) }),
         expect.objectContaining({ scopes: ["operator.admin"] }),
       );
+      if (path === "/trace/stop") {
+        expect(gatewayMock.mock.calls.at(-1)?.[2].body).toMatchObject({ path: " trace.zip " });
+      }
     }
   });
 });

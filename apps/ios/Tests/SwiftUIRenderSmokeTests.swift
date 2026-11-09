@@ -35,6 +35,25 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
+    @Test @MainActor func `local device settings build across device widths and text sizes`() {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
+        for width in [320.0, 768.0] {
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+                let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+                let root = NavigationStack {
+                    SettingsProTab(directRoute: .deviceSettings)
+                }
+                .environment(AppAppearanceModel())
+                .environment(appModel)
+                .environment(controller)
+                .environment(\.dynamicTypeSize, typeSize)
+                windows.append(Self.host(root, size: CGSize(width: width, height: 1024)))
+            }
+        }
+    }
+
     @Test @MainActor func `settings About destination builds in light and dark mode`() {
         for scheme in [ColorScheme.light, ColorScheme.dark] {
             for typeSize in [DynamicTypeSize.large, .accessibility2] {
@@ -213,9 +232,8 @@ struct SwiftUIRenderSmokeTests {
         """
 
         let root = ChatStreamingAssistantBubble(
-            text: text,
+            text: ChatStreamingAssistantText(sourceText: text, includesThinking: false),
             markdownVariant: .standard,
-            showsReasoning: false,
             assistantName: "OpenClaw",
             assistantAvatarText: "OC",
             assistantAvatarTint: nil,

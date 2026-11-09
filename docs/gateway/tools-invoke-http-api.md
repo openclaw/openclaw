@@ -65,12 +65,14 @@ Fields:
 - `tool` / `name` (string, required): tool name to invoke. `name` takes precedence if both are sent.
 - `action` (string, optional): merged into `args.action` if the tool schema supports an `action` property and `args` did not already set one.
 - `args` (object, optional): tool-specific arguments.
-- `sessionKey` (string, optional): target session key. If omitted or `"main"`, the Gateway resolves the agent's canonical main session (`agent:<agentId>:main`, or `global` in global session scope). Custom `session.mainKey` values are ignored.
+- `sessionKey` (string, optional): target session key. If omitted or `"main"`, the Gateway resolves the agent's primary main session (`agent:<agentId>:main`, or `global` in global session scope). Custom `session.mainKey` values are ignored.
 - `agentId` (string, optional): resolves the session key for that agent. Errors with `400` if it conflicts with an explicit `sessionKey` that already maps to a different agent.
 - `idempotencyKey` (string, optional): used to derive a stable tool-call id for the invocation.
 - `dryRun` (boolean, optional): reserved for future use; currently ignored.
 
 ## Policy + routing behavior
+
+For identity-authenticated callers with [named operator roles](/gateway/operator-scopes#named-operator-roles), the role's agent allowlist applies even when the selected session has no stored entry. A role with `sandbox: "required"` must target an existing session with recorded required-sandbox provenance; a missing session, including an omitted or `"main"` target that resolves to one, returns **403**. Create a session through the normal session flow first. The WebSocket `tools.invoke` method uses the same rule. Shared-secret and trusted system calls retain their existing authority.
 
 Tool availability is filtered through the same policy chain used by Gateway agents:
 
@@ -81,6 +83,12 @@ Tool availability is filtered through the same policy chain used by Gateway agen
 - subagent policy (when invoking with a subagent session key)
 
 If a tool is not allowed by policy, the endpoint returns **404**.
+
+### Configured MCP tools
+
+Tools from configured MCP servers (`mcp.servers` and enabled bundle plugins) are invocable by their agent-facing name, `<server>__<tool>`, for example `granola__list_meetings`. They pass through the same policy chain and `gateway.tools` deny list as Gateway tools; use `tools.deny: ["<server>__<tool>"]` or `["<server>__*"]` to block them.
+
+Each call connects only the server that owns the name, on a private MCP runtime that closes when the call finishes. It does not reuse or warm the session's agent runtime, so each call pays the server's connect-and-list cost. Requester-scoped servers (`oauth.identity: "per-requester"`) are not available here because the call carries no verified sender. If the owning server cannot connect or list its tools, the endpoint returns **500** with the server's diagnostic instead of **404**.
 
 Important boundary notes:
 

@@ -1,4 +1,3 @@
-// Shared JSON state helpers for pairing namespaces.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
@@ -6,6 +5,14 @@ import { resolveStateDir } from "../config/paths.js";
 import { isMissingPathError } from "./errno.js";
 
 export { createAsyncLock, readJsonIfExists } from "./json-files.js";
+
+export async function archiveLegacyPairingFile(filePath: string): Promise<void> {
+  try {
+    await fs.rename(filePath, `${filePath}.migrated`);
+  } catch {
+    // Missing file or a racing second gateway process; nothing left to archive.
+  }
+}
 
 /** Resolve pending/paired JSON file locations for one pairing namespace. */
 export function resolvePairingPaths(baseDir: string | undefined, subdir: string) {

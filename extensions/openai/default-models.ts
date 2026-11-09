@@ -1,4 +1,3 @@
-// Openai plugin module implements default models behavior.
 import {
   applyAgentDefaultModelPrimary,
   ensureModelAllowlistEntry,
@@ -19,7 +18,7 @@ export function applyOpenAIProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const configuredRefs = [
     resolveAgentModelPrimaryValue(configuredModel),
     ...(typeof configuredModel === "object" ? (configuredModel.fallbacks ?? []) : []),
-  ].filter((ref): ref is string => typeof ref === "string" && ref.trim().length > 0);
+  ].filter((ref): ref is string => ref !== undefined && ref.trim().length > 0);
   const withConfiguredRefs = configuredRefs.reduce(
     (next, modelRef) => ensureModelAllowlistEntry({ cfg: next, modelRef }),
     cfg,

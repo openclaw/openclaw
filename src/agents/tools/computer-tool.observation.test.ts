@@ -1,9 +1,16 @@
 import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionState } from "../../logging/diagnostic-session-state.js";
 import { getImageMetadata } from "../../media/image-ops.js";
 import { createSolidPngBuffer } from "../../plugin-sdk/test-helpers/image-fixtures.js";
 import type { ComputerActResult } from "../../plugins/computer-use-contract.js";
+import {
+  detectToolCallLoop,
+  recordToolCall,
+  recordToolCallOutcome,
+} from "../tool-loop-detection.js";
 import type { ComputerToolTransport } from "./computer-tool-shared.js";
 import {
   createVisionComputerTool,
@@ -111,6 +118,92 @@ function createObservedTool(
 describe("computer targeted action observations", () => {
   beforeEach(resetComputerToolMocks);
 
+  it("invalidates old frames and targeted refs before taking control", async () => {
+    const computerUse = v2Descriptor(["screenshot", "get_window_state", "left_click"]);
+    const invoke = vi.fn<ComputerToolTransport["invoke"]>(async (request) => {
+      if (request.command === "screen.snapshot") {
+        return {
+          format: "png",
+          width: 1,
+          height: 1,
+          base64: TINY_PNG_BASE64,
+          displayFrameId: "frame",
+        };
+      }
+      return request.commandParams.action === "get_window_state"
+        ? observationResult(1)
+        : { ok: true };
+    });
+    const tool = createVisionComputerTool({
+      contextEpoch: { value: 0 },
+      transport: {
+        computerUse,
+        resolveNode: async () => ({ nodeId: "desktop-1", computerUse }),
+        invoke,
+      },
+    });
+    await tool.execute("window", { action: "get_window_state", windowRef: "window-1" });
+    const before = await tool.execute("before", { action: "screenshot" });
+    await tool.execute("takeover", { action: "take_control" });
+    if (!isRecord(before.details)) {
+      throw new Error("Expected screenshot details");
+    }
+    invoke.mockClear();
+    await expect(
+      tool.execute("old-frame", {
+        action: "left_click",
+        frameId: before.details.frameId,
+        coordinate: [0, 0],
+      }),
+    ).rejects.toThrow("frameId does not match");
+    await expect(
+      tool.execute("old-element", {
+        action: "left_click",
+        windowRef: "window-1",
+        elementRef: "element-1",
+        observationId: "observation-1",
+      }),
+    ).rejects.toThrow("fresh observation");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "detects unchanged window reads without discarding fresh refs (changing=%s)",
+    async (changing) => {
+      let revision = 1;
+      const fixture = createObservedTool({
+        followUp: () => {
+          const result = observationResult(++revision);
+          if (changing) {
+            result.observation!.elements![0]!.label = `Save ${revision}`;
+          }
+          return result;
+        },
+      });
+      const state: SessionState = { lastActivity: 0, state: "processing", queueDepth: 0 };
+      const params = { action: "get_window_state", windowRef: "window-1" };
+      for (let index = 1; index <= 20; index++) {
+        const id = `read-${index}`;
+        recordToolCall(state, "computer", params, id);
+        const result = await fixture.tool.execute(id, params);
+        expect(JSON.stringify(result.content)).toContain(`observation-${index}`);
+        expect(JSON.stringify(result.content)).toContain(`element-${index}`);
+        recordToolCallOutcome(state, {
+          toolName: "computer",
+          toolParams: params,
+          toolCallId: id,
+          result,
+        });
+      }
+      expect(detectToolCallLoop(state, "computer", params)).toMatchObject({
+        stuck: true,
+        level: changing ? "warning" : "critical",
+      });
+      await expect(fixture.click(1)).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
+      expect(fixture.counts().mutations).toBe(0);
+    },
+  );
+
   it("returns fresh refs and preserves input evidence without an extra model observation turn", async () => {
     const fixture = createObservedTool();
     await fixture.observe();
@@ -145,11 +238,11 @@ describe("computer targeted action observations", () => {
     const requests = fixture.invoke.mock.calls.map(([request]) => request);
     const mutationRequest = expectDefined(requests[1], "first input request");
     const observationRequest = expectDefined(requests[2], "automatic observation request");
-    const mutationKey = `computer.act:v1:${createHash("sha256")
-      .update(JSON.stringify(["run-1", "click-1", "computer.act"]))
+    const mutationKey = `computer.act:v2:${createHash("sha256")
+      .update(JSON.stringify(["run-1", "", "click-1", "computer.act"]))
       .digest("hex")}`;
     expect(mutationRequest.idempotencyKey).toBe(mutationKey);
-    expect(observationRequest.idempotencyKey).toMatch(/^computer\.observation:v1:/);
+    expect(observationRequest.idempotencyKey).toMatch(/^computer\.observation:v2:/);
     expect(new Set(requests.map((request) => request.idempotencyKey)).size).toBe(5);
     expect(observationRequest.commandParams).toEqual({
       action: "get_window_state",

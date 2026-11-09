@@ -1,77 +1,22 @@
-/**
- * Bounded MEMORY.md compaction for dreaming/promotion writes.
- *
- * Background: the dreaming pipeline appends promoted entries to MEMORY.md
- * via short-term-promotion.applyShortTermPromotions. Without a size budget,
- * MEMORY.md grows unboundedly across deep-phase sweeps and eventually
- * exceeds bootstrap's per-file injection cap, breaking session bootstrap.
- * See issue #73691.
- *
- * Strategy: drop the OLDEST auto-promoted sections (date-ordered) until
- * the file plus the new section fit within the budget. A section counts as
- * dreaming-owned only when its complete body matches the marker + entry
- * structure emitted by `buildPromotionSection`. Ambiguous or mixed content
- * is preserved unconditionally.
- */
-
-import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-
 const PROMOTION_SECTION_HEADING_RE = /^## Promoted From Short-Term Memory \(([^)]+)\)\s*$/;
 
 const PROMOTION_SUBSECTION_HEADING_RE = /^### (?:Global|Project: .+?)\s*$/;
 
+// Annotated markers still belong to their promotion section when finding boundaries.
 const PROMOTION_ENTRY_MARKER_RE = /^<!--\s*openclaw-memory-promotion:.*-->\s*$/i;
+
+// Only a single comment can qualify a block for deletion; retain the marker's line domain.
+const GENERATED_PROMOTION_ENTRY_MARKER_RE =
+  /^<!--\s*openclaw-memory-promotion:(?:(?!-->).)*-->\s*$/i;
 
 const ATX_HEADING_RE = /^ {0,3}#{1,6}(?:[ \t]|$)/;
 
 const SETEXT_HEADING_UNDERLINE_RE = /^ {0,3}(?:=+|-+)[ \t]*$/;
 
-/**
- * Default budget for MEMORY.md content on disk, in characters. Chosen to
- * stay safely below the bootstrap injection cap (~12KB per file at the
- * time of writing) so promoted memory keeps reaching new sessions instead
- * of being silently dropped by bootstrap truncation.
- */
+// Stay below bootstrap's per-file injection cap so promotion remains visible (#73691).
 export const DEFAULT_MEMORY_FILE_MAX_CHARS = 10_000;
 
-/**
- * Keep promotion output within every consuming agent's per-file bootstrap
- * budget. An unconfigured bootstrap limit stays above the promotion writer's
- * own ceiling, so only explicit lower limits need to reduce the budget here.
- */
-export function resolveMemoryPromotionFileMaxChars(params: {
-  cfg?: OpenClawConfig;
-  agentIds: readonly string[];
-}): number {
-  const defaultBootstrapLimit = params.cfg?.agents?.defaults?.bootstrapMaxChars;
-  const agentIds: Array<string | undefined> =
-    params.agentIds.length > 0 ? [...new Set(params.agentIds)] : [undefined];
-  let limit = DEFAULT_MEMORY_FILE_MAX_CHARS;
-
-  for (const agentId of agentIds) {
-    const configuredLimit = agentId
-      ? (resolveAgentConfig(params.cfg ?? {}, agentId)?.bootstrapMaxChars ?? defaultBootstrapLimit)
-      : defaultBootstrapLimit;
-    if (
-      typeof configuredLimit === "number" &&
-      Number.isFinite(configuredLimit) &&
-      configuredLimit > 0
-    ) {
-      limit = Math.min(limit, Math.floor(configuredLimit));
-    }
-  }
-  return limit;
-}
-
-/**
- * Reserve for writer-side overhead that the helper does not see directly:
- * the `# Long-Term Memory\n\n` header re-emitted when compaction empties
- * out (20 chars) and `withTrailingNewline`'s trailing `\n` (1 char). See
- * the actual write expression in `applyShortTermPromotions`. Subtracting
- * this from `budgetChars` keeps the on-disk file inside the caller's
- * stated budget instead of exceeding it by up to ~21 chars in edge cases.
- */
+// applyShortTermPromotions may restore the empty-file header (20 chars) and final newline.
 const WRITE_OVERHEAD_RESERVE = 21;
 
 type MemoryBlock =
@@ -96,7 +41,7 @@ function isGeneratedPromotionBlock(lines: string[]): boolean {
       }
     }
 
-    if (!PROMOTION_ENTRY_MARKER_RE.test(lines[index] ?? "")) {
+    if (!GENERATED_PROMOTION_ENTRY_MARKER_RE.test(lines[index] ?? "")) {
       return false;
     }
     // A marker owns only the single bullet emitted with it. Treat any other
@@ -148,7 +93,6 @@ function parseMemoryBlocks(content: string): MemoryBlock[] {
   const lines = content.split(/\r?\n/);
   const blocks: MemoryBlock[] = [];
   let currentLines: string[] = [];
-  let currentKind: "preserved" | "promotion" = "preserved";
   let currentDate: string | undefined;
 
   const flush = () => {
@@ -156,7 +100,7 @@ function parseMemoryBlocks(content: string): MemoryBlock[] {
       return;
     }
     const text = currentLines.join("\n");
-    if (currentKind === "promotion" && currentDate && isGeneratedPromotionBlock(currentLines)) {
+    if (currentDate && isGeneratedPromotionBlock(currentLines)) {
       blocks.push({
         kind: "promotion",
         date: currentDate,
@@ -167,12 +111,11 @@ function parseMemoryBlocks(content: string): MemoryBlock[] {
       blocks.push({ kind: "preserved", text });
     }
     currentLines = [];
-    currentKind = "preserved";
     currentDate = undefined;
   };
 
   for (const [index, line] of lines.entries()) {
-    if (currentKind === "promotion" && SETEXT_HEADING_UNDERLINE_RE.test(line)) {
+    if (currentDate && SETEXT_HEADING_UNDERLINE_RE.test(line)) {
       const headingLines = takeSetextHeadingLines(currentLines);
       if (headingLines) {
         flush();
@@ -180,17 +123,10 @@ function parseMemoryBlocks(content: string): MemoryBlock[] {
         continue;
       }
     }
-    const continuesPromotionBody =
-      currentKind === "promotion" && startsGeneratedPromotionSubsection(lines, index);
+    const continuesPromotionBody = currentDate && startsGeneratedPromotionSubsection(lines, index);
     if (ATX_HEADING_RE.test(line) && !continuesPromotionBody) {
       flush();
-      const match = PROMOTION_SECTION_HEADING_RE.exec(line);
-      if (match) {
-        currentKind = "promotion";
-        currentDate = match[1];
-      } else {
-        currentKind = "preserved";
-      }
+      currentDate = PROMOTION_SECTION_HEADING_RE.exec(line)?.[1];
       currentLines = [line];
     } else {
       currentLines.push(line);
@@ -198,10 +134,6 @@ function parseMemoryBlocks(content: string): MemoryBlock[] {
   }
   flush();
   return blocks;
-}
-
-function joinBlocks(blocks: MemoryBlock[]): string {
-  return blocks.map((block) => block.text).join("\n");
 }
 
 export type CompactMemoryParams = {
@@ -217,30 +149,13 @@ type CompactMemoryResult = {
   droppedDates: string[];
 };
 
-/**
- * Drop oldest auto-promotion sections from `existingMemory` until
- * `existingMemory + newSection` fits within `budgetChars`. Returns the
- * (possibly trimmed) existing memory and the dates of dropped sections.
- *
- * Guarantees:
- * - Non-promotion content (user-authored markdown, the file header, any
- *   heading of any level not matching the promotion pattern, and any mixed
- *   or malformed promotion-shaped block) is preserved.
- * - Promotion sections are dropped in ascending date order (oldest first).
- * - If `existingMemory + newSection` already fits the budget, the existing
- *   memory is returned unchanged.
- * - Compaction stops before exceeding `maxPriorEntryLossFraction` when set.
- * - If the budget cannot be satisfied within that loss bound, the caller owns
- *   the final fit check and may defer the new section without rewriting memory.
- */
+/** Drop oldest fully generated sections within the loss bound; the caller owns the final fit check. */
 export function compactMemoryForBudget(params: CompactMemoryParams): CompactMemoryResult {
   const { existingMemory, newSection, budgetChars } = params;
   if (budgetChars <= 0) {
     return { compacted: existingMemory, droppedDates: [] };
   }
 
-  // Reserve writer-side header + trailing-newline overhead so the on-disk
-  // file actually fits the caller's stated budget.
   const effectiveBudget = Math.max(0, budgetChars - WRITE_OVERHEAD_RESERVE);
 
   if (existingMemory.length + newSection.length <= effectiveBudget) {
@@ -249,21 +164,8 @@ export function compactMemoryForBudget(params: CompactMemoryParams): CompactMemo
 
   const blocks = parseMemoryBlocks(existingMemory);
   const promotionEntries = blocks
-    .map((block, index) =>
-      block.kind === "promotion"
-        ? {
-            index,
-            date: block.date,
-            length: block.text.length,
-            entryCount: block.entryCount,
-          }
-        : null,
-    )
-    .filter(
-      (entry): entry is { index: number; date: string; length: number; entryCount: number } =>
-        entry !== null,
-    )
-    .toSorted((a, b) => a.date.localeCompare(b.date));
+    .flatMap((block, index) => (block.kind === "promotion" ? [{ block, index }] : []))
+    .toSorted((a, b) => a.block.date.localeCompare(b.block.date));
 
   if (promotionEntries.length === 0) {
     return { compacted: existingMemory, droppedDates: [] };
@@ -271,28 +173,34 @@ export function compactMemoryForBudget(params: CompactMemoryParams): CompactMemo
 
   const droppedIndices = new Set<number>();
   const droppedDates: string[] = [];
-  const totalEntryCount = promotionEntries.reduce((total, entry) => total + entry.entryCount, 0);
+  const totalEntryCount = promotionEntries.reduce(
+    (total, { block }) => total + block.entryCount,
+    0,
+  );
   const maxLossFraction = Math.max(0, Math.min(1, params.maxPriorEntryLossFraction ?? 1));
   let droppedEntryCount = 0;
   let projectedExistingSize = existingMemory.length;
-  // Block boundaries cost one newline each in joinBlocks; subtract a
+  // Block boundaries cost one newline each; subtract a
   // newline along with the block text so the projection stays honest.
   const blockSeparatorCost = blocks.length > 1 ? 1 : 0;
 
-  for (const entry of promotionEntries) {
+  for (const { block, index } of promotionEntries) {
     if (projectedExistingSize + newSection.length <= effectiveBudget) {
       break;
     }
     if (
       totalEntryCount > 0 &&
-      (droppedEntryCount + entry.entryCount) / totalEntryCount > maxLossFraction
+      (droppedEntryCount + block.entryCount) / totalEntryCount > maxLossFraction
     ) {
       break;
     }
-    droppedIndices.add(entry.index);
-    droppedDates.push(entry.date);
-    droppedEntryCount += entry.entryCount;
-    projectedExistingSize = Math.max(0, projectedExistingSize - entry.length - blockSeparatorCost);
+    droppedIndices.add(index);
+    droppedDates.push(block.date);
+    droppedEntryCount += block.entryCount;
+    projectedExistingSize = Math.max(
+      0,
+      projectedExistingSize - block.text.length - blockSeparatorCost,
+    );
   }
 
   if (droppedIndices.size === 0) {
@@ -300,5 +208,5 @@ export function compactMemoryForBudget(params: CompactMemoryParams): CompactMemo
   }
 
   const remaining = blocks.filter((_, index) => !droppedIndices.has(index));
-  return { compacted: joinBlocks(remaining), droppedDates };
+  return { compacted: remaining.map((block) => block.text).join("\n"), droppedDates };
 }

@@ -9,28 +9,29 @@ const enTranscripts = {
     filters: "Filter meeting transcripts",
     advancedFilters: "Filters",
     titleFilter: "Search meetings",
-    sourceFilter: "Provider ID",
-    accountFilter: "Account ID",
-    agentFilter: "Agent ID",
+    sourceFilter: "Provider",
+    accountFilter: "Account",
+    agentFilter: "Agent",
     afterFilter: "Started on or after",
     beforeFilter: "Started before",
     filterHint:
       "Search titles, source IDs, saved summaries, and transcript text. Dates use UTC. Provider, account, and agent IDs are exact matches. Source meeting URLs and private source metadata are not searched.",
+    filterHintShort: "Dates use UTC. IDs must match exactly.",
     filter: "Filter",
     clearFilters: "Clear filters",
     pagination: "Transcript pages",
     firstPage: "First page",
     nextPage: "Next page",
     emptyHint:
-      "Try clearing the filters, or set up a source in Meeting capture. Agent chat history is on the Sessions page.",
+      "Try clearing the filters, or set up a source in Meeting capture. Agent conversations are on the Sessions page.",
     choose: "Select a transcript",
     chooseHint:
       "Select a transcript to read the conversation, search its text, or download a copy.",
     forbidden: "Transcript access is restricted",
     forbiddenHint:
-      "This connection needs operator read access and permission to read the shared archive. Ask a Gateway administrator to review your access.",
-    loadError: "Could not load transcripts",
-    disconnected: "Connect to the Gateway to read meeting transcripts.",
+      "You need read access and permission to read the shared archive. Ask an admin to review your access.",
+    loadError: "Couldn’t load transcripts. Try again.",
+    disconnected: "Reconnect to read meeting transcripts.",
     unknown: "Unknown",
     unattributed: "Agent not recorded",
     savedCount: "{count} saved utterances",
@@ -48,18 +49,18 @@ const enTranscripts = {
     modelNotes: "Model-generated notes",
     heuristicNotes: "Notes extracted using text heuristics",
     generatedAt: "Generated {time}",
-    noSummary: "No summary is available yet.",
+    noSummary: "No summary yet.",
     generatingSummary: "Generating meeting summary…",
-    summaryError: "Could not generate the meeting summary.",
+    summaryError: "Couldn’t generate the meeting summary. Try again.",
     searchWithin: "Search within this transcript",
     search: "Search",
     clearSearch: "Clear search",
     searchResults: "Matching utterances for “{query}” across this transcript, loaded in pages.",
-    noMatches: "No matching utterances.",
-    noUtterances: "No utterances have been saved in this transcript.",
+    noMatches: "No utterances match your search.",
+    noUtterances: "No utterances yet.",
     download: { markdown: "Download Markdown", jsonl: "Download JSONL" },
     exportError:
-      "Download failed. No partial file was downloaded. Try again, or use the Transcripts CLI for exports over the browser limit.",
+      "Couldn’t download the transcript. No partial file was downloaded. Try again, or use the transcripts CLI for exports over the browser limit.",
     exporting: "Preparing download…",
     downloadStarted: "Download started. Check your browser downloads.",
   },
@@ -88,9 +89,9 @@ const enTranscripts = {
     requiredLocator: "Enter a non-blank value for {field}.",
     chooseProvider: "Choose a provider",
     autoStartUnavailable:
-      "Auto-start setup is unavailable for this provider. Existing fields remain editable. Check the provider's setup documentation; after enabling its plugin or restarting the Gateway, refresh health.",
+      "Auto-start setup is unavailable for this provider. Existing fields remain editable. Check the provider's setup documentation, enable its plugin, then refresh health.",
     noAutoStartProviders:
-      "No enabled provider currently advertises auto-start setup. Check the provider's setup documentation and refresh health after enabling its plugin or restarting the Gateway. Existing sources remain editable.",
+      "No enabled provider currently advertises auto-start setup. Check the provider's setup documentation, enable its plugin, then refresh health. Existing sources remain editable.",
     sourceChanged:
       "This source changed while you were editing. Cancel and reopen it to use the current draft.",
     rawDraftPending:
@@ -110,7 +111,7 @@ const enTranscripts = {
       "admitted-start-failed":
         "Capture startup failed after the transcript was created and cannot retry automatically. Saved notes are retained. Check the provider configuration and refresh health.",
       "start-failed":
-        "Capture could not start. Check the source and provider configuration, then restart the Gateway and refresh health.",
+        "Capture could not start. Check the source and provider configuration, then turn capture off and on to retry and refresh health.",
       ended:
         "The provider ended this capture attempt. Saved notes are retained. Check the provider configuration and refresh health.",
     },

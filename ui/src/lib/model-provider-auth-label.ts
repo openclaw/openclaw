@@ -1,6 +1,7 @@
 import type { ModelAuthStatusProvider } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { registerModelControlsEnglish } from "../i18n/locales/en-model-controls.ts";
+import { providerUsageForAccount } from "./model-auth.ts";
 
 registerModelControlsEnglish();
 
@@ -46,16 +47,13 @@ export function describeModelProviderAuth(
     const account =
       active ??
       (showCredentials && subscriptions.length === 1 && !hasApiKey ? subscriptions[0] : undefined);
-    // A provider-wide plan remains ambiguous when an unusable second login exists.
-    const subscriptionCount = provider.profiles.filter(
-      (p) => p.type === "oauth" || p.type === "token",
-    ).length;
     return {
       kind: "subscription",
       label:
-        (subscriptionCount === 1 ? provider.usage?.plan : undefined) ||
+        active?.displayName ||
+        providerUsageForAccount(provider, account?.profileId)?.plan ||
         t("chat.modelControls.subscription"),
-      detail: subscriptions.length > 1 || showCredentials ? account?.email : undefined,
+      detail: account?.email,
     };
   }
   return hasApiKey ? { kind: "api", label: t("chat.modelControls.api") } : undefined;

@@ -4,7 +4,6 @@ const SHA = /^[a-f0-9]{40}$/u;
 const PACKAGE = /^@openclaw\/[a-z0-9][a-z0-9._-]*$/u;
 
 export function createStablePluginNpmBootstrapApproval(input) {
-  const stableSoakWaiver = typeof input.stableSoakWaiver === "string" ? input.stableSoakWaiver : "";
   const eligibility = evaluateReleaseBootstrapGate(input);
   if (eligibility.status === "FAIL") {
     throw new Error(eligibility.message);
@@ -49,7 +48,6 @@ export function createStablePluginNpmBootstrapApproval(input) {
     targetSha: input.targetSha,
     publishTag: input.publishTag,
     releaseProfile: input.releaseProfile,
-    stableSoakWaiver,
     validationRunId: input.validationRunId,
     validationRunAttempt: input.validationRunAttempt,
     packages: input.packages.toSorted(),

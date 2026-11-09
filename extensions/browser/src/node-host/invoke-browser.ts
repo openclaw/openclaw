@@ -1,9 +1,5 @@
-/**
- * Node-host browser.proxy command implementation for delegated Browser control
- * requests.
- */
 import fsPromises from "node:fs/promises";
-import { toUSVString } from "node:util";
+import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import {
   asNullableRecord,
   normalizeStringEntries,
@@ -11,16 +7,15 @@ import {
 import { hasBrowserControlWork } from "../browser-control-state.js";
 import { BROWSER_PROXY_COMMAND, BROWSER_PROXY_UPLOAD_COMMAND } from "../browser-node-commands.js";
 import {
-  assertBrowserProxyFileCountWithinLimit,
   assertBrowserProxyFileBytesWithinLimits,
   BROWSER_PROXY_ERROR_ENVELOPE,
   BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
   createBrowserProxyFailure,
+  collectBrowserProxyFilePaths,
   type BrowserProxyEnvelope,
   type BrowserProxyFile,
   type BrowserProxyRoute,
   type BrowserProxyUploadV1,
-  visitBrowserProxyFilePaths,
 } from "../browser-proxy-envelope.js";
 import { resolveBrowserProxyTimeoutMs } from "../browser-proxy-timeouts.js";
 import {
@@ -32,7 +27,11 @@ import {
 import { resolveCdpControlPolicy } from "../browser/cdp-reachability-policy.js";
 import { closeTrackedCdpTarget, redactCdpUrl } from "../browser/cdp.helpers.js";
 import { loadBrowserConfigForRuntimeRefresh } from "../browser/config-refresh-source.js";
-import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
+import {
+  resolveBrowserConfig,
+  resolveProfile,
+  type ResolvedBrowserProfile,
+} from "../browser/config.js";
 import {
   isBrowserHostLocalRoute,
   isPersistentBrowserProfileMutation,
@@ -45,8 +44,8 @@ import {
   getBrowserControlState,
   startBrowserControlServiceFromConfig,
 } from "../control-service.js";
+import { describeBrowserControlUnavailable } from "../plugin-enabled.js";
 import { withTimeout } from "../sdk-node-runtime.js";
-import { detectMime } from "../sdk-setup-tools.js";
 
 type BrowserProxyParams = {
   method?: string;
@@ -88,7 +87,7 @@ const BROWSER_PROXY_STATUS_TIMEOUT_MS = 750;
 const BROWSER_PROXY_MAX_ENCODED_PAYLOAD_BYTES = 24 * 1024 * 1024;
 
 function countBrowserProxyEncodedPayloadBytes(serialized: string): number {
-  // Native JSON serialization has already escaped C0 units; raw JSON cannot contain them.
+  // Native JSON serialization has already escaped C0 units and lone surrogates.
   let bytes = Buffer.byteLength(serialized, "utf8") + 2;
   for (const character of '"\\') {
     const code = character.charCodeAt(0);
@@ -104,90 +103,23 @@ function countBrowserProxyEncodedPayloadBytes(serialized: string): number {
       index = serialized.indexOf(character, index);
     }
   }
-  const wellFormed = toUSVString(serialized);
-  if (wellFormed !== serialized) {
-    // Raw JSON may preserve lone surrogates. Replacement keeps UTF-16 positions intact.
-    for (
-      let index = wellFormed.indexOf("\ufffd");
-      index !== -1;
-      index = wellFormed.indexOf("\ufffd", index + 1)
-    ) {
-      if (serialized.charCodeAt(index) !== 0xfffd) {
-        bytes += 3;
-      }
-    }
-  }
   return bytes;
 }
 
-function normalizeProfileAllowlist(raw?: string[]): string[] {
-  return Array.isArray(raw) ? normalizeStringEntries(raw) : [];
-}
-
-function resolveBrowserProxyConfig() {
-  const cfg = loadBrowserConfigForRuntimeRefresh();
+function resolveBrowserProxyConfig(cfg = loadBrowserConfigForRuntimeRefresh()) {
   const proxy = cfg.nodeHost?.browserProxy;
-  const allowProfiles = normalizeProfileAllowlist(proxy?.allowProfiles);
-  const enabled = proxy?.enabled !== false;
-  return { enabled, allowProfiles };
+  if (proxy?.enabled === false) {
+    throw new Error("UNAVAILABLE: node browser proxy disabled");
+  }
+  return {
+    allowProfiles: Array.isArray(proxy?.allowProfiles)
+      ? normalizeStringEntries(proxy.allowProfiles)
+      : [],
+  };
 }
-
-let browserControlReady: Promise<void> | null = null;
-let admittedBrowserControlState: ReturnType<typeof getBrowserControlState> = null;
 
 export function hasBrowserNodeHostWork(): boolean {
   return hasBrowserControlWork() || hasBrowserProxyUploadWork();
-}
-
-async function ensureBrowserControlService(): Promise<void> {
-  const current = getBrowserControlState();
-  // Admission survives config refresh only for this exact live runtime generation.
-  if (current && current === admittedBrowserControlState) {
-    return;
-  }
-  if (browserControlReady) {
-    return browserControlReady;
-  }
-  const startup = (async () => {
-    const cfg = loadBrowserConfigForRuntimeRefresh();
-    const resolved = resolveBrowserConfig(cfg.browser, cfg);
-    if (!resolved.enabled) {
-      throw new Error("browser control disabled");
-    }
-    const started = await startBrowserControlServiceFromConfig();
-    if (!started) {
-      throw new Error("browser control disabled");
-    }
-    admittedBrowserControlState = started;
-  })();
-  const sharedStartup = startup.finally(() => {
-    // Share pending failures, but never keep settled startup as runtime authority.
-    if (browserControlReady === sharedStartup) {
-      browserControlReady = null;
-    }
-  });
-  browserControlReady = sharedStartup;
-  return sharedStartup;
-}
-
-function isProfileAllowed(params: { allowProfiles: string[]; profile?: string | null }) {
-  const { allowProfiles, profile } = params;
-  if (!allowProfiles.length) {
-    return true;
-  }
-  if (!profile) {
-    return false;
-  }
-  return allowProfiles.includes(profile.trim());
-}
-
-function collectBrowserProxyPaths(payload: unknown): string[] {
-  const paths = new Set<string>();
-  visitBrowserProxyFilePaths(payload, (filePath) => {
-    paths.add(filePath.trim());
-    assertBrowserProxyFileCountWithinLimit(paths.size);
-  });
-  return [...paths];
 }
 
 async function readBrowserProxyFiles(filePaths: string[]): Promise<BrowserProxyFile[]> {
@@ -213,14 +145,6 @@ async function readBrowserProxyFiles(filePaths: string[]): Promise<BrowserProxyF
     }
   }
   return files;
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- CLI JSON params are typed by the invoked method.
-function decodeParams<T>(raw?: string | null): T {
-  if (!raw) {
-    throw new Error("INVALID_REQUEST: paramsJSON required");
-  }
-  return JSON.parse(raw) as T;
 }
 
 function isBrowserProxyTimeoutError(err: unknown): boolean {
@@ -314,7 +238,6 @@ function formatBrowserProxyTimeoutMessage(params: {
   return parts.join("; ");
 }
 
-/** Executes a serialized browser.proxy command and returns a serialized result payload. */
 export async function runBrowserProxyCommand(
   paramsJSON?: string | null,
   command = BROWSER_PROXY_COMMAND,
@@ -322,7 +245,10 @@ export async function runBrowserProxyCommand(
 ): Promise<string> {
   invocationSignal?.throwIfAborted();
   void ensureBrowserProxyUploadCleanup();
-  const params = decodeParams<BrowserProxyParams>(paramsJSON);
+  if (!paramsJSON) {
+    throw new Error("INVALID_REQUEST: paramsJSON required");
+  }
+  const params = JSON.parse(paramsJSON) as BrowserProxyParams;
   if (command === BROWSER_PROXY_COMMAND && params.upload !== undefined) {
     throw new Error("INVALID_REQUEST: browser.proxy does not accept upload envelopes");
   }
@@ -336,17 +262,22 @@ export async function runBrowserProxyCommand(
   if (!pathValue) {
     throw new Error("INVALID_REQUEST: path required");
   }
-  const proxyConfig = resolveBrowserProxyConfig();
-  if (!proxyConfig.enabled) {
-    throw new Error("UNAVAILABLE: node browser proxy disabled");
+  resolveBrowserProxyConfig();
+  const method = typeof params.method === "string" ? params.method.trim().toUpperCase() : "GET";
+  const path = normalizeBrowserRequestPath(pathValue);
+  if (method !== "GET" && method !== "POST" && method !== "DELETE") {
+    throw new Error("INVALID_REQUEST: method must be GET, POST, or DELETE");
+  }
+  if (path === BROWSER_PROXY_OWNED_TAB_CLOSE_PATH && method !== "POST") {
+    throw new Error("INVALID_REQUEST: owned tab close requires POST");
   }
 
-  await ensureBrowserControlService();
+  if (!(await startBrowserControlServiceFromConfig())) {
+    throw new Error(await describeBrowserControlUnavailable());
+  }
   invocationSignal?.throwIfAborted();
   const cfg = loadBrowserConfigForRuntimeRefresh();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  const method = typeof params.method === "string" ? params.method.toUpperCase() : "GET";
-  const path = normalizeBrowserRequestPath(pathValue);
   let body = params.body;
   const requestedProfile =
     resolveRequestedBrowserProfile({
@@ -366,7 +297,7 @@ export async function runBrowserProxyCommand(
       }
     : { status: "unavailable" };
   const includeRoute = params.errorEnvelope === BROWSER_PROXY_ERROR_ENVELOPE;
-  const allowedProfiles = proxyConfig.allowProfiles;
+  const allowedProfiles = resolveBrowserProxyConfig(cfg).allowProfiles;
   if (isPersistentBrowserProfileMutation(method, path)) {
     throw new Error("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
   }
@@ -376,21 +307,29 @@ export async function runBrowserProxyCommand(
   if (isBrowserHostLocalRoute(method, path)) {
     throw new Error("INVALID_REQUEST: browser.proxy cannot run host-local browser routes");
   }
-  if (allowedProfiles.length > 0) {
-    if (path !== "/profiles") {
-      const profileToCheck = requestedProfile || resolved.defaultProfile;
-      if (!isProfileAllowed({ allowProfiles: allowedProfiles, profile: profileToCheck })) {
-        throw new Error("INVALID_REQUEST: browser profile not allowed");
-      }
-    } else if (requestedProfile) {
-      if (!isProfileAllowed({ allowProfiles: allowedProfiles, profile: requestedProfile })) {
-        throw new Error("INVALID_REQUEST: browser profile not allowed");
-      }
+  const assertCurrent = (profile?: ResolvedBrowserProfile) => {
+    invocationSignal?.throwIfAborted();
+    const current = resolveBrowserProxyConfig();
+    const selected = profile?.name || effectiveProfile || requestedProfile;
+    if (
+      (path !== "/profiles" || selected) &&
+      current.allowProfiles.length > 0 &&
+      (!selected || !current.allowProfiles.includes(selected.trim()))
+    ) {
+      throw new Error("INVALID_REQUEST: browser profile not allowed");
     }
-  }
+  };
+  assertCurrent();
 
   const timeoutMs = resolveBrowserProxyTimeoutMs(params.timeoutMs);
-  const deadlineAt = Date.now() + timeoutMs;
+  const deadlineAt = performance.now() + timeoutMs;
+  const timeoutDetails = {
+    method,
+    path,
+    profile: requestedProfile || resolved.defaultProfile || undefined,
+    timeoutMs,
+    wsBacked: isWsBackedBrowserProxyPath(path),
+  };
   const query: Record<string, unknown> = {};
   const rawQuery = params.query ?? {};
   for (const [key, value] of Object.entries(rawQuery)) {
@@ -399,14 +338,16 @@ export async function runBrowserProxyCommand(
     }
     query[key] = typeof value === "string" ? value : String(value);
   }
-  if (requestedProfile) {
-    query.profile = requestedProfile;
+  // A default-profile change must not redirect work after its route was selected.
+  if (effectiveProfile || requestedProfile) {
+    query.profile = effectiveProfile || requestedProfile;
   }
 
   if (path === BROWSER_PROXY_OWNED_TAB_CLOSE_PATH) {
     const request = readOwnedTabCloseRequest(body);
     const liveResolved = getBrowserControlState()?.resolved ?? resolved;
     const profile = resolveProfile(liveResolved, effectiveProfile);
+    assertCurrent(profile ?? undefined);
     const result =
       profile?.cdpUrl && effectiveProfile
         ? await closeTrackedCdpTarget({
@@ -418,6 +359,10 @@ export async function runBrowserProxyCommand(
             timeoutMs: liveResolved.remoteCdpTimeoutMs,
             ssrfPolicy: resolveCdpControlPolicy(profile, liveResolved.ssrfPolicy),
             signal: invocationSignal,
+            closeIfCurrent: async (dispatch) => {
+              assertCurrent(profile);
+              return await dispatch();
+            },
           })
         : { status: "ownership-mismatch" as const };
     return JSON.stringify({
@@ -444,43 +389,35 @@ export async function runBrowserProxyCommand(
     if (!isBrowserProxyTimeoutError(err)) {
       throw err;
     }
-    throw new Error(
-      formatBrowserProxyTimeoutMessage({
-        method,
-        path,
-        profile: requestedProfile || resolved.defaultProfile || undefined,
-        timeoutMs,
-        wsBacked: isWsBackedBrowserProxyPath(path),
-        status: null,
-      }),
-      { cause: err },
-    );
+    throw new Error(formatBrowserProxyTimeoutMessage({ ...timeoutDetails, status: null }), {
+      cause: err,
+    });
   }
   body = stagedUpload.body;
-  const remainingTimeoutMs = deadlineAt - Date.now();
+  try {
+    assertCurrent();
+  } catch (error) {
+    await discardStagedBrowserProxyUpload(stagedUpload);
+    throw error;
+  }
+  const remainingTimeoutMs = deadlineAt - performance.now();
   if (remainingTimeoutMs <= 0) {
     await discardStagedBrowserProxyUpload(stagedUpload);
-    throw new Error(
-      formatBrowserProxyTimeoutMessage({
-        method,
-        path,
-        profile: requestedProfile || resolved.defaultProfile || undefined,
-        timeoutMs,
-        wsBacked: isWsBackedBrowserProxyPath(path),
-        status: null,
-      }),
-    );
+    throw new Error(formatBrowserProxyTimeoutMessage({ ...timeoutDetails, status: null }));
   }
   let response;
   try {
     response = await withTimeout(
       (timeoutSignal) =>
         dispatcher.dispatch({
-          method: method === "DELETE" ? "DELETE" : method === "POST" ? "POST" : "GET",
+          method,
           path,
           query,
           body,
           signal: combineBrowserProxySignals(timeoutSignal, invocationSignal),
+          assertCurrent: async (profile) => {
+            assertCurrent(profile);
+          },
         }),
       remainingTimeoutMs,
       "browser proxy request",
@@ -496,11 +433,8 @@ export async function runBrowserProxyCommand(
     });
     throw new Error(
       formatBrowserProxyTimeoutMessage({
-        method,
-        path,
+        ...timeoutDetails,
         profile: path === "/profiles" ? undefined : profileForStatus || undefined,
-        timeoutMs,
-        wsBacked: isWsBackedBrowserProxyPath(path),
         status,
       }),
       { cause: err },
@@ -508,8 +442,6 @@ export async function runBrowserProxyCommand(
   }
   if (response.status >= 400) {
     await discardStagedBrowserProxyUpload(stagedUpload);
-  }
-  if (response.status >= 400) {
     if (params.errorEnvelope === BROWSER_PROXY_ERROR_ENVELOPE) {
       // New callers opt into the closed envelope; older Gateways retain the
       // shipped status-prefixed node error during rolling upgrades.
@@ -536,12 +468,14 @@ export async function runBrowserProxyCommand(
     });
   }
 
-  const paths = collectBrowserProxyPaths(result);
-  const files = paths.length > 0 ? await readBrowserProxyFiles(paths) : undefined;
+  const paths = collectBrowserProxyFilePaths(result);
+  const files = paths.size > 0 ? await readBrowserProxyFiles([...paths]) : undefined;
 
-  const payload: BrowserProxyEnvelope = files
-    ? { result, files, ...(includeRoute ? { route } : {}) }
-    : { result, ...(includeRoute ? { route } : {}) };
+  const payload: BrowserProxyEnvelope = {
+    result,
+    ...(files ? { files } : {}),
+    ...(includeRoute ? { route } : {}),
+  };
   const serialized = JSON.stringify(payload);
   // Node results carry this JSON as a string inside a second JSON frame.
   if (countBrowserProxyEncodedPayloadBytes(serialized) > BROWSER_PROXY_MAX_ENCODED_PAYLOAD_BYTES) {

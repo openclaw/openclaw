@@ -7,7 +7,7 @@ read_when:
 ---
 
 This page covers the authoring commands: `plugins init`, `plugins build`,
-`plugins validate`, and `plugins pack`, plus the tool, feature, and provider
+`plugins validate`, `plugins lint`, and `plugins pack`, plus the tool, feature, and provider
 scaffolds they generate.
 
 ## Author
@@ -21,7 +21,9 @@ npm run plugin:validate
 
 `plugins init` creates a minimal TypeScript tool plugin by default. The first
 argument is the plugin id; `--name` sets the display name. OpenClaw uses the
-id for the default output directory and package naming. Tool scaffolds use
+id for the default output directory and package naming. Scoped tool and provider
+ids keep their npm scope: `@author/tools` creates `@author/openclaw-plugin-tools`.
+Tool scaffolds use
 `defineToolPlugin` and generate `package.json` scripts `plugin:build` and
 `plugin:validate` that build then call `openclaw plugins build`/`validate`.
 
@@ -32,6 +34,21 @@ current entry export still agree. Pass `--json` for a machine-readable
 validation result. See [Tool Plugins](/plugins/tool-plugins) for the full
 authoring workflow.
 
+Authoring metadata must be regular files containing valid UTF-8 JSON. Symlinks to
+regular files are supported; pipes and other special files are rejected before reading.
+
+`plugins init`, `build`, and `validate` report their specific input errors, such as
+an existing output directory, missing entry, or malformed package metadata,
+without requiring debug output. These rejected inputs still exit with code 1
+before writing project files. Feature plugin IDs must start with a lowercase
+letter and contain only lowercase letters, digits, or hyphens; an invalid ID
+leaves the target directory untouched.
+
+`plugins lint --root <path>` inspects a plugin and its materialized runtime
+dependencies without importing plugin code or reading operator configuration.
+Use `--json` for structured compatibility warnings. Findings do not block installs;
+see [Runtime compatibility](/plugins/runtime-compatibility) for scope and limits.
+
 The scaffold writes TypeScript source but generates metadata from the built
 `./dist/index.js` entry, so the workflow also works with the published CLI. Use
 `--entry <path>` when the entry is not the default package entry. Use
@@ -40,7 +57,9 @@ rewriting files.
 
 Tool and provider scaffolds compile `src/index.ts` and its imported modules into
 `dist`, leaving independent test files out of the package. Feature scaffolds also
-include their separate browser entry in TypeScript checks.
+include their separate browser entry in TypeScript checks. All scaffolds pin
+TypeScript 7.0.2 and set `rootDir` to `src`, keeping the compiled entry at
+`dist/index.js`.
 
 ### Feature scaffold and artifacts
 
@@ -50,9 +69,9 @@ and composer replacement. Run `npm install`, `npm run build`, and
 `package.json.openclaw.controlUi`; `plugins build` writes immutable bundled
 assets and their manifest declaration.
 
-Plugin APIs are [experimental](/plugins/sdk-overview#api-stability). To load the
-scaffold's native browser UI, enable **Settings → Labs → Custom plugin UI**, then
-restart the Gateway and reload the browser. See
+Plugin APIs are [experimental](/plugins/sdk-overview#api-stability). The
+scaffold’s native browser UI is available by default once the plugin is enabled;
+there is no Labs opt-in. Existing advanced opt-outs remain honored. See
 [Enable custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui).
 
 `plugins pack` validates a built project, bundles its backend dependencies, and
@@ -66,6 +85,13 @@ another path. Packing follows the package's runtime entry selection, including
 entry paths are rewritten to the compiled files included in the archive.
 See [Feature plugins](/plugins/feature-plugins) for activation approval, reload,
 view lifecycle, and recovery.
+
+Validation refusals, such as a missing plugin manifest or an unsupported archive
+extension, print their specific reason and exit with status `1`.
+If the compiler is missing, the CLI asks you to install `esbuild` in the plugin's
+`devDependencies`, then run `plugins build` again.
+Bundling refusals also report unsupported imports or module-relative resources
+with their existing recovery guidance; rejected builds still exit with status `1`.
 
 ### Provider scaffold
 

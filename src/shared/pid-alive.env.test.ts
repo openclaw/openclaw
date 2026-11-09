@@ -1,5 +1,5 @@
 import childProcess from "node:child_process";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   createDiagnosticFixtureRouting,
   diagnosticCanaries,
@@ -8,9 +8,18 @@ import {
 } from "../infra/diagnostic-env.test-support.js";
 import { getFileLockProcessStartTime } from "./pid-alive.js";
 
-afterEach(() => vi.restoreAllMocks());
+beforeEach(() => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  // This suite owns the subprocess environment, independent of host native inspection.
+  vi.stubGlobal("SEALED_RUNTIME_BUILD", true);
+});
 
-it("isolates the lock-owner ps child while retaining its stable locale and timezone", async () => {
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+it("isolates file-lock birth while retaining its stable locale and timezone", async () => {
   const nativeExec = childProcess.execFileSync;
   const routing = createDiagnosticFixtureRouting({
     PATH: "/fixture/bin",
@@ -18,7 +27,6 @@ it("isolates the lock-owner ps child while retaining its stable locale and timez
     LC_ALL: "C",
     TZ: "UTC",
   });
-  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
   await withSyntheticDiagnosticEnv(
     { ...routing, LC_ALL: "fr_FR.UTF-8", TZ: "Pacific/Honolulu" },
     async () => {

@@ -1,28 +1,31 @@
-// Gateway readiness checker for channel health and startup sidecar state.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
+import type { AgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
   type ChannelHealthPolicy,
-  type ChannelHealthEvaluation,
 } from "../channel-health-policy.js";
 import type { ChannelManager } from "../server-channels.js";
-import type { GatewayPluginReloadStatus } from "../server-plugin-runtime-generation.js";
+import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
-/** Snapshot returned by the gateway readiness probe. */
 type ReadinessResult = {
   ready: boolean;
+  coreReady: boolean;
   failing: string[];
+  degraded?: string[];
   suppressed?: string[];
   uptimeMs: number;
   eventLoop?: GatewayEventLoopHealth;
   pluginReload?: GatewayPluginReloadStatus;
+  agentDatabases?: readonly AgentDatabaseAdmissionRefusal[];
+  agentDeletions?: readonly AgentDatabaseAdmissionRefusal[];
+  stateDatabase?: { reason: string };
 };
 
-/** Function form used by HTTP readiness endpoints and tests. */
 export type ReadinessChecker = () => ReadinessResult;
 
 export type StartupResult =
@@ -30,7 +33,6 @@ export type StartupResult =
   | { ok: false; status: "starting"; uptimeMs: number; pendingReason: string }
   | { ok: false; status: "draining"; uptimeMs: number };
 
-/** Function form used by HTTP startup endpoints and tests. */
 export type StartupChecker = () => StartupResult;
 
 type GatewayStartupStateDeps = {
@@ -42,19 +44,29 @@ type GatewayStartupStateDeps = {
 
 const DEFAULT_READINESS_CACHE_TTL_MS = 1_000;
 
-/** Create a startup checker that excludes downstream channel health. */
-export function createStartupChecker(deps: GatewayStartupStateDeps): StartupChecker {
+/** Startup waits for admission settlement; readiness retains its own agent policy. */
+export function createStartupChecker(
+  deps: GatewayStartupStateDeps,
+  getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[],
+): StartupChecker {
   return (): StartupResult => {
     const uptimeMs = Date.now() - deps.startedAt;
     if (deps.getGatewayDraining?.()) {
       return { ok: false, status: "draining", uptimeMs };
     }
-    if (deps.getStartupPending?.()) {
+    const pendingReason = deps.getStartupPending?.()
+      ? (deps.getStartupPendingReason?.() ?? "startup-sidecars")
+      : getAgentDatabaseAdmissionRefusals?.().some(
+            (refusal) => refusal.code === "agent-database-inspection-pending",
+          )
+        ? "agent-database-inspection"
+        : undefined;
+    if (pendingReason !== undefined) {
       return {
         ok: false,
         status: "starting",
         uptimeMs,
-        pendingReason: deps.getStartupPendingReason?.() ?? "startup-sidecars",
+        pendingReason,
       };
     }
     return { ok: true, status: "started", uptimeMs };
@@ -63,13 +75,9 @@ export function createStartupChecker(deps: GatewayStartupStateDeps): StartupChec
 
 function shouldIgnoreReadinessFailure(
   accountSnapshot: ChannelAccountSnapshot,
-  health: ChannelHealthEvaluation,
-  autostartSuppressed: boolean,
+  health: ReturnType<typeof evaluateChannelHealth>,
 ): boolean {
   if (health.reason === "unmanaged" || health.reason === "stale-socket") {
-    return true;
-  }
-  if (autostartSuppressed && health.reason === "not-running") {
     return true;
   }
   // Channel restarts spend time in backoff with running=false before the next
@@ -85,67 +93,84 @@ function shouldIgnoreReadinessFailure(
   return restartableReason && inRestartHandoff;
 }
 
-/** Create a cached readiness checker over channel runtime health. */
 export function createReadinessChecker(
   deps: GatewayStartupStateDeps & {
-    channelManager: ChannelManager;
+    channelManager: Pick<
+      ChannelManager,
+      "getRuntimeSnapshot" | "getAutostartSuppression" | "isAmbientAutostartSuppressed"
+    >;
     getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
     getStateDatabaseFailure?: () => Error | undefined;
+    getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
     getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
+    isChatSendAvailable?: () => boolean;
     shouldSkipChannelReadiness?: () => boolean;
-    cacheTtlMs?: number;
   },
 ): ReadinessChecker {
   const { channelManager, startedAt } = deps;
   const getStartup = createStartupChecker(deps);
-  const cacheTtlMs = Math.max(0, deps.cacheTtlMs ?? DEFAULT_READINESS_CACHE_TTL_MS);
   let cachedAt = 0;
   let cachedState: Omit<ReadinessResult, "uptimeMs"> | null = null;
 
-  return (): ReadinessResult => {
+  const readReadiness = (
+    agentDatabases: readonly AgentDatabaseAdmissionRefusal[] | undefined,
+  ): ReadinessResult => {
     const startup = getStartup();
     const uptimeMs = startup.uptimeMs;
     const now = startedAt + uptimeMs;
     if (startup.status === "starting") {
-      return withEventLoopHealth(
-        { ready: false, failing: [startup.pendingReason], uptimeMs },
-        deps.getEventLoopHealth,
-      );
+      return { ready: false, coreReady: false, failing: [startup.pendingReason], uptimeMs };
     }
     if (startup.status === "draining") {
-      return withEventLoopHealth(
-        { ready: false, failing: ["gateway-draining"], uptimeMs },
-        deps.getEventLoopHealth,
-      );
+      return { ready: false, coreReady: false, failing: ["gateway-draining"], uptimeMs };
+    }
+    if (!readChildRuntimeViability().available) {
+      return { ready: false, coreReady: false, failing: ["child-runtime"], uptimeMs };
+    }
+    const stateDatabaseFailure = deps.getStateDatabaseFailure?.();
+    if (stateDatabaseFailure) {
+      cachedState = null;
+      return {
+        ready: false,
+        coreReady: false,
+        failing: ["state-database"],
+        stateDatabase: { reason: stateDatabaseFailure.message },
+        uptimeMs,
+      };
+    }
+    if (agentDatabases?.length) {
+      cachedState = null;
+      return {
+        ready: false,
+        coreReady: false,
+        failing: agentDatabases.map(({ agentId }) => `agent-database:${agentId}`),
+        uptimeMs,
+      };
     }
     const pluginReload = deps.getPluginReloadStatus?.();
     if (pluginReload) {
       cachedState = null;
-      return withEventLoopHealth(
-        { ready: false, failing: ["plugin-reload"], pluginReload, uptimeMs },
-        deps.getEventLoopHealth,
-      );
+      return { ready: false, coreReady: false, failing: ["plugin-reload"], pluginReload, uptimeMs };
+    }
+    if (deps.isChatSendAvailable?.() === false) {
+      cachedState = null;
+      return { ready: false, coreReady: false, failing: ["chat-startup"], uptimeMs };
     }
     if (
       cachedState &&
       !isFutureDateTimestampMs(cachedAt, { nowMs: now }) &&
-      now - cachedAt < cacheTtlMs
+      now - cachedAt < DEFAULT_READINESS_CACHE_TTL_MS
     ) {
-      return withEventLoopHealth({ ...cachedState, uptimeMs }, deps.getEventLoopHealth);
-    }
-    if (deps.getStateDatabaseFailure?.()) {
-      return withEventLoopHealth(
-        { ready: false, failing: ["state-database"], uptimeMs },
-        deps.getEventLoopHealth,
-      );
+      return { ...cachedState, uptimeMs };
     }
     if (deps.shouldSkipChannelReadiness?.()) {
-      return withEventLoopHealth({ ready: true, failing: [], uptimeMs }, deps.getEventLoopHealth);
+      return { ready: true, coreReady: true, failing: [], uptimeMs };
     }
 
     const snapshot = channelManager.getRuntimeSnapshot();
     const globallyAutostartSuppressed = channelManager.getAutostartSuppression() !== null;
     const failing: string[] = [];
+    const degraded: string[] = [];
     const suppressed: string[] = [];
 
     for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
@@ -165,16 +190,16 @@ export function createReadinessChecker(
           channelId,
         };
         const health = evaluateChannelHealth(accountSnapshot, policy);
+        if (health.reason === "reconnect-grace" && !degraded.includes(channelId)) {
+          degraded.push(channelId);
+        }
         if (!health.healthy && autostartSuppressed && health.reason === "not-running") {
           if (!suppressed.includes(channelId)) {
             suppressed.push(channelId);
           }
           continue;
         }
-        if (
-          !health.healthy &&
-          !shouldIgnoreReadinessFailure(accountSnapshot, health, autostartSuppressed)
-        ) {
+        if (!health.healthy && !shouldIgnoreReadinessFailure(accountSnapshot, health)) {
           failing.push(channelId);
           break;
         }
@@ -184,17 +209,25 @@ export function createReadinessChecker(
     cachedAt = now;
     cachedState = {
       ready: failing.length === 0,
+      coreReady: true,
       failing,
+      ...(degraded.length > 0 ? { degraded } : {}),
       ...(suppressed.length > 0 ? { suppressed } : {}),
     };
-    return withEventLoopHealth({ ...cachedState, uptimeMs }, deps.getEventLoopHealth);
+    return { ...cachedState, uptimeMs };
   };
-}
-
-function withEventLoopHealth(
-  result: ReadinessResult,
-  getEventLoopHealth?: () => GatewayEventLoopHealth | undefined,
-): ReadinessResult {
-  const eventLoop = getEventLoopHealth?.();
-  return eventLoop ? { ...result, eventLoop } : result;
+  return () => {
+    const refusals = deps.getAgentDatabaseAdmissionRefusals?.();
+    const agentDatabases = refusals?.filter(({ code }) => code !== "agent-deletion");
+    const agentDeletions = refusals?.filter(({ code }) => code === "agent-deletion");
+    const result = readReadiness(agentDatabases);
+    const getEventLoopHealth = deps.getEventLoopHealth;
+    const eventLoop = getEventLoopHealth?.();
+    return {
+      ...result,
+      ...(agentDatabases?.length ? { agentDatabases } : {}),
+      ...(agentDeletions?.length ? { agentDeletions } : {}),
+      ...(eventLoop ? { eventLoop } : {}),
+    };
+  };
 }

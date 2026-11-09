@@ -1,3 +1,5 @@
+import { MARKDOWN_LINK_START_BOUNDARY_SOURCE } from "./markdown-link-boundary.ts";
+
 const HOST_LOCAL_FILE_HREF_RE =
   /^(?:~\/|\/(?:Users|home|tmp|private\/tmp|var\/folders|private\/var\/folders)\/|\/[A-Za-z]:\/|[A-Za-z]:[\\/])/;
 const FILE_SEGMENT_SOURCE = "[\\p{L}\\p{M}\\p{N}_.@#+-]+";
@@ -22,17 +24,22 @@ function fileGrammar(extension: string, segment = FILE_SEGMENT_SOURCE) {
   const end = "(?!\\.?[\\p{L}\\p{M}\\p{N}_])";
   const multiSegment = `(?:${prefixed}|${windowsAbsolute}|${unprefixed})(?:${FILE_LINE_SUFFIX_SOURCE})?${end}`;
   const bareWithLine = `${name}${FILE_LINE_SUFFIX_SOURCE}${end}`;
+  const source = `${multiSegment}|${bareWithLine}`;
   return {
-    scan: new RegExp(`${multiSegment}|${bareWithLine}`, "gu"),
+    source,
     exact: new RegExp(`^(?:${multiSegment}|${bareWithLine})$`, "u"),
     bare: new RegExp(`^${segment}\\.(${SCANNED_EXTENSION_SOURCE})$`, "u"),
   };
 }
 const SCANNED_FILE = fileGrammar(SCANNED_EXTENSION_SOURCE);
 const AUTHORED_FILE = fileGrammar(AUTHORED_EXTENSION_SOURCE, AUTHORED_FILE_SEGMENT_SOURCE);
-export const MARKDOWN_FILE_LINK_SCAN_RE = SCANNED_FILE.scan;
+// Reject impossible starts before walking a long path candidate.
+export const MARKDOWN_FILE_LINK_SCAN_RE = new RegExp(
+  `${MARKDOWN_LINK_START_BOUNDARY_SOURCE}(?:${SCANNED_FILE.source})`,
+  "gu",
+);
 const FILE_LINE_SUFFIX_RE = /:(\d{1,6})(?:[-:]\d{1,6})?$/;
-const BARE_FILE_EXTENSIONS = new Set([
+const AUTOLINK_FILE_EXTENSIONS = new Set([
   "astro",
   "bash",
   "c",
@@ -89,9 +96,15 @@ const BARE_FILE_EXTENSIONS = new Set([
   "zsh",
 ]);
 
-export function markdownFileLinkFromEvent(
-  event: Event,
-): { path: string; line: number | null } | null {
+export type MarkdownFileLinkTarget = {
+  path: string;
+  line?: number | null;
+  sessionKey?: string;
+  messageEntryId?: string;
+  documentRelative?: boolean;
+};
+
+export function markdownFileLinkFromEvent(event: Event): MarkdownFileLinkTarget | null {
   const target = event.target;
   if (!(target instanceof Element)) {
     return null;
@@ -102,12 +115,22 @@ export function markdownFileLinkFromEvent(
     return null;
   }
   const line = link.dataset.fileLine;
-  return { path, line: line ? Number.parseInt(line, 10) : null };
+  const sessionKey = link.closest<HTMLElement>("[data-file-session-key]")?.dataset.fileSessionKey;
+  const messageEntryId =
+    link.closest<HTMLElement>("[data-file-entry-id]")?.dataset.fileEntryId ??
+    (!sessionKey ? link.closest<HTMLElement>("[data-entry-id]")?.dataset.entryId : undefined);
+  return {
+    path,
+    line: line ? Number.parseInt(line, 10) : null,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(messageEntryId ? { messageEntryId } : {}),
+    ...(link.dataset.fileDocumentRelative === "true" ? { documentRelative: true } : {}),
+  };
 }
 
 export function markdownFileLinkFromKeyboardEvent(
   event: KeyboardEvent,
-): { path: string; line: number | null } | null {
+): MarkdownFileLinkTarget | null {
   if (event.key !== "Enter" && event.key !== " ") {
     return null;
   }
@@ -131,7 +154,7 @@ function isAllowlistedBareFilename(raw: string, grammar: RegExp): boolean {
     return false;
   }
   const match = grammar.exec(raw);
-  return Boolean(match?.[1] && BARE_FILE_EXTENSIONS.has(match[1].toLowerCase()));
+  return Boolean(match?.[1] && AUTOLINK_FILE_EXTENSIONS.has(match[1].toLowerCase()));
 }
 
 export function parseMarkdownFileLinkTarget(
@@ -143,9 +166,48 @@ export function parseMarkdownFileLinkTarget(
   if (!grammar.exact.test(target) && !isAllowlistedBareFilename(target, grammar.bare)) {
     return null;
   }
-  return splitMarkdownFileLineSuffix(target);
+  const parsed = splitMarkdownFileLineSuffix(target);
+  // Unprefixed paths are ambiguous with repository names ("openclaw/openclaw.ai").
+  // An explicit path prefix or authored link keeps uncommon extensions addressable.
+  if (
+    !options?.authored &&
+    parsed.path.includes("/") &&
+    !/^(?:~\/|\.{1,2}\/|\/|[A-Za-z]:[\\/])/.test(parsed.path) &&
+    !AUTOLINK_FILE_EXTENSIONS.has(parsed.path.slice(parsed.path.lastIndexOf(".") + 1).toLowerCase())
+  ) {
+    return null;
+  }
+  return parsed;
 }
 
 export function isHostLocalMarkdownFileHref(href: string): boolean {
   return HOST_LOCAL_FILE_HREF_RE.test(href.trim());
+}
+
+/** Selection cues may drop a query; source-bound reads still reject it. */
+export function parseMarkdownDocumentFileLinkTarget(
+  href: string,
+  purpose: "read" | "select" = "read",
+) {
+  // Split URL delimiters before decoding: encoded # and ? belong to the filename.
+  const path = href.split(purpose === "select" ? /[?#]/ : "#", 1)[0] ?? "";
+  if (!path || path.includes("?")) {
+    return null;
+  }
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    return null;
+  }
+  const target = splitMarkdownFileLineSuffix(decoded);
+  if (
+    !target.path ||
+    /^(?:[/\\]|~[/\\]|[a-z][a-z0-9+.-]*:)/i.test(target.path) ||
+    /\p{Cc}/u.test(decoded)
+  ) {
+    return null;
+  }
+  // Authored document hrefs already delimit their paths, including extensionless files.
+  return target;
 }
