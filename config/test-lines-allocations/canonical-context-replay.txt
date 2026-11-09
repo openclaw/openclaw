@@ -1,2 +1,2 @@
 # Canonical replay: worker and memory branches, admission, byte bounds, and LLM prefix preservation.
-473
+476

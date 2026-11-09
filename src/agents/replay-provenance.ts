@@ -12,6 +12,7 @@ export function annotateInterSessionUserMessages(messages: AgentMessage[]): Agen
     if (message?.role !== "user") {
       return message;
     }
+    // SAFETY: Persisted user messages may carry provenance outside AgentMessage; the normalizer validates unknown input.
     const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
     if (provenance?.kind !== "inter_session") {
       return message;
@@ -38,6 +39,7 @@ export function annotateInterSessionUserMessages(messages: AgentMessage[]): Agen
         text: annotateInterSessionPromptText("Inter-session content follows.", provenance),
       });
     } else {
+      // SAFETY: findIndex above verified this unchanged block's text discriminant and string payload.
       const existing = content[textIndex] as { type: "text"; text: string };
       const text = annotateInterSessionPromptText(existing.text, provenance);
       if (text === existing.text) {
