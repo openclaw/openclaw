@@ -9,7 +9,8 @@ title: "Restart recovery"
 ---
 
 A graceful Gateway stop or restart records which root sessions are working, then
-aborts that work promptly. At the next startup, each marked session gets one
+aborts that work promptly. This includes accepted turns still preparing their
+runtime when shutdown begins. At the next startup, each marked session gets one
 ordinary system input asking the agent to inspect current state and continue.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution.

@@ -483,6 +483,41 @@ it("marks the active execution when an older message wait remains in the same se
     }
   }));
 
+it.each(["restart", "user", "completed"] as const)(
+  "selects retained %s work at the restart marker snapshot",
+  (ending) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const target = {
+        agentId: "main",
+        sessionKey: `agent:main:before-markers-${ending}`,
+        sessionId: `before-markers-${ending}`,
+      };
+      replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const { operation, release } = await withSessionTurn(target, async (active) => {
+        assert(active);
+        if (ending === "completed") {
+          active.freezeAbort();
+        }
+        return { operation: active, release: active.retainExecution() };
+      });
+      try {
+        if (ending !== "completed") {
+          expect(ending === "restart" ? operation.abortForRestart() : operation.abortByUser()).toBe(
+            true,
+          );
+        }
+        await persistRunningSessionsForRestart({ cfg: {} });
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual(
+          ending === "restart" ? { queuedInputIds: [] } : undefined,
+        );
+      } finally {
+        release();
+        await operation.ownerSettlement;
+      }
+    }),
+);
+
 it("marks completed reply settlement only when accepted inputs remain queued", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
