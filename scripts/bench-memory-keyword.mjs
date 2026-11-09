@@ -112,11 +112,15 @@ if (values["query-plan"]) {
     const coldMs = performance.now() - coldStart;
     const coldUsage = process.cpuUsage(coldCpu);
     assert.deepEqual(coldOutput, expected);
-    for (let index = 0; index < warmup; index++) owner.planKeywordSearch(input);
+    for (let index = 0; index < warmup; index++) {
+      owner.planKeywordSearch(input);
+    }
     const warmCpu = process.cpuUsage();
     const warmStart = performance.now();
     let output;
-    for (let index = 0; index < iterations; index++) output = owner.planKeywordSearch(input);
+    for (let index = 0; index < iterations; index++) {
+      output = owner.planKeywordSearch(input);
+    }
     const warmMs = performance.now() - warmStart;
     const warmUsage = process.cpuUsage(warmCpu);
     assert.deepEqual(output, expected);
@@ -142,9 +146,9 @@ if (values["query-plan"]) {
       platform: process.platform,
       arch: process.arch,
     };
-    await new Promise((resolve) =>
-      process.stdout.write(`KEYWORD_PLAN ${JSON.stringify(payload)}\n`, resolve),
-    );
+    await new Promise((resolve) => {
+      process.stdout.write(`KEYWORD_PLAN ${JSON.stringify(payload)}\n`, resolve);
+    });
     process.exit(0);
   }
   assert(values.out && values["plan-base"], "query planning requires --out and --plan-base");
@@ -193,7 +197,7 @@ if (values["query-plan"]) {
       for (let round = 0; round < rounds; round++) {
         for (const arm of ["base", "head"]) {
           report.active = { cell: cell.id, round, arm };
-          const value = runBenchmarkWorker({
+          const sample = runBenchmarkWorker({
             args: [
               "--import",
               "./scripts/tsx.mjs",
@@ -214,8 +218,9 @@ if (values["query-plan"]) {
                   value.cell === cell.id &&
                   value.sourceSHA256 === seals[arm],
               );
-              for (const metric of metrics)
+              for (const metric of metrics) {
                 assert(Number.isFinite(value[metric]) && value[metric] >= 0, metric);
+              }
               assert.match(value.inputSHA256, /^[a-f0-9]{64}$/u);
               assert.match(value.outputSHA256, /^[a-f0-9]{64}$/u);
               assert.equal(value.node, process.version);
@@ -224,11 +229,11 @@ if (values["query-plan"]) {
               return value;
             },
           });
-          samples[arm].push(value);
+          samples[arm].push(sample);
           if (arm === "head") {
             const base = samples.base[round];
-            assert.equal(value.inputSHA256, base.inputSHA256);
-            assert.equal(value.outputSHA256, base.outputSHA256);
+            assert.equal(sample.inputSHA256, base.inputSHA256);
+            assert.equal(sample.outputSHA256, base.outputSHA256);
           }
           save();
         }
@@ -239,8 +244,9 @@ if (values["query-plan"]) {
         result.summaries[metric] = { base, head };
         for (const percentile of ["p50", "p95"]) {
           assert(base[percentile] > 0, `${cell.id}/${metric}/${percentile}: non-positive baseline`);
-          if (head[percentile] >= base[percentile] * 1.2)
+          if (head[percentile] >= base[percentile] * 1.2) {
             result.rejected.push(`${metric}/${percentile}`);
+          }
         }
       }
       save();
@@ -259,9 +265,9 @@ if (values["query-plan"]) {
     save();
     throw error;
   }
-  await new Promise((resolve) =>
-    process.stdout.write(`Query-plan report: ${path.join(out, "result.json")}\n`, resolve),
-  );
+  await new Promise((resolve) => {
+    process.stdout.write(`Query-plan report: ${path.join(out, "result.json")}\n`, resolve);
+  });
   process.exit(0);
 }
 const count = Number(values.chunks),
