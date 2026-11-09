@@ -9,6 +9,27 @@ import { readTriageUpdateFailure } from "./triage-update.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("update failure triage diagnostics", () => {
+  it.runIf(process.platform !== "win32")(
+    "reads a symlink to a regular failure artifact",
+    async () => {
+      const stateDir = tempDirs.make("openclaw-update-triage-");
+      const inputPath = path.join(stateDir, "failure.json");
+      const linkPath = path.join(stateDir, "failure-link.json");
+      await fs.writeFile(inputPath, JSON.stringify({ error: "synthetic update failure" }));
+      await fs.symlink(inputPath, linkPath);
+
+      await expect(readTriageUpdateFailure(linkPath, { env: {}, stateDir })).resolves.toEqual({
+        error: "synthetic update failure",
+      });
+    },
+  );
+
+  it("rejects a directory as a failure artifact", async () => {
+    const stateDir = tempDirs.make("openclaw-update-triage-");
+
+    await expect(readTriageUpdateFailure(stateDir, { env: {}, stateDir })).rejects.toThrow();
+  });
+
   it.each(["package-post-install-doctor"] as const)(
     "writes bounded sanitized failure evidence without changing the result (%s)",
     async (advisoryKind) => {

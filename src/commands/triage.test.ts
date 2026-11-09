@@ -1,9 +1,11 @@
+import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import JSZip from "jszip";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { UpdateCommandFailure } from "../cli/update-cli/update-command-result.js";
 import { withUpdateFailureTriage } from "../cli/update-cli/update-command-triage.js";
@@ -126,6 +128,37 @@ describe("triageCommand", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a writerless FIFO update result without blocking triage",
+    async () => {
+      // This directory must outlive afterEach so deadline cleanup can release a blocked open.
+      const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-triage-fifo-"));
+      const inputPath = path.join(directory, "failure.fifo");
+      execFileSync("mkfifo", [inputPath]);
+      const runtime = createTriageRuntime();
+      const reading = triageCommand(runtime, {
+        json: true,
+        noExport: true,
+        updateResult: inputPath,
+      });
+      onTestFinished(async () => {
+        // Release a regressed blocking open after the test deadline so cleanup can finish.
+        const release = await fs.open(inputPath, fs.constants.O_RDWR | fs.constants.O_NONBLOCK);
+        try {
+          await reading.catch(() => undefined);
+        } finally {
+          await release.close();
+          await fs.rm(directory, { recursive: true, force: true });
+        }
+      });
+
+      await expect(reading).rejects.toThrow("Update failure diagnostics must be a regular file.");
+      expect(runtime.writeJson).not.toHaveBeenCalled();
+      expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps the updater's failure exit code when automatic triage is declined", async () => {
     mocks.confirm.mockResolvedValue(false);
