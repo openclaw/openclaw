@@ -68,9 +68,7 @@ it.each([
   // Inspect the first render, before browser geometry admits virtual tracks.
   const cards = container.querySelectorAll("[data-dashboard-session]");
   expect(cards).toHaveLength(12);
-  expect(cards[11]?.getAttribute("data-dashboard-session")).toBe(
-    "agent:main:dashboard:volume-11",
-  );
+  expect(cards[11]?.getAttribute("data-dashboard-session")).toBe("agent:main:dashboard:volume-11");
   expect(
     [...container.querySelectorAll(".dashboards-group__heading > span")].map((heading) =>
       heading.textContent?.trim(),

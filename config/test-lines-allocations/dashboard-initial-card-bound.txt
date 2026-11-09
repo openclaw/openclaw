@@ -1,2 +1,2 @@
 # Cover the initial 12-card bound before geometry, including grouped list headings.
-37
+35
