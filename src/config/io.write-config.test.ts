@@ -2768,6 +2768,7 @@ describe("config io write", () => {
       configPath,
       env: { HOME: home } as NodeJS.ProcessEnv,
       logger: { warn, error: vi.fn() },
+      observe: true,
     });
     io.loadConfig();
     expect(warn).toHaveBeenCalledTimes(1);

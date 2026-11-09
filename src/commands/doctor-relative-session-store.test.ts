@@ -642,8 +642,14 @@ it.each([false, true])(
           expect(readWidgets(canonical, key)).toEqual({
             found: true,
             value: [
-              { name: "destination-widget", html: Buffer.from("<p>Destination user content</p>") },
-              { name: "source-widget", html: Buffer.from("<p>Source user content</p>") },
+              {
+                name: "destination-widget",
+                html: new Uint8Array(Buffer.from("<p>Destination user content</p>")),
+              },
+              {
+                name: "source-widget",
+                html: new Uint8Array(Buffer.from("<p>Source user content</p>")),
+              },
             ],
           });
         }

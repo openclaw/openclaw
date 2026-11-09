@@ -4,7 +4,7 @@ import "./subagent-spawn-model.mocks.shared.js";
 import { installSpawnAuthorityFixture } from "./subagent-spawn.authority.test-support.js";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -12,8 +12,10 @@ import {
 } from "../../../config/config.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
-import { testing as cliBackendsTesting } from "../../cli-backends.test-support.js";
+import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import { buildDefaultTestCliBackend } from "../../cli-runner.test-helpers.js";
+import { isCliProvider } from "../../model-selection-cli.js";
 import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
@@ -41,13 +43,16 @@ function useInProcessSpawns() {
  */
 describe("subagent spawn sandbox-CLI admission", () => {
   beforeEach(() => {
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: (() => [buildDefaultTestCliBackend()]) as never,
+    // Admission reads runtime registry metadata, not the executable resolver test seam.
+    // The enclosing authority fixture restores the previous registry after each case.
+    const registry = createEmptyPluginRegistry();
+    registry.cliBackends.push({
+      pluginId: "test-cli-plugin",
+      source: "test",
+      backend: buildDefaultTestCliBackend(),
     });
-  });
-
-  afterEach(() => {
-    cliBackendsTesting.resetDepsForTest();
+    setActivePluginRegistry(registry);
+    expect(isCliProvider("test-cli")).toBe(true);
   });
 
   async function configureSpawnConfig(params: {
