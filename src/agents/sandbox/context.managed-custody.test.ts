@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { create as createTar } from "tar";
 import { assert, expect, it, onTestFinished, vi } from "vitest";
+import packageJson from "../../../package.json" with { type: "json" };
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -79,6 +80,7 @@ it.skipIf(process.platform === "win32")(
       JSON.stringify({
         name: "review-fixture",
         private: true,
+        packageManager: packageJson.packageManager,
         dependencies: { "fixture-payload": "file:../payload.tgz" },
         scripts: {
           postinstall: "node -e \"require('fs').appendFileSync('lifecycle.txt','ran\\n')\"",
@@ -100,7 +102,18 @@ it.skipIf(process.platform === "win32")(
     const run = (cwd: string, command: string, env: Record<string, string> = {}) => {
       const result = spawnSync("/bin/sh", ["-c", command], {
         cwd,
-        env: { PATH: process.env.PATH, HOME: state.root, CI: "1", ...guestEnv(env) },
+        env: {
+          PATH: process.env.PATH,
+          HOME: state.root,
+          CI: "1",
+          ...guestEnv(env),
+          // Test setup preserves this toolchain cache before isolating HOME/XDG.
+          COREPACK_HOME: process.env.COREPACK_HOME,
+          COREPACK_ENABLE_NETWORK: "0",
+          PNPM_CONFIG_OFFLINE: "true",
+          // Corepack selects the pinned version; pnpm must not download itself again.
+          PNPM_CONFIG_PM_ON_FAIL: "ignore",
+        },
         encoding: "utf8",
         timeout: 30_000,
       });
