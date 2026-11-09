@@ -1346,9 +1346,9 @@ var External = [
     /(^sessionKey$|^agentId$|^environmentId$)/u,
     /(^environmentId$|^port$|^title$|^description$|^path$|^sessionKey$|^agentId$)/u,
     /(^id$|^environmentId$|^sessionKey$|^agentId$)/u,
-    /(^source$|^ifRowsRevision$|^rowMode$|^limit$|^offset$|^activeMinutes$|^activityPulseBoundaries$|^activeOnly$|^requireLastInteraction$|^sortBy$|^includeGlobal$|^includeUnknown$|^excludeSubagents$|^excludeCron$|^excludeSystem$|^excludeDock$|^configuredAgentsOnly$|^includeDerivedTitles$|^includeLastMessage$|^includeActivitySummary$|^label$|^projectId$|^workspaceDir$|^group$|^pinned$|^boardFace$|^hasBoard$|^creatorId$|^ownerId$|^ownerFirst$|^involvingMe$|^profileRelation$|^involvingProfileId$|^includePeople$|^includeOwnerSessionCounts$|^spawnedBy$|^agentId$|^search$|^archived$)/u,
+    /(^source$|^ifRowsRevision$|^rowMode$|^limit$|^offset$|^activeMinutes$|^activityPulseBoundaries$|^activeOnly$|^unreadOnly$|^requireLastInteraction$|^sortBy$|^includeGlobal$|^includeUnknown$|^excludeSubagents$|^excludeCron$|^excludeSystem$|^excludeDock$|^configuredAgentsOnly$|^includeDerivedTitles$|^includeLastMessage$|^includeActivitySummary$|^label$|^projectId$|^workspaceDir$|^group$|^pinned$|^boardFace$|^hasBoard$|^creatorId$|^ownerId$|^ownerFirst$|^involvingMe$|^profileRelation$|^involvingProfileId$|^includePeople$|^includeOwnerSessionCounts$|^spawnedBy$|^agentId$|^search$|^archived$)/u,
     /(^profileId$|^relationship$)/u,
-    /(^source$|^ifRowsRevision$|^rowMode$|^limit$|^offset$|^activeMinutes$|^activityPulseBoundaries$|^activeOnly$|^requireLastInteraction$|^sortBy$|^includeGlobal$|^includeUnknown$|^excludeSubagents$|^excludeCron$|^excludeSystem$|^excludeDock$|^configuredAgentsOnly$|^includeDerivedTitles$|^includeLastMessage$|^includeActivitySummary$|^label$|^projectId$|^workspaceDir$|^group$|^pinned$|^boardFace$|^hasBoard$|^creatorId$|^ownerId$|^ownerFirst$|^involvingMe$|^profileRelation$|^involvingProfileId$|^includePeople$|^includeOwnerSessionCounts$|^spawnedBy$|^agentId$|^search$|^archived$|^includeMessageBodies$)/u,
+    /(^source$|^ifRowsRevision$|^rowMode$|^limit$|^offset$|^activeMinutes$|^activityPulseBoundaries$|^activeOnly$|^unreadOnly$|^requireLastInteraction$|^sortBy$|^includeGlobal$|^includeUnknown$|^excludeSubagents$|^excludeCron$|^excludeSystem$|^excludeDock$|^configuredAgentsOnly$|^includeDerivedTitles$|^includeLastMessage$|^includeActivitySummary$|^label$|^projectId$|^workspaceDir$|^group$|^pinned$|^boardFace$|^hasBoard$|^creatorId$|^ownerId$|^ownerFirst$|^involvingMe$|^profileRelation$|^involvingProfileId$|^includePeople$|^includeOwnerSessionCounts$|^spawnedBy$|^agentId$|^search$|^archived$|^includeMessageBodies$)/u,
     /(^kind$|^routeSegment$|^hostId$|^identifierAlphabet$|^fullLength$|^minPrefixLength$|^lookup$|^ambiguity$)/u,
     /^[a-z][a-z0-9-]*$/u,
     /(^catalogId$|^metadataOnly$|^cursors$|^agentId$|^progressId$|^allowPartialResults$|^search$|^limitPerHost$|^hostIds$)/u,
@@ -14390,6 +14390,7 @@ var External = [
       !("activityPulseBoundaries" in value) ||
       check_2169(value.activityPulseBoundaries)) &&
     (value.activeOnly === void 0 || !("activeOnly" in value) || check_181(value.activeOnly)) &&
+    (value.unreadOnly === void 0 || !("unreadOnly" in value) || check_181(value.unreadOnly)) &&
     (value.requireLastInteraction === void 0 ||
       !("requireLastInteraction" in value) ||
       check_181(value.requireLastInteraction)) &&
@@ -14505,6 +14506,7 @@ var External = [
       !("activityPulseBoundaries" in value) ||
       check_2169(value.activityPulseBoundaries)) &&
     (value.activeOnly === void 0 || !("activeOnly" in value) || check_181(value.activeOnly)) &&
+    (value.unreadOnly === void 0 || !("unreadOnly" in value) || check_181(value.unreadOnly)) &&
     (value.requireLastInteraction === void 0 ||
       !("requireLastInteraction" in value) ||
       check_181(value.requireLastInteraction)) &&

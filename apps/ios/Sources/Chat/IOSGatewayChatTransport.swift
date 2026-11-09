@@ -20,6 +20,7 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
     let outboxGatewayID: String?
     private let mediaArtifactLoader: IOSMediaArtifactLoader?
     private let sourceResourceLoader: IOSSourceResourceLoader?
+    private let onSessionMutation: (@Sendable () -> Void)?
 
     var outboxRequiresSessionRoutingContract: Bool {
         true
@@ -37,7 +38,8 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         globalAgentId: String? = nil,
         outboxGatewayID: String? = nil,
         mediaArtifactLoader: IOSMediaArtifactLoader? = nil,
-        sourceResourceLoader: IOSSourceResourceLoader? = nil)
+        sourceResourceLoader: IOSSourceResourceLoader? = nil,
+        onSessionMutation: (@Sendable () -> Void)? = nil)
     {
         self.gateway = gateway
         self.widgetGateway = widgetGateway
@@ -45,6 +47,7 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         self.outboxGatewayID = GatewayStableIdentifier.exact(outboxGatewayID)
         self.mediaArtifactLoader = mediaArtifactLoader
         self.sourceResourceLoader = sourceResourceLoader
+        self.onSessionMutation = onSessionMutation
     }
 
     func acquireOutboxRouteLease() async -> OpenClawChatTransportRouteLeaseResult {
@@ -194,10 +197,15 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         _ request: OpenClawChatGatewayRequest,
         ifCurrentRoute route: GatewayNodeSessionRoute) async throws -> Data
     {
-        try await self.gateway.request(
+        let data = try await self.gateway.request(
             request,
             ifCurrentRoute: route,
             distinguishPreDispatchRouteChange: true)
+        // Re-read even an applied:false receipt; never decrement a local unread counter.
+        if request.method.hasPrefix("sessions."), await self.gateway.currentRoute() == route {
+            self.onSessionMutation?()
+        }
+        return data
     }
 
     func createSession(
