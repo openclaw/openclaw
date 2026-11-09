@@ -19,10 +19,8 @@ suite.define(() => {
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
           const dataUrl = await page.evaluate(() => {
-            const canvas = Object.assign(document.createElement("canvas"), {
-              width: 1200,
-              height: 500,
-            });
+            const canvas = document.createElement("canvas");
+            Object.assign(canvas, { width: 1200, height: 500 });
             return canvas.toDataURL("image/png");
           });
           const artifactId = "artifact_transcript_image_fixture";
@@ -60,7 +58,12 @@ suite.define(() => {
                 role: "assistant",
                 content: [
                   { type: "text", text: "Here is the desktop screenshot." },
-                  { type: "toolCall", name: "computer", id: "capture", arguments: screenshotArgs },
+                  {
+                    type: "toolCall",
+                    name: computerCall.name,
+                    id: "capture",
+                    arguments: screenshotArgs,
+                  },
                 ],
                 __openclaw: { id: "capture-call", seq: 2, runId },
                 timestamp: 2,
