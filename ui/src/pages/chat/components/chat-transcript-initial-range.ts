@@ -30,10 +30,9 @@ export class TranscriptInitialRange {
   private cancelPreparation?: () => void;
   private preparationIsIdle = false;
   private prepareStarted = 0;
-  private prepareLatency = 16;
   private idleStep = 1;
   private idleMeasureStep = 1;
-  private scrollSample = { time: 0, distance: 0, velocity: 0, direction: -1 };
+  private scrollSample = { time: 0, distance: 0, direction: -1 };
   private viewportOnly = false;
   private cachedWindow = false;
   private forecastTimeout?: ReturnType<typeof setTimeout>;
@@ -226,10 +225,9 @@ export class TranscriptInitialRange {
     }
     const virtualizer = this.virtualizer();
     const viewport = virtualizer.scrollRect?.height ?? 600;
-    const distance = Math.max(
-      this.scrollSample.distance,
-      this.scrollSample.velocity * (16 + this.prepareLatency),
-    );
+    // Measurement latency can span several inputs. Multiplying it by velocity
+    // skips the arriving viewport and evicts rows that are still approaching.
+    const distance = this.scrollSample.distance;
     const direction = this.scrollSample.direction;
     const top = Math.max(0, (virtualizer.scrollOffset ?? 0) + direction * distance);
     const first = virtualizer.getVirtualItemForOffset(top);
@@ -434,11 +432,9 @@ export class TranscriptInitialRange {
     this.idleStep = 1;
     this.idleMeasureStep = 1;
     const now = performance.now();
-    const previous = this.scrollSample;
     this.scrollSample = {
       time: now,
       distance: Math.abs(delta),
-      velocity: previous.time ? Math.abs(delta) / Math.max(16, now - previous.time) : 0,
       direction: Math.sign(delta),
     };
     this.finish();
@@ -465,8 +461,6 @@ export class TranscriptInitialRange {
       key === this.preparingRowKey &&
       (entry || !this.virtualizer().targetWindow?.ResizeObserver)
     ) {
-      // This is readiness latency, including layout, rather than CPU time.
-      this.prepareLatency = Math.max(1, performance.now() - this.prepareStarted);
       this.prepareStarted = 0;
       queueMicrotask(() => {
         if (this.preparingRowKey === key) {

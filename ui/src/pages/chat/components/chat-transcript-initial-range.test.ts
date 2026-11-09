@@ -99,11 +99,11 @@ it("yields between destination-size corrections and waits for a stable end befor
 });
 
 it.each([
-  { delta: 1200, expected: [40, 41, 42], nextExpected: [45, 46, 47] },
-  { delta: -1200, expected: [20, 21, 22], nextExpected: [15, 16, 17] },
+  { delta: 1200, expected: [40, 41, 42] },
+  { delta: -1200, expected: [20, 21, 22] },
 ])(
   "keeps approaching rows paintable until active admission during a $delta px fling",
-  ({ delta, expected, nextExpected }) => {
+  ({ delta, expected }) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     let now = 1;
     vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -156,15 +156,13 @@ it.each([
       expect(presentation.activeRowKeys.has(String(index))).toBe(false);
     }
 
-    // A faster next sample predicts beyond the previous forecast before it arrives.
+    // Faster input does not extrapolate past the approaching viewport.
     const step = delta / 2;
     now = 17;
     range.recordReaderMovement(step);
     virtualizer.scrollOffset = 3600 + step;
     const approaching = range.presentation(rows);
-    expect(approaching.forecastRowKeys).toEqual(
-      new Set([...expected, ...nextExpected].map(String)),
-    );
+    expect(approaching.forecastRowKeys).toEqual(new Set(expected.map(String)));
     const mounted = new Set(virtualizer.getVirtualItems().map((item) => String(item.key)));
     for (const index of expected) {
       expect(mounted.has(String(index))).toBe(true);
