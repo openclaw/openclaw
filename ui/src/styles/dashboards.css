@@ -135,7 +135,7 @@
   background: none;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .dashboards-authors__clear:hover {
@@ -158,7 +158,7 @@
   padding: 0 8px;
   border-radius: var(--radius-sm);
   color: var(--text-strong);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .dashboards-authors__row:hover,
