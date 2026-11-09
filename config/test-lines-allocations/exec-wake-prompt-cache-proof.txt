@@ -1,0 +1,6 @@
+# Wire-level gateway proof that a background exec completion wake keeps the conversation
+# system prompt (byte-identical prefix, unchanged tool ceiling) plus its restricted-producer
+# control: the prompt-cache regression is only observable against a shipped Gateway and a
+# recorded provider request, so it cannot be covered by the in-process prompt fixtures.
+# Includes the producer-surface narrowing matrix and queued-ceiling snapshot tests.
+618

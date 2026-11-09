@@ -17,10 +17,6 @@ import { bindReplyInputChannel } from "../../agents/harness/host-private-capabil
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
 import { captureRequesterOrigin } from "../../agents/requester-origin.js";
 import { revokeRequesterCronAuthority } from "../../agents/subagents/requester-cron-authority.js";
-import {
-  attachToolAllowlistIntersection,
-  readToolAllowlistIntersection,
-} from "../../agents/tool-policy.js";
 import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { copyChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
@@ -61,6 +57,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplySteeringIntent } from "./reply-steering-intent.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
+import { snapshotQueuedToolCeiling } from "./reply-tool-authority-snapshot.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import {
   bindSourceReplyDeliveryRuntime,
@@ -383,13 +380,8 @@ export async function executePreparedReplyRun(
   const replyPolicyChannel =
     (replyRoute.channel as OriginatingChannelType | undefined) ??
     (messageProvider as OriginatingChannelType | undefined);
-  const queuedToolsAllow = opts?.toolsAllow ? [...opts.toolsAllow] : opts?.toolsAllow;
-  const queuedToolIntersections = opts?.toolsAllow
-    ? readToolAllowlistIntersection(opts.toolsAllow)
-    : undefined;
-  if (queuedToolsAllow && queuedToolIntersections) {
-    attachToolAllowlistIntersection(queuedToolsAllow, queuedToolIntersections);
-  }
+  // The queued turn executes under this copy, so it must keep the ceiling's provenance.
+  const queuedToolsAllow = snapshotQueuedToolCeiling(opts?.toolsAllow);
   const admittedSessionSettings =
     opts?.admittedSessionSettings ?? preparedSessionState.sessionEntry;
   const groupTurn = getGroupThreadTurn();

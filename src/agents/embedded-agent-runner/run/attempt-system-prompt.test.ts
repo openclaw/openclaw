@@ -37,6 +37,7 @@ import { convertToLlm } from "../../sessions/messages.js";
 import { buildSubagentSpawnEnvelope } from "../../subagents/spawn/subagent-system-prompt.js";
 import { fakeTool } from "../../test-helpers/fake-tool.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { markToolAllowlistAsProducerSurface } from "../../tool-policy.js";
 import {
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
@@ -508,6 +509,32 @@ describe("buildAttemptSystemPrompt", () => {
     expect(await refreshSystemPrompt(prepared.systemPromptText, [read])).not.toContain(
       "Web search is supported but not configured.",
     );
+  });
+
+  it("keeps the conversation prompt when a cap only records the producer's own surface", async () => {
+    // A genuine narrowing still earns the minimal prompt.
+    const narrowed = await preparePermissionPrompt({
+      skills: { prompt: "", toolsAllow: ["read"] },
+    });
+    expect(narrowed.prepared.systemPromptText).not.toContain("## Execution Bias");
+
+    // An exec-completion wake inherits the producing run's full surface as its ceiling.
+    const producerSurface = await preparePermissionPrompt({
+      skills: {
+        prompt: "",
+        toolsAllow: markToolAllowlistAsProducerSurface(["read", "write", "exec"]),
+      },
+    });
+    expectText(producerSurface.prepared.systemPromptText, [
+      "## Execution Bias",
+      "- Actionable request: act now.",
+    ]);
+    // The ceiling still bounds the tool surface the prompt advertises.
+    expect(producerSurface.effectiveTools.map(({ name }) => name)).toEqual([
+      "read",
+      "write",
+      "exec",
+    ]);
   });
 
   const skillsCatalog = "<available_skills><skill><name>weather</name></skill></available_skills>";

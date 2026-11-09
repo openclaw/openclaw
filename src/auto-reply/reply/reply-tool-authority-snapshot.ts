@@ -2,16 +2,35 @@ import { captureRequesterOrigin } from "../../agents/requester-origin.js";
 import {
   attachToolAllowlistIntersection,
   readToolAllowlistIntersection,
+  retainProducerSurfaceToolAllowlist,
 } from "../../agents/tool-policy.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
+
+/**
+ * Copies the tool ceiling a queued turn will execute under, keeping the non-enumerable facts
+ * attached to it. A turn queued behind active work must read the same provenance as the input
+ * that produced it, or a producer-surface ceiling would look like an explicit cap again.
+ */
+export function snapshotQueuedToolCeiling(
+  toolsAllow: readonly string[] | undefined,
+): string[] | undefined {
+  if (!toolsAllow) {
+    return undefined;
+  }
+  const queued = retainProducerSurfaceToolAllowlist([...toolsAllow], toolsAllow);
+  const restrictions = readToolAllowlistIntersection(toolsAllow);
+  return restrictions ? attachToolAllowlistIntersection(queued, restrictions) : queued;
+}
 
 /** Own the policy snapshot without retaining unrelated attempt payloads or callbacks. */
 export function captureReplyToolAuthorityInput(
   run: ReplyToolAuthorityInput,
 ): ReplyToolAuthorityInput {
   const handoff = run.run.trustedInternalHandoff;
-  const toolsAllow = run.toolsAllow ? [...run.toolsAllow] : undefined;
+  const toolsAllow = run.toolsAllow
+    ? retainProducerSurfaceToolAllowlist([...run.toolsAllow], run.toolsAllow)
+    : undefined;
   const intersection = run.toolsAllow
     ? readToolAllowlistIntersection(run.toolsAllow)?.map((restriction) => restriction.slice())
     : undefined;

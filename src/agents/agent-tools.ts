@@ -83,6 +83,7 @@ import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
 import { createEmbeddedMessageInvocationPolicy } from "./scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "./scheduled-tool-policy.js";
+import { buildSessionEventSourceToolCap } from "./session-event-producer-surface.js";
 import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
 import { withLegacySessionCapabilityRead } from "./subagents/spawn/subagent-session-store-legacy.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
@@ -664,14 +665,12 @@ function* assembleOpenClawCodingTools(
       capabilityProfile,
       tools: finalizedTools,
       sessionEventSourcePolicy: options?.sessionEventSourcePolicy ?? {
-        toolsAllow: [
-          ...finalizedTools.filter(turnAuthorized).map((tool) => tool.name),
-          // Provider-hosted search has no function tool; keep this turn's decision for it.
-          ...(!finalizedTools.some((tool) => tool.name === "web_search") &&
-          isConversationToolAllowed(capabilityProfile, "web_search")
-            ? ["web_search"]
-            : []),
-        ],
+        toolsAllow: buildSessionEventSourceToolCap({
+          options,
+          capabilityProfile,
+          turnAuthorized,
+          tools: finalizedTools,
+        }),
       },
     }),
   );

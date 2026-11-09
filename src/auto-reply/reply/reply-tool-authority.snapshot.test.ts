@@ -2,6 +2,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import * as requesterOrigin from "../../agents/requester-origin.js";
 import { withPreparedToolConstruction } from "../../agents/tool-construction-preparation.js";
+import {
+  attachToolAllowlistIntersection,
+  isProducerSurfaceToolAllowlist,
+  markToolAllowlistAsProducerSurface,
+  readToolAllowlistIntersection,
+} from "../../agents/tool-policy.js";
 import * as channelRegistry from "../../channels/plugins/registry.js";
 import * as facts from "../../config/resolution-facts.js";
 import * as snapshots from "../../config/runtime-snapshot.js";
@@ -10,6 +16,7 @@ import { publishRetainedSessionEntryChange } from "../../config/sessions/session
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { retainReplyToolAuthorityClassification } from "./reply-tool-authority-cohort.js";
+import { snapshotQueuedToolCeiling } from "./reply-tool-authority-snapshot.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 
 const route = { provider: "openai", model: "test-model" };
@@ -345,4 +352,21 @@ it("reuses the captured incumbent principal while validating interleaved callers
   await expect(alice.projectAsync({ ...overlay, senderId: "bob" }, route)).rejects.toThrow(
     "requester",
   );
+});
+
+it("keeps a queued completion's producer-surface ceiling out of the minimal prompt", () => {
+  // A completion queued behind active work executes from this copy, not from the source list.
+  const ceiling = markToolAllowlistAsProducerSurface(["read", "exec", "message"]);
+  const queued = snapshotQueuedToolCeiling(ceiling);
+  expect(queued).not.toBe(ceiling);
+  expect(queued).toEqual(["read", "exec", "message"]);
+  expect(isProducerSurfaceToolAllowlist(queued)).toBe(true);
+  expect(snapshotQueuedToolCeiling(undefined)).toBeUndefined();
+});
+
+it("keeps an explicit queued cap unmarked and retains its independent restrictions", () => {
+  const explicit = attachToolAllowlistIntersection(["exec"], [["exec"], ["exec", "read"]]);
+  const queued = snapshotQueuedToolCeiling(explicit);
+  expect(isProducerSurfaceToolAllowlist(queued)).toBe(false);
+  expect(readToolAllowlistIntersection(queued!)).toEqual([["exec"], ["exec", "read"]]);
 });
