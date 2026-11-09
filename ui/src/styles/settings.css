@@ -1075,10 +1075,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
 }
 
 .settings-toggle {
-  display: inline-flex;
-  align-items: center;
   gap: var(--space-2);
-  cursor: var(--cursor-action);
 }
 
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select {
@@ -1938,10 +1935,6 @@ textarea.settings-input {
     max-height: none;
     overflow: visible;
   }
-}
-
-.standing-grants-table td.mono {
-  overflow-wrap: anywhere;
 }
 
 /* The footnote starts where the log rows' text does, at every width. */
