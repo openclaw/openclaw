@@ -64,6 +64,13 @@ describe("database config", () => {
       engine: "postgres",
       families: familyEngines(["sqlite", "sqlite", "postgres", "sqlite", "postgres"]),
     },
+    { engine: "sqlite", localStores: "anchors" },
+    { engine: "postgres", localStores: "none" },
+    {
+      engine: "postgres",
+      localStores: "none",
+      families: familyEngines(Array.from({ length: 5 }, () => "postgres")),
+    },
   ])("preserves optional database config %j for runtime admission", (database) => {
     expect(OpenClawSchema.parse({ database }).database).toEqual(database);
   });
@@ -78,6 +85,14 @@ describe("database config", () => {
     { families: { state: { engine: "unknown" } } },
     { families: { state: { engine: "postgres", postgres: { schemaPrefix: "state" } } } },
     { families: { quarantine: { engine: "sqlite" } } },
+    { localStores: "none" },
+    { engine: "sqlite", localStores: "none" },
+    { families: familyEngines(Array.from({ length: 5 }, () => "postgres")), localStores: "none" },
+    {
+      engine: "postgres",
+      localStores: "none",
+      families: familyEngines(["postgres", "postgres", "postgres", "postgres", "sqlite"]),
+    },
   ])("rejects invalid database config %j", (database) => {
     expect(OpenClawSchema.safeParse({ database }).success).toBe(false);
   });

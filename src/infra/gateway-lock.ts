@@ -49,6 +49,10 @@ import {
   type GatewayOwnerLease,
 } from "./gateway-owner-lease.js";
 import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.types.js";
+import {
+  acquireConfiguredGatewayPostgresOwner,
+  type GatewayPostgresOwner,
+} from "./gateway-postgres-owner.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { captureStalledGatewayStartup } from "./gateway-startup-owner.js";
 import {
@@ -490,6 +494,8 @@ export async function acquireGatewayLock(
   // Lock file that blocked the failing attempt, named in the timeout error.
   let contendedLockPath: string | undefined;
   let projection: GatewayStateProjection | undefined;
+  // database.localStores none: the install's PostgreSQL session lock excludes other hosts too.
+  let postgresOwner: GatewayPostgresOwner | undefined;
   let stateOwner: ReturnType<typeof acquireGatewayStateOwner>;
   try {
     stateOwner =
@@ -523,6 +529,9 @@ export async function acquireGatewayLock(
             await assertHistoricalGatewayOwnerStopped(paths, opts, (contended) => {
               contendedLockPath = contended;
             });
+            postgresOwner = await acquireConfiguredGatewayPostgresOwner((contended) => {
+              contendedLockPath = contended;
+            });
             if (!opts.databasePortRecovery && opts.databaseAccess !== "none") {
               try {
                 await owner.run(() => {
@@ -543,6 +552,8 @@ export async function acquireGatewayLock(
             if (error instanceof GatewayStateOwnerContentionError) {
               contendedLockPath ??= paths.ownerLockPath;
             }
+            await postgresOwner?.release();
+            postgresOwner = undefined;
             owner.release();
             throw error;
           }
@@ -608,6 +619,7 @@ export async function acquireGatewayLock(
       parentMaintenance?.assertOwnerCurrent(access);
     }
     stateOwner.assertCurrent();
+    postgresOwner?.assertCurrent();
     if (projection && !projection.verifyStillHeld()) {
       throw new Error("OpenClaw Gateway ownership projection is no longer current");
     }
@@ -676,6 +688,7 @@ export async function acquireGatewayLock(
   } catch (error) {
     await ownerLease?.release();
     projection?.release();
+    await postgresOwner?.release();
     stateOwner.release();
     throw new GatewayLockError(
       "failed to acquire gateway state ownership",
@@ -714,6 +727,7 @@ export async function acquireGatewayLock(
         await resources?.close();
         projection?.release();
         projection = undefined;
+        await postgresOwner?.release();
         stateOwner.release();
       })().catch((error: unknown) => {
         released = undefined;

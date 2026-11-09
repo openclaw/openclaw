@@ -29,6 +29,10 @@ export const DatabaseConfigSchema = z
         label: "Family Database Engines",
         help: "Optional engine overrides for state, agent, workboard, logbook, and team-reports. Each override requires engine. State and agent families may use different engines; local safety journals are not configurable. All PostgreSQL families share database.postgres.",
       }),
+    localStores: z.enum(["anchors", "none"]).optional().register(configUiMetadata, {
+      label: "Local Store Files",
+      help: "Opt-in for all-PostgreSQL installs (default: anchors). In this release, none only moves Gateway state ownership into PostgreSQL: a session advisory lock keyed by an installation UUID refuses a second Gateway for the same installation on any host. Requires every configurable family to use postgres. Store anchors and other local files are unchanged; see the PostgreSQL operator guide.",
+    }),
     postgres: z
       .strictObject({
         connection: SecretInputSchema.refine(
@@ -55,6 +59,23 @@ export const DatabaseConfigSchema = z
         label: "PostgreSQL",
         help: "PostgreSQL connection and schema naming. PostgreSQL 16–18 are qualified; other admitted majors remain experimental pending conformance. Back up each store schema together with its local SQLite anchor. See the PostgreSQL operator guide for deployment qualification limits.",
       }),
+  })
+  .superRefine((database, ctx) => {
+    if (database.localStores !== "none") {
+      return;
+    }
+    const families = Object.values(database.families ?? {});
+    if (
+      database.engine !== "postgres" ||
+      families.some((family) => family?.engine !== "postgres")
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["localStores"],
+        message:
+          'database.localStores "none" requires database.engine postgres and no family overrides to sqlite.',
+      });
+    }
   })
   .optional()
   .register(configUiMetadata, {
