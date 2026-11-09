@@ -194,7 +194,8 @@ custom selections retain the full registry.
 Packed Node groups also share the runtime-only registry when every group has
 one known configuration and only explicitly qualified files. This includes
 the Gateway client callsite guard, Codex abort settlement, and native search
-authority proofs. Parent and child resolve the same include-file selection;
+authority proofs, plus the synthetic CI timing-refitter tooling suite. Parent
+and child resolve the same include-file selection;
 broad or mixed selections, extra Vitest arguments, and groups requiring a build
 retain the full registry. Test inventory, process isolation, and artifact
 verification are unchanged.
