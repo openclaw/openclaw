@@ -155,6 +155,8 @@ const MERMAID_ASSET_INPUT_RE =
 const ANDROID_TALK_CONTRACT_FIXTURE_RE = /^test\/fixtures\/talk-config-contract\.json$/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
+// Packaged workspace templates ship with the runtime, so they keep Node lanes.
+const WORKSPACE_TEMPLATE_SCOPE_RE = /^docs\/reference\/templates\//u;
 const WINDOWS_SQLITE_SCOPE_RE = /^src\/(?:state\/|.*sqlite.*\.ts$)/;
 // Windows process-start identity: the owner, the Windows probe it falls back to,
 // and every consumer that admits or recovers work from that identity. The
@@ -300,7 +302,7 @@ export function detectChangedScope(changedPaths) {
     const isAppleBuildInput = isAppleSharedBuildInput(path);
     const hasNativeProtocolInput = isNativeProtocolInput(path);
 
-    if (facts.surface === "docs") {
+    if (facts.surface === "docs" && !WORKSPACE_TEMPLATE_SCOPE_RE.test(path)) {
       continue;
     }
 
@@ -635,7 +637,7 @@ export function detectNodeFastScope(changedPaths) {
   for (const rawPath of changedPaths) {
     const facts = getChangedPathFacts(rawPath);
     const { path } = facts;
-    if (!path || facts.surface === "docs") {
+    if (!path || (facts.surface === "docs" && !WORKSPACE_TEMPLATE_SCOPE_RE.test(path))) {
       continue;
     }
 
