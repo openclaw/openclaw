@@ -133,6 +133,12 @@ legacy workspace setup, legacy session stores, and exec approvals. Malformed or
 conflicting input is retained and requires the manual action in the diagnostic.
 The updater uses this repair path before accepting the installed target.
 
+If final validation still finds invalid config or a required migration remains
+deferred, the repair exits with code 1 and reports the unresolved findings. The
+updater receives an error result rather than successful repair completion.
+Conditional migration deferrals and diagnostic-only findings retain their existing
+advisory behavior; read-only JSON and lint keep their documented exit contracts.
+
 Update-time Doctor runs startup-required repairs before optional inspections.
 When the installed updater supports post-restart inspections, Doctor moves
 lint-backed, inspection-only checks out of the stopped Gateway window. The

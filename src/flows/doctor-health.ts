@@ -142,9 +142,44 @@ async function runDoctorHealthFlowWithResult(
   let healthContext: DoctorHealthFlowContext | undefined;
   let preparedArchiveDiscovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
   let doctorResult: UpdatePostInstallDoctorResult = { status: "error" };
-  const recordConfigWriteRefusal = (ctx: DoctorHealthFlowContext): boolean => {
+  const collectDoctorResult = (
+    ctx: DoctorHealthFlowContext,
+    pluginWarnings: string[] = [],
+  ): UpdatePostInstallDoctorResult => {
+    const warnings = normalizeUpdatePostInstallDoctorWarnings([
+      ...pluginWarnings,
+      ...(ctx.configResult.warnings ?? []),
+      ...(maintenance?.warnings ?? []),
+      ...(ctx.configResult.stateMigrationStepReceipts ?? []).flatMap((receipt) =>
+        receipt.outcome === "warning" ||
+        receipt.outcome === "skipped" ||
+        receipt.outcome === "deferred"
+          ? receipt.warnings
+          : [],
+      ),
+      ...(ctx.postInstallDoctorResult?.warnings ?? []),
+    ]);
+    return {
+      ...(ctx.postInstallDoctorResult ?? { status: "ok" }),
+      ...(warnings.length ? { warnings } : {}),
+      ...(maintenance?.failureFacts?.length
+        ? {
+            failureFacts: [
+              ...maintenance.failureFacts,
+              ...(ctx.postInstallDoctorResult?.failureFacts ?? []),
+            ],
+          }
+        : {}),
+    };
+  };
+  const recordRepairRefusal = (ctx: DoctorHealthFlowContext): boolean => {
     if (!ctx.configWriteRefusal) {
-      return false;
+      if (ctx.postInstallDoctorResult?.status !== "error") {
+        return false;
+      }
+      showDoctorOutro("Doctor blocked; required repairs remain incomplete.");
+      exitCode = 1;
+      return true;
     }
     // Config fixes were computed but refused by the writer; the warning above
     // already lists the manual work. This failure outranks a recoverable
@@ -450,7 +485,7 @@ async function runDoctorHealthFlowWithResult(
       await measureGatewayBootstrapStep("doctor.contributions", () =>
         runDoctorHealthContributions(ctx),
       );
-      if (recordConfigWriteRefusal(ctx)) {
+      if (recordRepairRefusal(ctx)) {
         return undefined;
       }
       if (maintenance) {
@@ -530,7 +565,14 @@ async function runDoctorHealthFlowWithResult(
         );
       }
     }
-    if (!ctx || recordConfigWriteRefusal(ctx)) {
+    if (!ctx || recordRepairRefusal(ctx)) {
+      if (
+        healthContext?.postInstallDoctorResult?.status === "error" &&
+        !healthContext.configWriteRefusal
+      ) {
+        // Finish can add restoration failures after a blocked run drops its completed context.
+        doctorResult = collectDoctorResult(healthContext);
+      }
       return;
     }
     const pluginWarnings: string[] = [];
@@ -542,31 +584,7 @@ async function runDoctorHealthFlowWithResult(
       renderStructuredHealthFindings(ctx, findings);
       pluginWarnings.push(...findings.map((finding) => `${finding.checkId}: ${finding.message}`));
     }
-    const warnings = normalizeUpdatePostInstallDoctorWarnings([
-      ...pluginWarnings,
-      ...(ctx.configResult.warnings ?? []),
-      ...(maintenance?.warnings ?? []),
-      ...(ctx.configResult.stateMigrationStepReceipts ?? []).flatMap((receipt) =>
-        receipt.outcome === "warning" ||
-        receipt.outcome === "skipped" ||
-        receipt.outcome === "deferred"
-          ? receipt.warnings
-          : [],
-      ),
-      ...(ctx.postInstallDoctorResult?.warnings ?? []),
-    ]);
-    doctorResult = {
-      ...(ctx.postInstallDoctorResult ?? { status: "ok" }),
-      ...(warnings.length ? { warnings } : {}),
-      ...(maintenance?.failureFacts?.length
-        ? {
-            failureFacts: [
-              ...maintenance.failureFacts,
-              ...(ctx.postInstallDoctorResult?.failureFacts ?? []),
-            ],
-          }
-        : {}),
-    };
+    doctorResult = collectDoctorResult(ctx, pluginWarnings);
     if (updateResult && doctorResult.status === "advisory") {
       exitCode = UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE;
       return;
