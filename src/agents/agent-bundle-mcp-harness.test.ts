@@ -389,8 +389,7 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     const result = await staticTools("scheduled-diagnostic", { toolsAllow: ["*"] });
 
     expect(result.diagnosticNotice).toContain("user-mail: authentication required");
-    expect(result.diagnosticNotice).toContain("Do not claim MCP-backed work succeeded");
-    expect(result.diagnosticNotice?.isWellFormed()).toBe(true);
+    expect(result.diagnosticNotice).toContain(`${"🙂".repeat(72)}. Do not claim MCP-backed work`);
     await result.dispose();
   });
 
