@@ -103,6 +103,7 @@ export async function runSessionsSendA2AFlow(params: {
       // A reverse send to another session cannot settle this captured return route.
       if (
         wait.terminalReply?.disposition === "empty" &&
+        wait.yielded !== true &&
         params.replyMode === "peer" &&
         !wait.sourceReplyDelivered &&
         params.requesterSessionKey &&

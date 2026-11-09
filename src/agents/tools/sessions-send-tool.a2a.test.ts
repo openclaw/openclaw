@@ -135,6 +135,7 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
     { name: "missing final", disposition: "empty", delivered: false, notify: true },
     { name: "intentional silence", disposition: "silent", delivered: false, notify: false },
     { name: "already delivered", disposition: "empty", delivered: true, notify: false },
+    { name: "yielded work", disposition: "empty", delivered: false, notify: false, yielded: true },
   ] as const)("closes a channel peer request with $name", async (scenario) => {
     const origin = { channel: "telegram", to: "-100123", accountId: "family", threadId: "554" };
     await runFlow({
@@ -150,6 +151,7 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
         status: "ok",
         terminalReply: { disposition: scenario.disposition },
         sourceReplyDelivered: scenario.delivered,
+        yielded: "yielded" in scenario ? scenario.yielded : undefined,
       },
     });
     if (scenario.notify) {
