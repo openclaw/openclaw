@@ -9,7 +9,7 @@ import { UsageValuePicker, type UsageValueOption } from "./view-value-picker.tsx
 export type UsageQueryFilterKey = "channel" | "provider" | "model" | "tool";
 
 /** The selected `key:value` tokens of one field, as written in the query draft. */
-export function usageQueryFieldValues(
+function usageQueryFieldValues(
   terms: ReturnType<typeof extractQueryTerms>,
   filterKey: string,
 ): string[] {
@@ -21,7 +21,7 @@ export function usageQueryFieldValues(
 }
 
 /** A field's values with their session counts, plus selected values the range no longer has. */
-export function usageQueryFieldOptions(
+function usageQueryFieldOptions(
   options: readonly string[],
   counts: Readonly<Record<string, number>> | undefined,
   selected: readonly string[],
@@ -40,7 +40,7 @@ export function usageQueryFieldOptions(
 }
 
 /** Toggles one value of a field in the query draft; the query applies with Filter or Enter. */
-export function toggleUsageQueryValue(
+function toggleUsageQueryValue(
   queryDraft: string,
   filterKey: string,
   selected: readonly string[],
@@ -56,7 +56,7 @@ export function toggleUsageQueryValue(
   );
 }
 
-export function usageQueryFilterSearchLabel(filterKey: UsageQueryFilterKey): string {
+function usageQueryFilterSearchLabel(filterKey: UsageQueryFilterKey): string {
   return t(`usage.filters.search.${filterKey}`);
 }
 
