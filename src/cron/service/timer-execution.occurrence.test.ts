@@ -212,6 +212,21 @@ describe("scheduled occurrence admission", () => {
     },
   );
 
+  it("builds a well-formed pause notice when the job name crosses the cut with an emoji", async () => {
+    const { state } = harness();
+    state.deps.admitScheduledOccurrence = async () => ({
+      ...unadmittedScheduledOccurrence("paused"),
+      pause: { reason: "archived", parentSessionKey: "agent:main:dashboard:parent" },
+    });
+    const result = await executeJobCore(state, {
+      ...makeCronJob({ payload: payloadFor("agentTurn") }),
+      name: `${"a".repeat(119)}📊 tail`,
+    });
+    expect(result).toMatchObject({ status: "skipped", executionStarted: false });
+    expect(result.error).toBeDefined();
+    expect(result.error?.isWellFormed()).toBe(true);
+  });
+
   it("gives every run a fail context when no admitter is configured", async () => {
     const { state, seen } = harness();
     delete state.deps.admitScheduledOccurrence;

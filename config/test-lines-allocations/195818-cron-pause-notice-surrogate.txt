@@ -1,0 +1,3 @@
+# buildScheduledParentPauseNotice keeps the configured automation name surrogate-safe (#195818).
+# Covers emoji-crossed and emoji-inside pause notice name cases plus executor-path notice checks.
+33

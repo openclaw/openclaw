@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
  * The admitted-occurrence contract shared by the cron service and every
  * executor. `admitScheduledOccurrence` in `execution-context-admission.ts`
@@ -84,7 +85,10 @@ export function buildScheduledParentPauseNotice(params: {
   job: { id: string; name?: string };
   pause: CronParentUnavailable;
 }): string {
-  const name = (params.job.name || params.job.id).replace(/\s+/g, " ").trim().slice(0, 120);
+  const name = truncateUtf16Safe(
+    (params.job.name || params.job.id).replace(/\s+/g, " ").trim(),
+    120,
+  );
   const { pause } = params;
   const cause =
     pause.reason === "worktree-missing"
