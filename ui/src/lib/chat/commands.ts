@@ -400,17 +400,6 @@ export type InlineSlashCompletion = {
   argumentStart?: number;
 };
 
-function matchesSlashIdentifierPrefix(word: string): boolean {
-  const lower = normalizeLowercaseStringOrEmpty(word);
-  return SLASH_COMMANDS.some(
-    (command) =>
-      normalizeLowercaseStringOrEmpty(command.name).startsWith(lower) ||
-      command.aliases?.some((alias) =>
-        normalizeLowercaseStringOrEmpty(alias.replace(/^\//u, "")).startsWith(lower),
-      ),
-  );
-}
-
 /**
  * Finds the slash token being edited at the caret, including inside normal prose.
  * A leading token is the draft's own command even when prose follows it; only
@@ -438,8 +427,11 @@ export function findInlineSlashCompletion(
   const query = match[1] ?? "";
   // Text typed in front of existing prose (`/loo|Apply`) stays: the token only
   // extends past the caret while the whole word can still name a command.
-  if (end > boundedCaret && !matchesSlashIdentifierPrefix(text.slice(start + 1, end))) {
-    end = boundedCaret;
+  if (end > boundedCaret) {
+    const word = normalizeLowercaseStringOrEmpty(text.slice(start + 1, end));
+    if (!SLASH_COMMANDS.some((command) => getSlashCommandRelevance(command, word) <= 1)) {
+      end = boundedCaret;
+    }
   }
   return {
     query,
