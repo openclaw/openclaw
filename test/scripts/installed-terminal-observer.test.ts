@@ -2403,7 +2403,11 @@ it("admits package-bound heartbeat lifetimes only outside predecessor observatio
     10_000,
   );
   expect(stagedResult.status, stagedResult.stderr).toBe(0);
-  const stagedBinding = f.records().find((row) => row.event === "thread")?.packageHeartbeat;
+  const stagedLaunches = f
+    .records()
+    .filter((row) => row.event === "thread" && row.pid === stagedResult.pid && row.thread === 0);
+  expect(stagedLaunches).toHaveLength(1);
+  const stagedBinding = stagedLaunches[0]?.packageHeartbeat;
   assert(stagedBinding && typeof stagedBinding === "object");
   expect(stagedBinding).toMatchObject({ root: staged, qualifiedRoot: staged });
   const oldRoot = path.join(f.root, "original-package");
@@ -2411,8 +2415,15 @@ it("admits package-bound heartbeat lifetimes only outside predecessor observatio
   fs.renameSync(staged, packageRoot);
   const activated = runProcess(node, [f.spec.bin], f.env, 10_000);
   expect(activated.status, activated.stderr).toBe(0);
-  const activatedBinding = f.records().findLast((row) => row.event === "thread")?.packageHeartbeat;
-  expect(activatedBinding).toEqual({ ...stagedBinding, root: packageRoot });
+  const activatedRows = f.records();
+  // Directory order is not chronology; bind the exact native parent in both orders.
+  for (const rows of [activatedRows, activatedRows.toReversed()]) {
+    expect(
+      rows
+        .filter((row) => row.event === "thread" && row.pid === activated.pid && row.thread === 0)
+        .map((row) => row.packageHeartbeat),
+    ).toEqual([{ ...stagedBinding, root: packageRoot }]);
+  }
   expect(
     fs
       .readdirSync(f.spec.directory)
