@@ -15,7 +15,7 @@ import {
 import { HoverMarquee } from "../../lib/solid/hover-marquee.tsx";
 import { DashboardPreview } from "./dashboard-preview.tsx";
 import type { DashboardGalleryFilters, DashboardGalleryHandlers } from "./gallery-filters.ts";
-import type { DashboardsRouteData } from "./view.tsx";
+import type { DashboardsRouteData } from "./gallery-filters.ts";
 
 export type DashboardRow = SessionsListResult["sessions"][number];
 

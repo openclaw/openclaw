@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import {
   normalizeUiAppearancePreference,
@@ -60,14 +61,13 @@ export const DASHBOARDS_DISPLAY_DEFAULTS: DashboardsDisplay = {
 
 /** Browser-local gallery display; the defaults are not stored. */
 export function normalizeDashboardsDisplay(value: unknown): DashboardsDisplay | undefined {
-  if (!value || typeof value !== "object") {
+  if (!isRecord(value)) {
     return undefined;
   }
-  const record = value as Record<string, unknown>;
   const display: DashboardsDisplay = {
-    view: normalizeChoice(DASHBOARDS_VIEWS, "grid")(record.view),
-    sort: normalizeChoice(DASHBOARDS_SORTS, "updated")(record.sort),
-    group: normalizeChoice(DASHBOARDS_GROUPS, "none")(record.group),
+    view: normalizeChoice(DASHBOARDS_VIEWS, "grid")(value.view),
+    sort: normalizeChoice(DASHBOARDS_SORTS, "updated")(value.sort),
+    group: normalizeChoice(DASHBOARDS_GROUPS, "none")(value.group),
   };
   return display.view === "grid" && display.sort === "updated" && display.group === "none"
     ? undefined

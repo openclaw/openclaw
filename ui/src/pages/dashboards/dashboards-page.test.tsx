@@ -26,8 +26,8 @@ import {
 } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { stubManualIntersectionObserver } from "../chat/components/chat-media-observer.test-support.ts";
+import type { DashboardsRouteData } from "./gallery-filters.ts";
 import { page as dashboardRoute } from "./route.ts";
-import type { DashboardsRouteData } from "./view.tsx";
 
 function pageContext(overrides: {
   sessions?: Partial<ApplicationContext["sessions"]>;

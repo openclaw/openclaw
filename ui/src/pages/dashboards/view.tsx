@@ -18,7 +18,6 @@ import {
   latest,
   onSettled,
 } from "solid-js";
-import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -43,18 +42,13 @@ import {
   DashboardSearch,
   type DashboardAuthorOption,
 } from "./dashboard-tools.tsx";
-import type { DashboardGalleryFilters, DashboardGalleryHandlers } from "./gallery-filters.ts";
+import type {
+  DashboardGalleryFilters,
+  DashboardGalleryHandlers,
+  DashboardsRouteData,
+} from "./gallery-filters.ts";
 
 registerDashboardsEnglish();
-
-export type DashboardsRouteData = {
-  result: SessionsListResult | null;
-  error: string | null;
-  basePath: string;
-  fallbackAgentId: string;
-  mainKey: string;
-  globalScope: boolean;
-};
 
 function dashboardAuthors(data: DashboardsRouteData): DashboardAuthorOption[] {
   const authors = new Map<string, DashboardAuthorOption>();
