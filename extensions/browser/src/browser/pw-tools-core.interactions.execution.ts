@@ -4,7 +4,7 @@ import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import type { BrowserBatchAbort, BrowserBatchActionResult } from "./client-actions-types.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
 import type { BrowserDownloadResult } from "./download-types.js";
-import { BrowserTabCrashedError } from "./errors.js";
+import { BrowserTabCrashedError, isBrowserTabCrashedError } from "./errors.js";
 import { assertBrowserNavigationResultAllowed } from "./navigation-guard.js";
 import { pageTargetInfo } from "./pw-session-connection.js";
 import {
@@ -324,8 +324,10 @@ async function batchViaPlaywright(
           isBrowserObservedDialogBlockedError(err) ||
           err instanceof BrowserInteractionAuthorityError ||
           // A crashed tab is a target-level failure, not a child result: keep the
-          // typed conflict and stop before later children touch the dead renderer.
-          err instanceof BrowserTabCrashedError
+          // typed conflict (or rethrow Playwright's crash for the route mapper) and
+          // stop before later children touch the dead renderer.
+          err instanceof BrowserTabCrashedError ||
+          isBrowserTabCrashedError(err)
         ) {
           throw err;
         }

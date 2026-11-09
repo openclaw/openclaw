@@ -48,6 +48,8 @@ it("maps a crashed renderer to an explicit tab-crash conflict", () => {
     "page.evaluate: Target crashed ",
     "page.goto: Page crashed\nCall log:\n  - navigating",
     "locator.click: Page crashed\nCall log:\n  - waiting for locator('b')",
+    "keyboard.press: Page crashed\nCall log:\n  - pressing Enter",
+    "mouse.click: Target crashed \nCall log:\n  - clicking",
     "page.waitForTimeout: Page crashed",
     "Page crashed.",
     "Target crashed",

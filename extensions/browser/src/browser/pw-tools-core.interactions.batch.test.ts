@@ -4,7 +4,11 @@ import { chromium } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
-import { BrowserTabCrashedError } from "./errors.js";
+import {
+  BROWSER_TAB_CRASHED_MESSAGE,
+  BrowserTabCrashedError,
+  toBrowserErrorResponse,
+} from "./errors.js";
 import { closePlaywrightBrowserConnection as closeRealBrowserConnection } from "./pw-session-actions.js";
 import { getPageForTargetId as getRealPageForTargetId } from "./pw-session-connection.js";
 import {
@@ -103,9 +107,11 @@ const actualClosePageViaPlaywright = vi.hoisted(() => ({
     undefined as unknown as typeof import("./pw-tools-core.snapshot.js").closePageViaPlaywright,
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime-internal")>()),
   registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
 }));
+// mock-isolation: Route CDP through the synthetic Playwright fixture, never a live socket.
 vi.mock(
   "./pw-session-cdp-transport.js",
   () => import("./pw-session-cdp-transport.test-support.js"),
@@ -292,6 +298,29 @@ describe("executeActViaPlaywright batches", () => {
     } finally {
       await restoreResolver();
     }
+  });
+
+  it("stops the batch when a child action crashes during execution", async () => {
+    locator.click.mockRejectedValueOnce(
+      new Error("locator.click: Page crashed\nCall log:\n  - waiting for locator('b')"),
+    );
+    const error = await batch([click, hover], { stopOnError: false }).catch(
+      (caught: unknown) => caught,
+    );
+    expect(toBrowserErrorResponse(error)).toEqual({
+      status: 409,
+      message: BROWSER_TAB_CRASHED_MESSAGE,
+    });
+    expect(locator.hover).not.toHaveBeenCalled();
+  });
+
+  it("preserves crash classification when native insertion crashes", async () => {
+    page.keyboard.insertText.mockRejectedValueOnce(
+      new Error("keyboard.insertText: Page crashed\nCall log:\n  - inserting text"),
+    );
+    await expect(batch([{ kind: "insertText", text: "value" }])).rejects.toThrow(
+      BrowserTabCrashedError,
+    );
   });
 
   it.each([

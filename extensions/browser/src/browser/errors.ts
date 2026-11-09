@@ -7,9 +7,12 @@ export const BROWSER_TAB_CRASHED_MESSAGE =
 // action errors. Match the first line only, so those suffixes do not defeat the check, and keep the
 // match on Playwright's own framing so a page-script error is not rewritten.
 const BROWSER_TAB_CRASHED_LINE_RE =
-  /^(?:(?:page|locator|frame|elementHandle|browserContext|request)\.[\w$.]+: )?(?:Target|Page) crashed\.?$/i;
+  /^(?:(?:page|locator|frame|elementHandle|browserContext|request|keyboard|mouse)\.[\w$.]+: )?(?:Target|Page) crashed\.?$/i;
 
-function isTabCrashedError(err: Error): boolean {
+export function isBrowserTabCrashedError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
   const firstLine = err.message.split("\n", 1)[0]?.trimEnd() ?? "";
   return BROWSER_TAB_CRASHED_LINE_RE.test(firstLine);
 }
@@ -195,7 +198,7 @@ export function toBrowserErrorResponse(err: unknown): BrowserErrorResponse | nul
   if (err instanceof Error && err.name === "InvalidBrowserNavigationUrlError") {
     return { status: 400, message: err.message, reason: BROWSER_ERROR_REASONS.navigationBlocked };
   }
-  if (err instanceof Error && isTabCrashedError(err)) {
+  if (isBrowserTabCrashedError(err)) {
     return { status: 409, message: BROWSER_TAB_CRASHED_MESSAGE };
   }
   return null;
