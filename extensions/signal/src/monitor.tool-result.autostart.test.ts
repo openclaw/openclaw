@@ -1,9 +1,14 @@
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   PlatformMessageNotDispatchedError,
   toErrorObject as toLintErrorObject,
 } from "openclaw/plugin-sdk/error-runtime";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createNonExitingRuntime, waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SignalDaemonHandle } from "./daemon.js";
@@ -513,6 +518,51 @@ describe("monitor tool results", () => {
       },
     });
     expectNoReplyDeliveryOrRouteUpdate();
+  });
+
+  it("routes read receipts using the current runtime DM scope", async () => {
+    const cfg: OpenClawConfig = {
+      session: { dmScope: "main" },
+      channels: { signal: { dmPolicy: "allowlist", allowFrom: ["+15550001111"] } },
+    };
+    const controller = new AbortController();
+    setRuntimeConfigSnapshot(cfg, cfg);
+    stream.mockImplementation(async ({ onEvent }) => {
+      const current: OpenClawConfig = {
+        ...cfg,
+        session: { dmScope: "per-channel-peer" },
+      };
+      setRuntimeConfigSnapshot(current, current);
+      try {
+        await onEvent({
+          event: "receive",
+          data: JSON.stringify({
+            envelope: {
+              sourceNumber: "+15550001111",
+              sourceName: "Ada",
+              timestamp: 3,
+              receiptMessage: { isRead: true, timestamps: [1700000000001] },
+            },
+          }),
+        });
+        await waitForSignalToolResultIngressDispatchIdle();
+      } finally {
+        controller.abort();
+      }
+    });
+    try {
+      await runExternal(controller.signal, { config: cfg });
+      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+        "Signal read receipt: Ada read msg 1700000000001",
+        {
+          sessionKey: "agent:main:signal:direct:+15550001111",
+          contextKey: "signal:read:1700000000001:+15550001111",
+        },
+      );
+      expectNoReplyDeliveryOrRouteUpdate();
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("blocks reaction notifications from unauthorized senders", async () => {

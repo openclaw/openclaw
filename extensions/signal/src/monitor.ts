@@ -20,7 +20,10 @@ import {
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "openclaw/plugin-sdk/reply-runtime";
-import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  captureRuntimeConfigAsyncReader,
+  createRuntimeConfigReader,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createNonExitingRuntime,
   type BackoffPolicy,
@@ -52,6 +55,7 @@ import {
 } from "./daemon.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
 import type { SignalEventHandlerDeps } from "./monitor/event-handler.types.js";
+import { handleSignalReadReceipt } from "./monitor/read-receipts.js";
 import { createSignalNativeReplyIdPlan } from "./native-reply.js";
 import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
 import { sendMessageSignal } from "./send.js";
@@ -485,9 +489,23 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       deliverReplies: (params) => deliverReplies({ ...params, cfg, chunkMode }),
     });
 
+    const readReceiptConfig = createRuntimeConfigReader(cfg);
+    const readReceiptDeps = {
+      account,
+      accountUuid: accountInfo.config.accountUuid,
+      accountId: accountInfo.accountId,
+      dmPolicy,
+      groupPolicy,
+      allowFrom,
+      groupAllowFrom,
+    };
     ingressMonitor = await startSignalIngressMonitor({
       accountId: accountInfo.accountId,
-      dispatch: handleEvent,
+      // Read receipts become system context; everything else takes the message path.
+      dispatch: async (event, lifecycle, payload) =>
+        (await handleSignalReadReceipt({ ...readReceiptDeps, cfg: readReceiptConfig() }, payload))
+          ? undefined
+          : await handleEvent(event, lifecycle, payload),
       runtime,
     });
 

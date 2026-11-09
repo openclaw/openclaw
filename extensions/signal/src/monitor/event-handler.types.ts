@@ -21,6 +21,10 @@ type SignalEnvelope = {
   } | null;
   syncMessage?: unknown;
   reactionMessage?: SignalReactionMessage | null;
+  receiptMessage?: {
+    isRead?: boolean | null;
+    timestamps?: number[] | null;
+  } | null;
 };
 
 export type SignalMention = {
