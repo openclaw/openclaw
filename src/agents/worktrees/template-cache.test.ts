@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { assert, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import * as allocation from "./allocation.js";
 import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
@@ -74,6 +77,86 @@ beforeEach(() => {
     prepare: (record) =>
       fs.mkdir(record.path).then(() => fs.writeFile(path.join(record.path, "source"), "source")),
   };
+});
+
+it("loads, selects, and refreshes a v2026.11.2 template without staging fields", async () => {
+  const id = "76860e96-3126-4e22-b32e-75a23b568937";
+  const legacyPath = path.join(params.worktreeRoot, ".templates", id);
+  await fs.mkdir(legacyPath, { recursive: true });
+  await fs.writeFile(path.join(legacyPath, "source"), "source");
+  const { path: databasePath } = openOpenClawStateDatabase({ env });
+  await closeStateDatabaseForTest();
+  await fs.rename(databasePath, `${databasePath}.template`);
+  await fs.copyFile(`${databasePath}.template`, databasePath, fs.constants.COPYFILE_EXCL);
+  const { DatabaseSync } = requireNodeSqlite();
+  const released = new DatabaseSync(databasePath);
+  try {
+    // Released schema at v2026.11.2 (b556fdf457b0), independent of today's writer.
+    released.exec(`
+      DROP TABLE worktree_templates;
+      CREATE TABLE worktree_templates (
+        cache_key TEXT NOT NULL PRIMARY KEY,
+        id TEXT NOT NULL UNIQUE,
+        repo_root TEXT NOT NULL,
+        common_dir TEXT NOT NULL,
+        worktree_root TEXT NOT NULL,
+        path TEXT NOT NULL,
+        backend TEXT NOT NULL,
+        source_commit TEXT NOT NULL,
+        content_key TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('preparing', 'ready')),
+        created_at INTEGER NOT NULL,
+        last_used_at INTEGER NOT NULL
+      ) STRICT;
+    `);
+    released
+      .prepare("INSERT INTO worktree_templates VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', 10, 10)")
+      .run(
+        params.cacheKey,
+        id,
+        params.repoRoot,
+        params.commonDir,
+        params.worktreeRoot,
+        legacyPath,
+        params.backend,
+        params.sourceCommit,
+        params.contentKey,
+      );
+  } finally {
+    released.close();
+  }
+  const original = { id, path: legacyPath, status: "ready", sourceCommit: params.sourceCommit };
+  expect(await templateRegistry.readTemplateAsync(env, params.cacheKey)).toMatchObject(original);
+  const build = vi.fn(params.prepare);
+  const selected = await prepare({ prepare: build });
+  expect(selected).toMatchObject(original);
+  expect(build).not.toHaveBeenCalled();
+  await selected?.release();
+  const refreshed = await prepare({
+    contentKey: "commit-2",
+    sourceCommit: "b".repeat(40),
+    prepare: build,
+    refresh: async (existing, staged) => {
+      expect(await templateRegistry.readTemplateAsync(env, params.cacheKey)).toMatchObject(
+        original,
+      );
+      await fs.cp(existing.path, staged.path, { recursive: true });
+      await fs.writeFile(path.join(staged.path, "source"), "updated");
+      expect(await source(existing)).toBe("source");
+      return true;
+    },
+  });
+  assert(refreshed, "Released templates must support staged refresh");
+  expect(refreshed.id).not.toBe(id);
+  expect(await templateRegistry.readTemplateAsync(env, params.cacheKey)).toMatchObject({
+    id: refreshed.id,
+    status: "ready",
+    sourceCommit: "b".repeat(40),
+  });
+  expect(await source(refreshed)).toBe("updated");
+  expect(await source({ path: legacyPath })).toBe("source");
+  expect(build).not.toHaveBeenCalled();
+  await refreshed.release();
 });
 
 it.each(["cold", "idle"])("shares %s preparation and reader custody", async (state) => {

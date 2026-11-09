@@ -22,7 +22,9 @@ node --import ./scripts/tsx.mjs scripts/perf/sandbox-template-commit-measure.ts 
 
 That repository contains 62,000 distinct tracked payload files (1,100,004,000
 bytes), a local dependency, and a real pnpm lockfile. Generation and image setup
-are outside measured intervals.
+are outside measured intervals. Each session receives a full projection of this
+repository: 20 sessions therefore hold 20 × 62,000 payload files and 22 GB of
+logical payload, before template and source copies.
 
 For a large agent database, use the existing offline fixture generator. Its
 transcript size is logical text before compression; record the actual
@@ -83,6 +85,15 @@ baseline/candidate drain pairs. Same-input candidate acceptance is zero native
 installer calls after the gate, one successful initial template build, all 20
 accepted sessions reaching the provider, and p50/max readiness below 60 seconds.
 A count above zero is a regression even when a tiny fixture completes quickly.
+
+The shared restart fixture sets `agents.defaults.timeoutSeconds` to 120. The
+runtime adds 30 seconds of preparation grace, so its execution watchdog can
+abort a preparing turn at about 150 seconds, before this script's default
+180-second observation deadline. Subsequent admission-destination errors can
+reflect that cancellation; inspect the preceding watchdog event. This is a
+fixture-selected runtime deadline, not the product's default 48-hour timeout.
+Changing `--timeout` alone does not change it. A deadline-censored run is a failed
+readiness result, not evidence of a template or container-start capacity limit.
 
 `--case refresh` changes the synthetic prepare script before creating the cohort
 and pins each worktree to the exact new commit. Its marker is written from inside
