@@ -1,0 +1,2 @@
+# Regression coverage for bidirectional transcript forecasting, measured-only anchoring, and avoiding redundant table layout reads; net growth in PR #196173.
+87
