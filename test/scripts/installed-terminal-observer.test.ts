@@ -61,20 +61,19 @@ function terminalOutputFixture() {
   const candidateStdout = `${JSON.stringify(candidateResult)}\n`;
   const detail =
     "Update backup cleanup failed: Selected package launcher identity changed.. Inspect /fixture/backup/previous before manual cleanup.";
+  const step = {
+    name: "package-backup-retention",
+    command: "openclaw update",
+    cwd: root,
+    exitCode: 1,
+    stderrTail: detail,
+  };
   const output = {
     ...candidateResult,
     status: "error",
     reason: "update-recovery-pending",
     recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-    steps: [
-      {
-        name: "package-backup-retention",
-        command: "openclaw update",
-        cwd: root,
-        exitCode: 1,
-        stderrTail: detail,
-      },
-    ],
+    steps: [step],
   };
   const parentOutput = { event: "stdout", pid: 10, thread: 0, time: "50", bytes: "" };
   const fault = { event: "launcher-replaced", pid: 10, thread: 0, time: "40" };
@@ -102,6 +101,7 @@ function terminalOutputFixture() {
   return {
     rows,
     output,
+    step,
     result,
     fault,
     parentOutput,
@@ -272,7 +272,7 @@ it("separates captured inspection replies from inherited or forwarded CLI bytes"
     const replies = rows.filter((row) => row.event === "stdout" && row.pid === childStartup.pid);
     expect(replies).toHaveLength(1);
     const recorded = replies[0];
-    assert(typeof recorded.time === "string");
+    assert(recorded && typeof recorded.time === "string");
     expect(Buffer.from(String(recorded.bytes), "base64").toString()).toBe(reply);
     // Keep the real stdout records intact. The pure oracle's candidate facts
     // place its terminal window after the captured reply, before parent output.
@@ -352,31 +352,31 @@ it("validates terminal output as one settled parent error without replaying cand
     [
       "unrelated step",
       (value) => {
-        value.output.steps[0].name = "database-cleanup";
+        value.step.name = "database-cleanup";
       },
     ],
     [
       "foreign step root",
       (value) => {
-        value.output.steps[0].cwd = "/other/install";
+        value.step.cwd = "/other/install";
       },
     ],
     [
       "successful step",
       (value) => {
-        value.output.steps[0].exitCode = 0;
+        value.step.exitCode = 0;
       },
     ],
     [
       "multiple failures",
       (value) => {
-        value.output.steps.push({ ...value.output.steps[0] });
+        value.output.steps.push({ ...value.step });
       },
     ],
     [
       "wrong refusal",
       (value) => {
-        value.output.steps[0].stderrTail = "Disk full";
+        value.step.stderrTail = "Disk full";
       },
     ],
     [
@@ -1694,8 +1694,10 @@ it("exports compact launch summaries with exact raw references and unchanged bou
     });
   }
   rows.push({ event: "handoff", pid: 100, thread: 0, sequence: rows.length, time: "100" });
+  assert(rows[1]);
   rows[1].lifetimeBound = { sourceKind: "process-native-exit", ownExitCode: null, time: "80" };
   const raw = rows.map(({ coverage: _coverage, lifetimeBound: _bound, ...event }) => event);
+  assert(raw[1]);
   const projection = summarizeInstalledTerminalLaunches(rows);
   expect(projection.workersWithoutPreload).toHaveLength(20);
   expect(projection.workersWithoutPreload[0]).toMatchObject({
@@ -1719,7 +1721,7 @@ it("exports compact launch summaries with exact raw references and unchanged bou
     spawnId: 0,
     nativeSettlement: [expect.any(Object), expect.any(Object)],
   });
-  expect(projection.workerLifetimeBounds[0].bound).toEqual(rows[1].lifetimeBound);
+  expect(projection.workerLifetimeBounds[0]?.bound).toEqual(rows[1].lifetimeBound);
   expect(Buffer.byteLength(JSON.stringify(rows))).toBeGreaterThan(512 * 1024);
   const summary = { status: "passed", cells: [{ name: "healthy", ...projection }] };
   const bundle = (events = raw, lifecycle = raw) => {
@@ -1780,7 +1782,7 @@ it("exports compact launch summaries with exact raw references and unchanged bou
     ["sha256", "0".repeat(64)],
   ] as const) {
     const changed = structuredClone(summary);
-    const reference = changed.cells[0].workersWithoutPreload[0].evidence;
+    const reference = changed.cells[0]?.workersWithoutPreload[0]?.evidence;
     assert(reference && typeof reference === "object");
     Object.assign(reference, { [field]: value });
     expect(
@@ -1807,6 +1809,7 @@ it("exports compact launch summaries with exact raw references and unchanged bou
     "Duplicate summary event",
   );
   const changed = structuredClone(raw);
+  assert(changed[1]);
   changed[1].packageHeartbeat = { source: "changed helper", sha256: "a".repeat(64) };
   const conflicting = bundle(raw, changed);
   expect(() => buildInstalledTerminalSummary(summary, conflicting.bytes, conflicting.read)).toThrow(
@@ -1816,6 +1819,7 @@ it("exports compact launch summaries with exact raw references and unchanged bou
   expect(() => buildInstalledTerminalSummary(summary, tampered.bytes, tampered.read)).toThrow(
     "Changed summary event digest",
   );
+  assert(evidence.manifest.files[0]);
   evidence.manifest.files[0].sha256 = "0".repeat(64);
   expect(() =>
     buildInstalledTerminalSummary(
