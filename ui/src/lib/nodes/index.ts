@@ -291,12 +291,6 @@ function readStoredDeviceIdentity(storage: Storage | null): StoredIdentity | nul
 }
 
 export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
-  const identity = await resolveDeviceIdentity();
-  activeDeviceIdentityId = identity.deviceId;
-  return identity;
-}
-
-async function resolveDeviceIdentity(): Promise<DeviceIdentity> {
   const storage = getSafeLocalStorage();
   const parsed = readStoredDeviceIdentity(storage);
   try {
@@ -309,6 +303,7 @@ async function resolveDeviceIdentity(): Promise<DeviceIdentity> {
         };
         storage?.setItem(DEVICE_IDENTITY_STORAGE_KEY, JSON.stringify(updated));
       }
+      activeDeviceIdentityId = derivedId;
       return {
         deviceId: derivedId,
         publicKey: parsed.publicKey,
@@ -320,6 +315,7 @@ async function resolveDeviceIdentity(): Promise<DeviceIdentity> {
   }
 
   if (sessionDeviceIdentity) {
+    activeDeviceIdentityId = sessionDeviceIdentity.deviceId;
     return sessionDeviceIdentity;
   }
   const identity = await generateIdentity();
@@ -334,6 +330,7 @@ async function resolveDeviceIdentity(): Promise<DeviceIdentity> {
     // A write-rejecting store still gets the in-memory identity below.
   }
   sessionDeviceIdentity = identity;
+  activeDeviceIdentityId = identity.deviceId;
   return identity;
 }
 
