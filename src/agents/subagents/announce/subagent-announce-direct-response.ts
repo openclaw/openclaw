@@ -136,9 +136,14 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         error: stateConflict
           ? summarizeDeliveryError(directAnnounceResult?.meta?.error)
           : "completion agent did not produce a visible reply",
-        ...(requesterCompletedSuccessfully || stateConflict
+        // A completed run's final reply is settled: retrying the same completion cannot
+        // produce text that was never written, so re-admission only repeats the failure
+        // until the dedupe window expires. A state conflict is transient and stays retryable.
+        ...(stateConflict
           ? { disposition: "retryable" as const }
-          : {}),
+          : requesterCompletedSuccessfully
+            ? { disposition: "permanent_failure" as const }
+            : {}),
       };
     };
     const requiresSettleReply = params.sourceTool === "subagent_settle";

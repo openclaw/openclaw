@@ -1202,7 +1202,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         to: undefined,
         bestEffortDeliver: true,
       });
-      expectRecordFields(result, missingVisibleCompletion);
+      expectRecordFields(result, { ...missingVisibleCompletion, disposition: "permanent_failure" });
     },
   );
 
