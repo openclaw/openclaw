@@ -58,6 +58,13 @@ those tool calls through the same cleanup path. The queued message keeps its
 place and is delivered once when the run can accept it or the next turn starts.
 The action never targets a later run. Unsupported tools keep the wait explanation.
 
+Queued follow-ups show **Queued behind the current turn** in the Control UI,
+including messages whose steering attempt fell back to the queue. Use **Stop**
+to stop the current turn, or the available **Steer** / **Send now** action to
+redirect it. Slow-send logs distinguish admission waits with
+`detail.reply.admission.active_run_wait`, `mailbox_wait`, `inputs_wait`,
+`followup_barrier_wait`, and `successor_barrier_wait` timings under the same prefix.
+
 A steered channel reply carries that message's quoted or forwarded context into
 the model input. Quoted content stays conversation data; commands and answers to
 pending questions use the literal incoming text. Text-only transcript entries
