@@ -11,8 +11,28 @@ import { listEnabledSignalAccounts, resolveSignalAccount } from "./accounts.js";
 import { normalizeSignalReactionRecipient } from "./normalize.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
 import { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
+import { sendMessageSignal } from "./send.js";
 
 const providerId = "signal";
+
+// Signal clients aim every later edit at the newest revision: Signal-Android moves reactions
+// and pins from the revision an edit names, so re-targeting the original drops them. Each
+// timestamp in an edit chain maps to the chain's newest revision. In-process only: after a
+// restart the next edit targets whatever messageId the caller passes (accepted edge case).
+const EDIT_CHAIN_LIMIT = 512;
+const signalEditChains = new Map<string, { latest: number }>();
+
+function rememberSignalEdit(key: (timestamp: number) => string, edited: number, revision: number) {
+  const chain = signalEditChains.get(key(edited)) ?? { latest: revision };
+  chain.latest = revision;
+  for (const timestamp of [edited, revision]) {
+    signalEditChains.delete(key(timestamp));
+    signalEditChains.set(key(timestamp), chain);
+  }
+  while (signalEditChains.size > EDIT_CHAIN_LIMIT) {
+    signalEditChains.delete(signalEditChains.keys().next().value as string);
+  }
+}
 const GROUP_PREFIX = "group:";
 
 export const signalMessageActions: ChannelMessageActionAdapter = {
@@ -29,9 +49,9 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
     const reactionsEnabled = configuredAccounts.some((account) =>
       createActionGate(account.config.actions)("reactions"),
     );
-    return { actions: reactionsEnabled ? ["send", "react"] : ["send"] };
+    return { actions: reactionsEnabled ? ["send", "edit", "react"] : ["send", "edit"] };
   },
-  supportsAction: ({ action }) => action === "react",
+  supportsAction: ({ action }) => action === "react" || action === "edit",
   prepareSendPayload: ({ ctx, payload, replyToId, replyToIdSource }) => {
     if (ctx.action !== "send") {
       return null;
@@ -131,6 +151,42 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
       });
       return jsonResult({ ok: true, [remove ? "removed" : "added"]: emoji });
+    }
+
+    if (action === "edit") {
+      // Signal edits replace the text of an earlier message from this account, in place.
+      const account = resolveSignalAccount({ cfg, accountId });
+      if (!account.enabled || !account.configured) {
+        throw new Error(`Signal account "${account.accountId}" is not enabled and configured.`);
+      }
+      const to = readStringParam(params, "to", {
+        required: true,
+        label: "recipient (UUID, phone number, or group)",
+      });
+      const messageId = readStringParam(params, "messageId", { required: true });
+      const timestamp = parseStrictNonNegativeInteger(messageId);
+      if (timestamp === undefined) {
+        throw new Error(`Invalid messageId: ${messageId}. Expected numeric timestamp.`);
+      }
+      const text =
+        readStringParam(params, "text") ??
+        readStringParam(params, "newText") ??
+        readStringParam(params, "message");
+      if (!text) {
+        throw new Error("Signal edit requires text, newText, or message.");
+      }
+      const chainKey = (ts: number) => `${account.accountId}\u0000${to}\u0000${ts}`;
+      const result = await sendMessageSignal(to, text, {
+        cfg,
+        accountId: account.accountId,
+        editTimestamp: signalEditChains.get(chainKey(timestamp))?.latest ?? timestamp,
+        ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
+      });
+      const revision = parseStrictNonNegativeInteger(result.messageId);
+      if (revision !== undefined) {
+        rememberSignalEdit(chainKey, timestamp, revision);
+      }
+      return jsonResult({ ok: true, edited: messageId, messageId: result.messageId });
     }
 
     throw new Error(`Action ${action} not supported for ${providerId}.`);

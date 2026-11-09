@@ -102,6 +102,12 @@ describe("sendMessageSignal receipts", () => {
     expectSend({ username: ["alice.42"] });
   });
 
+  it("sends an edit of an earlier message when editTimestamp is set", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567892 });
+    await send("Status: done", { editTimestamp: 1700000000123 });
+    expectSend({ message: "Status: done", "edit-timestamp": 1700000000123 });
+  });
+
   it("attaches a media receipt for attachment sends", async () => {
     signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567891 });
     const cap = 12 * 1024 * 1024;

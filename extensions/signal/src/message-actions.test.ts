@@ -8,6 +8,10 @@ const sendReactionSignalMock = vi
 const removeReactionSignalMock = vi
   .spyOn(sendReactionsModule, "removeReactionSignal")
   .mockResolvedValue({ ok: true });
+const sendModule = await import("./send.js");
+const sendMessageSignalMock = vi
+  .spyOn(sendModule, "sendMessageSignal")
+  .mockResolvedValue({ messageId: "1700000000999", receipt: {} as never });
 const { signalMessageActions } = await import("./message-actions.js");
 
 const DEFAULT_CFG: OpenClawConfig = { channels: { signal: { account: "+15550001111" } } };
@@ -45,19 +49,55 @@ describe("signalMessageActions", () => {
 
   it.each([
     ["unconfigured", {}, undefined, []],
-    ["reactions disabled", disabledCfg, undefined, ["send"]],
-    ["any enabled account", overrideCfg, undefined, ["send", "react"]],
-    ["default account", overrideCfg, "default", ["send"]],
-    ["work account", overrideCfg, "work", ["send", "react"]],
+    ["reactions disabled", disabledCfg, undefined, ["send", "edit"]],
+    ["any enabled account", overrideCfg, undefined, ["send", "edit", "react"]],
+    ["default account", overrideCfg, "default", ["send", "edit"]],
+    ["work account", overrideCfg, "work", ["send", "edit", "react"]],
   ] as const)("discovers actions for %s", (_name, cfg, accountId, actions) => {
     expect(
       signalMessageActions.describeMessageTool?.({ cfg, accountId })?.actions ?? [],
     ).toStrictEqual(actions);
   });
 
-  it("supports only reactions for plugin dispatch", () => {
+  it("supports reactions and edits for plugin dispatch", () => {
     expect(signalMessageActions.supportsAction?.({ action: "send" })).toBe(false);
     expect(signalMessageActions.supportsAction?.({ action: "react" })).toBe(true);
+    expect(signalMessageActions.supportsAction?.({ action: "edit" })).toBe(true);
+  });
+
+  it("edits an earlier message in place through the send path", async () => {
+    sendMessageSignalMock.mockClear();
+    await signalMessageActions.handleAction?.({
+      channel: "signal",
+      action: "edit",
+      cfg: DEFAULT_CFG,
+      params: { to: "+15559999999", messageId: "1700000000123", text: "Status: done" },
+    });
+    expect(sendMessageSignalMock).toHaveBeenCalledWith(
+      "+15559999999",
+      "Status: done",
+      expect.objectContaining({ editTimestamp: 1700000000123 }),
+    );
+  });
+
+  it("aims a second edit of the original message at its newest revision", async () => {
+    sendMessageSignalMock.mockClear();
+    const edit = (text: string) =>
+      signalMessageActions.handleAction?.({
+        channel: "signal",
+        action: "edit",
+        cfg: DEFAULT_CFG,
+        params: { to: "+15559999998", messageId: "1700000000500", text },
+      });
+    sendMessageSignalMock.mockResolvedValueOnce({
+      messageId: "1700000000600",
+      receipt: {} as never,
+    });
+    await edit("rev 1");
+    await edit("rev 2");
+    expect(sendMessageSignalMock.mock.calls.map((call) => call[2]?.editTimestamp)).toEqual([
+      1700000000500, 1700000000600,
+    ]);
   });
 
   it.each(["implicit", "explicit"] as const)(
