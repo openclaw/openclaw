@@ -2203,8 +2203,8 @@ openclaw-approvals-page .data-table-pagination__info {
 
 .settings-sidebar__agent .agent-select__trigger {
   min-width: 0;
-  min-height: 40px;
-  padding: 6px 8px;
+  min-height: 32px;
+  padding: 0 9px;
   border-color: transparent;
   background: transparent;
   font-size: 14px;
@@ -2272,11 +2272,13 @@ openclaw-approvals-page .data-table-pagination__info {
 
   width: 100%;
   min-width: 0;
-  height: 34px;
+  height: 32px;
   padding-block: 0;
-  padding-inline: 32px 34px;
+  /* Query text starts on the nav labels' edge (10px glyph inset + 15px glyph + 9px gap),
+     minus this field's 1px border; the end keeps room for the clear button. */
+  padding-inline: 33px 34px;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  border-radius: var(--radius-md);
+  border-radius: var(--field-radius);
   background: color-mix(in srgb, var(--card) 72%, transparent);
   color: var(--text);
   font: inherit;
@@ -2325,7 +2327,7 @@ openclaw-approvals-page .data-table-pagination__info {
 }
 
 .settings-sidebar__group-label {
-  padding: 0 9px;
+  padding: 0 10px;
   margin: 0 0 4px;
   font-size: calc(10.5px * var(--control-ui-text-scale));
   font-weight: 650;
