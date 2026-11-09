@@ -17,6 +17,7 @@ import {
 import {
   captureLaunchAgentInstallFiles,
   readExistingLaunchAgentPlist,
+  removeBootedOutLaunchAgentPlist,
   resolveLaunchAgentPlistPath,
   writeLaunchAgentPlist,
 } from "./launchd-service-files.js";
@@ -57,11 +58,11 @@ export async function uninstallLaunchAgent({
 
   const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
   const trashDir = path.posix.join(home, ".Trash");
-  const dest = path.join(trashDir, `${label}.plist`);
   try {
-    await fs.mkdir(trashDir, { recursive: true });
-    await fs.rename(plistPath, dest);
-    stdout.write(`${formatLine("Moved LaunchAgent to Trash", dest)}\n`);
+    const { destination } = await removeBootedOutLaunchAgentPlist(plistPath, trashDir);
+    stdout.write(
+      `${destination ? formatLine("Moved LaunchAgent to Trash", destination) : formatLine("Removed LaunchAgent", plistPath)}\n`,
+    );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       try {

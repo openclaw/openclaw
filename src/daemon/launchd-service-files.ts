@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { hasErrnoCode } from "../infra/errno.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
@@ -46,6 +48,32 @@ export function resolveLaunchAgentPlistPathForLabel(
 ): string {
   const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
   return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
+}
+
+/**
+ * Remove only the caller-verified plist after its service has been booted out.
+ * App-launched helpers can be denied Trash access while LaunchAgents stays writable.
+ */
+export async function removeBootedOutLaunchAgentPlist(
+  plistPath: string,
+  trashDir: string,
+): Promise<{ destination?: string }> {
+  // Never replace a previous Trash item, even for removals in the same millisecond.
+  const destination = path.join(
+    trashDir,
+    `${path.basename(plistPath, ".plist")}-${randomUUID()}.plist`,
+  );
+  try {
+    await fs.mkdir(trashDir, { recursive: true });
+    await fs.rename(plistPath, destination);
+    return { destination };
+  } catch (error) {
+    if (!hasErrnoCode(error, "EPERM") && !hasErrnoCode(error, "EACCES")) {
+      throw error;
+    }
+  }
+  await fs.unlink(plistPath);
+  return {};
 }
 
 function resolveLaunchAgentEnvDir(env: GatewayServiceEnv): string {

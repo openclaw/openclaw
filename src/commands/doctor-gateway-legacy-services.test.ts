@@ -357,6 +357,89 @@ describe("maybeScanExtraGatewayServices", () => {
   );
 
   it.each([
+    { operation: "mkdir", code: "EPERM", unlinkCode: undefined },
+    { operation: "mkdir", code: "EACCES", unlinkCode: undefined },
+    { operation: "rename", code: "EPERM", unlinkCode: undefined },
+    { operation: "rename", code: "EACCES", unlinkCode: undefined },
+    { operation: "mkdir", code: "EIO", unlinkCode: undefined },
+    { operation: "rename", code: "EXDEV", unlinkCode: undefined },
+    { operation: "rename", code: "EPERM", unlinkCode: "EACCES" },
+  ] as const)(
+    "settles denied Trash $operation $code with unlink $unlinkCode",
+    async ({ operation, code, unlinkCode }) => {
+      setupLegacyMacService();
+      mocks.execLaunchctl
+        .mockResolvedValueOnce(launchctlResult())
+        .mockResolvedValueOnce(launchctlResult())
+        .mockResolvedValueOnce(launchctlResult({ code: 113, stderr: "Could not find service" }));
+      const mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+      vi.spyOn(fs, "access").mockResolvedValue(undefined);
+      const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
+      const unlink = vi.spyOn(fs, "unlink").mockResolvedValue(undefined);
+      vi.mocked(fs[operation]).mockRejectedValueOnce(Object.assign(new Error(code), { code }));
+      if (unlinkCode) {
+        unlink.mockRejectedValueOnce(Object.assign(new Error(unlinkCode), { code: unlinkCode }));
+      }
+
+      await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), makeDoctorPrompts());
+
+      expectBoundedLaunchctlCleanup();
+      expect(mocks.execLaunchctl.mock.invocationCallOrder[2]).toBeLessThan(
+        mkdir.mock.invocationCallOrder[0]!,
+      );
+      const fallback = code === "EPERM" || code === "EACCES";
+      expect(unlink).toHaveBeenCalledTimes(fallback ? 1 : 0);
+      if (fallback) {
+        expect(unlink).toHaveBeenCalledWith(LEGACY_MAC_PLIST);
+      }
+      expect(rename).toHaveBeenCalledTimes(operation === "rename" ? 1 : 0);
+      if (fallback && !unlinkCode) {
+        expectNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+        expectNoNoteContaining(".Trash", "Legacy gateway removed");
+        expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway cleanup skipped");
+      } else {
+        expectNoteContaining(
+          LEGACY_MAC_LABEL + " (could not move plist)",
+          "Legacy gateway cleanup skipped",
+        );
+        expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+      }
+    },
+  );
+
+  it("does not remove legacy plists under external service authority", async () => {
+    setupLegacyMacService();
+    const unlink = vi.spyOn(fs, "unlink").mockResolvedValue(undefined);
+    const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
+    await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, async () => {
+      await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), makeDoctorPrompts());
+    });
+    expect(mocks.execLaunchctl).not.toHaveBeenCalled();
+    expect(unlink).not.toHaveBeenCalled();
+    expect(rename).not.toHaveBeenCalled();
+    expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+  });
+
+  it("keeps legacy Trash destinations distinct at the same clock time", async () => {
+    setupLegacyMacService();
+    vi.spyOn(Date, "now").mockReturnValue(1234);
+    vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    vi.spyOn(fs, "access").mockResolvedValue(undefined);
+    const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
+    for (let index = 0; index < 2; index++) {
+      mocks.execLaunchctl
+        .mockResolvedValueOnce(launchctlResult())
+        .mockResolvedValueOnce(launchctlResult())
+        .mockResolvedValueOnce(launchctlResult({ code: 113, stderr: "Could not find service" }));
+      await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), makeDoctorPrompts());
+    }
+    expect(rename).toHaveBeenCalledTimes(2);
+    const destinations = rename.mock.calls.map(([, destination]) => destination);
+    expect(new Set(destinations).size).toBe(2);
+    expect(rename.mock.calls.every(([source]) => source === LEGACY_MAC_PLIST)).toBe(true);
+  });
+
+  it.each([
     {
       name: "timeouts",
       results: Array.from({ length: 3 }, () =>
@@ -386,6 +469,7 @@ describe("maybeScanExtraGatewayServices", () => {
     const mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
     const access = vi.spyOn(fs, "access").mockResolvedValue(undefined);
     const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
+    const unlink = vi.spyOn(fs, "unlink").mockResolvedValue(undefined);
     const runtime = makeDoctorIo();
     await maybeScanExtraGatewayServices({ deep: false }, runtime, makeDoctorPrompts());
     expectBoundedLaunchctlCleanup();
@@ -393,6 +477,7 @@ describe("maybeScanExtraGatewayServices", () => {
     expect(mkdir).not.toHaveBeenCalled();
     expect(access).not.toHaveBeenCalled();
     expect(rename).not.toHaveBeenCalled();
+    expect(unlink).not.toHaveBeenCalled();
     expectNoteContaining(
       `${LEGACY_MAC_LABEL} (launchctl could not confirm unload)`,
       "Legacy gateway cleanup skipped",

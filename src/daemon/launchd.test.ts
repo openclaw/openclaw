@@ -36,11 +36,11 @@ import {
 } from "./launchd-install.test-support.js";
 import { LAUNCH_AGENT_ENV_WRAPPER_SHELL } from "./launchd-plist.js";
 import { launchdTestState as state } from "./launchd-state.test-support.js";
+import { registerLaunchdUninstallTests } from "./launchd-uninstall.test-support.js";
 import {
   disableCurrentOpenClawUpdateLaunchdJob,
   findStaleOpenClawUpdateLaunchdJobs,
   isLaunchAgentEnabled,
-  isLaunchAgentLoaded,
   parkCurrentLaunchAgentForMaintenance,
   parseLaunchAgentEnabled,
   readLaunchAgentProgramArguments,
@@ -51,7 +51,6 @@ import {
   stageLaunchAgent,
   startLaunchAgent,
   stopLaunchAgent,
-  uninstallLaunchAgent,
 } from "./launchd.js";
 
 const ENV = createDefaultLaunchdEnv();
@@ -627,76 +626,7 @@ describe("launchd bootstrap repair", () => {
   );
 });
 
-describe("launchd uninstall", () => {
-  it("rejects a permission-denied launchctl inspection", async () => {
-    state.printError = "launchctl print permission denied";
-    state.printFailuresRemaining = 1;
-
-    await expect(isLaunchAgentLoaded({ env: createDefaultLaunchdEnv() })).rejects.toMatchObject({
-      reason: "launchd-gui-domain-unavailable",
-    });
-  });
-
-  it.each([
-    { operation: "lstat", code: "EACCES" },
-    { operation: "rename", code: "ENOENT" },
-  ] as const)(
-    "reports $operation $code without leaking the plist path",
-    async ({ operation, code }) => {
-      const plistPath = resolveLaunchAgentPlistPath(ENV);
-      if (operation === "rename") {
-        state.files.set(plistPath, "RunAtLoad=true");
-      }
-      vi.mocked(fs[operation]).mockRejectedValueOnce(
-        Object.assign(new Error(`${code}: ${operation} '${plistPath}'`), { code }),
-      );
-      const uninstall = uninstallLaunchAgent(launchAgentControlFixture(ENV));
-      await expect(uninstall).rejects.toThrow(`LaunchAgent removal failed (${code})`);
-      await expect(uninstall).rejects.not.toThrow(plistPath);
-      if (operation === "rename") {
-        expect(state.files.has(plistPath)).toBe(true);
-      }
-    },
-  );
-
-  it("preserves the plist when launchctl cannot boot out the service", async () => {
-    const plistPath = resolveLaunchAgentPlistPath(ENV);
-    state.files.set(plistPath, "RunAtLoad=true");
-    state.bootoutError = "launchctl bootout permission denied";
-
-    await expect(uninstallLaunchAgent(launchAgentControlFixture(ENV))).rejects.toThrow(
-      "launchctl bootout failed: launchctl bootout permission denied",
-    );
-    expect(state.files.has(plistPath)).toBe(true);
-  });
-
-  it.each(["missing", "stopped symlink", "concurrently removed"])(
-    "keeps removal idempotent for a %s LaunchAgent",
-    async (kind) => {
-      const plistPath = resolveLaunchAgentPlistPath(ENV);
-      if (kind !== "missing") {
-        state.files.set(plistPath, "RunAtLoad=true");
-      }
-      if (kind === "stopped symlink") {
-        state.serviceLoaded = false;
-        state.bootoutError = "Boot-out failed: 5: Input/output error";
-      }
-      if (kind === "concurrently removed") {
-        vi.mocked(fs.rename).mockImplementationOnce(async () => {
-          state.files.delete(plistPath);
-          throw Object.assign(new Error(`ENOENT: no such file, rename '${plistPath}'`), {
-            code: "ENOENT",
-          });
-        });
-      }
-      await expect(uninstallLaunchAgent(launchAgentControlFixture(ENV))).resolves.toBeUndefined();
-      expect(state.files.has(plistPath)).toBe(false);
-      if (kind === "stopped symlink") {
-        expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
-      }
-    },
-  );
-});
+registerLaunchdUninstallTests(ENV);
 
 describe("launchd install", () => {
   it("refuses an in-band label migration before mutating either LaunchAgent", async () => {
