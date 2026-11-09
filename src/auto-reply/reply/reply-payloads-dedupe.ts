@@ -206,6 +206,7 @@ function getMatchingMessagingToolReplyTargets(
     return match
       ? match({
           originTarget: originRoute.to,
+          originThreadId: originRoute.threadId,
           targetKey: targetRoute.to,
           targetThreadId: stringifyRouteThreadId(target.threadId),
         })

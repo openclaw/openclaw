@@ -235,6 +235,7 @@ export type ChannelOutboundAdapter = {
   preferFinalAssistantVisibleText?: boolean;
   targetsMatchForReplySuppression?: (params: {
     originTarget: string;
+    originThreadId?: string;
     targetKey: string;
     targetThreadId?: string;
   }) => boolean;
