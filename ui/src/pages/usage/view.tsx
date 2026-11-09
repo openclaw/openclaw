@@ -165,6 +165,7 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
         <section class="usage-header-section">
           <div class={["usage-header", { pinned: props.display.headerPinned && !phone() }]}>
             {controls.toolbar()}
+            {controls.appliedFilters()}
 
             {/* Carapace summary strip: fixed cells, so placeholders and loaded totals share one layout. */}
             <div class="usage-summary-strip">

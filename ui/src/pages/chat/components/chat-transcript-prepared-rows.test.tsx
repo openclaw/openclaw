@@ -148,6 +148,11 @@ async function transcriptFixture(
   let queued = false;
   let disposed = false;
   let preparationCost = 0;
+  const rowHeights = new WeakMap<HTMLElement, number>();
+  const resizeRow = (row: HTMLElement, height: number) => {
+    rowHeights.set(row, height);
+    emitTranscriptResize(row, 800, height);
+  };
   const renderRow = vi.fn((row: TranscriptRow<number>) => {
     now += preparationCost;
     if (!ordinary) {
@@ -226,6 +231,7 @@ async function transcriptFixture(
     draw,
     renderRow,
     groups,
+    resizeRow,
     elapse(milliseconds: number) {
       now += milliseconds;
     },
@@ -257,8 +263,10 @@ async function transcriptFixture(
         }
         await settle();
         if (measure) {
-          for (const row of container.querySelectorAll<HTMLElement>("[data-prepared-row]")) {
-            emitTranscriptResize(row, 800, 100);
+          for (const row of container.querySelectorAll<HTMLElement>(
+            ".chat-virtual-row:not([data-prepared-row]), [data-preparing-row]",
+          )) {
+            emitTranscriptResize(row, 800, rowHeights.get(row) ?? 100);
           }
         }
         await settle();
@@ -273,8 +281,10 @@ async function transcriptFixture(
       }
       preparationCost = 0;
       await settle();
-      for (const row of container.querySelectorAll<HTMLElement>("[data-prepared-row]")) {
-        emitTranscriptResize(row, 800, 100);
+      for (const row of container.querySelectorAll<HTMLElement>(
+        ".chat-virtual-row:not([data-prepared-row]), [data-preparing-row]",
+      )) {
+        emitTranscriptResize(row, 800, rowHeights.get(row) ?? 100);
       }
       await settle();
     },
@@ -522,7 +532,7 @@ it("keeps reverse medium preparation through size compensation while the tail st
   await view.scrollTo(120.5);
   const first = transcriptRows(view.container)[0]!;
   const beforeResize = view.container.scrollTop;
-  emitTranscriptResize(first, 800, 500);
+  view.resizeRow(first, 500);
   await settle();
   const rendered = view.renderRow.mock.calls.length;
   await view.frame(1, false);
@@ -619,7 +629,7 @@ it("keeps parked row styles stable when an earlier row changes height", async ()
   const observer = new MutationObserver((records) => mutations.push(...records));
   observer.observe(parked, { attributes: true, attributeFilter: ["style"] });
   try {
-    emitTranscriptResize(active, 800, 200);
+    view.resizeRow(active, 200);
     await settle();
     mutations.push(...observer.takeRecords());
     expect(mutations).toHaveLength(0);
@@ -650,7 +660,7 @@ it("prepares ahead during scrolling and waits for measurement before admitting a
   await view.frame(2, false);
   expect(view.renderRow.mock.calls).toHaveLength(rendered);
   const draws = view.draw.mock.calls.length;
-  emitTranscriptResize(preparing!, 800, 100);
+  view.resizeRow(preparing!, 100);
   await settle();
   // A measured preparation must not publish a second range inside the same
   // observer delivery. Completion shares the next frame's geometry commit.
@@ -671,7 +681,7 @@ it("releases initial viewport rows when the tail grows before reader navigation"
   expect(tail).not.toBeNull();
   expect(transcriptRows(view.container).length).toBeGreaterThan(1);
 
-  emitTranscriptResize(tail!, 800, 900);
+  view.resizeRow(tail!, 900);
   await settle();
   await view.frame(32);
 
@@ -780,7 +790,7 @@ it("materializes one predicted row between scroll frames and uses the latest vie
   await view.task();
   expect(transcriptRows(view.container)).toHaveLength(mounted.length + 1);
 
-  emitTranscriptResize(prepared!, 800, 100);
+  view.resizeRow(prepared!, 100);
   await settle();
   await view.scrollTo(6);
   const afterScroll = transcriptRows(view.container);
@@ -830,7 +840,7 @@ it("prepares one arriving row between viewport-sized scroll steps", async () => 
   await view.frame(1, false);
   await view.task();
   expect(transcriptRows(view.container)).toEqual(prepared);
-  emitTranscriptResize(preparing!, 800, 100);
+  view.resizeRow(preparing!, 100);
   await settle();
   await view.scrollTo(180);
   await view.frame(1, false);

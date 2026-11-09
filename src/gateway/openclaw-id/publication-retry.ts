@@ -170,6 +170,11 @@ export function createPublicationRetry(params: PublicationRetryParams) {
         return "again";
       }
       await params.setPending(false);
+      if (rerun) {
+        // A request arrived while clearing; its pending write may have landed first.
+        await params.setPending(true);
+        return "again";
+      }
       return "done";
     }
     if (outcome?.state === "failed" && outcome.retryable) {

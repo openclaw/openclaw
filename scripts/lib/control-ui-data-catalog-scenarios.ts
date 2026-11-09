@@ -37,7 +37,7 @@ function suffix(index: number) {
   return String(index).padStart(4, "0");
 }
 
-function createDataCatalogInventory(revision = 1) {
+function createDataCatalogInventory(revision = 1, uninstalledIndex?: number) {
   const plugins: PluginCatalogItem[] = Array.from({ length: inventorySize }, (_, index) => ({
     id: `data-plugin-${suffix(index)}`,
     catalogId: `data-catalog-${suffix(index)}`,
@@ -63,15 +63,21 @@ function createDataCatalogInventory(revision = 1) {
       latestVersion: "1.0.0",
     },
     local: {
-      pluginId: plugin.id,
-      present: true,
-      installed: true,
-      enabled: true,
-      state: "enabled",
-      action: "manage",
+      pluginId: index === uninstalledIndex ? undefined : plugin.id,
+      present: index !== uninstalledIndex,
+      installed: index !== uninstalledIndex,
+      enabled: index !== uninstalledIndex,
+      state: index === uninstalledIndex ? "not-installed" : "enabled",
+      action: index === uninstalledIndex ? "install" : "manage",
     },
   }));
-  return { plugins, entries };
+  return {
+    plugins:
+      uninstalledIndex === undefined
+        ? plugins
+        : plugins.filter((_plugin, index) => index !== uninstalledIndex),
+    entries,
+  };
 }
 
 function catalogPage(
@@ -90,8 +96,11 @@ function catalogPage(
   };
 }
 
-function createDataCatalogFixture(revision = 1): InteractionFixtureOverrides {
-  const { plugins, entries } = createDataCatalogInventory(revision);
+function createDataCatalogFixture(
+  revision = 1,
+  uninstalledIndex?: number,
+): InteractionFixtureOverrides {
+  const { plugins, entries } = createDataCatalogInventory(revision, uninstalledIndex);
   const groups: ToolsCatalogResult["groups"] = Array.from(
     { length: toolGroupCount },
     (_, groupIndex) => ({
@@ -955,6 +964,51 @@ function catalogScenario(
 }
 
 export const dataCatalogScenarios: readonly InteractionScenario[] = [
+  {
+    ...fixture,
+    id: "data-catalog-inventory-readiness",
+    explicitOnly: true,
+    route: pathForRoute("plugins"),
+    expected: "Catalog search works before installed inventory permits installation.",
+    fixtureOverrides: () => createDataCatalogFixture(1, 900),
+    prepare: async (page) => countRows(page, ".plugin-catalog-card", 8),
+    run: async (page) => {
+      const search = page.getByRole("searchbox", { name: "Search plugins" });
+      if (!(await search.isEditable())) {
+        throw new Error("Catalog search must be editable");
+      }
+      const inputReadyAtMs = await page.evaluate(() => performance.now());
+      await search.fill(pluginQuery);
+      await catalogCount(page, 100);
+      const install = page.getByRole("button", { name: "Install Data plugin 0900", exact: true });
+      await install.waitFor({ state: "visible" });
+      const inventoryPendingAtSearch = await install.isDisabled();
+      const inventoryLoadingVisible = await page
+        .locator('#plugins-hub-panel > [role="status"]')
+        .isVisible();
+      if ((await search.inputValue()) !== pluginQuery) {
+        throw new Error("Catalog search lost its accepted query");
+      }
+      const searchReadyAtMs = await page.evaluate(() => performance.now());
+      await page.waitForFunction(() => {
+        const button = document.querySelector<HTMLButtonElement>(
+          'button[aria-label="Install Data plugin 0900"]',
+        );
+        return button?.checkVisibility() && !button.disabled;
+      });
+      await frames(page);
+      return {
+        searchAccepted: true,
+        inputReadyAtMs,
+        searchReadyAtMs,
+        inventoryPendingAtSearch,
+        inventoryLoadingVisible,
+        inventoryReadyAtMs: await page.evaluate(() => performance.now()),
+        matchingPlugins: 100,
+        installedPlugins: inventorySize - 1,
+      };
+    },
+  },
   catalogEntryScenario(0),
   catalogEntryScenario(100),
   {

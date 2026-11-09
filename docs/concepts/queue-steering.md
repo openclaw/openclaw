@@ -33,7 +33,8 @@ without aborting the run. Each interrupted tool records that the user interrupte
 it; the steer then reaches the next model decision after those results. Repeated
 clicks do not reinject the message or interrupt later work. When a running tool
 cannot safely stop, or the runtime does not support tool-only interruption, the
-UI explains the wait instead of offering the link.
+UI shows the steer as **Steering…** instead of offering the link, and its hover
+text explains the wait.
 
 Foreground local `exec` waits for process cleanup before delivery. Interrupting a
 `process` poll only stops that wait; its independently owned background command
@@ -50,6 +51,19 @@ In the built-in runtime, each steered user input gets its own delivered answer i
 Recording a steering receipt while another input is being persisted keeps the active turn running. Accepted inputs remain in order and reach the next available model boundary.
 
 If the built-in runtime reaches its 120-second transcript-delivery deadline and proves that it removed the exact queued message before submission, that input returns to followup custody in its original queue position. Younger steers already accepted by the active run stay there and are not replayed. A timeout without proven withdrawal remains non-replayable because the runtime may still consume the input; this also applies to the native Codex confirmation timeout.
+
+After that fallback, **Send now** stays below the waiting message while the
+original run still has supported, interruptible tools running. Clicking it stops
+those tool calls through the same cleanup path. The queued message keeps its
+place and is delivered once when the run can accept it or the next turn starts.
+The action never targets a later run. Unsupported tools keep the wait explanation.
+
+Queued follow-ups show **Queued behind the current turn** in the Control UI,
+including messages whose steering attempt fell back to the queue. Use **Stop**
+to stop the current turn, or the available **Steer** / **Send now** action to
+redirect it. Slow-send logs distinguish admission waits with
+`detail.reply.admission.active_run_wait`, `mailbox_wait`, `inputs_wait`,
+`followup_barrier_wait`, and `successor_barrier_wait` timings under the same prefix.
 
 A steered channel reply carries that message's quoted or forwarded context into
 the model input. Quoted content stays conversation data; commands and answers to

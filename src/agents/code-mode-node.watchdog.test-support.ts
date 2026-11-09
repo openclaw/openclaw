@@ -1,5 +1,4 @@
 import { readdirSync } from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import { mock } from "node:test";
 import { GCProfiler, getHeapStatistics, setFlagsFromString } from "node:v8";
 import vm from "node:vm";
@@ -24,15 +23,21 @@ let collectGarbage: () => void = () => {
   collectGarbage();
 };
 
-// Sample while the VM is executing: completed watchdog threads disappear from /proc.
-vm.Script = class extends vm.Script {
-  override runInContext(...args: Parameters<vm.Script["runInContext"]>) {
+// Patch the shared prototype used by the worker's named Script import.
+const scriptPrototype: {
+  runInContext: (this: vm.Script, ...args: Parameters<vm.Script["runInContext"]>) => unknown;
+} = vm.Script.prototype;
+const runInContext = scriptPrototype.runInContext;
+mock.method(
+  vm.Script.prototype,
+  "runInContext",
+  function (this: vm.Script, ...args: Parameters<vm.Script["runInContext"]>) {
+    // Sample while the VM is executing: completed watchdog threads disappear from /proc.
     const before = new Set(process.platform === "linux" ? readdirSync("/proc/self/task") : []);
     args[0].heapStatistics = getHeapStatistics;
     args[0].collectGarbage = collectGarbage;
     args[0].watchdogThreads = () => readdirSync("/proc/self/task").filter((id) => !before.has(id));
-    return super.runInContext(...args);
-  }
-};
-syncBuiltinESMExports();
+    return runInContext.apply(this, args);
+  },
+);
 await import("./code-mode-node.worker.js");

@@ -1,9 +1,9 @@
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { expect, it } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { forceFullGc } from "../test-utils/retention.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import type { SqliteWorkerCloseReceipt } from "./sqlite-worker-contract.js";
@@ -71,7 +71,7 @@ it.skipIf(!explicitSqliteCloseReleasesNativeResources)(
       const control = new WeakRef({});
       for (let pass = 0; pass < 4; pass++) {
         await nextTurn();
-        queryObjects(WeakRef);
+        forceFullGc();
       }
       expect(control.deref()).toBeUndefined();
       expect(reference.deref()).toBeUndefined();

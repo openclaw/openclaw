@@ -8,7 +8,6 @@ import {
 } from "../../components/solid/menu.tsx";
 import { SwitchIndicator } from "../../components/solid/switch.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
-import "../../styles/settings-native-controls.css";
 import type { UsageProps } from "./types.ts";
 
 type Choice = { value: string; label: string; title?: string };

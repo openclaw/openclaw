@@ -16,8 +16,8 @@ export type CreateVerifiedSqliteSnapshotOptions = {
     stagingRoot: string;
     preserveSourceArtifacts?: boolean;
     preparedSource?: PreparedSqliteSnapshotSource;
-    /** Log a failed private-copy removal instead of failing a published snapshot. */
-    bestEffortCleanup?: boolean;
+    /** Candidate updates keep cleanup warnings separate from backup validation failures. */
+    cleanupFailure?: "warn";
   };
   onProgress?: (progress: BackupProgressInfo) => void;
   /** Final caller checks around publication; failures remove only this helper's target. */

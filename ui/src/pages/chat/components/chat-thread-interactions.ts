@@ -198,6 +198,7 @@ export type ChatThreadProps = Omit<
     commentsDisabled?: boolean;
     onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
     onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
+    onNewSessionSelection?: (selection: ChatSelectionSource) => void;
     /** Shows one of the session's subagents. */
     onOpenSubagent?: (sessionKey: string) => void;
     /** Shows the session's subagents; absent where the pane has no list of them to show. */
@@ -215,6 +216,7 @@ type TranscriptInteractionProps = Pick<
   | "onFocusComposer"
   | "onAddToChat"
   | "onCompanionSelection"
+  | "onNewSessionSelection"
 >;
 
 const transcriptStates = new Map<string, ChatThreadState>();
@@ -464,6 +466,7 @@ export function handleTranscriptPointerUp(
     paneId: props.paneId,
     onAddToChat: props.onAddToChat,
     onAskSideChat: (selection, anchorRect) => props.onCompanionSelection?.(selection, anchorRect),
+    onAskNewSession: (selection) => props.onNewSessionSelection?.(selection),
   });
 }
 

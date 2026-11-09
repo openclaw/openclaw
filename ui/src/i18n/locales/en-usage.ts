@@ -52,6 +52,17 @@ const enUsage = {
       daysCount: "{count} days",
       hoursCount: "{count} hours",
       sessionsCount: "{count} sessions",
+      search: {
+        creator: "Search identities",
+        channel: "Search channels",
+        provider: "Search providers",
+        model: "Search models",
+        tool: "Search tools",
+      },
+      noMatches: "No matches for “{query}”",
+      is: "is",
+      isAnyOf: "is any of",
+      hasErrors: "Has errors",
     },
     display: {
       title: "Display",
@@ -66,6 +77,8 @@ const enUsage = {
       apply: "Filter",
       matching: "{shown} of {total} sessions match",
       inRange: "{total} sessions in range",
+      ofTotal: "{shown} of {total}",
+      short: "Filter sessions…",
       tip: "Tip: use filters or click bars to refine days.",
     },
     export: {
@@ -89,6 +102,7 @@ const enUsage = {
       all: "All identities",
       select: "Filter by session creator",
       selected: "Selected identity",
+      you: "You",
       identity: "Identity",
       unattributed: "Not recorded",
       unattributedHint:

@@ -108,6 +108,7 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
               ...(client.connectionSignal ? [client.connectionSignal] : []),
             ]),
             browserOrigin: client.browserOrigin,
+            authPolicy: client.authPolicy,
             openUrl: async (url) => {
               login.assertCurrent();
               await prompter.openUrl?.(url);
