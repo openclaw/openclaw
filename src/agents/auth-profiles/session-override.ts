@@ -17,7 +17,6 @@ import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessi
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { listUserProfileAuthLinksAsync } from "../../state/user-model-accounts.js";
-import { resolveNativeModelPrimary } from "../agent-scope.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
@@ -34,9 +33,9 @@ import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js"
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import { resolveModelRouteIntent } from "../model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
-import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import { authProfilesLog } from "./constants.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
+import { resolveSessionAuthProfilePreference } from "./selection-preference.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "./source-check.js";
 import {
   ensureAuthProfileStoreAsync,
@@ -601,27 +600,19 @@ export async function resolveSessionAuthSelection(params: {
       ? (resolveSessionAuthProfileOverrideSource(params.sessionEntry) ?? "auto")
       : "auto"
     : undefined;
-  // Person-linked pins carry user strength and outrank the agent's static @profile.
-  const rotatedPinnedProfileId =
-    rotatedSource === "user" || rotatedSource === "user-link" ? rotatedProfileId : undefined;
-  const configuredProfile = splitTrailingAuthProfile(
-    resolveNativeModelPrimary(params.cfg, params.agentId) ?? "",
-  ).profile;
-  const defaultModel = configuredProfile
-    ? resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId })
-    : undefined;
-  const configuredProfileId =
-    params.configuredProfileId?.trim() ||
-    (defaultModel &&
-    resolveModelCatalogIdentityKey({ provider: params.provider, id: modelId }) ===
-      resolveModelCatalogIdentityKey({ provider: defaultModel.provider, id: defaultModel.model })
-      ? configuredProfile
-      : undefined);
-  const profileId = rotatedPinnedProfileId ?? configuredProfileId ?? rotatedProfileId;
-  if (!profileId) {
+  const preference = resolveSessionAuthProfilePreference({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    provider: params.provider,
+    modelId,
+    configuredProfileId: params.configuredProfileId,
+    sessionProfileId: rotatedProfileId,
+    sessionProfileSource: rotatedSource,
+  });
+  if (!preference) {
     return undefined;
   }
-  const source = rotatedPinnedProfileId || configuredProfileId ? "user" : "auto";
+  const { profileId, source } = preference;
   if (params.nativeAuthProfileIds?.includes(profileId)) {
     // Apply pin/default precedence first; native login identities are not stored credentials.
     return { profileId, source, routeRequirement: undefined };
@@ -636,8 +627,7 @@ export async function resolveSessionAuthSelection(params: {
         })
       : store;
   if (
-    !rotatedPinnedProfileId &&
-    profileId === configuredProfileId &&
+    preference.origin === "model" &&
     !isProfileForProvider({
       cfg,
       providers: uniqueProviders(params.provider),
@@ -652,9 +642,7 @@ export async function resolveSessionAuthSelection(params: {
         modelId,
       });
     }
-    throw new Error(
-      `Auth profile "${configuredProfileId}" is not configured for ${params.provider}.`,
-    );
+    throw new Error(`Auth profile "${profileId}" is not configured for ${params.provider}.`);
   }
   return {
     profileId,

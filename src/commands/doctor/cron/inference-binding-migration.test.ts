@@ -534,6 +534,81 @@ it.each([false, true])(
   },
 );
 
+it.each(["native-default", "stored-default", "pinned-native"] as const)(
+  "matches scheduled CLI account selection for %s",
+  async (scenario) => {
+    await withAccounts(async (state) => {
+      const model = "anthropic/claude-opus-4-6";
+      const profile =
+        scenario === "native-default"
+          ? "anthropic:claude-cli"
+          : scenario === "stored-default"
+            ? "anthropic:work"
+            : undefined;
+      const cfg = config(state, {
+        systemAgent: { agentId: "main" },
+        model: profile ? `${model}@${profile}` : model,
+        models: { "anthropic/*": { agentRuntime: { id: "claude-cli" } } },
+      });
+      cfg.plugins = { allow: ["anthropic"], slots: { memory: "none" } };
+      cfg.session = { reset: { mode: "idle", idleMinutes: 1 } };
+      await configure(state, cfg);
+      await saveProfiles(
+        ...(scenario === "stored-default"
+          ? []
+          : [
+              {
+                profileId: "anthropic:token",
+                credential: {
+                  type: "token" as const,
+                  provider: "anthropic",
+                  token: "synthetic-token",
+                },
+              },
+            ]),
+        apiProfile("anthropic:work", "synthetic-work-key"),
+      );
+      const sessionKey = "agent:main:idle-native";
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "idle-native",
+          updatedAt: 1,
+          cliSessionBindings: { "claude-cli": { sessionId: "native-resume" } },
+        },
+      );
+      const originalSession = loadSessionEntry({ agentId: "main", sessionKey });
+      const job: CronStoredJob = {
+        ...makeAccountJob(scenario, model),
+        ...(scenario === "pinned-native" ? { sessionTarget: `session:${sessionKey}` } : {}),
+      };
+      const storePath = state.statePath("cron", "jobs.json");
+      await saveJobs(storePath, job);
+      await doctor.withDoctorConfigMaintenance(async () => {
+        const findings = await cronInferenceCheck.detect({
+          cfg,
+          mode: "lint",
+          runtime: createNonExitingRuntime(),
+        });
+        const result = await migrate(cfg);
+        expect(result.changes).toEqual([]);
+        expect(findings.map((finding) => finding.message)).toEqual(result.warnings);
+        if (scenario === "stored-default") {
+          expect(result.warnings).toHaveLength(1);
+          contains(
+            result.warnings[0]!,
+            `openclaw automations edit ${scenario} --model ${model}@anthropic:work`,
+          );
+        } else {
+          expect(result.warnings).toEqual([]);
+        }
+        expect(await readJobs(storePath)).toEqual([job]);
+        expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(originalSession);
+      });
+    });
+  },
+);
+
 it("records the planner's first account for ambiguous jobs, keeps direct keys unbound and refuses missing accounts instead of pinning a previous fallback", async () => {
   await withAccounts(async (state) => {
     const cfg = config(state, {

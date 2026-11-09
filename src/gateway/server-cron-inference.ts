@@ -4,6 +4,7 @@ import {
   resolveAgentWorkspaceDir,
   tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
+import { resolveSessionAuthProfilePreference } from "../agents/auth-profiles/selection-preference.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { hasSyntheticLocalProviderAuthConfig } from "../agents/model-auth-provider-config.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
@@ -94,11 +95,16 @@ export async function describeCronInferenceMigration(
     ) {
       return undefined;
     }
-    const sessionSource = resolveSessionAuthProfileOverrideSource(session.sessionEntry);
-    const pinnedSession = sessionSource === "user" || sessionSource === "user-link";
-    const explicitProfileId =
-      (pinnedSession ? session.sessionEntry.authProfileOverride : undefined) ??
-      selection.configuredProfileId;
+    const preference = resolveSessionAuthProfilePreference({
+      cfg,
+      agentId,
+      provider: selection.provider,
+      modelId: selection.model,
+      configuredProfileId: selection.configuredProfileId,
+      sessionProfileId: session.sessionEntry.authProfileOverride,
+      sessionProfileSource: resolveSessionAuthProfileOverrideSource(session.sessionEntry),
+    });
+    const explicitProfileId = preference?.source === "user" ? preference.profileId : undefined;
     const [attempt] = prepareAgentRuntimeAuth({
       config: cfg,
       agentId,
@@ -109,8 +115,8 @@ export async function describeCronInferenceMigration(
       authProfileStore: await loadAuthProfileStoreWithoutExternalProfilesAsync(
         selection.owner.agentDir,
       ),
-      sessionAuthProfileId: explicitProfileId,
-      sessionAuthProfileSource: explicitProfileId ? "user" : undefined,
+      sessionAuthProfileId: preference?.profileId,
+      sessionAuthProfileSource: preference?.source,
       ...(explicitProfileId
         ? { requiredAuthProfileId: explicitProfileId, allowAuthProfileFallback: false }
         : {}),

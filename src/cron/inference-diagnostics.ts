@@ -1,3 +1,4 @@
+import { resolveSessionAuthProfilePreference } from "../agents/auth-profiles/selection-preference.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
@@ -9,6 +10,8 @@ import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronCandidateExecution } from "./isolated-agent/candidate-execution.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
@@ -20,17 +23,31 @@ import {
 import type { CronStoredJob } from "./types.js";
 
 /** Read the same carried preferences and native resume identity as a scheduled run. */
-export function prepareCronInferenceDiagnosticSession(params: {
+export async function prepareCronInferenceDiagnosticSession(params: {
   cfg: OpenClawConfig;
   agentId: string;
   job: Pick<CronStoredJob, "id" | "sessionTarget" | "sessionKey">;
 }) {
   const { cfg, agentId, job } = params;
+  const targetKey = resolveCronSessionTargetSessionKey(job.sessionTarget);
   const sessionKey = resolveCronAgentSessionKey({
     cfg,
     agentId,
-    sessionKey: resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`,
+    sessionKey: targetKey ?? `cron:${job.id}`,
   });
+  if (targetKey) {
+    // Session-event admission pins the existing incarnation even after configured expiry.
+    const read = await readSessionEntriesFromStoreInWorker({
+      agentId,
+      sessionKeys: [sessionKey],
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+    });
+    const entry = read.entries[0]?.entry;
+    if (entry) {
+      return { sessionEntry: entry, initialSessionEntry: entry, isNewSession: false };
+    }
+    // With no incarnation to pin, retain the existing fresh-session preparation.
+  }
   return prepareCronSession({
     cfg,
     agentId,
@@ -54,16 +71,28 @@ export async function inspectCronCliInferenceAccount(params: {
   provider: string;
   model: string;
   configuredProfileId?: string;
-  session: Awaited<ReturnType<typeof prepareCronSession>>;
+  session: Pick<
+    Awaited<ReturnType<typeof prepareCronSession>>,
+    "sessionEntry" | "initialSessionEntry" | "isNewSession"
+  >;
 }): Promise<{ warning?: string } | undefined> {
   const { cfg, agentId, provider, model, session, job } = params;
+  const preference = resolveSessionAuthProfilePreference({
+    cfg,
+    agentId,
+    provider,
+    modelId: model,
+    configuredProfileId: params.configuredProfileId,
+    sessionProfileId: session.sessionEntry.authProfileOverride,
+    sessionProfileSource: resolveSessionAuthProfileOverrideSource(session.sessionEntry),
+  });
   const execution = resolveCronCandidateExecution(
     {
       cfg,
       agentId,
       provider,
       model,
-      authProfileId: params.configuredProfileId,
+      authProfileId: preference?.profileId,
       sessionEntry: session.sessionEntry,
       sessionRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
         cfg,
@@ -85,23 +114,14 @@ export async function inspectCronCliInferenceAccount(params: {
   ) {
     return {};
   }
-  const source = resolveSessionAuthProfileOverrideSource(session.sessionEntry);
-  const pinnedSession = source === "user" || source === "user-link";
-  const authProfileId =
-    (pinnedSession ? session.sessionEntry.authProfileOverride : undefined) ??
-    params.configuredProfileId ??
-    session.sessionEntry.authProfileOverride;
   const selected = selectCliExecutionAuthProfile({
     cliExecutionProvider: execution.executionProvider,
     authProfileProvider: provider,
     config: cfg,
     store: await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir),
     readinessMode: "read-only",
-    selected: authProfileId
-      ? {
-          authProfileId,
-          authProfileIdSource: pinnedSession || params.configuredProfileId ? "user" : "auto",
-        }
+    selected: preference
+      ? { authProfileId: preference.profileId, authProfileIdSource: preference.source }
       : undefined,
     sessionBinding: session.isNewSession
       ? undefined

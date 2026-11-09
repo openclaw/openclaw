@@ -264,8 +264,11 @@ missing profile from account order or recreate its credentials automatically.
 
 Managed updates and the standard container entrypoint run repairing Doctor before
 activation. A manual source upgrade must include `openclaw doctor --fix` before
-starting the Gateway. Startup reports potentially unmigrated host-account jobs
-before scheduling; it does not capture credentials or rewrite jobs.
+starting the Gateway. Startup checks potentially unmigrated host-account jobs in the background without
+delaying cron readiness or operations. The scan has a five-second aggregate budget;
+if it expires, one warning reports how many jobs were not checked and points to
+`openclaw doctor --lint` for a complete check. Startup does not capture credentials
+or rewrite jobs.
 
 Keys in the environment or provider config have no stored account to record. A job
 on such a route stays unbound and runs on that key; once a stored account becomes eligible for its route, the
