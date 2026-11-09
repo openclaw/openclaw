@@ -2,7 +2,7 @@ import "./personal-session-group-dialog.css";
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
-import { clearCompositionEnd, isComposingKeyboardEvent, recordCompositionEnd } from "../lib/ime.ts";
+import { isComposingKeyboardEvent } from "../lib/ime.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import type {
   PersonalSessionGroup,
@@ -372,10 +372,8 @@ export function PersonalSessionGroupDialogView(props: {
                       }
                     }
                   }),
-                  nativeListener("keyup", clearCompositionEnd),
                   (element: HTMLInputElement) => queueMicrotask(() => element.focus()),
                 ]}
-                onCompositionEnd={recordCompositionEnd}
                 type="search"
                 class="input personal-section-dialog__label"
                 aria-label={t("sessionsView.personalGroupSearch")}
