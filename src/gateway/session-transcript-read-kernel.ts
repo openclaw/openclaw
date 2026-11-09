@@ -22,7 +22,10 @@ import {
 import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { readRecentTranscriptConversationText } from "../config/sessions/transcript-recent-text.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import type { TranscriptAnchorPageOptions } from "../sessions/transcript-anchor-page.js";
+import {
+  boundHistoryAnchorPageRange,
+  type TranscriptAnchorReadOptions,
+} from "../sessions/transcript-anchor-page.js";
 import type { TranscriptReadWindowOptions } from "../sessions/transcript-read-window.js";
 import {
   createChatHistoryRecoveryProjection,
@@ -91,27 +94,35 @@ function projectSqliteHistoryEvents(entries: readonly SessionTranscriptMessageEv
   return messages;
 }
 
-// Raw admission bounds decoding; this cap also accounts for projected event metadata.
+// Raw admission bounds decoding; final selection measures the positioned worker rows
+// and their actual projected messages before either representation is disclosed.
 function capAnchorEventsByBytes(
-  events: SessionTranscriptMessageEvent[],
-  maxBytes: number | undefined,
-): SessionTranscriptMessageEvent[] {
-  if (maxBytes === undefined) {
-    return events;
-  }
-  const limit = Math.max(1_024, Math.floor(maxBytes));
-  let bytes = 2;
-  let start = events.length;
-  while (start > 0) {
-    const eventBytes = jsonUtf8Bytes(events[start - 1]);
-    const separatorBytes = start === events.length ? 0 : 1;
-    if (bytes + separatorBytes + eventBytes > limit) {
-      break;
-    }
-    bytes += separatorBytes + eventBytes;
-    start -= 1;
-  }
-  return events.slice(start);
+  page: { events: SessionTranscriptMessageEvent[]; offset: number; hasOverreadContext: boolean },
+  options: TranscriptAnchorReadOptions,
+) {
+  const events = page.events;
+  const anchor = events.findIndex((row) => asOptionalRecord(row.event)?.id === options.messageId);
+  const { start, endExclusive } = boundHistoryAnchorPageRange(
+    {
+      readStart: 0,
+      endExclusive: events.length,
+      hasOverreadContext: page.hasOverreadContext,
+      offset: page.offset,
+    },
+    anchor >= 0 ? anchor : options.direction === "newer" ? 0 : events.length - 1,
+    Math.min(8 * 1024 * 1024, Math.max(1_024, Math.floor(options.maxBytes ?? 8 * 1024 * 1024))),
+    (index) =>
+      Math.max(
+        jsonUtf8Bytes(events[index]),
+        jsonUtf8Bytes(sqliteMessageEventWithSeq(events[index]!)),
+      ),
+    options.maxBytes === undefined,
+  );
+  return {
+    events: events.slice(start, endExclusive),
+    hasOverreadContext: page.hasOverreadContext && start === 0 && endExclusive > start,
+    offset: page.offset + events.length - endExclusive,
+  };
 }
 
 function readRecentSqliteMessageRecords(
@@ -206,16 +217,29 @@ function selectSessionTranscriptProjection(
           transcriptPath: sessionFile,
         };
       }
+      const bounded = capAnchorEventsByBytes(page, selection.options);
       return {
         found: true,
         ...(page.windowReset ? { windowReset: true } : {}),
-        ...(page.readWindow ? { readWindow: page.readWindow } : {}),
+        ...(page.readWindow
+          ? {
+              readWindow: {
+                ...page.readWindow,
+                anchor: bounded.events.length
+                  ? {
+                      rawSeq: bounded.events.at(-1)!.eventSeq,
+                      seq: bounded.events.at(-1)!.seq,
+                    }
+                  : undefined,
+              },
+            }
+          : {}),
         displaySource: page.displaySource,
-        hasOverreadContext: page.hasOverreadContext,
-        messages: capAnchorEventsByBytes(page.events, selection.options.maxBytes)
+        hasOverreadContext: bounded.hasOverreadContext,
+        messages: bounded.events
           .map(sqliteMessageEventWithSeq)
           .filter((message) => message !== undefined),
-        offset: page.offset,
+        offset: bounded.offset,
         totalMessages: page.totalMessages,
         transcriptPath: sessionFile,
       };
@@ -339,7 +363,7 @@ export async function filterSessionMessageHistoryVisibility(
     const recoveryReaders = {
       ...readers,
       readSessionMessagesAroundIdWithStatsAsync: archive
-        ? (_scope: SessionTranscriptReadScope, options: TranscriptAnchorPageOptions) =>
+        ? (_scope: SessionTranscriptReadScope, options: TranscriptAnchorReadOptions) =>
             archive.readAroundId(options)
         : readers.readSessionMessagesAroundIdWithStatsAsync,
     };
@@ -548,7 +572,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
   /** Reads one message-id-anchored page from a single transcript snapshot. */
   async function readSessionMessagesAroundIdWithStatsAsync(
     scope: SessionTranscriptReadScope,
-    opts: TranscriptAnchorPageOptions & SessionTranscriptReadOptions,
+    opts: TranscriptAnchorReadOptions & SessionTranscriptReadOptions,
   ): Promise<ReadSessionMessagesAroundIdResult> {
     const target = await access.resolveTarget(scope);
     const sessionFile =

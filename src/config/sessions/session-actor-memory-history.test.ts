@@ -31,7 +31,9 @@ const ids = (events: readonly unknown[]) =>
   events.flatMap((event) => (isRecord(event) && typeof event.id === "string" ? [event.id] : []));
 const messageIds = (messages: readonly unknown[]) =>
   messages.flatMap((item) =>
-    isRecord(item) && isRecord(item["__openclaw"]) ? [item["__openclaw"].id] : [],
+    isRecord(item) && isRecord(item["__openclaw"]) && typeof item["__openclaw"].id === "string"
+      ? [item["__openclaw"].id]
+      : [],
   );
 
 async function fixture(events: unknown[]) {
@@ -91,6 +93,169 @@ async function fixture(events: unknown[]) {
 }
 
 describe("memory actor history", () => {
+  it("keeps bounded directional continuation and exact positioned bytes in the memory owner", async () => {
+    const { storage } = await fixture([
+      message("left", null, "user", "x".repeat(5 * 1024 * 1024)),
+      message("right", "left", "user", "y".repeat(5 * 1024 * 1024)),
+    ]);
+    for (const [messageId, direction, expected, offset] of [
+      ["right", "older", "left", 1],
+      ["left", "newer", "right", 0],
+    ] as const) {
+      const page = await storage.read(
+        {
+          type: "session.history.around-id",
+          input: {
+            options: { messageId, direction, directionalPage: true, maxMessages: 2 },
+          },
+        },
+        authority,
+      );
+      expect(messageIds(page.messages)).toEqual([expected]);
+      expect(page).toMatchObject({
+        found: true,
+        offset,
+        totalMessages: 2,
+        hasOverreadContext: false,
+      });
+      expect(Buffer.byteLength(JSON.stringify(page.messages))).toBeLessThan(8 * 1024 * 1024);
+    }
+    const missing = await storage.read(
+      {
+        type: "session.history.around-id",
+        input: {
+          options: {
+            messageId: "absent",
+            direction: "older",
+            directionalPage: true,
+            maxMessages: 2,
+          },
+        },
+      },
+      authority,
+    );
+    expect(missing).toMatchObject({ found: false, messages: [] });
+    const explicit = await storage.read(
+      {
+        type: "session.history.around-id",
+        input: {
+          options: { messageId: "right", maxMessages: 2, maxBytes: 1024 },
+        },
+      },
+      authority,
+    );
+    expect(explicit.messages).toEqual([]);
+  });
+
+  it("bounds closed reset intervals and preserves window reset flags", async () => {
+    const { storage } = await fixture([
+      message("closed-0", null, "user", "x".repeat(3 * 1024 * 1024)),
+      message("closed-1", "closed-0", "user", "x".repeat(3 * 1024 * 1024)),
+      message("closed-2", "closed-1", "user", "x".repeat(3 * 1024 * 1024)),
+      {
+        type: "reset",
+        id: "closing",
+        parentId: "closed-2",
+        reason: "new",
+        timestamp: "2026-10-11T00:00:01.000Z",
+      },
+      message("current", "closing", "user", "current"),
+    ]);
+    const closed = await storage.read(
+      {
+        type: "session.history.around-id",
+        input: {
+          options: {
+            messageId: "closing",
+            closedResetInterval: true,
+            direction: "older",
+            maxMessages: 6,
+          },
+        },
+      },
+      authority,
+    );
+    expect(messageIds(closed.messages)).toEqual(["closed-1", "closed-2"]);
+    expect(closed).toMatchObject({
+      found: true,
+      totalMessages: 3,
+      offset: 0,
+      hasOverreadContext: false,
+    });
+    const reset = await storage.read(
+      {
+        type: "session.history.around-id",
+        input: {
+          options: {
+            messageId: "closed-1",
+            maxMessages: 6,
+            expectedReadWindow: { source: "stale", latestResetRawSeq: null },
+          },
+        },
+      },
+      authority,
+    );
+    expect(reset).toMatchObject({ found: true, windowReset: true, hasOverreadContext: false });
+    expect(reset.readWindow).toBeDefined();
+    expect(messageIds(reset.messages)).toEqual(["closing", "current"]);
+  });
+
+  it("pages mixed-size earlier history contiguously through the memory owner", async () => {
+    // Mixed widths force byte trimming independently of the requested message count.
+    const widths = [1, 3, 1, 3, 1, 3];
+    const expected = widths.map((_, index) => "mixed-" + index);
+    const { storage } = await fixture(
+      widths.map((width, index) =>
+        message(
+          expected[index]!,
+          index ? expected[index - 1]! : null,
+          "user",
+          "x".repeat(width * 1024 * 1024),
+        ),
+      ),
+    );
+    const read = (messageId: string, direction?: "older" | "newer") =>
+      storage.read(
+        {
+          type: "session.history.around-id",
+          input: { options: { messageId, maxMessages: 6, direction } },
+        },
+        authority,
+      );
+
+    const observed: string[] = [expected.at(-1)!];
+    let anchor = expected.at(-1)!;
+    let remainingPages = expected.length;
+    while (remainingPages-- > 0) {
+      const page = await read(anchor, "older");
+      const pageIds = messageIds(page.messages);
+      expect(pageIds.at(-1)).toBe(anchor);
+      const older = pageIds.slice(0, -1);
+      if (older.length === 0) {
+        expect(anchor).toBe(expected[0]);
+        break;
+      }
+      const start = expected.indexOf(older[0]!);
+      expect(pageIds).toEqual(expected.slice(start, expected.indexOf(anchor) + 1));
+      expect(Buffer.byteLength(JSON.stringify(page.messages))).toBeLessThan(8 * 1024 * 1024);
+      expect(page.hasOverreadContext).toBe(false);
+      observed.unshift(...older);
+      anchor = older[0]!;
+    }
+    expect(observed).toEqual(expected);
+    const around = await read("mixed-2");
+    expect(around.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ __openclaw: expect.objectContaining({ id: "mixed-2" }) }),
+      ]),
+    );
+    const newer = await read("mixed-1", "newer");
+    expect(newer.messages[0]).toMatchObject({ __openclaw: { id: "mixed-1" } });
+    expect(newer.offset).toBe(
+      expected.length - 1 - expected.indexOf(messageIds(newer.messages).at(-1)!),
+    );
+  });
+
   it("keeps raw progress distinct from the active branch and publishes phase writes before reads", async () => {
     const { actor, storage } = await fixture([
       message("user", null, "user", "Question"),
@@ -358,7 +523,7 @@ describe("memory actor history", () => {
     expect(messageIds(media.messages)).toEqual(["large"]);
   });
 
-  it("bounds recent history and refuses unbounded pages whose combined raw payload exceeds the cap", async () => {
+  it("bounds recent and unanchored history independently of anchor windows", async () => {
     const content = "x".repeat(3 * 1024 * 1024);
     const { storage } = await fixture([
       message("first", null, "user", content),
@@ -375,10 +540,6 @@ describe("memory actor history", () => {
     expect(messageIds(recent.messages)).toEqual(["second", "third"]);
     const reads: SessionActorMemoryHistoryQuery[] = [
       { type: "session.history.page", input: { options: { offset: 0, maxMessages: 3 } } },
-      {
-        type: "session.history.around-id",
-        input: { options: { messageId: "second", maxMessages: 3 } },
-      },
     ];
     for (const query of reads) {
       expect(() => storage.readCurrent(query, authority)).toThrow(

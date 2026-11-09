@@ -1,13 +1,19 @@
 import fs from "node:fs";
 import zlib from "node:zlib";
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { afterEach, expect, it, vi } from "vitest";
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import * as projection from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import * as archiveWorkers from "../config/sessions/session-accessor.sqlite-archive.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
@@ -18,7 +24,9 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { readChatHistoryMessageId } from "./session-history-tail.js";
 import {
+  readSessionMessagesAroundIdWithStatsAsync,
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
   readSessionMessagesMatchingIdAsync,
@@ -176,3 +184,83 @@ it("restores cold lookup bytes and validates selected payloads off the caller th
     await expect(read()).rejects.toThrow();
   });
 });
+
+it.each(["sqlite", "archive"] as const)(
+  "full-message recovery advances past a bounded sentinel (source=%s)",
+  async (source) => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      try {
+        const cap = 8 * 1024 * 1024;
+        const sessionId = "bounded-recovery";
+        const scope = {
+          agentId: "main",
+          sessionId,
+          sessionKey: "agent:main:" + sessionId,
+          storePath: state.statePath("sessions.json"),
+        };
+        const content = "Recovered answer " + "x".repeat(8192);
+        const events = [
+          { type: "session", version: 3, id: sessionId },
+          {
+            type: "message",
+            id: "failed",
+            parentId: null,
+            message: {
+              role: "assistant",
+              content: STREAM_ERROR_FALLBACK_TEXT,
+              stopReason: "error",
+              // SQLite retains full diagnostics; archive parsing has its own smaller line cap.
+              errorMessage: "d".repeat(source === "sqlite" ? cap - 4096 : 128),
+            },
+          },
+          {
+            type: "message",
+            id: "recovered",
+            parentId: "failed",
+            message: { role: "assistant", content, stopReason: "stop" },
+          },
+        ];
+        if (source === "sqlite") {
+          await replaceTranscriptEvents(scope, events);
+          const inclusive = await readSessionMessagesAroundIdWithStatsAsync(scope, {
+            messageId: "failed",
+            direction: "newer",
+            maxMessages: 2,
+          });
+          // Prove the actual 8 MiB boundary: both rows fit alone, not together.
+          expect(inclusive.messages.map(readChatHistoryMessageId)).toEqual(["failed"]);
+          expect(inclusive.offset).toBe(1);
+          const bytes = Buffer.byteLength(JSON.stringify(inclusive.messages));
+          expect(bytes).toBeGreaterThan(cap - 8192);
+          expect(bytes).toBeLessThanOrEqual(cap);
+        } else {
+          fs.writeFileSync(
+            state.statePath(sessionId + ".jsonl.reset.2026-11-09T00-00-00.000Z"),
+            events.map((event) => JSON.stringify(event)).join("\n") + "\n",
+          );
+        }
+        const options = { allowResetArchiveFallback: true };
+        expect(await readSessionMessageByIdAsync(scope, "failed", options)).toMatchObject({
+          found: true,
+          oversized: false,
+          message: { content: STREAM_ERROR_FALLBACK_TEXT, stopReason: "error" },
+        });
+        expect(
+          await readSessionMessageByIdAsync(scope, "failed", {
+            ...options,
+            historyVisibility: {},
+          }),
+        ).toEqual({ found: false, oversized: false, historyHidden: true });
+        expect(
+          await readSessionMessageByIdAsync(scope, "recovered", {
+            ...options,
+            historyVisibility: {},
+          }),
+        ).toMatchObject({ found: true, oversized: false, message: { content } });
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    });
+  },
+);

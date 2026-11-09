@@ -1,0 +1,5 @@
+# RH121: real SQL-worker/chat-kernel and memory-owner bounded-history regressions.
+# Adjacent individually fitting rows, exact positioned cap, source reset and closed history.
+# Full-message recovery: near-cap SQLite sentinel and retained-archive continuation.
+# Authenticated Gateway paging: mixed-size, adjacent near-cap and reset-boundary transport.
+785

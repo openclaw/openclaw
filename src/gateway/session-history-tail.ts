@@ -176,11 +176,12 @@ async function readNewerChatHistoryMessages(params: {
   expectedReadWindow?: TranscriptReadWindow;
   readOnly?: boolean;
 }): Promise<unknown[]> {
-  // Anchor lookup and positioning share one snapshot; numeric offsets drift on appends.
+  // Exclusive ID continuation keeps the scanned anchor out of the page byte budget.
   const page = await params.readers.readSessionMessagesAroundIdWithStatsAsync(params.readScope, {
     messageId: params.anchorId,
-    maxMessages: params.limit + 1,
+    maxMessages: params.limit,
     direction: "newer",
+    directionalPage: true,
     expectedReadWindow: params.expectedReadWindow,
     allowResetArchiveFallback: true,
     readOnly: params.readOnly,
@@ -191,16 +192,7 @@ async function readNewerChatHistoryMessages(params: {
       "window-changed",
     );
   }
-  const anchorIndex = page.messages.findIndex(
-    (message) => readChatHistoryMessageId(message) === params.anchorId,
-  );
-  if (anchorIndex < 0) {
-    throw new SessionTranscriptProjectionUnavailableError(
-      params.readScope.sessionId,
-      "window-changed",
-    );
-  }
-  return page.messages.slice(anchorIndex + 1, anchorIndex + 1 + params.limit);
+  return page.messages;
 }
 
 /** Resolve only the newer turn context a historical page needs to classify its pending error. */

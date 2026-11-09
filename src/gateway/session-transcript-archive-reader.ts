@@ -9,9 +9,10 @@ import { materializeSessionArchiveForRead } from "../config/sessions/archive-com
 import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
+  boundHistoryAnchorPageRange,
   resolveHistoryAnchorPageRange,
   resolveTranscriptPageEnd,
-  type TranscriptAnchorPageOptions,
+  type TranscriptAnchorReadOptions,
   type TranscriptRecentReadLimits,
 } from "../sessions/transcript-anchor-page.js";
 import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
@@ -399,7 +400,7 @@ export class ArchivedTranscriptReader {
     };
   }
 
-  async readAroundId(opts: TranscriptAnchorPageOptions): Promise<
+  async readAroundId(opts: TranscriptAnchorReadOptions): Promise<
     ReadRecentSessionMessagesResult & {
       found: boolean;
       hasOverreadContext: boolean;
@@ -433,18 +434,42 @@ export class ArchivedTranscriptReader {
         continue;
       }
       const range = resolveHistoryAnchorPageRange(index.entries.length, anchorIndex, opts);
+      const limit = Math.min(
+        SOURCE_PAGE_MAX_BYTES,
+        Math.max(1024, Math.floor(opts.maxBytes ?? SOURCE_PAGE_MAX_BYTES)),
+      );
+      const rawRange = boundHistoryAnchorPageRange(
+        range,
+        anchorIndex,
+        limit,
+        (position) => index.entries[position]!.length,
+        opts.maxBytes === undefined,
+      );
       const entries = await readIndexedTranscriptEntries(
         filePath,
         index,
-        index.entries.slice(range.readStart, range.endExclusive),
+        index.entries.slice(rawRange.start, rawRange.endExclusive),
         this.scope.sessionId,
+      );
+      const bounded = boundHistoryAnchorPageRange(
+        { ...range, readStart: 0, endExclusive: entries.length },
+        anchorIndex - rawRange.start,
+        limit,
+        (position) => jsonUtf8Bytes(indexedTranscriptEntryToMessage(entries[position]!)),
+        opts.maxBytes === undefined,
       );
       return {
         displaySource: index.displaySource,
         found: true,
-        hasOverreadContext: range.hasOverreadContext,
-        messages: entries.flatMap(indexedTranscriptEntryToMessages),
-        offset: range.offset,
+        hasOverreadContext:
+          range.hasOverreadContext &&
+          rawRange.start === range.readStart &&
+          bounded.start === 0 &&
+          bounded.endExclusive > bounded.start,
+        messages: entries
+          .slice(bounded.start, bounded.endExclusive)
+          .flatMap(indexedTranscriptEntryToMessages),
+        offset: index.entries.length - (rawRange.start + bounded.endExclusive),
         totalMessages: index.entries.length,
         transcriptPath: filePath,
         transcriptSource: "reset-archive",

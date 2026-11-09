@@ -10,7 +10,7 @@ import type {
   SessionRecentConversationText,
 } from "../config/sessions/transcript-recent-text.js";
 import type {
-  TranscriptAnchorPageOptions,
+  TranscriptAnchorReadOptions,
   TranscriptRecentReadLimits,
 } from "../sessions/transcript-anchor-page.js";
 import type {
@@ -147,7 +147,7 @@ export type SessionTranscriptReader = {
   ): Promise<ReadRecentSessionMessagesResult>;
   readSessionMessagesAroundIdWithStatsAsync(
     scope: SessionTranscriptReadScope,
-    options: TranscriptAnchorPageOptions & SessionTranscriptReadOptions,
+    options: TranscriptAnchorReadOptions & SessionTranscriptReadOptions,
     signal?: AbortSignal,
   ): Promise<ReadSessionMessagesAroundIdResult>;
 };
@@ -179,7 +179,7 @@ export type SessionTranscriptProjectionSelection =
         SessionTranscriptReadOptions;
     }
   | { kind: "page"; options: SessionTranscriptPageOptions }
-  | { kind: "around-id"; options: TranscriptAnchorPageOptions & SessionTranscriptReadOptions }
+  | { kind: "around-id"; options: TranscriptAnchorReadOptions & SessionTranscriptReadOptions }
   | {
       kind: "by-id";
       messageId: string;

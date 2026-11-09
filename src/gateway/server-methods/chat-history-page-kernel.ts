@@ -92,7 +92,7 @@ export async function readChatHistoryPageKernel(
   const readSequence = options.readMessageSequence ?? readChatHistoryMessageSeq;
   if (messageId) {
     const direction = pageCursor?.direction;
-    const readPage = await options.readers.readSessionMessagesAroundIdWithStatsAsync(readScope, {
+    let readPage = await options.readers.readSessionMessagesAroundIdWithStatsAsync(readScope, {
       messageId,
       // Directional pages exclude the anchor; older pages also need preceding turn context.
       maxMessages: max + (direction === "older" ? 2 : direction === "newer" ? 1 : 0),
@@ -129,7 +129,36 @@ export async function readChatHistoryPageKernel(
           end += 1;
         }
       }
-      if (direction === "newer") {
+      const hasAdjacent = direction === "older" ? start > 0 : end < pageMessages.length;
+      if (!hasAdjacent && (direction === "older" ? (anchorSeq ?? 1) > 1 : readPage.offset > 0)) {
+        // An individually fitting anchor can consume the whole byte budget. Read
+        // its neighbors separately, still by ID in the same selected source.
+        const previous = readPage;
+        const adjacent = await options.readers.readSessionMessagesAroundIdWithStatsAsync(
+          readScope,
+          {
+            messageId,
+            direction,
+            directionalPage: true,
+            maxMessages: max + (direction === "older" ? 1 : 0),
+            allowResetArchiveFallback: true,
+            readOnly: options.readOnly,
+          },
+        );
+        if (
+          !adjacent.found ||
+          adjacent.windowReset ||
+          adjacent.displaySource !== previous.displaySource
+        ) {
+          return { messages: [], windowReset: true };
+        }
+        readPage = adjacent;
+        overreadContextMessage = direction === "newer" ? pageMessages[end - 1] : undefined;
+        pageMessages = adjacent.messages;
+        if (direction === "older" && pageMessages.length > max) {
+          overreadContextMessage = pageMessages[0];
+        }
+      } else if (direction === "newer") {
         overreadContextMessage = pageMessages[end - 1];
         pageMessages = pageMessages.slice(end - 1);
       } else {

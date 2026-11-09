@@ -14,6 +14,7 @@ import {
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { readNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import {
+  boundHistoryAnchorPageRange,
   resolveHistoryAnchorPageRange,
   resolveTranscriptPageEnd,
 } from "../../sessions/transcript-anchor-page.js";
@@ -535,51 +536,40 @@ export function readSessionActorMemoryProjection(
         rows = rows.slice(0, anchor);
         anchor = rows.length - 1;
       }
-      const range = resolveHistoryAnchorPageRange(rows.length, anchor, options);
+      const range = resolveHistoryAnchorPageRange(
+        rows.length,
+        anchor,
+        closed ? { ...options, directionalPage: undefined } : options,
+      );
       const limit = Math.min(options.maxBytes ?? SOURCE_PAGE_MAX_BYTES, SOURCE_PAGE_MAX_BYTES);
-      const start = resolveSessionActorMemoryHistoryStart(
-        rows,
-        range.readStart,
-        range.endExclusive,
+      const { start, endExclusive } = boundHistoryAnchorPageRange(
+        range,
+        anchor,
         Math.max(1024, Math.floor(limit)),
-        Infinity,
-        options.maxBytes === undefined,
-        2,
+        (index, remainingBytes) =>
+          rows[index]!.serializedBytes - 1 > remainingBytes
+            ? rows[index]!.serializedBytes - 1
+            : Math.max(
+                jsonUtf8Bytes({
+                  event: rows[index]!.event,
+                  eventSeq: rows[index]!.rawSeq,
+                  seq: index + 1,
+                  displayPosition: position(rows[index]!),
+                }),
+                jsonUtf8Bytes(message(rows[index]!, index + 1)),
+              ),
         options.maxBytes === undefined,
       );
-      let selected = rows.slice(start, range.endExclusive);
-      let selectedStart = start;
-      if (options.maxBytes !== undefined) {
-        const responseLimit = Math.max(1024, Math.floor(limit));
-        let bytes = 2;
-        let index = selected.length;
-        while (index > 0) {
-          const candidate = selected[index - 1]!;
-          const size = jsonUtf8Bytes({
-            event: candidate.event,
-            eventSeq: candidate.rawSeq,
-            seq: start + index,
-            displayPosition: position(candidate),
-          });
-          const separator = index === selected.length ? 0 : 1;
-          if (bytes + size + separator > responseLimit) {
-            break;
-          }
-          bytes += size + separator;
-          index--;
-        }
-        selectedStart += index;
-        selected = selected.slice(index);
-      }
+      const selected = rows.slice(start, endExclusive);
       return {
         found: true,
-        messages: messages(selected, selectedStart),
+        messages: messages(selected, start),
         totalMessages: rows.length,
-        hasOverreadContext: range.hasOverreadContext && selectedStart === range.readStart,
-        offset: range.offset,
+        hasOverreadContext: range.hasOverreadContext && start === range.readStart,
+        offset: rows.length - endExclusive,
         displaySource,
         transcriptPath: window.hot.target.sessionKey,
-        ...(changed ? { windowReset: true, readWindow: capture(selected, selectedStart) } : {}),
+        ...(changed ? { windowReset: true, readWindow: capture(selected, start) } : {}),
       };
     }
     case "source": {

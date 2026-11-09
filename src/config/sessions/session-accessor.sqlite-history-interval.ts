@@ -7,8 +7,9 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import {
+  boundHistoryAnchorPageRange,
   resolveHistoryAnchorPageRange,
-  type TranscriptAnchorPageOptions,
+  type TranscriptAnchorReadOptions,
 } from "../../sessions/transcript-anchor-page.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { positionTranscriptDisplayEvents } from "./session-accessor.sqlite-display-position.js";
@@ -262,6 +263,7 @@ function readHistoricalDisplayEventRange(
   count: number,
   anchor: { activePosition: number; displayPosition: number },
   maxBytes?: number,
+  anchorOptions?: TranscriptAnchorReadOptions,
 ): SessionTranscriptMessageEvent[] {
   if (count <= 0) {
     return [];
@@ -271,7 +273,7 @@ function readHistoricalDisplayEventRange(
     historyNavigationValidSql.as("navigation_valid"),
     eb(transcriptEventReadBytesSql("event"), "+", 1).as("serialized_bytes"),
   ]);
-  const olderCount = anchor.displayPosition - start;
+  const olderCount = Math.max(0, anchor.displayPosition - start);
   // The anchor already identifies the physical position; visit only its selected neighbors.
   const older =
     olderCount === 0
@@ -288,14 +290,16 @@ function readHistoricalDisplayEventRange(
     query
       .where("active.active_position", ">=", anchor.activePosition)
       .orderBy("active.active_position", "asc")
-      .limit(count - olderCount),
+      .limit(count - olderCount)
+      .offset(Math.max(0, start - anchor.displayPosition)),
   ).rows;
   const ranged = [...older.toReversed(), ...newer].map((row, index) => {
     assertTranscriptNavigationValid(row.navigation_valid);
     return Object.assign(row, { displaySeq: start + index + 1 });
   });
-  let selected = ranged;
+  // Unanchored callers retain their existing whole-page refusal contract.
   if (
+    anchorOptions === undefined &&
     maxBytes === undefined &&
     ranged.reduce((bytes, row) => bytes + row.serialized_bytes, 2) > SOURCE_PAGE_MAX_BYTES
   ) {
@@ -303,20 +307,19 @@ function readHistoricalDisplayEventRange(
       `Transcript history page exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte limit; request a smaller limit`,
     );
   }
-  if (maxBytes !== undefined) {
-    const limit = Math.min(SOURCE_PAGE_MAX_BYTES, Math.max(1_024, Math.floor(maxBytes)));
-    let bytes = 2;
-    let selectedStart = ranged.length;
-    while (selectedStart > 0) {
-      const nextBytes = ranged[selectedStart - 1]!.serialized_bytes;
-      if (bytes + nextBytes > limit) {
-        break;
-      }
-      bytes += nextBytes;
-      selectedStart--;
-    }
-    selected = ranged.slice(selectedStart);
-  }
+  // Size the contiguous anchor window before loading event bodies.
+  const limit = Math.min(
+    SOURCE_PAGE_MAX_BYTES,
+    Math.max(1_024, Math.floor(maxBytes ?? SOURCE_PAGE_MAX_BYTES)),
+  );
+  const selectedRange = boundHistoryAnchorPageRange(
+    { readStart: 0, endExclusive: ranged.length, hasOverreadContext: false, offset: 0 },
+    anchorOptions ? anchor.displayPosition - start : ranged.length - 1,
+    limit,
+    (position) => ranged[position]!.serialized_bytes - 1,
+    anchorOptions !== undefined && maxBytes === undefined,
+  );
+  const selected = ranged.slice(selectedRange.start, selectedRange.endExclusive);
   if (selected.length === 0) {
     return [];
   }
@@ -397,7 +400,7 @@ export function readHistoricalHistoryAnchorPage(
   projection: CurrentTranscriptProjection,
   displaySource: string | undefined,
   row: { active_position: number; event_type: string | null },
-  options: TranscriptAnchorPageOptions,
+  options: TranscriptAnchorReadOptions,
   excludeClosingReset = false,
 ): SessionTranscriptMessageAnchorPage | undefined {
   const interval = resolveClosedResetIntervalForDisplayable(projection, row);
@@ -421,21 +424,24 @@ export function readHistoricalHistoryAnchorPage(
   const range = resolveHistoryAnchorPageRange(
     total,
     excludeClosingReset ? total - 1 : anchorPosition,
+    excludeClosingReset ? { ...options, directionalPage: undefined } : options,
+  );
+  const requested = range.endExclusive - range.readStart;
+  const events = readHistoricalDisplayEventRange(
+    projection,
+    displaySource,
+    interval,
+    range.readStart,
+    requested,
+    { activePosition: row.active_position, displayPosition: anchorPosition },
+    options.maxBytes,
     options,
   );
   return {
-    events: readHistoricalDisplayEventRange(
-      projection,
-      displaySource,
-      interval,
-      range.readStart,
-      range.endExclusive - range.readStart,
-      { activePosition: row.active_position, displayPosition: anchorPosition },
-      options.maxBytes,
-    ),
+    events,
     found: true,
-    hasOverreadContext: range.hasOverreadContext,
-    offset: range.offset,
+    hasOverreadContext: range.hasOverreadContext && events[0]?.seq === range.readStart + 1,
+    offset: total - (events.at(-1)?.seq ?? range.endExclusive),
     displaySource,
     totalMessages: total,
   };

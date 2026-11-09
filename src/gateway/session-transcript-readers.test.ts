@@ -9,12 +9,16 @@ import {
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { createTranscriptDisplaySource } from "../sessions/transcript-display-position.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
+import { readChatHistoryMessageId } from "./session-history-tail.js";
 import { visitSessionMessagesAsync } from "./session-transcript-native.test-support.js";
+import type { SessionTranscriptPageReader } from "./session-transcript-read.types.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessageByIdAsync,
@@ -25,6 +29,7 @@ import {
   readSessionMessagesPageWithStatsAsync,
   readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
+import * as transcriptReaders from "./session-transcript-readers.js";
 import { readLatestSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
 
 describe("session transcript reader facade", () => {
@@ -57,6 +62,344 @@ describe("session transcript reader facade", () => {
     await replaceTranscriptEvents(scope, events);
     return scope;
   }
+
+  test("pages mixed-size earlier history contiguously through the SQL worker facade", async () => {
+    // Mixed widths force byte trimming independently of the requested message count.
+    const widths = [1, 3, 1, 3, 1, 3];
+    const expected = widths.map((_, index) => "mixed-" + index);
+    const scope = await writeTranscript("mixed-pages", [
+      { type: "session", version: 3, id: "mixed-pages" },
+      ...widths.map((width, index) => ({
+        type: "message",
+        id: expected[index],
+        parentId: index ? expected[index - 1] : null,
+        message: { role: "user", content: "x".repeat(width * 1024 * 1024) },
+      })),
+    ]);
+    const read = (messageId: string, direction?: "older" | "newer") =>
+      readSessionMessagesAroundIdWithStatsAsync(scope, { messageId, maxMessages: 6, direction });
+
+    const observed: string[] = [expected.at(-1)!];
+    let anchor = expected.at(-1)!;
+    let remainingPages = expected.length;
+    while (remainingPages-- > 0) {
+      const page = await read(anchor, "older");
+      const ids = page.messages.map((item) => readChatHistoryMessageId(item)!);
+      expect(ids.at(-1)).toBe(anchor);
+      const older = ids.slice(0, -1);
+      if (older.length === 0) {
+        expect(anchor).toBe(expected[0]);
+        break;
+      }
+      const start = expected.indexOf(older[0]!);
+      expect(ids).toEqual(expected.slice(start, expected.indexOf(anchor) + 1));
+      expect(Buffer.byteLength(JSON.stringify(page.messages))).toBeLessThan(8 * 1024 * 1024);
+      expect(page.hasOverreadContext).toBe(false);
+      observed.unshift(...older);
+      anchor = older[0]!;
+    }
+    expect(observed).toEqual(expected);
+    const around = await read("mixed-2");
+    expect(around.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ __openclaw: expect.objectContaining({ id: "mixed-2" }) }),
+      ]),
+    );
+    const newer = await read("mixed-1", "newer");
+    expect(newer.messages[0]).toMatchObject({ __openclaw: { id: "mixed-1" } });
+    expect(newer.offset).toBe(
+      expected.length - 1 - expected.indexOf(readChatHistoryMessageId(newer.messages.at(-1))!),
+    );
+  });
+
+  test.each([false, true])(
+    "chat kernel advances adjacent 5 MiB rows (closed=%s)",
+    async (closed) => {
+      const events = [
+        { type: "session", version: 3, id: "kernel-adjacent" },
+        {
+          type: "message",
+          id: "left",
+          parentId: null,
+          message: { role: "user", content: "x".repeat(5 * 1024 * 1024) },
+        },
+        {
+          type: "message",
+          id: "right",
+          parentId: "left",
+          message: { role: "user", content: "y".repeat(5 * 1024 * 1024) },
+        },
+        ...(closed
+          ? [
+              {
+                type: "reset",
+                id: "closing",
+                parentId: "right",
+                reason: "new",
+                timestamp: "2026-10-11T00:00:01.000Z",
+              },
+              {
+                type: "message",
+                id: "current",
+                parentId: "closing",
+                message: { role: "user", content: "current" },
+              },
+            ]
+          : []),
+      ];
+      const scope = await writeTranscript("kernel-adjacent", events);
+      const read = async (
+        messageId: string,
+        direction?: "older" | "newer",
+        source?: string,
+        readers: SessionTranscriptPageReader = transcriptReaders,
+      ) =>
+        readChatHistoryPageKernel(
+          {
+            entry: undefined,
+            provider: undefined,
+            sessionId: scope.sessionId,
+            storePath,
+            sessionAgentId: "main",
+            canonicalKey: scope.sessionKey,
+            max: 1,
+            maxHistoryBytes: 512 * 1024,
+            effectiveMaxChars: 200,
+            offset: undefined,
+            messageId,
+            ...(direction && source
+              ? { pageCursor: { sessionId: scope.sessionId, source, messageId, direction } }
+              : {}),
+          },
+          { readers, deferProfileDisplay: true },
+        );
+      const first = await read("right");
+      expect(first.messages.map(readChatHistoryMessageId)).toEqual(["right"]);
+      expect(first.anchor?.hasOlder).toBe(true);
+      const source = first.anchor!.source;
+      const older = await read("right", "older", source);
+      expect(older.messages.map(readChatHistoryMessageId)).toEqual(["left"]);
+      expect(older.anchor).toMatchObject({
+        oldestMessageId: "left",
+        newestMessageId: "left",
+        hasOlder: false,
+      });
+      const newer = await read("left", "newer", source);
+      expect(newer.messages.map(readChatHistoryMessageId)).toEqual(["right"]);
+      expect(newer.anchor?.hasNewer).toBe(closed);
+      if (closed) {
+        const end = await read("right", "newer", source);
+        expect(end.messages.map(readChatHistoryMessageId)).toEqual(["closing"]);
+        expect(end.anchor?.hasNewer).toBe(false);
+        const interval = await readSessionMessagesAroundIdWithStatsAsync(scope, {
+          messageId: "closing",
+          closedResetInterval: true,
+          maxMessages: 4,
+          direction: "older",
+        });
+        expect(interval.messages.map(readChatHistoryMessageId)).toEqual(["right"]);
+        expect(interval).toMatchObject({ offset: 0, totalMessages: 2, hasOverreadContext: false });
+      }
+      const replacement = () =>
+        writeTranscript(scope.sessionId, [
+          events[0],
+          {
+            type: "message",
+            id: "replacement",
+            parentId: null,
+            message: { role: "user", content: "new generation" },
+          },
+        ]);
+      // Replace the physical selection between inclusive admission and continuation.
+      // Both reads are real facade calls; no production test seam or fake result.
+      let reads = 0;
+      const readers: SessionTranscriptPageReader = {
+        ...transcriptReaders,
+        async readSessionMessagesAroundIdWithStatsAsync(target, options, signal) {
+          if (++reads === 2) {
+            await replacement();
+          }
+          return transcriptReaders.readSessionMessagesAroundIdWithStatsAsync(
+            target,
+            options,
+            signal,
+          );
+        },
+      };
+      expect(await read("right", "older", source, readers)).toMatchObject({
+        messages: [],
+        windowReset: true,
+      });
+      expect(reads).toBe(2);
+      expect(await read("right", "older", source)).toMatchObject({
+        messages: [],
+        windowReset: true,
+      });
+    },
+  );
+
+  test("final positioned SQL cap retains the anchor and reports its actual interval", async () => {
+    const rows = ["first", "anchor", "last"].map((id, index, ids) => ({
+      type: "message",
+      id,
+      parentId: index ? ids[index - 1] : null,
+      message: { role: "user", content: "x".repeat(700) },
+    }));
+    const scope = await writeTranscript("positioned-cap", [
+      { type: "session", version: 3, id: "positioned-cap" },
+      ...rows,
+    ]);
+    // Both stored payloads fit, but positioned rows cross this exact budget.
+    const maxBytes = Buffer.byteLength(JSON.stringify(rows.slice(0, 2))) + 2;
+    const around = await readSessionMessagesAroundIdWithStatsAsync(scope, {
+      messageId: "anchor",
+      maxMessages: 1,
+      maxBytes,
+    });
+    expect(around.messages.map(readChatHistoryMessageId)).toEqual(["anchor"]);
+    expect(around).toMatchObject({ offset: 1, hasOverreadContext: false });
+    const newer = await readSessionMessagesAroundIdWithStatsAsync(scope, {
+      messageId: "first",
+      direction: "newer",
+      maxMessages: 2,
+      maxBytes,
+    });
+    expect(newer.messages.map(readChatHistoryMessageId)).toEqual(["first"]);
+    expect(newer).toMatchObject({ offset: 2, hasOverreadContext: false });
+    for (const page of [around, newer]) {
+      expect(Buffer.byteLength(JSON.stringify(page.messages))).toBeLessThanOrEqual(maxBytes);
+    }
+    const small = await readSessionMessagesAroundIdWithStatsAsync(scope, {
+      messageId: "anchor",
+      maxMessages: 1,
+      maxBytes: 1024,
+    });
+    const reset = await readSessionMessagesAroundIdWithStatsAsync(scope, {
+      messageId: "anchor",
+      maxMessages: 1,
+      maxBytes,
+      expectedReadWindow: { source: "stale", latestResetRawSeq: null },
+    });
+    expect(reset).toMatchObject({ windowReset: true, hasOverreadContext: false, offset: 1 });
+    expect(reset.readWindow?.anchor?.seq).toBe(2);
+    expect(reset.messages.map(readChatHistoryMessageId)).toEqual(["anchor"]);
+    expect(small.messages.map(readChatHistoryMessageId)).toEqual(["anchor"]);
+    expect(small).toMatchObject({ offset: 1, hasOverreadContext: false });
+  });
+
+  test("chat kernel continues after the default positioned SQL cap trims a raw-fitting page", async () => {
+    const cap = 8 * 1024 * 1024;
+    const rows = ["first", "second"].map((id, index) => ({
+      type: "message",
+      id,
+      parentId: index ? "first" : null,
+      message: { role: "user", content: "" },
+    }));
+    // Leave less room than the positioned row envelopes require, but admit
+    // both raw records. This reaches the real final cap without a test budget.
+    const payloadBytes = cap - Buffer.byteLength(JSON.stringify(rows)) - 16;
+    rows[0]!.message.content = "x".repeat(Math.floor(payloadBytes / 2));
+    rows[1]!.message.content = "y".repeat(payloadBytes - rows[0]!.message.content.length);
+    const scope = await writeTranscript("kernel-positioned-cap", [
+      { type: "session", version: 3, id: "kernel-positioned-cap" },
+      ...rows,
+    ]);
+    const readers: SessionTranscriptPageReader = {
+      ...transcriptReaders,
+      async readSessionMessagesAroundIdWithStatsAsync(target, options, signal) {
+        const page = await transcriptReaders.readSessionMessagesAroundIdWithStatsAsync(
+          target,
+          options,
+          signal,
+        );
+        expect(Buffer.byteLength(JSON.stringify(page.messages))).toBeLessThanOrEqual(cap);
+        return page;
+      },
+    };
+    const read = (messageId: string, source?: string) =>
+      readChatHistoryPageKernel(
+        {
+          entry: undefined,
+          provider: undefined,
+          sessionId: scope.sessionId,
+          storePath,
+          sessionAgentId: "main",
+          canonicalKey: scope.sessionKey,
+          max: 1,
+          maxHistoryBytes: 512 * 1024,
+          effectiveMaxChars: 200,
+          offset: undefined,
+          messageId,
+          ...(source
+            ? {
+                pageCursor: {
+                  sessionId: scope.sessionId,
+                  source,
+                  messageId,
+                  direction: "newer" as const,
+                },
+              }
+            : {}),
+        },
+        { readers, deferProfileDisplay: true },
+      );
+    const first = await read("first");
+    expect(first.messages.map(readChatHistoryMessageId)).toEqual(["first"]);
+    expect(first.anchor).toMatchObject({ hasOlder: false, hasNewer: true });
+    const second = await read("first", first.anchor!.source);
+    expect(second.messages.map(readChatHistoryMessageId)).toEqual(["second"]);
+    expect(second.anchor).toMatchObject({ hasOlder: true, hasNewer: false });
+  });
+
+  test("chat kernel walks mixed widths without duplicate or omitted source rows", async () => {
+    const widths = [1, 3, 1, 3, 1, 3];
+    const expected = widths.map((_, index) => "walk-" + index);
+    const scope = await writeTranscript("kernel-mixed", [
+      { type: "session", version: 3, id: "kernel-mixed" },
+      ...widths.map((width, index) => ({
+        type: "message",
+        id: expected[index],
+        parentId: index ? expected[index - 1] : null,
+        message: { role: "user", content: "x".repeat(width * 1024 * 1024) },
+      })),
+    ]);
+    const initial = await readSessionMessagesAroundIdWithStatsAsync(scope, {
+      messageId: expected[5]!,
+      maxMessages: 1,
+    });
+    const source = createTranscriptDisplaySource([initial.displaySource!]);
+    const seen = [expected[5]!];
+    let anchor = expected[5]!;
+    let remainingPages = expected.length;
+    while (remainingPages-- > 0) {
+      const page = await readChatHistoryPageKernel(
+        {
+          entry: undefined,
+          provider: undefined,
+          sessionId: scope.sessionId,
+          storePath,
+          sessionAgentId: "main",
+          canonicalKey: scope.sessionKey,
+          max: 2,
+          maxHistoryBytes: 512 * 1024,
+          effectiveMaxChars: 200,
+          offset: undefined,
+          messageId: anchor,
+          pageCursor: { sessionId: scope.sessionId, source, messageId: anchor, direction: "older" },
+        },
+        { readers: transcriptReaders, deferProfileDisplay: true },
+      );
+      const ids = page.messages.map(readChatHistoryMessageId);
+      expect(ids.length).toBeGreaterThan(0);
+      expect(ids.some((id) => seen.includes(id!))).toBe(false);
+      seen.unshift(...ids.map((id) => id!));
+      anchor = page.anchor!.oldestMessageId!;
+      if (!page.anchor!.hasOlder) {
+        break;
+      }
+    }
+    expect(seen).toEqual(expected);
+  });
 
   function markProjectionNeedsRebuild(sessionId: string): void {
     openOpenClawAgentDatabase({
@@ -290,7 +633,7 @@ describe("session transcript reader facade", () => {
     ).rejects.toThrow("Transcript history message exceeds the 8388608-byte page limit");
   });
 
-  test("refuses unbounded anchor windows and caps payloads before decoding", async () => {
+  test("bounds anchor windows before decoding excluded payloads", async () => {
     const sessionId = "reader-anchor-page-bytes";
     const scope = await writeTranscript(sessionId, [
       { type: "session", version: 3, id: sessionId },
@@ -301,11 +644,15 @@ describe("session transcript reader facade", () => {
         message: { role: "user", content: "a".repeat(3 * 1024 * 1024) },
       })),
     ]);
-    await expect(
-      readSessionMessagesAroundIdWithStatsAsync(scope, { messageId: "large-1", maxMessages: 3 }),
-    ).rejects.toThrow(
-      "Transcript history page exceeds the 8388608-byte limit; request a smaller limit",
-    );
+    const bounded = await readSessionMessagesAroundIdWithStatsAsync(scope, {
+      messageId: "large-1",
+      maxMessages: 3,
+    });
+    expect(bounded.messages).toMatchObject([
+      { __openclaw: { id: "large-0" } },
+      { __openclaw: { id: "large-1" } },
+    ]);
+    expect(bounded.offset).toBe(1);
     const database = openOpenClawAgentDatabase({
       agentId: "main",
       path: path.join(tempDir, "openclaw-agent.sqlite"),
@@ -321,7 +668,7 @@ describe("session transcript reader facade", () => {
       maxMessages: 3,
       maxBytes: 4 * 1024 * 1024,
     });
-    expect(page.messages).toMatchObject([{ __openclaw: { id: "large-2" } }]);
+    expect(page.messages).toMatchObject([{ __openclaw: { id: "large-1" } }]);
     expect(page.hasOverreadContext).toBe(false);
   });
 

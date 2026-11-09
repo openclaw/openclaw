@@ -9,9 +9,10 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import {
+  boundHistoryAnchorPageRange,
   resolveHistoryAnchorPageRange,
   resolveTranscriptPageEnd,
-  type TranscriptAnchorPageOptions,
+  type TranscriptAnchorReadOptions,
   type TranscriptRecentReadLimits,
 } from "../../sessions/transcript-anchor-page.js";
 import type { TranscriptReadWindowOptions } from "../../sessions/transcript-read-window.js";
@@ -599,7 +600,7 @@ export function readSessionTranscriptHistoryEventLookupFromProjection(
 
 export function readSessionTranscriptHistoryAnchorPageFromProjection(
   projection: CurrentTranscriptProjection,
-  options: TranscriptAnchorPageOptions,
+  options: TranscriptAnchorReadOptions,
 ): SessionTranscriptMessageAnchorPage {
   const history = resolveVisibleHistoryProjection(projection);
   const anchor = readDisplayableActiveEventMetadataById(projection, options.messageId);
@@ -657,21 +658,29 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
   }
   const range = resolveHistoryAnchorPageRange(history.total, anchorSeq - 1, options);
   const limit = Math.min(options.maxBytes ?? SOURCE_PAGE_MAX_BYTES, SOURCE_PAGE_MAX_BYTES);
-  const { start } = resolveRecentHistoryStart(
+  const visible = resolveVisibleHistoryRange(history, range.readStart, range.endExclusive);
+  const sizes = new Map<number, number>();
+  let displayPosition = visible.boundedStart;
+  for (const row of iterateVisibleMessageMetadata(
     projection,
-    range.readStart,
-    range.endExclusive,
-    history,
+    visible.messageStart,
+    visible.messageEnd,
+    "asc",
+  )) {
+    while (visible.boundaries.has(displayPosition)) {
+      displayPosition++;
+    }
+    sizes.set(displayPosition++, row.serialized_bytes);
+  }
+  const { start, endExclusive } = boundHistoryAnchorPageRange(
+    range,
+    anchorSeq - 1,
     Math.max(1024, limit),
-    range.endExclusive - range.readStart,
+    (position) =>
+      (visible.boundaries.get(position)?.serializedBytes ?? sizes.get(position) ?? 1) - 1,
     options.maxBytes === undefined,
   );
-  if (options.maxBytes === undefined && start !== range.readStart) {
-    throw new Error(
-      `Transcript history page exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte limit; request a smaller limit`,
-    );
-  }
-  const events = readVisibleHistoryRange(projection, start, range.endExclusive, history);
+  const events = readVisibleHistoryRange(projection, start, endExclusive, history);
   return {
     events,
     ...(windowChange
@@ -679,7 +688,7 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
       : {}),
     found: true,
     hasOverreadContext: range.hasOverreadContext && start === range.readStart,
-    offset: range.offset,
+    offset: history.total - endExclusive,
     displaySource: history.displaySource,
     totalMessages: history.total,
   };

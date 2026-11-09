@@ -18,6 +18,11 @@ export type TranscriptAnchorPageOptions = {
   expectedReadWindow?: TranscriptReadWindow;
 };
 
+/** Internal Gateway continuation; not part of TranscriptAnchorPageOptions or the RPC. */
+export type TranscriptAnchorReadOptions = TranscriptAnchorPageOptions & {
+  directionalPage?: true;
+};
+
 export function resolveTranscriptPageEnd(
   totalMessages: number,
   options: { beforeSeq?: number; offset?: number },
@@ -33,10 +38,29 @@ export function resolveTranscriptPageEnd(
 export function resolveHistoryAnchorPageRange(
   totalMessages: number,
   anchorPosition: number,
-  { maxMessages, direction }: Pick<TranscriptAnchorPageOptions, "maxMessages" | "direction">,
+  {
+    maxMessages,
+    direction,
+    directionalPage,
+  }: Pick<TranscriptAnchorReadOptions, "maxMessages" | "direction" | "directionalPage">,
 ) {
   const pageSize = Math.max(1, Math.floor(Number.isFinite(maxMessages) ? maxMessages : 1));
   if (direction) {
+    if (directionalPage) {
+      const endExclusive =
+        direction === "older"
+          ? anchorPosition
+          : Math.min(totalMessages, anchorPosition + 1 + pageSize);
+      return {
+        readStart:
+          direction === "older"
+            ? Math.max(0, endExclusive - pageSize)
+            : Math.min(totalMessages, anchorPosition + 1),
+        endExclusive,
+        hasOverreadContext: false,
+        offset: totalMessages - endExclusive,
+      };
+    }
     const endExclusive =
       direction === "older"
         ? anchorPosition + 1
@@ -61,4 +85,42 @@ export function resolveHistoryAnchorPageRange(
     hasOverreadContext: readStart < start,
     offset: totalMessages - endExclusive,
   };
+}
+
+/** Admit a contiguous range around the anchor before loading any payloads. */
+export function boundHistoryAnchorPageRange(
+  range: ReturnType<typeof resolveHistoryAnchorPageRange>,
+  anchorPosition: number,
+  maxBytes: number,
+  byteSize: (position: number, remainingBytes: number) => number,
+  rejectOversized = false,
+) {
+  let start = Math.max(range.readStart, Math.min(anchorPosition, range.endExclusive - 1));
+  let endExclusive = start;
+  let bytes = 2;
+  const include = (position: number) => {
+    const separator = start === endExclusive ? 0 : 1;
+    const size = byteSize(position, maxBytes - bytes - separator) + separator;
+    if (bytes + size > maxBytes) {
+      if (rejectOversized && start === endExclusive) {
+        throw new Error(`Transcript history message exceeds the ${maxBytes}-byte page limit`);
+      }
+      return false;
+    }
+    bytes += size;
+    return true;
+  };
+  if (start < range.endExclusive) {
+    if (!include(start)) {
+      return { start, endExclusive };
+    }
+    endExclusive++;
+  }
+  while (start > range.readStart && include(start - 1)) {
+    start--;
+  }
+  while (endExclusive < range.endExclusive && include(endExclusive)) {
+    endExclusive++;
+  }
+  return { start, endExclusive };
 }
