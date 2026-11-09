@@ -518,28 +518,18 @@ extension OpenClawSnapshotUITests {
         file: StaticString = #filePath,
         line: UInt = #line)
     {
-        guard let app, let image = app.screenshot().image.cgImage else {
-            XCTFail("App screenshot has no CGImage", file: file, line: line)
-            return
-        }
-
-        let appFrame = app.frame
-        let elementFrame = element.frame.intersection(appFrame)
-        guard !elementFrame.isNull, elementFrame.width > 1, elementFrame.height > 1 else {
+        guard element.exists, element.frame.width > 1, element.frame.height > 1 else {
             XCTFail("\(name) has no visible screenshot region", file: file, line: line)
             return
         }
-
-        let scaleX = CGFloat(image.width) / appFrame.width
-        let scaleY = CGFloat(image.height) / appFrame.height
-        let crop = CGRect(
-            x: (elementFrame.minX - appFrame.minX) * scaleX,
-            y: (elementFrame.minY - appFrame.minY) * scaleY,
-            width: elementFrame.width * scaleX,
-            height: elementFrame.height * scaleY).integral
-            .intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        guard let cropped = image.cropping(to: crop), crop.width > 1, crop.height > 1 else {
-            XCTFail("Could not crop screenshot for \(name)", file: file, line: line)
+        // Capture the element directly: app-frame coordinates and screenshot orientation
+        // do not share a coordinate space on every simulator orientation.
+        let screenshot = element.screenshot().image
+        let normalized = UIGraphicsImageRenderer(size: screenshot.size).image { _ in
+            screenshot.draw(in: CGRect(origin: .zero, size: screenshot.size))
+        }
+        guard let cropped = normalized.cgImage else {
+            XCTFail("Could not capture screenshot for \(name)", file: file, line: line)
             return
         }
 

@@ -390,6 +390,19 @@ extension OpenClawChatView {
         }
     }
 
+    private func handleTranscriptDistanceChange(_ distanceFromBottom: CGFloat) {
+        let isAtLiveEdge = distanceFromBottom <= Layout.liveEdgeThreshold
+        guard self.scroll.isAtLiveEdge != isAtLiveEdge else { return }
+        self.scroll.isAtLiveEdge = isAtLiveEdge
+        #if !os(iOS)
+        guard self.hasPerformedInitialScroll else { return }
+        if isAtLiveEdge, !self.scroll.isUserScrolling, !self.isFollowingTurn, self.searchMessageID == nil {
+            self.scroll.followTarget = .latest
+            self.scroll.hasNewerContentBelow = false
+        }
+        #endif
+    }
+
     private func messageList(transcript: TranscriptPresentation) -> some View {
         let hasVisibleContent = !transcript.rows.isEmpty || self.hasVisibleTransientContent
         return ZStack {
@@ -397,6 +410,8 @@ extension OpenClawChatView {
                 #if os(iOS)
                 List {
                     self.transcriptGroups(transcript: transcript, hasVisibleContent: hasVisibleContent)
+                        .frame(maxWidth: self.readingColumnWidth)
+                        .frame(maxWidth: .infinity)
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)
                         .listRowInsets(EdgeInsets(
@@ -465,16 +480,7 @@ extension OpenClawChatView {
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
                 geometry.contentSize.height - geometry.visibleRect.maxY
             } action: { _, distanceFromBottom in
-                let isAtLiveEdge = distanceFromBottom <= Layout.liveEdgeThreshold
-                guard self.scroll.isAtLiveEdge != isAtLiveEdge else { return }
-                self.scroll.isAtLiveEdge = isAtLiveEdge
-                #if !os(iOS)
-                guard self.hasPerformedInitialScroll else { return }
-                if isAtLiveEdge, !self.scroll.isUserScrolling, !self.isFollowingTurn, self.searchMessageID == nil {
-                    self.scroll.followTarget = .latest
-                    self.scroll.hasNewerContentBelow = false
-                }
-                #endif
+                self.handleTranscriptDistanceChange(distanceFromBottom)
             }
             .onScrollPhaseChange { _, phase in
                 self.handleTranscriptScrollPhase(phase)

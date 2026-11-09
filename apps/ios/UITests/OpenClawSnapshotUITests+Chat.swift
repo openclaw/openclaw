@@ -449,14 +449,24 @@ extension OpenClawSnapshotUITests {
         let navigationBar = app.navigationBars.firstMatch
         let statusBarHeight = navigationBar.frame.minY - app.frame.minY
         XCTAssertGreaterThan(statusBarHeight, 0)
+        XCTAssertEqual(app.state, .runningForeground, "Native navigation requires the app in the foreground")
+        self.attachScreenshot(named: "reader-before-status-bar-navigation")
         app.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: app.frame.width * 0.18, dy: statusBarHeight * 0.4)).tap()
-        let readerAtTop = XCTNSPredicateExpectation(
+        guard app.state == .runningForeground else {
+            XCTFail("Status-bar input left the app; this is not native-navigation evidence")
+            return
+        }
+        self.attachScreenshot(named: "reader-after-status-bar-input")
+        let readerDepartedLatest = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
-                jumpToLatest.exists && !finalReply.frame.intersects(transcript.frame)
+                app.state == .runningForeground &&
+                    (!finalReply.exists || !finalReply.frame.intersects(transcript.frame))
             },
             object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [readerAtTop], timeout: 5), .completed)
+        XCTAssertEqual(XCTWaiter.wait(for: [readerDepartedLatest], timeout: 5), .completed)
+        XCTAssertEqual(app.state, .runningForeground)
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
         self.assertElementHasRenderedContent(transcript, named: "transcript after status bar scroll")
         self.attachScreenshot(named: "reader-status-bar-navigation")
         jumpToLatest.tap()
@@ -589,6 +599,43 @@ extension OpenClawSnapshotUITests {
         XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY)
         self.assertElementHasRenderedContent(latest, named: "final reply after collapsing work again")
         self.attachScreenshot(named: "completed-work-collapsed-again")
+    }
+
+    func testIPadTranscriptStaysInsideComposerColumn() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad, "iPad reading-column proof only")
+        defer { XCUIDevice.shared.orientation = .portrait }
+        for (orientation, name) in [
+            (UIDeviceOrientation.portrait, "portrait"),
+            (UIDeviceOrientation.landscapeLeft, "landscape"),
+        ] {
+            XCUIDevice.shared.orientation = orientation
+            self.launchApp(
+                for: Self.chatScreenshotTarget,
+                additionalArguments: ["--openclaw-long-chat-fixture"])
+            let app = try XCTUnwrap(self.app)
+            let composer = app.otherElements["chat-composer-surface"]
+            XCTAssertTrue(composer.waitForExistence(timeout: 8))
+            let transcript = try self.chatTranscript(in: app)
+            let assistant = app.otherElements["chat-assistant-message-body"].firstMatch
+            XCTAssertTrue(assistant.waitForExistence(timeout: 8))
+            // Check the assistant container, not a short text leaf that fits even in a full-width row.
+            XCTAssertGreaterThanOrEqual(assistant.frame.minX, composer.frame.minX - 24)
+            XCTAssertLessThanOrEqual(assistant.frame.maxX, composer.frame.maxX + 24)
+            self.assertElementHasRenderedContent(assistant, named: "iPad assistant column \(name)")
+            self.attachScreenshot(named: "ipad-assistant-column-\(name)")
+            let user = app.staticTexts["Prepare a detailed project review."]
+            for _ in 0..<4 where !user.exists || !user.frame.intersects(transcript.frame) {
+                transcript.swipeDown()
+            }
+            XCTAssertTrue(user.exists)
+            guard user.exists else { return }
+            XCTAssertTrue(user.frame.intersects(transcript.frame))
+            XCTAssertGreaterThanOrEqual(user.frame.minX, composer.frame.minX - 24)
+            XCTAssertLessThanOrEqual(user.frame.maxX, composer.frame.maxX + 24)
+            XCTAssertGreaterThanOrEqual(user.frame.maxX, composer.frame.maxX - 48)
+            self.assertElementHasRenderedContent(user, named: "iPad user column \(name)")
+            self.attachScreenshot(named: "ipad-user-column-\(name)")
+        }
     }
 
     func testExistingSessionRestoresLatestOutput() throws {
