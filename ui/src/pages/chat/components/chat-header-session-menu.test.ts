@@ -189,7 +189,7 @@ async function select(menu: HeaderMenuElement, value: string) {
 it("focuses the current first row when reopening removes the parked first row", async () => {
   const menu = await mountMenu({}, false);
   await openMenu(menu);
-  const previousFirst = item(menu, "Command palette");
+  const previousFirst = item(menu, "Search");
   const trigger = menu.readTrigger()!;
   const hidden = whenHidden(menu);
   press(panel(menu), "Escape");

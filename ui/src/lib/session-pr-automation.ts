@@ -1,3 +1,4 @@
+import type { CronAddResult } from "../../../packages/gateway-protocol/src/schema/cron.types.js";
 import {
   readCanonicalCronListPage,
   resolveCronListPageNextOffset,
@@ -76,11 +77,12 @@ export async function setCiAutomationEnabled(
   option: CiAutomationOption,
   enabled: boolean,
   current: CronJob | undefined,
-): Promise<CronJob | undefined> {
+): Promise<{ job: CronJob; warning?: string } | undefined> {
   if (!current && !enabled) {
     return undefined;
   }
   let result: CronJob;
+  let warning: string | undefined;
   if (current) {
     if (!ciAutomationJobMatches(current, target, option) || !current.configRevision) {
       throw new Error("Refresh the automation before changing it.");
@@ -92,14 +94,15 @@ export async function setCiAutomationEnabled(
     });
   } else {
     // Declaration convergence makes a lost create acknowledgement discoverable as the same job.
-    const response = await client.request<{ job: CronJob }>(
+    const response = await client.request<CronAddResult>(
       "cron.add",
       ciAutomationJobSpec(target, option),
     );
-    result = response.job;
+    result = "job" in response ? response.job : response;
+    warning = response.warning;
   }
   if (!result || !ciAutomationJobMatches(result, target, option)) {
     throw new Error("The automation changed while saving. Refresh to check its current state.");
   }
-  return result;
+  return { job: result, ...(warning ? { warning } : {}) };
 }

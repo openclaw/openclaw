@@ -295,6 +295,18 @@ it("reuses trusted simulator libraries and shared package downloads without publ
     (step: WorkflowStep) => step.id === "watch-rtc-cache",
   );
   expect(restore?.with).toEqual(producer.with);
+  expect(producer.with["restore-keys"]).toBe(
+    "watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-\n",
+  );
+  for (const [file, job] of [
+    ["macos-periphery.yml", "ios-index"],
+    ["ios-store-release.yml", "screenshots"],
+  ] as const) {
+    const consumer = readWorkflow(`.github/workflows/${file}`).jobs[job].steps.find(
+      (step: WorkflowStep) => step.name === "Restore Watch RTC build inputs",
+    );
+    expect(consumer.with).toEqual(producer.with);
+  }
   const packages = capture.steps.find((step: WorkflowStep) => step.id === "ios-packages-cache");
   const nativePackages = jobs["ios-build"].steps.find(
     (step: WorkflowStep) => step.id === "ios-packages-cache",
@@ -338,9 +350,13 @@ it("reuses trusted simulator libraries and shared package downloads without publ
 it("shares release device libraries only between trusted main release destinations", () => {
   const job = readWorkflow(".github/workflows/ios-store-release.yml").jobs.release;
   const restore = job.steps.find((step: WorkflowStep) => step.id === "watch-rtc-cache");
-  const save = job.steps.find((step: WorkflowStep) => step.uses?.startsWith("actions/cache/save@"));
+  const save = job.steps.find(
+    (step: WorkflowStep) => step.name === "Save Watch RTC release libraries",
+  );
   expect(restore.with.key).toMatch(/^watch-rtc-release-v1-/);
-  expect(restore.with["restore-keys"]).toBeUndefined();
+  expect(restore.with["restore-keys"]).toBe(
+    "watch-rtc-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.watch-rtc-inputs.outputs.xcode }}-\n",
+  );
   expect(save.with.path).toBe(restore.with.path);
   expect(save.with.key).toBe("${{ steps.watch-rtc-cache.outputs.cache-primary-key }}");
   for (const operation of ["release", "testflight"]) {

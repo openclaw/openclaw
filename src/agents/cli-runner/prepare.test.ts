@@ -954,52 +954,30 @@ describe("prepareCliRunContext", () => {
     },
   );
 
-  it("persists and forwards a refreshed managed Anthropic OAuth profile", async () => {
-    const { dir } = fixture.session;
-    const agentDir = path.join(dir, "agents", "main", "agent");
-    const authProfileId = "anthropic:openclaw-managed";
-    const prepareExecution = vi.fn(async () => undefined);
-    const refreshedCredential = {
+  it("runs an imported Claude CLI OAuth login natively without forwarding a credential", async () => {
+    const credential = {
       type: "oauth" as const,
-      provider: "anthropic",
-      access: "refreshed-access-token",
-      refresh: "refreshed-refresh-token",
-      expires: Date.now() + 60 * 60_000,
+      provider: "claude-cli",
+      access: "expired-imported-access",
+      refresh: "imported-refresh",
+      expires: Date.now() - 60_000,
+      email: "owner@example.com",
     };
+    const agentDir = path.join(fixture.session.dir, "agents", "main", "agent");
+    const authProfileId = "anthropic:claude-cli";
+    const prepareExecution = vi.fn(async () => undefined);
     fs.mkdirSync(agentDir, { recursive: true });
     saveAuthProfileStore(
-      createAuthProfileStoreFixture({
-        [authProfileId]: {
-          type: "oauth",
-          provider: "anthropic",
-          access: "expired-access-token",
-          refresh: "stored-refresh-token",
-          expires: Date.now() - 60_000,
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: credential,
         },
-      }),
+      },
       agentDir,
     );
     setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
-    const resolveApiKeyForProfile = vi.fn<typeof resolveApiKeyForProfileImpl>(async ({ store }) => {
-      saveAuthProfileStore(
-        {
-          ...store,
-          profiles: {
-            ...store.profiles,
-            [authProfileId]: refreshedCredential,
-          },
-        },
-        agentDir,
-      );
-      return {
-        apiKey: refreshedCredential.access,
-        provider: refreshedCredential.provider,
-        profileId: authProfileId,
-        profileType: refreshedCredential.type,
-        credential: refreshedCredential,
-        readCurrentCredential: null,
-      };
-    });
+    const resolveApiKeyForProfile = vi.fn<typeof resolveApiKeyForProfileImpl>(async () => null);
     setCliRunnerPrepareTestDeps({
       resolveApiKeyForProfile,
     });
@@ -1013,80 +991,12 @@ describe("prepareCliRunContext", () => {
       config: {},
     });
 
+    expect(prepareExecution).toHaveBeenCalledTimes(1);
     expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authProfileId,
-        authCredential: expect.objectContaining({
-          type: "oauth",
-          provider: "anthropic",
-          access: refreshedCredential.access,
-          refresh: refreshedCredential.refresh,
-        }),
-      }),
+      expect.objectContaining({ authProfileId: undefined, authCredential: undefined }),
     );
-    expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[authProfileId]).toEqual(
-      refreshedCredential,
-    );
-    expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profileId: authProfileId,
-        agentDir,
-        allowProfileFallback: false,
-      }),
-    );
+    expect(resolveApiKeyForProfile).not.toHaveBeenCalled();
   });
-
-  it.each([
-    {
-      label: "OAuth under the Claude CLI provider",
-      credential: {
-        type: "oauth" as const,
-        provider: "claude-cli",
-        access: "expired-imported-access",
-        refresh: "imported-refresh",
-        expires: Date.now() - 60_000,
-        email: "owner@example.com",
-      },
-    },
-  ])(
-    "runs an imported Claude CLI login stored as $label natively without forwarding a credential",
-    async ({ credential }) => {
-      const { dir } = fixture.session;
-      const agentDir = path.join(dir, "agents", "main", "agent");
-      const authProfileId = "anthropic:claude-cli";
-      const prepareExecution = vi.fn(async () => undefined);
-      fs.mkdirSync(agentDir, { recursive: true });
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            [authProfileId]: credential,
-          },
-        },
-        agentDir,
-      );
-      setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
-      const resolveApiKeyForProfile = vi.fn<typeof resolveApiKeyForProfileImpl>(async () => null);
-      setCliRunnerPrepareTestDeps({
-        resolveApiKeyForProfile,
-      });
-
-      await fixture.prepare({
-        sessionKey: "agent:main:main",
-        agentDir,
-        provider: "claude-cli",
-        model: "sonnet",
-        authProfileId,
-        config: {},
-      });
-
-      expect(prepareExecution).toHaveBeenCalledTimes(1);
-      expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({ authProfileId: undefined, authCredential: undefined }),
-      );
-      expect(resolveApiKeyForProfile).not.toHaveBeenCalled();
-    },
-  );
 
   it.each(["missing", "different-profile"] as const)(
     "rejects a selected credential when auth resolution returns %s",
@@ -1121,20 +1031,19 @@ describe("prepareCliRunContext", () => {
         agentDir,
       );
       setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
-      setCliRunnerPrepareTestDeps({
-        resolveApiKeyForProfile: vi.fn<typeof resolveApiKeyForProfileImpl>(async () =>
-          resolution === "missing"
-            ? null
-            : {
-                apiKey: fallbackCredential.access,
-                provider: fallbackCredential.provider,
-                profileId: fallbackProfileId,
-                profileType: fallbackCredential.type,
-                credential: fallbackCredential,
-                readCurrentCredential: null,
-              },
-        ),
-      });
+      const resolveApiKeyForProfile = vi.fn<typeof resolveApiKeyForProfileImpl>(async () =>
+        resolution === "missing"
+          ? null
+          : {
+              apiKey: fallbackCredential.access,
+              provider: fallbackCredential.provider,
+              profileId: fallbackProfileId,
+              profileType: fallbackCredential.type,
+              credential: fallbackCredential,
+              readCurrentCredential: null,
+            },
+      );
+      setCliRunnerPrepareTestDeps({ resolveApiKeyForProfile });
 
       const preparation = fixture.prepare({
         sessionKey: "agent:main:main",
@@ -1157,6 +1066,13 @@ describe("prepareCliRunContext", () => {
         agentDir,
       });
       await expect(preparation).rejects.toThrow("openclaw models auth login --provider anthropic");
+      expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          profileId: authProfileId,
+          agentDir,
+          allowProfileFallback: false,
+        }),
+      );
       expect(prepareExecution).not.toHaveBeenCalled();
     },
   );
@@ -2065,23 +1981,23 @@ describe("prepareCliRunContext", () => {
     },
   );
 
-  it("uses the recorded worktree bootstrap instead of the configured checkout", async () => {
+  it("keeps agent bootstrap and adds only project instructions from a project worktree", async () => {
     setCliRunnerPrepareTestDeps({ resolveBootstrapContextForRun: loadBootstrapContext });
     const { dir, sessionTarget } = fixture.session;
     const task = path.join(dir, "task");
     fs.mkdirSync(task);
-    fs.writeFileSync(path.join(dir, "AGENTS.md"), "SHARED-RULE-MUST-NOT-LEAK");
-    fs.writeFileSync(path.join(dir, "SOUL.md"), "SHARED-SOUL-MUST-NOT-LEAK");
-    fs.writeFileSync(path.join(task, "AGENTS.md"), "BRANCH-RULE");
-    fs.writeFileSync(path.join(task, "SOUL.md"), "BRANCH-SOUL");
+    fs.writeFileSync(path.join(dir, "SOUL.md"), "AGENT-SOUL");
+    fs.writeFileSync(path.join(task, "AGENTS.md"), "PROJECT-RULE");
+    fs.writeFileSync(path.join(task, "SOUL.md"), "PROJECT-SOUL-MUST-NOT-LEAK");
     const context = await fixture.prepare({
       config: { agents: { entries: { main: { workspace: dir } } } },
       workspaceDir: dir,
       cwd: task,
       sessionEntry: { sessionId: sessionTarget.sessionId, updatedAt: 1, sessionRoot: task },
     });
-    expect(context.systemPrompt).toContain("BRANCH-RULE");
-    expect(context.systemPrompt).toContain("BRANCH-SOUL");
+    for (const text of ["AGENT-SOUL", "PROJECT-RULE"]) {
+      expect(context.systemPrompt).toContain(text);
+    }
     expect(context.systemPrompt).not.toContain("MUST-NOT-LEAK");
   });
 

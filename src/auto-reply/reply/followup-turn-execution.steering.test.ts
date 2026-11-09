@@ -370,9 +370,8 @@ describe("queued ingress acceptance", () => {
           if (multipleInputs) {
             const claim = run.controllerClaim ?? run.controllerInput?.claim;
             selectedGroups.push(claim?.sources.map((source) => source.prompt) ?? []);
-            rejectQueuePreparation(run, new Error("ENOSPC: queued preparation failed"));
           }
-          throw new Error("ENOSPC: queued preparation failed");
+          rejectQueuePreparation(run, new Error("ENOSPC: queued preparation failed"));
         });
         const drain = createChannelIngressDrain({
           queue,
@@ -430,6 +429,7 @@ describe("queued ingress acceptance", () => {
             expect(signals.map((signal) => signal.aborted)).toEqual([false, false]);
             await vi.advanceTimersByTimeAsync(60);
             expect(signals.map((signal) => signal.aborted)).toEqual([true, false]);
+            await vi.advanceTimersByTimeAsync(250);
             expect(selectedGroups).toContainEqual(["Second request"]);
             // The waiting input keeps its heartbeat until its own preparation fails.
             await vi.advanceTimersByTimeAsync(90);
@@ -455,6 +455,7 @@ describe("queued ingress acceptance", () => {
         } finally {
           drain.dispose();
           clearFollowupQueue(key);
+          await vi.advanceTimersByTimeAsync(250);
           preparation?.mockRestore();
         }
       });

@@ -53,6 +53,7 @@ afterEach(() => {
 
 it.each([
   ["chatBubblesEnabled", false],
+  ["openclawIdEnabled", false],
   ["uploadsEnabled", true],
 ] as const)("publishes %s changes from its default %s", async (field, initial) => {
   fetchMock

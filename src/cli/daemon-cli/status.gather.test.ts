@@ -24,9 +24,7 @@ import {
   sendMinimalGatewayConnectChallenge,
   sendMinimalGatewayResponse,
 } from "../../gateway/minimal-gateway.test-helpers.js";
-import * as gatewayBootLifecycle from "../../infra/gateway-boot-lifecycle.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
-import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
@@ -54,6 +52,10 @@ import {
   inspectPortConnections,
   inspectPortUsage,
   inspectPortUsages,
+  originalReadGatewayLastShutdown,
+  readGatewayLastShutdownAsync,
+  readGatewayRecentCrashesAsync,
+  readGatewayRestartHandoffSync,
   readLastGatewayErrorLine,
   type GatewayStatusProbeOptions,
   type PortUsageInspectionOptions,
@@ -90,11 +92,6 @@ const fetchNpmPackageTargetStatus = vi.fn(
     nodeEngine: null,
   }),
 );
-const readGatewayRestartHandoffSync = vi.fn<
-  (_env?: NodeJS.ProcessEnv) => GatewayRestartHandoff | null
->(() => null);
-const originalReadGatewayLastShutdown = gatewayBootLifecycle.readGatewayLastShutdownAsync;
-const readGatewayLastShutdownAsync = vi.spyOn(gatewayBootLifecycle, "readGatewayLastShutdownAsync");
 const findSystemdGatewayInstallation = vi.fn<
   typeof import("../../daemon/systemd-scope.js").findSystemdGatewayInstallation
 >(async () => ({ kind: "none" }));
@@ -506,6 +503,7 @@ describe("gatherDaemonStatus", () => {
     readLastGatewayErrorLine.mockResolvedValue(null);
     readGatewayRestartHandoffSync.mockClear();
     readGatewayLastShutdownAsync.mockReset().mockResolvedValue(undefined);
+    readGatewayRecentCrashesAsync.mockReset().mockResolvedValue([]);
     preflightOpenClawDatabaseSchemas
       .mockReset()
       .mockResolvedValue({ incompatible: [], indeterminate: [] });

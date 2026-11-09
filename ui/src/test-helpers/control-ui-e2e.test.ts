@@ -12,6 +12,7 @@ import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
 import {
   installControlUiE2ePageDiagnosticRing,
   recordControlUiE2eFailureFacts,
+  rethrowWithControlUiE2eFailureFacts,
 } from "./control-ui-e2e-diagnostics.ts";
 import { installControlUiE2eRendererStallProbe } from "./control-ui-e2e-renderer-stall.ts";
 import {
@@ -58,6 +59,58 @@ describe("shared proof capture", () => {
     vi.restoreAllMocks();
     document.body.replaceChildren();
   });
+
+  it.each(["resolve", "reject", "throw", "late resolve", "late reject"] as const)(
+    "preserves the original failure and bounded facts when a scenario read will %s",
+    async (outcome) => {
+      const { logs } = diagnosticFixture();
+      const page = pageFixture({
+        evaluate: async () => ({ failureSummary: { available: true } }),
+        screenshot: async () => Buffer.from("proof"),
+      });
+      const original = new Error("original assertion failure");
+      const pending = createDeferredCore<Record<string, number>>();
+      const read = () => {
+        if (outcome === "throw") {
+          throw new Error("diagnostic launch failed");
+        }
+        return outcome === "resolve"
+          ? Promise.resolve({ toolCards: 2 })
+          : outcome === "reject"
+            ? Promise.reject(new Error("diagnostic read failed"))
+            : pending.promise;
+      };
+      const failed = rethrowWithControlUiE2eFailureFacts(page, original, "factsRead", read).catch(
+        (error: unknown) => error,
+      );
+      const late = outcome.startsWith("late");
+      if (late) {
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      expect(await failed).toBe(original);
+      const capture = async () => {
+        await captureControlUiE2eFailureDiagnostics(page, { error: original, label: "scenario" });
+        const summary = logs.mock.calls.findLast(
+          ([message]) => message === "[control-ui-e2e] failure state",
+        );
+        return JSON.parse(String(summary?.[1])).scenarioFacts;
+      };
+      const expected =
+        outcome === "resolve" ? { factsRead: true, toolCards: 2 } : { factsRead: false };
+      expect(await capture()).toEqual(expected);
+      if (late) {
+        if (outcome === "late resolve") {
+          pending.resolve({ toolCards: 9 });
+        } else {
+          pending.reject(new Error("late diagnostic failure"));
+        }
+        await vi.runAllTimersAsync();
+        // Capture again: unchanged old artifact bytes alone cannot detect a late WeakMap write.
+        expect(await capture()).toEqual(expected);
+      }
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it.each([
     { stage: "evaluation", late: "resolve" },

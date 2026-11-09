@@ -254,12 +254,12 @@ export async function cloneProjectCheckout(
   throw classifyProjectGitFailure(result, "clone", Boolean(options.token));
 }
 
-/** Refreshes refs in an existing Gateway-managed project checkout. */
-export async function refreshProjectCheckout(
+async function withProjectCheckoutTransport(
   input: { target: string; url: string },
-  options: ProjectCloneOptions = {},
+  options: ProjectCloneOptions,
+  run: (staging: string, stagingOptions: ProjectCloneOptions) => Promise<void>,
 ): Promise<void> {
-  const [objectPath, objectFormatResult, initialRefs, filterResult] = await Promise.all([
+  const [objectPath, objectFormatResult] = await Promise.all([
     runProjectCheckoutGit(input, options, [
       "rev-parse",
       "--path-format=absolute",
@@ -267,15 +267,7 @@ export async function refreshProjectCheckout(
       "objects",
     ]),
     runProjectCheckoutGit(input, options, ["rev-parse", "--show-object-format"]),
-    readProjectRemoteRefs(input, options),
-    runProjectCheckoutGit(input, options, ["config", "--get", "remote.origin.partialclonefilter"]),
   ]);
-  // The temporary repository does not inherit the managed clone's origin filter.
-  const filter =
-    filterResult.code === 1 && filterResult.termination === "exit"
-      ? ""
-      : requireGitCommandOutput("git config remote.origin.partialclonefilter", filterResult).trim();
-  let currentRefs = initialRefs;
   if (objectPath.code !== 0 || objectPath.termination !== "exit") {
     throw new ProjectCloneError(
       "clone_failed",
@@ -309,6 +301,33 @@ export async function refreshProjectCheckout(
       );
     }
     const stagingOptions = { ...options, objectDirectory: objects };
+    await run(staging, stagingOptions);
+  } catch (error) {
+    retainStaging = hasCommandProcessCleanupError(error);
+    throw error;
+  } finally {
+    if (!retainStaging) {
+      await fs.rm(staging, { recursive: true, force: true });
+    }
+  }
+}
+
+/** Refreshes refs in an existing Gateway-managed project checkout. */
+export async function refreshProjectCheckout(
+  input: { target: string; url: string },
+  options: ProjectCloneOptions = {},
+): Promise<void> {
+  const [initialRefs, filterResult] = await Promise.all([
+    readProjectRemoteRefs(input, options),
+    runProjectCheckoutGit(input, options, ["config", "--get", "remote.origin.partialclonefilter"]),
+  ]);
+  // The temporary repository does not inherit the managed clone's origin filter.
+  const filter =
+    filterResult.code === 1 && filterResult.termination === "exit"
+      ? ""
+      : requireGitCommandOutput("git config remote.origin.partialclonefilter", filterResult).trim();
+  let currentRefs = initialRefs;
+  await withProjectCheckoutTransport(input, options, async (staging, stagingOptions) => {
     let protectedRefs: ReadonlySet<string> | undefined;
     if (currentRefs.size > 0) {
       // Seed only refs already owned by the managed checkout. Besides enabling
@@ -393,13 +412,69 @@ export async function refreshProjectCheckout(
         );
       }
     }
-  } catch (error) {
-    retainStaging = hasCommandProcessCleanupError(error);
-    throw error;
+  });
+}
+
+/** Explicit maintenance only: the caller owns the managed base's lifecycle lease. */
+export async function unshallowProjectCheckout(
+  input: { target: string; url: string },
+  options: ProjectCloneOptions & { assertCurrent(): void },
+): Promise<void> {
+  options.assertCurrent();
+  const shallow = path.join(input.target, ".git", "shallow");
+  // Match Git's maintenance exclusion, including depth fetches outside our lease.
+  const lock = await fs.open(`${shallow}.lock`, "wx");
+  try {
+    await withProjectCheckoutTransport(input, options, async (staging, stagingOptions) => {
+      await fs.copyFile(shallow, path.join(staging, "shallow"));
+      const result = await runProjectCheckoutGit(
+        { target: staging, url: input.url },
+        stagingOptions,
+        [
+          "fetch",
+          "--unshallow",
+          "--filter=blob:none",
+          "--no-auto-maintenance",
+          "--no-prune",
+          "--no-prune-tags",
+          "--no-tags",
+          "--no-write-fetch-head",
+          "--no-recurse-submodules",
+          "--",
+          input.url,
+          "+refs/heads/*:refs/remotes/origin/*",
+        ],
+        { lowerPriority: true, env: { GIT_NO_LAZY_FETCH: "1" } },
+      );
+      if (result.code !== 0 || result.termination !== "exit") {
+        throw classifyProjectGitFailure(result, "fetch", Boolean(options.token));
+      }
+      // A shallow upstream cannot supply full history; keep the original boundary.
+      if ((await fs.readdir(staging)).includes("shallow")) {
+        return;
+      }
+      for (const [key, value] of [
+        ["remote.origin.promisor", "true"],
+        ["remote.origin.partialclonefilter", "blob:none"],
+      ] as const) {
+        requireGitCommandOutput(
+          "git config partial clone",
+          await runProjectCheckoutGit(input, options, [
+            "config",
+            "--local",
+            "--replace-all",
+            key,
+            value,
+          ]),
+        );
+      }
+      options.assertCurrent();
+      options.signal?.throwIfAborted();
+      await fs.unlink(shallow);
+    });
   } finally {
-    if (!retainStaging) {
-      await fs.rm(staging, { recursive: true, force: true });
-    }
+    await lock.close();
+    await fs.unlink(`${shallow}.lock`);
   }
 }
 

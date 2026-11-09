@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex as digest } from "@openclaw/normalization-core/node-crypto";
@@ -171,23 +172,82 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
     params.source,
     await requireGit(params.source, ["rev-parse", "--git-common-dir"], gitOptions),
   );
-  const prepareSource = async (directory: string, templateGuard: typeof guard) => {
+  const prepareSource = async (
+    directory: string,
+    templateGuard: typeof guard,
+    retainedCommit?: string,
+  ) => {
     await guard.requireDiskSpace(
       [{ path: params.templateRoot, bytes: WORKTREE_SETUP_HEADROOM_BYTES }],
       "sandbox dependency template",
     );
-    await backend.createTemplate(directory, templateGuard);
+    if (!retainedCommit) {
+      await backend.createTemplate(directory, templateGuard);
+    }
     await timeWorktreePreparationPhase("checkout", () =>
       prepareLocalWorkspaceCheckout({
         source: params.source,
         destination: directory,
         temporaryRoot: params.temporaryRoot,
         baseCommit: params.baseCommit,
+        retainedCommit,
         branch: "openclaw-template",
         signal: templateGuard.signal,
         assertCurrent: templateGuard.commitGuard,
       }),
     );
+  };
+  const prepare = async (
+    directory: string,
+    templateOptions: WorktreeAllocationGuard,
+    retainedCommit?: string,
+  ) => {
+    using phases = observeDiagnosticsTimelinePhases(`${TEMPLATE_PHASE}.build`);
+    const templateGuard = {
+      ...guard,
+      ...templateOptions,
+      signal: templateOptions.signal ?? guard.signal,
+    };
+    await prepareSource(directory, templateGuard, retainedCommit);
+    const result = await prepareSandboxDependencyTemplate({
+      directory,
+      cfg: params.sandbox,
+      // Refreshes retain the template row, but must not reuse its retired builder.
+      scopeKey: randomUUID(),
+      identity,
+      signal: templateGuard.signal,
+      assertCurrent: templateGuard.commitGuard,
+      rollbackGuard: templateOptions.rollbackGuard,
+    });
+    phases.mark(`${TEMPLATE_PHASE}.validate`);
+    const contained =
+      result.installed && (await hasContainedVirtualStore(directory, identity.docker.workdir));
+    templateGuard.commitGuard();
+    const valid = await validateTemplate(
+      directory,
+      params.baseCommit,
+      templateGuard,
+      contained ? "dependencies" : "source-only",
+    );
+    if (contained && valid) {
+      log.info("sandbox dependency template prepared for the selected commit");
+      return;
+    }
+    const reason = result.installed
+      ? contained
+        ? "installation changed tracked source"
+        : "pnpm virtual store is outside node_modules or unavailable"
+      : result.reason;
+    log.warn(`sandbox dependency template using source-only fallback: ${reason}`);
+    // The builder has retired. Reuse its clean source only after removing every
+    // generated output; changed or unverified tracked bytes still need a fresh checkout.
+    if (valid) {
+      return;
+    }
+    templateGuard.commitGuard();
+    phases.mark(`${TEMPLATE_PHASE}.rebuild`);
+    await fs.rm(directory, { recursive: true, force: true });
+    await prepareSource(directory, templateGuard);
   };
   const record = await prepareWorktreeTemplate({
     env: params.env,
@@ -206,60 +266,36 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
         "sandbox dependency template",
       ),
     validate: (existing, templateOptions) =>
-      validateTemplate(existing.path, params.baseCommit, templateOptions),
-    prepare: async (preparing, templateOptions) => {
-      using phases = observeDiagnosticsTimelinePhases(`${TEMPLATE_PHASE}.build`);
-      const templateGuard = {
-        ...guard,
-        ...templateOptions,
-        signal: templateOptions.signal ?? guard.signal,
-      };
-      await prepareSource(preparing.path, templateGuard);
-      const result = await prepareSandboxDependencyTemplate({
-        directory: preparing.path,
-        cfg: params.sandbox,
-        scopeKey: preparing.id,
-        identity,
-        signal: templateGuard.signal,
-        assertCurrent: templateGuard.commitGuard,
-        rollbackGuard: templateOptions.rollbackGuard,
-      });
-      phases.mark(`${TEMPLATE_PHASE}.validate`);
-      const contained =
-        result.installed &&
-        (await hasContainedVirtualStore(preparing.path, identity.docker.workdir));
-      templateGuard.commitGuard();
-      const valid = await validateTemplate(
-        preparing.path,
-        params.baseCommit,
-        templateGuard,
-        contained ? "dependencies" : "source-only",
+      validateTemplate(existing.path, existing.sourceCommit, templateOptions),
+    refresh: async (existing, templateOptions) => {
+      // Retain exact commit identity: lifecycle scripts and local packages can consume
+      // any source file. Reinstall after advancing; only the full checkout is skipped.
+      const changed = await runGit(
+        params.source,
+        [
+          "diff-tree",
+          "--quiet",
+          "-r",
+          existing.sourceCommit,
+          params.baseCommit,
+          "--",
+          "pnpm-lock.yaml",
+          ":(glob)**/.gitattributes",
+        ],
+        { ...gitOptions, signal: templateOptions.signal, beforeRun: templateOptions.commitGuard },
       );
-      if (contained && valid) {
-        log.info("sandbox dependency template prepared for the selected commit");
-        return;
+      if (changed.code !== 0 || changed.termination !== "exit") {
+        return false;
       }
-      const reason = result.installed
-        ? contained
-          ? "installation changed tracked source"
-          : "pnpm virtual store is outside node_modules or unavailable"
-        : result.reason;
-      log.warn(`sandbox dependency template using source-only fallback: ${reason}`);
-      // The builder has retired. Reuse its clean source only after removing every
-      // generated output; changed or unverified tracked bytes still need a fresh checkout.
-      if (valid) {
-        return;
-      }
-      templateGuard.commitGuard();
-      phases.mark(`${TEMPLATE_PHASE}.rebuild`);
-      await fs.rm(preparing.path, { recursive: true, force: true });
-      await prepareSource(preparing.path, templateGuard);
+      await prepare(existing.path, templateOptions, existing.sourceCommit);
+      return true;
     },
+    prepare: (preparing, templateOptions) => prepare(preparing.path, templateOptions),
   });
   return record ? { record, backend } : undefined;
 }
 
-/** The caller holds allocation before projection custody, matching removal's lock order. */
+/** The caller holds worktree mutation before projection custody, matching removal's lock order. */
 export async function cloneLocalWorkspaceTemplate(
   params: LocalWorkspaceTemplateParams & { branch: string; destination: string },
 ): Promise<boolean> {

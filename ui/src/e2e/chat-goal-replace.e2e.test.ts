@@ -70,7 +70,7 @@ suite.define(() => {
           ]);
         }
         await exactButton(dialog, "Cancel").click();
-        expect(await input.inputValue()).toBe(`/goal ${proposed}`);
+        expect(await input.inputValue()).toBe(proposed);
         expect(await gateway.getRequests(method)).toHaveLength(0);
         if (artifacts) {
           await captureFrame(artifacts, "cancelled.png", page.locator("body"), [card, input]);
@@ -212,7 +212,7 @@ suite.define(() => {
           ]);
         }
         await exactButton(dialog, "Cancel").click();
-        expect(await input.inputValue()).toBe("/goal " + proposal);
+        expect(await input.inputValue()).toBe(proposal);
         expect(await gateway.getRequests(method)).toHaveLength(0);
         expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
         if (artifacts) {
@@ -222,6 +222,7 @@ suite.define(() => {
           ]);
         }
         // The ordinary picker must remain usable while the same turn is executing.
+        await input.press("Escape");
         await input.fill("/goal");
         await input.press("Enter");
         await page.locator(".agent-chat__goal-mode").waitFor();

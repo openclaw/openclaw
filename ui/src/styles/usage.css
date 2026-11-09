@@ -518,18 +518,6 @@ select.usage-select {
   margin-top: 0;
 }
 
-.callout.warning {
-  background: var(--warn-subtle);
-  color: var(--text);
-}
-
-.callout.warning.usage-cache-warning {
-  background: var(--warn-subtle);
-  color: var(--accent);
-  font-weight: 600;
-  box-shadow: none;
-}
-
 .usage-empty-state {
   justify-items: start;
 }
@@ -1613,18 +1601,6 @@ select.usage-creator-filter {
   flex: 0 0 auto;
 }
 
-.session-bar-copy {
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
-  padding: 5px;
-}
-
-.session-bar-copy svg {
-  width: 14px;
-  height: 14px;
-}
-
 .session-bar-copy-feedback {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
@@ -2161,7 +2137,7 @@ select.usage-creator-filter {
     width: 16px;
     height: 16px;
     background: var(--text-tertiary);
-    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+    mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>")
       center / contain no-repeat;
   }
 
