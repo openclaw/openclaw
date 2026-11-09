@@ -7006,18 +7006,19 @@ the existing commit receipts. Manager ordering, live write authority, and commit
 view adoption remain unchanged. Released synchronous persistence methods retain
 their separate native adapter.
 
-Transcript hydration residency, rewrite preparation, and publication copy mutable view containers while
-retaining already-owned string values, so old tool results and image payloads do
-not require another full byte copy on the main thread. Prepared views remain
-independently mutable. Opaque structured-cloneable SDK data retains native snapshot
-semantics. Worker write ordering, atomic publication, and stored bytes are unchanged.
+The hydration owner freezes decoded transcript snapshots once, including navigation
+maps. Actor seeding, retained exact reads, and identical in-flight readers share the
+same snapshot; bounded selections own their navigation containers and share frozen
+payloads. Public SessionManager getters detach only the hydrated entries they expose, and
+extension context hooks retain writable copies. Rewrite preparation, publication,
+and rollback keep their separate writable snapshots. Opaque structured-cloneable
+SDK data retains native snapshot semantics. Worker ordering and stored bytes are unchanged.
 
-Initial model-context snapshots also reuse equal string values from the loaded
-SessionManager. The context reader still owns selection and admission; its projected
-fields, property order, and mutable containers remain authoritative. Resident SDK
-edits and accessors cannot change the returned context, and frozen resident payloads
-do not make the initial model view immutable. Fresh reader-owned message containers
-are reused in place; an admitted cohort still detaches the manager's mutable view.
+Initial model context owns its message array while sharing immutable transcript
+payloads. Internal cohort preparation reads the shared branch without invoking
+public mutable getters. Mutable SDK entries detach before internal publication,
+so later local edits cannot change the prepared context. Selection, admission,
+projected fields, property order, and prompt bytes remain under their existing owners.
 
 Append receipts read active identity, projection readiness, and the latest sequence
 in one transaction-local query. A clean latest message shares that result with
