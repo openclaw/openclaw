@@ -17,7 +17,7 @@ import type {
   WorkerOperationHandlers,
   WorkerOperations,
 } from "../../state/worker-operation-registry.js";
-import type { WorktreeTemplateRecord } from "./template-registry.js";
+import { retainedWorktreeTemplateKey, type WorktreeTemplateRecord } from "./template-registry.js";
 
 type TemplateDatabase = Pick<DB, "worktree_templates" | "state_leases">;
 const TEMPLATE_READER_SCOPE = "core:managed-worktrees:template-readers";
@@ -105,14 +105,32 @@ function hasTemplateReaders(db: EngineConnection, id: string): boolean {
 }
 
 export const worktreeTemplateReadOperations = {
-  "worktrees.templates.read": ({ cacheKey }: { cacheKey: string }, db) => {
+  "worktrees.templates.read": (
+    { cacheKey, contentKey }: { cacheKey: string; contentKey?: string },
+    db,
+  ) => {
     const row = tableExists(db, "worktree_templates")
       ? executeSqliteQuerySync(
           db,
           kyselyFor(db)
             .selectFrom("worktree_templates")
             .selectAll()
-            .where("cache_key", "=", cacheKey),
+            .where(
+              "cache_key",
+              "in",
+              contentKey === undefined
+                ? [cacheKey]
+                : [cacheKey, retainedWorktreeTemplateKey(cacheKey, contentKey)],
+            )
+            .orderBy((eb) =>
+              eb
+                .case()
+                .when("content_key", "=", contentKey ?? "")
+                .then(0)
+                .else(1)
+                .end(),
+            )
+            .limit(1),
         ).rows[0]
       : undefined;
     return {
@@ -178,7 +196,7 @@ export const worktreeTemplateOperations = {
       }: {
         id: string;
         now: number;
-        publication?: { cacheKey: string; previousId?: string };
+        publication?: { cacheKey: string; previousId?: string; retainedCacheKey?: string };
       },
     ) => {
       const k = kyselyFor(db);
@@ -196,7 +214,10 @@ export const worktreeTemplateOperations = {
             db,
             k
               .updateTable("worktree_templates")
-              .set({ cache_key: `retired:${publication.previousId}`, status: "preparing" })
+              .set({
+                cache_key: publication.retainedCacheKey ?? `retired:${publication.previousId}`,
+                status: publication.retainedCacheKey ? "ready" : "preparing",
+              })
               .where("id", "=", publication.previousId),
           );
         }
@@ -228,7 +249,11 @@ export const worktreeTemplateOperations = {
         owner: StateLeaseProcessOwner;
       } & (
         | { id: string; unpublish?: true }
-        | { selection: Pick<WorktreeTemplateRecord, "cacheKey" | "contentKey" | "backend"> }
+        | {
+            selection: Pick<WorktreeTemplateRecord, "cacheKey" | "contentKey" | "backend"> & {
+              now?: number;
+            };
+          }
       ),
     ) => {
       const k = kyselyFor(db);
@@ -239,7 +264,19 @@ export const worktreeTemplateOperations = {
           : k
               .selectFrom("worktree_templates")
               .selectAll()
-              .where("cache_key", "=", input.selection.cacheKey)
+              .where(
+                "cache_key",
+                "in",
+                input.selection.backend.startsWith("sandbox-")
+                  ? [
+                      input.selection.cacheKey,
+                      retainedWorktreeTemplateKey(
+                        input.selection.cacheKey,
+                        input.selection.contentKey,
+                      ),
+                    ]
+                  : [input.selection.cacheKey],
+              )
               .where("content_key", "=", input.selection.contentKey)
               .where("backend", "=", input.selection.backend)
               .where("status", "=", "ready"),
@@ -264,6 +301,16 @@ export const worktreeTemplateOperations = {
             .set({
               status: "preparing",
             })
+            .where("id", "=", row.id),
+        );
+      }
+      if ("selection" in input && input.selection.now !== undefined) {
+        row.last_used_at = input.selection.now;
+        executeSqliteQuerySync(
+          db,
+          k
+            .updateTable("worktree_templates")
+            .set({ last_used_at: row.last_used_at })
             .where("id", "=", row.id),
         );
       }
