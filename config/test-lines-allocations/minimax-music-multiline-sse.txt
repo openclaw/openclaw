@@ -1,0 +1,2 @@
+# Real plugin loading and loopback SSE decoding for compact and multiline events.
+87
