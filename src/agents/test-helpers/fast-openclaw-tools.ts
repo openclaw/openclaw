@@ -44,6 +44,7 @@ const coreTools = [
   stubActionTool("browser", ["status", "snapshot"]),
   stubTool("tts"),
   stubTool("image_generate"),
+  stubTool("music_generate"),
   stubTool("video_generate"),
   stubTool("web_fetch"),
   stubTool("view_image"),
