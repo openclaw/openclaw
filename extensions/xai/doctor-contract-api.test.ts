@@ -136,6 +136,40 @@ describe("xAI doctor contract", () => {
     });
   });
 
+  it("repairs a saved OAuth grok-build row through the discovery pricing alias", () => {
+    // OAuth discovery prices grok-build as grok-build-0.1 and persists id grok-build.
+    const flat = { input: 1, output: 2, cacheRead: 0.2, cacheWrite: 0 };
+    const row: ModelDefinitionConfig = {
+      id: "grok-build",
+      name: "grok-build",
+      api: "openai-responses",
+      baseUrl: "https://cli-chat-proxy.grok.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: flat,
+      contextWindow: 256_000,
+      maxTokens: 64_000,
+      compat: {},
+    };
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          xai: { baseUrl: "https://cli-chat-proxy.grok.com/v1", models: [row] },
+        },
+      },
+    };
+    const result = migrate(config, 1);
+    const repaired = result.config.models?.providers?.xai?.models?.[0];
+    expect(repaired?.id).toBe("grok-build");
+    expect(repaired?.cost).toEqual({
+      ...flat,
+      tieredPricing: [
+        { range: [0, 200_000], input: 1, output: 2, cacheRead: 0.2, cacheWrite: 0 },
+        { range: [200_000], input: 2, output: 4, cacheRead: 0.4, cacheWrite: 0 },
+      ],
+    });
+  });
+
   it.each([
     {
       name: "redirects retired image models",

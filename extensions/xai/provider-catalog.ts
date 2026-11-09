@@ -12,6 +12,7 @@ import type {
 import {
   buildXaiCatalogModels,
   resolveXaiCatalogEntry,
+  resolveXaiPricingCatalogModelId,
   XAI_BASE_URL,
   XAI_DEFAULT_CONTEXT_WINDOW,
   XAI_IMAGE_MODELS,
@@ -81,7 +82,7 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
   if (!modelId) {
     return undefined;
   }
-  const fallback = resolveXaiCatalogEntry(modelId === "grok-build" ? "grok-build-0.1" : modelId);
+  const fallback = resolveXaiCatalogEntry(resolveXaiPricingCatalogModelId(modelId));
   if ((XAI_IMAGE_MODELS as readonly string[]).includes(modelId)) {
     return undefined;
   }

@@ -54,6 +54,14 @@ function toXaiModelDefinition(model: (typeof manifest.modelCatalog.providers.xai
 const XAI_MODEL_CATALOG: ModelDefinitionConfig[] =
   manifest.modelCatalog.providers.xai.models.map(toXaiModelDefinition);
 
+/**
+ * OAuth discovery lists `grok-build` and prices it as `grok-build-0.1`.
+ * The provider-facing id stays `grok-build`; only catalog lookup uses this alias.
+ */
+export function resolveXaiPricingCatalogModelId(modelId: string): string {
+  return modelId === "grok-build" ? "grok-build-0.1" : modelId;
+}
+
 /** Curated pricing and supported-family capabilities share one lookup owner. */
 export function resolveXaiCatalogEntry(modelId: string): ModelDefinitionConfig | undefined {
   const normalized = normalizeXaiCatalogModelId(modelId);

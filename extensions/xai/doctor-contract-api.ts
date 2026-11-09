@@ -3,6 +3,7 @@ import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   isLegacyXaiBuiltinModel,
   resolveXaiCatalogEntry,
+  resolveXaiPricingCatalogModelId,
   XAI_BASE_URL,
   XAI_GROK_OAUTH_BASE_URL,
 } from "./model-definitions.js";
@@ -86,7 +87,9 @@ function catalogPricingTiersFor(model: unknown, providerBaseUrl: unknown) {
   const route =
     typeof record?.baseUrl === "string" && record.baseUrl.trim() ? record.baseUrl : providerBaseUrl;
   const catalog =
-    typeof record?.id === "string" ? resolveXaiCatalogEntry(record.id)?.cost : undefined;
+    typeof record?.id === "string"
+      ? resolveXaiCatalogEntry(resolveXaiPricingCatalogModelId(record.id))?.cost
+      : undefined;
   if (
     !cost ||
     (typeof route === "string" &&
