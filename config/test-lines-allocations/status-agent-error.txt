@@ -1,0 +1,3 @@
+# Net test-line growth from PR "fix(cli): show the --agent option error in status"
+# (regression asserts the invalid --agent selection rejects with an ExpectedCliError).
+3

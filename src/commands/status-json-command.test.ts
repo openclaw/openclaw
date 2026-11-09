@@ -14,6 +14,9 @@ it.each([
 ] as const)("rejects invalid agent selection %j before scanning", async (selection, error) => {
   const runtime = createTestRuntime();
   const opts = { ...createStatusGatewayProbeBudget(), ...selection };
-  await expect(runStatusJsonCommand({ opts, runtime })).rejects.toThrow(error);
+  await expect(runStatusJsonCommand({ opts, runtime })).rejects.toMatchObject({
+    name: "ExpectedCliError",
+    message: error,
+  });
   expect(scanStatusJsonFast).not.toHaveBeenCalled();
 });
