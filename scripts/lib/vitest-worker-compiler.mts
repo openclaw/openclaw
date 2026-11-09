@@ -119,7 +119,7 @@ async function compileVitestWorkerArtifacts(
   ]) {
     recordInput(path.resolve(root, name));
   }
-  const entry =
+  const entry: Record<string, string> =
     preset === "tooling"
       ? {
           "infra/runtime-process-entrypoints":
