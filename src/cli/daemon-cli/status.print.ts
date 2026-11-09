@@ -43,6 +43,7 @@ import {
   projectDaemonServiceForJson,
   resolveDaemonInstallBlockMessage,
   resolveDaemonServiceInstallGuidance,
+  resolveLaunchdInspectionWarnings,
   resolveRuntimeStatusColor,
   safeDaemonEnv,
 } from "./shared.js";
@@ -522,10 +523,8 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
 
-  if (service.foreignLaunchdInspectionError) {
-    printWarning(
-      terminalText`Could not inspect foreign launchd jobs: ${service.foreignLaunchdInspectionError}`,
-    );
+  for (const warning of resolveLaunchdInspectionWarnings(service)) {
+    printWarning(warning);
     spacer();
   }
   if (service.foreignLaunchdJobs?.length) {
