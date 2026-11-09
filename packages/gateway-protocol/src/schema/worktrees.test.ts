@@ -24,6 +24,9 @@ describe("managed worktree protocol schemas", () => {
     expect(createWorktree({ repoRoot: "/repo", name: "task-one", baseRef: "main" })).toBe(true);
     expect(remove({ id: "id", force: true })).toBe(true);
     expect(gc({})).toBe(true);
+    expect(gc({ orphanBranches: { repoRoot: "/repo", dryRun: true } })).toBe(true);
+    expect(gc({ orphanBranches: { repoRoot: "/repo", dryRun: "true" } })).toBe(false);
+    expect(gc({ orphanBranches: { repoRoot: "" } })).toBe(false);
     expect(createSession({ agentId: "main", worktree: true })).toBe(true);
     expect(createSession({ agentId: "main", catalogId: "claude" })).toBe(true);
     expect(createSession({ agentId: "main", thinkingLevel: "high" })).toBe(true);

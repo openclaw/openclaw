@@ -712,6 +712,10 @@ openclaw worktrees retire-snapshot <id> \
   --retained-ref refs/heads/<retained-branch> --retained-oid <source-commit> --json
 ```
 
+The retained source must be an ordinary branch outside `openclaw/*` or a
+remote-tracking ref. Managed branches expire with their worktrees and cannot
+serve as durable source custody after the snapshot's registry row is retired.
+
 Retirement applies only to ordinary snapshots, not exact-state recovery snapshots or
 their retained checkouts. It requires identical source trees and retained snapshot-parent history.
 It refuses a live or reappeared checkout, Git registration, changed identity,
@@ -780,7 +784,12 @@ result includes `recoveryPath` and `recoveryRetainedUntil`. This retains writes
 from processes that already held a working directory or open file descriptor;
 Git index/ref locks alone cannot make deleting those bytes safe. The recovery
 path is not an active workspace. Snapshot expiration deletes this retained
-checkout, so do not continue working there or treat it as permanent storage.
+checkout and retires its managed branch once no other checkout or recovery owner
+needs it, so do not continue working there or treat it as permanent storage.
+If branch deletion fails, cleanup records the failure and keeps the registry entry
+for retry. A checkout retired because its Git metadata is missing keeps its branch
+and registry recovery ownership while source files remain, even after the normal
+snapshot retention period.
 
 Exact-state retirement requires a full, non-sparse checkout with Git file refs
 and supported Git index extensions. It holds native Git index and ref locks while
@@ -882,6 +891,7 @@ openclaw worktrees remove <id> [--force | --if-lossless | --exact-state <file>] 
 openclaw worktrees restore <id> [--recover-exact-state <file>] [--json]
 openclaw worktrees gc [--retry-deferred] [--json]
 openclaw worktrees gc --job <id> [--json]
+openclaw worktrees gc --orphan-branches <repoRoot> [--dry-run] [--json]
 openclaw worktrees recover-removal <id> --snapshot <oid> [--json]
 openclaw worktrees retire-snapshot <id> --expected-ref <ref> --expected-oid <oid> --removed-at <milliseconds> --retained-ref <ref> --retained-oid <oid> [--json]
 ```
@@ -900,6 +910,37 @@ openclaw worktrees gc --job <id>
 ```
 
 `--json` prints the receipt, including the job state and current cleanup summary. Polling observes the job without starting another pass. Enqueue requests made while a job is queued or running return that same job; only the latest job is retained, and restarting the Gateway discards its receipt. To force reinspection of unchanged deferred checkouts, start a new job with `--retry-deferred` after any current job finishes.
+
+To inspect local branches left behind by older cleanup, select the repository and
+preview the owner-qualified cleanup first:
+
+```bash
+openclaw worktrees gc --orphan-branches /path/to/repo --dry-run
+openclaw worktrees gc --orphan-branches /path/to/repo --json
+```
+
+This mode completes separately from background checkout cleanup; it cannot be
+combined with `--job` or `--retry-deferred`. `--dry-run` is available only with
+`--orphan-branches` and makes no branch changes. Human output names every managed
+branch and its outcome, for example:
+
+```text
+Managed branch cleanup (dry run): /path/to/repo
+would-delete openclaw/retired-task
+preserved openclaw/active-task: registry or pending recovery owner
+```
+
+Only local `openclaw/*` branches are eligible. Cleanup preserves branches attached
+to any Git worktree, referenced by a live or retained registry record, or reserved
+by pending creation. Recovery references without a matching registry record stop
+branch cleanup for that repository rather than guessing which branches they need.
+Other local branches and remote-tracking refs are outside this command's scope.
+Deletion uses the existing allocation lease and Git's checked-out-branch protection.
+Failures are returned per branch and make the CLI exit nonzero. JSON output contains
+`repoRoot`, `dryRun`, and `branches`, with `branch`, `outcome` (`would-delete`,
+`deleted`, `preserved`, or `failed`), and an optional `reason` for each entry.
+The command routes through the same local Gateway owner as ordinary worktree GC;
+older Gateways reject the unsupported request without running ordinary cleanup.
 
 For partial clones, `openclaw worktrees gc --retry-deferred` also checks the
 objects needed by all Git-registered worktree indexes and current HEAD trees
@@ -936,16 +977,16 @@ their specific input error and exit with code 1 before cleanup or removal.
 
 ## Gateway methods
 
-| Method                     | Purpose                                                                 |
-| -------------------------- | ----------------------------------------------------------------------- |
-| `worktrees.list`           | List active and restorable worktree records.                            |
-| `worktrees.branches`       | List local and remote branches of a repository for base-ref pickers.    |
-| `worktrees.create`         | Create or reuse a named managed worktree.                               |
-| `worktrees.remove`         | Snapshot and remove a worktree. Forced removals report `snapshotError`. |
-| `worktrees.restore`        | Restore a removed worktree from its snapshot.                           |
-| `worktrees.gc`             | Queue background cleanup or read a job's progress.                      |
-| `worktrees.recoverRemoval` | Complete an interrupted removal from the exact pending snapshot.        |
-| `worktrees.retireSnapshot` | Retire one redundant snapshot with exact retained-source guards.        |
+| Method                     | Purpose                                                                   |
+| -------------------------- | ------------------------------------------------------------------------- |
+| `worktrees.list`           | List active and restorable worktree records.                              |
+| `worktrees.branches`       | List local and remote branches of a repository for base-ref pickers.      |
+| `worktrees.create`         | Create or reuse a named managed worktree.                                 |
+| `worktrees.remove`         | Snapshot and remove a worktree. Forced removals report `snapshotError`.   |
+| `worktrees.restore`        | Restore a removed worktree from its snapshot.                             |
+| `worktrees.gc`             | Queue checkout cleanup, read progress, or inspect/delete orphan branches. |
+| `worktrees.recoverRemoval` | Complete an interrupted removal from the exact pending snapshot.          |
+| `worktrees.retireSnapshot` | Retire one redundant snapshot with exact retained-source guards.          |
 
 `worktrees.list` requires `operator.write` because it returns every session's worktree paths, repository roots, and branches. `worktrees.create` and `worktrees.branches` require `operator.write` for configured agent workspaces and registered projects; arbitrary host paths still require `operator.admin`. All creation disables repository Git hooks; write-scoped creation also skips `.openclaw/worktree-setup.sh`. Removing, restoring, and garbage-collecting worktrees remain admin-only. Branch listing reads existing refs only and never fetches. Unchanged inventories are reused after checking checkout, ref, configuration, and object-storage metadata, including repositories with large pack directories; changed metadata refreshes the inventory. Remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
 
@@ -958,7 +999,7 @@ fields and results are:
 | `worktrees.create`         | `repoRoot`; optional `name`, `baseRef`, `profiles`, `expectedRepoIdentity`                                                | Full worktree record, including any `gcProtection`. The CLI captures the physical repository identity before dispatch. |
 | `worktrees.remove`         | `id`; optional, mutually exclusive `force`, `ifLossless`, or `exactState`                                                 | `removed`, optional `snapshotRef`, `snapshotError`, `recoveryPath`, `recoveryRetainedUntil`, and lossless `cleanup`.   |
 | `worktrees.restore`        | `id`; optional `recoverExactState`                                                                                        | Full restored worktree record.                                                                                         |
-| `worktrees.gc`             | Optional `jobId` to poll; optional `retryDeferred: true` when queuing a new job                                           | Job receipt with the current cleanup summary; see below.                                                               |
+| `worktrees.gc`             | Optional `jobId` to poll; `retryDeferred: true` when queuing; or `orphanBranches: { repoRoot, dryRun? }`                  | Job receipt, or the completed orphan-branch result for `orphanBranches`; see below.                                    |
 | `worktrees.recoverRemoval` | `id`, `snapshot` (the expected pending snapshot OID)                                                                      | `removed: true`, optional `snapshotRef`.                                                                               |
 | `worktrees.retireSnapshot` | `id`, `expectedSnapshotRef`, `expectedSnapshotOid`, `expectedRemovedAt`, `retainedSourceRef`, `expectedRetainedSourceOid` | `retired: true`, `id`.                                                                                                 |
 

@@ -33,7 +33,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type {
   WorktreesListResult,
-  WorktreesGcResult,
+  WorktreesGcReceipt,
 } from "../../packages/gateway-protocol/src/schema/worktrees.ts";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import type { TranscriptEvent } from "../../src/config/sessions/session-accessor.sqlite-contract.js";
@@ -524,7 +524,7 @@ try {
       delete env.OPENCLAW_DELETE_SNAPSHOT_BARRIER;
       child = launch();
       await connect();
-      const job = (await rpc("worktrees.gc", {})) as WorktreesGcResult;
+      const job = (await rpc("worktrees.gc", {})) as WorktreesGcReceipt;
       assert(job.jobId, "cleanup must have an owner-tracked receipt");
       let receipt = job;
       const recoveryDeadline = Date.now() + 180000;
@@ -532,7 +532,7 @@ try {
         assert(Date.now() < recoveryDeadline, "restart cleanup did not settle");
         // This mutation RPC permits 30 calls/minute, including receipt reads.
         await delay(2500);
-        receipt = (await rpc("worktrees.gc", { jobId: job.jobId })) as WorktreesGcResult;
+        receipt = (await rpc("worktrees.gc", { jobId: job.jobId })) as WorktreesGcReceipt;
       }
       assert.equal(receipt.state, "completed", JSON.stringify(receipt));
       writeFileSync(

@@ -120,8 +120,11 @@ export const WorktreesGcParamsSchema = closedObject({
   expectedOwnerId: Type.Optional(NonEmptyString),
   jobId: Type.Optional(NonEmptyString),
   retryDeferred: Type.Optional(Type.Boolean()),
+  orphanBranches: Type.Optional(
+    closedObject({ repoRoot: NonEmptyString, dryRun: Type.Optional(Type.Boolean()) }),
+  ),
 });
-export const WorktreesGcResultSchema = closedObject({
+const WorktreesGcReceiptSchema = closedObject({
   jobId: Type.Optional(NonEmptyString),
   state: Type.Optional(Type.String({ enum: ["queued", "running", "completed", "failed"] })),
   startedAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
@@ -177,6 +180,21 @@ export const WorktreesGcResultSchema = closedObject({
   evictions: Type.Optional(Type.Record(Type.String(), Type.Integer({ minimum: 0 }))),
 });
 
+export const WorktreesGcResultSchema = Type.Union([
+  WorktreesGcReceiptSchema,
+  closedObject({
+    repoRoot: NonEmptyString,
+    dryRun: Type.Boolean(),
+    branches: Type.Array(
+      closedObject({
+        branch: NonEmptyString,
+        outcome: Type.String({ enum: ["would-delete", "deleted", "preserved", "failed"] }),
+        reason: Type.Optional(Type.String()),
+      }),
+    ),
+  }),
+]);
+
 export const WorktreesRecoverFileParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   path: NonEmptyString,
@@ -218,6 +236,7 @@ export type WorktreesRemoveResult = Static<typeof WorktreesRemoveResultSchema>;
 export type WorktreesRestoreParams = Static<typeof WorktreesRestoreParamsSchema>;
 export type WorktreesGcParams = Static<typeof WorktreesGcParamsSchema>;
 export type WorktreesGcResult = Static<typeof WorktreesGcResultSchema>;
+export type WorktreesGcReceipt = Static<typeof WorktreesGcReceiptSchema>;
 export type WorktreesRecoverFileParams = Static<typeof WorktreesRecoverFileParamsSchema>;
 export type WorktreesRecoverRemovalParams = Static<typeof WorktreesRecoverRemovalParamsSchema>;
 export type WorktreesRecoverRemovalResult = Static<typeof WorktreesRecoverRemovalResultSchema>;

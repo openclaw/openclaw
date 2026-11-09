@@ -277,11 +277,28 @@ export const worktreesHandlers: GatewayRequestHandlers = {
   }),
   "worktrees.gc": worktreeHandler(validateWorktreesGcParams, async (opts, params) => {
     const { respond, context } = opts;
+    if (
+      params.orphanBranches &&
+      (params.jobId || params.retryDeferred || !params.expectedOwnerId)
+    ) {
+      invalidParams(respond);
+      return;
+    }
     const commitGuard = captureWorktreeMutationGuard(params.expectedOwnerId, opts);
     if (commitGuard === null) {
       return;
     }
     commitGuard?.();
+    if (params.orphanBranches) {
+      const result = await managedWorktrees.pruneOrphanBranches({
+        ...params.orphanBranches,
+        signal: opts.signal,
+        commitGuard,
+      });
+      commitGuard?.();
+      respond(true, result, undefined);
+      return;
+    }
     const receipt = requestGatewayWorktreeMaintenance(context.getRuntimeConfig, {
       jobId: params.jobId,
       retryDeferred: params.retryDeferred,
