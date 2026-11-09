@@ -26,7 +26,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import type { VisitorGrant } from "./src/grant-record.js";
 import { visitorRuntimeStore } from "./src/runtime.js";
-import { visitorListDetailsSchema, type VisitorListDetails } from "./src/tool-results.js";
+import {
+  visitorInviteDetailsSchema,
+  visitorListDetailsSchema,
+  type VisitorListDetails,
+} from "./src/tool-results.js";
 import {
   githubProvider,
   guestRole,
@@ -417,13 +421,10 @@ describe("visitor-access plugin lifecycle", () => {
     );
 
     const invite = await registered.invite({ email: "visitor@example.test" });
+    assert(Value.Check(visitorInviteDetailsSchema, invite.details));
 
-    expect(invite.details).toMatchObject({
-      invitationText: expect.stringContaining(`${"x".repeat(199)} invited you to OpenClaw.`),
-    });
-    expect(invite.details).toMatchObject({
-      invitationText: expect.not.stringMatching(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u),
-    });
+    expect(invite.details.invitationText).toContain(`${"x".repeat(199)} invited you to OpenClaw.`);
+    expect(invite.details.invitationText).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
     expect(await registered.store.lookup("visitor@example.test")).toMatchObject({
       invitedBy: { profileId: "inviter", label: "x".repeat(199) },
     });
