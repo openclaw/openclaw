@@ -68,6 +68,7 @@ import {
   resolveCompactionCompletionNotice,
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
+import * as flushCycle from "./memory-flush-cycle.js";
 import {
   buildVisibleMemoryFlushFailure,
   resolveVisibleMemoryFlushErrorPayloads,
@@ -81,7 +82,6 @@ import {
 } from "./memory-flush-plan.js";
 import {
   estimatePromptTokensForMemoryFlush,
-  hasAlreadyFlushedForCurrentCompaction,
   resolveCompactionThreshold,
   resolveProjectedPromptTokens,
   resolveResponsesServerCompactionThreshold,
@@ -150,7 +150,8 @@ export async function runSessionCompactionIfNeeded(params: {
   const isCli = followupUsesCliRuntime(runtimeParams, runtimeId);
   const ownsNativeCompaction = followupOwnsNativeCompaction(runtimeParams, runtimeId);
   if (isCli || ownsNativeCompaction || normalizeLowercaseStringOrEmpty(runtimeId) === "codex") {
-    return entry;
+    // CLI backends keep native compaction but still get the pre-compaction memory write.
+    return await flushCycle.beforeNativeCompaction(isCli, runtimeId, entry, params);
   }
 
   const compactionSessionKey = params.sessionKey;
@@ -551,14 +552,18 @@ export async function runMemoryFlushIfNeeded(
     followupOwnsNativeCompaction(runtimeParams, runtimeId);
   // Only a native provider's flush can persist without a writable workspace, so other
   // resolvers are never called for a session whose workspace cannot be written.
-  const canAttemptFlush = (memoryFlushWritable || isMemoryFlushPlanNativeProviderOwned()) && !isCli;
+  // CLI backends never advance their compaction count; they re-arm on the
+  // transcript-byte window below instead of the compaction-cycle watermark.
+  const canAttemptFlush = memoryFlushWritable || (!isCli && isMemoryFlushPlanNativeProviderOwned());
   if (!canAttemptFlush) {
     return { sessionEntry: entry, outcome: "skipped" };
   }
 
   const flushRunId = crypto.randomUUID();
   let flushRunRegistered = false;
-  const recordFailure = (error: unknown) => recordMemoryFlushFailure(error, params, entry);
+  // Failures before the byte window is known have no CLI bucket to record.
+  const recordFailure = (error: unknown, cliRearmBucket?: number) =>
+    recordMemoryFlushFailure(error, params, entry, cliRearmBucket);
   const contextWindowTokens = Math.min(
     resolveFollowupContextTokens(runtimeParams, runtimeId),
     params.recoveryContextTokenBudget ?? Number.POSITIVE_INFINITY,
@@ -577,7 +582,7 @@ export async function runMemoryFlushIfNeeded(
     return { sessionEntry: entry, outcome: "skipped" };
   }
 
-  if (!entry || hasAlreadyFlushedForCurrentCompaction(entry)) {
+  if (!entry || flushCycle.isSettled(isCli, entry, memoryFlushPlan)) {
     assertMemoryFlushCurrent();
     return { sessionEntry: entry, outcome: "skipped" };
   }
@@ -586,14 +591,7 @@ export async function runMemoryFlushIfNeeded(
   );
   const persistedPromptTokens = resolveFreshSessionTotalTokens(entry);
 
-  // The soft margin belongs only to early flushing, leaving room before blocking compaction.
-  const flushThreshold = Math.max(
-    0,
-    resolveCompactionThreshold({
-      contextWindowTokens,
-      reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
-    }) - Math.max(0, Math.floor(memoryFlushPlan.softThresholdTokens)),
-  );
+  const flushThreshold = flushCycle.threshold(contextWindowTokens, memoryFlushPlan);
 
   const shouldReadTranscript = persistedPromptTokens === undefined;
 
@@ -603,15 +601,13 @@ export async function runMemoryFlushIfNeeded(
     sessionId: params.followupRun.run.sessionId,
     sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
     storePath: params.storePath,
-    includeByteSize: asPositiveFiniteNumber(forceFlushTranscriptBytes) !== undefined,
+    includeByteSize: isCli || asPositiveFiniteNumber(forceFlushTranscriptBytes) !== undefined,
     includeTurnTaint: true,
     includeUsage: shouldReadTranscript,
     abortSignal,
   });
   assertMemoryFlushCurrent();
-  const transcriptByteSize = sessionLogSnapshot.byteSize;
-  const shouldForceFlushByTranscriptSize =
-    transcriptByteSize !== undefined && transcriptByteSize >= forceFlushTranscriptBytes;
+  const bytes = flushCycle.byteTrigger({ isCli, entry, sessionLogSnapshot, memoryFlushPlan });
 
   const transcriptUsageTokens = shouldReadTranscript
     ? await estimateContextTokensFromSessionTranscript(
@@ -637,13 +633,14 @@ export async function runMemoryFlushIfNeeded(
   const tokenCountForFlush = asPositiveFiniteNumber(projectedTokenCount);
 
   const shouldFlushMemory =
-    params.recoveryContextTokenBudget !== undefined ||
-    shouldRunPreflightCompaction({
-      entry,
-      tokenCount: tokenCountForFlush,
-      threshold: flushThreshold,
-    }) ||
-    shouldForceFlushByTranscriptSize;
+    !bytes.skip &&
+    (params.recoveryContextTokenBudget !== undefined ||
+      shouldRunPreflightCompaction({
+        entry,
+        tokenCount: tokenCountForFlush,
+        threshold: flushThreshold,
+      }) ||
+      bytes.forced);
 
   if (!shouldFlushMemory) {
     return { sessionEntry: entry, outcome: "skipped" };
@@ -676,7 +673,7 @@ export async function runMemoryFlushIfNeeded(
       },
     });
   } catch (error) {
-    return await recordFailure(error);
+    return await recordFailure(error, bytes.cliRearmBucket);
   }
   if (!preparedAttempt) {
     return { sessionEntry: entry, outcome: "skipped" };
@@ -814,6 +811,7 @@ export async function runMemoryFlushIfNeeded(
           contextTokenBudget: contextWindowTokens,
           memoryFlushWritePath,
           memoryFlushTools,
+          ...flushCycle.cliDispatch(isCli),
           initialTurnTainted:
             !params.followupRun.run.senderIsOwner || sessionLogSnapshot?.turnTainted === true,
           prompt: memoryFlushPlan.prompt,
@@ -866,7 +864,7 @@ export async function runMemoryFlushIfNeeded(
         const updatedEntry = await updateSessionEntry(
           { storePath: params.storePath, sessionKey: params.sessionKey },
           async () => ({
-            memoryFlush: { kind: "succeeded", compactionCount: flushedCompactionCount },
+            memoryFlush: flushCycle.succeeded(flushedCompactionCount, bytes.cliRearmBucket),
           }),
           { skipMaintenance: true, takeCacheOwnership: true },
         );
@@ -883,7 +881,7 @@ export async function runMemoryFlushIfNeeded(
       memoryFlushLog.debug(error.message);
       return { sessionEntry: entry, outcome: "skipped" };
     }
-    return await recordFailure(error);
+    return await recordFailure(error, bytes.cliRearmBucket);
   } finally {
     stopHeartbeat?.();
     if (parentRunId && !abortSignal?.aborted) {

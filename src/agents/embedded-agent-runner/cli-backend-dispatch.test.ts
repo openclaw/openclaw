@@ -213,6 +213,29 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
     expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({ provider: "claude-cli" });
   });
 
+  it("carries a memory flush's write target and private transcript prompt to the CLI run", async () => {
+    await runDispatch({
+      trigger: "memory",
+      memoryFlushWritePath: "memory/2026-11-09.md",
+      prompt: "private maintenance prompt",
+      transcriptPrompt: "",
+      toolsAllow: ["read", "write"],
+    });
+    expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
+      trigger: "memory",
+      memoryFlushWritePath: "memory/2026-11-09.md",
+      transcriptPrompt: "",
+    });
+    expect(createCliDispatchTranscriptRecorder.mock.calls[0]?.[0]).toMatchObject({ prompt: "" });
+  });
+
+  it("leaves ordinary runs without a memory write target", async () => {
+    await runDispatch();
+    const params = runCliAgent.mock.calls[0]?.[0];
+    expect(params).not.toHaveProperty("memoryFlushWritePath");
+    expect(params).not.toHaveProperty("transcriptPrompt");
+  });
+
   it("dispatches when no credential mode resolves for the passthrough", async () => {
     resolveModelAuthMode.mockReturnValue(undefined);
     expect(await runDispatch()).toBeDefined();

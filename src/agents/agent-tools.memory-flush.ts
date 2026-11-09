@@ -81,6 +81,13 @@ function wrapPersistenceTool(
   });
 }
 
+/**
+ * Tools a file-arm memory flush may use. Exported so the flush caller can bound
+ * a CLI-backend loopback grant with the same set constructed below rather than
+ * a second hand-written copy free to drift.
+ */
+export const MEMORY_FLUSH_ALLOWED_TOOLS: readonly string[] = ["read", "write"];
+
 /** Project a memory flush onto its file writer or selected provider-owned persistence tools. */
 export function projectMemoryFlushTools(
   tools: AnyAgentTool[],

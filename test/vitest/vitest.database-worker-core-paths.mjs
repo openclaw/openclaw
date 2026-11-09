@@ -848,6 +848,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-database-preflight.startup-index.test.ts",
   "src/state/openclaw-state-lease.retention.test.ts",
   "src/system-agent/setup-lifetime.test.ts",
+  "src/auto-reply/reply/agent-runner-memory.cli-flush.test.ts",
   "src/auto-reply/reply/agent-runner-memory.test.ts",
   "src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts",
   "src/auto-reply/reply/agent-runner.thinking.runreplyagent.test.ts",

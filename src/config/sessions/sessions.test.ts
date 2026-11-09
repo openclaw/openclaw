@@ -131,6 +131,21 @@ it.each<NormalizationCase>([
     { pendingTranscriptRepair: structuredClone(repairBacklog) },
     { pendingTranscriptRepair: repairBacklog },
   ],
+  [
+    "CLI memory-flush re-arm bucket",
+    { memoryFlush: { kind: "succeeded", compactionCount: 0, cliRearmBucket: 3 } },
+    { memoryFlush: { kind: "succeeded", compactionCount: 0, cliRearmBucket: 3 } },
+  ],
+  [
+    "failed CLI memory flush keeps its bucket",
+    { memoryFlush: { kind: "failed", cliRearmBucket: 2, failureCount: 1 } },
+    { memoryFlush: { kind: "failed", cliRearmBucket: 2, failureCount: 1 } },
+  ],
+  [
+    "older memory-flush rows stay bucket-free",
+    { memoryFlush: { kind: "succeeded", compactionCount: 4 } },
+    { memoryFlush: { kind: "succeeded", compactionCount: 4 } },
+  ],
   ...[{ id: "repair-1", text: "first", createdAt: 42 }, [{ kind: "transport-only" }]].map(
     (pendingTranscriptRepair): NormalizationCase => [
       `invalid repair backlog ${JSON.stringify(pendingTranscriptRepair)}`,

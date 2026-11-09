@@ -74,6 +74,9 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
       ? undefined
       : createCliDispatchTranscriptRecorder({
           ...params,
+          // Mirror the transcript-visible prompt, not raw maintenance text: a
+          // memory flush keeps its private prompt out with transcriptPrompt "".
+          prompt: params.transcriptPrompt ?? params.prompt,
           storePath,
           sessionFile,
           provider: eligibility.provider,
@@ -152,6 +155,15 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
       agentId: params.agentId,
       storePath,
       trigger: params.trigger,
+      // Memory-flush runs prepare one append-only write target; the loopback
+      // grant and final tool construction confine the writer to it, and a
+      // memory trigger without one fails closed there.
+      ...(params.memoryFlushWritePath ? { memoryFlushWritePath: params.memoryFlushWritePath } : {}),
+      // An absent transcriptPrompt defaults to the run prompt, which would
+      // record private maintenance text; forward the caller's explicit value.
+      ...(params.transcriptPrompt !== undefined
+        ? { transcriptPrompt: params.transcriptPrompt }
+        : {}),
       sessionFile,
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,

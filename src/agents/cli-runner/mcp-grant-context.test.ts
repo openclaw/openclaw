@@ -33,6 +33,16 @@ function buildGrant(
 }
 
 describe("buildCliMcpGrantContext", () => {
+  it("stamps a memory flush's host-minted write target into the grant", () => {
+    expect(
+      buildGrant({ trigger: "memory", memoryFlushWritePath: " memory/2026-11-09.md " }),
+    ).toMatchObject({ trigger: "memory", memoryFlushWritePath: "memory/2026-11-09.md" });
+    expect(buildGrant({ trigger: "memory", memoryFlushWritePath: "  " })).not.toHaveProperty(
+      "memoryFlushWritePath",
+    );
+    expect(buildGrant()).not.toHaveProperty("memoryFlushWritePath");
+  });
+
   it("snapshots policy and logical model fields without copying private metadata", () => {
     const elevated = {
       enabled: false,

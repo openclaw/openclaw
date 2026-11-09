@@ -509,6 +509,9 @@ export async function resolveGatewayScopedTools(
           inputProvenance: params.inputProvenance,
           trustedInternalHandoff: params.trustedInternalHandoff,
           trigger: params.trigger,
+          // createOpenClawCodingTools throws when a memory trigger has no
+          // target, so this surface can never widen into an unrestricted writer.
+          memoryFlushWritePath: params.memoryFlushWritePath,
           approvalReviewerDeviceId: params.approvalReviewerDeviceId,
           runtimeToolAllowlist: [...mediatedToolNames],
           exec: execDefaults

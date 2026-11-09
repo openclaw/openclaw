@@ -15,6 +15,7 @@ export async function recordMemoryFlushFailure(
   error: unknown,
   run: MemoryFlushRunParams,
   initialSessionEntry?: SessionEntry,
+  cliRearmBucket?: number,
 ): Promise<MemoryFlushResult> {
   let sessionEntry = initialSessionEntry;
   let outcome: MemoryFlushOutcome = "failed";
@@ -38,12 +39,19 @@ export async function recordMemoryFlushFailure(
           return {
             memoryFlush:
               failureCount >= MAX_FLUSH_FAILURES
-                ? { kind: "succeeded", compactionCount: currentEntry.compactionCount ?? 0 }
+                ? {
+                    kind: "succeeded",
+                    compactionCount: currentEntry.compactionCount ?? 0,
+                    // CLI sessions re-arm on the byte bucket, so suppression has to be
+                    // recorded there too or the exhausted cycle retries every turn.
+                    ...(cliRearmBucket !== undefined ? { cliRearmBucket } : {}),
+                  }
                 : {
                     kind: "failed",
                     ...(currentEntry.memoryFlush?.compactionCount !== undefined
                       ? { compactionCount: currentEntry.memoryFlush.compactionCount }
                       : {}),
+                    ...(cliRearmBucket !== undefined ? { cliRearmBucket } : {}),
                     failureCount,
                   },
           };

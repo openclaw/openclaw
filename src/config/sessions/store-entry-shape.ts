@@ -298,8 +298,13 @@ export function normalizeMemoryFlush(value: unknown): SessionEntry["memoryFlush"
     return undefined;
   }
   const compactionCount = normalizeCount(value.compactionCount);
+  const cliRearmBucket = normalizeCount(value.cliRearmBucket);
   if (value.kind === "succeeded" && compactionCount !== undefined) {
-    return { kind: "succeeded", compactionCount };
+    return {
+      kind: "succeeded",
+      compactionCount,
+      ...(cliRearmBucket !== undefined ? { cliRearmBucket } : {}),
+    };
   }
   const failureCount = normalizeCount(value.failureCount);
   if (value.kind !== "failed" || !failureCount) {
@@ -308,6 +313,7 @@ export function normalizeMemoryFlush(value: unknown): SessionEntry["memoryFlush"
   return {
     kind: "failed",
     ...(compactionCount !== undefined ? { compactionCount } : {}),
+    ...(cliRearmBucket !== undefined ? { cliRearmBucket } : {}),
     failureCount,
   };
 }

@@ -165,20 +165,6 @@ function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolve
   registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
 }
 
-function registerClaudeCliBackend(ownsNativeCompaction = false): void {
-  cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-        ownsNativeCompaction,
-      },
-    ],
-  });
-}
-
 type TestReplyOperation = ReplyOperation & {
   setPhase: ReturnType<typeof vi.fn<ReplyOperation["setPhase"]>>;
   updateSessionId: ReturnType<typeof vi.fn<ReplyOperation["updateSessionId"]>>;
@@ -1484,50 +1470,6 @@ describe("runMemoryFlushIfNeeded", () => {
       compactionCount: 1,
     });
     expect(incrementCompactionCountMock).toHaveBeenCalledOnce();
-  });
-
-  it("skips memory flush and byte preflight for CLI-owned sessions", async () => {
-    registerClaudeCliBackend(true);
-    registerMemoryFlushPlanResolverForTest(() =>
-      createModifiedMemoryFlushPlan({ forceFlushTranscriptBytes: 10 }),
-    );
-    const { sessionKey, storePath, sessionEntry } = await seedBytePressure(
-      "sqlite-cli-owned-session.json",
-    );
-    const cfg = {
-      agents: {
-        defaults: {
-          models: { "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } } },
-          compaction: { memoryFlush: {}, maxActiveTranscriptBytes: "10b" },
-        },
-      },
-    } as const;
-    const followupRun = createTestFollowupRun({
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      sessionId: "session",
-      sessionKey,
-    });
-
-    const flushResult = await runDefaultMemoryFlush(sessionEntry, {
-      cfg,
-      followupRun,
-      sessionKey,
-      storePath,
-      replyOperation: createReplyOperation(),
-    });
-    const preflightEntry = await runDefaultPreflight(sessionEntry, {
-      cfg,
-      followupRun,
-      sessionKey,
-      storePath,
-    });
-
-    expect(flushResult).toEqual({ sessionEntry, outcome: "skipped" });
-    expect(preflightEntry).toBe(sessionEntry);
-    expect(preflightEntry?.compactionCount).toBe(0);
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
   it("preserves post-compaction context when prepared delivery ownership changes", async () => {
