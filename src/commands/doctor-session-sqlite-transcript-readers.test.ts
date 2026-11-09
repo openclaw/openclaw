@@ -61,8 +61,7 @@ it("selects legacy headerless sessions by first sequence and full JSON semantics
 
 it("preserves exact compressed payloads in label and header repair snapshots", () => {
   tables("transcript_events", ", event_zstd BLOB, event_utf8_bytes INTEGER, navigation_json TEXT");
-  database.exec(`CREATE TABLE session_transcript_cold_archives (session_id TEXT PRIMARY KEY);
-    INSERT INTO session_windows VALUES ('compressed', 'agent:main:compressed')`);
+  database.exec("INSERT INTO session_windows VALUES ('compressed', 'agent:main:compressed')");
   const originals = [
     ` { "type": "message", "id": "first", "message": {"role":"user","content":"${"🦞".repeat(500)}"} } `,
     `{"type":"message","id":"second","message":{"role":"assistant","content":"${"kept".repeat(500)}"}}`,
@@ -87,6 +86,7 @@ it("preserves exact compressed payloads in label and header repair snapshots", (
   );
   expect(reader.sessionIds()).toEqual(["compressed"]);
   database.exec(`
+    CREATE TABLE session_transcript_cold_archives (session_id TEXT PRIMARY KEY);
     INSERT INTO session_transcript_cold_archives VALUES ('archived');
     INSERT INTO transcript_events
       SELECT 'archived', seq, created_at,

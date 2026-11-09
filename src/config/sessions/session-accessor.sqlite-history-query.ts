@@ -45,7 +45,6 @@ import type {
 } from "./session-accessor.sqlite-history-projection.types.js";
 import {
   getActiveTranscriptKysely,
-  readProjectionTranscriptPayload,
   readSnapshotEventRows,
   type SessionTranscriptMessageAnchorPage,
   type SessionTranscriptMessageEventPage,
@@ -63,6 +62,7 @@ import {
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "./session-accessor.sqlite-visible-cursor.js";
 import { createTranscriptRawDeltaCursor } from "./session-transcript-raw-cursor.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import { readTranscriptPayload } from "./transcript-payload.js";
 
 const recentHistory = {
   // Bun weakly retains named channels, so the cache owner must keep its subscription alive.
@@ -105,7 +105,7 @@ function readBoundaryEvents(
   return new Map(
     readSnapshotEventRows(projection, eventSeqs).map((row) => [
       row.seq,
-      parseStoredTranscriptEvent(readProjectionTranscriptPayload(projection, row, row.seq)),
+      parseStoredTranscriptEvent(readTranscriptPayload(row)),
     ]),
   );
 }

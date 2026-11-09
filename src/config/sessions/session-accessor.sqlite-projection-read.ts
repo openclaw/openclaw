@@ -210,15 +210,13 @@ export function readSnapshotEventRows(
 }
 
 export function readProjectionTranscriptPayload(
-  projection: Pick<CurrentTranscriptProjection, "readColdPayload"> & {
-    resolved: { sessionId: string };
-  },
+  projection: Pick<CurrentTranscriptProjection, "readColdPayload">,
   row: Pick<TranscriptPayloadRecord, "event_json" | "event_zstd" | "event_utf8_bytes">,
   eventSeq: number,
 ): string {
   return row.event_json === null && row.event_zstd === null && projection.readColdPayload
     ? projection.readColdPayload(eventSeq)
-    : readTranscriptPayload(row, projection.resolved.sessionId, eventSeq);
+    : readTranscriptPayload(row);
 }
 
 export function parseActiveTranscriptMessageRow(
@@ -226,7 +224,7 @@ export function parseActiveTranscriptMessageRow(
     event_seq: number;
     message_position: number | null;
   },
-  projection: Parameters<typeof readProjectionTranscriptPayload>[0],
+  projection: Pick<CurrentTranscriptProjection, "readColdPayload">,
 ): SessionTranscriptMessageEvent {
   if (row.message_position === null) {
     throw new Error("Active transcript message row is missing its message position");

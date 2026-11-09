@@ -51,14 +51,12 @@ const nativeFixtureEvent =
 function createTable(database: DatabaseSync): void {
   // Deliberately omit production constraints so reads also exercise corrupted persisted records.
   database.exec(`CREATE TABLE transcript_events (
-    session_id TEXT NOT NULL DEFAULT 'payload-session',
     seq INTEGER PRIMARY KEY, event_json TEXT, event_zstd BLOB,
     event_utf8_bytes INTEGER, navigation_json TEXT,
     navigation_type TEXT, navigation_custom_type TEXT, navigation_display INTEGER NOT NULL DEFAULT 0,
     message_role TEXT, navigation_last_type TEXT, navigation_last_custom_type TEXT,
     navigation_valid INTEGER NOT NULL DEFAULT 1
   ) STRICT;
-  CREATE TABLE session_transcript_cold_archives (session_id TEXT PRIMARY KEY);
   CREATE TABLE session_transcript_active_event_facts (
     session_id TEXT NOT NULL, seq INTEGER NOT NULL, serialized_bytes INTEGER NOT NULL,
     dependency_navigation_json TEXT NOT NULL, PRIMARY KEY(session_id, seq)
@@ -103,7 +101,7 @@ function readBody(database: DatabaseSync, seq: number, mode: "sql" | "row" = "sq
       database,
       query.select(["event.event_json", "event.event_zstd", "event.event_utf8_bytes"]),
     );
-    return row && readTranscriptPayload(row, "payload-session", seq);
+    return row && readTranscriptPayload(row);
   }
   return executeSqliteQueryTakeFirstSync(
     database,
@@ -137,7 +135,7 @@ describe("transcript payload storage boundary", () => {
       decode.mockRestore();
     }
     expect(prepared.event_zstd).not.toBeNull();
-    expect(readTranscriptPayload(prepared, "payload-session", 1)).toBe(original);
+    expect(readTranscriptPayload(prepared)).toBe(original);
     for (const role of ["user", "assistant"]) {
       const event = { type: "message", id: "x".repeat(1100), message: { role, content: "" } };
       const json = JSON.stringify(event);
@@ -162,7 +160,7 @@ describe("transcript payload storage boundary", () => {
   it("reads legacy predicates lazily and uses the next payload write without JSON work", () => {
     using database = openNodeSqliteDatabase(":memory:");
     createTable(database);
-    database.exec(`
+    database.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT;
       ALTER TABLE transcript_events ADD COLUMN created_at INTEGER;
       INSERT INTO transcript_events (seq, session_id, event_json, created_at)
       VALUES (1, 'legacy', '{"type":"message","message":{"role":"user"}}', 1)`);
@@ -208,7 +206,7 @@ describe("transcript payload storage boundary", () => {
   it("publishes predicate columns with inserts and rewrites and rolls both back together", () => {
     using database = openNodeSqliteDatabase(":memory:");
     createTable(database);
-    database.exec(`
+    database.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT;
       ALTER TABLE transcript_events ADD COLUMN created_at INTEGER`);
     const write = createTranscriptEventInserter(database, "session");
     write({
@@ -264,7 +262,7 @@ describe("transcript payload storage boundary", () => {
     (legacy) => {
       using database = openNodeSqliteDatabase(":memory:");
       createTable(database);
-      database.exec(`
+      database.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT;
       ALTER TABLE transcript_events ADD COLUMN created_at INTEGER;
       DROP TABLE session_transcript_active_event_facts;
       PRAGMA user_version = ${AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION - (legacy ? 1 : 0)};
@@ -312,7 +310,7 @@ describe("transcript payload storage boundary", () => {
       } finally {
         observation.restore();
       }
-      target.exec(`
+      target.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT;
         ALTER TABLE transcript_events ADD COLUMN created_at INTEGER`);
       const eventJson = `{"type":"custom","id":"first","id":"last","data":"${"fixture".repeat(1024)}"}`;
       const prepared = prepareTranscriptPayloadForReuse(source, eventJson);
@@ -584,39 +582,31 @@ describe("transcript payload storage boundary", () => {
     );
   });
 
-  it.each(["sql", "row"] as const)("classifies missing bodies through %s reads", (mode) => {
-    using database = openNodeSqliteDatabase(":memory:");
-    createTable(database);
-    insert(database, 7, {
-      event_json: null,
-      event_zstd: null,
-      event_utf8_bytes: 128,
-      navigation_json: '{"type":"message"}',
-    });
-    const read = () => readBody(database, 7, mode);
-    expect(read).toThrow(
-      expect.objectContaining({
-        name: "SessionTranscriptCorruptionError",
-        code: "TRANSCRIPT_CORRUPT",
-        message: expect.stringMatching(/payload-session.*7.*[Rr]estore/),
-      }),
-    );
-    database
-      .prepare("INSERT INTO session_transcript_cold_archives VALUES (?)")
-      .run("payload-session");
-    if (mode === "sql") {
+  it.each(["sql", "row"] as const)(
+    "classifies missing and malformed bodies through %s reads",
+    (mode) => {
+      using database = openNodeSqliteDatabase(":memory:");
+      createTable(database);
+      insert(database, 7, {
+        event_json: null,
+        event_zstd: null,
+        event_utf8_bytes: 128,
+        navigation_json: '{"type":"message"}',
+      });
+      const read = () => readBody(database, 7, mode);
       expect(read).toThrow(
         expect.objectContaining({ name: "SessionTranscriptColdError", code: "TRANSCRIPT_COLD" }),
       );
-    }
-    database.prepare("UPDATE transcript_events SET event_zstd = ?").run(Buffer.alloc(0));
-    expect(read).toThrow(
-      expect.objectContaining({
-        name: "SessionTranscriptCorruptionError",
-        code: "TRANSCRIPT_CORRUPT",
-      }),
-    );
-  });
+      database.prepare("UPDATE transcript_events SET event_zstd = ?").run(Buffer.alloc(0));
+      expect(read).toThrow(
+        expect.objectContaining({
+          name: "SessionTranscriptCorruptionError",
+          code: "TRANSCRIPT_CORRUPT",
+          message: expect.stringContaining("Restore a verified backup"),
+        }),
+      );
+    },
+  );
 
   it("bounds malformed frames and rejects size, checksum and UTF-8 corruption", () => {
     const database = openNodeSqliteDatabase(":memory:");
@@ -672,7 +662,7 @@ describe("transcript payload storage boundary", () => {
       for (const [index, message] of messages.entries()) {
         insert(database, index + 1, prepareTranscriptPayload(database, JSON.stringify(message)));
       }
-      database.exec(`UPDATE transcript_events SET session_id = 'selected';
+      database.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT DEFAULT 'selected';
         CREATE TABLE session_transcript_active_events (
           session_id TEXT, event_seq INTEGER, message_position INTEGER
         );
@@ -680,9 +670,7 @@ describe("transcript payload storage boundary", () => {
       const readers = getMessageRangeReaders({ db: database, agentId: "main", path: ":memory:" });
       const range = { sessionId: "selected", start: 1, endExclusive: 3 };
       const parseMessage = (row: Parameters<typeof parseActiveTranscriptMessageRow>[0]) =>
-        parseActiveTranscriptMessageRow(row, {
-          resolved: { sessionId: "selected" },
-        });
+        parseActiveTranscriptMessageRow(row, {});
       const events = Array.from(readers.messages(range), parseMessage);
       expect(events).toEqual(
         messages.map((event, index) => ({ event, eventSeq: index + 1, seq: index + 2 })),

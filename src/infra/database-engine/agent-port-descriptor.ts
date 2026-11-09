@@ -334,22 +334,16 @@ export async function loadAgentPortDescriptor(
       transcript_events(row) {
         let decoded = row;
         if (row.event_zstd != null) {
-          if (!(row.event_zstd instanceof Uint8Array) || typeof row.session_id !== "string") {
-            throw new DatabasePortDataError(
-              "Invalid compressed transcript payload or session identity",
-            );
+          if (!(row.event_zstd instanceof Uint8Array)) {
+            throw new DatabasePortDataError("Invalid compressed transcript payload");
           }
           decoded = {
             ...row,
-            event_json: readTranscriptPayload(
-              {
-                event_json: null,
-                event_zstd: row.event_zstd,
-                event_utf8_bytes: Number(row.event_utf8_bytes),
-              },
-              row.session_id,
-              Number(row.seq),
-            ),
+            event_json: readTranscriptPayload({
+              event_json: null,
+              event_zstd: row.event_zstd,
+              event_utf8_bytes: Number(row.event_utf8_bytes),
+            }),
             event_zstd: null,
           };
         }

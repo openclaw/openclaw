@@ -7,12 +7,15 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   getActiveTranscriptKysely,
-  readProjectionTranscriptPayload,
   readSnapshotEventRows,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import { collectCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix-values.js";
-import { transcriptEventModelNavigationSql, transcriptPredicateSql } from "./transcript-payload.js";
+import {
+  readTranscriptPayload,
+  transcriptEventModelNavigationSql,
+  transcriptPredicateSql,
+} from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 /** Projection dependencies are metadata, separate from the byte-bounded model history. */
@@ -129,12 +132,7 @@ export function readCacheTtlProjectionPrefix(
         // Sorting checkpoint payloads decompresses obsolete history before the first yield.
         // Fetch only consumed payloads through the owner of this same projection snapshot.
         const eventJson =
-          row.reset_json ??
-          readProjectionTranscriptPayload(
-            projection,
-            readSnapshotEventRows(projection, [row.seq])[0]!,
-            row.seq,
-          );
+          row.reset_json ?? readTranscriptPayload(readSnapshotEventRows(projection, [row.seq])[0]!);
         yield JSON.parse(eventJson) as unknown;
       }
     })(),

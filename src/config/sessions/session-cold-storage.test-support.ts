@@ -91,11 +91,7 @@ export async function createSessionColdStorageFixture(
           .orderBy("seq"),
       ).rows.map(({ event_zstd, event_utf8_bytes, ...row }) => {
         if (row.event_json !== null || event_zstd !== null) {
-          row.event_json = readTranscriptPayload(
-            { ...row, event_zstd, event_utf8_bytes },
-            row.session_id,
-            row.seq,
-          );
+          row.event_json = readTranscriptPayload({ ...row, event_zstd, event_utf8_bytes });
         }
         return row;
       }),
