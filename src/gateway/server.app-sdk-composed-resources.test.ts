@@ -78,6 +78,7 @@ async function proveWorkerCreation(): Promise<void> {
   try {
     const record: WorkerEnvironmentServiceRecord = {
       resourceReceipt: null,
+      retention: null,
       environmentId: "worker-sdk-e2e",
       providerId: "testbox",
       profileId: "development",

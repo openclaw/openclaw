@@ -8438,7 +8438,7 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches().isEmpty)
     }
 
-    @Test func `write scope permits model but keeps effort settings admin only`() async throws {
+    @Test func `effort settings stay unchanged without effort access`() async throws {
         let writeCatalog = OpenClawChatComposerCapabilityCatalog(
             sessionSettingsAvailable: true,
             modelMutationAvailable: true,
@@ -8460,6 +8460,26 @@ struct ChatViewModelTests {
             vm.selectVerboseLevel("full")
         }
         try await Task.sleep(for: .milliseconds(20))
+        #expect(await transport.sessionSettingsPatches().isEmpty)
+    }
+
+    @Test func `write scope permits effort but keeps tool details admin only`() async throws {
+        let writeCatalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            modelMutationAvailable: true,
+            effortMutationAvailable: true)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            sessionsResponses: [sessionsResponse([
+                sessionEntry(key: "main", updatedAt: 1, sessionId: "sess-main"),
+            ])],
+            composerCapabilityCatalog: writeCatalog)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await vm.loadComposerCapabilities()
+
+        #expect(await MainActor.run { !vm.composerVerboseMutationAvailable })
+        await MainActor.run { vm.selectVerboseLevel("full") }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
         #expect(await transport.sessionSettingsPatches().isEmpty)
     }
 
@@ -8945,6 +8965,40 @@ struct ChatViewModelTests {
             vm.toggleComposerWebSearch()
         }
         #expect(await transport.sessionSettingsPatches().isEmpty)
+    }
+
+    @Test func `health poll recovery reloads composer capabilities loaded before connect`() async throws {
+        let calls = AsyncCounter()
+        let writerCatalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            modelMutationAvailable: true,
+            effortMutationAvailable: true,
+            permissionMutationAvailable: true)
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            sessionsResponses: [sessionsResponse([
+                sessionEntry(key: "main", updatedAt: 1, sessionId: "sess-main"),
+            ])],
+            composerCapabilityCatalogHook: { _, _ in
+                // The composer's first load runs before the operator route exists.
+                await calls.increment() == 1 ? OpenClawChatComposerCapabilityCatalog() : writerCatalog
+            },
+            healthResponses: [false, true])
+        let bootstrap = try #require(await MainActor.run {
+            vm.load()
+            return vm.bootstrapTask
+        })
+        await bootstrap.value
+        await vm.loadComposerCapabilities()
+        #expect(await MainActor.run { !vm.healthOK && !vm.composerModelMutationAvailable })
+
+        // The chat's own health poll, not a gateway health event, observes the connection.
+        await vm.pollHealthIfNeeded(force: true)
+        await calls.wait { $0 >= 2 }
+        await waitForObservedState {
+            vm.composerModelMutationAvailable && vm.composerEffortMutationAvailable
+        }
+        #expect(await calls.current() == 2)
     }
 
     @Test func `composer capabilities fail closed and discard a stale catalog`() async throws {
@@ -10588,7 +10642,6 @@ struct ChatViewModelTests {
         await finalRefresh?.value
         #expect(await mainHistoryCount.current() == 3)
 
-
         await send.value
         #expect(await MainActor.run {
             vm.sessionId == "sess-main-send-refresh" &&
@@ -10647,7 +10700,6 @@ struct ChatViewModelTests {
             vm.sessionId == "sess-main-terminal-empty-refresh" &&
                 vm.pendingRunCount == 0
         })
-
 
         await send.value
         #expect(await MainActor.run {
@@ -10714,7 +10766,6 @@ struct ChatViewModelTests {
                 }
         })
 
-
         await send.value
         #expect(await MainActor.run {
             vm.sessionId == "sess-main-terminal-user-only-refresh" &&
@@ -10770,7 +10821,6 @@ struct ChatViewModelTests {
         await sendRefreshGate.release()
         await vm.bootstrapTask?.value
         #expect(vm.sessionId == "sess-main-manual-user-only-refresh" && vm.pendingRunCount == 0)
-
 
         await send?.value
         #expect(vm.sessionId == "sess-main-manual-user-only-refresh")
@@ -10835,7 +10885,6 @@ struct ChatViewModelTests {
         #expect(vm.messages.contains { message in
             message.content.contains { $0.text == "older answer" }
         })
-
 
         await send?.value
         #expect(vm.sessionId == "sess-main-manual-older-complete-refresh")
@@ -10932,7 +10981,6 @@ struct ChatViewModelTests {
         #expect(await MainActor.run {
             vm.sessionId == "sess-main-manual-stale-complete-refresh"
         })
-
 
         await send.value
         #expect(await MainActor.run {
@@ -15405,19 +15453,28 @@ struct ChatTranscriptRevisionTests {
 }
 
 private func pagedHistory(
-    _ range: ClosedRange<Int>, total: Int, offset: Int? = nil,
-    nextOffset: Int? = nil, hasMore: Bool = false, sessionID: String = "sess-main") -> OpenClawChatHistoryPayload
+    _ range: ClosedRange<Int>,
+    total: Int,
+    offset: Int? = nil,
+    nextOffset: Int? = nil,
+    hasMore: Bool = false,
+    sessionID: String = "sess-main") -> OpenClawChatHistoryPayload
 {
     OpenClawChatHistoryPayload(
-        sessionKey: "main", sessionId: sessionID,
+        sessionKey: "main",
+        sessionId: sessionID,
         messages: range.map { index in
             AnyCodable([
                 "role": "assistant", "timestamp": Double(index),
                 "content": [["type": "text", "text": "History row \(index)"]],
                 "__openclaw": ["id": "row-\(index)"],
             ])
-        }, thinkingLevel: "off", offset: offset, nextOffset: nextOffset,
-        hasMore: hasMore, totalMessages: total)
+        },
+        thinkingLevel: "off",
+        offset: offset,
+        nextOffset: nextOffset,
+        hasMore: hasMore,
+        totalMessages: total)
 }
 
 extension ChatViewModelTests {
@@ -15430,7 +15487,8 @@ extension ChatViewModelTests {
         })
         #expect(vm.applyHistoryPayload(
             pagedHistory(201...400, total: 400, nextOffset: 200, hasMore: true),
-            for: vm.beginHistoryRequest(), preservingOptimisticLocalMessages: false))
+            for: vm.beginHistoryRequest(),
+            preservingOptimisticLocalMessages: false))
         #expect(vm.messages.count == 200)
         #expect(vm.hasEarlierHistory)
         #expect(await vm.loadEarlierHistory())
@@ -15446,12 +15504,14 @@ extension ChatViewModelTests {
         let (_, vm) = await makeViewModel(historyResponses: [], requestHistoryPageHook: { _, _ in page })
         _ = vm.applyHistoryPayload(
             pagedHistory(201...400, total: 400, nextOffset: 200, hasMore: true),
-            for: vm.beginHistoryRequest(), preservingOptimisticLocalMessages: false)
+            for: vm.beginHistoryRequest(),
+            preservingOptimisticLocalMessages: false)
         #expect(await vm.loadEarlierHistory())
         let oldestID = vm.messages.first?.id
         _ = vm.applyHistoryPayload(
             pagedHistory(204...403, total: 403, nextOffset: 200, hasMore: true),
-            for: vm.beginHistoryRequest(), preservingOptimisticLocalMessages: false)
+            for: vm.beginHistoryRequest(),
+            preservingOptimisticLocalMessages: false)
         #expect(vm.messages.count == 403)
         #expect(vm.messages.first?.id == oldestID)
         #expect(vm.messages.last?.transcriptMessageID == "row-403")
@@ -15468,7 +15528,8 @@ extension ChatViewModelTests {
         })
         _ = vm.applyHistoryPayload(
             pagedHistory(201...400, total: 400, nextOffset: 200, hasMore: true),
-            for: vm.beginHistoryRequest(), preservingOptimisticLocalMessages: false)
+            for: vm.beginHistoryRequest(),
+            preservingOptimisticLocalMessages: false)
         #expect(await vm.loadEarlierHistory())
         #expect(await requests.current() == ["200", "203"])
         #expect(vm.messages.count == 400)
@@ -15484,7 +15545,8 @@ extension ChatViewModelTests {
         })
         _ = vm.applyHistoryPayload(
             pagedHistory(201...400, total: 400, nextOffset: 200, hasMore: true),
-            for: vm.beginHistoryRequest(), preservingOptimisticLocalMessages: false)
+            for: vm.beginHistoryRequest(),
+            preservingOptimisticLocalMessages: false)
         let request = Task { await vm.loadEarlierHistory() }
         await gate.waitUntilBlocked()
         vm.switchSession(to: "other")
@@ -15504,12 +15566,14 @@ extension ChatViewModelTests {
         })
         _ = vm.applyHistoryPayload(
             pagedHistory(201...400, total: 400, nextOffset: 200, hasMore: true),
-            for: vm.beginHistoryRequest(), preservingOptimisticLocalMessages: false)
+            for: vm.beginHistoryRequest(),
+            preservingOptimisticLocalMessages: false)
         let request = Task { await vm.loadEarlierHistory() }
         await gate.waitUntilBlocked()
         _ = vm.applyHistoryPayload(
             pagedHistory(202...401, total: 401, nextOffset: 200, hasMore: true),
-            for: vm.beginHistoryRequest(), preservingOptimisticLocalMessages: false)
+            for: vm.beginHistoryRequest(),
+            preservingOptimisticLocalMessages: false)
         await gate.release()
         #expect(await request.value == false)
         #expect(vm.messages.count == 200)
@@ -15522,16 +15586,19 @@ extension ChatViewModelTests {
         let (_, vm) = await makeViewModel(historyResponses: [], requestHistoryPageHook: { _, _ in page })
         _ = vm.applyHistoryPayload(
             pagedHistory(201...400, total: 400, nextOffset: 200, hasMore: true),
-            for: vm.beginHistoryRequest(), preservingOptimisticLocalMessages: false)
+            for: vm.beginHistoryRequest(),
+            preservingOptimisticLocalMessages: false)
         #expect(await vm.loadEarlierHistory())
         _ = vm.applyHistoryPayload(
             pagedHistory(501...700, total: 400, nextOffset: 200, hasMore: true),
-            for: vm.beginHistoryRequest(), preservingOptimisticLocalMessages: false)
+            for: vm.beginHistoryRequest(),
+            preservingOptimisticLocalMessages: false)
         #expect(vm.messages.count == 200)
         #expect(vm.messages.first?.transcriptMessageID == "row-501")
         _ = vm.applyHistoryPayload(
             pagedHistory(601...800, total: 400, nextOffset: 200, hasMore: true, sessionID: "new-session"),
-            for: vm.beginHistoryRequest(), preservingOptimisticLocalMessages: false)
+            for: vm.beginHistoryRequest(),
+            preservingOptimisticLocalMessages: false)
         #expect(vm.messages.count == 200)
         #expect(vm.sessionId == "new-session")
     }
@@ -15541,12 +15608,19 @@ extension ChatViewModelTests {
     @MainActor
     @Test func `history paging consumes an empty projected page without stranding its offset`() async {
         let page = OpenClawChatHistoryPayload(
-            sessionKey: "main", sessionId: "sess-main", messages: [], thinkingLevel: "off",
-            offset: 200, nextOffset: 400, hasMore: true, totalMessages: 600)
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [],
+            thinkingLevel: "off",
+            offset: 200,
+            nextOffset: 400,
+            hasMore: true,
+            totalMessages: 600)
         let (_, vm) = await makeViewModel(historyResponses: [], requestHistoryPageHook: { _, _ in page })
         _ = vm.applyHistoryPayload(
             pagedHistory(401...600, total: 600, nextOffset: 200, hasMore: true),
-            for: vm.beginHistoryRequest(), preservingOptimisticLocalMessages: false)
+            for: vm.beginHistoryRequest(),
+            preservingOptimisticLocalMessages: false)
         #expect(await vm.loadEarlierHistory())
         #expect(vm.earlierHistoryNextOffset == 400)
         #expect(vm.messages.count == 200)
@@ -15562,7 +15636,8 @@ extension ChatViewModelTests {
         })
         _ = vm.applyHistoryPayload(
             pagedHistory(201...400, total: 400, nextOffset: 200, hasMore: true),
-            for: vm.beginHistoryRequest(), preservingOptimisticLocalMessages: false)
+            for: vm.beginHistoryRequest(),
+            preservingOptimisticLocalMessages: false)
         let request = Task { await vm.loadEarlierHistory() }
         await gate.waitUntilBlocked()
         let mutation = vm.beginSessionBranchSwitchActivity(for: vm.currentSessionSnapshot())
@@ -15581,18 +15656,23 @@ extension ChatViewModelTests {
         let (_, vm) = await makeViewModel(historyResponses: [], requestHistoryPageHook: { _, _ in page })
         _ = vm.applyHistoryPayload(
             pagedHistory(201...400, total: 400, nextOffset: 200, hasMore: true),
-            for: vm.beginHistoryRequest(), preservingOptimisticLocalMessages: false)
+            for: vm.beginHistoryRequest(),
+            preservingOptimisticLocalMessages: false)
         #expect(await vm.loadEarlierHistory())
         let local = try #require(OpenClawChatViewModel.decodeMessages([chatTextMessage(
-            role: "assistant", text: "Local final awaiting persistence", timestamp: 0,
+            role: "assistant",
+            text: "Local final awaiting persistence",
+            timestamp: 0,
             idempotencyKey: "not-yet-durable")]).first)
         vm.replaceMessages([local] + vm.messages)
         vm.provisionalFinalMessagesByID[local.id] = OpenClawChatViewModel.ProvisionalFinalMessage(
-            reconciliationKey: "local-awaiting-persistence", runId: "not-yet-durable",
+            reconciliationKey: "local-awaiting-persistence",
+            runId: "not-yet-durable",
             scope: vm.currentRunMessageScope())
         _ = vm.applyHistoryPayload(
             pagedHistory(204...403, total: 403, nextOffset: 200, hasMore: true),
-            for: vm.beginHistoryRequest(), preservingOptimisticLocalMessages: false)
+            for: vm.beginHistoryRequest(),
+            preservingOptimisticLocalMessages: false)
         #expect(vm.messages.contains { $0.id == local.id })
         #expect(vm.provisionalFinalMessagesByID[local.id] != nil)
         #expect(vm.messages.last?.transcriptMessageID == "row-403")

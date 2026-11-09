@@ -413,16 +413,11 @@ openclaw-systems-page {
 .systems-session-link:hover .systems-session-link__title {
   color: var(--accent);
 }
-.systems-mobile-picker {
+/* Outranks the shared select's display so the picker stays phone-only. */
+.systems-workspace .systems-toolbar > select.systems-mobile-picker {
   display: none;
   min-width: 0;
   max-width: 230px;
-  background: var(--bg-elevated);
-  color: var(--text);
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
-  padding: 6px;
-  font-size: 12px;
 }
 .systems-sidebar {
   padding: 6px 0 12px;
@@ -649,10 +644,19 @@ openclaw-systems-page {
   .systems-heading {
     display: none;
   }
-  .systems-mobile-picker {
-    display: block;
+  /* Level with the 32px icon buttons beside it, and drawn with the same border. */
+  .systems-workspace .systems-toolbar > select.systems-mobile-picker {
+    --settings-control-height: 32px;
+
+    display: -webkit-inline-box;
     flex: 1;
     max-width: none;
+    height: 32px;
+    min-height: 32px;
+    border-color: var(--border);
+  }
+  .systems-desktop .desktop-toolbar select.settings-select {
+    border-color: var(--border);
   }
   .systems-workspace > .content-header.hub-page-header.systems-page-header {
     padding-inline: 10px;
@@ -700,10 +704,88 @@ openclaw-systems-page {
   /* Keep the persistent outlet at the chat inset; pad only this page's content. */
   .systems-workspace {
     padding: 8px 8px 16px;
+    background: transparent;
   }
 
   .systems-workspace > .content-header.hub-page-header.systems-page-header {
     margin-top: 0;
+  }
+
+  /* With stats off the viewer takes the space: Backups goes with the stats and only
+     notices keep the overview, which must not stay behind as an empty focus stop. */
+  .systems-overview--compact {
+    min-height: 0;
+  }
+  .systems-overview--compact > .systems-backups {
+    display: none;
+  }
+  .systems-overview--compact:not(:has(> .systems-callout)) {
+    display: none;
+  }
+
+  /* The panel tint belongs to the viewer's stage; the bar sits on the page. */
+  .systems-desktop .bp:not(:fullscreen) {
+    background: transparent;
+  }
+
+  /* Wrapped rows start at one edge and Disconnect closes the bar on the right. */
+  .systems-desktop .desktop-toolbar__spacer {
+    display: none;
+  }
+  .systems-desktop .desktop-toolbar--connection > :last-child {
+    margin-inline-start: auto;
+  }
+  /* Without app launchers the spacer breaks view controls from window controls, and its
+     empty line takes two row gaps. Fullscreen's tooltip wrapper has no box of its own. */
+  .systems-desktop .desktop-toolbar.desktop-toolbar--connection:not(:has(> .desktop-apps)) {
+    row-gap: 4px;
+
+    & > .desktop-toolbar__spacer {
+      display: block;
+      flex: 0 0 100%;
+      order: 1;
+    }
+
+    & > :nth-last-child(-n + 4),
+    & .desktop-fullscreen-button {
+      order: 2;
+    }
+  }
+  /* The window controls share one box; fullscreen otherwise keeps the browser's button. */
+  .systems-desktop .desktop-fullscreen-button {
+    display: inline-flex;
+    border: 0;
+    border-radius: 4px;
+    padding: 5px 7px;
+    background: transparent;
+    color: var(--muted);
+  }
+  .systems-desktop .desktop-fullscreen-icon {
+    display: inline-flex;
+  }
+  /* Safari's native control ignores height, so the picker draws its own chevron to match its 32px neighbors. */
+  .systems-toolbar > .systems-mobile-picker {
+    height: 32px;
+    padding-block: 0;
+    padding-inline-end: 28px;
+    appearance: none;
+    background-image: var(--select-chevron);
+    background-repeat: no-repeat;
+    background-position:
+      right 16px center,
+      right 12px center;
+    background-size: 5px 5px;
+    text-overflow: ellipsis;
+  }
+}
+
+/* Touch has no hover to reveal refresh; focus alone would hide it in the phone drawer. */
+@media (hover: none) {
+  .systems-filter__refresh {
+    opacity: 1;
+  }
+  .systems-filter__refresh:disabled {
+    opacity: 0.45;
   }
 }
 

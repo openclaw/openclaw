@@ -1,5 +1,6 @@
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { canPresentGatewayMethod } from "../gateway-methods.ts";
 import { peekChatMetadata } from "./chat-metadata-store.ts";
 import {
   buildFallbackSlashCommands,
@@ -53,6 +54,13 @@ function loadRemoteSlashCommands(
   // so no TTL applies here. The cache below owns only commands.list-derived entries.
   if (metadata) {
     return Promise.resolve(buildSlashCommandsFromEntries(metadata.commands));
+  }
+  if (
+    !canPresentGatewayMethod(client, "commands.list", "operator.read", {
+      requireAdvertisement: false,
+    })
+  ) {
+    return Promise.resolve(buildFallbackSlashCommands());
   }
   let cache = remoteSlashCommandCache.get(client);
   if (!cache) {

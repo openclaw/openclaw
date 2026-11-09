@@ -1,6 +1,6 @@
 // Install the shared GitHub fixture before loading the registered action owners.
 // oxfmt-ignore
-import { interruptCanonicalWorkspaceAcceptance, bindFixtureRuntime, fixture, mocks } from "./github-pr-workspace-preparation.test-support.js";
+import { interruptCanonicalWorkspaceAcceptance, bindFixtureRuntime, fixture, mocks, observeManagedLayoutCaptures } from "./github-pr-workspace-preparation.test-support.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -19,6 +19,7 @@ import {
 import {
   commandResult,
   installGitHubPublicationTestHarness,
+  overrideCommands,
 } from "./github-publication.test-support.js";
 
 describe("existing PR preparation through the registered agent action", () => {
@@ -313,6 +314,7 @@ describe("existing PR preparation through the registered agent action", () => {
       }
       expect(await f.guestGit("rev-parse", "HEAD")).toBe(continuedGuestHead);
       expect(await f.guestGit("symbolic-ref", "HEAD")).toBe(guestBranch);
+      await f.local!.git("-C", f.upstream, "branch", "another-base", f.pr.base.sha);
       for (const advance of [false, true]) {
         if (advance) {
           await f.advanceHead({ "newer-pr.txt": "newer remote PR work\n" });
@@ -455,6 +457,7 @@ describe("existing PR preparation through the registered agent action", () => {
       const create = vi
         .spyOn(sandboxBackend, "createSandboxBackend")
         .mockResolvedValue(f.sandbox.backend!);
+      using captures = observeManagedLayoutCaptures();
       let sandbox: Awaited<ReturnType<typeof resolveSandboxContext>> = null;
       try {
         sandbox = await resolveSandboxContext({
@@ -468,6 +471,7 @@ describe("existing PR preparation through the registered agent action", () => {
           },
         });
         expect(sandbox?.workspaceSource).toBe("managed-worktree");
+        expect(captures.observations).toEqual(["scan:canonical"]);
         if (contents === "authored directory") {
           await fs.mkdir(path.join(f.projection, "saved-empty"));
           await expect(f.invoke({}, sandbox)).rejects.toThrow(
@@ -892,6 +896,24 @@ describe("existing PR preparation through the registered agent action", () => {
     const f = await fixture({ fork: true });
     const before = f.readSession();
     const head = await f.git("rev-parse", "HEAD");
+    let failedRead = false;
+    overrideCommands((argv) => {
+      if (
+        !failedRead &&
+        argv[0] === "gh" &&
+        argv.includes("GET") &&
+        argv.at(-1) ===
+          `repos/${f.pr.head.repo.full_name}/branches/${encodeURIComponent(f.pr.head.ref)}`
+      ) {
+        failedRead = true;
+        return commandResult("", 1);
+      }
+      return undefined;
+    });
+    await expect(f.invoke()).rejects.toThrow(
+      "The original PR's write eligibility could not be verified",
+    );
+    expect(failedRead).toBe(true);
     f.pr.maintainer_can_modify = false;
     await expect(f.invoke()).rejects.toThrow("no observed write permission");
     f.pr.maintainer_can_modify = true;

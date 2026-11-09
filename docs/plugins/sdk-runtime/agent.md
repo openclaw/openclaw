@@ -69,9 +69,12 @@ loads the selected active branch, and `openDetachedBoundedAsync` returns the sam
 selection without persistence. File-backed SQLite reads run on the history worker.
 The synchronous getters consume the prepared view without reading storage.
 
-Hydrated entry and message envelopes remain mutable local views. Their nested
-payloads are frozen after migration and can be shared across rewrite snapshots.
-Replace a payload with a new value instead of editing its nested objects or arrays.
+Public SessionManager getters preserve local entry and message mutation behavior:
+they detach selected hydrated entries before exposing them; already-admitted immutable
+append payloads retain their existing sharing contract. Internal hydration,
+actor reads, and initial model-context preparation share immutable transcript
+payloads. Extension context hooks still receive writable message copies. Neither
+editing a getter's local view nor editing hook messages changes retained actor history.
 
 Full reads transfer bounded chunks from one committed SQLite snapshot without
 truncating the transcript to fit the worker. The caller still holds the complete
@@ -191,7 +194,8 @@ compaction or reset boundary. It preserves
 tool-result ownership and rejects a limit that cannot retain the newest complete
 frame or required boundary. Stored transcripts stay unchanged. Omitting `limits`
 keeps the full selected context. Async reads retain admission, anchor, and
-cancellation checks.
+cancellation checks. Background model views should pass bounded limits, because an
+unbounded read of a very large session can exhaust the transcript worker.
 
 For a temporary model-only view, callers may explicitly add
 `toolResultOverflow: "omit"` to `limits`. Under byte pressure, the reader replaces
@@ -428,6 +432,8 @@ Each `SessionTranscriptMessageEntry` contains:
 
     `runEmbeddedAgent(...)` is the neutral helper for starting a normal OpenClaw agent turn from plugin code. It uses the same provider/model resolution and agent-harness selection as channel-triggered replies.
 
+    Each call owns a detached execution lifetime, so deferred turns can continue after the triggering request completes. During reversible suspension, calls from an admitted request can continue; other calls wait for admission to reopen. Pass `abortSignal` to cancel that wait or the turn.
+
     The caller owns `terminalReplyExpectation`: `"required"` for a normally requested response, `"optional"` for optional work, or `"result-required"` for internal work that must return a result. External turns may explicitly finish with an entire final that trims to uppercase `NO_REPLY` under either default reply expectation. The terminal producer prepares the full payload once and publishes `meta.terminalReply`; delivery consumes that fact without reparsing text. Producer preparation strips one literal leading `NO_REPLY\n`, preserving the remaining bytes as visible text. Otherwise, a standalone `NO_REPLY` on the last non-empty line is removed and the preceding answer is delivered; whitespace around that final line is allowed. Lowercase, punctuation, quoted or JSON forms, and inline or mid-text mentions are ordinary visible text. Internal result-required turns need a completed current-source final result, not a silent payload or progress update. `NO_REPLY` discards anything written this turn that was not sent, so send confirmations before ending silently. Empty output is not silence: recovery after settled tools uses a tool-free finalization pass rather than repeating completed actions.
 
     For stored assistant text without an authoritative display or final-result fact, `openclaw/plugin-sdk/reply-runtime` exports `isSilentReplyText(text?: string)`, which checks only `text?.trim() === "NO_REPLY"`. It has no custom-token parameter. `reply-chunking` no longer exports silence helpers, and the memory-host runtime no longer re-exports them. There are no compatibility aliases; live delivery must use producer-prepared output rather than this stored-text helper.
@@ -445,6 +451,24 @@ Each `SessionTranscriptMessageEntry` contains:
     Raw calls using this CLI opt-in keep the saved session fallback for same-agent child model selection. Explicit and configured child models still take precedence.
 
     `resolveThinkingPolicy(...)` returns the provider/model's supported thinking levels and optional default. Provider plugins own the model-specific profile through their thinking hooks, so tool plugins should call this runtime helper instead of importing or duplicating provider lists.
+
+    `explainToolAvailability({ agentId?, sessionKey?, toolNames, pluginId? })` explains whether named tools reach an agent or one session. It replays the same final tool-policy composition that agent runs use, with the current runtime config. Pass `pluginId` for tools your plugin owns, so plugin-ID and `group:plugins` policy entries match; omit it for core tools.
+
+    ```typescript
+    const report = await api.runtime.agent.explainToolAvailability({
+      sessionKey,
+      toolNames: ["memory_save"],
+      pluginId: "my-memory",
+    });
+    for (const tool of report.tools) {
+      if (!tool.available) {
+        // tool.block: { stage, source?, detail, fix }
+        console.warn(`${tool.name} hidden at ${tool.block.stage}: ${tool.block.detail} ${tool.block.fix}`);
+      }
+    }
+    ```
+
+    The result is `{ agentId, sandbox: { mode, source, sandboxed? }, tools }`. Each blocked tool names one stage: `deny` (an explicit deny entry, which wins over earlier exclusions), `harness` (the harness or CLI backend does not expose OpenClaw tools), `model` (the model has no tool support), `sandbox` (sandbox tool policy), `profile`, `provider-policy` (`tools.byProvider`), `allowlist`, or `session` (group, sender, subagent, or inherited policy). `source` names the config path that removed the tool, and `fix` gives a generic remedy. An agent query (no `sessionKey`) covers configured policy only; a session query adds that session's model, harness, and sandbox, and matches group and account tool policy through the session's delivery route. Plugin manifest tool-profile grants apply as they do for real runs. `sandbox.mode` and `sandbox.source` report the agent's sandbox setting, so a plugin whose tool factory refuses sandboxed runs can explain that gate in its own words. The call is read-only and does not grant access.
 
     `normalizeThinkingLevel(...)` converts user text such as `on`, `x-high`, or `extra high` to the standard stored level before checking it against the resolved policy.
 
@@ -487,6 +511,10 @@ Each `SessionTranscriptMessageEntry` contains:
     ```
 
     Prefer `getSessionEntryAsync(...)`, `getSessionEntryByIdAsync(...)`, `prepareSessionEntryPatch(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. Doctor and migration paths can combine `fallbackEntry`, `skipMaintenance`, and `requireWriteSuccess` for one atomic repair of the underlying store.
+
+    The deprecated synchronous `listSessionEntries(...)` accepts `projection: "list"` for metadata-only scans. Its default remains `"full"`. The list projection omits saved `skillsSnapshot`, `systemPromptReport`, and `sessionDiffBaseline` payloads; never write a projected entry back as a complete replacement. New asynchronous callers should use the existing metadata-only `listSessionEntriesAsync(...)`.
+
+    `listSessionCatalogEntries(...)` from `openclaw/plugin-sdk/session-catalog` uses metadata entries in its direct-listing fallback, matching the Gateway-supplied catalog snapshot. Consumers needing saved snapshots should read that session with `getSessionEntryAsync(...)`.
 
     Both async getters are also exported from the existing `openclaw/plugin-sdk/session-store-runtime` subpath. They return the complete public entry projection, excluding host-private fields, or `undefined` for a missing entry. The by-ID result includes `{ sessionKey, entry }` from the same selected owner. An explicit `storePath` selects that physical store; an omitted path inside a host-supplied incognito scope retains that scope. Managed runtime calls reject if their plugin owner retires while the read is pending. Returned metadata does not authorize a later effect; revalidate the caller's current authority at that boundary. The SDK and runtime `getSessionEntry(...)` getters are deprecated in favor of `getSessionEntryAsync(...)` and remain supported through 2026-12-31, with removal in the first January 2027 stable release. Their synchronous behavior remains unchanged during the migration window. The existing `readSessionUpdatedAt(...)` deprecation follows the same removal window; await `readSessionUpdatedAtAsync(...)` instead.
 

@@ -105,8 +105,11 @@ qualification accepted. A metadata retry starting is not qualification success.
 terminal (choosing the same producer or all-jobs mode for attempt-bound install-smoke
 payload consumers), while sibling children and the original parent may still run. It
 adopts active attempts without duplicating them and leaves green child
-workflows untouched. After the resulting child evidence is green and the
-original parent finishes, it reruns the parent once. The original Decision and
+workflows untouched. Each invocation reruns a child once; if that rerun fails
+again, it exits at once with the failed attempt and remaining rerun budget rather
+than waiting for siblings. A duplicate-job (ghost) attempt is unsealable: start
+a fresh all-group FRV instead of rerunning again. After the resulting child
+evidence is green and the original parent finishes, it reruns the parent once. The original Decision and
 Drain may disagree after an early retry; the final parent attempt restores the
 same immutable execution plan and seals the updated evidence. Existing plan
 and attempt-binding checks remain mandatory.

@@ -1,0 +1,2 @@
+# Require authored module-flow bindings before the retained shared-runner checks.
+5

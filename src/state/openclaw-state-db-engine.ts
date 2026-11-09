@@ -1,9 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { getEnvironmentData } from "node:worker_threads";
-import {
-  getDatabaseEngineInput,
-  getDatabaseEngineSelection,
-} from "../infra/database-engine/context.js";
 import type { PostgresSchemaFragment, StoreSchema } from "../infra/database-engine/contract.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import {
@@ -36,6 +31,7 @@ import {
 } from "./openclaw-state-db-admission.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { stateEngineInput } from "./openclaw-state-db-engine-input.js";
 import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { withLegacyPublicationDraft } from "./openclaw-state-db-schema-v28-publication.js";
 import { withLegacyLocalWorkspaceManifests } from "./openclaw-state-db-schema-v31-workspace-manifests.js";
@@ -50,6 +46,7 @@ import {
 } from "./openclaw-state-db-schema-v36-template-names.js";
 import { withLegacyWorkerResourceReceipts } from "./openclaw-state-db-schema-v37-resource-receipts.js";
 import { withLegacyRepositoryDiskAuthority } from "./openclaw-state-db-schema-v38-repository-disk.js";
+import { withLegacyWorkerRetention } from "./openclaw-state-db-schema-v39-worker-retention.js";
 import {
   admitStateSchemaFacts,
   PostgresSchemaAdmissionUnavailableError,
@@ -60,18 +57,6 @@ import { statePostgresRuntime as runtime } from "./postgres-schema.generated/run
 
 const recovery =
   "Use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.";
-
-export function stateEngineInput() {
-  const selected = getDatabaseEngineSelection();
-  if (selected) {
-    return getDatabaseEngineInput("state");
-  }
-  const connection: unknown =
-    process.env.NODE_ENV === "test"
-      ? getEnvironmentData("openclaw.test.state.connection")
-      : undefined;
-  return typeof connection === "string" ? { connection, schemaPrefix: "openclaw_test" } : undefined;
-}
 
 export function isStatePostgres(): boolean {
   return stateEngineInput() !== undefined;
@@ -189,9 +174,13 @@ function statePostgresVersionSql(version: number): string {
 }
 
 function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
+  const statePostgresSchemaV38 = {
+    ...statePostgresSchema,
+    postgres: withLegacyWorkerRetention(statePostgresSchema.postgres),
+  };
   const statePostgresSchemaV37 = {
-    postgres: withLegacyRepositoryDiskAuthority(statePostgresSchema.postgres),
-    postgresFragments: statePostgresSchema.postgresFragments.map((fragment) => ({
+    postgres: withLegacyRepositoryDiskAuthority(statePostgresSchemaV38.postgres),
+    postgresFragments: statePostgresSchemaV38.postgresFragments.map((fragment) => ({
       ...fragment,
       sql: withLegacyRepositoryDiskAuthority(fragment.sql),
     })),
@@ -390,10 +379,17 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     {
       version: 38,
       fromSchema: statePostgresSchemaV37,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV38,
       sql: `ALTER TABLE IF EXISTS session_repository_workspaces ADD COLUMN disk_authority_json text COLLATE "C";
         ALTER TABLE worker_workspace_pending_results ADD COLUMN repository_disk_authority_json text COLLATE "C";
         ${statePostgresVersionSql(38)}`,
+    },
+    {
+      version: 39,
+      fromSchema: statePostgresSchemaV38,
+      schema: statePostgresSchema,
+      sql: `ALTER TABLE worker_environments ADD COLUMN retention_json text COLLATE "C";
+        ${statePostgresVersionSql(39)}`,
     },
   ];
 }

@@ -344,7 +344,12 @@ describe("worker turn launcher reclaimed placement", () => {
           expect(onLaneWait.mock.calls).toEqual([admitted]);
         }
         expectPlacement(null);
-        expectUncalled(environments.acquireTurnCredential, environments.startTunnel, runLocal);
+        expectUncalled(
+          environments.ensureRetainedRunning,
+          environments.acquireTurnCredential,
+          environments.startTunnel,
+          runLocal,
+        );
       } finally {
         resumeWorkspaceResolution.resolve();
         uninstallPlacement();

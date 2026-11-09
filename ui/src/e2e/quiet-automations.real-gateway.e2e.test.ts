@@ -328,9 +328,7 @@ suite.define(() => {
                 limit: 100,
               });
               expect(startup.inFlightRun).toBeUndefined();
-              expect(
-                await pane.getByRole("button", { name: "Stop generating", exact: true }).count(),
-              ).toBe(0);
+              expect(await pane.getByRole("button", { name: "Stop", exact: true }).count()).toBe(0);
               expect(await pane.getByText(fixture.prompt, { exact: false }).count()).toBe(0);
             }
           } finally {

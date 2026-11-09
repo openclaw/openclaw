@@ -56,7 +56,7 @@ process.on("message", (message: TerminalPtyControl) => {
       return;
     }
     if (message.params.executionIntent === "agent-tool") {
-      enterAgentExecCgroup();
+      enterAgentExecCgroup(message.params.executionScopeKey);
     }
     const startup = prepareTerminalPty(message.params).then((launch) => {
       if (message.type === "start") {

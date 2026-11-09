@@ -1,4 +1,5 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
+import { finishBootFrame } from "../app/boot-composer.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "../pages/chat/chat-history-events.ts";
@@ -19,6 +20,7 @@ import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snaps
 
 export function createSidebarSnapshot(host: {
   sidebarSnapshot: SidebarSnapshotModel | null;
+  readonly sidebarAgentsMode: "chip" | "roster";
   readonly sessionDataContext?: {
     gateway: ApplicationGateway;
     agentSelection: { readonly state: { readonly scopeId: string | null } };
@@ -34,6 +36,7 @@ export function createSidebarSnapshot(host: {
   let publish: (() => void) | undefined;
   let pending = false;
   let saved = false;
+  let lastCapture = "none";
   const store = new SessionSnapshotStore();
   let gateway: ApplicationGateway | undefined;
   let revision = -1;
@@ -82,8 +85,11 @@ export function createSidebarSnapshot(host: {
         const key = sidebarSnapshotScopeKey(scope);
         const deleted = sidebarSnapshotDeletedSessionKey(key, event);
         if (deleted) {
+          finishBootFrame();
           // Cancel accepted stale captures, retaining the rest of the display and cache.
           generation += 1;
+          cancelCapture?.();
+          cancelCapture = undefined;
           pending = false;
           if (captured && saved) {
             const model = removeSidebarSnapshotSession(captured.model, deleted);
@@ -142,9 +148,13 @@ export function createSidebarSnapshot(host: {
               host.restoreSidebarSnapshot(model);
               captured = { model, serialized: JSON.stringify(model) };
               saved = true;
+            } else {
+              finishBootFrame();
             }
             notify();
           });
+        } else {
+          finishBootFrame();
         }
         // Connection receipts retire stale snapshot capture and restore the new scope.
         stopGateway = gateway.subscribe(() => {
@@ -166,6 +176,7 @@ export function createSidebarSnapshot(host: {
       clearDisplay();
     }
     if (pending && host.sidebarSnapshotSettled()) {
+      finishBootFrame();
       generation += 1;
       pending = false;
       notify();
@@ -212,6 +223,9 @@ export function createSidebarSnapshot(host: {
       cancelHandoff();
       // Release before rendering so a failed refresh cannot leave cached controls painted.
       host.releaseSidebarSnapshot();
+    } else if (!captured) {
+      // Readiness can settle without changing rows, so no render need follow this publication.
+      capture();
     }
   }
 
@@ -251,33 +265,50 @@ export function createSidebarSnapshot(host: {
     }
     cancelCapture();
     cancelCapture = undefined;
-    if (
-      !cleanup.length ||
-      pending ||
-      !scope ||
-      (scope.profileId !== null && gateway?.snapshot.selfUser === undefined) ||
-      host.sidebarSnapshot ||
-      !host.sidebarSnapshotSettled()
-    ) {
+    const blocked = !cleanup.length
+      ? "disconnected"
+      : pending
+        ? "boot-read"
+        : !scope
+          ? "missing-scope"
+          : scope.profileId !== null && gateway?.snapshot.selfUser === undefined
+            ? "identity"
+            : host.sidebarSnapshot
+              ? "cached-display"
+              : !host.sidebarSnapshotSettled()
+                ? "unsettled"
+                : null;
+    if (blocked || !scope) {
+      lastCapture = blocked ?? "missing-scope";
       return;
     }
     const model = host.captureSidebarSnapshot();
     if (!model) {
+      lastCapture = "model-unavailable";
       return;
     }
     const next = { model, serialized: JSON.stringify(model) };
     if (next.serialized === captured?.serialized) {
+      // Retain a failed/in-flight write's phase when an unchanged capture is skipped.
       return;
     }
     captured = next;
     saved = false;
     const current = captureScope();
     const key = sidebarSnapshotScopeKey(scope);
+    lastCapture = "retiring";
     void retirement.then(async () => {
       if (!current()) {
+        if (next === captured) {
+          lastCapture = "superseded";
+        }
         return;
       }
+      lastCapture = "writing";
       const written = await store.writeSidebar(key, model, parseSidebarSnapshot);
+      if (next === captured) {
+        lastCapture = !current() ? "superseded" : written ? "saved" : "rejected";
+      }
       if (written && current() && next === captured) {
         saved = true;
         notify();
@@ -296,6 +327,7 @@ export function createSidebarSnapshot(host: {
 
   function matchesAgent(model: SidebarSnapshotModel): boolean {
     return (
+      model.mode === host.sidebarAgentsMode &&
       (model.mode !== "chip" || model.roster?.agentId === host.expandedAgentId()) &&
       (model.navigationView !== "pages" ||
         model.pageScopeId === host.sessionDataContext?.agentSelection.state.scopeId)
@@ -325,18 +357,22 @@ export function createSidebarSnapshot(host: {
   }
 
   function clearDisplay(): void {
+    if (pending || host.sidebarSnapshot) {
+      finishBootFrame();
+    }
     cancelHandoff();
     cancelCapture?.();
     cancelCapture = undefined;
     generation += 1;
     pending = saved = false;
+    lastCapture = "none";
     captured = null;
     host.clearSidebarSnapshot();
     notify();
   }
 
   return {
-    read: () => ({ pending, saved, model: host.sidebarSnapshot }),
+    read: () => ({ pending, saved, model: host.sidebarSnapshot, captureStatus: lastCapture }),
     subscribe,
     connect,
     disconnect,

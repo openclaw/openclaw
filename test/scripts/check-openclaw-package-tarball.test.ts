@@ -17,6 +17,9 @@ import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-boots
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
+  AI_RUNTIME_FILES,
+  AI_RUNTIME_PACKAGE_JSON,
+  BUNDLED_AI_PACKAGE_OPTIONS,
   CODE_MODE_WORKER_PATH,
   listFilesRecursively,
   withTarball,
@@ -24,17 +27,6 @@ import {
 
 const CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mts";
 const PUBLIC_CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mjs";
-const AI_RUNTIME_PACKAGE_JSON = JSON.stringify({
-  name: "@openclaw/ai",
-  version: "2026.6.11",
-  exports: {
-    ".": { import: "./dist/index.mjs" },
-    "./providers": { import: "./dist/providers.mjs" },
-    "./transports": { import: "./dist/transports.mjs" },
-    "./internal/*": { import: "./dist/internal/*.mjs" },
-    "./internal/tool-schema": { import: "./dist/internal/tool-schema.mjs" },
-  },
-});
 const LEGACY_AI_RUNTIME_PACKAGE_JSON = JSON.stringify({
   name: "@openclaw/ai",
   version: "2026.7.2-beta.4",
@@ -44,22 +36,6 @@ const LEGACY_AI_RUNTIME_PACKAGE_JSON = JSON.stringify({
     "./internal/runtime": { import: "./dist/internal/runtime.mjs" },
   },
 });
-const AI_RUNTIME_FILES = {
-  "dist/index.js": "export {};\n",
-  "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
-  "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
-  "node_modules/@openclaw/ai/dist/providers.mjs": "export {};\n",
-  "node_modules/@openclaw/ai/dist/transports.mjs": "export {};\n",
-  "node_modules/@openclaw/ai/dist/internal/openai-responses-payload-policy.mjs": "export {};\n",
-  "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
-  "node_modules/@openclaw/ai/dist/internal/tool-schema.mjs": "export {};\n",
-};
-const BUNDLED_AI_PACKAGE_OPTIONS = {
-  packageJson: {
-    dependencies: { "@openclaw/ai": "2026.6.11" },
-    bundleDependencies: ["@openclaw/ai"],
-  },
-};
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function writeCraftedTarball(

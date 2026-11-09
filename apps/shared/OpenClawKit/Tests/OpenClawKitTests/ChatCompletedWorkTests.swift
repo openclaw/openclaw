@@ -8,7 +8,7 @@ struct ChatCompletedWorkTests {
     @Test func `paging completed work adds a disclosure without changing the message anchor`() throws {
         let answer = Self.message("assistant", "Reading answer", at: 3000, phase: "final_answer")
         let before = ChatTranscriptPresentation(rows: Self.collapse([answer]), metadata: [:])
-        let commentary = Self.message("assistant", "Checking", at: 1000, phase: "commentary")
+        let commentary = Self.message("toolResult", "Checking", at: 1000)
         let tool = Self.message("toolResult", "Checked", at: 2000)
         let after = ChatTranscriptPresentation(rows: Self.collapse([commentary, tool, answer]), metadata: [:])
         #expect(before.historyAnchorID == answer.id)
@@ -336,24 +336,21 @@ struct ChatCompletedWorkTests {
     @Test func `paging a missing steer predecessor preserves the exposed reading row`() {
         let original = Self.message("user", "Check the repair", at: 1000, run: "original")
         let reading = Self.message(
-            "assistant",
+            "toolResult",
             "Because the repair was not implemented",
             at: 2000,
-            run: "original",
-            phase: "commentary")
+            run: "original")
         let work = Self.message(
-            "assistant",
+            "toolResult",
             "Checking the importer",
             at: 2500,
-            run: "original",
-            phase: "commentary")
+            run: "original")
         let steer = Self.message("user", "Keep checking", at: 3000, run: "steer", steer: "original")
         let continued = Self.message(
-            "assistant",
+            "toolResult",
             "Checking grouping",
             at: 4000,
-            run: "original",
-            phase: "commentary")
+            run: "original")
         let answer = Self.message(
             "assistant",
             "The repair is complete",
@@ -373,9 +370,9 @@ struct ChatCompletedWorkTests {
         #expect(Self.work(in: preserved).flatMap(\.messages).contains { $0.id == work.id })
     }
 
-    @Test func `history anchor skips a disclosure that changes when its predecessor arrives`() {
+    @Test func `history anchor skips a disclosure when its predecessor arrives`() {
         let original = Self.message("user", "Original", at: 1000, run: "original")
-        let work = Self.message("assistant", "Working", at: 2000, run: "original", phase: "commentary")
+        let work = Self.message("toolResult", "Working", at: 2000, run: "original")
         let reading = Self.message("assistant", "Reading", at: 3000, run: "original", phase: "final_answer")
         let steer = Self.message("user", "Continue", at: 4000, run: "steer", steer: "original")
         let answer = Self.message("assistant", "Finished", at: 5000, run: "original", phase: "final_answer")
@@ -388,7 +385,7 @@ struct ChatCompletedWorkTests {
             runWorking: false,
             preservedRowID: presentation.historyAnchorID)
         #expect(Self.visibleIDs(loaded).contains(reading.id))
-        #expect(!loaded.contains { $0.id == current.first?.id })
+        #expect(Self.work(in: loaded).flatMap(\.messages).contains { $0.id == work.id })
     }
 
     private static func decode(_ json: String) throws -> OpenClawChatMessage {

@@ -6,9 +6,16 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { DashboardsView, type DashboardGalleryFilters, type DashboardsRouteData } from "./view.tsx";
+import type { DashboardGalleryFilters, DashboardsRouteData } from "./gallery-filters.ts";
+import { DashboardsView } from "./view.tsx";
 
-const filters: DashboardGalleryFilters = { query: "", ownerId: "", sort: "updated" };
+const filters: DashboardGalleryFilters = {
+  query: "",
+  ownerIds: [],
+  sort: "updated",
+  view: "grid",
+  group: "none",
+};
 const handlers = { onFilterChange: vi.fn() };
 
 const dashboard = {
@@ -52,7 +59,6 @@ it.each([
   expect(busy).not.toBeNull();
   const placeholders = busy?.querySelectorAll(".skeleton") ?? [];
   expect(placeholders.length).toBeGreaterThan(0);
-  expect(busy?.querySelector(".dashboards-toolbar")).not.toBeNull();
   expect(busy?.querySelectorAll(".dashboards-grid .dashboard-preview").length).toBeGreaterThan(0);
   for (const placeholder of placeholders) {
     expect(placeholder.closest('[aria-hidden="true"]')).not.toBeNull();
@@ -77,17 +83,35 @@ it.each([
   }
 
   await waitForSolid(() => {
-    expect(container.querySelector('[aria-busy="true"], .skeleton')).toBeNull();
+    expect(busy?.isConnected).toBe(false);
     expect(container.querySelector(selector)?.textContent).toContain(message);
   });
   if (outcome === "empty") {
     expect(container.querySelector(selector)?.textContent).toContain(
-      "Dashboards created in your tasks will appear here",
+      "Dashboards created in your sessions appear here.",
     );
   }
   if (outcome === "error") {
     expect(container.querySelector("[data-dashboards-empty]")).toBeNull();
   }
+});
+
+it.each([
+  [{ ownerIds: [], sort: "updated" }, false],
+  [{ ownerIds: ["riley"], sort: "updated" }, true],
+  [{ ownerIds: [], sort: "title" }, false],
+] as const)("marks the author filter trigger for %j", (selected, active) => {
+  const { container } = mountSolid(() => (
+    <DashboardsView
+      data={routeData([dashboard])}
+      readReady={() => undefined}
+      filters={{ ...filters, sort: selected.sort, ownerIds: [...selected.ownerIds] }}
+      handlers={handlers}
+    />
+  ));
+
+  const trigger = container.querySelector('button[aria-label="Filter by author"]');
+  expect(trigger?.classList.contains("active")).toBe(active);
 });
 
 it.each(["", "/openclaw"])("navigates dashboard links with base path %s", (basePath) => {

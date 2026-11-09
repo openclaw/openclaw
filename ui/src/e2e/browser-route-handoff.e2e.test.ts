@@ -229,7 +229,7 @@ suite.define(() => {
           const send = await gateway.waitForRequest("chat.send");
           const runId = asNullableRecord(send.params)?.idempotencyKey;
           expect.assert(typeof runId === "string");
-          await page.getByRole("button", { name: "Stop generating" }).waitFor();
+          await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
           let seq = 0;
           const emitResult = async (
             toolCallId: string,

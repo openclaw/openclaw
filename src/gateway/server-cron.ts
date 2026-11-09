@@ -15,7 +15,6 @@ import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
-import { runCronCommandJob } from "../cron/command-runner.js";
 import { isCronExecutionIdle } from "../cron/execution-idle.js";
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService } from "../cron/service.js";
@@ -47,6 +46,7 @@ import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { runCronCommandUnderSource } from "./cron-command-source.js";
 import {
   createCronExitWatchers,
   type CronExitWatcherHandlers,
@@ -58,7 +58,7 @@ import {
   fenceScheduledGatewayContextResolver,
 } from "./scheduled-run-gateway-context.js";
 import { createGatewayCronAgentDeps } from "./server-cron-agent-run.js";
-import { finalizeCronCompletionAnnouncement, pickDefined } from "./server-cron-completion.js";
+import { finalizeCronCompletionAnnouncement } from "./server-cron-completion.js";
 import type { GatewayCronState } from "./server-cron-contract.js";
 import {
   bindCronStreamRemoval,
@@ -76,14 +76,14 @@ import {
   runGatewayCronSessionEvent,
 } from "./server-cron-event-dispatch.js";
 import { createGatewayCronHeartbeatSummary } from "./server-cron-heartbeat-summary.js";
-import { describeCronInferenceMigration } from "./server-cron-inference.js";
+import { createCronInferenceMigrationDiagnostic } from "./server-cron-inference.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronWebhook,
   sendGatewayCronFailureAlert,
   createGatewayCronFailureRepair,
 } from "./server-cron-notifications.js";
-import { toPluginCronChangedEvent } from "./server-cron-plugin-job.js";
+import { toCronBroadcastEvent, toPluginCronChangedEvent } from "./server-cron-plugin-job.js";
 import { createGatewayCronPublisher } from "./server-cron-publication.js";
 import { createGatewayCronTargetResolver } from "./server-cron-targets.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -344,7 +344,7 @@ export function buildGatewayCronService(params: {
     storePath,
     cronEnabled,
     cronConfig: params.cfg.cron,
-    describeJobLoadWarning: (job) => describeCronInferenceMigration(getRuntimeConfig(), job),
+    describeJobLoadWarning: createCronInferenceMigrationDiagnostic(getRuntimeConfig),
     hostExecutionDisabled,
     listConfiguredChannels: () => listConfiguredMessageChannels(getRuntimeConfig()),
     admitScheduledOccurrence: ({ job }) => admitGatewayCronOccurrence(job, resolveCronAgent),
@@ -380,7 +380,7 @@ export function buildGatewayCronService(params: {
     resolveSessionStorePath,
     sessionStorePath,
     enqueueSystemEvent: (text, opts) => enqueueCronSystemEvent(text, opts, resolveCronTarget(opts)),
-    runSessionEvent: (request) => runGatewayCronSessionEvent(request, resolveCronTarget),
+    runSessionEvent: (request) => runGatewayCronSessionEvent(request, resolveCronTarget, storePath),
     resolveOriginDeliveryContext: (opts) =>
       resolveGatewayCronOriginDeliveryContext(opts, resolveCronTarget),
     runSchedulerOwned,
@@ -393,12 +393,9 @@ export function buildGatewayCronService(params: {
       resolveGatewayContext: scheduledGatewayContextResolver,
       resolvePluginRegistry: params.resolvePluginRegistry,
     }),
-    runCommandJob: async ({ job, abortSignal, deliveryAttemptFence }) => {
-      const result = await runCronCommandJob({
-        job,
-        abortSignal,
-        nowMs: Date.now,
-      });
+    runCommandJob: async (run) => {
+      const { job, abortSignal, deliveryAttemptFence } = run;
+      const result = await runCronCommandUnderSource(run, scheduledGatewayContextResolver);
       const completion = await finalizeCronCompletionAnnouncement({
         deliveryAttemptFence,
         job,
@@ -568,36 +565,7 @@ export function buildGatewayCronService(params: {
         jobSnapshot?.sessionKey ??
         evt.sessionKey;
       const scopedAgentId = jobSnapshot?.owner?.agentId ?? jobSnapshot?.agentId;
-      // Views fetch definitions and run details on demand; the sidebar needs
-      // bounded status and freshness. Keep the full event for hooks and notifications below.
-      const {
-        job: eventJob,
-        summary: _summary,
-        diagnostics: _diagnostics,
-        delivery: _delivery,
-        ...event
-      } = evt;
-      const payload = {
-        ...event,
-        ...(eventJob
-          ? {
-              job: {
-                ...pickDefined(eventJob, ["id", "name", "agentId", "enabled", "updatedAtMs"]),
-                state: pickDefined(eventJob.state, [
-                  "nextRunAtMs",
-                  "lastRunAtMs",
-                  "lastDurationMs",
-                  "lastTriggerEvalAtMs",
-                  "lastMeaningfulResult",
-                  "lastRunStatus",
-                  "lastStatus",
-                  "runningAtMs",
-                  "autoDisabled",
-                ]),
-              },
-            }
-          : {}),
-      };
+      const payload = toCronBroadcastEvent(evt);
       params.broadcast("cron", payload, {
         dropIfSlow: true,
         ...(scopedSessionKey
@@ -727,6 +695,7 @@ export function buildGatewayCronService(params: {
   exitWatchers = createCronExitWatchers(exitWatcherHandlers, params.scheduler);
   const streamWatchers = createCronStreamWatchers({
     hostExecutionDisabled,
+    resolveGatewayContext: scheduledGatewayContextResolver,
     getDefaultAgentId: () => cron.getDefaultAgentId(),
     scheduler: params.scheduler,
     getProcessSupervisor,

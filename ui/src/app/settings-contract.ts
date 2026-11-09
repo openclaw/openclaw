@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import {
   normalizeUiAppearancePreference,
@@ -43,6 +44,35 @@ const CATALOG_OPEN_TARGETS = ["viewer", "terminal"] as const;
 export type CatalogOpenTarget = (typeof CATALOG_OPEN_TARGETS)[number];
 
 export const normalizeCatalogOpenTarget = normalizeChoice(CATALOG_OPEN_TARGETS, "viewer");
+
+const DASHBOARDS_VIEWS = ["grid", "list"] as const;
+const DASHBOARDS_SORTS = ["updated", "title"] as const;
+const DASHBOARDS_GROUPS = ["none", "updated", "author"] as const;
+export type DashboardsDisplay = {
+  view: (typeof DASHBOARDS_VIEWS)[number];
+  sort: (typeof DASHBOARDS_SORTS)[number];
+  group: (typeof DASHBOARDS_GROUPS)[number];
+};
+export const DASHBOARDS_DISPLAY_DEFAULTS: DashboardsDisplay = {
+  view: "grid",
+  sort: "updated",
+  group: "none",
+};
+
+/** Browser-local gallery display; the defaults are not stored. */
+export function normalizeDashboardsDisplay(value: unknown): DashboardsDisplay | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const display: DashboardsDisplay = {
+    view: normalizeChoice(DASHBOARDS_VIEWS, "grid")(value.view),
+    sort: normalizeChoice(DASHBOARDS_SORTS, "updated")(value.sort),
+    group: normalizeChoice(DASHBOARDS_GROUPS, "none")(value.group),
+  };
+  return display.view === "grid" && display.sort === "updated" && display.group === "none"
+    ? undefined
+    : display;
+}
 
 const CHAT_WORKSPACE_DOCKS = ["right", "bottom"] as const;
 type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
@@ -157,6 +187,7 @@ export type UiSettings = {
   chatSplitLayout?: ChatSplitLayout;
   chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
   boardSessionViews?: BoardSessionViews; // Per-device active dashboard tab and dock state
+  dashboardsDisplay?: DashboardsDisplay; // Dashboards gallery view, ordering and grouping
   sidebarSessionLayouts?: SidebarSessionLayouts; // Sidebar columns and widths per session
   sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state
@@ -183,6 +214,8 @@ export type UiSettings = {
   // so this stays out of the synced ui.prefs set in server-prefs-state.ts.
   sessionDeleteConfirm?: boolean;
   chatModelChangeConfirm?: boolean;
+  // Browser-local, Gateway-scoped acknowledgement; changed notices become visible again.
+  dismissedReadOnlyConfigNotice?: string;
   // Device-local opt-in: route eligible external links into the Gateway browser panel.
   openLinksInControlUiBrowser?: boolean;
   // Browser-local opt-in; absence preserves native panels and plugin readers.

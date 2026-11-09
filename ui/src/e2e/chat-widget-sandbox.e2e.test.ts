@@ -48,6 +48,7 @@ function widgetDocument(): string {
     <label>Local note<input aria-label="Local note" placeholder="State stays in this widget"></label>
     <button id="refresh">Refresh via chat</button><button id="details">Toggle details</button>
     <button id="data">Try dashboard data</button><button id="record">Record state</button>
+    <button id="query">Query approved runs</button>
     <button id="popup">Try native popup</button>
     <output id="popup-result" aria-label="Popup result"></output>
     <output id="result" aria-label="Widget result">Ready</output>
@@ -71,6 +72,8 @@ function widgetDocument(): string {
         catch{document.querySelector('#result').textContent='Dashboard data is unavailable in chat';}};
       document.querySelector('#record').onclick=async()=>{await window.openclaw.state.emit({clicked:true});
         document.querySelector('#result').textContent='State recorded';};
+      document.querySelector('#query').onclick=async()=>{const data=await window.openclaw.data.query('main-ci');
+        document.querySelector('#result').textContent='Approved query returned '+data.workflow_runs.length+' run';};
     </script>`,
   );
 }
@@ -183,6 +186,25 @@ suite.define(() => {
         title: "Community pulse",
         sizeW: 12,
         sizeH: 5,
+        grantState: "granted",
+        declared: {
+          queries: [
+            {
+              name: "main-ci",
+              bindingId: "github.actions.runs",
+              params: {
+                repository: "owner/repo",
+                workflow: "ci.yml",
+                branch: "main",
+                status: null,
+                created: null,
+                perPage: 5,
+                excludePullRequests: true,
+              },
+              fields: ["status"],
+            },
+          ],
+        },
         frameUrl: `${new URL(proxy.baseUrl).origin}${boardPath}?bt=ticket`,
         viewTicket: "ticket",
         viewTicketTtlMs: 1_200_000,
@@ -227,6 +249,7 @@ suite.define(() => {
               ...defaultControlUiFeatureMethods,
               "board.get",
               "board.event",
+              "board.data.read",
               "canvas.document.view",
             ],
             historyMessages: [
@@ -239,6 +262,7 @@ suite.define(() => {
               "canvas.document.view": { html, sandboxUrl, sandboxPort },
               "board.get": snapshot,
               "board.event": { ok: true, appended: true },
+              "board.data.read": { workflow_runs: [{ status: "completed" }] },
             },
           });
           const outer = page.locator(".chat-tool-card__preview-frame");
@@ -340,6 +364,11 @@ suite.define(() => {
           await inline.getByRole("button", { name: "Try dashboard data" }).click();
           await inline.getByText("Dashboard data is unavailable in chat").waitFor();
           expect(await gateway.getRequests("board.data.read")).toEqual([]);
+          await click(board, "Query approved runs");
+          await board.getByText("Approved query returned 1 run", { exact: true }).waitFor();
+          expect(
+            (await gateway.getRequests("board.data.read")).map((request) => request.params),
+          ).toEqual([{ ticket: "ticket", queryName: "main-ci" }]);
 
           const retainedFrame = await outer.elementHandle();
           const retainedBoardFrame = await boardOuter.elementHandle();

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import process from "node:process";
 import {
   composeReleaseChildAttemptEvidence,
+  readReleaseJobListing,
   releaseChildSpec,
   releaseCompositeJobsSha256,
   validateReleaseChildRunProvenance,
@@ -9,6 +10,7 @@ import {
 import {
   downloadExactActionsArtifactArchive,
   inspectActionsArtifactZip,
+  readBoundedResponseBody,
 } from "./actions-artifact-archive.mjs";
 import { canonicalizeJsonValue } from "./canonical-json.mjs";
 import {
@@ -78,23 +80,52 @@ function dependencies(repository, deps) {
   };
   const github = async (endpoint) => {
     const timeout = Math.min(60_000, remaining());
-    return deps.github
-      ? deps.github(endpoint)
-      : JSON.parse(
-          await execGhReadAsync(["api", `repos/${repository}/${endpoint}`], {
+    const load = async () =>
+      deps.github
+        ? JSON.stringify(await deps.github(endpoint))
+        : execGhReadAsync(["api", "repos/" + repository + "/" + endpoint], {
             timeout,
             maxBuffer: 4 * 1024 * 1024,
             env: { ...process.env, OCTOPOOL_FRESH: "1" },
-          }),
-        );
+          });
+    const value = JSON.parse(
+      await (deps.immutableReads ? deps.immutableReads.text(endpoint, load) : load()),
+    );
+    deps.immutableReads?.observeRun(endpoint, value);
+    return value;
   };
   return {
     github,
+    immutableReads: deps.immutableReads,
     downloadArchive:
       deps.downloadArchive ??
       (async (params) => {
         if (params.token) {
-          return downloadExactActionsArtifactArchive(params);
+          return downloadExactActionsArtifactArchive({
+            ...params,
+            ...(deps.immutableReads
+              ? {
+                  fetchImpl: async (url, options) => {
+                    const route = String(url).replace(
+                      "https://api.github.com/repos/" + repository + "/",
+                      "",
+                    );
+                    if (!route.endsWith("/zip")) {
+                      return fetch(url, options);
+                    }
+                    const bytes = await deps.immutableReads.bytes(route, async () => {
+                      const response = await fetch(url, options);
+                      return readBoundedResponseBody(response, {
+                        expectedBytes: params.expected.artifactSizeBytes,
+                        maxBytes: MAX_RELEASE_ARTIFACT_BYTES,
+                        label: "Child evidence archive",
+                      });
+                    });
+                    return new Response(bytes);
+                  },
+                }
+              : {}),
+          });
         }
         // Local verifiers can use gh's authenticated session without exporting
         // its token. The shared verifier below still checks metadata and bytes.
@@ -175,35 +206,38 @@ function validateRun(run, selection, request) {
 }
 
 async function readAttemptJobs(github, run, runAttempt) {
-  const jobs = [];
-  let total;
-  for (let page = 1; page <= MAX_JOB_PAGES; page += 1) {
-    const inventory = await github(
-      `actions/runs/${run.id}/attempts/${runAttempt}/jobs?per_page=100&page=${page}`,
-    );
-    total ??= inventory?.total_count;
-    requireEvidence(
-      positiveInteger(total) &&
-        total <= MAX_JOB_PAGES * 100 &&
-        inventory?.total_count === total &&
-        Array.isArray(inventory.jobs) &&
-        inventory.jobs.length > 0 &&
-        inventory.jobs.every(
-          (job) =>
-            String(job.run_id) === String(run.id) &&
-            job.run_attempt === runAttempt &&
-            job.head_sha === run.head_sha &&
-            job.status === "completed",
-        ),
-      "job inventory is incomplete or belongs to another attempt",
-    );
-    jobs.push(...inventory.jobs);
-    if (jobs.length >= total) {
-      requireEvidence(jobs.length === total, "job inventory count changed");
-      return jobs;
+  return readReleaseJobListing(async (perPage) => {
+    const jobs = [];
+    let total;
+    const maxPages = Math.ceil((MAX_JOB_PAGES * 100) / perPage);
+    for (let page = 1; page <= maxPages; page += 1) {
+      const inventory = await github(
+        `actions/runs/${run.id}/attempts/${runAttempt}/jobs?per_page=${perPage}&page=${page}`,
+      );
+      total ??= inventory?.total_count;
+      requireEvidence(
+        positiveInteger(total) &&
+          total <= MAX_JOB_PAGES * 100 &&
+          inventory?.total_count === total &&
+          Array.isArray(inventory.jobs) &&
+          inventory.jobs.length > 0 &&
+          inventory.jobs.every(
+            (job) =>
+              String(job.run_id) === String(run.id) &&
+              job.run_attempt === runAttempt &&
+              job.head_sha === run.head_sha &&
+              job.status === "completed",
+          ),
+        "job inventory is incomplete or belongs to another attempt",
+      );
+      jobs.push(...inventory.jobs);
+      if (jobs.length >= total) {
+        requireEvidence(jobs.length === total, "job inventory count changed");
+        return jobs;
+      }
     }
-  }
-  throw new Error("Full release child evidence job inventory exceeded its bound");
+    throw new Error("Full release child evidence job inventory exceeded its bound");
+  });
 }
 
 function validatePublisher(jobs, receipt) {
@@ -355,6 +389,13 @@ async function validateEvidence(selection, request, deps) {
       ),
     "receipt does not match the complete live composite workload",
   );
+  if (deps.immutableReads) {
+    const currentParent = await deps.github("actions/runs/" + selection.sourceParentRunId);
+    requireEvidence(
+      currentParent.run_attempt === selection.sourceParentAttempt,
+      "source parent attempt changed",
+    );
+  }
   const parent = await deps.github(
     `actions/runs/${selection.sourceParentRunId}/attempts/${selection.sourceParentAttempt}`,
   );

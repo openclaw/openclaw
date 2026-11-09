@@ -247,6 +247,13 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
     const sample = memorySample({
       workerCount: retired ? 0 : 1,
       workerTaskMetrics: [current],
+      sqliteReaderMetrics: [
+        {
+          operation: "sessions.usage.refresh",
+          count: retired ? 4 : 2,
+          readBytes: retired ? 8192 : 4096,
+        },
+      ],
       workerMessages: [
         {
           kind: "sqlite_reply" as const,
@@ -293,6 +300,7 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
         metrics.render(),
         "openclaw_worker_messages_total",
         "openclaw_session_row_selections_total",
+        "openclaw_sqlite_reader_read_bytes_total",
       );
     }
     metrics.record(sample);
@@ -325,7 +333,9 @@ openclaw_session_row_selection_rows_total{kind="parent",task="control-ui-pr"} 12
 openclaw_session_row_selection_resets_total 2
 openclaw_session_row_partition_cache_total{outcome="hit",task="sessions.list"} 63
 openclaw_session_row_partition_cache_total{outcome="miss",task="sessions.list"} 1
-openclaw_session_row_partition_revisions_total{reason="metadata"} 3`);
+openclaw_session_row_partition_revisions_total{reason="metadata"} 3
+openclaw_sqlite_reader_operations_total{reader_operation="sessions.usage.refresh"} 4
+openclaw_sqlite_reader_read_bytes_total{reader_operation="sessions.usage.refresh"} 8192`);
 });
 
 it("exports native memory, missing workers, lifecycle totals and attributed spawns", () => {

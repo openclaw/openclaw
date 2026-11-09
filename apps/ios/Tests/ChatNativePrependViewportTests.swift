@@ -38,8 +38,10 @@ final class ChatNativePrependViewportTests: XCTestCase {
     private var landedCount = 0
 
     private func land() {
-        self.viewport.capture()
-        XCTAssertTrue(self.viewport.pageArrived(anchor: self.anchor) { _ in self.landedCount += 1 })
+        let captureID = self.viewport.capture()
+        XCTAssertTrue(self.viewport.pageArrived(captureID: captureID, anchor: self.anchor) { _ in
+            self.landedCount += 1
+        })
     }
 
     func testPrependCorrectsInTheLayoutPassAndFollowsTheRow() {
@@ -111,5 +113,39 @@ final class ChatNativePrependViewportTests: XCTestCase {
         XCTAssertFalse(self.viewport.isPending)
         self.tick()
         XCTAssertEqual(self.landedCount, 0)
+    }
+
+    func testExplicitPositioningCancelsPendingCapture() {
+        let captureID = self.viewport.capture()
+        self.viewport.cancel()
+        XCTAssertFalse(self.viewport.pageArrived(captureID: captureID, anchor: self.anchor))
+        self.scrollView.contentOffset.y = 500
+        self.scrollView.contentSize.height += 400
+        XCTAssertEqual(self.scrollView.contentOffset.y, 500)
+        XCTAssertFalse(self.viewport.isPending)
+    }
+
+    func testExplicitPositioningCancelsActiveLanding() {
+        self.land()
+        self.viewport.cancel()
+        self.scrollView.contentOffset.y = 500
+        self.scrollView.contentSize.height += 400
+        self.tick()
+        XCTAssertEqual(self.scrollView.contentOffset.y, 500)
+        XCTAssertFalse(self.viewport.isPending)
+    }
+
+    func testStaleCompletionCannotLandOrCancelNewSessionCapture() {
+        let sessionA = self.viewport.capture()
+        self.viewport.cancel()
+        let sessionB = self.viewport.capture()
+        XCTAssertFalse(self.viewport.pageArrived(captureID: sessionA, anchor: self.anchor))
+        self.viewport.cancel(captureID: sessionA)
+        XCTAssertTrue(self.viewport.owns(sessionB))
+        XCTAssertTrue(self.viewport.pageArrived(captureID: sessionB, anchor: self.anchor))
+        self.viewport.cancel(captureID: sessionA)
+        self.scrollView.contentSize.height += 400
+        XCTAssertEqual(self.scrollView.contentOffset.y, 700)
+        XCTAssertTrue(self.viewport.owns(sessionB))
     }
 }

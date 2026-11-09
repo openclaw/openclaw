@@ -147,6 +147,11 @@ extension ChatTranscriptRow {
 }
 
 extension OpenClawChatMessage {
+    /// The model stopped to call tools, so the run goes on: this row is a step, not where a reply ends.
+    var stoppedForToolUse: Bool {
+        ["tooluse", "tool_use", "tool_calls"].contains(self.stopReason?.lowercased() ?? "")
+    }
+
     var isForwardedTurnBoundary: Bool {
         self.provenance?.kind == "inter_session" && self.provenance?.sourceTool == "sessions_send"
     }

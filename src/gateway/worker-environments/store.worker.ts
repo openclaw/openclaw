@@ -118,6 +118,18 @@ export const workerEnvironmentOperations = {
     "recordResourceReceipt",
     (input, store) => store.recordResourceReceipt(input),
   ),
+  "workerEnvironments.beginRetentionOperation": environmentMutation(
+    "beginRetentionOperation",
+    (input, store) => store.beginRetentionOperation(input),
+  ),
+  "workerEnvironments.recordRetentionObservation": environmentMutation(
+    "recordRetentionObservation",
+    (input, store) => store.recordRetentionObservation(input),
+  ),
+  "workerEnvironments.setRetentionRuntimeAdmission": environmentMutation(
+    "setRetentionRuntimeAdmission",
+    (input, store) => store.setRetentionRuntimeAdmission(input),
+  ),
   "workerEnvironments.ensureNodeEnrollment": mutation(
     "ensureNodeEnrollment",
     ({ input }, { store, touch }) => {
@@ -171,6 +183,10 @@ export const workerEnvironmentOperations = {
   "workerEnvironments.requestPreparedDestroy": environmentMutation(
     "requestPreparedDestroy",
     (input, store) => store.requestPreparedDestroy(input),
+  ),
+  "workerEnvironments.refreshPreparedProject": environmentMutation(
+    "refreshPreparedProject",
+    (input, store) => store.refreshPreparedProject(input),
   ),
   "workerEnvironments.createSessionAttachmentIntent": mutation(
     "createSessionAttachmentIntent",

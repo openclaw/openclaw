@@ -355,7 +355,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           inFlightRun: { runId: "mock-plan-run" },
         },
       ]);
-      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
     });
 
     it("serves preview session agent:main:tax-research through both chat entry points", async () => {
@@ -470,7 +470,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         // The fixture viewer is Riley; this shared checkout belongs to Peter.
         await selectAllSidebarSessions(page);
         await page.getByText("OpenClaw work checkout", { exact: true }).click();
-        await page.getByRole("button", { name: "Write a message to send." }).waitFor();
+        await page.getByRole("button", { name: "Type a message first." }).waitFor();
         if (captureUiProof) {
           await page.screenshot({ path: path.join(artifacts, "chat.png") });
         }
@@ -679,8 +679,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         const isolated = await isolatedPage(attachments.url, { serviceWorkers: "block" });
         context = isolated.context;
         const { page, origin, escaped } = isolated;
-        await page.goto(`${origin}/chat`, { waitUntil: "domcontentloaded" });
-        await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+        await page.goto(attachments.url, { waitUntil: "domcontentloaded" });
+        await page.locator('[data-test-id="board-widget"]').first().waitFor();
         const result = await page.evaluate(async () => {
           const response = await fetch("/__fixtures/chat-attachments/sample-image.svg");
           const blob = await response.blob();

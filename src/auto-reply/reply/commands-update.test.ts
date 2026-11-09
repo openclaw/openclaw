@@ -4,6 +4,7 @@ import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { handleUpdateCommand } from "./commands-update.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
+import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 
 const { dispatch, callGatewayTool, readChannelContextGatewayContextResolver, host } = vi.hoisted(
   () => ({
@@ -96,6 +97,22 @@ it.each([
   await expectStopped(text);
   expect(dispatch).not.toHaveBeenCalled();
 });
+
+it.each([
+  ["required", { ackDelivered: true }, "delivered"],
+  ["result-required", { ackDelivered: true }, "delivered"],
+  ["required", { ackQueued: true }, "pending"],
+] as const)(
+  "records a %s turn as answered when the Gateway owns the acknowledgement %j",
+  async (expectation, ack, outcome) => {
+    const runState = { replyCompletion: { expectation, outcome: "missing" as const } };
+    params.opts = { [REPLY_OPERATION_RUN_STATE]: runState } as HandleCommandsParams["opts"];
+    dispatch.mockResolvedValueOnce(startedHandoff(ack));
+
+    await expectStopped();
+    expect(runState.replyCompletion).toEqual({ expectation, outcome });
+  },
+);
 
 it("hands off an owner update with session routing and only a request watchdog", async () => {
   const order: string[] = [];

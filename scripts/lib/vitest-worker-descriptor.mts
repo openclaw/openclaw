@@ -1,5 +1,5 @@
 // Process-local facts shared by test runners without importing the executable bootstrap.
-export type VitestWorkerPreset = "full" | "runtime";
+export type VitestWorkerPreset = "full" | "runtime" | "tooling";
 export type VitestWorkerDescriptor = { directory: string; preset?: VitestWorkerPreset };
 
 const descriptorKey = Symbol.for("openclaw.vitest.compiled-subprocess-descriptor");

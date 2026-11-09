@@ -14,7 +14,11 @@ final class ChatNativePrependViewport: NSObject {
     private var sizeObservation: NSKeyValueObservation?
     /// From the page request until its landing settles. A user scroll does not end it:
     /// the correction moves the offset by the anchor's movement only, so a scroll is kept.
-    private(set) var isPending = false
+    private(set) var captureID: UUID?
+    var isPending: Bool {
+        self.captureID != nil
+    }
+
     private var landing: Landing?
     private var frameLink: CADisplayLink?
 
@@ -52,16 +56,28 @@ final class ChatNativePrependViewport: NSObject {
         }
     }
 
-    func capture() {
+    @discardableResult
+    func capture() -> UUID? {
         self.cancel()
-        self.isPending = self.scrollView != nil
+        self.captureID = self.scrollView == nil ? nil : UUID()
+        return self.captureID
+    }
+
+    func owns(_ captureID: UUID?) -> Bool {
+        captureID != nil && self.captureID == captureID
+    }
+
+    func cancel(captureID: UUID?) {
+        guard self.owns(captureID) else { return }
+        self.cancel()
     }
 
     /// Starts following `anchor`, the reader's row, through the page's layout.
     /// `landed` runs when the landing settles on its own, not when it is cancelled, with whether the
     /// reader is at the top of the content.
-    func pageArrived(anchor: UIView?, landed: ((_ atTop: Bool) -> Void)? = nil) -> Bool {
-        guard self.isPending, let scrollView, scrollView.window != nil else {
+    func pageArrived(captureID: UUID?, anchor: UIView?, landed: ((_ atTop: Bool) -> Void)? = nil) -> Bool {
+        guard self.owns(captureID) else { return false }
+        guard let scrollView, scrollView.window != nil else {
             self.cancel()
             return false
         }
@@ -86,7 +102,7 @@ final class ChatNativePrependViewport: NSObject {
     }
 
     func cancel() {
-        self.isPending = false
+        self.captureID = nil
         self.landing = nil
         self.frameLink?.invalidate()
         self.frameLink = nil

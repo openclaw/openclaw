@@ -359,6 +359,8 @@ Separately, the managed Gateway dreaming sidecar may read dreaming **settings** 
 </ParamField>
 <ParamField path="phases.deep.maxPriorEntryLossFraction" type="number" default="0.25">
   Reject a consolidation rewrite or append compaction when it removes more than this fraction of prior entries. Append compaction only removes whole machine-generated promotion sections.
+  A handwritten comment attached to a promotion marker makes its whole section
+  ineligible for append compaction; clean generated sections can still be reclaimed.
 </ParamField>
 <ParamField path="frequency" type="string" default="0 3 * * *">
   Cron cadence for the full dreaming sweep.

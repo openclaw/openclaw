@@ -33,7 +33,8 @@ Use the phase-specific hooks for new plugins:
   When provided, `fallbacksOverride` replaces the fallback chain for this run;
   `[]` disables model fallback, so a failed primary fails the run. A value that
   is not an array of strings is treated as `[]`. Omit it to preserve configured
-  fallback behavior.
+  fallback behavior. Results returned after the source run is canceled or
+  superseded are discarded before model preparation.
 - `agent_turn_prepare`: receives the current prompt, prepared session
   messages, and queued injections consumed for this session.
   Return `prependContext` or `appendContext`.
@@ -314,6 +315,11 @@ augmentation.
 - `ctx.toolNames`: the OpenClaw tools the model could call this turn, after
   policy. Runtime-native tools, such as the Codex shell, are not listed. It is
   absent for runtimes that cannot report it, such as CLI backends.
+- `ctx.completedTurn`: `{ sessionId, entryId }` of the transcript entry that
+  ended the turn. Pass it as `through` to `api.runtime.subagent.runForkedTurn`
+  to review the finished turn in the background. It is absent when the runtime
+  recorded no final entry, such as CLI backends or a turn superseded before it
+  finished.
 
 `agent_end` is an observation hook. Channel-backed paths generally run
 it fire-and-forget after the turn, while local one-shot paths can wait
@@ -432,7 +438,7 @@ runtime or Codex. Legacy V1 runtimes, including Copilot, return
 without queueing the guidance. The API does not automatically enqueue a later
 turn; use the explicit fallback below when needed.
 
-Steering requires `plugins.entries.<id>.hooks.allowPromptInjection` (enabled
+Steering requires `plugins.entries.<id>.hooks.allowPromptModification` (enabled
 unless explicitly set to `false`) and a live plugin instance. Disabled prompt
 injection returns `steered: false`; an expired plugin instance cannot dispatch.
 The host and guarded runtime recheck the plugin instance before dispatch,
