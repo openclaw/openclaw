@@ -46,19 +46,19 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       await page.getByText("Plugin panel unavailable").waitFor();
       const documentReachable = createDeferredCore();
-      await page.route(new URL("index.html", suite.server.baseUrl).href, async (route) => {
-        if (route.request().method() !== "HEAD") {
-          await route.continue();
-          return;
-        }
-        await documentReachable.promise;
-        await route.fulfill({ status: 200 });
-      });
       const failure = await failControlUiModuleForDocuments(
         page,
         controlUiE2eBuiltModuleRequest("ui/src/pages/plugin/logbook-view.tsx"),
         2,
       );
+      await page.route(new URL("index.html", suite.server.baseUrl).href, async (route) => {
+        if (route.request().headers()["x-openclaw-reachability-probe"] !== "1") {
+          await route.fallback();
+          return;
+        }
+        await documentReachable.promise;
+        await route.fallback();
+      });
       const pages = await openSidebarPages(page);
       await pages.getByRole("link", { name: "Logbook", exact: true }).click();
       await expect.poll(failure.documentCount).toBe(1);
