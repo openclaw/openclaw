@@ -362,8 +362,6 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[], signal: 
         const inputReceipt = `${unit.outDir}/.inputs.json`;
         const args = boundaryPreparationArgs(repoRoot, unit);
         const previous = readArtifactRecord(recordPath);
-        // Prime config/toolchain/topology before starting even an uncached owner.
-        before.signature(unit.config, args, [], unit.outputRoot);
         if (
           // A valid full receipt can cover a narrower request; the reverse never applies.
           [
