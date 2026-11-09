@@ -147,6 +147,30 @@ it("preserves a partially visible retained message rather than overscan across m
   expect(anchor.update(instance, measuredRows)).toBe(false);
 });
 
+it("measures a retired prefix before restoring an unmeasured retained reader", () => {
+  const { scroller, bubble, virtualizer, instance, anchor, measureRows } = fixture(4000);
+  let contentTop = 290;
+  bubble.getBoundingClientRect = () => rect(contentTop - scroller.scrollTop, 180);
+  scroller.scrollTop = 200;
+  anchor.messageKeys = messages("retired", "visible");
+  anchor.capture(scroller, false);
+  anchor.messageKeys = messages("visible", "newer");
+  expect(anchor.hasPrepend).toBe(false);
+  anchor.capture(scroller, false, true);
+  // A cached virtual rebase can move the retained bubble before native row delivery.
+  contentTop += 973;
+  const ready = vi.fn(unmeasuredRows);
+  expect(anchor.update(instance, ready)).toBe(true);
+  expect(measureRows).toHaveBeenCalledTimes(1);
+  expect(ready).not.toHaveBeenCalled();
+  expect(bubble.getBoundingClientRect().top).toBe(90);
+  expect(scroller.scrollTop).toBe(1173);
+  expect(anchor.update(instance, ready)).toBe(true);
+  expect(anchor.messageKey).toBeNull();
+  expect(anchor.update(instance, measuredRows)).toBe(false);
+  expect(virtualizer.scrollToOffset).toHaveBeenCalledTimes(1);
+});
+
 it("anchors the first visible current message in DOM order after later refs prepend", () => {
   const { scroller, row, messageElements, anchor, instance } = fixture();
   const first = document.createElement("div");

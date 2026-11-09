@@ -9,14 +9,13 @@ export class TranscriptPrependAnchor {
   messageKeys: TranscriptMessageKeys = new Set();
   committedMessageRows: ReadonlyMap<string, string> = new Map();
   private firstMessageKey: string | undefined;
-  private pending:
-    | (ChatTranscriptPrependAnchor & { measured: boolean; prepended: boolean })
-    | null = null;
+  private pending: (ChatTranscriptPrependAnchor & { measured: boolean; rebased: boolean }) | null =
+    null;
 
   constructor(
     private readonly messageElements: ReadonlyMap<string, HTMLElement>,
     private readonly onLayoutCorrection: (before: number, after: number) => void,
-    private readonly measurePrependedRows: () => boolean,
+    private readonly measureRebasedRows: () => boolean,
   ) {}
 
   /** Stable message identity used to resolve its row in the committed projection. */
@@ -47,7 +46,7 @@ export class TranscriptPrependAnchor {
       ...bookmark,
       top: element.getBoundingClientRect().top + bookmark.offset,
       measured: false,
-      prepended: false,
+      rebased: false,
     };
   }
 
@@ -96,22 +95,26 @@ export class TranscriptPrependAnchor {
       this.pending = {
         ...anchor,
         measured: false,
-        prepended: this.hasPrepend || retained?.prepended === true,
+        // Both prefix insertion and retirement rebase cached row positions before paint.
+        rebased:
+          Boolean(
+            this.firstMessageKey && this.firstMessageKey !== this.messageKeys.keys().next().value,
+          ) || retained?.rebased === true,
       };
     }
     this.firstMessageKey = this.messageKeys.keys().next().value;
   }
 
-  /** Prefix insertion must land before paint; warm replacement joins the native batch. */
+  /** Head rebasing lands before paint; unchanged-head replacement joins the native batch. */
   update(
     virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
     rowsMeasured: () => boolean,
   ): boolean {
     const anchor = this.pending;
-    if (!anchor || (!anchor.prepended && !rowsMeasured())) {
+    if (!anchor || (!anchor.rebased && !rowsMeasured())) {
       return false;
     }
-    const changed = anchor.prepended && this.measurePrependedRows();
+    const changed = anchor.rebased && this.measureRebasedRows();
     const moved = restoreTranscriptPrependAnchor(
       anchor,
       virtualizer.scrollElement,
