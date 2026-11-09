@@ -1,6 +1,9 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { resolveRenderedColors } from "../test-helpers/rendered-colors.ts";
 import { twoFrames } from "./chat-presentation.test-support.ts";
@@ -256,6 +259,57 @@ async function checkStartup({
 }
 
 suite.define(() => {
+  it("recovers the saved theme after an initial preference read failure without reconnecting", async () => {
+    await suite.withPage(
+      { colorScheme: "light", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        const profileResponse = {
+          status: "ok",
+          entries: { "ui.theme": "knot", "ui.themeMode": "dark" },
+        };
+        const gateway = await installMockGateway(page, {
+          ...scenario,
+          awaitInitialRoster: false,
+          heldMethods: ["users.prefs.get"],
+          methodResponses: { "users.prefs.get": profileResponse },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/appearance`);
+        await gateway.waitForRequest("users.prefs.get");
+        await gateway.rejectDeferred("users.prefs.get", {
+          code: "UNAVAILABLE",
+          message: "Synthetic temporary profile read failure",
+        });
+        const read = () =>
+          page.evaluate(() => ({
+            theme: document.documentElement.dataset.theme,
+            mode: document.documentElement.dataset.themeMode,
+          }));
+        const capture = async (name: string) => {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator("openclaw-app"),
+            [page.locator(".settings-theme-card--claw")],
+            { animations: "disabled" },
+          );
+          await writeFile(path.join(suite.artifactDir, `${name}.png`), frame.png);
+        };
+        await expect.poll(read).toEqual({ theme: "light", mode: "light" });
+        await capture("failed-read");
+        await expect
+          .poll(async () => (await gateway.getRequests("users.prefs.get")).length, {
+            timeout: 5_000,
+          })
+          .toBe(2);
+        await expect.poll(read).toEqual({ theme: "openknot", mode: "dark" });
+        await expect
+          .poll(() => page.locator(".settings-theme-card--knot").getAttribute("class"))
+          .toContain("settings-theme-card--active");
+        expect(await gateway.getRequests("connect")).toHaveLength(1);
+        await capture("recovered");
+      },
+    );
+  });
+
   it("refreshes browser and status-bar colors on live theme, mode, accent, and breakpoint changes", async () => {
     await suite.withPage(
       { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
