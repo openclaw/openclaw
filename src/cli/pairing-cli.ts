@@ -6,6 +6,7 @@ import type { Command } from "commander";
 import type {
   ChannelsPairingCliListResult,
   ChannelsPairingCodeApproveResult,
+  ChannelsPairingRemoveResult,
 } from "../../packages/gateway-protocol/src/schema/channel-pairing.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -19,7 +20,11 @@ import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { bootstrapCommandOwnerFromPairing } from "../pairing/command-owner.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
-import { approveChannelPairingCode, listChannelPairingRequests } from "../pairing/pairing-store.js";
+import {
+  approveChannelPairingCode,
+  listChannelPairingRequests,
+  removeChannelAllowFromStore,
+} from "../pairing/pairing-store.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
@@ -71,7 +76,7 @@ export function registerPairingCli(program: Command) {
   const channelHint = channels.length > 0 ? channels.join(", ") : "none configured";
   const pairing = program
     .command("pairing")
-    .description("Secure DM pairing (approve inbound requests)")
+    .description("Secure DM pairing (approve inbound requests, remove approved senders)")
     .addHelpText("after", () => formatDocsHelp("/cli/pairing"));
 
   pairing
@@ -213,6 +218,65 @@ export function registerPairingCli(program: Command) {
         });
       } catch (err) {
         defaultRuntime.log(theme.warn(terminalText`Failed to notify requester: ${String(err)}`));
+      }
+    });
+
+  pairing
+    .command("remove")
+    .description("Forget senders approved through pairing")
+    .option("--channel <channel>", `Channel (${channelHint})`)
+    .option("--account <accountId>", "Account id (for multi-account channels)")
+    .option("--all", "Forget every approved sender of the channel (or account)", false)
+    .option("--json", "Print JSON", false)
+    .argument("[channelOrSender]", "Channel (or sender id when --channel is passed)")
+    .argument("[senderId]", "Sender id to forget (when channel is passed as the 1st arg)")
+    .action(async (channelOrSender, senderId, opts) => {
+      const usage = `Usage: ${formatCliCommand("openclaw pairing remove <channel> <senderId>")} or ${formatCliCommand("openclaw pairing remove <channel> --all")}`;
+      // Without --channel the first argument is the channel; with it, the first argument is the sender.
+      const channelRaw = opts.channel || channelOrSender;
+      const senderRaw = opts.channel ? channelOrSender : senderId;
+      if (opts.channel && senderId != null) {
+        throwExpectedCliError(`Too many arguments. ${usage}`);
+      }
+      const sender = normalizeStringifiedOptionalString(senderRaw);
+      if (!channelRaw || (opts.all ? sender !== undefined : !sender)) {
+        throwExpectedCliError(
+          opts.all && sender !== undefined
+            ? `Pass either a sender id or --all, not both. ${usage}`
+            : usage,
+        );
+      }
+      const channel = parseChannel(channelRaw, channels);
+      const accountId = resolveAccountId(opts.account);
+      const target = opts.all ? { all: true as const } : { entry: sender as string };
+      const scope = { channel, ...(accountId ? { accountId } : {}) };
+      const result = await runWithLocalStateOwner<ChannelsPairingRemoveResult>({
+        method: "channels.pairing.remove",
+        params: { ...scope, ...target },
+        target: `${channel} approved senders`,
+        requiredCapabilities: [GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_REMOVE_OWNER],
+        runLocal: async ({ env, assertCurrent }) => ({
+          removed: await removeChannelAllowFromStore({ ...scope, target, env, assertCurrent }),
+        }),
+      });
+      if (opts.json) {
+        defaultRuntime.writeJson({ channel, removed: result.removed });
+        return;
+      }
+      if (result.removed.length === 0) {
+        const where = accountId
+          ? terminalText`${channel} account ${accountId}`
+          : terminalText`${channel}`;
+        throwExpectedCliError(
+          opts.all
+            ? `No approved senders found for ${where}.`
+            : `No approved sender "${sender}" found for ${where}. Pass --account <accountId> when the sender was approved on a non-default account.`,
+        );
+      }
+      for (const removal of result.removed) {
+        defaultRuntime.log(
+          `${theme.success("Removed")} ${theme.muted(terminalText`${channel}`)} sender ${theme.command(terminalText`${removal.entry}`)} ${theme.muted(terminalText`(account ${removal.accountId})`)}.`,
+        );
       }
     });
 }

@@ -19,7 +19,11 @@ import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-
 import { resolveAllowFromAccountId, safeChannelKey } from "./pairing-store-keys.js";
 import { readChannelAllowEntries } from "./pairing-store-sqlite.js";
 import type { PairingChannel, PairingRequestRecord } from "./pairing-store.types.js";
-import type { PairingMutation, PairingSelector } from "./pairing-store.worker-contract.js";
+import type {
+  PairingAllowRemoval,
+  PairingMutation,
+  PairingSelector,
+} from "./pairing-store.worker-contract.js";
 
 export {
   CHANNEL_PAIRING_PENDING_TTL_MS,
@@ -27,6 +31,7 @@ export {
   resolveChannelPairingRequestId,
 } from "./pairing-store-model.js";
 export { readChannelAllowFromStore } from "./pairing-store.read.js";
+export type { PairingAllowRemoval } from "./pairing-store.worker-contract.js";
 export type PairingRequest = PairingRequestRecord;
 
 function resolvePairingAdapter(channel: PairingChannel, pairingAdapter?: ChannelPairingAdapter) {
@@ -178,6 +183,51 @@ export async function removeChannelAllowFromStoreEntry(
   params: AllowFromStoreEntryUpdateParams,
 ): Promise<{ changed: boolean; allowFrom: string[] }> {
   return updateAllowFromStoreEntry(params, true);
+}
+
+/** Forgets every approved sender of one account, or of the whole channel when no account is given. */
+export async function clearChannelAllowFromStore(
+  channel: PairingChannel,
+  env: NodeJS.ProcessEnv = process.env,
+  accountId?: string,
+  assertCurrent?: () => void,
+): Promise<PairingAllowRemoval[]> {
+  const result = await mutatePairing(
+    { channel, env, assertCurrent },
+    { action: "allowClear", accountId: accountId ? resolveAllowFromAccountId(accountId) : "" },
+  );
+  if (result.action !== "allowClear") {
+    throw new Error("Unexpected channel pairing allowlist result");
+  }
+  return result.removed;
+}
+
+export type ChannelAllowFromStoreRemovalTarget = { entry: string } | { all: true };
+
+/**
+ * Removes approved senders from the pairing store for `openclaw pairing remove`.
+ * One entry targets a single account (the default account when none is given);
+ * `all` clears the account, or the whole channel without an account.
+ */
+export async function removeChannelAllowFromStore(
+  params: PairingOptions & { accountId?: string; target: ChannelAllowFromStoreRemovalTarget },
+): Promise<PairingAllowRemoval[]> {
+  const { target, ...options } = params;
+  if ("all" in target) {
+    return clearChannelAllowFromStore(
+      options.channel,
+      options.env,
+      options.accountId,
+      options.assertCurrent,
+    );
+  }
+  const accountId = resolveAllowFromAccountId(options.accountId);
+  const entry = normalizeAllowFromInput(
+    target.entry,
+    resolvePairingAdapter(options.channel, options.pairingAdapter),
+  );
+  const removed = await removeChannelAllowFromStoreEntry({ ...options, entry: target.entry });
+  return removed.changed ? [{ accountId, entry }] : [];
 }
 
 export async function listChannelPairingRequests(

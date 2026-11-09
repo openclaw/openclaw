@@ -163,6 +163,10 @@ export const validateChannelsPairingDismissParams = createProtocolValidator(
   S.ChannelsPairingDismissParamsSchema,
   Checks.isChannelsPairingDismissParams,
 );
+export const validateChannelsPairingRemoveParams = createProtocolValidator(
+  S.ChannelsPairingRemoveParamsSchema,
+  Checks.isChannelsPairingRemoveParams,
+);
 export const validateChannelsStartParams = createProtocolValidator(
   S.ChannelsStartParamsSchema,
   Checks.isChannelsStartParams,

@@ -65,7 +65,8 @@ selects that contract when `version: 2` is present.
 ### Channel DM pairing
 
 `channels.pairing.list`, `channels.pairing.approve`, and
-`channels.pairing.dismiss` manage channel DM access requests. They are separate
+`channels.pairing.dismiss` manage channel DM access requests;
+`channels.pairing.remove` forgets senders approved through them. They are separate
 from [device bootstrap](/gateway/protocol/rpc-devices-nodes-and-approvals#device-pairing-and-device-tokens).
 
 The existing list request accepts optional `channel` and `accountId` and returns
@@ -76,14 +77,15 @@ approval also accepts `notify` and `bootstrapCommandOwner`. Approval returns
 `requestId`, `senderId`, `notification`, and `commandOwnerBootstrap`; dismissal
 returns `requestId` and `senderId`. These contracts remain unchanged.
 
-The local CLI uses two explicit, `operator.admin`-protected branches after
+The local CLI uses three explicit, `operator.admin`-protected branches after
 negotiating the corresponding
 [owner capability](/gateway/protocol/versioning#local-state-owner-routing):
 
-| Method                     | Request                                                             | Result                                                                                              |
-| -------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `channels.pairing.list`    | `format: "cli"`, `channel`, `expectedOwnerId`; optional `accountId` | Raw request array containing `id`, `code`, `createdAt`, `lastSeenAt`, and optional `meta`.          |
-| `channels.pairing.approve` | `channel`, `code`, `expectedOwnerId`; optional `accountId`          | `{ id, entry }`, where `entry` is the raw approved request, or `null` when no pending code matches. |
+| Method                     | Request                                                                        | Result                                                                                                                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `channels.pairing.list`    | `format: "cli"`, `channel`, `expectedOwnerId`; optional `accountId`            | Raw request array containing `id`, `code`, `createdAt`, `lastSeenAt`, and optional `meta`.                                                                                                |
+| `channels.pairing.approve` | `channel`, `code`, `expectedOwnerId`; optional `accountId`                     | `{ id, entry }`, where `entry` is the raw approved request, or `null` when no pending code matches.                                                                                       |
+| `channels.pairing.remove`  | `channel`, `expectedOwnerId`, and `entry` or `all: true`; optional `accountId` | `{ removed: [{ accountId, entry }] }`, empty when nothing matched. `entry` targets the default account unless `accountId` is set; `all` clears the account, or every account without one. |
 
 The code selector and existing request-ID selector are mutually exclusive.
 Omitting `accountId` in the CLI branch preserves cross-account listing and code

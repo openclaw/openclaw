@@ -7,9 +7,11 @@ import {
   addChannelAllowFromStoreEntry,
   approveChannelPairingCode,
   approveChannelPairingRequest,
+  type ChannelAllowFromStoreRemovalTarget,
   dismissChannelPairingRequest,
   listChannelPairingRequests,
   readChannelAllowFromStore,
+  removeChannelAllowFromStore,
   removeChannelAllowFromStoreEntry,
   upsertChannelPairingRequest,
 } from "./pairing-store.js";
@@ -42,6 +44,8 @@ export function pairingStoreFixture(
     add: (entry: string, targetEnv = env) =>
       addChannelAllowFromStoreEntry({ ...scope, entry, env: targetEnv }),
     remove: (entry: string) => removeChannelAllowFromStoreEntry({ ...scope, entry }),
+    forget: (target: ChannelAllowFromStoreRemovalTarget, account?: string) =>
+      removeChannelAllowFromStore({ channel, env, accountId: account, target }),
     dismiss: (requestId: string) => dismissChannelPairingRequest({ channel, accountId, requestId }),
     approveRequest: (requestId: string, account: string, requestChannel = channel) =>
       approveChannelPairingRequest({

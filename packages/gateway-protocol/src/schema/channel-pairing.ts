@@ -106,6 +106,26 @@ export const ChannelsPairingDismissResultSchema = closedObject({
   senderId: NonEmptyString,
 });
 
+/** Forgets approved DM senders in the pairing store; CLI-only, routed through the state owner. */
+export const ChannelsPairingRemoveParamsSchema = Type.Union([
+  closedObject({
+    channel: NonEmptyString,
+    accountId: Type.Optional(CliPairingAccountIdSchema),
+    entry: Type.String({ minLength: 1, pattern: "\\S" }),
+    expectedOwnerId: NonEmptyString,
+  }),
+  closedObject({
+    channel: NonEmptyString,
+    accountId: Type.Optional(CliPairingAccountIdSchema),
+    all: Type.Literal(true),
+    expectedOwnerId: NonEmptyString,
+  }),
+]);
+
+export const ChannelsPairingRemoveResultSchema = closedObject({
+  removed: Type.Array(closedObject({ accountId: NonEmptyString, entry: NonEmptyString })),
+});
+
 export type ChannelsPairingListParams = Static<typeof ChannelsPairingListParamsSchema>;
 export type ChannelsPairingListResult = Static<typeof ChannelsPairingListResultSchema>;
 export type ChannelsPairingCliListResult = Static<typeof ChannelsPairingCliListResultSchema>;
@@ -116,5 +136,7 @@ export type ChannelsPairingApproveParams = Static<typeof ChannelsPairingApproveP
 export type ChannelsPairingApproveResult = Static<typeof ChannelsPairingApproveResultSchema>;
 export type ChannelsPairingDismissParams = Static<typeof ChannelsPairingDismissParamsSchema>;
 export type ChannelsPairingDismissResult = Static<typeof ChannelsPairingDismissResultSchema>;
+export type ChannelsPairingRemoveParams = Static<typeof ChannelsPairingRemoveParamsSchema>;
+export type ChannelsPairingRemoveResult = Static<typeof ChannelsPairingRemoveResultSchema>;
 export type ChannelsPairingAccount = Static<typeof ChannelPairingAccountSchema>;
 export type ChannelsPairingRequest = Static<typeof ChannelPairingRequestSchema>;

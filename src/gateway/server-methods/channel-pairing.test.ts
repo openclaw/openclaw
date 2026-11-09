@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   listPlugins: vi.fn(),
   listRequests: vi.fn(),
   notify: vi.fn(),
+  removeAllow: vi.fn(),
 }));
 
 // mock-isolation: Pairing tests supply their channel inventory without loading live plugins.
@@ -34,6 +35,7 @@ vi.mock("../../pairing/pairing-store.js", () => ({
   CHANNEL_PAIRING_PENDING_TTL_MS: 3_600_000,
   dismissChannelPairingRequest: mocks.dismiss,
   listChannelPairingRequests: mocks.listRequests,
+  removeChannelAllowFromStore: mocks.removeAllow,
   resolveChannelPairingRequestId: vi.fn(() => "opaque-request-id"),
 }));
 vi.mock("./local-state-owner.js", () => ({
@@ -73,6 +75,7 @@ const target = { channel: "whatsapp", accountId: "personal", requestId: "opaque-
 const listSelector = { channel: "whatsapp", format: "cli" };
 const codeSelector = { channel: "whatsapp", code: "SECRET12" };
 const senderId = "+15551234567";
+const removeSelector = { channel: "whatsapp", entry: senderId };
 const timestamp = "2026-07-20T10:00:00.000Z";
 const publicAccount = {
   channel: "whatsapp",
@@ -127,17 +130,23 @@ it.each([
     "channels.pairing.approve",
     { ...codeSelector, requestId: "opaque", accountId: "personal", expectedOwnerId: "owner" },
   ],
+  ["channels.pairing.remove", removeSelector],
+  ["channels.pairing.remove", { ...removeSelector, entry: " ", expectedOwnerId: "owner" }],
+  ["channels.pairing.remove", { ...removeSelector, all: true, expectedOwnerId: "owner" }],
+  ["channels.pairing.remove", { channel: "whatsapp", all: false, expectedOwnerId: "owner" }],
 ] as const)("rejects an invalid CLI selector for %s", async (method, params) => {
   const respond = await invoke(method, params, ["operator.admin"]);
   expectError(respond, { code: "INVALID_REQUEST" });
   expect(mocks.listRequests).not.toHaveBeenCalled();
   expect(mocks.approveCode).not.toHaveBeenCalled();
   expect(mocks.approve).not.toHaveBeenCalled();
+  expect(mocks.removeAllow).not.toHaveBeenCalled();
 });
 
 it.each([
   ["channels.pairing.list", { ...listSelector, expectedOwnerId: "owner" }],
   ["channels.pairing.approve", { ...codeSelector, expectedOwnerId: "owner" }],
+  ["channels.pairing.remove", { ...removeSelector, expectedOwnerId: "owner" }],
 ] as const)("requires current admin owner authority for %s", async (method, params) => {
   const denied = await invoke(method, params, ["operator.pairing"]);
   expectError(denied, { code: "FORBIDDEN", details: { mutationAccepted: false } });
@@ -150,6 +159,32 @@ it.each([
   expectError(replaced, { details: { mutationAccepted: false, reason: "STATE_OWNER_CHANGED" } });
   expect(mocks.listRequests).not.toHaveBeenCalled();
   expect(mocks.approveCode).not.toHaveBeenCalled();
+  expect(mocks.removeAllow).not.toHaveBeenCalled();
+});
+
+it.each([
+  { name: "one sender", params: removeSelector, target: { entry: senderId } },
+  {
+    name: "every sender of one account",
+    params: { channel: "whatsapp", accountId: "personal", all: true },
+    target: { all: true },
+  },
+])("removes $name through the owner guard", async ({ params, target: expected }) => {
+  const removed = [{ accountId: "personal", entry: senderId }];
+  mocks.removeAllow.mockResolvedValue(removed);
+
+  const respond = await invoke("channels.pairing.remove", { ...params, expectedOwnerId: "owner" }, [
+    "operator.admin",
+  ]);
+
+  expect(mocks.captureOwnerGuard).toHaveBeenCalledWith("owner", expect.any(Object));
+  expect(mocks.removeAllow).toHaveBeenCalledWith({
+    channel: "whatsapp",
+    accountId: "accountId" in params ? params.accountId : undefined,
+    target: expected,
+    assertCurrent: expect.any(Function),
+  });
+  expectSuccess(respond, { removed });
 });
 
 it.each(["sync", "async"] as const)(

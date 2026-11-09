@@ -65,6 +65,12 @@ openclaw pairing approve telegram <CODE>
 Add `--notify` to tell the requester on the same channel. Multi-account channels
 take `--account <id>`.
 
+To forget a sender approved through pairing, for example before handing a bot
+token to someone else or after disconnecting the channel, run
+`openclaw pairing remove telegram <senderId>`, or
+`openclaw pairing remove telegram --all` to forget every approved sender. See
+[`openclaw pairing remove`](/cli/pairing#pairing-remove).
+
 Unlike the Control UI's explicit checkbox, the CLI automatically bootstraps
 `commands.ownerAllowFrom` when no command owner is configured, using an entry
 such as `telegram:123456789`. This gives first-time setups an explicit owner for

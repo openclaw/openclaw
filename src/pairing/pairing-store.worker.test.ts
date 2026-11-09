@@ -269,6 +269,41 @@ it("runs request, prune, approval, dismissal, and allowlist mutations without ca
   await expect(f.upsert("four")).resolves.toEqual({ code: "", created: false });
 });
 
+it("forgets approved senders per account or for the whole channel without caller-thread SQL", async () => {
+  const pending = request("pending");
+  const f = fixture("forget", [pending], {
+    alpha: ["a-one", "a-two"],
+    beta: ["b-one"],
+    default: ["d-one"],
+  });
+  const observed = observeHostDataSql();
+  try {
+    await expect(f.forget({ entry: "missing" }, "alpha")).resolves.toEqual([]);
+    await expect(f.forget({ entry: "a-one" }, "alpha")).resolves.toEqual([
+      { accountId: "alpha", entry: "a-one" },
+    ]);
+    // Without an account, a single entry targets the default account only.
+    await expect(f.forget({ entry: "d-one" })).resolves.toEqual([
+      { accountId: "default", entry: "d-one" },
+    ]);
+    await expect(f.forget({ all: true }, "beta")).resolves.toEqual([
+      { accountId: "beta", entry: "b-one" },
+    ]);
+    await expect(f.allow("alpha")).resolves.toEqual(["a-two"]);
+    await expect(f.allow("beta")).resolves.toEqual([]);
+    await expect(f.forget({ all: true })).resolves.toEqual([
+      { accountId: "alpha", entry: "a-two" },
+    ]);
+    await expect(f.forget({ all: true })).resolves.toEqual([]);
+    expect(
+      observed.queries.filter((query) => /channel_pairing_(?:requests|allow_entries)/.test(query)),
+    ).toEqual([]);
+  } finally {
+    observed.restore();
+  }
+  expect(f.read()).toEqual({ version: 1, requests: [pending], allowFrom: {} });
+});
+
 it("captures the physical store before yielding and preserves FIFO allowlist edits", async () => {
   const f = fixture("captured-store");
   const captured = { ...env };

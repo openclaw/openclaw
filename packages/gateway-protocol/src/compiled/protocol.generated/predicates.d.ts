@@ -987,6 +987,11 @@ export function isChannelsPairingDismissParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ChannelsPairingDismissParamsSchema
 >;
+export function isChannelsPairingRemoveParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ChannelsPairingRemoveParamsSchema
+>;
 export function isChannelsStartParams(
   value: unknown,
 ): value is import("typebox").Static<
