@@ -25,7 +25,7 @@ afterAll(async () => {
 // The fake holds its initialize reply until this socket answers; it never does.
 // `waiting` settles once the fake has received initialize, so the startup timer exists.
 async function holdInitialize() {
-  const gate = join(await mkdtemp(join(tmpdir(), "muse-gate-")), "init.sock");
+  const gate = join(await mkdtemp(join(workspace, "muse-gate-")), "init.sock");
   const server = createServer(() => {});
   await new Promise<void>((resolve) => {
     server.listen(gate, resolve);
