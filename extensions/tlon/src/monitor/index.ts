@@ -245,23 +245,16 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     return normalizeShip(ship) === settingsState.effectiveOwnerShip;
   }
 
-  /** DM ingress allowlist for one chat event; club claims only match as their club-scoped id. */
+  /** Club authors are unverified; only explicit owner approval may admit their message. */
   function resolveChatAllowFrom(params: {
     ownerDm: boolean;
     isClubMessage: boolean;
     senderShip: string;
-    senderId: string;
   }): string[] {
     if (params.ownerDm) {
       return [params.senderShip];
     }
-    if (!params.isClubMessage) {
-      return settingsState.effectiveDmAllowlist;
-    }
-    const claimedShipAllowed = settingsState.effectiveDmAllowlist.some(
-      (ship) => normalizeShip(ship) === params.senderShip,
-    );
-    return claimedShipAllowed ? [params.senderId] : [];
+    return params.isClubMessage ? [] : settingsState.effectiveDmAllowlist;
   }
 
   const processMessage = async (params: {
@@ -918,7 +911,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
           senderShip: senderId,
           accountId: account.accountId,
           conversation: { kind: "direct", id: senderShip },
-          allowFrom: resolveChatAllowFrom({ ownerDm, isClubMessage, senderShip, senderId }),
+          allowFrom: resolveChatAllowFrom({ ownerDm, isClubMessage, senderShip }),
           contextBinding,
         });
       if (!ownerDm && !(await resolveChannelIngress()).senderAccess.allowed) {

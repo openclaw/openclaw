@@ -222,8 +222,10 @@ be in `dmAllowlist`, `defaultAuthorizedShips`, or `groupInviteAllowlist`.
 
 Group DMs are the exception. Tlon does not verify who wrote a group DM message, so group DM
 messages never carry owner authority: owner commands, approval replies, and admin commands only
-work in a 1:1 DM with the bot. A group DM message whose claimed author is on `dmAllowlist` is still
-answered, but as an ordinary unverified sender.
+work in a 1:1 DM with the bot. `dmAllowlist` applies only to verified 1:1 DMs. Every group DM
+message requires explicit owner approval, even when its claimed author is on `dmAllowlist`.
+Approval can replay the saved message as an ordinary unverified sender; later group DM messages
+require another approval. Without an owner configured, group DM messages are dropped and logged.
 
 Pending DM requests saved by versions before this behavior cannot be told apart from group DM
 claims. Approving one still adds the ship to `dmAllowlist`, but its stored message is not

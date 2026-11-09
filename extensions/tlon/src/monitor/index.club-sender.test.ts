@@ -88,8 +88,7 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
       expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
     });
   });
-  it("never grants owner identity or citation access to an admitted club owner claim", async () => {
-    inboundRuntimeMock.shouldComputeCommandAuthorized.mockReturnValueOnce(true);
+  it("queues an allowlisted owner claim without reading citations or dispatching", async () => {
     startMonitorDefaults({ dmAllowlist: [OWNER] });
     await withMonitor(async () => {
       sseClientMock.scry.mockClear();
@@ -99,30 +98,25 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
         content: [citation(DIARY, 1), { inline: ["/restart"] }],
         id: "~bus/3",
       });
-      expect(sseClientMock.scry).not.toHaveBeenCalled();
-      const [context] = inboundRuntimeMock.buildContext.mock.calls[0] as [
-        {
-          from: string;
-          sender: { id: string; name: string; roles: string[] };
-          extra: { SenderRole: string; CommandAuthorized: boolean };
-        },
-      ];
-      expect(context.sender.id).toBe(`club:${CLUB_ID}:${OWNER}`);
-      expect(context.sender.name).toBe(`club:${CLUB_ID}:${OWNER}`);
-      expect(context.from).toBe(`tlon:club:${CLUB_ID}:${OWNER}`);
-      expect(context.sender.roles).toEqual(["user"]);
-      expect(context.extra.SenderRole).toBe("user");
-      expect(context.extra.CommandAuthorized).toBe(false);
+      expect(sseClientMock.scry.mock.calls.map(([path]) => path)).toEqual(["/chat/blocked.json"]);
+      expect(inboundRuntimeMock.buildContext).not.toHaveBeenCalled();
+      expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
+      expect(pokedTexts().join("")).toContain("unverified; group DM");
     });
   });
-  it("keeps replying to allowlisted ships in a club, as an ordinary user", async () => {
+  it("queues an allowlisted author claim in a club while admitting the ship's 1:1 DM", async () => {
     startMonitorDefaults({ dmAllowlist: ["~bus"] });
+    ingressMock.receive.mockResolvedValue({ kind: "ignored" });
     await withMonitor(async () => {
       await sendChat({ whom: CLUB_ID, author: "~bus", text: "hello", id: "~bus/4" });
+      expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
+      expect(pokedTexts().join("")).toContain("unverified; group DM");
+
+      await sendChat({ whom: "~bus", author: "~nec", text: "hello", id: "~bus/direct" });
       expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
       expect(inboundRuntimeMock.buildContext).toHaveBeenCalledWith(
         expect.objectContaining({
-          sender: expect.objectContaining({ id: `club:${CLUB_ID}:~bus`, roles: ["user"] }),
+          sender: expect.objectContaining({ id: "~bus", roles: ["user"] }),
         }),
       );
     });
@@ -188,15 +182,19 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
       const [context] = inboundRuntimeMock.buildContext.mock.calls[0] as [
         {
           from: string;
-          sender: { id: string; roles: string[] };
+          sender: { id: string; name: string; roles: string[] };
           extra: { SenderRole: string; CommandAuthorized: boolean };
         },
       ];
       expect(context.sender.id).toBe(`club:${CLUB_ID}:~bus`);
+      expect(context.sender.name).toBe(`club:${CLUB_ID}:~bus`);
       expect(context.from).toBe(`tlon:club:${CLUB_ID}:~bus`);
       expect(context.sender.roles).toEqual(["user"]);
       expect(context.extra.SenderRole).toBe("user");
       expect(context.extra.CommandAuthorized).toBe(false);
+      inboundRuntimeMock.dispatch.mockClear();
+      await sendChat({ whom: CLUB_ID, author: "~bus", text: "another message", id: "~bus/next" });
+      expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
     });
   });
 
@@ -230,11 +228,9 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
           add: { essay: { author: OWNER, content: [{ inline: ["hi"] }], sent: 1 } },
         },
       });
-      expect(inboundRuntimeMock.buildContext).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sender: expect.objectContaining({ id: `club:${expectedClub}:${OWNER}`, roles: ["user"] }),
-        }),
-      );
+      expect(inboundRuntimeMock.buildContext).not.toHaveBeenCalled();
+      expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
+      expect(pokedTexts().join("")).toContain(`unverified; group DM ${expectedClub}`);
       const subjects = inboundRuntimeMock.resolveStable.mock.calls.map(
         ([params]) => (params as { subject: { stableId: string } }).subject.stableId,
       );
