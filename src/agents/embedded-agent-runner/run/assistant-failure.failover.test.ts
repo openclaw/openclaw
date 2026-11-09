@@ -66,6 +66,7 @@ describe("assistant failure recovery", () => {
     );
     await expect(
       runWithModelFallback({
+        cfg: undefined,
         provider: "provider-cedar",
         model: "selected-model",
         manifestPlugins: [],
