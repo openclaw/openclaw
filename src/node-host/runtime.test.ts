@@ -122,6 +122,33 @@ describe("node-host invocation cancellation", () => {
     await runtime.close();
   });
 
+  it("does not launch an invocation cancelled while disconnect cleanup is pending", async () => {
+    const retiring = createDeferred();
+    const entered = createDeferred();
+    mocks.retireIdleWorkers.mockImplementationOnce(async () => {
+      entered.resolve();
+      await retiring.promise;
+    });
+    const runtime = await startRuntime();
+    try {
+      const disconnecting = runtime.cancelAll();
+      await entered.promise;
+      const pending = runtime.invoke({ ...frame, command: "system.run" });
+      await setImmediate();
+      runtime.cancel(frame.id);
+      retiring.resolve();
+      await disconnecting;
+      await pending;
+
+      expect(mocks.handleInvoke).not.toHaveBeenCalled();
+      await runtime.invoke({ ...frame, id: "after-cancel", command: "system.run" });
+      expect(mocks.handleInvoke).toHaveBeenCalledOnce();
+    } finally {
+      retiring.resolve();
+      await runtime.close();
+    }
+  });
+
   it("cancels a superseded invocation without orphaning its replacement", async () => {
     const first = holdInvoke();
     const second = holdInvoke();
