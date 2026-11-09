@@ -54,6 +54,7 @@ import {
   createToolSearchCatalogRef,
   createToolSearchTools,
   registerHeadlessToolSearchCatalog,
+  restrictToolSearchCatalog,
   resolveToolSearchConfig,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
@@ -316,7 +317,15 @@ describe("Tool Search input schemas", () => {
       groupId: Type.Optional(Type.String()),
     };
     const spawn = bindCollectorSpawnTool(
-      fakeTool("sessions_spawn", Type.Object({ task: Type.String(), ...collectorFields })),
+      fakeTool(
+        "sessions_spawn",
+        Type.Object({
+          task: Type.String(),
+          optional: Type.Optional(Type.Literal(true)),
+          fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
+          ...collectorFields,
+        }),
+      ),
       collectorFields,
     );
     const wait = markCollectorReaderTool(fakeTool("agents_wait"));
@@ -343,14 +352,25 @@ describe("Tool Search input schemas", () => {
     expect(execEntry.parameters).not.toHaveProperty("properties.durable");
     expect(execEntry.parameters).toHaveProperty("properties.host.enum", ["auto", "gateway"]);
     const withoutWait = wrapped.filter((tool) => tool.name !== "agents_wait");
-    registerHeadlessToolSearchCatalog({ catalogRef, tools: withoutWait });
-    const hidden = catalogRef.current!.entries.find((entry) => entry.name === "sessions_spawn")!;
-    expect(hidden.parameters).not.toHaveProperty("properties.collect");
+    restrictToolSearchCatalog({
+      catalogRef,
+      allowedToolNames: new Set(withoutWait.map((tool) => tool.name)),
+    });
     const copied = withoutWait.map((tool) => copyAgentToolMetadata(tool, { ...tool }));
-    registerHeadlessToolSearchCatalog({ catalogRef, tools: copied });
-    expect(
-      catalogRef.current!.entries.find((entry) => entry.name === "sessions_spawn")?.parameters,
-    ).not.toHaveProperty("properties.collect");
+    for (const rebuild of [false, true]) {
+      if (rebuild) {
+        registerHeadlessToolSearchCatalog({ catalogRef, tools: copied });
+      }
+      const hidden = catalogRef.current!.entries.find((entry) => entry.name === "sessions_spawn")!;
+      expect(hidden.parameters).not.toHaveProperty("properties.collect");
+      expect(hidden.parameters).toHaveProperty("properties.optional.const", true);
+      const declaration = (await createCodeModeToolApiFile(hidden.name, hidden)).content;
+      expect(declaration).toContain("optional?: true");
+      expect(declaration).toContain('fastMode?: boolean | "auto"');
+      await expect(
+        runtime.call("sessions_spawn", { task: "inspect", optional: true, fastMode: "auto" }),
+      ).resolves.toBeDefined();
+    }
     registerHeadlessToolSearchCatalog({ catalogRef, tools: [...copied, wait] });
     expect(
       catalogRef.current!.entries.find((entry) => entry.name === "sessions_spawn")?.parameters,

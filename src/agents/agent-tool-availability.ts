@@ -155,6 +155,24 @@ export function bindAgentToolExecutionSchema<T extends Pick<AnyAgentTool, "param
   return tool;
 }
 
+/** Keep owner-controlled schema changes aligned across native and canonical contracts. */
+export function transformAgentToolInputSchemas(
+  tool: Pick<AnyAgentTool, "parameters">,
+  transform: (schema: unknown) => AnyAgentTool["parameters"],
+): void {
+  const parameters = tool.parameters;
+  const bound = executionSchemas.get(tool);
+  const projected = transform(parameters);
+  if (bound && parameters === bound.projected) {
+    executionSchemas.set(tool, {
+      canonical: transform(bound.canonical),
+      presentation: transform(bound.presentation),
+      projected,
+    });
+  }
+  tool.parameters = projected;
+}
+
 export function resolveAgentToolExecutionSchema(tool: object, schema: unknown): unknown {
   const declared = availabilityBindings.get(tool)?.binding.executionSchema?.(schema);
   return declared !== undefined ? declared : (executionSchemas.get(tool)?.canonical ?? schema);

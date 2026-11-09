@@ -5,6 +5,7 @@ import {
   bindAgentToolAvailability,
   getAgentToolAvailabilityBinding,
   isAgentToolExecutionAvailable,
+  transformAgentToolInputSchemas,
   type AgentToolAvailabilityBinding,
 } from "../../agent-tool-availability.js";
 import { SESSIONS_SPAWN_COLLECTOR_GUIDANCE } from "../../tool-description-presets.js";
@@ -116,9 +117,6 @@ export function bindCollectorSpawnTool<T extends AnyAgentTool>(
   const binding: AgentToolAvailabilityBinding = {
     prepareBeforeNormalization: true,
     prepare(current, callableTools, offeredTools) {
-      const schema = current.parameters;
-      const retainedFields = collectorFieldsBySchema.get(schema);
-      const currentFields = retainedFields ?? collectorFieldsFromSchema(schema) ?? fields;
       const nativeReader = (reader: ReturnType<typeof callableTools.get>) =>
         reader && isNativeCollectorReader(reader) ? reader : undefined;
       // An offered reader keeps the collector definition stable across turns; only a
@@ -128,12 +126,16 @@ export function bindCollectorSpawnTool<T extends AnyAgentTool>(
       capability.nativeReader = isCallableCollectorReader(callableReader)
         ? callableReader
         : undefined;
-      const preparedSchema = collectorSchema(schema, offeredReader ? currentFields : {});
-      // Hook wrappers share schemas, not tool objects, while collector fields are hidden.
-      if (preparedSchema !== schema || !retainedFields) {
-        collectorFieldsBySchema.set(preparedSchema, currentFields);
-      }
-      current.parameters = preparedSchema;
+      transformAgentToolInputSchemas(current, (schema) => {
+        const retainedFields = isRecord(schema) ? collectorFieldsBySchema.get(schema) : undefined;
+        const currentFields = retainedFields ?? collectorFieldsFromSchema(schema) ?? fields;
+        const preparedSchema = collectorSchema(schema, offeredReader ? currentFields : {});
+        // Hook wrappers share schemas, not tool objects, while collector fields are hidden.
+        if (preparedSchema !== schema || !retainedFields) {
+          collectorFieldsBySchema.set(preparedSchema, currentFields);
+        }
+        return preparedSchema;
+      });
       const description = current.description
         .replace(WAIT_GUIDANCE, "")
         .replace(SESSIONS_SPAWN_COLLECTOR_GUIDANCE, "")
