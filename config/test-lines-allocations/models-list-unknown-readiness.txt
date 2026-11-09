@@ -1,0 +1,2 @@
+# Assert omitted unknown-readiness fields and existing model rows across CLI, metadata, and worker boundaries.
+24

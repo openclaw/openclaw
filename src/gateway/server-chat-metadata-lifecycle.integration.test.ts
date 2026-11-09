@@ -192,7 +192,7 @@ function createCatalogContext(getConfig: () => OpenClawConfig) {
 
 async function expectAvailable(
   lifecycle: Awaited<ReturnType<typeof createGatewayChatMetadataLifecycle>>,
-  expectedAvailable = true,
+  expectedAvailable: boolean | undefined,
   activeConfig: OpenClawConfig = config,
   activeContext: GatewayRequestContext = context,
 ): Promise<void> {
@@ -223,9 +223,16 @@ async function expectAvailable(
     }),
   ]);
   for (const { models } of [metadata, modelsList]) {
-    expect(
-      models?.find(({ id, provider }) => id === "gpt-5.4" && provider === "openai")?.available,
-    ).toBe(expectedAvailable);
+    const listedModel = models?.find(
+      ({ id, provider }) => id === "gpt-5.4" && provider === "openai",
+    );
+    expect(listedModel).toBeDefined();
+    if (expectedAvailable === undefined) {
+      expect(listedModel).not.toHaveProperty("available");
+      expect(listedModel).not.toHaveProperty("unavailableReason");
+    } else {
+      expect(listedModel).toHaveProperty("available", expectedAvailable);
+    }
   }
 }
 
@@ -869,9 +876,9 @@ describe("gateway chat metadata lifecycle composition", () => {
       }
       await publishOwner(activeConfig);
       const lifecycle = await attachLifecycle(activeContext);
-      const expectAvailability = (available = true) =>
+      const expectAvailability = (available: boolean | undefined) =>
         expectAvailable(lifecycle, available, activeConfig, activeContext);
-      await expectAvailability(false);
+      await expectAvailability(apiKey ? false : undefined);
       const modelApi = apiKey ? "openai-responses" : "openai-chatgpt-responses";
       const modelBaseUrl = apiKey
         ? "https://api.openai.com/v1"
@@ -923,13 +930,13 @@ describe("gateway chat metadata lifecycle composition", () => {
           ...(apiKey ? { authProfileId: "openai:default" } : {}),
         }),
       ]);
-      await vi.waitFor(() => expectAvailability());
+      await vi.waitFor(() => expectAvailability(true));
       revokeRuntimeAuthMaterializations({
         agentDir: state.agentDir("main"),
         provider: "openai",
         runtimeOwnerId: "codex",
       });
-      await vi.waitFor(() => expectAvailability(false));
+      await vi.waitFor(() => expectAvailability(apiKey ? false : undefined));
     },
   );
 
@@ -948,7 +955,7 @@ describe("gateway chat metadata lifecycle composition", () => {
     let metadataRead: Promise<void> | undefined;
     try {
       await lifecycle.attachContext(context, ownedSidecars.publish);
-      await expectAvailable(lifecycle);
+      await expectAvailable(lifecycle, true);
       mocks.ensureOpenClawModelsJson.mockRejectedValueOnce(failure);
       expect(mocks.mutationListener).toBeTypeOf("function");
       mocks.mutationListener!({
@@ -986,7 +993,7 @@ describe("gateway chat metadata lifecycle composition", () => {
       expect(metadataOutcome).toBe(failure);
 
       await publishOwner();
-      await expectAvailable(lifecycle);
+      await expectAvailable(lifecycle, true);
     } finally {
       unregister();
       await ownedSidecars.stop();
@@ -1002,6 +1009,6 @@ describe("gateway chat metadata lifecycle composition", () => {
 
     await publishOwner();
 
-    await vi.waitFor(async () => await expectAvailable(lifecycle));
+    await vi.waitFor(async () => await expectAvailable(lifecycle, true));
   });
 });

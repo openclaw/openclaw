@@ -447,11 +447,17 @@ describe("prepared model catalog worker boundary", () => {
     };
     const expectAvailability = (
       result: Awaited<ReturnType<typeof projectModels>>,
-      available: boolean,
-    ) =>
-      expect(result.result.models).toContainEqual(
-        expect.objectContaining({ id: "durable-model", available }),
-      );
+      available: boolean | undefined,
+    ) => {
+      const model = result.result.models.find(({ id }) => id === "durable-model");
+      expect(model).toBeDefined();
+      if (available === undefined) {
+        expect(model).not.toHaveProperty("available");
+        expect(model).not.toHaveProperty("unavailableReason");
+      } else {
+        expect(model).toHaveProperty("available", available);
+      }
+    };
     const profileId = `${DURABLE_AUTH_PROVIDER_ID}:default`;
     const writeDurableProfile = (key?: string, usageStats?: AuthProfileStore["usageStats"]) => {
       saveProfiles(
@@ -510,7 +516,7 @@ describe("prepared model catalog worker boundary", () => {
     writeDurableProfile();
     const removed = await projectModels();
     expectCatalogAuth(fixture.snapshot, DURABLE_AUTH_PROVIDER_ID).toBe("missing");
-    expectAvailability(removed, false);
+    expectAvailability(removed, undefined);
     expect(removed.projected.authStore).toBeDefined();
     expect(removed.projected.authStore?.profiles[profileId]).toBeUndefined();
     fixture.supersede();
