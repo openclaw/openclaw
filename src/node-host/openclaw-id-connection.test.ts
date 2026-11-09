@@ -9,7 +9,10 @@ afterEach(async () => {
   }
   vi.useRealTimers();
 });
-function fixture(code?: number) {
+function fixture(
+  code?: number,
+  resolveTarget = async (_signal: AbortSignal) => ({ serverKey: `iroh:${"aa".repeat(32)}` }),
+) {
   const closed = new Promise<Awaited<ReturnType<Connection["closed"]>>>((resolve) => {
     if (code !== undefined) {
       resolve({ code, kind: "application", reason: "deliberately unrelated text" });
@@ -38,11 +41,12 @@ function fixture(code?: number) {
     close: vi.fn(),
   };
   const terminal = vi.fn();
-  const session = new NodeTunnelConnection({
+  const options = {
     endpoint,
-    serverKey: `iroh:${"aa".repeat(32)}`,
+    resolveTarget,
     onTerminal: terminal,
-  });
+  };
+  const session = new NodeTunnelConnection(options);
   sessions.push(session);
   return { session, endpoint, conn, terminal, connect, close };
 }
@@ -94,4 +98,38 @@ test("backs off relay-denied dials instead of a tight retry loop", async () => {
   await vi.advanceTimersByTimeAsync(1);
   await nextRejected;
   expect(connect).toHaveBeenCalledTimes(2);
+});
+
+test("retires the connected server when a freshness probe discovers its replacement", async () => {
+  vi.useFakeTimers();
+  let serverKey = `iroh:${"aa".repeat(32)}`;
+  const { session, connect, close } = fixture(undefined, async () => ({ serverKey }));
+  const first = session.connection();
+  await vi.advanceTimersByTimeAsync(500);
+  await first;
+  serverKey = `iroh:${"cc".repeat(32)}`;
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(connect).toHaveBeenNthCalledWith(
+    2,
+    "cc".repeat(32),
+    expect.any(Buffer),
+    expect.any(Object),
+  );
+  expect(close).toHaveBeenCalledWith(10, "server authority changed");
+});
+
+test("does not dial after cancellation during authority refresh", async () => {
+  vi.useFakeTimers();
+  let finishRefresh!: (value: { serverKey: string }) => void;
+  const refreshed = new Promise<{ serverKey: string }>((resolve) => {
+    finishRefresh = resolve;
+  });
+  const { session, connect } = fixture(undefined, () => refreshed);
+  const connection = session.connection();
+  const rejected = expect(connection).rejects.toThrow();
+  await vi.advanceTimersByTimeAsync(0);
+  await session.close();
+  finishRefresh({ serverKey: `iroh:${"aa".repeat(32)}` });
+  await rejected;
+  expect(connect).not.toHaveBeenCalled();
 });
