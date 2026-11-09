@@ -75,11 +75,25 @@ while true; do
 
   now=$(date +%s)
   if (( now >= deadline )); then
-    echo "Timed out after ${timeout}s waiting for pattern: $pattern" >&2
-    echo "Last ${lines} lines from $target:" >&2
-    printf '%s\n' "$pane_text" >&2
-    exit 1
+    break
   fi
 
-  sleep "$interval"
+  # Cap numeric seconds, leaving invalid intervals for sleep to diagnose as before.
+  wait_interval="$interval"
+  if [[ "$interval" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]]; then
+    wait_interval=$(awk -v interval="$interval" -v remaining="$((deadline - now))" \
+      'BEGIN { print (interval + 0 > remaining ? remaining : interval) }')
+  fi
+  sleep "$wait_interval"
+  # Do not let a late match turn an expired wait into success. The first probe above
+  # remains unconditional so a zero timeout can still find already-present text.
+  now=$(date +%s)
+  if (( now >= deadline )); then
+    break
+  fi
 done
+
+echo "Timed out after ${timeout}s waiting for pattern: $pattern" >&2
+echo "Last ${lines} lines from $target:" >&2
+printf '%s\n' "$pane_text" >&2
+exit 1
