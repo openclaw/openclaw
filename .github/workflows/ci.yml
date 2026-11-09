@@ -2704,6 +2704,9 @@ jobs:
           requirements="$(node --input-type=module <<'NODE'
           import { existsSync } from "node:fs";
           import { resolve } from "node:path";
+          const { loadPatternListFromEnv, matchesVitestGlob } = await import("./test/vitest/vitest.pattern-file.ts");
+          const selectedPatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE");
+          const isSelected = (file) => selectedPatterns === null || selectedPatterns.some((pattern) => matchesVitestGlob(file, resolve(pattern)));
           const webkitSuites = new Set([
             resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts"),
             resolve("ui/src/e2e/chat-composer-picker-layout.e2e.test.ts"),
@@ -2712,11 +2715,12 @@ jobs:
             resolve("ui/src/e2e/logs-scroll.e2e.test.ts"),
             resolve("ui/src/e2e/chat-history-reading-stability.e2e.test.ts"),
             resolve("ui/src/e2e/chat-loading-animation-retention.e2e.test.ts"),
-          ].filter(existsSync));
+          ].filter((file) => existsSync(file) && isSelected(file)));
           const runtimeSuite = resolve("ui/src/e2e/stale-build-recovery.production.e2e.test.ts");
+          const hasRuntimeSuite = existsSync(runtimeSuite) && isSelected(runtimeSuite);
           let requiresWebkit = false;
           let requiresRuntime = false;
-          if (webkitSuites.size > 0 || existsSync(runtimeSuite)) {
+          if (webkitSuites.size > 0 || hasRuntimeSuite) {
             const { createVitest } = await import("vitest/node");
             const vitest = await createVitest({
               config: "test/vitest/vitest.ui-e2e.config.ts",
@@ -3772,6 +3776,7 @@ jobs:
           dependency-cache: ${{ !(needs.preflight.outputs.boat_build_qualification == 'true' && github.run_attempt == 1 && needs.preflight.outputs.ci_shape == 'main' && matrix.check_name == 'checks-node-compact-large-4' && matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && matrix.plan_concurrency == 1 && matrix.pretest_build_mode == null && matrix.test_runtime_policy == 'node') && matrix.runner != 'runson-c8i-8xlarge' && (matrix.node_version == null || matrix.node_version == '24.x') && (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github' && runner.environment == 'self-hosted' && (github.event_name != 'workflow_dispatch' || ((needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1)) && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           vitest-fs-cache: "true"
           vitest-worker-cache: ${{ needs.preflight.outputs.frozen_target != 'true' && matrix.pretest_build_mode == null && (matrix.node_version == null || matrix.node_version == '24.x') && 'true' || 'false' }}
+          vitest-worker-preset: ${{ matrix.worker_cache_preset || 'full' }}
           node-compile-cache: "true"
 
       - name: Apply frozen Node test compatibility
@@ -4489,7 +4494,7 @@ jobs:
 
       - name: Cache extension package boundary artifacts for hosted core lint
         id: sdk-boundary-cache
-        if: (needs.preflight.outputs.shared_sdk_declarations != 'true' || matrix.requires_sdk_declarations != true) && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate
+        if: (needs.preflight.outputs.shared_sdk_declarations != 'true' || (!matrix.lint_selection_json && matrix.requires_sdk_declarations != true)) && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate
         uses: ./.ci-harness/.github/actions/sdk-declarations
         with: *sdk_main_restore_inputs
 
@@ -5230,7 +5235,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache-mode: *cache_mode
+          cache-mode: off
           install-bun: "false"
           install-deps: "false"
 
@@ -6121,6 +6126,7 @@ jobs:
               -only-testing:OpenClawTests/IOSGatewayChatTransportTests
               -only-testing:OpenClawTests/LocationServiceCallbackTests
               -only-testing:OpenClawTests/LocationServiceOrderingTests
+              -only-testing:OpenClawTests/LocationPermissionSummaryTests
               -only-testing:OpenClawTests/NodeAppModelInvokeTests
               -only-testing:OpenClawTests/OpenClawAppDelegateTests
               -only-testing:OpenClawTests/WatchMessagingInboundTransportTests

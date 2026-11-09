@@ -113,7 +113,10 @@ extension GatewayConnectionController {
             password: relay.password,
             sessionKey: relay.sessionKey,
             deliveryChannel: relay.deliveryChannel,
-            deliveryTo: relay.deliveryTo))
+            deliveryTo: relay.deliveryTo,
+            requiresForegroundSignIn: relay.requiresForegroundSignIn,
+            tlsFingerprintSHA256: relay.tlsFingerprintSHA256,
+            customHeaders: relay.customHeaders))
     }
 
     private static func legacyDeviceAuthMigrationGatewayID() -> String? {

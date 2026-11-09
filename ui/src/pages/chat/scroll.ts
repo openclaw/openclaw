@@ -204,7 +204,7 @@ function queueChatScroll(
       // A return issued at an already-clamped end produces no native scroll event.
       // Settle it here; an actual smooth journey waits for its final position event.
       if (manualScroll && distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
-        updateChatScrollPosition(host, target, "toward-end");
+        updateChatScrollPosition(host, target, true);
       }
     };
     frame = requestAnimationFrame(() => {
@@ -253,13 +253,13 @@ export function handleChatScroll(host: ChatScrollHost, event: Event): void {
   updateChatScrollPosition(host, container);
 }
 
-export function handleChatScrollTakeover(host: ChatScrollHost, towardEnd = false): void {
+export function handleChatScrollTakeover(host: ChatScrollHost, towardEnd?: boolean): void {
   cancelChatScroll(host);
   const container = host.chatScrollElement?.();
   if (container) {
     // Intent can stop a smooth scroll without moving a pixel. Retire queued
     // follow work and publish reader policy even without a native scroll event.
-    updateChatScrollPosition(host, container, towardEnd ? "toward-end" : "reader");
+    updateChatScrollPosition(host, container, towardEnd ?? "reader");
   }
 }
 
@@ -276,7 +276,7 @@ export function lockChatScroll(host: ChatScrollHost): void {
 function updateChatScrollPosition(
   host: ChatScrollHost,
   container: HTMLElement,
-  takeover: false | "reader" | "toward-end" = false,
+  takeover?: boolean | "reader",
 ): void {
   const scrollTop = Math.max(0, container.scrollTop);
   const delta = scrollTop - host.chatLastScrollTop;
@@ -285,7 +285,7 @@ function updateChatScrollPosition(
   // Ignore downward scroll events that we triggered, including intermediate
   // smooth-scroll frames. A real user scroll-up must still pass through so
   // streaming stops pinning them back to the bottom.
-  const isUserScrollUp = takeover !== false || (delta < 0 && !host.chatIsMaintenanceScroll?.());
+  const isUserScrollUp = takeover !== undefined || (delta < 0 && !host.chatIsMaintenanceScroll?.());
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   if ((host.chatIsProgrammaticScroll?.() || host.chatIsMaintenanceScroll?.()) && !isUserScrollUp) {
     // A measured arrival clears the affordance even when maintenance must not
@@ -295,7 +295,12 @@ function updateChatScrollPosition(
     }
     return;
   }
-  if (isUserScrollUp && distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
+  if (
+    takeover === false ||
+    (isUserScrollUp && distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX)
+  ) {
+    // An upward key owns the viewport before its native movement. Otherwise
+    // incoming content can restart following between keydown and that movement.
     // Taking control before initial history settles must retire its queued
     // force-scroll. Otherwise that delayed commit can overwrite the viewport.
     host.chatHasAutoScrolled = true;
@@ -303,7 +308,7 @@ function updateChatScrollPosition(
     host.chatReadingHistory = true;
   } else if (
     distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX &&
-    (delta > 0 || takeover === "toward-end")
+    (delta > 0 || takeover === true)
   ) {
     // A shrinking dock can clamp scrollTop backwards to the new end. Only
     // reader movement toward the end or fresh input resumes following.

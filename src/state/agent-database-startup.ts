@@ -7,6 +7,7 @@ import { retryAsync } from "../infra/retry.js";
 import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   prepareSqliteDatabaseAdmission,
+  readSqliteDatabaseCleanClose,
 } from "../infra/sqlite-database-admission.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
@@ -238,6 +239,14 @@ class AgentDatabaseStartupAdmission {
         target.agentId !== undefined &&
         runtimeAgentIds.has(target.agentId) &&
         includesOpenClawAgentDatabasePath(runtimePaths, target.path, samePath),
+      cleanClose: (target: PendingInspection["target"]) => {
+        // Ordering only: an unreadable store is inspected (and reported) on the normal path.
+        try {
+          return readSqliteDatabaseCleanClose(target.path);
+        } catch {
+          return false;
+        }
+      },
       track: (work: Promise<unknown>) => this.track(work),
       defer: (inspections: PendingInspection[], reason: string) =>
         this.defer({ env, inspections, reason }),
@@ -358,8 +367,16 @@ class AgentDatabaseStartupAdmission {
         const preparation: {
           maintenance?: () => Promise<void>;
           recoverInputs?: () => Promise<void>;
+          withdraw?: () => void;
         } = {};
         let revokeReadAdmission: (() => void) | undefined;
+        const publicationComplete = createDeferredCore();
+        const releasePublication = () => {
+          if (this.publishingAgentId === agentId) {
+            this.publishingAgentId = undefined;
+          }
+          publicationComplete.resolve();
+        };
         let integrity: ReturnType<typeof prepareAgentDatabaseStartupVerification>;
         let preparedSuccessfully = false;
         try {
@@ -445,31 +462,24 @@ class AgentDatabaseStartupAdmission {
               this.verifying,
             );
           }
+          const preparationOptions = { env, assertCurrent, signal: this.signal };
           await withSqliteReadOnlyWorkerScope(
             async () => {
               await assertNotDeleted();
-              await preparePendingAgentDatabase(refusal, { env, assertCurrent }, async () => {
+              await preparePendingAgentDatabase(refusal, preparationOptions, async () => {
                 await using prepared = new AsyncDisposableStack();
-                const input = {
-                  agentId,
-                  paths,
-                  env,
-                  signal: this.signal,
-                  assertCurrent,
-                  phase,
-                };
+                const input = { agentId, paths, env, signal: this.signal, assertCurrent, phase };
                 const publish = async () => {
-                  const publicationComplete = createDeferredCore();
                   phase("publication-wait");
                   const previous = this.publication;
                   this.publication = publicationComplete.promise;
                   try {
-                    await previous;
+                    await racePromiseWithAbortSignal(previous, this.signal);
                     assertCurrent();
                     this.publishingAgentId = agentId;
                     for (let attempt = 1; ; attempt++) {
                       try {
-                        await activation.publishAgent(input);
+                        preparation.withdraw = (await activation.publishAgent(input)) || undefined;
                         break;
                       } catch (error) {
                         const superseded =
@@ -495,33 +505,40 @@ class AgentDatabaseStartupAdmission {
                     }
                     phase("publication");
                     await assertNotDeleted();
-                  } finally {
-                    if (this.publishingAgentId === agentId) {
-                      this.publishingAgentId = undefined;
+                    if (activation.captureReadAdmission) {
+                      // Publish only prepared inputs. Sibling auth/model refreshes must see
+                      // this agent before physical cleanup, which can stall independently.
+                      revokeReadAdmission = publishPendingAgentDatabaseReadAdmission(refusal, {
+                        env,
+                        paths: canReadBeforeOpen
+                          ? results.flatMap((result) =>
+                              result.status === "fulfilled"
+                                ? (result.value.readReadyAgentPaths ?? [])
+                                : [],
+                            )
+                          : paths,
+                        assertCurrent: activation.captureReadAdmission({
+                          ...input,
+                          assertCurrent: assertLifetimeCurrent,
+                        }),
+                      });
+                      releasePublication();
+                      recovery.readReady = undefined;
+                      readReady.resolve();
                     }
-                    publicationComplete.resolve();
+                  } catch (error) {
+                    // Refuse failed publication before cleanup can block its handoff.
+                    if (!this.stopped) {
+                      failPendingAgentDatabase(refusal, error, { env });
+                    }
+                    releasePublication();
+                    throw error;
                   }
                 };
                 if (canReadBeforeOpen && activation.captureReadAdmission) {
                   // Exact existing schemas can serve committed snapshots while full integrity
                   // gates writes. Native readers retain schema, file, and quarantine checks.
-                  const assertReadCurrent = activation.captureReadAdmission({
-                    ...input,
-                    assertCurrent: assertLifetimeCurrent,
-                  });
-                  assertReadCurrent();
                   await preparePendingAgentDatabaseRead(refusal, { env, assertCurrent }, publish);
-                  assertReadCurrent();
-                  assertCurrent();
-                  revokeReadAdmission = publishPendingAgentDatabaseReadAdmission(refusal, {
-                    env,
-                    paths: results.flatMap((result) =>
-                      result.status === "fulfilled" ? (result.value.readReadyAgentPaths ?? []) : [],
-                    ),
-                    assertCurrent: assertReadCurrent,
-                  });
-                  recovery.readReady = undefined;
-                  readReady.resolve();
                   log.info("agent database reads ready while writable inspection continues", {
                     agentId,
                     ...recoveryTiming(recovery),
@@ -561,7 +578,13 @@ class AgentDatabaseStartupAdmission {
                     phase("open");
                     const opened = await activation.openAgent(input);
                     if (opened) {
-                      prepared.use(opened);
+                      // Release keeps custody of unfinished native cleanup after shutdown.
+                      prepared.defer(() =>
+                        racePromiseWithAbortSignal(
+                          Promise.resolve(opened[Symbol.asyncDispose]()),
+                          this.signal,
+                        ),
+                      );
                     }
                   } finally {
                     release?.();
@@ -603,6 +626,9 @@ class AgentDatabaseStartupAdmission {
           if (!this.stopped) {
             const reason = formatErrorMessage(error);
             failPendingAgentDatabase(refusal, error, { env });
+            if (this.pending.get(agentId) === recovery) {
+              preparation.withdraw?.();
+            }
             log.warn("agent database remains degraded", {
               agentId,
               paths,
@@ -616,9 +642,8 @@ class AgentDatabaseStartupAdmission {
             integrity?.revoke();
           }
           revokeReadAdmission?.();
-          if (this.publishingAgentId === agentId) {
-            this.publishingAgentId = undefined;
-          }
+          // Failed publication releases only after its per-agent refusal is recorded.
+          releasePublication();
           readReady.resolve();
           completion.resolve();
           if (
