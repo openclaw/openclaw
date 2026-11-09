@@ -21,13 +21,15 @@ package metadata alone does not mean it is available on npm or ClawHub.
 
 ## Setup
 
-From that checkout, install the local plugin and restart the Gateway:
+From that checkout, install the local plugin:
 
 ```bash
 pnpm openclaw plugins install ./extensions/celeris
-pnpm openclaw gateway restart
 pnpm openclaw models auth login --provider celeris --method api-key
 ```
+
+Installation applies to a running local Gateway automatically; otherwise it takes
+effect on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 Enter your Celeris API key in the protected prompt. The provider also recognizes
 `CELERIS_API_KEY` in the Gateway environment and normal provider auth profiles.
