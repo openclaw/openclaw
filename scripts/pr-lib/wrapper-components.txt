@@ -273,6 +273,7 @@ scripts/lib/tooling-dependencies.mjs
 scripts/lib/watch-pr-ci-rollup.mts
 scripts/lib/watch-pr-ci-run.mts
 scripts/lib/windows-taskkill.mjs
+scripts/lib/windows-test-targets.mts
 scripts/pnpm-runner.mts
 scripts/pr-crabbox-gate-publisher.mjs
 scripts/pr-lib/dependency-hold-release.mjs
@@ -1296,6 +1297,7 @@ src/infra/sqlite-snapshot-capacity-error.ts
 src/infra/sqlite-snapshot-diagnostics.ts
 src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
+src/infra/sqlite-snapshot-publication-cleanup.ts
 src/infra/sqlite-snapshot-reclamation.ts
 src/infra/sqlite-snapshot-retirement.ts
 src/infra/sqlite-snapshot-reuse.ts

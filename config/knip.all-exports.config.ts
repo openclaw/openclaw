@@ -84,6 +84,10 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/infra/exec-host.native.test-support.ts!",
   // The authority retention test launches this isolated V8 heap proof by path.
   "src/agents/harness/tool-authority.runtime.retention.test-support.ts!",
+  // The hook retention test launches this native-ESM child through resolveRuntimeWorkerUrl.
+  "src/gateway/hooks-mapping.retention.test-support.ts!",
+  // Spawned through resolveRuntimeWorkerUrl by installed-skill-retention.test.ts.
+  "src/agents/installed-skill-retention.test-support.ts!",
   // Generated handoff preload and resolver shims import this helper by URL.
   "test/helpers/managed-handoff-isolation.ts!",
   // The Windows CLI lifetime test launches this isolated probe by path.

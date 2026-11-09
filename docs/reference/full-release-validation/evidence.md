@@ -134,9 +134,51 @@ at publication cannot retroactively authorize a failed FRV; produce successful
 validation under the pinned policy first. Beta confidence deferrals remain
 separate and are recorded as **not run**, never as passed or waived failures.
 
+## Receipt-backed beta aggregate recovery
+
+When a full beta qualification's original execution-plan artifact is unavailable,
+.github/workflows/full-release-receipt-recovery.yml is a separate, explicit
+trusted-main operation. It does not repair, recreate, or reinterpret the
+historical plan, registry observations, or failed parent conclusion.
+
+Its request input is a closed openclaw.full-release-receipt-recovery/v1 record:
+a new request UUID, repository, original qualification-admission descriptor,
+original parent run/attempt, complete sealed candidate binding, all five original
+beta child selections, and original publication-artifact descriptors. Original C
+must equal Q. The admission's original publication selection, complete coverage,
+and frozen upgrade baselines remain authoritative; there is no new test selection
+or current-registry baseline resolution.
+
+The recovery owner authenticates the original admission and dispatches, each
+current successful child attempt and its complete composite receipt, the sealed
+candidate and its package bytes, and all recorded npm, SDK, plugin, and Docker
+producer receipts and payload digests. Missing payloads, incomplete job history,
+changed attempts, or lost authority fail closed. It never dispatches test or
+preparation workflows and has only Actions/content read permissions. Runtime
+setup installs only trusted P dependencies with lifecycle scripts disabled; it
+does not build or execute candidate code.
+
+The existing publication-admission owner then reads committed candidate metadata
+using current trusted P and collects new, honestly timestamped registry
+observations. The new successful aggregate records a separate source/admission
+and the original receipt request. Strict readers authenticate that workflow,
+upload order, observation bytes, current operator authority, original evidence,
+and the aggregate's trusted-main lineage. Publishers consume unchanged Q-owned
+npm/plugin/Docker artifacts; P owns aggregation and current publication admission.
+A retained original parent is not relabeled successful. Historical FRV validation
+and historical-plan restoration remain unchanged.
+
+Parsed payloads retain the archive owner's existing size and integrity limits.
+Opaque Docker and candidate image/registry archives use its streaming digest
+verification: the authenticated metadata size is the exact transfer bound, and
+every byte contributes to SHA-256 without retaining or expanding the archive.
+Metadata binding, expiry, deadlines, retries, and digest checks remain unchanged;
+missing or mismatched bytes never authorize omission or rebuilding.
+
 ## Workflow files
 
 - `.github/workflows/full-release-validation.yml`
+- `.github/workflows/full-release-receipt-recovery.yml`
 - `.github/workflows/full-release-candidate.yml`
 - `.github/workflows/openclaw-release-checks.yml`
 - `.github/workflows/openclaw-live-and-e2e-checks-reusable.yml`

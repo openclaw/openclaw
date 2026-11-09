@@ -957,7 +957,8 @@ Concurrent first searches share one build; cancelling a waiter does not cancel
 its owner. Later searches reuse the completed index for that prepared catalog
 and still check current run authority. Names and descriptions have twice the lexical
 weight of body text; exact names rank first.
-Fresh runs share metadata preparation from published skill revisions.
+Fresh runs share metadata preparation from compact published skill revisions,
+without retaining another copy of every description in their lookup keys.
 Up to four catalog selections retain their current content-only indexes between
 runs, within a shared 64 MiB conservative byte budget. Oversized selections remain
 available to their active run but are not retained for later runs. Readers and permission checks remain run-specific. Local file bodies still

@@ -137,6 +137,15 @@ describe("test-projects args", () => {
     );
   });
 
+  it("uses compiled workers for repair tests while retaining packaged-runtime prerequisites", () => {
+    const repair = "src/cli/update-cli/update-command-post-update-repair.test.ts";
+    const recovery = "src/cli/update-cli/update-command-post-update-recovery.test.ts";
+    const selection = { includePatterns: [repair] };
+    expect(resolveVitestPretestBuildMode([selection])).toBeUndefined();
+    selection.includePatterns.push(recovery);
+    expect(resolveVitestPretestBuildMode([selection])).toBe("runtime");
+  });
+
   it("keeps first sign-in's native provider graph isolated with its runtime prerequisite", () => {
     const file = "src/gateway/setup-inference.first-signin.integration.test.ts";
     const config = "test/vitest/vitest.gateway-server-isolated.config.ts";

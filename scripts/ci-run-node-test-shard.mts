@@ -395,7 +395,9 @@ export function resolveShardChildCommand(
         ? [
             fileURLToPath(new URL("./lib/vitest-worker-bootstrap.mts", import.meta.url)),
             workerRun.descriptor.directory,
-            ...(workerRun.descriptor.preset === "runtime" ? ["--worker-preset=runtime"] : []),
+            ...(workerRun.descriptor.preset && workerRun.descriptor.preset !== "full"
+              ? [`--worker-preset=${workerRun.descriptor.preset}`]
+              : []),
           ]
         : []),
       testProjectsEntrypoint,
@@ -425,14 +427,14 @@ async function loadWorkerOwner() {
     return undefined;
   }
   const { resolveSharedVitestCompilerEnv } = await import("./lib/vitest-process-env.mts");
-  const [worker, processOwner, runtimeSelection] = await Promise.all([
+  const [worker, processOwner, { resolveCiVitestWorkerPreset }] = await Promise.all([
     import("./lib/vitest-worker-run.mts"),
     import("./lib/vitest-process.mts"),
     import("./lib/vitest-runtime-selection.mts"),
   ]);
   return {
     createWorkerRun: worker.createVitestWorkerRun,
-    areRuntimeOnlyFiles: runtimeSelection.areRuntimeOnlyVitestUnitFiles,
+    resolvePreset: resolveCiVitestWorkerPreset,
     resolveCompilerEnv: resolveSharedVitestCompilerEnv,
     spawn: processOwner.spawnOwnedVitestProcess,
     exitBySignal: processOwner.exitVitestBySignal,
@@ -449,11 +451,19 @@ function createWorkerContext(
   const compilerEnv = owner.resolveCompilerEnv(
     plans.length > 0 ? plans.map((plan) => prepareChildEnv(plan, env)) : [env],
   );
-  const targets = plans.flatMap((plan) => (plan.kind === "target" ? [plan.target] : []));
-  const runtimeOnly =
-    !hasExtraArgs && targets.length === plans.length && owner.areRuntimeOnlyFiles(targets);
   return {
-    workerRun: owner.createWorkerRun(compilerEnv, undefined, runtimeOnly ? "runtime" : "full"),
+    workerRun: owner.createWorkerRun(
+      compilerEnv,
+      undefined,
+      owner.resolvePreset(
+        plans.map((entry) =>
+          entry.kind === "target"
+            ? { target: entry.target }
+            : { ...entry.plan, env: prepareChildEnv(entry, env) },
+        ),
+        hasExtraArgs,
+      ),
+    ),
     normalCompletion: true,
     spawn: owner.spawn,
     exitBySignal: owner.exitBySignal,

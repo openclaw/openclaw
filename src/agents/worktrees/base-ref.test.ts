@@ -1,7 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -242,12 +244,22 @@ describe("worktree default-base preparation", () => {
     await git(remote, "update-ref", "refs/heads/next", advanced);
     const unrelated = await createChildCommit("HEAD^{tree}", "unrelated session");
     await git(repo, "update-ref", "refs/heads/unrelated", unrelated);
+    const pack = execFileSync("git", ["pack-objects", path.join(repo, ".git/objects/pack/pack")], {
+      cwd: repo,
+      input: `${unrelated}\n`,
+      encoding: "utf8",
+    }).trim();
+    await fs.unlink(path.join(repo, ".git/objects", unrelated.slice(0, 2), unrelated.slice(2)));
+    const accesses = path.join(root, "refresh.pack-access");
+    vi.stubEnv("GIT_TRACE_PACK_ACCESS", accesses);
     const packets = path.join(root, "refresh.packets");
     vi.stubEnv("GIT_TRACE_PACKET", packets);
     await expect(resolveAt(90_000)).resolves.toMatchObject({
       commit: advanced,
       fetchSucceeded: true,
     });
+    expect(await fs.readFile(accesses, "utf8").catch(() => "")).not.toContain(pack);
+    vi.stubEnv("GIT_TRACE_PACK_ACCESS", undefined);
     const negotiation = await fs.readFile(packets, "utf8");
     expect(negotiation).toContain(`have ${head}`);
     expect(negotiation).not.toContain(`have ${unrelated}`);
@@ -261,11 +273,71 @@ describe("worktree default-base preparation", () => {
     await expect(resolveAt(120_000)).resolves.toMatchObject({ commit: head, fetchSucceeded: true });
     expect(network.slice(-1)).toEqual(["ls-remote"]);
     await git(remote, "update-ref", "refs/heads/next", advanced);
+    await git(repo, "config", "remote.origin.fetch", "+refs/heads/next:refs/remotes/custom/next");
     await resolveAt(150_000);
+    expect(await git(repo, "rev-parse", "refs/remotes/custom/next")).toBe(advanced);
     await git(remote, "update-ref", "refs/heads/next", head);
     await expect(resolveAt(180_000)).resolves.toMatchObject({ commit: head, fetchSucceeded: true });
     expect(network.slice(-4)).toEqual(["ls-remote", "fetch", "ls-remote", "fetch"]);
   });
+
+  it.each(["sha1", "sha256"])(
+    "preserves shallow partial transport policy in a linked %s worktree",
+    async (format) => {
+      const source = path.join(root, "source");
+      await git(root, "init", "--bare", `--object-format=${format}`, source);
+      await git(source, "config", "uploadpack.allowFilter", "true");
+      const tree = execFileSync("git", ["mktree"], {
+        cwd: source,
+        input: "",
+        encoding: "utf8",
+      }).trim();
+      const base = await git(source, ...gitIdentity, "commit-tree", tree, "-m", "base");
+      await git(source, "update-ref", "refs/heads/main", base);
+      await git(source, "symbolic-ref", "HEAD", "refs/heads/main");
+      const clone = path.join(root, "partial");
+      await git(
+        root,
+        "clone",
+        "--depth=1",
+        "--filter=blob:none",
+        "--no-checkout",
+        pathToFileURL(source).href,
+        clone,
+      );
+      const linked = path.join(root, "linked");
+      await git(clone, "worktree", "add", "--detach", "--no-checkout", linked, base);
+      const target = await git(
+        source,
+        ...gitIdentity,
+        "commit-tree",
+        tree,
+        "-p",
+        base,
+        "-m",
+        "advance",
+      );
+      await git(source, "update-ref", "refs/heads/main", target);
+      const included = path.join(root, "transport.config");
+      await fs.writeFile(included, '[url "../"]\n  insteadOf = synthetic:\n');
+      await git(clone, "config", "remote.origin.url", "synthetic:source");
+      await git(
+        clone,
+        "config",
+        `includeIf.gitdir:${clone.replaceAll(path.sep, "/")}/.git/.path`,
+        included,
+      );
+      const shallow = await fs.readFile(path.join(clone, ".git/shallow"), "utf8");
+      await expect(resolveWorktreeBase(linked)).resolves.toMatchObject({
+        commit: target,
+        fetchSucceeded: true,
+      });
+      expect(await git(clone, "rev-parse", "origin/main")).toBe(target);
+      expect(await git(linked, "rev-parse", "HEAD")).toBe(base);
+      expect(await fs.readFile(path.join(clone, ".git/shallow"), "utf8")).toBe(shallow);
+      expect(await git(clone, "merge-base", base, target)).toBe(base);
+    },
+  );
 
   it("closes an unused base preparation without allowing later Git effects", async () => {
     let expired: WorktreeBasePreparation | undefined;

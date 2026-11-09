@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { XPostEnvelope } from "./api.js";
+import { X_ACTIVITY_POST_EVENT_TYPES, type XPostEnvelope } from "./api.js";
 import { runXEvents, type XCursorState, type XEventStatus } from "./events.js";
 import { createXTestApi as createXApiClient } from "./test-support/api-client.js";
 import { budgetApi, post } from "./test-support/events.js";
@@ -83,6 +83,84 @@ afterEach(() => {
 });
 
 describe("X event transport", () => {
+  it.each([401, 403])("surfaces terminal polling authentication failure %s", async (status) => {
+    vi.useFakeTimers();
+    const api = budgetApi(createXTestSpend(), () => Response.json({}, { status }));
+    const failed = Promise.withResolvers<void>();
+    const test = streamFixture({
+      api,
+      mode: "poll",
+      onStatus: (value) => {
+        if (value.message?.includes("failed")) {
+          failed.resolve();
+        }
+      },
+    });
+    try {
+      await failed.promise;
+      expect(test.statuses.at(-1)).toMatchObject({
+        terminalDisconnect: true,
+        message: "mentions polling authentication failed; check X credentials",
+      });
+      await expect(test.run).rejects.toThrow(`HTTP ${status}`);
+    } finally {
+      await test.stop().catch(() => {});
+    }
+  });
+
+  it("times retry sleep, both budget checks, response headers, and first byte separately", async () => {
+    vi.useFakeTimers();
+    const delay = (ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      });
+    const spend = createXTestSpend();
+    const budgetStarted = Promise.withResolvers<void>();
+    vi.spyOn(spend, "streamResumeAt").mockImplementation(async () => {
+      budgetStarted.resolve();
+      await delay(125);
+      return undefined;
+    });
+    let attempt = 0;
+    const api = budgetApi(spend, async (url) => {
+      if (!url.pathname.endsWith("/stream")) {
+        return Response.json({ data: [] });
+      }
+      if (++attempt === 1) {
+        await delay(20_000);
+        return Response.json({}, { status: 503 });
+      }
+      await delay(20);
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            setTimeout(() => controller.enqueue(new TextEncoder().encode("\n")), 30);
+          },
+        }),
+      );
+    });
+    const onStreamTiming = vi.fn();
+    const test = streamFixture({ api, onStreamTiming });
+    try {
+      await budgetStarted.promise;
+      await vi.advanceTimersByTimeAsync(21_520);
+      await test.connected;
+      expect(onStreamTiming.mock.calls).toEqual([
+        ["budget-preflight", 125],
+        ["budget-check", 125],
+        ["response-headers", 20_000],
+        ["backoff", 1_000],
+        ["budget-preflight", 125],
+        ["budget-check", 125],
+        ["response-headers", 20],
+      ]);
+      await vi.advanceTimersByTimeAsync(30);
+      expect(onStreamTiming).toHaveBeenLastCalledWith("first-byte", 30);
+    } finally {
+      await test.stop();
+    }
+  });
+
   it("backs off consecutive failed opens but resets after each connected stream", async () => {
     vi.useFakeTimers();
     let attempt = 0;
@@ -262,6 +340,7 @@ describe("X event transport", () => {
       onStatus: (value) => {
         if (
           value.cursor ||
+          value.terminalDisconnect ||
           value.message === "mentions poll failed; retrying after the poll interval"
         ) {
           settled.resolve();
@@ -283,7 +362,11 @@ describe("X event transport", () => {
           : {}),
       });
     } finally {
-      await test.stop();
+      if (testCase.mode === "forbidden") {
+        await expect(test.stop()).rejects.toThrow("HTTP 403");
+      } else {
+        await test.stop();
+      }
     }
   });
 
@@ -486,7 +569,10 @@ describe("X event transport", () => {
               data:
                 endpoint === "create"
                   ? []
-                  : [{ event_type: "post.mention.create", filter: { user_id: "9" } }],
+                  : X_ACTIVITY_POST_EVENT_TYPES.map((event_type) => ({
+                      event_type,
+                      filter: { user_id: "9" },
+                    })),
             });
           }
           if (input.endsWith("/oauth2/token")) {

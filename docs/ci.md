@@ -43,7 +43,8 @@ source-build step; release-workflow budgets and package-integrity checks are unc
 
 Precise PR plans can run the complete source-boundary gate first in an existing
 short, serial 8-class tooling job. Both configs retain separate test processes;
-a 90-second boundary reservation must fit the existing 150-second test budget.
+the boundary reservation is 60 seconds for `bun-all` and 90 seconds for other
+runtime policies, within the existing 150-second test budget.
 Other runners, preparation modes, parallel jobs, and full validation keep their
 standalone boundary ownership.
 
@@ -83,6 +84,9 @@ Committed `config/postgres-conformance-timings.json` measurements price file wor
 configuration startup, and preparation; they never select the test inventory.
 Cold file scheduling follows Vitest's file-size order. The allocator minimizes
 predicted tail time, then total work, so preparation consumers can share one job.
+Shard 1 reserves 150 seconds for the PR-only PostgreSQL 16 Gateway cron smoke,
+including its second worker preparation and service lifecycle. All callers use
+the same deterministic assignment, including runs without that extra smoke.
 Unknown targets retain a default weight. Inspect any assignment with
 `--shard 1/3 --list` (or `2/3`, `3/3`). Refresh measurements from successful natural
 runs as the suite changes. The latest two file samples track recent workload
@@ -186,6 +190,14 @@ The exact Doctor plugin-index and SQLite sessions/transcripts built-CLI proofs
 use the runtime-only compiled-worker registry. The local TUI file does the same
 when its existing built-CLI mode is enabled; source TUI and broad, mixed, or
 custom selections retain the full registry.
+
+Packed Node groups also share the runtime-only registry when every group has
+one known configuration and only explicitly qualified files. This includes
+the Gateway client callsite guard, Codex abort settlement, and native search
+authority proofs. Parent and child resolve the same include-file selection;
+broad or mixed selections, extra Vitest arguments, and groups requiring a build
+retain the full registry. Test inventory, process isolation, and artifact
+verification are unchanged.
 
 When the artifact producer selects both channels and core support checks with
 matching compiler heap options, they share one full compiled-worker generation.
@@ -366,6 +378,8 @@ Full GitHub and hybrid type checks run the five core stripes independently, reta
 Additional checks and narrow-PR guards and dependency scans start directly after preflight. Ordinary PRs selecting Madge or Kysely divide guards into `check-guards` and `check-guards-architecture`, with the same runner routing and no compiler-plan wait. The manifest retains every check once, and both selected rows must pass. Other events retain their existing rows. Guards retain the exact comparison base and shared check commands; compiler and lint rows wait for their selected graphs. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
 
 Changed compiler planning queries each config's complete file membership with `--listFilesOnly`, using tsrs by default and tsgo on unsupported hosts or when `OPENCLAW_TYPECHECKER=tsgo`. Type-only consumers and dependency declarations remain included; the selected compiler's bundled library directory is excluded because it describes compiler identity, not repository membership. Config expansion and shard/buildinfo validation still use tsgo's `--showConfig`. Queries run serially without opening native API snapshots. Upstream first-attempt `check-plan` jobs use the 16-class when the backend is unset, `blacksmith`, or `hybrid`, including fork PRs. Fork type stripes also use the 16-class with an unset or `blacksmith` backend; their logical GitHub profile and restore-only cache policy stay intact. Existing hybrid health admission, the explicit GitHub override, retries, and frozen routing remain in effect.
+
+When shared SDK declarations are enabled, explicitly selected core-only lint rows skip SDK restoration. Selected extension consumers restore this run's SDK; unselected legacy rows retain their existing cache restoration.
 
 The extension package boundary row has a 40-minute job budget for SDK preparation,
 all selected plugin compiles, input-receipt validation, the required negative

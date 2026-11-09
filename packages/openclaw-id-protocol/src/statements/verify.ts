@@ -1,5 +1,5 @@
 // Signature and authority verification for signed statements.
-import type { Ed25519PublicKey } from "../keys.js";
+import { formatEd25519PublicKey, rawPublicKey, type Ed25519PublicKey } from "../keys.js";
 import { hasValidSignature } from "./envelope.js";
 import type {
   OwnerCapability,
@@ -79,6 +79,7 @@ export type OwnerSignedType =
   | "OwnerDeviceCert"
   | "ServerBinding"
   | "InviteCap"
+  | "NodeInviteCap"
   | "MembershipChange"
   | "Revocation";
 
@@ -90,6 +91,7 @@ const REQUIRED_CAPABILITY: Record<
 > = {
   OwnerDeviceCert: "approve_device",
   InviteCap: "invite",
+  NodeInviteCap: "invite",
   MembershipChange: "manage_members",
   Revocation: null,
 };
@@ -194,6 +196,19 @@ export async function verifyInviteRedemptionSignature(
 ): Promise<VerifyResult<"InviteRedemption">> {
   if (statement.signer !== statement.body.device_pub) {
     return failure("wrong_signer", "redemption must be signed by its own device key");
+  }
+  if (!(await hasValidSignature(statement))) {
+    return failure("bad_signature", "envelope signature does not verify");
+  }
+  return { ok: true, statement, authority: { kind: "self" } };
+}
+
+/** A node redemption proves possession of the exact W it asks to admit. */
+export async function verifyNodeRedemptionSignature(
+  statement: SignedStatement<"NodeRedemption">,
+): Promise<VerifyResult<"NodeRedemption">> {
+  if (statement.signer !== formatEd25519PublicKey(rawPublicKey(statement.body.peer_key))) {
+    return failure("wrong_signer", "node redemption must be signed by its own peer key");
   }
   if (!(await hasValidSignature(statement))) {
     return failure("bad_signature", "envelope signature does not verify");
