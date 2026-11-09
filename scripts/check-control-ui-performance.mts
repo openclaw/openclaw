@@ -58,9 +58,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Mounted Latest settlement: measured 1,298,202 B (+581 B over its base),
-  // within the coordinator-accepted receipt-fanout lane allowance.
-  chatBootJsGzipBytes: 1_298_202,
+  // Receipt narrowing: measured 1,298,838 B (+760 B over current main),
+  // within the coordinator-accepted +853 B trade for heavy-turn completion/latency.
+  chatBootJsGzipBytes: 1_298_838,
   // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
   newBootJsGzipBytes: 803_364,
   startupCssRequests: 1,
