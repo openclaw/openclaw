@@ -193,7 +193,7 @@ export async function ensureLoaded(
     const hydrated = hydratedRaw;
     const loadWarning =
       describeCronHostExecutionRestriction(hydrated, state.deps.hostExecutionDisabled) ??
-      state.deps.describeJobLoadWarning?.(hydrated);
+      (await state.deps.describeJobLoadWarning?.(hydrated));
     const loadWarningKey = `host:${hydrated.id}`;
     if (loadWarning && !state.warnedInvalidPersistedJobKeys.has(loadWarningKey)) {
       state.warnedInvalidPersistedJobKeys.add(loadWarningKey);

@@ -114,7 +114,7 @@ export type CronServiceDeps = {
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
   /** Host-owned, read-only diagnostics before startup recovery can dispatch loaded jobs. */
-  describeJobLoadWarning?: (job: CronStoredJob) => string | undefined;
+  describeJobLoadWarning?: (job: CronStoredJob) => string | undefined | Promise<string | undefined>;
   /** Disallow automation jobs that run commands or scripts on the host. */
   hostExecutionDisabled?: boolean;
   resolveUserTimezone?: () => string | undefined;

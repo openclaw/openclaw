@@ -482,6 +482,58 @@ it("warns that an unbound job whose default moved to a stored account is refused
   });
 });
 
+it.each([false, true])(
+  "diagnoses CLI stored-account selection without adoption (stored: %s)",
+  async (stored) => {
+    await withAccounts(async (state) => {
+      const cfg = config(state, {
+        systemAgent: { agentId: "main" },
+        model: "anthropic/claude-opus-4-6",
+        models: { "anthropic/*": { agentRuntime: { id: "claude-cli" } } },
+      });
+      cfg.plugins = { allow: ["anthropic"], slots: { memory: "none" } };
+      await configure(state, cfg);
+      if (stored) {
+        await saveProfiles({
+          profileId: "anthropic:default",
+          credential: { type: "token", provider: "anthropic", token: "synthetic-token" },
+        });
+      }
+      const original = [
+        makeAccountJob("cli-inherited"),
+        makeAccountJob("cli-native", "anthropic/claude-opus-4-6@anthropic:claude-cli"),
+      ];
+      const storePath = state.statePath("cron", "jobs.json");
+      await saveJobs(storePath, ...original);
+      await doctor.withDoctorConfigMaintenance(async () => {
+        const findings = await cronInferenceCheck.detect({
+          cfg,
+          mode: "lint",
+          runtime: createNonExitingRuntime(),
+        });
+        const result = await migrate(cfg);
+        expect(result.changes).toEqual([]);
+        expect(findings.map((finding) => finding.message)).toEqual(result.warnings);
+        if (stored) {
+          expect(result.warnings).toHaveLength(1);
+          contains(
+            result.warnings[0]!,
+            "cli-inherited",
+            "claude-cli",
+            "anthropic:default",
+            "openclaw automations edit cli-inherited --model anthropic/claude-opus-4-6@anthropic:default",
+            "never borrow a stored account",
+          );
+        } else {
+          expect(result.warnings).toEqual([]);
+        }
+        expect(await readJobs(storePath)).toEqual(original);
+        expect(globalThis.fetch).not.toHaveBeenCalled();
+      });
+    });
+  },
+);
+
 it("records the planner's first account for ambiguous jobs, keeps direct keys unbound and refuses missing accounts instead of pinning a previous fallback", async () => {
   await withAccounts(async (state) => {
     const cfg = config(state, {

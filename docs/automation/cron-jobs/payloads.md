@@ -273,9 +273,15 @@ job stops with the adoption instructions instead of switching to that account. J
 creation follows the same rule. An account refusal ends the run; it never falls back
 to another model or provider. Credentialless models remain usable without an account.
 
-Unbound CLI-runtime automations use the CLI's own login and do not require an
-inference binding. OpenClaw does not forward a stored inference profile on this
-native-only path. Jobs with a saved inference binding keep using that account.
+Unbound CLI-runtime automations need no inference binding when the CLI account
+selector chooses native login. If it selects a stored profile, scheduled runs refuse
+to borrow that account: Doctor, lint, and startup name the job and its explicit
+`openclaw automations edit <jobId> --model <provider/model>@<profileId>` recovery
+command. This edit also sets the primary model; Doctor never adopts CLI accounts
+automatically. To explicitly choose Claude CLI's native login, use
+`anthropic/<model>@anthropic:claude-cli` with the same edit command.
+OpenClaw does not forward a stored inference profile on the native-only path.
+Jobs with a saved inference binding keep using that account.
 Known provider-auth environment variables and the backend's credential exclusions
 are removed after environment overrides, even when the live-test preserve-env
 option is set. Runtime settings, such as the context window, are retained.
