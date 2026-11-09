@@ -7,11 +7,21 @@ import {
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import { isMediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import { formatDecisionSummary } from "../../packages/media-understanding-common/src/format.js";
 import {
   normalizeMediaExecutionProviderId,
   normalizeMediaProviderId,
 } from "../../packages/media-understanding-common/src/provider-id.js";
 import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
+import type {
+  MediaAttachment,
+  MediaAttachmentDisposition,
+  MediaAttachmentProcessing,
+  MediaUnderstandingCapability,
+  MediaUnderstandingDecision,
+  MediaUnderstandingModelDecision,
+  MediaUnderstandingOutput,
+} from "../../packages/media-understanding-common/src/types.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import { configuredModelSupportsNativeVideo } from "../agents/model-input.js";
@@ -56,6 +66,7 @@ import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "./provider-registry.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import {
   resolveModelEntries,
   resolveScopeDecision,
@@ -63,21 +74,10 @@ import {
 } from "./resolve.js";
 import {
   buildModelDecision,
-  formatDecisionSummary,
   runCliEntry,
   runProviderEntry,
   type MediaRequestOverrides,
 } from "./runner.entries.js";
-import type {
-  MediaAttachment,
-  MediaAttachmentDisposition,
-  MediaAttachmentProcessing,
-  MediaUnderstandingCapability,
-  MediaUnderstandingDecision,
-  MediaUnderstandingModelDecision,
-  MediaUnderstandingOutput,
-  MediaUnderstandingProvider,
-} from "./types.js";
 
 export {
   createMediaAttachmentCache,
@@ -107,7 +107,7 @@ type RunCapabilityResult = {
 };
 
 const loadPreparedModelCatalogApi = createLazyRuntimeModule(async () => ({
-  ...(await import("../agents/model-catalog.js")),
+  ...(await import("../agents/model-catalog-lookup.js")),
   ...(await import("../agents/prepared-model-catalog.js")),
 }));
 

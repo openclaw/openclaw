@@ -1,0 +1,2 @@
+27
+# Preserve explicit checkout selection and the UI CLI's repo-root identity from another cwd.

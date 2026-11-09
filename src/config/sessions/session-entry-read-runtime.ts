@@ -55,7 +55,6 @@ import type {
   SessionExactEntriesWorkerResult,
 } from "./session-entry-read.types.js";
 import {
-  assertSessionStoreReadCandidate,
   captureSessionStoreReadCandidate,
   type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
@@ -539,7 +538,10 @@ export async function withSessionStoreReaderInWorker<T>(
   preparedSource?.assertCurrent();
   logical?.assertCurrent?.();
   const onReadError = logical?.onReadError;
-  const inspection = isArtifactPreservingStateRead("agent");
+  // Artifact-preserving reads qualify paths off the Gateway thread; only agent
+  // inspection (Doctor) reads a private copy of the source.
+  const inspection = isArtifactPreservingStateRead();
+  const privateCopy = isArtifactPreservingStateRead("agent");
   let selection: Awaited<ReturnType<typeof prepareSessionStoreReaderCandidates>>;
   try {
     selection = await prepareSessionStoreReaderCandidates(storePath, {
@@ -612,7 +614,7 @@ export async function withSessionStoreReaderInWorker<T>(
       const preparedDatabase = {
         ...database,
         env: { ...env },
-        readIdentity: inspection ? sourceIdentity : undefined,
+        readIdentity: privateCopy ? sourceIdentity : undefined,
       };
       let sourcePrepared = false;
       const prepareRead = () => {
@@ -633,8 +635,8 @@ export async function withSessionStoreReaderInWorker<T>(
           requestedPaths: [storePath, sourcePath],
           env,
           prepareRead,
-          readIdentity: inspection ? sourceIdentity : undefined,
-          readSourcePath: inspection ? sourcePath : undefined,
+          readIdentity: privateCopy ? sourceIdentity : undefined,
+          readSourcePath: privateCopy ? sourcePath : undefined,
         },
         async (reader) => {
           const assertCapturedCurrent = () => {
@@ -643,7 +645,7 @@ export async function withSessionStoreReaderInWorker<T>(
             continuation?.assertCurrent();
             route.assertCurrent();
             // Discovery can yield before writable admission; retain its selected physical source.
-            if (!inspection && sourceIdentity?.key.startsWith("file:")) {
+            if (!inspection && !preparedSource && sourceIdentity?.key.startsWith("file:")) {
               assertExistingDatabaseIdentity(
                 database.path,
                 sourceIdentity.key,
@@ -673,19 +675,15 @@ export async function withSessionStoreReaderInWorker<T>(
     };
     let result: T;
     if (preparedSource) {
-      const assertPreparedCurrent = () => {
-        preparedSource.assertCurrent();
-        assertSessionStoreReadCandidate(preparedSource.path, candidates);
-      };
-      assertPreparedCurrent();
+      preparedSource.assertCurrent();
       result = await readDatabase(
         {
           agentId: preparedSource.agentId,
-          path: assertSessionStoreReadCandidate(preparedSource.path, candidates),
+          path: preparedSource.path,
         },
         agentId ?? preparedSource.agentId,
         preparedSource.path,
-        { assertCurrent: assertPreparedCurrent },
+        { assertCurrent: preparedSource.assertCurrent },
       );
     } else if (direct && target.agentId) {
       resolveSqliteAgentId({ scopedAgentId: agentId, storeAgentId: target.agentId });

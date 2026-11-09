@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { resolveGatewayAuth, resolveGatewayAuthForConfig } from "../gateway/auth-resolve.js";
 import { getPath, setPathCreateStrict } from "./path-utils.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
@@ -54,11 +55,6 @@ it.each([
     [["auth.password", "GATEWAY_PASSWORD_REF", "resolved-gateway-password"]],
   ],
   [
-    "remote token wins",
-    { mode: "local", remote: { token: "remote-token" } },
-    [["auth.password", "GATEWAY_PASSWORD_REF", undefined]],
-  ],
-  [
     "local trusted proxy",
     { mode: "local", auth: { mode: "trusted-proxy" } },
     [
@@ -96,3 +92,32 @@ it.each([
     );
   }
 });
+
+it.each([undefined, "local-env-token"])(
+  "prepares local ingress auth independently of remote token (env token: %s)",
+  async (token) => {
+    const password = envRef("GATEWAY_PASSWORD_REF");
+    const env = {
+      OPENCLAW_GATEWAY_TOKEN: token,
+      GATEWAY_PASSWORD_REF: "resolved-local-password",
+    };
+    const snapshot = await prepare(
+      { gateway: { mode: "local", auth: { password }, remote: { token: "remote-token" } } },
+      env,
+    );
+    const auth = resolveGatewayAuth({ authConfig: snapshot.config.gateway?.auth, env });
+    expect(auth).toMatchObject(
+      token
+        ? { mode: "token", token, password: undefined }
+        : { mode: "password", token: undefined, password: "resolved-local-password" },
+    );
+    expect(resolveGatewayAuthForConfig({ config: snapshot.config, env })).toMatchObject(
+      token
+        ? { mode: "token", token, password: undefined }
+        : { mode: "password", token: "remote-token", password: "resolved-local-password" },
+    );
+    expect(snapshot.config.gateway?.auth?.password).toEqual(
+      token ? password : "resolved-local-password",
+    );
+  },
+);

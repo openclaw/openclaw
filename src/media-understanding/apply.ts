@@ -5,6 +5,11 @@ import {
   formatAudioTranscripts,
   formatMediaUnderstandingBody,
 } from "../../packages/media-understanding-common/src/format.js";
+import type {
+  MediaUnderstandingCapability,
+  MediaUnderstandingDecision,
+  MediaUnderstandingOutput,
+} from "../../packages/media-understanding-common/src/types.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -21,16 +26,11 @@ import {
   renderMediaAttachmentDisposition,
 } from "./media-attachment-outcomes.js";
 import { formatMediaFailureSummary } from "./media-failure-reason.js";
-import type { MediaExecutionContext } from "./provider-execution.js";
+import { assertMediaExecutionCurrent, type MediaExecutionContext } from "./provider-execution.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { resolveConcurrency } from "./resolve.js";
 import { createScopedMediaAttachmentCache } from "./runner.attachments.js";
 import { buildProviderRegistry, normalizeMediaAttachments, runCapability } from "./runner.js";
-import type {
-  MediaUnderstandingCapability,
-  MediaUnderstandingDecision,
-  MediaUnderstandingOutput,
-  MediaUnderstandingProvider,
-} from "./types.js";
 
 export type ApplyMediaUnderstandingResult = {
   extractedFileImages: ExtractedFileImage[];
@@ -239,6 +239,10 @@ export async function applyMediaUnderstanding(params: {
             // Placement is the caller's fact. Absent an authoritative host-readable
             // placement, suppress — a wrong path is worse than the plain marker (#122411).
             selfServePathsEnabled: params.selfServeLocalPaths === true,
+            signal: params.execution?.signal,
+            assertCurrent: params.execution
+              ? () => assertMediaExecutionCurrent(params.execution)
+              : undefined,
           });
     // Only processed capabilities have decisions, so audio-only runs cannot
     // add markers for image/video inputs still owned by the native harness.

@@ -44,6 +44,8 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "sessions.files.get",
   "sessions.files.download",
   "sessions.files.assets",
+  "sessions.files.preview",
+  "sessions.files.preview.release",
   "sessions.setInvolvement",
   "chat.history",
   "chat.startup",
@@ -74,6 +76,8 @@ const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
   "question.list",
   "chat.send",
   "chat.abort",
+  "chat.steerNow",
+  "session.typing",
   "sessions.create",
   "sessions.patch",
   "sessions.patchMany",
@@ -91,11 +95,51 @@ export function resolveSessionMethodScope(
   method: string,
   params?: unknown,
 ): SessionOperatorScope | undefined {
-  // Selecting a device filesystem requires the broader operator capability.
-  if (method === "sessions.create" && isRecord(params) && params.deviceFolder !== undefined) {
+  // Discovery has no params; runtime admission and handlers still require a
+  // session-bound request without operator-only provider/model overrides.
+  if (method === "talk.catalog") {
+    return params === undefined ||
+      (isRecord(params) &&
+        typeof params.sessionKey === "string" &&
+        params.sessionKey.trim().length > 0 &&
+        Object.keys(params).every((key) => key === "sessionKey"))
+      ? "operator.sessions.read"
+      : undefined;
+  }
+  if (method === "talk.session.create") {
+    return params === undefined ||
+      (isRecord(params) &&
+        params.mode === "transcription" &&
+        typeof params.sessionKey === "string" &&
+        params.sessionKey.trim().length > 0 &&
+        Object.keys(params).every((key) =>
+          ["sessionKey", "mode", "transport", "brain"].includes(key),
+        ))
+      ? "operator.sessions.write"
+      : undefined;
+  }
+  if (method === "talk.session.appendAudio" || method === "talk.session.close") {
+    return "operator.sessions.write";
+  }
+  // Selecting a device filesystem, or cloning/reusing a repository by URL with the
+  // Gateway's GitHub identity, requires the broader operator capability.
+  if (
+    method === "sessions.create" &&
+    isRecord(params) &&
+    (params.deviceFolder !== undefined || params.projectGitUrl !== undefined)
+  ) {
     return undefined;
   }
-  if (SESSION_READ_METHODS.has(method)) {
+  // Session readers can invoke only stored named queries. The closed RPC schema
+  // rejects overrides; the Gateway checks the definition and live grant at delivery.
+  if (
+    SESSION_READ_METHODS.has(method) ||
+    (method === "board.data.read" &&
+      isRecord(params) &&
+      typeof params.queryName === "string" &&
+      typeof params.ticket === "string" &&
+      Object.keys(params).every((key) => key === "ticket" || key === "queryName"))
+  ) {
     return "operator.sessions.read";
   }
   if (

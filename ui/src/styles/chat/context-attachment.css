@@ -8,7 +8,7 @@
 .chat-context-attachment__summary {
   align-items: center;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   display: flex;
   gap: 6px;
   list-style: none;
@@ -38,7 +38,7 @@
 .chat-context-attachment__body {
   background: var(--bg-accent);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   margin-top: 8px;
   max-width: 440px;
   padding: 12px;

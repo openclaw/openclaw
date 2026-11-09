@@ -67,7 +67,6 @@ for (let index = 0; index < 50; index++) {
     profileId: id,
     label: `Viewer ${index}`,
     avatarUrl: `/avatar/${id}`,
-    hasUploadedAvatar: true,
   });
 }
 const configuredAgentIds = new Set(["main"]);

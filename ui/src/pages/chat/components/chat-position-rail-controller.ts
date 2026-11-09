@@ -50,6 +50,7 @@ export function createPositionRail(props: PositionRailParams) {
   let scrollElement: HTMLElement | undefined;
   let resizeObserver: ResizeObserver | undefined;
   let observationPending = false;
+  let offsetPending = false;
   let refreshingWindow = false;
   let layoutFrame: number | undefined;
   let currentActiveId: string | undefined;
@@ -69,6 +70,7 @@ export function createPositionRail(props: PositionRailParams) {
   let pendingProjectionChange = false;
   let markerIdsByMessageId: ReadonlyMap<string, string> = new Map();
   let positionMessageIds: string[] = [];
+  let positionMessageIndexes = new Map<string, number>();
   let markersChanged = true;
   const markerElements = new Map<string, HTMLElement>();
   let transcriptElement: HTMLElement | undefined;
@@ -93,7 +95,10 @@ export function createPositionRail(props: PositionRailParams) {
     layoutFrame = requestAnimationFrame(() => {
       if (observationPending) {
         observeLayout();
+      } else if (offsetPending && scrollElement) {
+        viewportOffset = scrollElement.scrollTop;
       }
+      offsetPending = false;
       layoutFrame = undefined;
       syncLayout();
     });
@@ -131,7 +136,11 @@ export function createPositionRail(props: PositionRailParams) {
         visibleMessageIds.add(message.messageId);
       }
     }
-    const visibleOrder = positionMessageIds.filter((id) => visibleMessageIds.has(id));
+    const visibleOrder = [...visibleMessageIds]
+      .filter((id) => positionMessageIndexes.has(id))
+      .toSorted(
+        (left, right) => positionMessageIndexes.get(left)! - positionMessageIndexes.get(right)!,
+      );
     const activeMessageId = session?.activeMessageId(
       visibleOrder.length ? visibleOrder : positionMessageIds,
     );
@@ -176,7 +185,7 @@ export function createPositionRail(props: PositionRailParams) {
       markerIds.length,
       markerIndexes,
       viewportOffset,
-      viewportHeight ?? window.innerHeight,
+      viewportHeight ?? 0,
       currentActiveId ?? markerIds[0],
       interactionState.focusedId,
       interactionState.hoveredId,
@@ -312,10 +321,42 @@ export function createPositionRail(props: PositionRailParams) {
         { root, threshold: [0, Number.EPSILON, 1] },
       );
       // Bubble refs publish virtualization changes; token paints keep their targets.
-      stopMessageElements = session?.messageElements.subscribe(() => {
-        targetsChanged = true;
-        scheduleLayout();
-      });
+      stopMessageElements = session?.messageElements.subscribe(
+        (previous) => {
+          // Evicted rows must not stay alive until the next layout frame.
+          if (previous) {
+            intersectionObserver?.unobserve(previous);
+            observedMessages.delete(previous);
+          }
+          targetsChanged = true;
+          scheduleLayout();
+        },
+        () => {
+          syncVisibilityTargets();
+          const box = root.getBoundingClientRect();
+          const left = box.left + root.clientLeft;
+          const top = box.top + root.clientTop;
+          // Client dimensions round; keep the fractional scrollport edges.
+          const right = box.right - (root.offsetWidth - root.clientWidth - root.clientLeft);
+          const bottom = box.bottom - (root.offsetHeight - root.clientHeight - root.clientTop);
+          const offset = root.scrollTop;
+          const messages = [...observedMessages].map(
+            ([element, message]) => [message, element.getBoundingClientRect()] as const,
+          );
+          return () => {
+            const delta = root.scrollTop - offset;
+            for (const [message, rect] of messages) {
+              const width = Math.min(rect.right, right) - Math.max(rect.left, left);
+              const height =
+                Math.min(rect.bottom - delta, bottom) - Math.max(rect.top - delta, top);
+              message.visible =
+                width >= 0 && height >= 0 && (rect.width * rect.height === 0 || width * height > 0);
+            }
+            observeLayout();
+            syncLayout();
+          };
+        },
+      );
       targetsChanged = true;
     }
     if (!targetsChanged) {
@@ -355,7 +396,8 @@ export function createPositionRail(props: PositionRailParams) {
     if (syncPositionRailVisibility(scrollElement, overflowing) && !overflowing) {
       // Guarded marker callbacks retain this object while the rail is hidden.
       Object.assign(interactionState, initialInteraction());
-      refreshWindow();
+      // A shrinking range can notify us from the transcript's render computation.
+      onSettled(refreshWindow);
     }
     const { state, scheduleLayout: needsLayout } = resolvePositionRailReaderViewport(
       reader,
@@ -478,6 +520,7 @@ export function createPositionRail(props: PositionRailParams) {
   const bindScroller = (element?: Element) => {
     resizeObserver?.disconnect();
     observationPending = false;
+    offsetPending = false;
     disconnectVisibility();
     markersChanged = true;
     layoutVisible = false;
@@ -497,6 +540,7 @@ export function createPositionRail(props: PositionRailParams) {
       observationPending = true;
       resizeObserver = new ResizeObserver(observeLayout);
       resizeObserver.observe(scrollElement);
+      onSettled(syncVisibilityTargets);
       scheduleLayout();
     }
   };
@@ -556,6 +600,7 @@ export function createPositionRail(props: PositionRailParams) {
       targetsChanged = true;
       markerIdsByMessageId = positions.markerIdsByMessageId;
       positionMessageIds = [...positions.markerIdsByMessageId.keys()];
+      positionMessageIndexes = new Map(positionMessageIds.map((id, index) => [id, index]));
     }
     const count = markers.length;
     if (count === 0) {
@@ -630,7 +675,12 @@ export function createPositionRail(props: PositionRailParams) {
       bindMarker,
       bindScroller,
       bindPreview,
-      onScroll: observeLayout,
+      onScroll: () => {
+        // Read once in the owned frame, after transcript mutations have settled.
+        // Rail-only movement does not need dimensions or a reader observation.
+        offsetPending = true;
+        scheduleLayout();
+      },
       stopScrollInput,
       onPointerLeave: () => {
         interaction.hoveredId = null;

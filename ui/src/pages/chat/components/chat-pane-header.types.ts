@@ -38,6 +38,8 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   personActivity?: PersonActivityRouting;
   catalog: boolean;
   catalogColor?: string;
+  sessionColor?: string;
+  hasVersions?: boolean;
   editing: boolean;
   renameValue: string;
   workspaceRoot: string | null;

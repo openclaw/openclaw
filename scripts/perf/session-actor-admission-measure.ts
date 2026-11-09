@@ -10,7 +10,7 @@
  * sender and receiver; this is owner transport cost, not whole-Gateway latency.
  */
 import assert from "node:assert/strict";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
@@ -21,6 +21,7 @@ import { serialize } from "node:v8";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { projectSessionActorAuthority } from "../../src/config/sessions/session-actor-command.js";
 import type { SessionActorHotState } from "../../src/config/sessions/session-actor-contract.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -136,9 +137,6 @@ function send(verify = false) {
     );
   }
 }
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 try {
   send(true);
   for (let index = 0; index < 1000; index++) {
@@ -174,7 +172,7 @@ try {
       entryBytes: serialize(state.entry).byteLength,
       cpuMs: (used.user + used.system) / 1000,
       elapsedMs,
-      sampledAllocatedBytes: profile ? allocated(profile.profile.head) : undefined,
+      sampledAllocatedBytes: profile ? sumSampledHeapBytes(profile.profile.head) : undefined,
       gc: {
         count: pauses.length,
         totalMs: pauses.reduce((a, b) => a + b, 0),

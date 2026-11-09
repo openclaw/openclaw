@@ -2,20 +2,11 @@ import {
   addTimerTimeoutGraceMs,
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
-import type { CommandLaneSnapshot } from "../../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
 import { DEFAULT_AGENT_TIMEOUT_MS } from "../../timeout.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
 export const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
-
-export function shouldNoteLaneWait(snapshot: CommandLaneSnapshot): boolean {
-  return (
-    snapshot.queuedCount > 0 ||
-    snapshot.activeCount >= snapshot.maxConcurrent ||
-    snapshot.blockedBy != null
-  );
-}
 
 export function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number {
   const defaultLaneTimeoutMs = DEFAULT_AGENT_TIMEOUT_MS + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS;

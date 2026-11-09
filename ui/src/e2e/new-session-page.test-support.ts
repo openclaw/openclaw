@@ -138,6 +138,7 @@ export function pollLocatorText(locator: Locator) {
 export function createNewSessionPageE2eSuite() {
   return createControlUiE2eSuite({
     name: "Control UI new-session page mocked Gateway E2E",
+    trackBrowserContexts: true,
     unavailableMessage: (executablePath) =>
       `Playwright Chromium is unavailable at ${executablePath}`,
   });
@@ -331,12 +332,21 @@ export async function waitForCommittedNewSessionDraft(
   page: Page,
   expectedText: string | null,
   expectedAttachments: number | readonly string[],
+  permissionMode?: string,
 ): Promise<void> {
   const params = new URL(page.url()).searchParams;
   const scopeKey = JSON.stringify(
     ["agent", "catalog", "group"].map((key) => params.get(key)?.trim() ?? ""),
   );
-  await waitForCommittedComposerDraft(page, scopeKey, expectedText, expectedAttachments);
+  await waitForCommittedComposerDraft(
+    page,
+    scopeKey,
+    expectedText,
+    expectedAttachments,
+    undefined,
+    undefined,
+    permissionMode,
+  );
 }
 
 export async function waitForGatewayRecoveryScope(page: Page, ready = true) {

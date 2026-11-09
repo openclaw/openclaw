@@ -17,11 +17,11 @@ import { inspectUpdateRecoveries } from "../infra/update-run-recovery.js";
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import {
   summarizeRecoveryCleanup,
-  type collectUpdateCleanupInventory,
+  type collectUpdateCleanupInventoryAsync,
 } from "./doctor-session-sqlite-recovery-inventory.js";
 import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 
-type Inventory = ReturnType<typeof collectUpdateCleanupInventory>;
+type Inventory = Awaited<ReturnType<typeof collectUpdateCleanupInventoryAsync>>;
 type SelectionIdentity = Map<string, { stat: fs.BigIntStats; sha256?: string }>;
 export type UnmanifestedSelection = Map<string, SelectionIdentity>;
 
@@ -161,7 +161,11 @@ export function selectUnmanifestedRecovery(params: {
         if (
           !item ||
           item.outcome !== "protected" ||
-          !["unmanifested-recovery-original", "orphan-update-capture"].includes(item.reason)
+          ![
+            "unmanifested-recovery-original",
+            "orphan-update-capture",
+            "superseded-unsealed-capture",
+          ].includes(item.reason)
         ) {
           throw new Error(
             `Cannot include unmanifested path ${file}: not an eligible known recovery original or orphan capture.`,

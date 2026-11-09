@@ -1,4 +1,5 @@
 // The palette owns search/navigation; its draft reuses the canonical session owners.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
@@ -212,14 +213,16 @@ export class CommandPaletteState {
     const invalidation = modelCatalogEventInvalidation(event);
     const snapshot = this.context?.gateway.snapshot;
     const cron = snapshot && isCronInventoryInvalidation(event, snapshot);
-    // Palette search includes skills even when the model cache remains current.
-    if (cron || event.event === "chat.metadata.changed" || invalidation) {
-      if (invalidation === "clear") {
-        this.catalogLoad = undefined;
-        this.catalogItems = [];
-        this.settledModels = this.modelReader.snapshot;
-        this.modelItems = getCommandPaletteModelItems(this.settledModels);
-      }
+    if (invalidation === "clear") {
+      this.settledModels = this.modelReader.snapshot;
+      this.modelItems = getCommandPaletteModelItems(this.settledModels);
+    }
+    // Usage and model-only publications do not invalidate skills or plugins.
+    // ModelCatalogReader owns the independent model refresh.
+    const commandsChanged =
+      event.event === "chat.metadata.changed" &&
+      asNullableRecord(event.payload)?.commandsChanged !== false;
+    if (cron || commandsChanged) {
       if (this.open && document.visibilityState !== "hidden") {
         void this.ensureCatalogItems(true);
       } else {
@@ -311,9 +314,10 @@ export class CommandPaletteState {
   }
 
   readonly togglePalette = () => {
+    // A closed launcher keeps custody of an in-flight start and reports its outcome.
     if (!this.open) {
       this.openPalette();
-    } else if (!this.draft.submitting) {
+    } else {
       this.closePalette();
     }
   };
@@ -384,6 +388,9 @@ export class CommandPaletteState {
       this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
       this.mentionMenu.update(element, "trigger");
     }
+    if (input.attachments?.length) {
+      this.draft.adoptAttachments(input.attachments);
+    }
     if (input.attachmentFiles?.length) {
       this.draft.adoptAttachmentFiles(input.attachmentFiles, input.submitRequested);
     } else if (input.submitRequested) {
@@ -444,7 +451,10 @@ export class CommandPaletteState {
       current.agentId === agentId &&
       (current.loadedAt === undefined || Date.now() - current.loadedAt < CATALOG_CACHE_TTL_MS);
     const rebound = this.modelReader.bind(gateway, { agentId });
-    if ((!reuseCatalog && !force) || rebound || this.modelReader.failed) {
+    if (
+      !this.modelReader.pending &&
+      ((!reuseCatalog && !force) || rebound || this.modelReader.failed)
+    ) {
       void this.modelReader.read();
     }
     if (reuseCatalog) {

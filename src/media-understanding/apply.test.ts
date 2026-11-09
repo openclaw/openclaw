@@ -13,8 +13,8 @@ import type {
 } from "../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
-import type { MediaUnderstandingProvider } from "./types.js";
 
 type ResolveApiKeyForProvider =
   typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;

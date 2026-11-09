@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -26,6 +27,7 @@ suite.define(() => {
           const shell = page.locator(".agent-chat__composer-shell");
           const triggers = page.locator(".new-session-page__triggers");
           const edge = page.getByRole("separator", { name: "Resize message width", exact: true });
+          await shell.hover();
           await edge.waitFor();
           const width = () =>
             shell.evaluate((element) => Math.round(element.getBoundingClientRect().width));
@@ -94,20 +96,26 @@ suite.define(() => {
       const edge = page.getByRole("separator", { name: "Resize message width", exact: true });
       const width = () =>
         shell.evaluate((element) => Math.round(element.getBoundingClientRect().width));
+      const prepareKeyboardEdge = async () => {
+        const input = shell.locator("textarea");
+        await expect.poll(() => input.isEditable()).toBe(true);
+        await input.press("Tab");
+        await edge.waitFor();
+      };
       await page.goto(`${suite.server.baseUrl}new`);
-      await edge.waitFor();
+      await prepareKeyboardEdge();
       const initial = await width();
       await edge.press("ArrowRight");
       await expect.poll(width).toBe(initial - 20);
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await edge.waitFor();
+      await prepareKeyboardEdge();
       await expect.poll(width).toBe(initial - 20);
       await edge.press("ArrowRight");
       await expect.poll(width).toBe(initial - 40);
 
       await page.goto(`${suite.server.baseUrl}new`);
-      await edge.waitFor();
+      await prepareKeyboardEdge();
       await expect.poll(width).toBe(initial - 40);
       await edge.dblclick();
       await expect.poll(width).toBe(initial - 40);
@@ -144,6 +152,7 @@ suite.define(() => {
       await expect.poll(width).toBe(initial - 40);
       expect(await savedWidth()).toBe(saved);
       await page.reload();
+      await page.locator(".agent-chat__input").press("Tab");
       await edge.waitFor();
       await expect.poll(width).toBe(initial - 40);
     });
@@ -182,6 +191,7 @@ suite.define(() => {
             await openChatSidePanelType(page, "Files");
           }
           const edge = page.getByRole("separator", { name: "Resize message width", exact: true });
+          await page.locator(".agent-chat__composer-shell").hover();
           await edge.waitFor();
           const box = (await edge.boundingBox())!;
           await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -235,6 +245,84 @@ suite.define(() => {
     },
   );
 
+  it("keeps user bubbles at their default share of a dragged-wider chat column", async () => {
+    await suite.withPage({ viewport: { width: 1920, height: 900 } }, async ({ page }) => {
+      const sessionKey = "agent:main:composer-width-bubbles";
+      await installMockGateway(page, {
+        sessionKey,
+        historyMessages: [
+          {
+            role: "user",
+            content:
+              "Can you summarize what changed in the release checklist this week? I need the short version for the team sync tomorrow morning, plus anything that still blocks the beta cut, who owns each blocker, and whether any of them needs a decision from the maintainers before Thursday.",
+          },
+          {
+            role: "assistant",
+            content:
+              "Three things changed this week. The beta cut now waits on the Android signing check instead of the full device matrix, so the matrix moved to the stable gate. Release notes are generated from merged PR titles, with manual edits limited to the highlights section. The one open blocker is the macOS notarization retry, which still fails on the first attempt; Dana owns it and expects a fix before Thursday.",
+          },
+        ],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const edge = page.getByRole("separator", { name: "Resize message width", exact: true });
+      await page.locator(".agent-chat__composer-shell").hover();
+      await edge.waitFor();
+      const transcript = page.locator(".chat-thread-inner");
+      await transcript.getByText("Three things changed this week.").waitFor();
+      await waitForLayoutSettled(page, ".chat-thread-inner, .agent-chat__composer-shell");
+      const measure = () =>
+        page.evaluate(() => {
+          const width = (selector: string) =>
+            document.querySelector(selector)!.getBoundingClientRect().width;
+          const group = document.querySelector<HTMLElement>(".chat-group.user")!;
+          const style = getComputedStyle(group);
+          const content =
+            group.getBoundingClientRect().width -
+            Number.parseFloat(style.paddingLeft) -
+            Number.parseFloat(style.paddingRight);
+          return {
+            assistant: width(".chat-group.assistant .chat-bubble"),
+            column: width(".chat-thread-inner"),
+            share: width(".chat-group.user .chat-bubble") / Math.min(900, content * 0.68),
+          };
+        });
+      const unsaved = await measure();
+      expect(unsaved.share).toBeCloseTo(1, 2);
+
+      const box = await edge.boundingBox();
+      if (!box) {
+        throw new Error("Expected a visible composer border");
+      }
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 - 400, box.y + box.height / 2, { steps: 8 });
+      await page.mouse.up();
+      await expect
+        .poll(() =>
+          page
+            .locator(".chat")
+            .first()
+            .evaluate((element) => element.style.getPropertyValue("--chat-thread-max-width")),
+        )
+        .toMatch(/^\d+px$/u);
+      await waitForLayoutSettled(page, ".chat-thread-inner, .agent-chat__composer-shell");
+      const saved = await measure();
+      if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
+        const pane = (await page.locator(".chat").first().boundingBox())!;
+        const reply = (await page.locator(".chat-group.assistant").first().boundingBox())!;
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "saved-width-bubbles.png"),
+          clip: { x: pane.x, y: 0, width: pane.width, height: reply.y + reply.height + 32 },
+        });
+      }
+      expect(saved.column).toBeGreaterThan(unsaved.column + 200);
+      // Agent content still fills the widened column; the user bubble keeps its default share.
+      expect(saved.assistant).toBeGreaterThan(980);
+      expect(saved.assistant).toBeCloseTo(saved.column, 0);
+      expect(saved.share).toBeCloseTo(1, 2);
+    });
+  });
+
   it.each(["chat", "new"] as const)(
     "restores saved %s width at the first visible frame",
     async (route) => {
@@ -250,8 +338,7 @@ suite.define(() => {
             ? controlUiSessionUrl(suite.server.baseUrl, sessionKey)
             : suite.server.baseUrl + "new",
         );
-        const edge = page.getByRole("separator", { name: "Resize message width", exact: true });
-        await edge.waitFor();
+        await page.locator(".agent-chat__composer-shell").waitFor();
         await waitForLayoutSettled(page, ".agent-chat__composer-shell");
         const expectedWidth = await page
           .locator(".agent-chat__composer-shell")

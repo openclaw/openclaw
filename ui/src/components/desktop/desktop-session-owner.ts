@@ -5,6 +5,7 @@ import type {
 } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
@@ -302,7 +303,7 @@ export class DesktopSessionOwner {
     // Embedded presenters and placement events already carry the authoritative target.
     const target = requestedSource ?? resolvedSessionTarget;
     if (target === undefined && documentMode && sessionKey !== null && !sessions) {
-      throw new Error("Desktop session capability is unavailable");
+      throw new Error(t("desktop.sourceUnavailable"));
     }
     return {
       target:

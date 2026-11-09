@@ -34,6 +34,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "./types.js";
 
 // These tests exercise the durable owner, including rollback and process reopen; existing
 // textual Goal tests protect the shared policy but cannot catch a split Goal/turn commit.
@@ -134,7 +135,7 @@ describe("typed Goal operation persistence", () => {
       status: "done",
       totalTokens: 100,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     });
   });
   afterEach(() => {

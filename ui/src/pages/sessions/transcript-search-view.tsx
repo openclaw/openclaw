@@ -10,9 +10,9 @@ import {
   onSettled,
   Show,
 } from "solid-js";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { RetryAction } from "../../components/solid/settings-ui.tsx";
-import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
@@ -21,10 +21,10 @@ import type { TranscriptSearchResult, TranscriptSearchState } from "./transcript
 
 registerSessionOrganizationEnglish();
 
-registerCommandPaletteEnglish();
-
 export type TranscriptSearchProps = TranscriptSearchState & {
   transcriptSearchAvailable: boolean;
+  /** Beside the phone toolbar's search field the trigger needs its own icon. */
+  phoneLayout?: boolean;
   onTranscriptSearchChange: (query: string) => void;
   onTranscriptSearch: () => void;
   onClearTranscriptSearch: () => void;
@@ -102,11 +102,12 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
           </Show>
         </div>
       </Show>
-      <button
-        ref={(element) => (trigger = element)}
-        class="btn btn--xs btn--icon sessions-toolbar__icon sessions-transcript-search__trigger"
+      <IconButton
+        ref={(element: HTMLButtonElement) => (trigger = element)}
+        class="sessions-toolbar__icon sessions-transcript-search__trigger"
         type="submit"
-        aria-label={
+        icon={props.phoneLayout ? "textSearch" : "search"}
+        label={
           props.transcriptSearchAvailable
             ? t("sessionsView.transcriptSearchTitle")
             : t("sessionsView.transcriptSearchUnavailable")
@@ -121,9 +122,7 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
             onSettled(() => input?.focus({ preventScroll: true }));
           }
         }}
-      >
-        <Icon name="search" />
-      </button>
+      />
     </form>
   );
 }

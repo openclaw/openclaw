@@ -14,24 +14,24 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const authProfileMocks = vi.hoisted(() => ({
-  loadAuthProfileStoreForRuntime: vi.fn<
+  loadAuthProfileStoreForRuntimeAsync: vi.fn<
     (
       agentDir?: string,
       options?: { allowKeychainPrompt?: boolean; readOnly?: boolean; inheritedAuthDir?: string },
-    ) => AuthProfileStore
-  >(() => {
+    ) => Promise<AuthProfileStore>
+  >(async () => {
     throw new Error("unexpected auth profile load");
   }),
-  hasAnyAuthProfileStoreSource: vi.fn((_agentDir?: string) => false),
-  hasLocalAuthProfileStoreSource: vi.fn((_agentDir?: string) => false),
+  hasAnyAuthProfileStoreSourceAsync: vi.fn(async (_agentDir?: string) => false),
+  hasLocalAuthProfileStoreSourceAsync: vi.fn(async (_agentDir?: string) => false),
   resolveApiKeyForProfile: vi.fn(),
 }));
 
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/auth-profiles.js")>()),
-  loadAuthProfileStoreForRuntime: authProfileMocks.loadAuthProfileStoreForRuntime,
-  hasAnyAuthProfileStoreSource: authProfileMocks.hasAnyAuthProfileStoreSource,
-  hasLocalAuthProfileStoreSource: authProfileMocks.hasLocalAuthProfileStoreSource,
+  loadAuthProfileStoreForRuntimeAsync: authProfileMocks.loadAuthProfileStoreForRuntimeAsync,
+  hasAnyAuthProfileStoreSourceAsync: authProfileMocks.hasAnyAuthProfileStoreSourceAsync,
+  hasLocalAuthProfileStoreSourceAsync: authProfileMocks.hasLocalAuthProfileStoreSourceAsync,
   resolveApiKeyForProfile: authProfileMocks.resolveApiKeyForProfile,
 }));
 
@@ -63,11 +63,11 @@ describe("inspectAuthProfileHealth", () => {
     mainDir = path.join(tempDir, "main-agent");
     vi.spyOn(Date, "now").mockReturnValue(now);
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    authProfileMocks.loadAuthProfileStoreForRuntime.mockReset();
-    authProfileMocks.hasAnyAuthProfileStoreSource.mockReset();
-    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
-    authProfileMocks.hasLocalAuthProfileStoreSource.mockReset();
-    authProfileMocks.hasLocalAuthProfileStoreSource.mockReturnValue(false);
+    authProfileMocks.loadAuthProfileStoreForRuntimeAsync.mockReset();
+    authProfileMocks.hasAnyAuthProfileStoreSourceAsync.mockReset();
+    authProfileMocks.hasAnyAuthProfileStoreSourceAsync.mockResolvedValue(false);
+    authProfileMocks.hasLocalAuthProfileStoreSourceAsync.mockReset();
+    authProfileMocks.hasLocalAuthProfileStoreSourceAsync.mockResolvedValue(false);
     authProfileMocks.resolveApiKeyForProfile.mockReset();
   });
 
@@ -83,10 +83,10 @@ describe("inspectAuthProfileHealth", () => {
   }
 
   function useLocalStore(store: AuthProfileStore): void {
-    authProfileMocks.hasLocalAuthProfileStoreSource.mockImplementation(
-      (agentDir) => agentDir !== undefined,
+    authProfileMocks.hasLocalAuthProfileStoreSourceAsync.mockImplementation(
+      async (agentDir) => agentDir !== undefined,
     );
-    authProfileMocks.loadAuthProfileStoreForRuntime.mockReturnValue(store);
+    authProfileMocks.loadAuthProfileStoreForRuntimeAsync.mockResolvedValue(store);
   }
 
   function expectedAuthStorePath(agentDir: string): string {
@@ -137,10 +137,10 @@ describe("inspectAuthProfileHealth", () => {
 
   it("maps disabled auth profiles to structured findings", async () => {
     writeAuthStore(mainDir);
-    authProfileMocks.hasLocalAuthProfileStoreSource.mockImplementation(
-      (agentDir) => agentDir !== undefined,
+    authProfileMocks.hasLocalAuthProfileStoreSourceAsync.mockImplementation(
+      async (agentDir) => agentDir !== undefined,
     );
-    authProfileMocks.loadAuthProfileStoreForRuntime.mockReturnValue({
+    authProfileMocks.loadAuthProfileStoreForRuntimeAsync.mockResolvedValue({
       version: 1,
       profiles: {},
       usageStats: {
@@ -167,10 +167,10 @@ describe("inspectAuthProfileHealth", () => {
   });
 
   it("shows exact WHAM classification while retaining canonical recovery policy", async () => {
-    authProfileMocks.hasLocalAuthProfileStoreSource.mockImplementation(
-      (agentDir) => agentDir !== undefined,
+    authProfileMocks.hasLocalAuthProfileStoreSourceAsync.mockImplementation(
+      async (agentDir) => agentDir !== undefined,
     );
-    authProfileMocks.loadAuthProfileStoreForRuntime.mockReturnValue({
+    authProfileMocks.loadAuthProfileStoreForRuntimeAsync.mockResolvedValue({
       version: 1,
       profiles: {
         "openai:expired": {
@@ -212,18 +212,18 @@ describe("inspectAuthProfileHealth", () => {
     });
 
     expect(findings).toEqual([]);
-    expect(authProfileMocks.hasAnyAuthProfileStoreSource).toHaveBeenCalledOnce();
-    expect(authProfileMocks.loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
+    expect(authProfileMocks.hasAnyAuthProfileStoreSourceAsync).toHaveBeenCalledOnce();
+    expect(authProfileMocks.loadAuthProfileStoreForRuntimeAsync).not.toHaveBeenCalled();
   });
 
   it("aggregates model auth diagnostics and labels strict agent subsets", async () => {
     const coderDir = path.join(tempDir, "coder-agent");
     writeAuthStore(mainDir);
     writeAuthStore(coderDir);
-    authProfileMocks.hasLocalAuthProfileStoreSource.mockImplementation(
-      (agentDir) => agentDir !== undefined,
+    authProfileMocks.hasLocalAuthProfileStoreSourceAsync.mockImplementation(
+      async (agentDir) => agentDir !== undefined,
     );
-    authProfileMocks.loadAuthProfileStoreForRuntime.mockImplementation((agentDir) => {
+    authProfileMocks.loadAuthProfileStoreForRuntimeAsync.mockImplementation(async (agentDir) => {
       if (agentDir === mainDir) {
         return createAuthProfileStoreFixture({
           ...expiredStore("openai-codex:shared", now - 60_000).profiles,
@@ -269,10 +269,10 @@ describe("inspectAuthProfileHealth", () => {
 
   it("offers credential repair while the same profile is cooling down", async () => {
     writeAuthStore(mainDir);
-    authProfileMocks.hasLocalAuthProfileStoreSource.mockImplementation(
-      (agentDir) => agentDir !== undefined,
+    authProfileMocks.hasLocalAuthProfileStoreSourceAsync.mockImplementation(
+      async (agentDir) => agentDir !== undefined,
     );
-    authProfileMocks.loadAuthProfileStoreForRuntime.mockReturnValue({
+    authProfileMocks.loadAuthProfileStoreForRuntimeAsync.mockResolvedValue({
       ...expiredStore("openai-codex:expired", now - 60_000),
       usageStats: { "openai-codex:expired": { cooldownUntil: now + 5 * 60_000 } },
     });
@@ -302,11 +302,11 @@ describe("inspectAuthProfileHealth", () => {
   it("prints malformed API-key profile diagnostics", async () => {
     const agentDir = path.join(tempDir, "main-agent");
     writeAuthStore(agentDir);
-    authProfileMocks.hasLocalAuthProfileStoreSource.mockImplementation(
-      (candidateDir) => candidateDir !== undefined,
+    authProfileMocks.hasLocalAuthProfileStoreSourceAsync.mockImplementation(
+      async (candidateDir) => candidateDir !== undefined,
     );
-    authProfileMocks.loadAuthProfileStoreForRuntime.mockImplementation(
-      (receivedAgentDir): AuthProfileStore => {
+    authProfileMocks.loadAuthProfileStoreForRuntimeAsync.mockImplementation(
+      async (receivedAgentDir): Promise<AuthProfileStore> => {
         if (receivedAgentDir === agentDir) {
           return createAuthProfileStoreFixture({
             "zai:default": createApiKeyCredential(
@@ -366,10 +366,10 @@ describe("inspectAuthProfileHealth", () => {
     "formats OAuth refresh failures through the doctor command path",
     async (profileId, message, expected) => {
       const agentDir = path.join(tempDir, "main-agent");
-      authProfileMocks.hasLocalAuthProfileStoreSource.mockImplementation(
-        (candidateDir) => candidateDir !== undefined,
+      authProfileMocks.hasLocalAuthProfileStoreSourceAsync.mockImplementation(
+        async (candidateDir) => candidateDir !== undefined,
       );
-      authProfileMocks.loadAuthProfileStoreForRuntime.mockReturnValue(
+      authProfileMocks.loadAuthProfileStoreForRuntimeAsync.mockResolvedValue(
         expiredStore(profileId, now - 60_000),
       );
       authProfileMocks.resolveApiKeyForProfile.mockRejectedValue(new Error(message));

@@ -108,6 +108,8 @@ describe("runCodexAppServerSideQuestion cache-parity fork", () => {
         ...parentPolicy,
         modelProvider: "openai",
         permissions: "parent-permissions",
+        // A cold resume can change this without rewriting the rollout's creation base.
+        baseInstructions: "Effective parent base after a cold resume.",
         developerInstructions: "Exact parent generic policy and workspace instructions.",
         config: {
           web_search: webSearch,

@@ -1,0 +1,2 @@
+# Config validation must preserve exact disabled markers while rejecting authored unknown settings.
+32

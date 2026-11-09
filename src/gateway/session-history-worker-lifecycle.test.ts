@@ -3,7 +3,6 @@ import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { encodeSessionArchiveContent } from "../config/sessions/archive-compression.js";
 import {
   replaceSessionEntry,
@@ -33,7 +32,6 @@ import {
 } from "../config/sessions/session-transcript-worker-runtime.js";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { DEFAULT_WORKER_PENDING_BYTES } from "../infra/worker-task-capacity.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
@@ -66,14 +64,6 @@ const observed = vi.hoisted(() => ({
   workers: [] as Worker[],
   idleCloseKeepsWorker: new WeakMap<Worker, boolean>(),
   dispatch: undefined as ((message: unknown, worker: Worker) => void) | undefined,
-  restoration: undefined as
-    | {
-        sessionId: string;
-        phase: "before restoration" | "queued restoration";
-        entered: () => void;
-        wait: Promise<void>;
-      }
-    | undefined,
 }));
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
@@ -101,51 +91,12 @@ vi.mock("node:worker_threads", async (importOriginal) => {
     },
   };
 });
-vi.mock("../config/sessions/session-cold-storage-read.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../config/sessions/session-cold-storage-read.js")>();
-  return {
-    ...actual,
-    readRestoredSessionTranscript: async (
-      ...args: Parameters<typeof actual.readRestoredSessionTranscript>
-    ) => {
-      const held = observed.restoration;
-      if (!held || args[0].sessionId !== held.sessionId) {
-        return actual.readRestoredSessionTranscript(...args);
-      }
-      if (held.phase === "before restoration") {
-        held.entered();
-        await held.wait;
-        return actual.readRestoredSessionTranscript(...args);
-      }
-      const [scope, read, options] = args;
-      const coldRead = options?.coldRead;
-      if (!coldRead) {
-        throw new Error("Queued restoration fixture requires prepared cold metadata");
-      }
-      return actual.readRestoredSessionTranscript(scope, read, {
-        ...options,
-        coldRead: {
-          ...coldRead,
-          readMetadata: async (phase) => {
-            if (phase === "queued") {
-              held.entered();
-              await held.wait;
-            }
-            return coldRead.readMetadata(phase);
-          },
-        },
-      });
-    },
-  };
-});
 
 afterAll(() => observed.timers.mockRestore());
 
 afterEach(async () => {
   memorySessionActorOwners.reset();
   observed.dispatch = undefined;
-  observed.restoration = undefined;
   await Promise.all(
     [historyLane, maintenanceLane, targetDiscoveryLane].map(async (lane) => {
       clearDatabaseWorkerIdleRetirement(lane);
@@ -460,76 +411,61 @@ it("evicts the least recently used of 64 retained targets without charging missi
   });
 });
 
-it.for(["before restoration", "queued restoration"] as const)(
-  "does not restore a replacement database for a revoked history read (%s)",
-  async (phase, { signal }) => {
-    await withHistoryState(async (state) => {
-      const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-      const fixture = await createSessionColdStorageFixture(databasePath);
-      const unrelated =
-        phase === "before restoration" ? await seed(state, "other", "unrelated-b") : undefined;
-      await unrelated?.read();
-      expect(
-        await runSessionColdStorageMaintenance({ config: maintenanceConfig(databasePath) }),
-      ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
-      const readStoredTranscript = () =>
-        withOpenClawAgentDatabaseReadOnly(
-          ({ db }) => ({
-            cold: readSessionColdTranscript(db, fixture.scope.sessionId),
-            events: db
-              .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
-              .all(fixture.scope.sessionId),
-          }),
-          fixture.options,
-        );
-      const before = readStoredTranscript();
-      expect(before).toEqual({
-        found: true,
-        value: {
-          cold: expect.objectContaining({ session_id: fixture.scope.sessionId }),
-          events: [],
-        },
-      });
-      const entered = createDeferredCore();
-      const gate = createDeferredCore();
-      observed.restoration = {
-        sessionId: fixture.scope.sessionId,
-        phase,
-        entered: entered.resolve,
-        wait: gate.promise,
-      };
-      const read = () => readChatHistoryPage({ ...historyParams(fixture.scope), max: 20 });
-      const pending = read();
-      const failure = expect(pending).rejects.toThrow("revoked");
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            entered.promise,
-            pending,
-            "History read settled before reaching the restoration boundary",
-          ),
-          signal,
-        );
-        await closeOpenClawAgentDatabaseByPathAsync(databasePath, "main");
-        if (unrelated) {
-          expectMessageIds((await unrelated.read()).messages, ["unrelated-b-message"]);
-        }
-        fs.copyFileSync(databasePath, `${databasePath}.replacement`);
-        fs.renameSync(databasePath, `${databasePath}.previous`);
-        fs.renameSync(`${databasePath}.replacement`, databasePath);
-        expect(readStoredTranscript()).toEqual(before);
-      } finally {
-        observed.restoration = undefined;
-        gate.resolve();
-        await failure;
-      }
-      expect(readStoredTranscript()).toEqual(before);
-      if (unrelated) {
-        expectMessageIds((await read()).messages, ["history-user", "history-assistant"]);
-      }
+it("revokes a cold history read before replacing its database without changing archived navigation", async () => {
+  await withHistoryState(async (state) => {
+    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+    const fixture = await createSessionColdStorageFixture(databasePath);
+    const unrelated = await seed(state, "other", "unrelated-b");
+    await unrelated.read();
+    expect(
+      await runSessionColdStorageMaintenance({ config: maintenanceConfig(databasePath) }),
+    ).toEqual({
+      archivedTranscripts: 1,
+      externalizedTranscripts: 0,
     });
-  },
-);
+    const readStoredTranscript = () =>
+      withOpenClawAgentDatabaseReadOnly(
+        ({ db }) => ({
+          cold: readSessionColdTranscript(db, fixture.scope.sessionId),
+          events: db
+            .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
+            .all(fixture.scope.sessionId),
+        }),
+        fixture.options,
+      );
+    const before = readStoredTranscript();
+    expect(before).toEqual({
+      found: true,
+      value: {
+        cold: expect.objectContaining({ session_id: fixture.scope.sessionId }),
+        events: expect.arrayContaining([
+          expect.objectContaining({ event_json: null, navigation_json: expect.any(String) }),
+        ]),
+      },
+    });
+    let closing: Promise<boolean> | undefined;
+    observed.dispatch = (message) => {
+      const input = asOptionalRecord(asOptionalRecord(message)?.input);
+      const params = asOptionalRecord(asOptionalRecord(input?.request)?.params);
+      if (input?.kind === "history-page" && params?.sessionId === fixture.scope.sessionId) {
+        observed.dispatch = undefined;
+        closing = closeOpenClawAgentDatabaseByPathAsync(databasePath, "main");
+      }
+    };
+    const read = () => readChatHistoryPage({ ...historyParams(fixture.scope), max: 20 });
+    await expect(read()).rejects.toThrow("revoked");
+    expect(closing).toBeDefined();
+    await closing;
+    expectMessageIds((await unrelated.read()).messages, ["unrelated-b-message"]);
+    fs.copyFileSync(databasePath, `${databasePath}.replacement`);
+    fs.renameSync(databasePath, `${databasePath}.previous`);
+    fs.renameSync(`${databasePath}.replacement`, databasePath);
+    expect(readStoredTranscript()).toEqual(before);
+    expectMessageIds((await read()).messages, ["history-user", "history-assistant"]);
+    expect(readStoredTranscript()).toEqual(before);
+    expectMessageIds((await unrelated.read()).messages, ["unrelated-b-message"]);
+  });
+});
 
 it("leaves the unrelated warm worker running when admission rejects a request before dispatch", async () => {
   await withHistoryState(async (state) => {

@@ -4,6 +4,7 @@ import { assert, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import * as allocation from "./allocation.js";
+import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 import { collectWorktreeTemplates, prepareWorktreeTemplate } from "./template-cache.js";
 import * as templateRegistry from "./template-registry-async.js";
@@ -112,6 +113,11 @@ it.each(["cold", "idle"])("shares %s preparation and reader custody", async (sta
   assert(rebuilt, "Invalid idle templates must be rebuilt");
   expect(rebuilt.id).not.toBe(left.id);
   expect(await source(rebuilt)).toBe("source");
+  // Replacement must not wait for filesystem retirement; GC owns the old generation.
+  expect(await source(left)).toBe("changed");
+  await collect();
+  expect(await list()).toMatchObject([{ id: rebuilt.id }]);
+  expect(await source(rebuilt)).toBe("source");
   await rebuilt.release();
   await collect();
   expect(await list()).toEqual([]);
@@ -152,7 +158,7 @@ it.each([false, true])("settles refresh before publication (fail=%s)", async (fa
   }
   expect(await source(reused!)).toBe(fail ? "source" : "updated");
   await refreshed?.release();
-  expect((await list())[0]).toMatchObject({
+  expect(await templateRegistry.readTemplateAsync(env, params.cacheKey)).toMatchObject({
     status: "ready",
     contentKey: next.contentKey,
     sourceCommit: next.sourceCommit,
@@ -212,12 +218,16 @@ it.each([
   { phase: "build", uncertain: false },
   { phase: "build", uncertain: true },
   { phase: "validate", uncertain: true },
+  { phase: "retire", uncertain: false },
   { phase: "retire", uncertain: true },
 ])("retains $phase custody ($uncertain)", async ({ phase, uncertain }) => {
   const prepared = phase === "build" ? undefined : await idle();
   const failure = uncertain ? new CommandProcessCleanupError() : new Error("settled");
   if (phase === "retire") {
-    vi.spyOn(fs, "rm").mockRejectedValueOnce(failure);
+    vi.spyOn(nativeWorktreeFilesystem, "remove").mockImplementationOnce(async (directory) => {
+      await fs.unlink(path.join(directory, "source"));
+      throw failure;
+    });
     const onError = vi.fn();
     await collect(onError);
     expect(onError).toHaveBeenCalledWith(failure, prepared?.id);
@@ -230,7 +240,7 @@ it.each([
   }
   const [record] = await list();
   expect(record?.status).toBe("preparing");
-  if (phase !== "retire") {
+  if (phase !== "retire" || !uncertain) {
     await collect();
   }
   expect(await list()).toHaveLength(uncertain ? 1 : 0);
@@ -244,6 +254,37 @@ it.each([
     }
   }
 });
+
+it.each(["nested", "template"])(
+  "retires only the selected template with a %s symlink",
+  async (link) => {
+    const retired = await idle();
+    const sibling = await prepare({ cacheKey: "other-volume" });
+    assert(retired && sibling);
+    const outside = directories.make("outside-template-root-");
+    await fs.writeFile(path.join(outside, "source"), "outside bytes");
+    if (link === "template") {
+      await fs.rename(retired.path, `${retired.path}-preserved`);
+      await fs.symlink(outside, retired.path, "junction");
+    } else {
+      await fs.mkdir(path.join(retired.path, "node_modules"));
+      await fs.symlink(outside, path.join(retired.path, "node_modules", "outside"), "junction");
+      await fs.symlink(path.join(outside, "source"), path.join(retired.path, "file-link"));
+    }
+    try {
+      await collect();
+      await expect(fs.lstat(retired.path)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await source(sibling)).toBe("source");
+      expect(await source({ path: outside })).toBe("outside bytes");
+      expect(await list()).toMatchObject([{ id: sibling.id }]);
+      if (link === "template") {
+        expect(await source({ path: `${retired.path}-preserved` })).toBe("source");
+      }
+    } finally {
+      await sibling.release();
+    }
+  },
+);
 
 it.each(["reservation", "lease"])("releases canceled %s handoffs", async (boundary) => {
   const controller = new AbortController();

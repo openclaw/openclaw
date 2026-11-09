@@ -12,6 +12,7 @@ on:
       - scripts/check-docs-mdx.mjs
       - scripts/check-docs-mdx.mts
       - scripts/lib/arg-utils.runtime.mjs
+      - scripts/lib/numeric-options.mjs
       - scripts/lib/docs-markdown.mjs
       - scripts/lib/docs-redirects.mjs
       - scripts/lib/tsx-cli-shim.mjs

@@ -7,7 +7,8 @@ import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -68,14 +69,9 @@ async function run(index: number) {
 }
 await run(-1);
 const profilePath = path.join(directory, "main-isolate");
-const marker = (phase: string) =>
-  fs.writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
-marker("identify-start");
+writeGatewayGcTraceMarker("identify-start", profilePath);
 global.gc();
-marker("identify-stop");
+writeGatewayGcTraceMarker("identify-stop", profilePath);
 const originalSync = fs.fsyncSync;
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
 let syncCalls = 0;
@@ -95,17 +91,9 @@ const loop = monitorEventLoopDelay({ resolution: 10 });
 const collections: Array<{ kind: number; ms: number }> = [];
 let begin = Infinity;
 let end = Infinity;
-const record: PerformanceObserverCallback = (entries) => {
-  for (const entry of entries.getEntries()) {
-    if (entry.startTime < begin || entry.startTime >= end) {
-      continue;
-    }
-    const detail = entry.toJSON().detail as { kind: number };
-    collections.push({ kind: detail.kind, ms: entry.duration });
-  }
-};
-type PerformanceObserverCallback = ConstructorParameters<typeof PerformanceObserver>[0];
-const observer = new PerformanceObserver(record);
+const observer = new PerformanceObserver((entries) =>
+  recordGcCollections(entries.getEntries(), collections, begin, end),
+);
 observer.observe({ entryTypes: ["gc"] });
 loop.enable();
 function distribution(samples: number[]) {
@@ -127,7 +115,7 @@ try {
   loop.reset();
   const latencies: number[] = [];
   const cpuStart = process.cpuUsage();
-  marker("heap-start");
+  writeGatewayGcTraceMarker("heap-start", profilePath);
   begin = performance.now();
   for (let index = 0; index < operations; index++) {
     const started = performance.now();
@@ -136,7 +124,7 @@ try {
     await delay(Math.max(0, begin + (index + 1) * intervalMs - performance.now()));
   }
   end = performance.now();
-  marker("heap-stop");
+  writeGatewayGcTraceMarker("heap-stop", profilePath);
   const cpu = process.cpuUsage(cpuStart);
   loop.disable();
   await nextTurn();

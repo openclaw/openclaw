@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { observeLayoutShifts } from "../test-helpers/control-ui-layout-shift.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { catalogModel } from "./model-catalog-fixtures.test-support.ts";
@@ -23,6 +24,43 @@ const suite = createNewSessionPageE2eSuite();
 const luna: ModelCatalogEntry = catalogModel("openai", "gpt-5.6-luna", "GPT-5.6 Luna");
 
 suite.define(() => {
+  it.each([320, 400, 560])(
+    "keeps mobile model loading steady at %s px under CPU throttling",
+    async (width) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 900 } },
+        async ({ context, page }) => {
+          const cpu = await context.newCDPSession(page);
+          await cpu.send("Emulation.setCPUThrottlingRate", { rate: 6 });
+          const gateway = await installMockGateway(page, { heldMethods: ["models.list"] });
+          await page.goto(`${suite.server.baseUrl}new`);
+          await gateway.waitForRequest("models.list");
+          const trigger = page.locator('[data-chat-model-select="true"]');
+          await pollAttribute(trigger, "aria-busy").toBe("true");
+          await page.evaluate(() => document.fonts.ready);
+          const controls = page.locator(
+            ".new-session-page__composer .agent-chat__composer-controls",
+          );
+          const before = await controls.boundingBox();
+          const shifts = await observeLayoutShifts(page);
+          await gateway.resolveDeferred("models.list");
+          await pollAttribute(trigger, "aria-busy").toBe("false");
+          await page.evaluate(
+            () =>
+              new Promise((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(resolve));
+              }),
+          );
+          expect(await controls.boundingBox()).toEqual(before);
+          const result = await shifts.evaluate((probe) => probe.read());
+          expect(result.value, JSON.stringify(result, null, 2)).toBe(0);
+          await shifts.evaluate((probe) => probe.stop());
+          await shifts.dispose();
+          await cpu.detach();
+        },
+      );
+    },
+  );
   it("keeps picker geometry stable while shortcut visibility follows focus", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
@@ -76,7 +114,7 @@ suite.define(() => {
               },
             };
           });
-        await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(6);
+        await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(4);
         const geometryBeforeFocus = await menuGeometry();
         expect(geometryBeforeFocus).not.toBeNull();
         await pollOpacity(secondShortcut).toBe("1");

@@ -223,6 +223,29 @@ describe("public session document", () => {
     expect(unavailableMain.querySelector(".colophon")).toBeNull();
     expect(unavailable).not.toContain('http-equiv="refresh"');
   });
+  it("keeps access-check decorations inert and provides status and recovery", () => {
+    const entryUrl = "/control/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain%2Ftopic";
+    const pending = fragment([], {
+      entryUrl,
+      title: "Conversation unavailable",
+      unavailable: true,
+    });
+    const skeleton = pending.querySelector(".app-skeleton")!;
+    expect(skeleton.getAttribute("aria-hidden")).toBe("true");
+    expect(skeleton.textContent).toBe("");
+    expect(skeleton.querySelectorAll("a, button, [tabindex]")).toHaveLength(0);
+    const status = pending.querySelector('[role="status"]')!;
+    expect(status.querySelector("svg")?.closest('[aria-hidden="true"]')).toBeTruthy();
+    expect(status.querySelector("h1")?.textContent).toBe("Loading conversation");
+    expect(status.querySelector("p")?.textContent).toBe("Checking access…");
+    expect(status.querySelector("button[data-public-reload]")?.textContent).toBe("Reload");
+    expect(fragment([], { entryUrl }).querySelector(".app-skeleton")).toBeNull();
+    expect(
+      fragment([], { title: "Conversation unavailable", unavailable: true }).querySelector(
+        ".app-skeleton",
+      ),
+    ).toBeNull();
+  });
   it("publishes only user and assistant conversation text without internal input or metadata", () => {
     const token = `sk-${"a".repeat(48)}`;
     const operatorSecret = "internal-ticket-8315";

@@ -595,7 +595,10 @@ export function discoverPluginSkills(params: {
   const candidates: PluginSkillCandidate[] = [];
 
   for (const name of childDirs) {
-    const skillDir = path.join(rootDir, name);
+    // Join under the canonical directory: reads walk every path prefix, and a
+    // symlinked ancestor of the state dir (macOS /tmp) would otherwise be judged
+    // against the plugin's skill root and rejected.
+    const skillDir = path.join(rootRealPath, name);
     if (!isSymlinkPath(skillDir)) {
       continue;
     }

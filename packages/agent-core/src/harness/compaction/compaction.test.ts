@@ -87,10 +87,16 @@ function createProjectedEntry(
     : { ...common, type, fromId: common.parentId ?? common.id, summary: content };
 }
 
-it("skips an invalid context window of zero", () => {
+it.each([
+  [1, 0, true, false],
+  [749_999, 1_000_000, true, false],
+  [750_001, 1_000_000, true, true],
+  [923_326, 1_000_000, true, true],
+  [923_326, 1_000_000, false, false],
+])("compacts %i tokens in a %i window (enabled: %s)", (tokens, window, enabled, expected) => {
   expect(
-    shouldCompact(1, 0, { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 }),
-  ).toBe(false);
+    shouldCompact(tokens, window, { enabled, reserveTokens: 20_000, keepRecentTokens: 20_000 }),
+  ).toBe(expected);
 });
 
 describe("calculateContextTokens", () => {

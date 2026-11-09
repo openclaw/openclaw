@@ -13,12 +13,12 @@ export async function readSessionTranscriptCohort<T, R>(
   signal: AbortSignal | undefined,
   caller: "history.hydration" | "history.model-context",
 ): Promise<R> {
-  const admitted = <V>(run: () => V) =>
+  const admitted = <V>(run: (assertOwner: () => void) => V) =>
     runOpenClawAgentWriteAdmission(
       database,
-      (_identity, assertOwner) => {
+      async (_identity, assertOwner) => {
         assertOwner();
-        const value = run();
+        const value = await run(assertOwner);
         assertOwner();
         return value;
       },
@@ -27,35 +27,47 @@ export async function readSessionTranscriptCohort<T, R>(
       signal,
       caller,
     );
-  // A single retry tolerates a writer overtaking the read, without starving writes
-  // or repeating a consumer that may already have produced effects.
+  const captureMutationWitness = () => {
+    const token = readSqliteDatabaseWriteTokenForPath(database.path);
+    const assertNative = captureSessionEntryNativeMutationWitness([database]);
+    return () => {
+      if (readSqliteDatabaseWriteTokenForPath(database.path) !== token) {
+        throw new SessionEntryChangedDuringReadError();
+      }
+      assertNative();
+    };
+  };
+  // Keep ordinary reads outside FIFO custody. Repeated contention gets one
+  // serialized read so concurrent session starts cannot exhaust the retry.
   for (let attempt = 0; ; attempt++) {
     const assertUnchanged = await admitted(() => {
       assertCurrent();
-      const token = readSqliteDatabaseWriteTokenForPath(database.path);
-      const assertNative = captureSessionEntryNativeMutationWitness([database]);
-      return () => {
-        if (readSqliteDatabaseWriteTokenForPath(database.path) !== token) {
-          throw new SessionEntryChangedDuringReadError();
-        }
-        assertNative();
-      };
+      return captureMutationWitness();
     });
     const value = await read();
-    const result = await admitted(() => {
+    const result = await admitted(async (assertOwner) => {
       signal?.throwIfAborted();
       assertCurrent();
+      let current = value;
+      let assertSnapshot = assertUnchanged;
       try {
-        assertUnchanged();
+        assertSnapshot();
       } catch (error) {
-        if (attempt === 0 && error instanceof SessionEntryChangedDuringReadError) {
+        if (!(error instanceof SessionEntryChangedDuringReadError)) {
+          throw error;
+        }
+        if (attempt === 0) {
           return { retry: true } as const;
         }
-        throw error;
+        assertSnapshot = captureMutationWitness();
+        current = await read();
+        assertOwner();
+        assertCurrent();
+        assertSnapshot();
       }
-      const consumed = consume(value);
+      const consumed = consume(current);
       assertCurrent();
-      assertUnchanged();
+      assertSnapshot();
       return { retry: false, value: consumed } as const;
     });
     if (!result.retry) {

@@ -193,6 +193,7 @@ export async function releaseCodexBoundLiveThread(
   }
   const client = previous?.client ?? options.client;
   let threadClosed: Promise<void> | undefined;
+  let released = false;
   let stopWatching: (() => void) | undefined;
   let stopReading: (() => void) | undefined;
   if (previous) {
@@ -257,7 +258,7 @@ export async function releaseCodexBoundLiveThread(
           : `Codex thread ${options.threadId} is claimed by active work; stop it first.`,
       );
     }
-    return await releaseCodexRetainedLiveThread({
+    released = await releaseCodexRetainedLiveThread({
       ...options,
       client,
       abandonClient: previous ? undefined : options.abandonClient,
@@ -271,6 +272,7 @@ export async function releaseCodexBoundLiveThread(
           }
         : undefined,
     });
+    return released;
   } finally {
     try {
       // Rejection must free the lane so the claimed run can still be stopped.
@@ -312,6 +314,21 @@ export async function releaseCodexBoundLiveThread(
         await options.lifecycleTiming.measure("retired-thread-runtime-release", () =>
           racePromiseWithAbortSignal(Promise.race(stopped), options.signal, exitWaitAbortError),
         );
+      } else if (released && threadClosed) {
+        // A live previous owner keeps the per-home writer lock until it unloads the thread
+        // (codex rollout/src/writer_lock.rs); managed clients unload on unsubscribe. A
+        // missed close stays visible as the resume's active-writer error.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await racePromiseWithAbortSignal(
+          Promise.race([
+            threadClosed,
+            new Promise<void>((resolve) => {
+              timer = setTimeout(resolve, CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS);
+            }),
+          ]),
+          options.signal,
+          exitWaitAbortError,
+        ).finally(() => clearTimeout(timer));
       }
     } finally {
       stopReading?.();
@@ -373,12 +390,26 @@ export async function tryReuseCodexLiveThread(
       await prepareCodexThreadFinalConfigPatch(params, options.nativeModelInputTools, binding);
       throwIfAborted();
       params.assertCurrent?.();
-      return { kind: "ready", binding: { ...binding, lifecycle: { action: "resumed" } } };
+      return {
+        kind: "ready",
+        binding: {
+          ...binding,
+          // Nothing is sent to this live thread, so report the base it got at creation,
+          // never a render of current inputs.
+          preparedOpenClawBaseInstructions: creationPolicy?.baseInstructions,
+          lifecycle: { action: "resumed" },
+        },
+      };
     }
     return { kind: "rotate" };
   }
 
-  if (!binding.clientId || binding.clientId !== clientId || (ringZeroActive && !incognito)) {
+  if (
+    !binding.clientId ||
+    binding.clientId !== clientId ||
+    (params.inferenceRoute && !getCodexInferenceThread(params.client, binding.threadId)) ||
+    (ringZeroActive && !incognito)
+  ) {
     return { kind: "resume" };
   }
 
@@ -490,6 +521,11 @@ export async function tryReuseCodexLiveThread(
         return { kind: "resume" };
       }
     }
+    // A native switch moves supervision past the stored model; render and fingerprint the
+    // prompt for Codex's current one, as cold resume does, so a changed base resumes cold.
+    const nativeModel =
+      binding.connectionScope === "supervision" ? nativeThread?.model?.trim() : undefined;
+    const promptBinding = nativeModel ? { ...binding, model: nativeModel } : binding;
     const pluginThreadConfig = await options.buildLoadedPluginThreadConfig(binding);
     assertWarmOwner();
     if (pluginThreadConfig && pluginThreadConfig.fingerprint !== binding.pluginAppsFingerprint) {
@@ -522,7 +558,7 @@ export async function tryReuseCodexLiveThread(
       prebuiltFinalConfigPatch.configPatch,
     );
     const resumeParams = await lifecycleTiming.measure("warm-thread-resume-params", () =>
-      options.buildResumeParams(binding, resumeAuthProfileId, resumeConfig),
+      options.buildResumeParams(promptBinding, resumeAuthProfileId, resumeConfig),
     );
     options.assertInferenceConfig(
       resumeParams.config,
@@ -536,6 +572,8 @@ export async function tryReuseCodexLiveThread(
       incognito &&
       (!ephemeralPolicy ||
         ephemeralPolicy.developerInstructions !== params.developerInstructions ||
+        ephemeralPolicy.baseInstructions !==
+          options.resolveOpenClawBaseInstructions(promptBinding) ||
         getCodexInferenceThread(params.client, binding.threadId) !== params.inferenceRoute ||
         [...(params.inferenceProviderRoutes?.keys() ?? [])].some(
           (provider) =>
@@ -691,6 +729,7 @@ export async function tryReuseCodexLiveThread(
         liveThreadConfigFingerprint,
         liveThreadEphemeralPolicy,
         liveThreadOwnership: retainedThread,
+        preparedOpenClawBaseInstructions: options.resolveOpenClawBaseInstructions(promptBinding),
         ...(!incognito && retainedThread.serviceTier && resumeParams.serviceTier === undefined
           ? { clearInheritedServiceTier: true }
           : {}),

@@ -108,16 +108,19 @@ export function projectSessionEntryUsageUpdate(
       projectSessionUsageSnapshot(update.usage, update.estimatedCostUsd, update.lastCallUsage),
     );
   }
-  if (totalTokens !== undefined && !update.preserveUserFacingRunState) {
+  const updatesContext = !update.preserveUserFacingRunState || update.hasCurrentContextSnapshot;
+  if (totalTokens !== undefined && updatesContext) {
     patch.totalTokens = totalTokens;
     patch.totalTokensFresh = true;
     patch.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
-    const accountedGoal = accountSessionGoalUsage({ ...entry, ...patch }, updatedAt);
-    if (accountedGoal) {
-      patch.goal = accountedGoal;
+    if (!update.preserveUserFacingRunState) {
+      const accountedGoal = accountSessionGoalUsage({ ...entry, ...patch }, updatedAt);
+      if (accountedGoal) {
+        patch.goal = accountedGoal;
+      }
     }
   } else if (
-    !update.preserveUserFacingRunState &&
+    updatesContext &&
     update.hasContextUpdate &&
     (update.hasCurrentContextSnapshot ||
       update.preserveFreshTotalTokensOnStaleUsage !== true ||
