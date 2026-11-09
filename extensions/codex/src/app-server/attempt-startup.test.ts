@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS } from "./attempt-client-cleanup.js";
 import type { startCodexAttemptThread } from "./attempt-startup.js";
 import {
   answerInitialize,
@@ -391,19 +392,30 @@ describe("startCodexAttemptThread", () => {
     resumed.releaseSharedClientLease();
   });
 
-  it("retires the startup client when its deadline ends a wait for a retired owner's exit", async () => {
-    const fixture = await bindToRetiredLeasedOwner();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const timedOut = readError(fixture.startOn(fixture.healthy, undefined, 1_000));
-    await fixture.exitWaitStarted;
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    expect(isCodexAppServerStartupError(await timedOut, "timed_out")).toBe(true);
-    expect(fixture.healthy.stdinDestroyed).toBe(true);
-    expect(fixture.owner.process.exitCode).toBeNull();
-    expect(readHarnessRequestMethods(fixture.healthy)).not.toContain("thread/resume");
-    fixture.releaseOwnerPeer();
-  });
+  it.each([
+    { budget: 1_000, retiresClient: true },
+    { budget: 60_000, retiresClient: false },
+  ])(
+    "bounds retired-owner handoff with a $budget ms startup budget",
+    async ({ budget, retiresClient }) => {
+      const fixture = await bindToRetiredLeasedOwner();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const timedOut = readError(fixture.startOn(fixture.healthy, undefined, budget));
+      try {
+        await fixture.exitWaitStarted;
+        await vi.advanceTimersByTimeAsync(
+          Math.min(budget, CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS),
+        );
+        expect(fixture.owner.process.exitCode).toBeNull();
+        expect(readHarnessRequestMethods(fixture.healthy)).not.toContain("thread/resume");
+      } finally {
+        // A handoff still waiting past its budget could now resume on real exit.
+        fixture.releaseOwnerPeer();
+      }
+      expect(isCodexAppServerStartupError(await timedOut, "timed_out")).toBe(true);
+      expect(fixture.healthy.stdinDestroyed).toBe(retiresClient);
+    },
+  );
 
   it.each([
     {
