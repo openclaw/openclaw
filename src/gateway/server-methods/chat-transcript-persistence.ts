@@ -177,7 +177,7 @@ export function buildAssistantDisplayRewrite(params: {
       ? prepared.content.filter((block) => {
           const caption =
             block.type === "text" && typeof block.text === "string"
-              ? sanitizeAssistantDisplayText(block.text)
+              ? sanitizeAssistantDisplayText(splitMediaFromOutput(block.text).text)
               : undefined;
           return (
             caption === joinedCaption ||
