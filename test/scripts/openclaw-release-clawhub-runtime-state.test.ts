@@ -47,6 +47,35 @@ describe("scripts/openclaw-release-clawhub-runtime-state.ts", () => {
     },
   );
 
+  it("records deferred publication without claiming package verification", () => {
+    const result = runRuntimeStateScript({ deferred: "true", "wait-for-clawhub": "false" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      verifierArgs: ["--skip-clawhub"],
+      proofLines: {
+        normal: expect.stringContaining("deferred"),
+        bootstrap: expect.stringContaining("deferred"),
+      },
+    });
+  });
+
+  it.each([
+    { "normal-run-id": "123" },
+    { "bootstrap-run-id": "456" },
+    { "wait-for-clawhub": "true" },
+  ])("rejects deferred publication combined with %j", (flags) => {
+    const result = runRuntimeStateScript({
+      deferred: "true",
+      "wait-for-clawhub": "false",
+      ...flags,
+    });
+    expect(result).toMatchObject({
+      status: 1,
+      stdout: "",
+      stderr: expect.stringContaining("Deferred ClawHub"),
+    });
+  });
+
   it.each([
     { staged: true, failed: false },
     { staged: true, failed: true },

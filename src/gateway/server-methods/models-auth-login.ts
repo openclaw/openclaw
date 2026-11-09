@@ -142,6 +142,7 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
                     signal,
                     openUrl,
                     browserOrigin: client.browserOrigin,
+                    authPolicy: client.authPolicy,
                   })
                 : undefined;
               const assertFlowCurrent = () => {

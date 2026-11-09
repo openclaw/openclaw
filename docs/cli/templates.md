@@ -24,7 +24,8 @@ Enable **Templates** in **Settings → Labs** before adding one. On a headless i
 `gateway.controlUi.experimental.templates` to `true` in OpenClaw config.
 Authoring and inspecting local Template packages do not require the Labs toggle.
 
-The CLI accepts a canonical local package directory or `CLAW.md` with YAML frontmatter.
+`templates add` accepts a ClawHub package name, a canonical local package directory,
+or `CLAW.md` with YAML frontmatter. Other source-reading commands remain local-only.
 Packages must declare `package.json.openclaw.template` as a safe package-relative
 path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. The obsolete
 `openclaw.claw` selector and JSON Template manifests are rejected, including in downloaded archives.
@@ -238,11 +239,33 @@ Add it to create a new ordinary agent:
 openclaw templates add ./incident-triage
 ```
 
+Add a published ClawHub Template directly, or preview the same flow first:
+
+```bash
+openclaw templates add @openclaw/api-integration-engineer --dry-run --json
+openclaw templates add @openclaw/api-integration-engineer
+```
+
+A registry name resolves the latest published release to an exact version and
+immutable artifact digest before planning. OpenClaw uses its existing registry
+trust checks, verifies the downloaded artifact, and safely extracts it under
+bounded package limits. The extracted source is temporary and is cleaned up
+after planning or Add; it is not an installed Template lifecycle. An existing
+local path takes precedence over a registry name; use `./name` to make a local
+source explicit.
+
+Registry previews require network access but do not create an agent, workspace,
+installed dependency, or retained Template source. Review the exact version,
+digest, requirements, and trust warnings in `--dry-run --json` output. A warned
+Template release requires `--acknowledge-clawhub-risk` when adding it. Template
+approval never approves its skill or plugin dependencies: their existing trust
+acknowledgments and `--accept-capabilities` checks still apply independently.
+
 Each Add chooses an unused agent ID. The CLI reports that ID so you can open
 or configure the agent afterward. The Control UI opens the new agent's chat
 and starts with "What can you do?" after a successful Add.
 
-`--dry-run --json` remains available for automation or offline inspection.
+`--dry-run --json` remains available for automation or local-source inspection.
 `--agent-id` and `--workspace` override the default destination with an
 unused ID or new path. Ordinary Add does not require a separate plan or
 review token. Exceptional trust warnings can still require explicit consent.

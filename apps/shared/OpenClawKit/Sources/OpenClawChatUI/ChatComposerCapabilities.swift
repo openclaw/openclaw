@@ -147,6 +147,7 @@ public struct OpenClawChatComposerCapabilityCatalog: Equatable, Sendable {
     public let sessionSettingsAvailable: Bool
     public let modelMutationAvailable: Bool
     public let effortMutationAvailable: Bool
+    public let verboseMutationAvailable: Bool
     public let webSearchBaseEnabled: Bool
     public let webSearchAvailable: Bool
     public let skills: [OpenClawChatComposerSkill]
@@ -165,6 +166,7 @@ public struct OpenClawChatComposerCapabilityCatalog: Equatable, Sendable {
         sessionSettingsAvailable: Bool = false,
         modelMutationAvailable: Bool = false,
         effortMutationAvailable: Bool = false,
+        verboseMutationAvailable: Bool = false,
         webSearchBaseEnabled: Bool = true,
         webSearchAvailable: Bool = false,
         skills: [OpenClawChatComposerSkill] = [],
@@ -182,6 +184,7 @@ public struct OpenClawChatComposerCapabilityCatalog: Equatable, Sendable {
         self.sessionSettingsAvailable = sessionSettingsAvailable
         self.modelMutationAvailable = modelMutationAvailable
         self.effortMutationAvailable = effortMutationAvailable
+        self.verboseMutationAvailable = verboseMutationAvailable
         self.webSearchBaseEnabled = webSearchBaseEnabled
         self.webSearchAvailable = webSearchAvailable
         self.skills = skills
