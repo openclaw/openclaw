@@ -321,10 +321,10 @@ async function buildTalkCatalog(
             configuredProviderId:
               provider.id === activeRealtimeProvider ? realtimeConfig.provider : undefined,
           });
-          // Top-level talk.realtime.model overrides provider-level config, matching
-          // talk.client.create's providerConfigOverrides precedence at session time.
-          const model =
-            provider.id === activeRealtimeProvider ? realtimeModel : realtimeConfig.model;
+          // The active entry mirrors session-time top-level model precedence.
+          // Inactive entries describe a provider switch, which clears that override
+          // and restores the target provider's own model (or resolved default).
+          const model = provider.id === activeRealtimeProvider ? realtimeModel : undefined;
           const rawConfigWithModel = model ? { ...rawConfig, model } : rawConfig;
           const defaultRawConfig = { ...rawConfig };
           delete defaultRawConfig.model;

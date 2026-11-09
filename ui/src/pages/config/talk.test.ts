@@ -938,6 +938,19 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     ],
     ["positive rejection", { transports: ["webrtc"] }, null, [], "webrtc"],
     [
+      "relay ready for OpenAI fallback after clearing the xAI model",
+      {
+        model: "grok-voice-latest",
+        defaultModel: "gpt-live-1-codex",
+        transport: "gateway-relay",
+        transports: ["webrtc", "gateway-relay"],
+        providerOption: { configured: true, supportsBrowserSession: true },
+      },
+      null,
+      ["transport"],
+      null,
+    ],
+    [
       "relay not configured for target provider",
       {
         transport: "gateway-relay",
@@ -972,6 +985,8 @@ describe("TalkSettingsPage realtime transport mutation", () => {
         expect(patchForm.mock.calls.filter(([path]) => path[2] === "transport")).toEqual([
           [realtimePath("transport"), expectedTransport],
         ]);
+      } else {
+        expect(patchForm.mock.calls.filter(([path]) => path[2] === "transport")).toEqual([]);
       }
     },
   );

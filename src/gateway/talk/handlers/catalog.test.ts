@@ -328,6 +328,52 @@ describe("talk.catalog handler", () => {
     },
   );
 
+  it.each([undefined, "gpt-realtime-2.1"])(
+    "checks inactive provider readiness with its post-switch model %s",
+    async (providerModel) => {
+      const provider = {
+        id: "openai",
+        label: "OpenAI",
+        resolveConfig: ({ rawConfig }: RealtimeVoiceProviderResolveConfigContext) => ({
+          ...rawConfig,
+          model: rawConfig.model ?? "gpt-live-1-codex",
+        }),
+        isConfigured: vi.fn(
+          ({ providerConfig }: { providerConfig: { model: string } }) =>
+            providerConfig.model === "gpt-live-1-codex",
+        ),
+        createBridge: vi.fn(),
+        createBrowserSession: vi.fn(),
+      };
+      mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
+      const respond = await invokeTalkHandler("talk.catalog", {
+        client: readClient(),
+        context: {
+          getRuntimeConfig: () =>
+            ({
+              talk: {
+                realtime: {
+                  provider: "xai",
+                  model: "grok-voice-latest",
+                  transport: "gateway-relay",
+                  providers: { openai: providerModel ? { model: providerModel } : {} },
+                },
+              },
+            }) as OpenClawConfig,
+        },
+      });
+      const catalog = expectRespondOk(respond) as {
+        realtime: { providers: Array<Record<string, unknown>> };
+      };
+      expect(provider.isConfigured).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerConfig: expect.objectContaining({ model: providerModel ?? "gpt-live-1-codex" }),
+        }),
+      );
+      expect(catalog.realtime.providers[0]).toMatchObject({ configured: !providerModel });
+    },
+  );
+
   it("emits realtime models and voices and mirrors create-time configured inputs", async () => {
     const provider = {
       id: "openai",
