@@ -61,7 +61,7 @@ async function writeTrustedProxyBrowserAuthConfig(password?: string) {
     gateway: {
       auth,
       trustedProxies: ["127.0.0.1"],
-      publicOrigin: ALLOWED_BROWSER_ORIGIN,
+      publicOrigin: ALLOWED_BROWSER_ORIGIN + ":443",
     },
   });
 }

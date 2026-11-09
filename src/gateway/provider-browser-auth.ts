@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import { readRuntimeConfig } from "../config/runtime-snapshot.js";
 import { OAUTH_PAGE_CSP } from "../infra/oauth-page-csp.js";
 import type { ProviderAuthContext } from "../plugins/provider-authentication.types.js";
@@ -71,7 +72,7 @@ export function resolveBrowserAuthOrigin(
   const config = authPolicy?.authMethod === "trusted-proxy" ? readRuntimeConfig() : null;
   const isPublicProxyOrigin = Boolean(
     config &&
-    browser.origin === config.gateway?.publicOrigin &&
+    browser.origin === resolveGatewayPublicOrigin(config) &&
     isGatewayAuthPolicyCurrent(authPolicy, config),
   );
   if (browser.origin && (isGatewayHostBrowserOrigin(browser) || isPublicProxyOrigin)) {

@@ -214,14 +214,21 @@ const proxyPrincipal = {
   browserOrigin: proxyBrowser,
 };
 
-it.each([undefined, "publicOrigin", "proxy-policy"])(
-  "binds a trusted-proxy callback to current public-origin authority (%s)",
-  async (change) => {
-    setRuntimeConfigSnapshot(proxyConfig);
+it.each([
+  [proxyOrigin, undefined],
+  [proxyOrigin + ":443", undefined],
+  [proxyOrigin + "/", undefined],
+  [proxyOrigin, "publicOrigin"],
+  [proxyOrigin, "proxy-policy"],
+] as const)(
+  "binds a trusted-proxy callback to current public-origin authority (%s, %s)",
+  async (publicOrigin, change) => {
+    const config = { gateway: { ...proxyConfig.gateway, publicOrigin } };
+    setRuntimeConfigSnapshot(config);
     const opened = createDeferredCore<string>();
     const session = createSession({
       browserOrigin: proxyBrowser,
-      authPolicy: captureGatewayAuthPolicy(proxyConfig, proxyPrincipal),
+      authPolicy: captureGatewayAuthPolicy(config, proxyPrincipal),
       openUrl: async (url) => opened.resolve(url),
     });
     expect(session.available).toBe(true);
