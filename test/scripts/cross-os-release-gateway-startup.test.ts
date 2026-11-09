@@ -14,6 +14,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawn: vi.fn(),
 }));
 
+vi.mock("node:net", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:net")>();
+  return { ...actual, createServer: vi.fn(actual.createServer) };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it.each([
@@ -46,6 +51,8 @@ it.each([
   const configWrites: number[] = [];
   const launches: number[] = [];
   const closeChildren: Array<() => void> = [];
+  let replacementListener: ReturnType<typeof createServer> | undefined;
+  const replacementClosed = vi.fn();
   writeFileSync(configPath, JSON.stringify({ gateway: { port: oldPort } }));
   const refusal = (port: number) =>
     `Port ${port} is busy but no listener PID could be determined. Run openclaw gateway status --deep to inspect the listener.\n`;
@@ -75,6 +82,10 @@ it.each([
     if (cliArgs[0] === "gateway" && cliArgs[1] === "run") {
       const port = Number(cliArgs[cliArgs.indexOf("--port") + 1]);
       launches.push(port);
+      if (launches.length > 1 && scenario !== "migration") {
+        expect(replacementClosed).toHaveBeenCalledOnce();
+        expect(replacementListener?.listening).toBe(false);
+      }
       if (launches.length === 1 || scenario === "repeated-refusal") {
         exitCode = 1;
         stderr =
@@ -92,6 +103,13 @@ it.each([
       expect(cliArgs[2]).toBe("gateway.port");
       const port = Number(cliArgs[3]);
       configWrites.push(port);
+      const created = vi.mocked(createServer).mock.results.at(-1);
+      if (created?.type !== "return") {
+        throw new Error("Replacement Gateway port did not create its native listener");
+      }
+      replacementListener = created.value;
+      expect(replacementListener.address()).toMatchObject({ port });
+      replacementListener.on("close", replacementClosed);
       exitCode = scenario === "config-failure" ? 1 : 0;
       if (exitCode === 0) {
         writeFileSync(configPath, JSON.stringify({ gateway: { port } }));
@@ -155,14 +173,14 @@ it.each([
       });
       if (scenario !== "migration") {
         expect(expectedPort).not.toBe(oldPort);
-        const replacement = await reserveTestPortListener({
-          offsets: [0],
-          port: expectedPort,
-          createListener: createServer,
-        });
-        await replacement.releaseListener();
-        await replacement.claim.release();
+        // Release belongs to the reservation we observed, not whichever socket
+        // wins the already-released port before a later rebind attempt.
+        expect(replacementListener?.address()).toBeNull();
       }
+    }
+    if (replacementListener) {
+      expect(replacementClosed).toHaveBeenCalledOnce();
+      expect(replacementListener.listening).toBe(false);
     }
     expect(occupied.listener.listening).toBe(true);
   } finally {
