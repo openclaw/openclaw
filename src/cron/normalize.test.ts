@@ -3,7 +3,11 @@ import {
   validateCronAddParams,
   validateCronUpdateParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
+import {
+  normalizeCronJobCreate,
+  normalizeCronJobInput,
+  normalizeCronJobPatch,
+} from "./normalize.js";
 import { mergeCronPayload } from "./service/payload-merge.js";
 import type { CronPayload } from "./types.js";
 
@@ -177,12 +181,20 @@ it.each<[UnknownRecord, UnknownRecord | undefined]>([
   }
   expect(requesterGetter).not.toHaveBeenCalled();
 });
+const zonedAt = (iso: string, at: string, tz: string): [UnknownRecord, UnknownRecord] => [
+  { kind: "at", at: iso },
+  { at, tz },
+];
 it.each<[UnknownRecord, UnknownRecord]>([
   [CRON_SCHEDULE, { tz: " " }],
   [
     { kind: "at", at: "2026-01-12T18:00:00.000Z" },
     { ...STALE_SCHEDULE, kind: "at" },
   ],
+  zonedAt("2026-11-10T01:00:00.000Z", "2026-11-10T09:00:00", "Asia/Shanghai"),
+  zonedAt("2026-11-01T05:30:00.000Z", "2026-11-01T01:30:00", "America/New_York"),
+  zonedAt("2026-11-10T07:00:00.000Z", "2026-11-10T09:00:00+02:00", "Asia/Shanghai"),
+  zonedAt("2026-11-10T09:00:00.000Z", "2026-11-10T09:00:00", ""),
   [
     { ...EVERY_SCHEDULE, anchorMs: 123 },
     {
@@ -219,10 +231,20 @@ it.each<[UnknownRecord, number, number | undefined]>([
   expect(child(normalizePatch({ schedule }), "schedule").staggerMs).toBe(patched);
 });
 
-it("rejects invalid explicit cron stagger before create or patch defaults", () => {
-  const schedule = { kind: "cron", expr: "0 * * * *", staggerMs: "abc" };
-  expect(() => createMain({ schedule })).toThrow(/staggerMs/);
-  expect(() => normalizePatch({ schedule })).toThrow(/staggerMs/);
+it.each([
+  [{ kind: "cron", expr: "0 * * * *", staggerMs: "abc" }, /staggerMs/],
+  [{ kind: "at", at: "2026-11-10T09:00:00", tz: "Asia/Nowhere" }, /IANA timezone/],
+  [{ kind: "at", at: "2026-03-08T02:30:00", tz: "America/New_York" }, /DST/],
+])("rejects unresolvable schedule %j on create and patch", (schedule, message) => {
+  expect(() => createMain({ schedule })).toThrow(message);
+  expect(() => normalizePatch({ schedule })).toThrow(message);
+});
+it("loads a stored at job with an unresolvable tz as plain UTC", () => {
+  const schedule = { kind: "at", at: "2026-11-10T09:00:00", tz: "Asia/Nowhere" };
+  expect(normalizeCronJobInput({ schedule })?.schedule).toEqual({
+    kind: "at",
+    at: "2026-11-10T09:00:00.000Z",
+  });
 });
 
 it("normalizes trigger scripts and preserves patch clears", () => {

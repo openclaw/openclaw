@@ -8,8 +8,10 @@ import {
   normalizeOptionalString,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
+import { parseOffsetlessIsoDateTimeInTimeZone } from "../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
+import { isOffsetlessIsoDateTime } from "../shared/iso-time.js";
 import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import { parseDeliveryInput } from "./delivery-field-schemas.js";
 import { normalizeCronInferenceBinding } from "./inference-binding.js";
@@ -37,11 +39,36 @@ type UnknownRecord = Record<string, unknown>;
 
 type NormalizeOptions = {
   applyDefaults?: boolean;
+  /** Reject an unresolvable `at` + `tz` (create/patch requests); stored jobs keep loading as UTC. */
+  rejectUnresolvableAtTimezone?: boolean;
   /** Session context used to resolve "current" sessionTarget during create-time defaulting. */
   sessionContext?: { sessionKey?: string };
 };
 
-function coerceSchedule(schedule: UnknownRecord) {
+/** Resolves an offset-less `at` as wall time in `tz`, matching `cron add --at X --tz Y`. */
+function resolveZonedAt(
+  at: string,
+  timezone: string | undefined,
+  reject: boolean | undefined,
+): string | undefined {
+  if (!timezone || !isOffsetlessIsoDateTime(at)) {
+    return undefined;
+  }
+  const resolved = parseOffsetlessIsoDateTimeInTimeZone(at, timezone);
+  if (resolved.ok) {
+    return resolved.iso;
+  }
+  if (!reject) {
+    return undefined;
+  }
+  throw new TypeError(
+    resolved.reason === "invalid-timezone"
+      ? `schedule.tz must be an IANA timezone such as America/New_York (got "${timezone}")`
+      : `schedule.at "${at}" is not a valid wall time in ${timezone} (invalid date, or skipped by a DST change)`,
+  );
+}
+
+function coerceSchedule(schedule: UnknownRecord, options: NormalizeOptions) {
   const next = snapshotOwnCronRecord(schedule);
   const rawKind = normalizeLowercaseStringOrEmpty(next.kind);
   const kind =
@@ -63,13 +90,20 @@ function coerceSchedule(schedule: UnknownRecord) {
   const everyMs = coerceFiniteScheduleNumber(next.everyMs);
   const anchorMs = coerceFiniteScheduleNumber(next.anchorMs);
   const atString = normalizeOptionalString(next.at) ?? "";
+  // An authored tz decides how an offset-less `at` reads, so resolve it before the
+  // UTC fallback below; the tz itself is then dropped with the other non-cron fields.
+  const zonedAtIso =
+    kind === "at" && atString
+      ? resolveZonedAt(atString, timezone, options.rejectUnresolvableAtTimezone)
+      : undefined;
   const parsedAtMs = atString ? parseAbsoluteTimeMs(atString) : null;
 
   if (kind) {
     next.kind = kind;
   }
 
-  const parsedAtIso = parsedAtMs !== null ? timestampMsToIsoString(parsedAtMs) : undefined;
+  const parsedAtIso =
+    zonedAtIso ?? (parsedAtMs !== null ? timestampMsToIsoString(parsedAtMs) : undefined);
   if (atString) {
     next.at = parsedAtIso ?? atString;
   }
@@ -388,7 +422,7 @@ export function normalizeCronJobInput(
   }
 
   if (isRecord(base.schedule)) {
-    next.schedule = coerceSchedule(base.schedule);
+    next.schedule = coerceSchedule(base.schedule, options);
   }
 
   if (isRecord(base.payload)) {
@@ -505,6 +539,7 @@ export function normalizeCronJobCreate(
 ): CronJobCreate | null {
   return normalizeCronJobInput(raw, {
     applyDefaults: true,
+    rejectUnresolvableAtTimezone: true,
     ...options,
   }) as CronJobCreate | null;
 }
@@ -516,6 +551,7 @@ export function normalizeCronJobPatch(
 ): CronJobPatch | null {
   return normalizeCronJobInput(raw, {
     applyDefaults: false,
+    rejectUnresolvableAtTimezone: true,
     ...options,
   }) as CronJobPatch | null;
 }
