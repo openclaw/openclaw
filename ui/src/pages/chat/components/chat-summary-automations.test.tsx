@@ -4,6 +4,7 @@ import { createSignal } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { CronCompactJob, CronJobsListResult } from "../../../api/types.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
 import type { TooltipElement } from "../../../components/solid/tooltip.tsx";
 import { createApplicationGateway } from "../../../test-helpers/application-context.ts";
 import {
@@ -20,7 +21,6 @@ import {
   ChatSummaryAutomations,
   createSessionAutomationInventory,
 } from "./chat-summary-automations.tsx";
-import { sessionAutomationNextRun } from "./session-automation-schedule-non-cron.ts";
 
 type Page = CronJobsListResult<CronCompactJob>;
 
@@ -278,19 +278,20 @@ it("updates a held automation's runtime state without rereading its inventory", 
 
   current.cron("finished", {
     jobId: "summary-job",
-    job: eventJob(3, { lastRunAtMs: 3, lastRunStatus: "ok", nextRunAtMs: 600_003 }),
+    job: eventJob(3, { lastRunAtMs: 3, lastRunStatus: "ok", nextRunAtMs: Date.now() + 120_000 }),
   });
-  await current.ready("Every 10 minutes");
+  // The scheduler's new deadline replaces the visible timing without a reread.
+  await current.ready("Next in 2 min (");
   expect(current.element.textContent).not.toContain("Running");
   expect(current.element.querySelector("openclaw-tooltip")).toHaveProperty(
     "content",
-    sessionAutomationNextRun(600_003),
+    "Every 10 minutes",
   );
   expect(current.request).toHaveBeenCalledTimes(1);
   current.unmount();
 });
 
-it("shows only the automation name and schedule after runs and checks", async () => {
+it("shows only the automation name and next run after runs and checks", async () => {
   const ranAt = Date.now() - 120_000;
   const current = component(
     jobsRequest(
@@ -307,9 +308,9 @@ it("shows only the automation name and schedule after runs and checks", async ()
       }),
     ),
   );
-  await current.ready("Every 10 minutes");
+  await current.ready("No run scheduled");
   expect(current.find(".chat-summary__automation-copy")?.textContent).toBe(
-    "Check the taskEvery 10 minutes",
+    "Check the taskNo run scheduled",
   );
   expect(current.find("time")).toBeNull();
   current.unmount();
@@ -344,7 +345,7 @@ it("admits only presented session-scoped reads and uses the existing automation 
   await current.ready(fullTitle);
   const link = find<HTMLAnchorElement>(".chat-summary__automation")!;
   expect(link.getAttribute("href")).toBe("/automations?job=summary-job");
-  expect(link.textContent).toContain("Every 10 minutes");
+  expect(link.textContent).toContain("No run scheduled");
   expect(find(".chat-summary__automation-title")?.textContent?.trim()).toBe(fullTitle);
   expect(find<HTMLDetailsElement>('[data-details-group="automations"]')?.open).toBe(true);
   expect(link.querySelector("svg")).not.toBeNull();
@@ -697,7 +698,7 @@ it("shares pending reads, retained rows, and failed refresh recovery between the
   );
   const retainedRows = [...rows()];
   for (const row of [overview, retainedRows[0]]) {
-    expect(row?.textContent).toContain("Every 10 minutes");
+    expect(row?.textContent).toContain("No run scheduled");
     expect(row?.textContent).not.toContain("Waiting for mobile review");
     expect(row?.textContent).not.toContain("Check failed");
     expect(row?.querySelector("time")).toBeNull();
@@ -825,46 +826,132 @@ it("retains reconnect facts and distinguishes auto-disabled from paused and stal
   await current.empty();
 });
 
-it("describes one-shot automations by local day and time instead of a full numeric date", async () => {
-  const now = new Date();
-  const at = (year: number, month: number, day: number, hour: number) => ({
-    kind: "at" as const,
-    at: new Date(year, month, day, hour).toISOString(),
+const iconMarkup = (name: "repeat" | "clock") => {
+  const view = mountSolid(() => <Icon name={name} />);
+  const markup = view.container.querySelector("svg")!.innerHTML;
+  view.unmount();
+  return markup;
+};
+
+it("leads timed rows with the scheduler-owned countdown, including a rearmed one-shot", async () => {
+  vi.useFakeTimers({
+    toFake: ["Date", "setInterval", "clearInterval"],
+    now: new Date(2026, 10, 9, 15, 3),
   });
-  const year = now.getFullYear();
+  onTestFinished(() => void vi.useRealTimers());
+  const due = new Date(2026, 10, 9, 15, 5).getTime();
   const current = component(
     jobsRequest(
+      job({ id: "recurring", name: "Repo sweep", nextRunAtMs: due }),
       job({
-        id: "today",
-        name: "Verify main CI",
+        id: "rearmed",
+        name: "Rearmed check",
         scheduleKind: "at",
-        schedule: at(year, now.getMonth(), now.getDate(), 11),
-      }),
-      job({
-        id: "tomorrow",
-        name: "Morning check",
-        scheduleKind: "at",
-        schedule: at(year, now.getMonth(), now.getDate() + 1, 9),
+        // The configured occurrence already passed; the scheduler moved the deadline.
+        schedule: { kind: "at", at: new Date(2026, 10, 9, 14, 51).toISOString() },
+        nextRunAtMs: due,
       }),
       job({
         id: "later",
         name: "Renewal",
         scheduleKind: "at",
-        schedule: at(year + 1, 2, 3, 9),
+        schedule: { kind: "at", at: new Date(2027, 2, 3, 9).toISOString() },
+        nextRunAtMs: new Date(2027, 2, 3, 9).getTime(),
       }),
     ),
   );
   await current.ready("Renewal");
-  const state = (id: string) =>
-    current.element.querySelector<HTMLAnchorElement>(`a[href$="job=${id}"]`)!.textContent;
-  expect(state("today")).toBe("Verify main CI11:00 AM");
-  expect(state("tomorrow")).toContain("Tomorrow at 9:00 AM");
-  expect(state("later")).toContain(`Mar 3, ${year + 1} at 9:00 AM`);
-  expect(current.element.textContent).not.toMatch(/At \d/);
+  const row = (id: string) =>
+    current.element.querySelector<HTMLAnchorElement>(`a[href$="job=${id}"]`)!;
+  const icon = (id: string) => row(id).querySelector(".chat-summary__automation-icon")!;
+  expect(row("recurring").textContent).toBe("Repo sweepNext in 2 min (today at 3:05 PM)");
+  expect(row("rearmed").textContent).toBe("Rearmed checkNext in 2 min (today at 3:05 PM)");
+  expect(row("later").textContent).toBe("RenewalNext in 114 days (Mar 3, 2027 at 9:00 AM)");
+  expect(current.element.textContent).not.toMatch(/2:51|At \d/);
+  expect(icon("recurring").getAttribute("aria-label")).toBe("Every 10 minutes");
+  expect(icon("recurring").querySelector("svg")!.innerHTML).toBe(iconMarkup("repeat"));
+  expect(icon("rearmed").getAttribute("aria-label")).toBe("Runs once");
+  expect(icon("rearmed").querySelector("svg")!.innerHTML).toBe(iconMarkup("clock"));
+  const tooltip = (id: string) => row(id).closest<TooltipElement>("openclaw-tooltip")?.content;
+  expect([tooltip("recurring"), tooltip("rearmed")]).toEqual(["Every 10 minutes", "Runs once"]);
+
+  // The countdown advances on the visible clock, without another inventory read.
+  await vi.advanceTimersByTimeAsync(60_000);
+  flush();
+  expect(row("rearmed").textContent).toContain("Next in 1 min (today at 3:05 PM)");
+  await vi.advanceTimersByTimeAsync(61_000);
+  flush();
+  expect(row("recurring").textContent).toBe("Repo sweepDue now");
+  expect(current.request).toHaveBeenCalledTimes(1);
   current.unmount();
 });
 
-it("describes cron weekdays and non-uniform minute steps without inventing a fixed interval", async () => {
+it("keeps watcher rows on their existing presentation", async () => {
+  const current = component(
+    jobsRequest(
+      job({ id: "watcher", name: "Log watcher", scheduleKind: "event", schedule: undefined }),
+    ),
+  );
+  await current.ready("Log watcher");
+  const watcher = current.element.querySelector<HTMLAnchorElement>('a[href$="job=watcher"]')!;
+  expect(watcher.textContent).toBe("Log watcher");
+  expect(watcher.querySelector(".chat-summary__automation-icon")?.getAttribute("aria-hidden")).toBe(
+    "true",
+  );
+  current.unmount();
+});
+
+it("derives cached rows' countdown when shown rather than storing stale text", async () => {
+  const current = component(undefined, true, true);
+  current.update({
+    cached: {
+      more: false,
+      rows: [
+        {
+          id: "cached",
+          name: "Cached sweep",
+          state: "",
+          timing: "recurring",
+          schedule: "Every 10 minutes",
+          nextRunAtMs: Date.now() + 3 * 3_600_000,
+        },
+      ],
+    },
+  });
+  await waitForSolid(() =>
+    expect(current.element.textContent).toContain("Cached sweepNext in 3 hours ("),
+  );
+  expect(current.request).not.toHaveBeenCalled();
+  current.unmount();
+});
+
+it("shows waiting and running runtime states instead of a countdown", async () => {
+  const current = component(
+    jobsRequest(
+      job({
+        id: "waiting",
+        name: "Capacity check",
+        nextRunAtMs: Date.now() - 60_000,
+        admissionDeferred: {
+          reason: "capacity",
+          sinceMs: Date.now() - 60_000,
+          attempts: 1,
+          retryAtMs: Date.now() + 30_000,
+        },
+      }),
+      job({ id: "running", name: "In flight", nextRunAtMs: Date.now() + 60_000, runningAtMs: 1 }),
+    ),
+  );
+  await current.ready("Capacity check");
+  const row = (id: string) =>
+    current.element.querySelector<HTMLAnchorElement>(`a[href$="job=${id}"]`)!;
+  expect(row("waiting").textContent).toBe("Capacity checkWaiting");
+  expect(row("running").querySelector(".session-run-spinner")).not.toBeNull();
+  expect(row("running").textContent).toBe("In flightRunning");
+  current.unmount();
+});
+
+it("labels cron cadence on the recurrence icon without inventing a fixed interval", async () => {
   const current = component(
     jobsRequest(
       job({
@@ -883,45 +970,18 @@ it("describes cron weekdays and non-uniform minute steps without inventing a fix
   );
   await current.ready("Weekday review");
   await vi.dynamicImportSettled();
-  const weekday = current.element.querySelector<HTMLAnchorElement>('a[href$="job=weekdays"]')!;
-  const minutes = current.element.querySelector<HTMLAnchorElement>('a[href$="job=minute-grid"]')!;
+  const label = (id: string) =>
+    current.element
+      .querySelector(`a[href$="job=${id}"] .chat-summary__automation-icon`)
+      ?.getAttribute("aria-label");
   // Inventory readiness does not include the first lazy cron formatter import.
   await waitForSolid(
     () => {
-      expect(weekday.textContent).toContain("Weekdays at 9:00 AM");
-      expect(minutes.textContent).toContain(
+      expect(label("weekdays")).toBe("Weekdays at 9:00 AM");
+      expect(label("minute-grid")).toBe(
         "At minutes 0, 7, 14, 21, 28, 35, 42, 49, and 56 of every hour",
       );
     },
     { timeout: 5_000 },
   );
-  expect(minutes.textContent).not.toContain("Every 7 minutes");
-});
-
-const later = Date.now() + 10 * 86_400_000;
-const failing = { reason: "schedule-errors", atMs: 1, consecutiveErrors: 3 } as const;
-const idle = "Not scheduled to run again";
-it.each([
-  [{ nextRunAtMs: later }, sessionAutomationNextRun(later)],
-  [{ nextRunAtMs: null }, idle],
-  [{ enabled: false, nextRunAtMs: later }, idle],
-  [{ autoDisabled: failing, nextRunAtMs: later }, idle],
-] satisfies [Partial<CronCompactJob>, string][])(
-  "row tooltip shows only: %j",
-  async (state, text) => {
-    const current = component(jobsRequest(job(state)));
-    await current.ready("Check the task");
-    expect(current.element.querySelector<TooltipElement>("openclaw-tooltip")?.content).toBe(text);
-    current.unmount();
-  },
-);
-
-it.each([
-  [new Date(2026, 10, 4, 14, 6), "Next run today at 2:06 PM"],
-  [new Date(2026, 10, 5, 9, 0), "Next run tomorrow at 9:00 AM"],
-  [new Date(2027, 0, 3, 9, 0), "Next run on Jan 3, 2027 at 9:00 AM"],
-])("words the next run at %s in local terms", (at, expected) => {
-  vi.useFakeTimers({ toFake: ["Date"], now: new Date(2026, 10, 4, 9, 0) });
-  onTestFinished(() => void vi.useRealTimers());
-  expect(sessionAutomationNextRun(at.getTime())).toBe(expected);
 });

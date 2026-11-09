@@ -17,6 +17,7 @@ import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Tooltip } from "../../../components/solid/tooltip.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { isRecurringSchedule } from "../../../lib/cron-next-run.ts";
 import { isCronInventoryInvalidation } from "../../../lib/cron/inventory-connection.ts";
 import { loadCompactCronJobsPage, retireCronJobsRequest } from "../../../lib/cron/jobs.ts";
 import { createInitialCronState } from "../../../lib/cron/state.ts";
@@ -35,8 +36,8 @@ import type { DetailsAutomation, DetailsSnapshotPatch } from "../chat-details-sn
 import type { ChatDetailsSnapshot } from "../session-details-snapshot-schema.ts";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { sessionAutomationRow, sessionAutomationTiming } from "./session-automation-row.ts";
 import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
-import { sessionAutomationNextRun } from "./session-automation-schedule-non-cron.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -395,18 +396,14 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       ? inventory
           .jobs()
           .slice(0, props.desktop && !props.desktop.expanded ? 10 : shown())
-          .map((job) => ({
-            id: job.id,
-            name: job.name,
-            disabled: !job.enabled || undefined,
-            autoDisabled: job.autoDisabled ? true : undefined,
-            running:
-              job.runningAtMs === undefined
-                ? undefined
-                : (inventory.connected() && job.enabled && !job.autoDisabled) || undefined,
-            state: jobState(job),
-            nextRunAtMs: job.enabled && !job.autoDisabled ? job.nextRunAtMs : null,
-          }))
+          .map((job) =>
+            Object.assign(sessionAutomationRow(job, inventory.connected()), {
+              schedule:
+                job.schedule && isRecurringSchedule(job.schedule)
+                  ? formatSchedule(job.schedule)
+                  : undefined,
+            }),
+          )
       : (cached()?.rows ?? []),
   );
   const hasCachedRows = () => inventory.jobs().length > shown();
@@ -507,18 +504,6 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     }
   }
 
-  function jobState(job: CronCompactJob) {
-    if (job.autoDisabled) {
-      return t("chat.sessionDetails.automationAttention");
-    }
-    if (!job.enabled) {
-      return t("chat.sessionDetails.automationPaused");
-    }
-    if (inventory.connected() && job.runningAtMs !== undefined) {
-      return t("common.running");
-    }
-    return job.schedule ? formatSchedule(job.schedule) : "";
-  }
   const errorNotice = () =>
     inventory.connected() && (
       <div class="chat-summary__automation-error">
@@ -546,14 +531,12 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
           let row: HTMLAnchorElement | undefined;
           const search = () => `?${new URLSearchParams({ job: job().id })}`;
           const running = () => job().running;
-          const state = () => job().state;
-          // Older cached snapshots lack nextRunAtMs; show no tooltip rather than guess.
-          const nextRun = () => {
-            const at = job().nextRunAtMs;
-            return at === undefined ? undefined : sessionAutomationNextRun(at);
-          };
+          const state = () => sessionAutomationTiming(job());
+          // Cadence stays in the icon label; a one-shot never repeats its authored time.
+          const cadence = () =>
+            job().timing === "once" ? t("cron.scheduleLabel.once") : job().schedule;
           return (
-            <Tooltip content={nextRun()} disabled={nextRun() === undefined}>
+            <Tooltip content={cadence()} disabled={!cadence()}>
               <a
                 ref={[
                   (element) => {
@@ -574,8 +557,13 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
                   }
                 }}
               >
-                <span class="chat-summary__automation-icon" aria-hidden="true">
-                  <Icon name="clock" />
+                <span
+                  class="chat-summary__automation-icon"
+                  role={cadence() ? "img" : undefined}
+                  aria-label={cadence()}
+                  aria-hidden={cadence() ? undefined : "true"}
+                >
+                  <Icon name={job().timing === "recurring" ? "repeat" : "clock"} />
                   {job().disabled && !job().autoDisabled && (
                     <span class="chat-summary__automation-paused">
                       <Icon name="pause" />
@@ -597,18 +585,12 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
                           { "is-attention": Boolean(job().autoDisabled) },
                         ]}
                       >
-                        {running() ? (
-                          <>
-                            <span class="session-run-spinner" aria-hidden="true" />
-                            <span class="sr-only">{state()}</span>
-                          </>
-                        ) : (
-                          <HoverMarquee
-                            class="chat-summary__automation-metadata"
-                            content={state()}
-                            options={{ host: () => row, stationary: true }}
-                          />
-                        )}
+                        {running() && <span class="session-run-spinner" aria-hidden="true" />}
+                        <HoverMarquee
+                          class="chat-summary__automation-metadata"
+                          content={state()}
+                          options={{ host: () => row, stationary: true }}
+                        />
                       </span>
                     )}
                   </span>

@@ -526,6 +526,17 @@
   white-space: nowrap;
 }
 
+.cron-detail-sub__schedule {
+  display: inline-flex;
+  margin-inline-end: 6px;
+  vertical-align: -2px;
+
+  > svg {
+    width: 14px;
+    height: 14px;
+  }
+}
+
 .cron-enabled-toggle {
   display: inline-flex;
   align-items: center;

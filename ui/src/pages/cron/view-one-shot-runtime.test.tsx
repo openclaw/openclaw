@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { formatDateTimeLocal } from "../../lib/cron/form-schedule.ts";
 import { jobToForm } from "../../lib/cron/form.ts";
 import { formatMs } from "../../lib/format.ts";
@@ -10,6 +10,8 @@ import { createCronViewJob, createCronViewProps } from "./view.test-support.ts";
 import { CronView } from "./view.tsx";
 
 it("keeps the configured occurrence while runtime refreshes, pauses, runs, or completes", async () => {
+  vi.useFakeTimers({ toFake: ["Date"], now: Date.parse("2026-10-30T12:01:00Z") });
+  onTestFinished(() => void vi.useRealTimers());
   const at = "2026-10-30T12:00:56.789Z";
   const next = Date.parse("2026-10-30T12:10:00Z");
   const job = createCronViewJob("continuation", {
@@ -32,19 +34,26 @@ it("keeps the configured occurrence while runtime refreshes, pauses, runs, or co
   expect(summary()).toContain(`Next activity at ${formatMs(next)}`);
   const input = container.querySelector<HTMLInputElement>("#cron-schedule-at")!;
   expect(input.value).toBe(formatDateTimeLocal(at));
-  for (const [state, enabled, expected] of [
-    [{ nextRunAtMs: next + 60_000 }, true, `Next activity at ${formatMs(next + 60_000)}`],
-    [{ nextRunAtMs: next, runningAtMs: next }, true, "Running"],
-    [{ nextRunAtMs: next }, false, "Paused"],
-    [{}, true, "No next run scheduled"],
+  const header = () => container.querySelector(".cron-detail-meta > .cron-detail-sub");
+  // The header leads with the scheduler-owned deadline, never the configured 12:00 occurrence.
+  expect(header()?.textContent).toMatch(/^Next in 9 min \(today at .+\)$/);
+  expect(header()?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Runs once");
+  for (const [state, enabled, expected, headerText] of [
+    [
+      { nextRunAtMs: next + 60_000 },
+      true,
+      `Next activity at ${formatMs(next + 60_000)}`,
+      "Next in 10 min (today at ",
+    ],
+    [{ nextRunAtMs: next, runningAtMs: next }, true, "Running", "Running"],
+    [{ nextRunAtMs: next }, false, "Paused", "Paused"],
+    [{}, true, "No next run scheduled", "No run scheduled"],
   ] as const) {
     job.state = state;
     job.enabled = enabled;
     refresh();
     expect(summary()).toContain(expected);
-    expect(container.querySelector(".cron-detail-meta > .cron-detail-sub")?.textContent).toContain(
-      expected.startsWith("Next activity at") ? "Next " : expected,
-    );
+    expect(header()?.textContent).toContain(headerText);
     expect(container.querySelector("#cron-schedule-at")).toBe(input);
     expect(input.value).toBe(formatDateTimeLocal(at));
   }

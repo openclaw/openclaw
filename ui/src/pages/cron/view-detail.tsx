@@ -3,6 +3,11 @@ import type { CronJob } from "../../api/types.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
+import {
+  cronJobNextRunFacts,
+  isRecurringSchedule,
+  readAutomationNextRun,
+} from "../../lib/cron-next-run.ts";
 import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { FailureDetails } from "./view-attention.tsx";
@@ -111,14 +116,40 @@ function DetailHeader(
       : t("cron.detail.newTitle");
   const description = () =>
     props.mode === "job" ? props.selectedJob?.description?.trim() : undefined;
-  // Header describes the SAVED job (schedule + next run); the form's live
-  // summary describes unsaved edits, so the two never contradict each other.
-  const nextRunSuffix = () =>
-    props.selectedJob ? ` · ${describeJobNextRun(props.selectedJob)}` : "";
-  const subtitle = () =>
-    props.mode === "job" && props.selectedJob
-      ? `${describeJobSchedule(props.selectedJob)}${nextRunSuffix()}`
-      : t("cron.detail.newSubtitle");
+  // Header describes the SAVED job's runtime; the form's live summary describes
+  // unsaved edits, so the two never contradict each other.
+  const savedJob = () => (props.mode === "job" ? props.selectedJob : undefined);
+  // Wall-clock schedules lead with the scheduler-owned next run; cadence moves to the icon.
+  const scheduleIcon = (): "repeat" | "clock" | undefined => {
+    const schedule = savedJob()?.schedule;
+    return !schedule
+      ? undefined
+      : isRecurringSchedule(schedule)
+        ? "repeat"
+        : schedule.kind === "at"
+          ? "clock"
+          : undefined;
+  };
+  const cadence = () => {
+    const job = savedJob();
+    return job && scheduleIcon() === "repeat"
+      ? describeJobSchedule(job)
+      : t("cron.scheduleLabel.once");
+  };
+  const subtitle = () => {
+    const job = savedJob();
+    if (!job) {
+      return t("cron.detail.newSubtitle");
+    }
+    if (!scheduleIcon()) {
+      return `${describeJobSchedule(job)} · ${describeJobNextRun(job)}`;
+    }
+    const facts = cronJobNextRunFacts(job);
+    // The detail header keeps the visible waiting reason.
+    return facts.waiting && facts.enabled && !facts.running && !facts.autoDisabled
+      ? describeJobNextRun(job)
+      : readAutomationNextRun(facts);
+  };
   return (
     <div class="cron-detail-header">
       <div class="cron-detail-header__copy">
@@ -136,7 +167,21 @@ function DetailHeader(
           >
             {(job) => <EnabledSwitch {...props} job={job} />}
           </Show>
-          <span class="cron-detail-sub">{subtitle()}</span>
+          <span class="cron-detail-sub">
+            <Show when={scheduleIcon()}>
+              {(name) => (
+                <span
+                  class="cron-detail-sub__schedule"
+                  role="img"
+                  aria-label={cadence()}
+                  title={cadence()}
+                >
+                  <Icon name={name()} />
+                </span>
+              )}
+            </Show>
+            {subtitle()}
+          </span>
           {props.selectedJob?.trigger ? <TriggerIndicator /> : undefined}
         </div>
       </div>

@@ -1,8 +1,15 @@
 import { createSignal } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { jobToForm } from "../../lib/cron/form.ts";
+import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createCronViewJob, createCronViewProps, getElement } from "./view.test-support.ts";
+import {
+  createCronViewJob,
+  createCronViewProps,
+  getElement,
+  scheduledJob,
+} from "./view.test-support.ts";
 import { CronView } from "./view.tsx";
 
 it("keeps the edited input and focus while its form and validation update", async () => {
@@ -267,4 +274,46 @@ it("shows a run's recorded next run as a fixed time, not a live relative label",
   const label = getElement(view.container, ".cron-run-entry__meta", HTMLElement).textContent;
   expect(label).toMatch(/Next .*2020/);
   expect(label).not.toMatch(/Due|ago/);
+});
+
+it("counts down the detail header live and keeps the waiting reason visible", async () => {
+  vi.useFakeTimers({
+    toFake: ["Date", "setInterval", "clearInterval"],
+    now: new Date(2026, 10, 9, 15, 3),
+  });
+  onTestFinished(() => void vi.useRealTimers());
+  const job = scheduledJob("header-countdown", {
+    schedule: { kind: "every", everyMs: 300_000 },
+    state: { nextRunAtMs: new Date(2026, 10, 9, 15, 5).getTime() },
+  });
+  const [props, setProps] = createSignal(
+    createCronViewProps({ editingJob: job, form: jobToForm(job, DEFAULT_CRON_FORM) }),
+  );
+  const view = mountSolid(() => <CronView {...props()} />);
+  const header = () => view.container.querySelector(".cron-detail-meta > .cron-detail-sub");
+  await waitForSolid(() => expect(header()).not.toBeNull());
+  expect(header()?.textContent).toBe("Next in 2 min (today at 3:05 PM)");
+  // The cadence keeps the automation list's wording.
+  expect(header()?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Every 5m");
+  await vi.advanceTimersByTimeAsync(60_000);
+  flush();
+  expect(header()?.textContent).toBe("Next in 1 min (today at 3:05 PM)");
+
+  job.state = {
+    nextRunAtMs: new Date(2026, 10, 9, 15, 4).getTime(),
+    admissionDeferred: {
+      reason: "capacity",
+      sinceMs: Date.now(),
+      attempts: 1,
+      retryAtMs: Date.now() + 30_000,
+    },
+  };
+  setProps((previous) => ({ ...previous }));
+  flush();
+  expect(header()?.textContent).toMatch(/^Waiting: capacity since /);
+
+  job.state = { nextRunAtMs: new Date(2026, 10, 10, 9, 0).getTime() };
+  setProps((previous) => ({ ...previous }));
+  flush();
+  expect(header()?.textContent).toBe("Next in 18 hours (tomorrow at 9:00 AM)");
 });

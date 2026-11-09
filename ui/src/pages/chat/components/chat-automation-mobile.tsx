@@ -4,6 +4,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { registerCronEnglish } from "../../../i18n/locales/en-cron.ts";
+import { isRecurringSchedule } from "../../../lib/cron-next-run.ts";
 import { handleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
@@ -11,6 +12,7 @@ import {
   SessionAutomationRead,
   type SessionAutomationInventory,
 } from "./chat-summary-automations.tsx";
+import { sessionAutomationRow, sessionAutomationTiming } from "./session-automation-row.ts";
 import "../../../styles/chat/automation-mobile.css";
 import "../../../styles/chat/summary-automations.css";
 import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
@@ -97,10 +99,16 @@ export function SessionAutomationMobileList(props: SessionAutomationMobileListPr
         <div class="session-automation-mobile__group">
           <For each={inventory().jobs()} keyed={(job) => job.id}>
             {(job) => {
-              const schedule = createMemo(
+              const row = createMemo(() => sessionAutomationRow(job(), inventory().connected()));
+              // Cadence stays in the icon label; a one-shot never repeats its authored time.
+              const cadence = createMemo(
                 () => {
                   const value = job().schedule;
-                  return value ? formatSchedule(value) : "";
+                  return !value
+                    ? undefined
+                    : isRecurringSchedule(value)
+                      ? formatSchedule(value)
+                      : t("cron.scheduleLabel.once");
                 },
                 { lazy: true },
               );
@@ -112,8 +120,12 @@ export function SessionAutomationMobileList(props: SessionAutomationMobileListPr
                     handleNavigationClick(event, () => props.onOpenAutomation(job().id))
                   }
                 >
-                  <span class="session-automation-mobile__list-icon">
-                    <Icon name="clock" />
+                  <span
+                    class="session-automation-mobile__list-icon"
+                    role={job().schedule ? "img" : undefined}
+                    aria-label={job().schedule ? cadence() : undefined}
+                  >
+                    <Icon name={row().timing === "recurring" ? "repeat" : "clock"} />
                     {job().autoDisabled ? (
                       <span class="chat-summary__automation-attention" />
                     ) : !job().enabled ? (
@@ -124,15 +136,7 @@ export function SessionAutomationMobileList(props: SessionAutomationMobileListPr
                   </span>
                   <span class="session-automation-mobile__list-copy">
                     <strong>{job().name || job().id}</strong>
-                    <small>
-                      {job().autoDisabled
-                        ? t("chat.sessionDetails.automationAttention")
-                        : !job().enabled
-                          ? t("chat.sessionDetails.automationPaused")
-                          : inventory().connected() && job().runningAtMs !== undefined
-                            ? t("common.running")
-                            : schedule()}
-                    </small>
+                    <small>{sessionAutomationTiming(row())}</small>
                   </span>
                   <Icon name="chevronRight" />
                 </a>
