@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { normalizeDiscoveredAgentModel } from "../agents/model-discovery-normalize.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as activationPlanner from "./activation-planner.js";
 import {
@@ -18,6 +20,7 @@ import {
   resolveProviderRuntimePluginHandle,
 } from "./provider-hook-runtime.js";
 import { findProviderRuntimeRegistrationInRegistry } from "./provider-registry-selection.js";
+import * as providerOwners from "./providers.js";
 import { resolvePluginProvidersCore, withPluginProviders } from "./providers.runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { setActivePluginRegistry } from "./runtime.js";
@@ -120,6 +123,63 @@ afterEach(clearPluginLoaderCache);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("provider selection registration coverage", () => {
+  it("reselects declared receivers after model mutation without rescanning model owners", () => {
+    const source: ProviderPlugin = {
+      id: "source",
+      label: "Source",
+      auth: [],
+      normalizeResolvedModel: ({ model }) => {
+        model.provider = "target";
+        model.id = "normalized";
+        return model;
+      },
+    };
+    const target: ProviderPlugin = {
+      id: "target",
+      label: "Target",
+      auth: [],
+      normalizeTransport: ({ modelId }) => ({ baseUrl: `https://target.example/${modelId}` }),
+    };
+    const scoped: ProviderPlugin = { ...target, id: "scoped", authScope: "plugin" };
+    const declared = [source, target, scoped];
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: declared.map(({ id }) => ({ id, providers: [id] })),
+    });
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.providers = [
+      // Neither an alias nor an undeclared colliding literal can replace the admitted owner.
+      { pluginId: "alias", source: "fixture.ts", provider: { ...target, hookAliases: ["source"] } },
+      { pluginId: "undeclared", source: "fixture.ts", provider: { ...target, id: "source" } },
+      ...declared.map((provider) => ({ pluginId: provider.id, source: "fixture.ts", provider })),
+    ];
+    const modelOwners = vi.spyOn(providerOwners, "resolveOwningPluginIdsForModelRefs");
+    try {
+      withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, () => {
+        const resolved = normalizeDiscoveredAgentModel(
+          makeProviderModelFixture({
+            id: "original",
+            provider: "source",
+            api: "openai-completions",
+            baseUrl: "https://source.example/v1",
+          }),
+          "/synthetic/agent",
+          { config: {} },
+        );
+        expect(resolved).toMatchObject({
+          provider: "target",
+          id: "normalized",
+          baseUrl: "https://target.example/normalized",
+        });
+        expect(modelOwners.mock.calls.length).toBe(0);
+        expect(() => resolveProviderRuntimePluginHandle({ provider: "scoped" })).toThrow(
+          "runtime and static credential scope differ",
+        );
+      });
+    } finally {
+      modelOwners.mockRestore();
+    }
+  });
+
   it.each(["active", "request", "unowned request", "disabled", "replaced"] as const)(
     "uses a %s runtime alias owner only as an independent inspection hint",
     async (state) => {

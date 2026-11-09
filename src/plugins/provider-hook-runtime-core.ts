@@ -191,6 +191,10 @@ export function createProviderHookRuntime(
     params: ProviderRuntimePluginLookupParams,
     registryScope?: "loaded",
   ): ProviderRuntimePluginHandle {
+    const retained = providers.resolveRetainedProviderLiteral(params);
+    if (retained) {
+      return captureProviderRuntimePluginHandle(params, retained, []);
+    }
     const { options, ownerRefs } = prepareProviderRuntimePluginLookup(params);
     const selection = resolvePluginProviderRegistryCore({ ...options, registryScope });
     return captureProviderRuntimePluginHandle(params, selection, ownerRefs);

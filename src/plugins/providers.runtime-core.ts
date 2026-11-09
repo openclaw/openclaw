@@ -25,11 +25,12 @@ import { hasCompletedPluginRuntimeRegistration } from "./plugin-runtime-artifact
 import { hasExplicitPluginIdScope } from "./plugin-scope.js";
 import { withPluginSetupPreparation } from "./plugin-setup-module.js";
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
+import { buildDeclaredProviderOwnerIndex } from "./provider-owner-index.js";
 import {
-  buildDeclaredProviderOwnerIndex,
-  matchesDeclaredProviderOwner,
-} from "./provider-owner-index.js";
-import { projectRegisteredProvider } from "./provider-registration-projection.js";
+  captureProviderRegistrySelection,
+  projectProviderRegistrySelection,
+  selectDeclaredProviderLiteral,
+} from "./provider-registry-selection.js";
 import {
   matchesProviderPluginRef,
   resolveProviderRuntimeWorkspaceDir,
@@ -168,7 +169,7 @@ export function createProviderRegistryResolver(dependencies: {
     };
   }
 
-  function prepareProviderLookupMetadata(
+  function resolveProviderLookupMetadata(
     params: Parameters<typeof resolvePluginProviderRegistryCore>[0],
     retained = false,
   ) {
@@ -196,6 +197,14 @@ export function createProviderRegistryResolver(dependencies: {
           })
         : resolvePluginMetadataSnapshot({ config: params.config ?? {}, env, workspaceDir }));
     const inputs = { ...sourceParams, env, workspaceDir };
+    return { inputs, snapshot };
+  }
+
+  function prepareProviderLookupMetadata(
+    params: Parameters<typeof resolvePluginProviderRegistryCore>[0],
+    retained = false,
+  ) {
+    const { inputs, snapshot } = resolveProviderLookupMetadata(params, retained);
     const selection = snapshot
       ? prepareProviderSelection(
           inputs,
@@ -328,19 +337,20 @@ export function createProviderRegistryResolver(dependencies: {
     return loadOptions !== undefined && isPluginRegistryLoadInFlight(loadOptions);
   }
 
-  function captureProviderRegistrySelection(
-    registry: PluginRegistry,
-    base: ReturnType<typeof prepareProviderSelection>,
-    onlyPluginIds?: readonly string[],
+  function resolveRetainedProviderLiteral(
+    params: Parameters<typeof resolveProviderLookupMetadata>[0] & { provider: string },
   ) {
-    return {
+    const registry = getPluginRuntimeGenerationRegistry();
+    if (!registry) {
+      return undefined;
+    }
+    const { inputs, snapshot } = resolveProviderLookupMetadata(params, true);
+    return selectDeclaredProviderLiteral(
       registry,
-      workspaceDir: base.workspaceDir,
-      onlyPluginIds,
-      isProviderOwnerEligible: (pluginId: string, provider: string) =>
-        (!onlyPluginIds || onlyPluginIds.includes(pluginId)) &&
-        matchesDeclaredProviderOwner(base.declaredProviderOwners, provider, pluginId),
-    };
+      params.provider,
+      inputs.workspaceDir,
+      snapshot?.declaredProviderOwners,
+    );
   }
 
   function prepareRegistry(
@@ -622,14 +632,10 @@ export function createProviderRegistryResolver(dependencies: {
     ) => ((provider: ProviderPlugin, pluginId: string) => ProviderPlugin) | undefined,
   ): ProviderPlugin[] {
     const resolved = resolvePluginProviderRegistryCore(params);
-    if (!resolved) {
-      return [];
-    }
-    const { registry, onlyPluginIds } = resolved;
-    const project = onSelectedRegistry?.(registry) ?? projectRegisteredProvider;
-    return registry.providers
-      .filter((entry) => !onlyPluginIds || onlyPluginIds.includes(entry.pluginId))
-      .map((entry) => project(entry.provider, entry.pluginId));
+    return projectProviderRegistrySelection(
+      resolved,
+      resolved ? onSelectedRegistry?.(resolved.registry) : undefined,
+    );
   }
 
   /** Keep callbacks inside the independently acquired inspection's lifetime. */
@@ -707,21 +713,14 @@ export function createProviderRegistryResolver(dependencies: {
     params: Parameters<typeof withPluginProviderRegistry>[0],
     run: (providers: ProviderPlugin[]) => Promise<T>,
   ): Promise<T> {
-    return withPluginProviderRegistry(params, async (selection) => {
-      const providers = selection
-        ? selection.registry.providers
-            .filter(
-              (entry) =>
-                !selection.onlyPluginIds || selection.onlyPluginIds.includes(entry.pluginId),
-            )
-            .map((entry) => projectRegisteredProvider(entry.provider, entry.pluginId))
-        : [];
-      return await run(providers);
-    });
+    return withPluginProviderRegistry(params, async (selection) =>
+      run(projectProviderRegistrySelection(selection)),
+    );
   }
 
   return {
     isPluginProvidersLoadInFlight,
+    resolveRetainedProviderLiteral,
     resolvePluginProviderRegistryCore,
     resolvePluginProvidersCore,
     withPluginProviderRegistry,
