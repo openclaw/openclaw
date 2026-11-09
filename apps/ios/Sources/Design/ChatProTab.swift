@@ -23,6 +23,7 @@ struct ChatProTab: View {
     }
 
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(GatewayConnectionController.self) private var gatewayController
     @AppStorage("openclaw.webchat.showAssistantTrace")
@@ -99,11 +100,13 @@ struct ChatProTab: View {
                 }
                 .sheet(isPresented: self.$showsNewSessionOptions) {
                     if let viewModel {
-                        ChatNewSessionOptionsPopover(viewModel: viewModel) {
-                            self.showsNewSessionOptions = false
+                        ScrollView {
+                            ChatNewSessionOptionsPopover(viewModel: viewModel) {
+                                self.showsNewSessionOptions = false
+                            }
                         }
                         .disabled(self.isGatewayTransitionPending)
-                        .presentationDetents([.medium])
+                        .presentationDetents(self.dynamicTypeSize.isAccessibilitySize ? [.large] : [.medium, .large])
                         .presentationDragIndicator(.visible)
                     }
                 }
@@ -369,6 +372,12 @@ struct ChatProTab: View {
             statusText: self.appModel.talkMode.statusText,
             providerLabel: self.appModel.talkMode.gatewayTalkProviderLabel,
             level: self.talkLevel,
+            isMicrophoneMuted: self.appModel.talkMode.isMicrophoneMuted,
+            toggleMicrophone: {
+                Task {
+                    await self.appModel.talkMode.setMicrophoneMuted(!self.appModel.talkMode.isMicrophoneMuted)
+                }
+            },
             inputDevices: self.talkInputDevices,
             selectedInputDeviceID: self.selectedTalkInputDeviceID,
             selectInputDevice: { deviceID in

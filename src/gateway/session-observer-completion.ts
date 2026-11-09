@@ -1,5 +1,6 @@
 import { isFailoverError, readDirectErrorCode } from "../agents/failover/error.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
+import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { emitAgentEvent, emitAgentEventForOwner } from "../infra/agent-events.js";
@@ -23,6 +24,13 @@ const observerLog = createSubsystemLogger("gateway/session-observer");
 // CLI-backed utility models (for example claude-cli Haiku) take 9-16s per call.
 const SESSION_OBSERVER_MODEL_TIMEOUT_MS = 30_000;
 const REJECTED_OUTPUT_MAX_CHARS = 160;
+
+/** One deadline covers the whole utility chain, so every configured candidate needs a call's worth. */
+function resolveObserverDeadlineMs(cfg: OpenClawConfig, agentId: string | undefined): number {
+  const setting = readUtilityModelSetting(cfg, agentId);
+  const candidates = setting.kind === "disabled" ? 1 : setting.fallbacks.length + 1;
+  return SESSION_OBSERVER_MODEL_TIMEOUT_MS * Math.max(1, candidates);
+}
 
 export function reportSessionObserverDegradation(
   state: SessionObserverState,
@@ -69,11 +77,14 @@ export function reportSessionObserverDegradation(
       message: `Session observer assessments stopped for this run after utility model${modelLabel} failed repeatedly.${details ? ` ${details}` : ""} To restore assessments, choose a capable utility model or add capable utilityModel.fallbacks.`,
     },
   };
-  const owner = getAgentRunContextOwnership(state.runId)?.exclusiveClaimId;
-  if (owner) {
-    emitAgentEventForOwner(notice, owner);
-  } else {
-    emitAgentEvent(notice);
+  const utility = readUtilityModelSetting(cfg, state.agentId);
+  if (utility.kind === "explicit" || (utility.kind === "auto" && utility.fallbacks.length > 0)) {
+    const owner = getAgentRunContextOwnership(state.runId)?.exclusiveClaimId;
+    if (owner) {
+      emitAgentEventForOwner(notice, owner);
+    } else {
+      emitAgentEvent(notice);
+    }
   }
   observerLog.warn("session observer disabled after consecutive failures", {
     sessionKey: state.sessionKey,
@@ -117,7 +128,10 @@ export function createSessionObserverCompletion(params: {
   return async (state: SessionObserverState, notes: readonly string[]) => {
     const controller = new AbortController();
     state.activeController = controller;
-    const timeout = setTimeout(() => controller.abort(), SESSION_OBSERVER_MODEL_TIMEOUT_MS);
+    const timeout = setTimeout(
+      () => controller.abort(),
+      resolveObserverDeadlineMs(params.getConfig(), state.agentId),
+    );
     const ownedWork = new AsyncWorkScope();
     try {
       const execute = async () => {

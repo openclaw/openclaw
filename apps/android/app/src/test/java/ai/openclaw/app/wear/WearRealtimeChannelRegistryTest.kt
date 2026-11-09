@@ -6,7 +6,9 @@ import ai.openclaw.wear.shared.WearRealtimeTalkStatus
 import android.os.Parcel
 import com.google.android.gms.wearable.ChannelClient
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
@@ -15,6 +17,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import org.junit.After
@@ -729,12 +732,14 @@ class WearRealtimeChannelRegistryTest {
       }
     }
 
+  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun `cancelled promotion retires its reserved channel before retry`() =
     runBlocking {
       val registry =
         WearRealtimeChannelRegistry(
-          scope = scope,
+          // Keep pending expiry on virtual time; this test drives cancellation explicitly.
+          scope = CoroutineScope(scope.coroutineContext + UnconfinedTestDispatcher()),
           transport = transport,
           connectionReadyTimeoutMillis = 500L,
           pendingConnectionTimeoutMillis = 1_000L,

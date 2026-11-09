@@ -6,7 +6,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 100vh;
   height: 100dvh;
   max-height: 100%;
   overflow-y: auto;

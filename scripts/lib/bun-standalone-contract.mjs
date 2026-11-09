@@ -15,7 +15,7 @@ export const STANDALONE_USAGE =
  *   aotLogTypeMismatches?: true,
  *   aotExplain?: string[],
  *   aotDisable?: string[],
- *   trim?: true | { allow?: ("run" | "jit")[], locales?: string[] },
+ *   trim?: true | { allow?: ("run" | "jit" | "interpreter" | "password" | "toml" | "yaml" | "json5" | "jsonc")[], locales?: string[] },
  *   functionSource?: false,
  *   disallowCodeGenerationFromStrings?: true | "strict"
  * }} StandaloneAotCompileOptions
@@ -159,10 +159,13 @@ export function parseStandaloneArguments(args) {
     aotCompileOptions.allowCodeFromDisk = true;
     aotFlags.push("--aot-allow-code-from-disk");
   }
-  if (trimAllow.size) {
+  if (trimAllow.size || aotCompileOptions.trim) {
     /** @type {("run" | "jit")[]} */
     const features = ["run", "jit"];
+    /** @type {Exclude<StandaloneAotCompileOptions["trim"], true | undefined>["allow"]} */
     const allow = features.filter((feature) => trimAllow.has(feature));
+    // Fetched plugins and same-executable children are invisible to build-time retention.
+    allow.push("interpreter", "password", "toml", "yaml", "json5", "jsonc");
     aotCompileOptions.trim = { allow };
     aotFlags.push(`--trim-allow=${allow.join(",")}`);
   }

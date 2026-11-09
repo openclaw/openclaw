@@ -11,19 +11,8 @@ import type {
   WorkspaceManifestValueInputs,
   WorkspaceStageInput,
 } from "./workspace-manifest-computation.js";
-import type {
-  WorkerWorkspaceManifest,
-  WorkerWorkspaceManifestEntry,
-} from "./workspace-manifest.js";
+import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { joinStagedWorkspaceManifestRead } from "./workspace-result-git.js";
-import {
-  resolveStagedWorkspaceReadEntry,
-  stagedWorkspaceEntryBytes,
-  STAGED_WORKSPACE_READ_MAX_BYTES,
-  STAGED_WORKSPACE_READ_MAX_ENTRIES,
-  type StagedWorkerWorkspaceInventory,
-  type StagedWorkerWorkspaceReadEntry,
-} from "./workspace-result-inventory.js";
 
 type WorkspaceCaptureArguments = Parameters<typeof readActualWorkspaceManifestImpl>[0];
 
@@ -139,7 +128,15 @@ function captureWorkspace<Type extends WorkspaceCaptureCommand>(
   params: WorkspaceCaptureArguments,
 ): Promise<WorkspaceManifestComputationOperations[Type]["output"]["value"]>;
 async function captureWorkspace(type: WorkspaceCaptureCommand, params: WorkspaceCaptureArguments) {
-  const { root, baseCommit, preserveDirectories, includePaths, buildCacheInputs, signal } = params;
+  const {
+    root,
+    baseCommit,
+    preserveDirectories,
+    includePaths,
+    buildCacheInputs,
+    gitIgnore,
+    signal,
+  } = params;
   if (hasGitWorkerContext()) {
     const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
     const snapshot = await readActualWorkspaceManifestImpl(params);
@@ -162,6 +159,10 @@ async function captureWorkspace(type: WorkspaceCaptureCommand, params: Workspace
         root,
         baseCommit,
         includePaths: includePaths === undefined ? undefined : [...includePaths],
+        gitIgnore: gitIgnore && {
+          paths: [...gitIgnore.paths],
+          retainedPaths: [...gitIgnore.retainedPaths],
+        },
         buildCacheInputs: buildCacheInputs === undefined ? undefined : [...buildCacheInputs],
         preserveDirectories:
           preserveDirectories === undefined ? undefined : [...preserveDirectories],
@@ -361,43 +362,6 @@ export async function loadStagedWorkspaceManifest(
     : await joinStagedWorkspaceManifestRead(input, signal, read);
 }
 
-export async function* readStagedWorkspaceManifestEntries(input: {
-  root: string;
-  entries: readonly WorkerWorkspaceManifestEntry[];
-  objectsByPath: StagedWorkerWorkspaceInventory["objectsByPath"];
-}) {
-  let nextEntry = 0;
-  while (nextEntry < input.entries.length) {
-    const entries: StagedWorkerWorkspaceReadEntry[] = [];
-    let bytes = 0;
-    while (nextEntry < input.entries.length) {
-      const entry = input.entries[nextEntry]!;
-      const entryBytes = stagedWorkspaceEntryBytes(entry);
-      if (
-        entries.length > 0 &&
-        (entries.length === STAGED_WORKSPACE_READ_MAX_ENTRIES ||
-          bytes + entryBytes > STAGED_WORKSPACE_READ_MAX_BYTES)
-      ) {
-        break;
-      }
-      entries.push(resolveStagedWorkspaceReadEntry(input.objectsByPath, entry));
-      bytes += entryBytes;
-      nextEntry++;
-    }
-    const contents = await computeWorkspaceManifest({
-      type: "workspace.manifest.entries",
-      input: { root: input.root, entries },
-    });
-    let offset = 0;
-    for (const { entry } of entries) {
-      const content =
-        entry.type === "file" ? contents.subarray(offset, offset + entry.size) : undefined;
-      offset += entry.type === "file" ? entry.size : 0;
-      yield { entry, content };
-    }
-  }
-}
-
 export async function prepareWorkspaceStageInput(input: WorkspaceStageInput<string>) {
   const encoder = new TextEncoder();
   return await computeWorkspaceManifest({
@@ -430,5 +394,16 @@ export async function prepareWorkspaceStageInput(input: WorkspaceStageInput<stri
 export async function prepareWorkspaceTreeInput(
   input: WorkspaceManifestValueInputs["workspace.manifest.tree-input"],
 ): Promise<null> {
+  if (hasGitWorkerContext()) {
+    const { buildWorkspaceTreeInput } = await import("./workspace-result-preparation.runtime.js");
+    return buildWorkspaceTreeInput(input);
+  }
   return computeValue("workspace.manifest.tree-input", input);
+}
+
+/** Patch construction and its output observers belong to the existing Git worker. */
+export async function prepareWorkspacePatch(
+  input: WorkspaceManifestValueInputs["workspace.reconcile.patch"],
+) {
+  return computeValue("workspace.reconcile.patch", input);
 }

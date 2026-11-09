@@ -231,6 +231,7 @@ else: fail('Unexpected call: ' + json.dumps(args))
           PLUGIN_PUBLISH_SCOPE: "all-publishable",
           PLUGINS: "",
           PREPARED_PLUGINS: "",
+          QUALIFIED_PLUGIN_NPM: "",
           GITHUB_REF: "refs/tags/release-publish/aaaaaaaaaaaa-100",
           GITHUB_REPOSITORY: repo,
           GITHUB_RUN_ID: "100",
@@ -367,6 +368,37 @@ describe("plugin npm child lifecycle", () => {
     }
   });
 });
+
+it.each([false, true])(
+  "defers ClawHub only after core registry authentication (published=%s)",
+  (published) => {
+    const result = fixture({
+      harness:
+        noops(
+          "verify_release_tag_target",
+          "render_github_release_notes",
+          "guard_existing_public_release",
+        ) +
+        "\nnpm() { return 1; }\n" +
+        (published
+          ? "resolve_openclaw_npm_publish_state() { openclaw_npm_already_published=true; }\n"
+          : "") +
+        "resolve_clawhub_release_plan() { echo authenticated-resume >&2; exit 23; }",
+    }).run(step("Dispatch publish workflows").run!, {
+      PUBLISH_OPENCLAW_NPM: "true",
+      WAIT_FOR_CLAWHUB: "false",
+      DEFER_CLAWHUB: "true",
+      OPENCLAW_NPM_RESUME_RUN_ID: "91",
+    });
+    expect(result.status).toBe(published ? 23 : 1);
+    expect(result.stderr).toContain(
+      published
+        ? "authenticated-resume"
+        : "defer_clawhub requires an authenticated already-published core",
+    );
+    expect(result.calls.some(isDispatch)).toBe(false);
+  },
+);
 
 it.each([
   { name: coreNpm, blocked: false },
@@ -622,7 +654,12 @@ it.each([
     const harness = `
 ${noops("resolve_clawhub_release_plan", "verify_release_tag_target", "record_postpublish_diagnostics", "upload_dependency_evidence_release_asset", "upload_release_evidence_assets", "append_release_proof_to_github_release")}
 wait_for_run_background() { (printf success > "$4") & wait_run_pid=$!; }
-verify_published_release() { echo VERIFIED >> "$GITHUB_STEP_SUMMARY"; }
+verify_published_release() {
+  if [[ "$DEFER_CLAWHUB" == "true" ]]; then
+    node --import "${import.meta.resolve("tsx")}" "${resolve("scripts/openclaw-release-clawhub-runtime-state.ts")}" --repository "$GITHUB_REPOSITORY" --wait-for-clawhub "$WAIT_FOR_CLAWHUB" --force-skip-clawhub false --deferred true --normal-publication-staged "$clawhub_authorized" --bootstrap-completed false >> "$GITHUB_STEP_SUMMARY" || return $?
+  fi
+  echo VERIFIED >> "$GITHUB_STEP_SUMMARY"
+}
 `;
     const result = fixture({
       registry: transientRegistry
@@ -635,6 +672,7 @@ verify_published_release() { echo VERIFIED >> "$GITHUB_STEP_SUMMARY"; }
           ? ledgerStates("in_progress")
           : ledgerStates("queued", "in_progress", "in_progress", "in_progress", "success"),
     }).run(step("Complete publish workflows").run!, {
+      DEFER_CLAWHUB: String(resume),
       CHILD_PLUGIN_NPM_RUN_ID: "90",
       CHILD_PLUGIN_CLAWHUB_RUN_ID: "",
       CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID: "",

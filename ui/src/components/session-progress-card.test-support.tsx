@@ -26,7 +26,7 @@ export function observeTranscript(container: HTMLElement, cleanups: Array<() => 
   const owner = {
     state,
     getScrollElement: () => (thread.isConnected ? thread : null),
-    prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
+    prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
     endAnchor: new TranscriptEndAnchor(() => {}),
     canFollowEnd: () => true,
     isProgrammaticScroll: () => false,

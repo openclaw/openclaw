@@ -3,6 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -239,11 +240,13 @@ it.each(["commit", "disconnect"])(
     child.stdout.on("data", (chunk: Buffer) => {
       output += chunk.toString();
     });
-    const closed = once(child, "close");
+    // Locally disconnecting IPC need not emit the aggregate child "close" event.
+    const exited = once(child, "exit");
+    const joined = Promise.all([exited, finished(child.stdout), finished(child.stderr)]);
     try {
       const ready = await Promise.race([
         once(child, "message").then(([message]) => message),
-        closed.then(([code]) => ({ exitedBeforeHandoff: code })),
+        exited.then(([code]) => ({ exitedBeforeHandoff: code })),
       ]);
       expect(ready, stderr).toEqual({
         type: "openclaw.node.resume-ready",
@@ -255,14 +258,14 @@ it.each(["commit", "disconnect"])(
       } else {
         child.disconnect();
       }
-      const [code] = await closed;
+      const [[code]] = await joined;
       expect(code).toBe(handoff === "commit" ? 0 : 1);
       expect(output).toBe(handoff === "commit" ? '{"entered":true}\n' : "");
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");
       }
-      await closed;
+      await joined;
     }
   },
 );

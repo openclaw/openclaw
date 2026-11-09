@@ -295,6 +295,10 @@ async function providerFixture(signal: AbortSignal) {
             );
             return;
           }
+          if (name === "parent") {
+            tool("sessions_yield", {});
+            return;
+          }
           text(`FINISHED_${cycle}_${name}`);
         },
         { ignoreAborted: true },
@@ -1041,6 +1045,20 @@ it.skipIf(process.platform === "win32").for([true, false])(
                 } else if (name !== "tool") {
                   if (name === "parent") {
                     await waitProvider(`child:${cycle}`);
+                    await waitProvider(`ready:${cycle}:${name}`);
+                    const parked = readRestartSession(
+                      instance.state.agentDir("main"),
+                      key(cycle, name),
+                      sharedStore,
+                    );
+                    assert(parked?.lifecycleRunId, "Parent must retain its yielded lifecycle");
+                    expect(
+                      await client!.request("agent.wait", {
+                        runId: parked.lifecycleRunId,
+                        timeoutMs: 30_000,
+                      }),
+                    ).toMatchObject({ status: "ok", yielded: true });
+                    return;
                   }
                   await waitFinal(key(cycle, name), `FINISHED_${cycle}_${name}`);
                 }

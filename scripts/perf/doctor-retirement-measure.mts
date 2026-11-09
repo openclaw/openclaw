@@ -32,6 +32,7 @@ const { values } = parseArgs({
     "observer-root": { type: "string" },
     "retained-wal": { type: "boolean", default: false },
     "standing-advisories": { type: "boolean", default: false },
+    "custom-codex-command": { type: "boolean", default: false },
   },
 });
 assert.ok(values.output, "--output is required (use a fresh directory per invocation)");
@@ -396,6 +397,17 @@ try {
   cfg.plugins ??= {};
   cfg.plugins.entries ??= {};
   cfg.plugins.entries.github = { ...cfg.plugins.entries.github, enabled: false };
+  if (values["custom-codex-command"]) {
+    cfg.plugins.entries.codex = {
+      ...cfg.plugins.entries.codex,
+      config: { appServer: { command: "/synthetic/custom-codex" } },
+    };
+    cfg.agents!.defaults!.models!["openai/gpt-5.6-sol"] = {
+      agentRuntime: { id: "codex" },
+      params: { responsesServerCompaction: true, responsesCompactThreshold: 80_000 },
+    };
+    summary.customCodexCommand = true;
+  }
   if (values["standing-advisories"]) {
     const id = "postpass-advisory";
     const peers = ["synthetic-a", "synthetic-b"];

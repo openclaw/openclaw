@@ -9,6 +9,7 @@ import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import { VERSION } from "../version.js";
 import { withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
 import * as check from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
@@ -100,6 +101,9 @@ describe("update-cli", () => {
   });
 
   it("keeps update completion refresh best-effort when profile install fails", async () => {
+    cli.mockGitUpdateAfterMutation(cli.makeOkUpdateResult({ after: { version: VERSION } }), false, {
+      databaseEngines: ["sqlite", "postgres"],
+    });
     setTty(true);
     mocks.checkShellCompletionStatus.mockResolvedValue({
       shell: "zsh",
@@ -118,6 +122,9 @@ describe("update-cli", () => {
   });
 
   it("prompts for optional shell completion setup without --yes", async () => {
+    cli.mockGitUpdateAfterMutation(cli.makeOkUpdateResult({ after: { version: VERSION } }), false, {
+      databaseEngines: ["sqlite", "postgres"],
+    });
     setTty(true);
     mocks.confirm.mockResolvedValue(true);
 
@@ -398,6 +405,7 @@ describe("update-cli", () => {
     const nodeModules = path.join(root, "prefix", "lib", "node_modules");
     const packageRoot = path.join(nodeModules, "openclaw");
     const sha = "a".repeat(40);
+    const databaseEngines = ["sqlite", "postgres"];
     await writeOpenClawPackageFixture(packageRoot, "2026.4.10", { inventory: true });
     mockPackageInstallStatus(packageRoot);
     mockFileBackedPathExists();
@@ -406,7 +414,10 @@ describe("update-cli", () => {
       async (argv) => {
         if (argv[0] === "git" && argv[1] === "clone") {
           const stagingDir = check.requireValue(argv.at(-1), "clone destination");
-          await writeOpenClawPackageFixture(stagingDir, "2026.8.1", { git: true });
+          await writeOpenClawPackageFixture(stagingDir, VERSION, {
+            git: true,
+            databaseEngines,
+          });
           return commandResult();
         }
         return undefined;
@@ -419,13 +430,22 @@ describe("update-cli", () => {
       mocks.select.mockResolvedValue("dev");
       mocks.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
       vi.mocked(gitUpdate).mockImplementation(async ({ opts: options }) => {
-        await writeOpenClawPackageFixture(tempDir, "2026.8.1", { git: true, builtSha: sha });
+        await writeOpenClawPackageFixture(tempDir, VERSION, {
+          git: true,
+          builtSha: sha,
+          databaseEngines,
+        });
         await options.prepareGitExposure?.(tempDir, sha, undefined);
         await options.validateCandidate(tempDir);
-        await check.requireValue(options.beforeGitMutation, "Git mutation admission")({});
+        await check.requireValue(
+          options.beforeGitMutation,
+          "Git mutation admission",
+        )({
+          databaseEngines,
+        });
         return cli.makeOkUpdateResult({
           root: tempDir,
-          after: { sha, version: "2026.8.1" },
+          after: { sha, version: VERSION },
         });
       });
       const runFixtureExec = check.requireValue(
@@ -704,7 +724,8 @@ describe("update-cli", () => {
     );
     const gitRoot = createCaseDir("openclaw-update-git");
     const sha = "a".repeat(40);
-    await writeOpenClawPackageFixture(gitRoot, "2026.8.17", {
+    await writeOpenClawPackageFixture(gitRoot, VERSION, {
+      databaseEngines: ["sqlite", "postgres"],
       git: true,
       builtSha: sha,
       entrySource: "export {};\n",
@@ -722,8 +743,10 @@ describe("update-cli", () => {
       cli.makeOkUpdateResult({
         mode: "git",
         root: canonicalGitRoot,
-        after: { sha, version: "2026.8.17" },
+        after: { sha, version: VERSION },
       }),
+      false,
+      { databaseEngines: ["sqlite", "postgres"] },
     );
     await withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, () => runUpdate({ yes: true }));
     check.expectUpdateCallChannel("dev");

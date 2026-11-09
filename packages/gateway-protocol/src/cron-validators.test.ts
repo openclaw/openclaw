@@ -96,6 +96,9 @@ describe("cron protocol validators", () => {
       job,
       { ...job, deliveryPreview },
       { created: true, job, deliveryPreview },
+      { ...job, warning: "Operator grant cannot be retained" },
+      { created: true, job, warning: "Operator grant cannot be retained" },
+      { created: false, job, warning: "Operator grant cannot be retained" },
     ]) {
       expect(Value.Check(CronAddResultSchema, result)).toBe(true);
     }
