@@ -39,6 +39,8 @@
     "executableFiles": [
       "dist/crabbox-wrapper.js",
       "dist/entry.js",
+      "dist/extensions/knowledge/skills/knowledge-source-ingest/scripts/discrawl-normalize.mjs",
+      "dist/extensions/knowledge/skills/knowledge-source-ingest/scripts/source-manifest.mjs",
       "dist/index.js",
       "dist/mac-node-worker.js",
       "dist/native-hook-relay/entry.js"
