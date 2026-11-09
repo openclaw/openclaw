@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
 import { visitorTargetKey, type VisitorTarget } from "./cloudflare.js";
 
@@ -86,7 +87,9 @@ export function invitationMetadata(
   const inviter = invitedBy
     ? {
         profileId: invitedBy.profileId,
-        ...(invitedBy.label ? { label: invitedBy.label.slice(0, INVITER_LABEL_MAX_CHARS) } : {}),
+        ...(invitedBy.label
+          ? { label: truncateUtf16Safe(invitedBy.label, INVITER_LABEL_MAX_CHARS) }
+          : {}),
       }
     : previous?.invitedBy;
   const note = supplied.note ?? previous?.note;
@@ -119,7 +122,7 @@ export function compareAndSetGrantOnboarding(
       state,
       ...(welcomeSessionKey ? { welcomeSessionKey } : {}),
       ...(welcomeSessionId ? { welcomeSessionId } : {}),
-      ...(error ? { error: error.slice(0, ONBOARDING_ERROR_MAX_CHARS) } : {}),
+      ...(error ? { error: truncateUtf16Safe(error, ONBOARDING_ERROR_MAX_CHARS) } : {}),
       // pending-to-pending reserves the session before setup; it must change the CAS token
       // even when two sign-ins arrive in the same millisecond or the clock moves backward.
       updatedAt: Math.max(now, (recorded?.updatedAt ?? -1) + 1),

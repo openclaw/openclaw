@@ -1,0 +1,3 @@
+# Visitor inviter display-name bound kept on a UTF-16 boundary: covers the truncated
+# invitation text a split surrogate would corrupt, including the invite service path.
+59
