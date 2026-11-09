@@ -120,7 +120,7 @@ workspace:
   bootstrapFiles: {}
 packages: []
 mcpServers: {}
-cronJobs: []
+automations: []
 ---
 
 # Incident triage
@@ -179,13 +179,17 @@ mcpServers:
     args: ["--yes", "@acme/statuspage-mcp@1.0.0"]
     env:
       STATUSPAGE_TOKEN: "${STATUSPAGE_TOKEN}"
-cronJobs:
+automations:
   - id: daily-summary
     name: Daily incident summary
     schedule: { cron: "0 9 * * *", timezone: UTC }
     session: isolated
     message: Summarize active incidents.
 ```
+
+Use `automations` for scheduled work. Older published manifests using `cronJobs`
+remain readable and are normalized to `automations`. Declaring both keys is an
+error; move the declarations to `automations` and remove `cronJobs`.
 
 Environment values remain unresolved references; never package credentials.
 Shared plugins and MCP servers must match existing declarations exactly or Add
