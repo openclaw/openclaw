@@ -23,12 +23,19 @@ export const QUOTA_RESUME_MAX_RETRY_MS = 6 * 60 * 60 * 1000;
 export const QUOTA_RESUME_LAUNCH_GRACE_MS = 10 * 60 * 1000;
 /** Ignore cooldown expiries further out than this; they are not usage-window resets. */
 export const QUOTA_RESUME_MAX_COOLDOWN_HORIZON_MS = 14 * 24 * 60 * 60 * 1000;
+/**
+ * A suspension whose resume time passed longer ago than this is abandoned, not
+ * resumed: the work is stale and, after an upgrade, historical markers in every
+ * store would otherwise all launch on the first scan.
+ */
+export const QUOTA_RESUME_OVERDUE_LIMIT_MS = 24 * 60 * 60 * 1000;
 
 export type QuotaResumeSkipReason =
   | "not_suspended"
   | "not_quota"
   | "aborted"
   | "superseded"
+  | "expired"
   | "run_active"
   | "attempts_exhausted"
   | "launch_in_flight";
@@ -68,10 +75,33 @@ export function resolveQuotaResumeAttempts(suspension: QuotaSuspension | undefin
     : 0;
 }
 
-/** Fallback retry delay when no provider reset time is known; grows per attempt. */
+/**
+ * Fallback retry delay when no provider reset time is known; grows per completed
+ * attempt. `attempts` is the number already made, so the first retry waits the base delay.
+ */
 export function resolveQuotaResumeRetryDelayMs(attempts: number): number {
   const exponent = Math.max(0, Math.min(attempts, 10));
   return Math.min(QUOTA_RESUME_DEFAULT_RETRY_MS * 2 ** exponent, QUOTA_RESUME_MAX_RETRY_MS);
+}
+
+/**
+ * Live-entry checks that must hold both when a candidate is selected and again
+ * inside the store transaction that marks it `resuming`.
+ */
+export function resolveQuotaResumeBlocker(
+  entry: Pick<QuotaResumeCandidateEntry, "abortedLastRun" | "lastInteractionAt">,
+  suspension: Pick<QuotaSuspension, "suspendedAt">,
+): Extract<QuotaResumeSkipReason, "aborted" | "superseded"> | null {
+  // The operator stopped the run after it was parked; never restart it behind their back.
+  if (entry.abortedLastRun) {
+    return "aborted";
+  }
+  // A newer human turn means the session already moved on; the lazy maintenance
+  // path owns the stale marker from here.
+  if ((entry.lastInteractionAt ?? 0) > suspension.suspendedAt) {
+    return "superseded";
+  }
+  return null;
 }
 
 /**
@@ -135,14 +165,9 @@ export function resolveQuotaResumeDecision(params: {
   if (suspension.reason !== "quota_exhausted") {
     return { action: "skip", reason: "not_quota" };
   }
-  // The operator stopped the run after it was parked; never restart it behind their back.
-  if (params.entry.abortedLastRun) {
-    return { action: "skip", reason: "aborted" };
-  }
-  // A newer human turn means the session already moved on; the lazy maintenance
-  // path owns the stale marker from here.
-  if ((params.entry.lastInteractionAt ?? 0) > suspension.suspendedAt) {
-    return { action: "skip", reason: "superseded" };
+  const blocker = resolveQuotaResumeBlocker(params.entry, suspension);
+  if (blocker) {
+    return { action: "skip", reason: blocker };
   }
   const attempts = resolveQuotaResumeAttempts(suspension);
   if (attempts >= (params.maxAttempts ?? QUOTA_RESUME_MAX_ATTEMPTS)) {
@@ -163,6 +188,9 @@ export function resolveQuotaResumeDecision(params: {
   });
   if (params.now < resumeAtMs) {
     return { action: "wait", resumeAtMs };
+  }
+  if (params.now - resumeAtMs > QUOTA_RESUME_OVERDUE_LIMIT_MS) {
+    return { action: "skip", reason: "expired" };
   }
   if (params.runActive) {
     return { action: "skip", reason: "run_active" };

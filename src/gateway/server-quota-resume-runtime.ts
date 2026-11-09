@@ -5,6 +5,8 @@ import {
   QUOTA_RESUME_CONTINUATION_TEXT,
   QUOTA_RESUME_INITIAL_DELAY_MS,
   QUOTA_RESUME_SCAN_INTERVAL_MS,
+  resolveQuotaResumeAttempts,
+  resolveQuotaResumeBlocker,
   resolveQuotaResumeDecision,
   resolveQuotaResumeRetryDelayMs,
   resolveQuotaResumeSettings,
@@ -129,7 +131,8 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function createDefaultDeps(
+/** Production dependency set; exported so tests can exercise the store and dispatch seams. */
+export async function createQuotaResumeDefaultDeps(
   resolveGatewayContext?: GatewayContextResolver,
 ): Promise<QuotaResumeRuntimeDeps> {
   const [
@@ -211,12 +214,17 @@ async function createDefaultDeps(
       }
     },
     markResuming: async ({ agentId, storePath, sessionKey, expected, attempt, now }) =>
-      patchSuspension({ agentId, storePath, sessionKey }, (suspension) => {
+      patchSuspension({ agentId, storePath, sessionKey }, (suspension, entry) => {
+        // The candidate came from a scan snapshot that may be minutes old by the
+        // time this session is reached; re-run every eligibility check on the live row.
         if (
           suspension.suspendedAt !== expected.suspendedAt ||
           suspension.failedProvider !== expected.failedProvider ||
           suspension.failedModel !== expected.failedModel ||
-          (suspension.state !== "suspended" && suspension.state !== "resuming")
+          suspension.reason !== "quota_exhausted" ||
+          (suspension.state !== "suspended" && suspension.state !== "resuming") ||
+          resolveQuotaResumeAttempts(suspension) !== attempt - 1 ||
+          resolveQuotaResumeBlocker(entry, suspension) !== null
         ) {
           return null;
         }
@@ -227,7 +235,8 @@ async function createDefaultDeps(
             ...suspension.autoResume,
             attempts: attempt,
             lastAttemptAt: now,
-            nextAttemptAt: now + resolveQuotaResumeRetryDelayMs(attempt),
+            // Backoff grows with completed attempts; the first retry waits the base delay.
+            nextAttemptAt: now + resolveQuotaResumeRetryDelayMs(attempt - 1),
           },
         };
       }),
@@ -244,9 +253,8 @@ async function createDefaultDeps(
             ...suspension.autoResume,
             attempts: attempt,
             lastAttemptAt: now,
-            nextAttemptAt: now + resolveQuotaResumeRetryDelayMs(attempt),
+            nextAttemptAt: now + resolveQuotaResumeRetryDelayMs(attempt - 1),
           },
-          summary: suspension.summary,
         };
       });
       log.warn("quota resume: continuation launch failed", { sessionKey, attempt, error });
@@ -364,7 +372,9 @@ export function startQuotaResumeRuntime(params: StartQuotaResumeRuntimeParams): 
           "launch",
         ] as const
       ).some((key) => overrides[key] === undefined);
-      const defaults = needsDefaults ? await createDefaultDeps(params.resolveGatewayContext) : {};
+      const defaults = needsDefaults
+        ? await createQuotaResumeDefaultDeps(params.resolveGatewayContext)
+        : {};
       return { ...defaults, ...overrides } as QuotaResumeRuntimeDeps;
     })();
     return depsPromise;

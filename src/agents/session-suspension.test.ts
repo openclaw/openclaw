@@ -100,6 +100,40 @@ describe("session suspension", () => {
     },
   );
 
+  it("keeps the automatic resume attempt count when a resumed run hits the same limit", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(5_000);
+    await recordSuspension(100);
+    const buildPatch = sessionAccessorMocks.patchSessionEntryCore.mock.calls[0]?.[1] as (
+      entry: SuspensionEntry,
+    ) => SuspensionEntry;
+    const consumed: QuotaSuspension = {
+      schemaVersion: 1,
+      suspendedAt: 1_000,
+      reason: "quota_exhausted",
+      failedProvider: "openai",
+      failedModel: "gpt-5.6-sol",
+      expectedResumeBy: 2_000,
+      state: "active",
+      autoResume: { attempts: 2, lastAttemptAt: 4_000, nextAttemptAt: 9_000, lastRunId: "run-2" },
+    };
+    expect(buildPatch({ quotaSuspension: consumed }).quotaSuspension).toMatchObject({
+      ...recoveryMarker,
+      suspendedAt: 5_000,
+      autoResume: { attempts: 2, lastAttemptAt: 4_000 },
+    });
+    // A marker nobody resumed yet, or one for another model, starts a fresh count.
+    expect(
+      buildPatch({ quotaSuspension: { ...consumed, state: "suspended" } }).quotaSuspension
+        ?.autoResume,
+    ).toBeUndefined();
+    expect(
+      buildPatch({ quotaSuspension: { ...consumed, failedModel: "gpt-5.6-luna" } }).quotaSuspension
+        ?.autoResume,
+    ).toBeUndefined();
+    expect(buildPatch({}).quotaSuspension?.autoResume).toBeUndefined();
+  });
+
   it("resolves the session store with the explicit agent id, never the agentDir basename", async () => {
     await recordSuspension(undefined, {
       ttlMs: undefined,

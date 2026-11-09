@@ -7,7 +7,9 @@ import {
   QUOTA_RESUME_MAX_ATTEMPTS,
   QUOTA_RESUME_MAX_COOLDOWN_HORIZON_MS,
   QUOTA_RESUME_MAX_RETRY_MS,
+  QUOTA_RESUME_OVERDUE_LIMIT_MS,
   resolveQuotaResumeAtMs,
+  resolveQuotaResumeBlocker,
   resolveQuotaResumeDecision,
   resolveQuotaResumeRetryDelayMs,
   resolveQuotaResumeSettings,
@@ -176,6 +178,38 @@ describe("quota resume policy", () => {
       action: "launch",
       attempt: 1,
     });
+  });
+
+  it("abandons a suspension whose resume time passed more than a day ago", () => {
+    const resumeAt = SUSPENDED_AT + 60_000;
+    expect(
+      decide({ quotaSuspension: suspension(), now: resumeAt + QUOTA_RESUME_OVERDUE_LIMIT_MS }),
+    ).toEqual({ action: "launch", attempt: 1 });
+    expect(
+      decide({ quotaSuspension: suspension(), now: resumeAt + QUOTA_RESUME_OVERDUE_LIMIT_MS + 1 }),
+    ).toEqual({ action: "skip", reason: "expired" });
+    // A still-blocking provider cooldown moves the deadline with the resume time.
+    expect(
+      decide({
+        quotaSuspension: suspension(),
+        now: resumeAt + QUOTA_RESUME_OVERDUE_LIMIT_MS + 1,
+        providerCooldownUntilMs: resumeAt + QUOTA_RESUME_OVERDUE_LIMIT_MS + 60_000,
+      }),
+    ).toEqual({
+      action: "wait",
+      resumeAtMs:
+        resumeAt + QUOTA_RESUME_OVERDUE_LIMIT_MS + 60_000 + QUOTA_RESUME_COOLDOWN_MARGIN_MS,
+    });
+  });
+
+  it("exposes the live-row blockers for the store transaction", () => {
+    const parked = suspension();
+    expect(resolveQuotaResumeBlocker({}, parked)).toBeNull();
+    expect(resolveQuotaResumeBlocker({ abortedLastRun: true }, parked)).toBe("aborted");
+    expect(resolveQuotaResumeBlocker({ lastInteractionAt: SUSPENDED_AT + 1 }, parked)).toBe(
+      "superseded",
+    );
+    expect(resolveQuotaResumeBlocker({ lastInteractionAt: SUSPENDED_AT }, parked)).toBeNull();
   });
 
   it("uses the recorded next attempt time over the original TTL", () => {
