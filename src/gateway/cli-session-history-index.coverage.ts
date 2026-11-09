@@ -1,8 +1,11 @@
 // Loads covered-aggregate facts from the temporary history index in bounded batches.
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { HistoryMatch, HistoryRow } from "./cli-session-history-index-policy.js";
 import {
   droppedCoveredAggregateIds,
+  isClaudeCliAssistantImport,
+  type createCliAssistantCoverage,
   type LocalCoverageUser,
 } from "./cli-session-history.merge-aggregates.js";
 
@@ -75,19 +78,9 @@ function readIndexedTexts(
   return texts;
 }
 
-export function readCliHistoryCoverageUsers(database: DatabaseSync): LocalCoverageUser[] {
-  const db = getNodeSqliteKysely<CoverageDatabase>(database);
-  const rows = executeSqliteQuerySync(
-    database,
-    db
-      .selectFrom("messages")
-      .select(["id", "text", "timestamp", "external_key"])
-      .where("local_seq", "is not", null)
-      .where("role", "=", "user")
-      .where("consumed", "=", 0)
-      .where("text", "is not", null)
-      .orderBy("id"),
-  ).rows;
+export function toLocalCoverageUsers(
+  rows: ReadonlyArray<Pick<HistoryRow, "id" | "text" | "timestamp" | "external_key">>,
+): LocalCoverageUser[] {
   const users: LocalCoverageUser[] = [];
   for (const row of rows) {
     const text = decodeIndexedHistoryText(row.text);
@@ -102,6 +95,44 @@ export function readCliHistoryCoverageUsers(database: DatabaseSync): LocalCovera
     });
   }
   return users;
+}
+
+export function readCliHistoryCoverageUsers(database: DatabaseSync): LocalCoverageUser[] {
+  const db = getNodeSqliteKysely<CoverageDatabase>(database);
+  return toLocalCoverageUsers(
+    executeSqliteQuerySync(
+      database,
+      db
+        .selectFrom("messages")
+        .select(["id", "text", "timestamp", "external_key"])
+        .where("local_seq", "is not", null)
+        .where("role", "=", "user")
+        .where("consumed", "=", 0)
+        .where("text", "is not", null)
+        .orderBy("id"),
+    ).rows,
+  );
+}
+
+// Both history indexes describe an import to coverage the same way.
+export function noteImportedCliCoverage(
+  coverage: ReturnType<typeof createCliAssistantCoverage>,
+  imported: Pick<HistoryRow, "role" | "timestamp" | "metadata" | "external_key" | "text">,
+  options: { match?: HistoryMatch; byIdentity?: boolean; toolResult: boolean },
+): number | undefined {
+  const matchedUser = options.match?.role === "user" ? options.match : undefined;
+  return coverage.noteImported({
+    role: imported.role,
+    timestamp: imported.timestamp,
+    duplicate: Boolean(options.match),
+    claudeAssistant: isClaudeCliAssistantImport(imported.role, imported.metadata),
+    matchedLocalTurn: matchedUser?.id,
+    matchedLocalText: matchedUser ? decodeIndexedHistoryText(matchedUser.text) : undefined,
+    matchedByIdentity: options.byIdentity === true && matchedUser !== undefined,
+    excludeExternalIdentity: imported.external_key !== null,
+    toolResult: options.toolResult,
+    hasText: imported.text !== null,
+  }).segmentTurn;
 }
 
 export function readCoveredCliAggregateIds(database: DatabaseSync): Set<number> {
@@ -123,6 +154,24 @@ export function readCoveredCliAggregateIds(database: DatabaseSync): Set<number> 
     database,
     db.selectFrom("coverage_segments").select(["import_id", "turn"]).orderBy("import_id"),
   ).rows;
+  return selectCoveredCliAggregateIds({
+    userIds,
+    aggregateIds,
+    segments: segmentRows,
+    readAggregateTexts: (ids) => readIndexedTexts(database, "messages", ids),
+    readSegmentTexts: (ids) => readIndexedTexts(database, "imports", ids),
+  });
+}
+
+// Turn grouping is shared so the SQLite and memory indexes cannot drift apart.
+export function selectCoveredCliAggregateIds(params: {
+  userIds: readonly number[];
+  aggregateIds: readonly number[];
+  segments: ReadonlyArray<{ import_id: number; turn: number }>;
+  readAggregateTexts: (ids: readonly number[]) => ReadonlyMap<number, string>;
+  readSegmentTexts: (ids: readonly number[]) => ReadonlyMap<number, string>;
+}): Set<number> {
+  const { userIds, aggregateIds, segments: segmentRows } = params;
   if (aggregateIds.length === 0 || segmentRows.length === 0) {
     return new Set();
   }
@@ -154,8 +203,8 @@ export function readCoveredCliAggregateIds(database: DatabaseSync): Set<number> 
     const batch = turns.slice(offset, offset + COVERAGE_TURN_BATCH);
     const aggregateSlice = batch.flatMap((turn) => aggregatesByTurn.get(turn) ?? []);
     const segmentSlice = batch.flatMap((turn) => segmentsByTurn.get(turn) ?? []);
-    const aggregateTexts = readIndexedTexts(database, "messages", aggregateSlice);
-    const segmentTexts = readIndexedTexts(database, "imports", segmentSlice);
+    const aggregateTexts = params.readAggregateTexts(aggregateSlice);
+    const segmentTexts = params.readSegmentTexts(segmentSlice);
     for (const turn of batch) {
       const aggregates = (aggregatesByTurn.get(turn) ?? []).flatMap((id) => {
         const text = aggregateTexts.get(id);

@@ -1,5 +1,3 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   enableNodeSqliteKyselyStatementCache,
   executeSqliteQuerySync,
@@ -21,7 +19,7 @@ import {
   type HistoryTextMatch,
 } from "./cli-session-history-index-policy.js";
 import {
-  decodeIndexedHistoryText,
+  noteImportedCliCoverage,
   readCliHistoryCoverageUsers,
   readCoveredCliAggregateIds,
 } from "./cli-session-history-index.coverage.js";
@@ -36,13 +34,6 @@ const INDEX_INSERT_BATCH_ROWS = 65;
 const INDEX_ORDINAL_BATCH_ROWS = 256;
 const INDEX_INSERT_BATCH_BYTES = 1024 * 1024;
 
-function isClaudeCliAssistantImport(role: string | null, metadata: string | null): boolean {
-  if (role !== "assistant" || !metadata) {
-    return false;
-  }
-  const meta = asOptionalRecord(JSON.parse(metadata));
-  return normalizeOptionalString(meta?.importedFrom) === "claude-cli";
-}
 type HistoryDatabase = {
   messages: HistoryRow;
   imports: HistoryRow;
@@ -254,21 +245,13 @@ export class CliSessionHistoryIndex {
     match?: HistoryMatch,
     byIdentity = false,
   ): void {
-    const matchedUser = match?.role === "user" ? match : undefined;
-    const noted = this.coverage.noteImported({
-      role: imported.role,
-      timestamp: imported.timestamp,
-      duplicate: Boolean(match),
-      claudeAssistant: isClaudeCliAssistantImport(imported.role, imported.metadata),
-      matchedLocalTurn: matchedUser?.id,
-      matchedLocalText: matchedUser ? decodeIndexedHistoryText(matchedUser.text) : undefined,
-      matchedByIdentity: byIdentity && matchedUser !== undefined,
-      excludeExternalIdentity: imported.external_key !== null,
+    const segmentTurn = noteImportedCliCoverage(this.coverage, imported, {
+      match,
+      byIdentity,
       toolResult: this.nativeToolResultImports[imported.id] === true,
-      hasText: imported.text !== null,
     });
-    if (noted.segmentTurn !== undefined) {
-      this.insertCoverageSegment({ importId: imported.id, turn: noted.segmentTurn });
+    if (segmentTurn !== undefined) {
+      this.insertCoverageSegment({ importId: imported.id, turn: segmentTurn });
     }
   }
 

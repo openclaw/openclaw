@@ -64,6 +64,14 @@ function createLocalTurnBucket(turns: readonly LocalTurn[]): LocalTurnBucket {
   };
 }
 
+export function isClaudeCliAssistantImport(role: string | null, metadata: string | null): boolean {
+  if (role !== "assistant" || !metadata) {
+    return false;
+  }
+  const meta = asOptionalRecord(JSON.parse(metadata));
+  return normalizeOptionalString(meta?.importedFrom) === "claude-cli";
+}
+
 // The durable reply keeps its key on the row; older transcript metadata nests it.
 export function isCliAssistantAggregateMessage(
   message: unknown,
