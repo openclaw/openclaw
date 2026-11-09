@@ -37,6 +37,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
+import { registerSystemRunPredicateTests } from "./invoke-system-run-predicates.test-support.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
 import {
   expectOk,
@@ -940,6 +941,17 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       );
     },
   );
+
+  registerSystemRunPredicateTests({
+    fixtureDir,
+    runLocal,
+    allowlistPolicy,
+    prepareCwdSession,
+    requireApprovalPlan,
+    durableFixture,
+    mutatePolicyOnCommit,
+    localResult,
+  });
 
   it.runIf(process.platform !== "win32").each([
     { boundary: "commit", revoke: true },
@@ -1853,36 +1865,5 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       );
     },
   );
-
-  it("does not bind safe builtin policy to a redundant exact-command grant", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    const { tempDir, prepared } = durableFixture({ payload: "cd ." });
-    const commitAuthorization = mutatePolicyOnCommit((current) => {
-      current.agents = { ...current.agents, main: { allowlist: [] } };
-    });
-    const rerun = await runLocal({
-      security: "allowlist",
-      ask: "on-miss",
-      preparedPlan: prepared.plan,
-      cwd: prepared.plan.cwd ?? tempDir,
-      commitExecAuthorization: commitAuthorization,
-      runCommand: vi.fn(async () => localResult("safe-builtin-ok")),
-    });
-
-    expect(commitAuthorization).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authorization: expect.objectContaining({
-          source: "current-policy",
-          requireExactCommandApproval: false,
-          requireDurableAllowlistApproval: false,
-        }),
-      }),
-    );
-    expect(rerun.runCommand).toHaveBeenCalledTimes(1);
-    expectOk(rerun.sendInvokeResult, "safe-builtin-ok");
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

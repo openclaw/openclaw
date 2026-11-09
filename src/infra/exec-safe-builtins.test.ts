@@ -225,6 +225,93 @@ describe.skipIf(process.platform === "win32")(
       );
     });
 
+    it.each([
+      ["test -e '/tmp/space path'", ["test", "-e", "/tmp/space path"]],
+      ["test -e '*.txt'", ["test", "-e", "*.txt"]],
+      ['test -e "*.txt"', ["test", "-e", "*.txt"]],
+      [String.raw`test -e \$literal`, ["test", "-e", "$literal"]],
+      ['test -e "$"', ["test", "-e", "$"]],
+      ["test -e '$'", ["test", "-e", "$"]],
+      [String.raw`test -e \*.txt`, ["test", "-e", "*.txt"]],
+      ['"test" -e proof.txt', ["test", "-e", "proof.txt"]],
+      ["'test' -e proof.txt", ["test", "-e", "proof.txt"]],
+      [String.raw`t\est -e proof.txt`, ["test", "-e", "proof.txt"]],
+      ["test'' -e proof.txt", ["test", "-e", "proof.txt"]],
+      ["t'es't -e proof.txt", ["test", "-e", "proof.txt"]],
+      [String.raw`$'te\x73t' -e proof.txt`, ["test", "-e", "proof.txt"]],
+      ["test -e $'proof.txt'", ["test", "-e", "proof.txt"]],
+      [String.raw`test -e $'\160\x72\u006f\U0000006ff.txt'`, ["test", "-e", "proof.txt"]],
+      [String.raw`test -e $'a\'?v'`, ["test", "-e", "a'?v"]],
+      [String.raw`test -e $'a\\'`, ["test", "-e", "a\\"]],
+      [String.raw`test -e $'\u00e9'`, ["test", "-e", "é"]],
+      [String.raw`test -e \$'a\'`, ["test", "-e", "$a\\"]],
+      ['"[" -e proof.txt "]"', ["[", "-e", "proof.txt", "]"]],
+      [String.raw`\[ -e proof.txt \]`, ["[", "-e", "proof.txt", "]"]],
+    ] as const)("preserves parsed literal predicate source: %s", async (command, argv) => {
+      const result = await evaluateShellAllowlistWithAuthorization({
+        command,
+        allowlist: [],
+        safeBins: new Set(),
+        cwd: "/tmp",
+      });
+      expect(result.analysisOk).toBe(true);
+      expect(result.segments[0]?.argv).toEqual(argv);
+      expect(result.allowlistSatisfied).toBe(true);
+      expect(result.segmentSatisfiedBy).toEqual(["safeBuiltins"]);
+    });
+
+    it.each([
+      "test -e *.txt",
+      "[ -e *.txt ]",
+      String.raw`test $'\0\''?v benign`,
+      String.raw`test -e $'proof'?`,
+      String.raw`[ -e $'proof'* ]`,
+      "test -e $FILE",
+      'test -e "$FILE"',
+      "test -e ${FILE}",
+      "test -e $(pwd)",
+      "test -e ~",
+      "test -e {a,b}",
+      '"$CMD" -e proof.txt',
+      String.raw`test -e $'\0proof'`,
+      String.raw`test -e $'\q'`,
+      String.raw`test -e $'\cA'`,
+      String.raw`test -e $'\400'`,
+    ])(
+      "does not grant an implicit exemption to dynamic or unproved source: %s",
+      async (command) => {
+        const result = await evaluateShellAllowlistWithAuthorization({
+          command,
+          allowlist: [],
+          safeBins: new Set(),
+          cwd: "/tmp",
+        });
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentSatisfiedBy).not.toContain("safeBuiltins");
+      },
+    );
+
+    it.each([
+      "test -v name",
+      "test '-v' name",
+      "test -'v' name",
+      String.raw`test $'\x2dv' name`,
+      String.raw`test $'\055\166' name`,
+      String.raw`test $'\u002d\U00000076' name`,
+      String.raw`"[" $'\x2dv' name "]"`,
+    ])("retains the semantic -v guard through real parsed argv: %s", async (command) => {
+      const result = await evaluateShellAllowlistWithAuthorization({
+        command,
+        allowlist: [],
+        safeBins: new Set(),
+        cwd: "/tmp",
+      });
+      expect(result.analysisOk).toBe(true);
+      expect(result.segments[0]?.argv).toContain("-v");
+      expect(result.allowlistSatisfied).toBe(false);
+      expect(result.segmentSatisfiedBy).not.toContain("safeBuiltins");
+    });
+
     it("does not auto-allow safe builtin tokens in direct argv evaluation", () => {
       const analysis = analyzeArgvCommand({ argv: ["pwd"], cwd: "/tmp", platform: "linux" });
       const result = evaluateExecAllowlist({

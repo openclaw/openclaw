@@ -116,6 +116,26 @@ describe("exec authorization renderer", () => {
     ).resolves.toEqual({ ok: false, reason: "shell expansion in enforced arguments" });
   });
 
+  it.each([
+    String.raw`test $'\0\''?v benign`,
+    String.raw`eval git status $$'a\'?v`,
+    String.raw`eval git status $$$$'a\'?v`,
+  ])("rejects unquoted expansion after ANSI-C/PID boundaries: %s", async (command) => {
+    await expect(
+      render(command, { mode: "enforced", segmentSatisfiedBy: ["safeBuiltins"] }),
+    ).resolves.toEqual({ ok: false, reason: "shell expansion in enforced arguments" });
+  });
+
+  it.each([
+    String.raw`test -e $'a\'?v'`,
+    String.raw`test -e \$'a\\?v'`,
+    String.raw`eval git status $$$'a\'?v'`,
+  ])("preserves literal ANSI-C and escaped-dollar boundaries: %s", async (command) => {
+    expect(
+      renderOk(await render(command, { mode: "enforced", segmentSatisfiedBy: ["safeBuiltins"] })),
+    ).toBe(command);
+  });
+
   it("preserves env assignment prefixes for enforced POSIX commands", async () => {
     const command = renderOk(
       await render("LIMIT=1 head -n 5", {
