@@ -6,8 +6,9 @@ import { asOptionalRecord } from "../../packages/normalization-core/src/record-c
 
 type Kind = "jobs" | "history";
 type Row = { key: string; node: number; top: number; visible: boolean };
-type Snapshot = { count: number; scrollTop: number; rows: Row[] };
+type Snapshot = { at: number; count: number; scrollTop: number; rows: Row[] };
 type Append = {
+  beforeAt: number;
   at: number;
   from: number;
   to: number;
@@ -15,9 +16,11 @@ type Append = {
   common: Array<{ key: string; retained: boolean; displacement: number | null }>;
   settledScrollDelta?: number;
   settledCommon?: Append["common"];
+  settledAt?: number;
 };
 type ProbeResult = {
   frames: number[];
+  wheels: Array<{ at: number; deltaY: number }>;
   longTasks: Array<{ start: number; duration: number }>;
   appends: Append[];
   maxRenderedRows: number;
@@ -124,6 +127,7 @@ export async function measureCronPagingPage(page: Page, url: string, kind: Kind,
       const content = document.querySelector<HTMLElement>(".content")!;
       const identities = new WeakMap<Element, number>();
       const frames: number[] = [];
+      const wheels: ProbeResult["wheels"] = [];
       const longTasks: ProbeResult["longTasks"] = [];
       const appends: Append[] = [];
       let nextIdentity = 0;
@@ -135,6 +139,7 @@ export async function measureCronPagingPage(page: Page, url: string, kind: Kind,
         const rows = [...document.querySelectorAll(rowSelector)];
         maxRenderedRows = Math.max(maxRenderedRows, rows.length);
         return {
+          at: performance.now(),
           count:
             viewKind === "jobs"
               ? Number(rows[0]?.getAttribute("aria-setsize"))
@@ -176,11 +181,16 @@ export async function measureCronPagingPage(page: Page, url: string, kind: Kind,
         previous = snapshot();
       };
       content.addEventListener("scroll", scrolled, { passive: true });
+      const wheeled = (event: WheelEvent) => {
+        wheels.push({ at: performance.now(), deltaY: event.deltaY });
+      };
+      content.addEventListener("wheel", wheeled, { passive: true });
       const mutations = new MutationObserver(() => {
         const current = snapshot();
         if (current.count > previous.count) {
           const beforeAppend = previous;
           const append: Append = {
+            beforeAt: beforeAppend.at,
             at: performance.now(),
             from: previous.count,
             to: current.count,
@@ -193,6 +203,7 @@ export async function measureCronPagingPage(page: Page, url: string, kind: Kind,
               const settled = snapshot();
               append.settledScrollDelta = settled.scrollTop - beforeAppend.scrollTop;
               append.settledCommon = compare(beforeAppend, settled);
+              append.settledAt = settled.at;
             }),
           );
         }
@@ -232,7 +243,8 @@ export async function measureCronPagingPage(page: Page, url: string, kind: Kind,
           );
           tasks.disconnect();
           content.removeEventListener("scroll", scrolled);
-          return { frames, longTasks, appends, maxRenderedRows, final: snapshot() };
+          content.removeEventListener("wheel", wheeled);
+          return { frames, wheels, longTasks, appends, maxRenderedRows, final: snapshot() };
         },
       };
     },
