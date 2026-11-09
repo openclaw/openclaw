@@ -20,8 +20,9 @@ import {
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
 } from "../cron-creator-authority-grant.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { cronJobMatchesDeclarationScope, readCronCallerScope } from "./cron-caller-scope.js";
-import { createReadService } from "./cron-read.test-support.js";
+import { callCron, createReadService } from "./cron-read.test-support.js";
 import {
   cronAccountPolicy as policy,
   expectCronReply,
@@ -200,6 +201,123 @@ describe("cron ownership access matrix", () => {
     setCronValidationTestRegistry();
   });
   afterEach(() => resetPluginRuntimeStateForTest());
+
+  it("keeps administrator-created declarations separate by agent and account, with idempotent retries", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createReadService({
+      storePath,
+      cronEnabled: false,
+      defaultAgentId: "ops",
+      enqueueSystemEvent: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    onTestFinished(() => cron.stop());
+    const context = createDirectChatContext({ cron, cronStorePath: storePath, getRuntimeConfig });
+    context.validateAgentRuntimeApprovalAuthority = () => true;
+    const manage = async (
+      agentId: string,
+      accountId: string,
+      method: "cron.add" | "cron.list" | "cron.get" | "cron.update" | "cron.remove",
+      params: Record<string, unknown>,
+    ) => {
+      const client = createCronCallerClient(agentId, accountId);
+      const identity = client.internal!.agentRuntimeIdentity!;
+      const authority = claimAgentRunDelegatedAuthority(identity.operationalRunInstance);
+      const scope = createCronCreatorAuthorityRunScope(
+        identity.operationalRunInstance.runId,
+        { kind: "local" },
+        { source: "control-ui-admin" },
+      );
+      try {
+        const respond = await runWithCronCreatorAuthorityCapability(scope, () =>
+          withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, () => {
+            // Add stays caller-scoped; management grants apply to explicit job operations.
+            identity.cronManagementGrant = bindCronManagementGrant(scope.runId)!.mint(method);
+            return callCron(context, method, params, { client });
+          }),
+        );
+        expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
+        return respond;
+      } finally {
+        revokeCronCreatorAuthorityRunScope(scope);
+        releaseAgentRunDelegatedAuthority(authority);
+      }
+    };
+    const keys = ["knowledge:scribe:conversations", "knowledge:scribe:claim-consolidation"];
+    const spec = (key: string): CronJobCreate => ({
+      name: key,
+      declarationKey: key,
+      schedule: { kind: "every", everyMs: 3_600_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: key, toolsAllow: ["read"] },
+      delivery: { mode: "none" },
+    });
+    const stored = async () => (await loadCronStore(storePath)).jobs;
+    const definitions = (jobs: CronJob[]) =>
+      jobs.map(({ id, agentId, owner, schedule, enabled }) => ({
+        id,
+        agentId,
+        owner,
+        schedule,
+        enabled,
+      }));
+    for (const [index, agentId] of ["ops", "researcher", "scout"].entries()) {
+      const before = definitions(await stored());
+      for (const key of keys) {
+        await manage(agentId, "default", "cron.add", { ...spec(key), enabled: index !== 0 });
+      }
+      const after = await stored();
+      expect(after).toHaveLength((index + 1) * 2);
+      expect(definitions(after.filter((job) => job.owner?.agentId !== agentId))).toEqual(before);
+      expectCronReply(
+        await manage(agentId, "default", "cron.list", {
+          agentId,
+          includeDisabled: true,
+          compact: true,
+        }),
+        expect.objectContaining({
+          total: 2,
+          jobs: expect.arrayContaining(
+            after
+              .filter((job) => job.owner?.agentId === agentId)
+              .map(({ id }) => expect.objectContaining({ id })),
+          ),
+        }),
+      );
+    }
+    const six = definitions(await stored());
+    for (const agentId of ["ops", "researcher", "scout"]) {
+      for (const key of keys) {
+        await manage(agentId, "default", "cron.add", { ...spec(key) });
+      }
+    }
+    expect(definitions(await stored())).toEqual(six);
+    for (const key of keys) {
+      await manage("ops", "work", "cron.add", { ...spec(key) });
+    }
+    expect(await stored()).toHaveLength(8);
+    expect(definitions((await stored()).filter((job) => job.owner?.accountId !== "work"))).toEqual(
+      six,
+    );
+    const owned = (await stored()).find((job) => job.owner?.agentId === "ops")!;
+    // Execution routing can change without transferring declaration ownership.
+    await cron.update(owned.id, { agentId: "scout" });
+    const retried = await manage("ops", "DEFAULT", "cron.add", { ...spec(owned.declarationKey!) });
+    expectCronReply(
+      retried,
+      expect.objectContaining({ job: expect.objectContaining({ id: owned.id }) }),
+    );
+    const foreign = (await stored()).find((job) => job.owner?.agentId === "researcher")!;
+    expectCronReply(
+      await manage("ops", "default", "cron.get", { id: foreign.id }),
+      expect.objectContaining({ id: foreign.id }),
+    );
+    await manage("ops", "default", "cron.update", { id: foreign.id, patch: { enabled: false } });
+    expect((await stored()).find((job) => job.id === foreign.id)?.enabled).toBe(false);
+    await manage("ops", "default", "cron.remove", { id: foreign.id });
+    expect((await stored()).some((job) => job.id === foreign.id)).toBe(false);
+  });
 
   it("filters operator commands, foreign streams and foreign trusted jobs from caller-scoped cron.list", async () => {
     getRuntimeConfig.mockReturnValue({});
