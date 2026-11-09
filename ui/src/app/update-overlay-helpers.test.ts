@@ -271,7 +271,7 @@ describe("update status localization", () => {
               name: "install",
               log: {
                 exitCode: 1,
-                stderrTail: "Progress: resolved 1\nENOSPC: no space left on device, write",
+                stderrTail: `Progress: resolved 1\nENOSPC: no space left on device, write ${"x".repeat(140)}🦞`,
               },
             },
           ],
@@ -279,7 +279,7 @@ describe("update status localization", () => {
       })?.banner,
     ).toEqual({
       tone: "danger",
-      text: "Couldn’t complete install: ENOSPC: no space left on device, write. Couldn’t install dependencies. Fix the install error and retry. If Ask OpenClaw is unavailable, run `openclaw triage` on the computer running OpenClaw to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
+      text: `Couldn’t complete install: ENOSPC: no space left on device, write ${"x".repeat(140)}. Couldn’t install dependencies. Fix the install error and retry. If Ask OpenClaw is unavailable, run \`openclaw triage\` on the computer running OpenClaw to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.`,
     });
   });
 
@@ -312,37 +312,6 @@ describe("update status localization", () => {
       expect(projected.updateStatusBanner?.text).not.toContain(password);
     },
   );
-
-  it("keeps a boundary emoji whole when shortening the recorded cause", () => {
-    const prefix = "npm ERR! code ELIFECYCLE ";
-    const line = `${prefix}${"x".repeat(179 - prefix.length)}😀tail`;
-    const projected = projectUpdateStatusResponse(
-      {
-        sentinel: {
-          kind: "update",
-          status: "error",
-          ts: 1_000,
-          stats: {
-            reason: "global-install-failed",
-            steps: [{ name: "global update", log: { exitCode: 1, stderrTail: line } }],
-          },
-        },
-      },
-      { updateStatusBanner: null, recordedUpdateAttempt: null, heldUpdateCampaignId: null },
-    );
-
-    const detail = projected.failure?.attempt?.failure?.detail;
-    expect(detail).toContain(prefix);
-    expect(detail?.isWellFormed()).toBe(true);
-    expect(detail?.includes("�")).toBe(false);
-    // truncateUtf16Safe keeps the whole pair or drops it; never a lone high surrogate.
-    expect(detail?.length).toBeLessThanOrEqual(180);
-    expect(detail?.endsWith("😀") || detail?.endsWith("…") || (detail?.length ?? 0) < 180).toBe(
-      true,
-    );
-    // Base slice(0, 180) leaves a lone high surrogate at the cut.
-    expect(line.slice(0, 180).isWellFormed()).toBe(false);
-  });
 
   it.each(["disk-read-only", "constructor", "__proto__", "toString"])(
     "preserves unknown status %s inside localized fallback guidance",

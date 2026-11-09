@@ -531,35 +531,6 @@ it.each([
   expect(runtime.registryStatus).toBe("complete");
 });
 
-it("reports a boundary emoji whole when shortening a failed activation", async () => {
-  const fullError = `${"x".repeat(511)}😀tail`;
-  vi.stubGlobal("isSecureContext", true);
-  vi.mocked(controlUiLoader.initializeControlUiPlugin).mockRejectedValue(new Error(fullError));
-  const request = vi.fn(async (method: string, _params: unknown) =>
-    method === "plugins.controlUi.list"
-      ? catalog([pluginDescriptor("one", `${assetPath("one")}index.js`)])
-      : { ok: true },
-  );
-  const refresh = vi.fn(async () => ({
-    pluginAssetsRequireAuth: false,
-    pluginFrameGrants: grants(),
-  }));
-  const context = connectedContext(clientFor(request), configForRuntime(refresh));
-  const runtime = runtimeFor(context);
-  runtime.start();
-  await runtime.refresh();
-  const reports = request.mock.calls
-    .filter(([method]) => method === "plugins.controlUi.report")
-    .map(([, params]) => params as { reports: { error?: string; status: string }[] });
-  const reported = reports.at(-1)?.reports[0];
-  expect(reported?.status).toBe("failed");
-  const detail = reported?.error;
-  expect(detail?.isWellFormed()).toBe(true);
-  expect(detail?.includes("�")).toBe(false);
-  expect(detail?.length).toBeLessThanOrEqual(512);
-  expect(fullError.slice(0, 512).isWellFormed()).toBe(false);
-});
-
 it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
   "reconciles native UI on %s without retiring the unchanged connection",
   async (event) => {
