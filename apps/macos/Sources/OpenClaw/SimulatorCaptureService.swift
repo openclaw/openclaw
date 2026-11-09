@@ -42,6 +42,7 @@ final class SimulatorCaptureService {
     private var capturePipe: Pipe?
     private var captureErrorPipe: Pipe?
     private var touchErrorPipe: Pipe?
+    private var touchAckPipe: Pipe?
     private var touchInputPipe: Pipe?
     private var deviceUDID: String?
     private var frames: SimulatorFrameBuffer?
@@ -50,6 +51,7 @@ final class SimulatorCaptureService {
     private var expiry: Task<Void, Never>?
     private var inputInProgress = false
     private var heldTouch = false
+    private var pendingCancelAckTarget: UInt64?
 
     func start(executionId: String) async throws -> Frame {
         guard self.reservationId == nil else { throw CaptureError.busy }
@@ -88,10 +90,15 @@ final class SimulatorCaptureService {
             let touch = try Self.helper("openclaw-simulator-touch", arguments: [udid])
             let touchInputPipe = Pipe()
             let touchErrorPipe = Pipe()
+            let touchAckPipe = Pipe()
             touch.standardInput = touchInputPipe
             touch.standardError = touchErrorPipe
+            touch.standardOutput = touchAckPipe
             touchErrorPipe.fileHandleForReading.readabilityHandler = { handle in
                 touchOutput.append(handle.availableData)
+            }
+            touchAckPipe.fileHandleForReading.readabilityHandler = { handle in
+                touchOutput.appendAck(handle.availableData)
             }
             touch.terminationHandler = { process in
                 touchOutput.stop("input exited with status \(process.terminationStatus)")
@@ -100,6 +107,7 @@ final class SimulatorCaptureService {
             self.touchProcess = touch
             self.touchInputPipe = touchInputPipe
             self.touchErrorPipe = touchErrorPipe
+            self.touchAckPipe = touchAckPipe
             self.touchReady = touchOutput
 
             let deadline = Date().addingTimeInterval(5)
@@ -282,17 +290,20 @@ final class SimulatorCaptureService {
     private func cancelHeldTouch(sessionId: String) {
         guard self.sessionId == sessionId, self.heldTouch else { return }
         self.heldTouch = false
+        self.pendingCancelAckTarget = (self.touchReady?.cancelCount ?? 0) + 1
         guard self.touchProcess?.isRunning == true else { return }
         _ = try? self.touchInputPipe?.fileHandleForWriting.write(contentsOf: Data([13, 0, 0, 0, 0, 0, 0, 0, 0]))
     }
 
     func stop(sessionId: String? = nil) async {
         if let sessionId, self.sessionId != sessionId { return }
-        let hadHeldTouch = self.heldTouch
         if let activeSession = self.sessionId { self.cancelHeldTouch(sessionId: activeSession) }
+        let cancelAckTarget = self.pendingCancelAckTarget
         let touchProcess = self.touchProcess
         let captureProcess = self.captureProcess
         let touchInputPipe = self.touchInputPipe
+        let touchAckPipe = self.touchAckPipe
+        let touchReady = self.touchReady
         self.reservationId = nil
         self.sessionId = nil
         self.executionId = nil
@@ -306,16 +317,24 @@ final class SimulatorCaptureService {
         self.capturePipe = nil
         self.captureErrorPipe = nil
         self.touchErrorPipe = nil
+        self.touchAckPipe = nil
         self.touchInputPipe = nil
         self.deviceUDID = nil
         self.frames = nil
         self.touchReady = nil
         self.heldTouch = false
-        if hadHeldTouch, touchProcess?.isRunning == true, touchInputPipe != nil {
-            // Give the HID helper a bounded chance to process the owner cancel.
-            try? await Task.sleep(for: .milliseconds(50))
-        }
+        self.pendingCancelAckTarget = nil
         try? touchInputPipe?.fileHandleForWriting.close()
+        if let cancelAckTarget {
+            let deadline = Date().addingTimeInterval(0.5)
+            while touchProcess?.isRunning == true,
+                  (touchReady?.cancelCount ?? 0) < cancelAckTarget,
+                  Date() < deadline
+            {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        touchAckPipe?.fileHandleForReading.readabilityHandler = nil
         if touchProcess?.isRunning == true { touchProcess?.terminate() }
         if captureProcess?.isRunning == true { captureProcess?.terminate() }
     }
@@ -431,13 +450,15 @@ final class SimulatorFrameBuffer: @unchecked Sendable {
     }
 }
 
-private final class SimulatorTouchReadiness: @unchecked Sendable {
+final class SimulatorTouchReadiness: @unchecked Sendable {
     private let lock = NSLock()
     private var output = ""
     private var isReady = false
     private var stoppedReason: String?
+    private var acknowledgments: UInt64 = 0
     var ready: Bool { self.lock.withLock { self.isReady } }
     var failure: String? { self.lock.withLock { self.stoppedReason } }
+    var cancelCount: UInt64 { self.lock.withLock { self.acknowledgments } }
     func append(_ data: Data) {
         self.lock.withLock {
             self.output = String((self.output + String(decoding: data, as: UTF8.self)).suffix(500))
@@ -446,5 +467,8 @@ private final class SimulatorTouchReadiness: @unchecked Sendable {
     }
     func stop(_ reason: String) {
         self.lock.withLock { self.stoppedReason = reason }
+    }
+    func appendAck(_ data: Data) {
+        self.lock.withLock { self.acknowledgments += UInt64(data.filter { $0 == 1 }.count) }
     }
 }

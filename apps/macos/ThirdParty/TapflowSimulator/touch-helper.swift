@@ -541,15 +541,31 @@ func u32BE(_ data: Data, offset: Int) -> UInt32 {
     return data.subdata(in: offset..<offset+4).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
 }
 
+// OpenClaw lifecycle patch: cancel an owned touch before the helper exits.
+// A one-byte stdout acknowledgment lets the owner wait for injection before termination.
+func cancelCurrentTouch() {
+    let down = touchDown
+    touchDown = .none
+    if down == .none { return }
+    if down == .digitizer && injectDigitizer(x: lastX, y: lastY, eventType: kNSLeftMouseUp, cancel: true) { return }
+    inject(x: lastX, y: lastY, eventType: kNSLeftMouseUp)
+}
+
+func exitAfterInputEOF() -> Never {
+    cancelCurrentTouch()
+    FileHandle.standardOutput.write(Data([1]))
+    exit(0)
+}
+
 DispatchQueue.global(qos: .userInteractive).async {
     while true {
-        guard let header = readExact(length: 1) else { exit(0) }
+        guard let header = readExact(length: 1) else { exitAfterInputEOF() }
         let type = header[0]
 
         switch type {
         case 6, 7, 8:
             // Two-finger frame: 16 bytes — x1,y1,x2,y2 as float32BE
-            guard let rest = readExact(length: 16) else { exit(0) }
+            guard let rest = readExact(length: 16) else { exitAfterInputEOF() }
             let x1 = f32BE(rest, offset: 0)
             let y1 = f32BE(rest, offset: 4)
             let x2 = f32BE(rest, offset: 8)
@@ -571,7 +587,7 @@ DispatchQueue.global(qos: .userInteractive).async {
             }
         default:
             // Single-finger / button frame: 8 bytes
-            guard let rest = readExact(length: 8) else { exit(0) }
+            guard let rest = readExact(length: 8) else { exitAfterInputEOF() }
             let x = f32BE(rest, offset: 0)
             let y = f32BE(rest, offset: 4)
             switch type {
@@ -585,13 +601,8 @@ DispatchQueue.global(qos: .userInteractive).async {
                 touchDown = .none
                 inject(x: lastX, y: lastY, eventType: kNSLeftMouseUp)
             case 13:
-                // Cancel the touch (#1115). Never leaves it down: where the cancel cannot be sent, it is lifted with an
-                // up, which is what an end does.
-                let down = touchDown
-                touchDown = .none
-                if down == .none { break }
-                if down == .digitizer && injectDigitizer(x: lastX, y: lastY, eventType: kNSLeftMouseUp, cancel: true) { break }
-                inject(x: lastX, y: lastY, eventType: kNSLeftMouseUp)
+                cancelCurrentTouch()
+                FileHandle.standardOutput.write(Data([1]))
             case 4:
                 let usagePage = u32BE(rest, offset: 0)
                 let usage     = u32BE(rest, offset: 4)

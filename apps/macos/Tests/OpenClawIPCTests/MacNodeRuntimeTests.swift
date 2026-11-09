@@ -31,6 +31,15 @@ struct MacNodeRuntimeTests {
         #expect(!frame.isFresh(at: frame.receivedAt.addingTimeInterval(4)))
     }
 
+    @Test func `Simulator HID cancel acknowledgment is tracked`() {
+        let readiness = SimulatorTouchReadiness()
+        readiness.append(Data("touch-helper ready".utf8))
+        #expect(readiness.ready)
+        #expect(readiness.cancelCount == 0)
+        readiness.appendAck(Data([1]))
+        #expect(readiness.cancelCount == 1)
+    }
+
     private actor ComputerProviderWorkerProbe: MacNodeHostWorking {
         private let commands: Set<String>
         private let supportsEntered: AsyncTestGate?
