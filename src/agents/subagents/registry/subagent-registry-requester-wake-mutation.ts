@@ -1,3 +1,4 @@
+import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
@@ -6,11 +7,12 @@ import type {
   RequesterWakeCommittedWrite,
   RequesterWakeMutation,
 } from "../completion/subagent-completion-mutation.types.js";
+import { captureSubagentControllerInputRetirement } from "./subagent-controller-inputs.js";
 import type { SubagentLifecycleWakeContext } from "./subagent-registry-lifecycle-context.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import { sameRequesterSettleRunIdentity } from "./subagent-requester-settle-identity.js";
-import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export type RequesterWakeMutationReceipt = { committed?: RequesterWakeCommittedWrite };
 
@@ -118,4 +120,146 @@ export function settleRequesterSettleWakeBatch(
     stateContext,
     receipt,
   );
+}
+
+// Observed outcomes belong to the run owner, not the transient evaluation. Weak keys release
+// retired owners; the scope keeps a later yield generation from consuming an older receipt.
+export const pendingRequesterSettlements = new WeakMap<
+  object,
+  {
+    scope: string;
+    rearmGeneration: number | undefined;
+    receipt: RequesterWakeMutationReceipt;
+    stateContext: OpenClawStateWorkerContext;
+    settle: () => Promise<void>;
+  }
+>();
+export function hasPendingRequesterSettlement(
+  context: SubagentLifecycleWakeContext,
+  entry: SubagentRunRecord,
+): boolean {
+  const pending = pendingRequesterSettlements.get(getSubagentRunRuntimeKey(entry));
+  if (!pending) {
+    return false;
+  }
+  try {
+    assertSubagentRegistryWriteSourceCurrent(pending.stateContext);
+  } catch {
+    return false;
+  }
+  return isRetainedRequesterSettleWakeMember(
+    context,
+    entry,
+    pending.rearmGeneration,
+    pending.receipt,
+  );
+}
+
+/** Retain the observed outcome until its commit and requester lifecycle effect settle. */
+export function createRequesterWakeSettlement(params: {
+  context: SubagentLifecycleWakeContext;
+  scope: string;
+  batch: readonly SubagentRunRecord[];
+  rearmGeneration: number | undefined;
+  outcome: SubagentAnnounceDeliveryResult | undefined;
+  onCommitted?: () => void | Promise<void>;
+  stateContext: OpenClawStateWorkerContext;
+  admittedWake: RequesterSettleWakeState | undefined;
+  release: (members: readonly SubagentRunRecord[]) => void;
+}): () => Promise<void> {
+  const {
+    context,
+    scope,
+    batch,
+    rearmGeneration,
+    outcome,
+    onCommitted,
+    stateContext,
+    admittedWake,
+    release,
+  } = params;
+  // Retry bookkeeping with the observed outcome, never by replaying delivery or inventing failure.
+  const receipt: RequesterWakeMutationReceipt = {};
+  const retireInputs = batch.map(captureSubagentControllerInputRetirement);
+  const settlement = {
+    scope,
+    rearmGeneration,
+    receipt,
+    stateContext,
+    settle: async (): Promise<void> => {
+      const members = batch.filter(
+        (member) =>
+          pendingRequesterSettlements.get(getSubagentRunRuntimeKey(member)) === settlement &&
+          isRetainedRequesterSettleWakeMember(context, member, rearmGeneration, receipt),
+      );
+      // A quiet decision needs its whole cohort; a recorded outcome stays with surviving peers.
+      const settlesMembers =
+        members.length > 0 &&
+        (outcome !== undefined ||
+          receipt.committed !== undefined ||
+          members.length === batch.length);
+      if (
+        settlesMembers &&
+        !(await settleRequesterSettleWakeBatch(
+          context,
+          members,
+          rearmGeneration,
+          outcome,
+          stateContext,
+          receipt,
+        ))
+      ) {
+        return;
+      }
+      if (settlesMembers) {
+        const requester = batch[0];
+        if (
+          !admittedWake?.pauseNotice &&
+          admittedWake?.requesterYieldBatch &&
+          admittedWake.requesterRunId &&
+          requester?.completionRequesterSessionId &&
+          outcome?.delivered !== true
+        ) {
+          // The committed handoff failed without a successor. Never close a
+          // newer turn, a reset, or a requester already stopped by its user.
+          await persistGatewaySessionLifecycleEvent({
+            sessionKey: requester.requesterSessionKey,
+            agentId: requester.requesterAgentId,
+            expectedWriter: {
+              runId: admittedWake.requesterRunId,
+              sessionId: requester.completionRequesterSessionId,
+              lifecycleRevision: requester.completionRequesterLifecycleRevision,
+              requireYielded: true,
+            },
+            event: {
+              runId: admittedWake.requesterRunId,
+              sessionId: requester.completionRequesterSessionId,
+              ts: Date.now(),
+              data: {
+                phase: "error",
+                error: outcome?.error ?? "Child completion could not continue the yielded request.",
+              },
+            },
+          });
+        }
+        for (const retire of retireInputs) {
+          retire();
+        }
+        await onCommitted?.();
+      }
+      for (const member of batch) {
+        const key = getSubagentRunRuntimeKey(member);
+        if (pendingRequesterSettlements.get(key) === settlement) {
+          pendingRequesterSettlements.delete(key);
+        }
+      }
+      if (settlesMembers) {
+        release(members);
+      }
+    },
+  };
+  for (const member of batch) {
+    pendingRequesterSettlements.set(getSubagentRunRuntimeKey(member), settlement);
+  }
+  return settlement.settle;
 }

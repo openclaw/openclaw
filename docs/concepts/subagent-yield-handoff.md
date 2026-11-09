@@ -67,6 +67,10 @@ dependency after its pause notice is consumed. When that requester finishes or
 is released, the completion owner closes the wait with a recorded error. The
 sweeper also reconciles waits whose requester ended before the child parked.
 Waiting for a live requester or owned descendants has no elapsed-time limit.
+The yielded batch retains the original requester run ID after releasing its
+execution binding. If completion delivery permanently fails without admitting a
+successor, settlement closes that exact parked lifecycle with a recorded error.
+A newer turn, Stop, or reset rejects the stale terminal write.
 A leaf that an earlier version left paused without a recorded wait keeps its
 existing continuation behavior. A kill
 claim on a paused run is never settled over; cancellation stays with the kill path.

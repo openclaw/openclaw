@@ -8,6 +8,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { hasSubagentYieldWaitSource } from "./subagent-registry-read.js";
 import { resolveYieldedRunContinuation } from "./subagent-registry-run-pause.js";
 import type { createSubagentSweepReadScope } from "./subagent-registry-sweep-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -40,9 +41,21 @@ export async function settleUnreachableYieldedSubagentRun(params: {
     requesterEnded =
       !requester || requester.archivedAt !== undefined || isTerminalSessionStatus(requester.status);
   }
-  const continuation = isYieldedSubagentRun(entry)
+  const retired = subagentRuns.isCompletionAuthorityRetired(entry);
+  let continuation = isYieldedSubagentRun(entry)
     ? resolveYieldedRunContinuation(entry, requesterEnded)
     : undefined;
+  if (
+    continuation?.state === "continuable" &&
+    retired &&
+    !entry.collect &&
+    !hasSubagentYieldWaitSource(entry)
+  ) {
+    continuation = {
+      state: "unreachable",
+      error: "Descendant completion can no longer continue this yielded requester.",
+    };
+  }
   if (continuation?.state !== "unreachable") {
     return false;
   }
@@ -52,7 +65,6 @@ export async function settleUnreachableYieldedSubagentRun(params: {
     status: "error" as const,
     error: continuation.error,
   };
-  const retired = subagentRuns.isCompletionAuthorityRetired(entry);
   await complete(
     {
       runId,

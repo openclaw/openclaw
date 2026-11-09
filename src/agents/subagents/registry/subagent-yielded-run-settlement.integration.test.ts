@@ -211,9 +211,16 @@ describe("yielded run settlement", () => {
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
   };
 
-  it.each(["done", "missing", "live"] as const)(
-    "settles a restored message wait only when its requester is gone (%s)",
-    async (requesterState) => {
+  it.each(
+    (["done", "missing", "live", "descendants-lost"] as const).flatMap((requesterState) =>
+      [false, true].map((expectsCompletionMessage) => ({
+        requesterState,
+        expectsCompletionMessage,
+      })),
+    ),
+  )(
+    "settles a restored yield only when its continuation is gone ($requesterState, completion=$expectsCompletionMessage)",
+    async ({ requesterState, expectsCompletionMessage }) => {
       const runId = "restored-message-wait";
       const childSessionKey = `agent:main:subagent:${runId}`;
       const requesterSessionKey = "agent:main:message-wait-requester";
@@ -250,7 +257,7 @@ describe("yielded run settlement", () => {
         requesterDisplayKey: "message-wait-requester",
         task: "Wait for a continuation from the requester",
         cleanup: requesterState === "live" ? "delete" : "keep",
-        expectsCompletionMessage: false,
+        expectsCompletionMessage,
         gatewayContextResolver,
       });
       expect(subagentRuns.get(runId)?.execution.status).toBe("running");
@@ -265,6 +272,9 @@ describe("yielded run settlement", () => {
       await mutateSubagentRuns([runId], (rows) => {
         const current = rows.get(runId)!;
         const paused = { ...current };
+        if (requesterState === "descendants-lost") {
+          delete paused.waitForMessage;
+        }
         markSubagentRunPausedAfterYield({ entry: paused, endedAt: T0 });
         return { value: undefined, postimages: new Map([[runId, paused]]) };
       });
@@ -284,7 +294,9 @@ describe("yielded run settlement", () => {
       context.localEmbedded = true;
       const gatewayRequest = vi.spyOn(gatewayCall, "callGateway").mockResolvedValue({ ok: true });
       const restored = subagentRuns.get(runId)!;
-      expect(restored.waitForMessage).toBe(true);
+      expect(restored.waitForMessage).toBe(
+        requesterState === "descendants-lost" ? undefined : true,
+      );
       expect(subagentRuns.isCompletionAuthorityRetired(restored)).toBe(true);
       if (requesterState === "live") {
         expect(

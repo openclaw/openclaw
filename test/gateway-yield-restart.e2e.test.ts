@@ -21,11 +21,14 @@ import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js"
 import { createDeferred } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
-it.skipIf(process.platform === "win32").for(["continue", "finish"] as const)(
-  "keeps a message-waiting child parked across restart while its requester resumes (%s)",
+it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-stopped"] as const)(
+  "preserves yielded work through an actual Gateway restart (%s)",
   { timeout: 180_000 },
   async (action, { signal, onTestFailed }) => {
-    const rootKey = "agent:main:main:thread:yield-restart";
+    const parkedRoot = action === "root-source-stopped";
+    const rootKey = parkedRoot
+      ? "agent:main:dashboard:yield-restart"
+      : "agent:main:main:thread:yield-restart";
     const rootPrompt = "YIELD_RESTART_REQUESTER";
     const childPrompt = "YIELD_RESTART_CHILD";
     const failed = createDeferred<never>();
@@ -33,6 +36,7 @@ it.skipIf(process.platform === "win32").for(["continue", "finish"] as const)(
     let childKey: string | undefined;
     let childRunId: string | undefined;
     let childCalls = 0;
+    let rootCalls = 0;
     let rootResumes = 0;
     let sequence = 0;
     let sentContinuation = false;
@@ -76,6 +80,10 @@ it.skipIf(process.platform === "win32").for(["continue", "finish"] as const)(
               reply("PARKED_CHILD_COMPLETED");
               return;
             }
+            if (action === "root-source-stopped") {
+              // Shutdown interrupts this executing child, removing the root's wake source.
+              return;
+            }
             call("sessions_yield", {
               waitFor: "message",
               acknowledgment: "Waiting for the requester continuation.",
@@ -83,6 +91,7 @@ it.skipIf(process.platform === "win32").for(["continue", "finish"] as const)(
             return;
           }
           assert(text.includes(rootPrompt), "Unexpected synthetic requester input");
+          rootCalls++;
           const spawned = input.find(
             (item) => isRecord(item) && item.type === "function_call_output",
           );
@@ -102,6 +111,12 @@ it.skipIf(process.platform === "win32").for(["continue", "finish"] as const)(
           childRunId ??= receipt.runId;
           if (text.includes("The Gateway restarted while you were working.")) {
             rootResumes++;
+          }
+          if (parkedRoot) {
+            call("sessions_yield", {});
+            return;
+          }
+          if (text.includes("The Gateway restarted while you were working.")) {
             finishRequester = () => reply("REQUESTER_FINISHED_WITHOUT_CONTINUATION");
             if (text.includes("PARKED_CHILD_COMPLETED")) {
               reply("REQUESTER_RECEIVED_CHILD_COMPLETION");
@@ -144,7 +159,10 @@ it.skipIf(process.platform === "win32").for(["continue", "finish"] as const)(
       async () => {
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
-        await client.request("chat.send", {
+        if (parkedRoot) {
+          await client.request("sessions.create", { key: rootKey, agentId: "main" });
+        }
+        const root = await client.request<{ runId: string }>("chat.send", {
           sessionKey: rootKey,
           message: rootPrompt,
           idempotencyKey: randomUUID(),
@@ -160,25 +178,88 @@ it.skipIf(process.platform === "win32").for(["continue", "finish"] as const)(
         );
         assert(childKey);
         assert(childRunId);
-        expect(
-          await client.request("agent.wait", { runId: childRunId, timeoutMs: 30_000 }),
-        ).toMatchObject({ status: "ok", yielded: true });
-        const parked = readRestartSession(instance.state.agentDir("main"), childKey);
+        if (action !== "root-source-stopped") {
+          expect(
+            await client.request("agent.wait", { runId: childRunId, timeoutMs: 30_000 }),
+          ).toMatchObject({ status: "ok", yielded: true });
+        } else {
+          await vi.waitFor(() => expect(childCalls).toBe(1), { timeout: 30_000 });
+        }
+        if (parkedRoot) {
+          expect(
+            await client.request("agent.wait", { runId: root.runId, timeoutMs: 30_000 }),
+          ).toMatchObject({ status: "ok", yielded: true });
+          // agent.wait observes the yielded terminal before controller cleanup.
+          // Restart only after the real root execution and terminal write have drained.
+          await vi.waitFor(
+            async () => {
+              const history = await client!.request<{
+                sessionInfo: { hasActiveRun: boolean };
+              }>("chat.history", { sessionKey: rootKey });
+              expect(history.sessionInfo.hasActiveRun).toBe(false);
+            },
+            { timeout: 15_000 },
+          );
+        }
+        const parkedKey = parkedRoot ? rootKey : childKey;
+        const parked = readRestartSession(instance.state.agentDir("main"), parkedKey);
         expect(parked?.lifecycleRunId).toEqual(expect.any(String));
         expect(parked?.status).toBeUndefined();
         const callsBeforeRestart = childCalls;
+        const rootCallsBeforeRestart = rootCalls;
         phase = "restart";
         await instance.stopGateway();
         await client.stopAndWait();
         client = undefined;
-        expect(
-          readRestartSession(instance.state.agentDir("main"), childKey)?.resumeAfterRestart,
-        ).toBeDefined();
+        expect
+          .soft(readRestartSession(instance.state.agentDir("main"), parkedKey)?.resumeAfterRestart)
+          .toBeDefined();
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
-        await vi.waitFor(() => expect(rootResumes).toBe(1), { timeout: 20_000 });
+        await vi.waitFor(
+          () =>
+            parkedRoot
+              ? expect(
+                  readRestartSession(instance.state.agentDir("main"), parkedKey)
+                    ?.resumeAfterRestart,
+                ).toBeUndefined()
+              : expect(rootResumes).toBe(1),
+          { timeout: 20_000 },
+        );
+        if (action === "root-source-stopped") {
+          phase = "root wait lost its child execution";
+          await vi.waitFor(
+            async () => {
+              const closed = readRestartSession(instance.state.agentDir("main"), rootKey);
+              expect(closed?.status).toBe("failed");
+              expect(closed?.lifecycleRunId).toBeUndefined();
+              expect(closed?.lastRunError).toMatch(/wait|child|restart/i);
+              const history = await client!.request<{ messages: unknown[] }>("chat.history", {
+                sessionKey: rootKey,
+              });
+              const notices = history.messages.filter(
+                (message) => isRecord(message) && message.customType === "run-failed-before-reply",
+              );
+              expect(notices).toEqual(
+                expect.arrayContaining([
+                  expect.objectContaining({
+                    display: true,
+                    content: expect.stringContaining(
+                      "the child completion this run was waiting for can no longer arrive",
+                    ),
+                    openclawRunError: expect.objectContaining({ runId: root.runId }),
+                  }),
+                ]),
+              );
+            },
+            { timeout: 15_000 },
+          );
+          expect(rootCalls).toBe(rootCallsBeforeRestart);
+          expect(rootResumes).toBe(0);
+          return;
+        }
         phase = "restored parked child";
-        const restored = readRestartSession(instance.state.agentDir("main"), childKey);
+        const restored = readRestartSession(instance.state.agentDir("main"), parkedKey);
         process.stdout.write(
           `[yield-restart-proof] ${JSON.stringify({
             childKey,

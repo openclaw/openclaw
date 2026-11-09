@@ -1,6 +1,6 @@
 ---
 doc-schema-version: 1
-summary: "Gateway restarts send one ordinary resume input to interrupted root sessions, including after a crash"
+summary: "Gateway restart recovery for interrupted root executions and recorded yield waits"
 read_when:
   - You want to know what happens to agent work when the Gateway restarts
   - A restart interrupted an agent, sub-agent, or background process
@@ -8,10 +8,12 @@ read_when:
 title: "Restart recovery"
 ---
 
-A graceful Gateway stop or restart records which root sessions are working, then
-aborts that work promptly. This includes accepted turns still preparing their
-runtime when shutdown begins. At the next startup, each marked session gets one
-ordinary system input asking the agent to inspect current state and continue.
+A graceful Gateway stop or restart records which sessions are working or waiting,
+then aborts executing work promptly. This includes accepted turns still preparing
+their runtime when shutdown begins. At the next startup, an interrupted root
+execution gets one ordinary system input asking the agent to inspect current
+state and continue. Recorded yield waits stay parked when their wake source
+survives; a lost source produces a visible failure instead.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution.
 
@@ -134,7 +136,8 @@ heartbeat observer works independently of the optional V8 flight recorder.
 | Root session left unfinished in a pending crash-recovery interval | Receives the same single resume input at the next startup                       |
 | Accepted user input captured in that shutdown marker              | Runs after the resume input, in FIFO order, with its sender's current authority |
 | Running sub-agent                                                 | Stops quietly; its root requester receives the resume input                     |
-| Sub-agent parked in `sessions_yield waitFor:"message"`            | Keeps its recorded wait; no model request runs until its requester continues it |
+| Session parked in `sessions_yield` with a surviving wake source   | Keeps its recorded wait, including dashboard roots; no startup model request    |
+| Yielded session whose child completion can no longer arrive       | Closes with a recorded, visible failure                                         |
 | Background process                                                | Ends with the old process; its root session receives the resume input           |
 | Already-produced outbound messages and media                      | Keep the existing delivery queue and delivery reconciliation                    |
 | Scheduled jobs                                                    | Keep cron's own scheduling, catch-up, and interruption policy                   |
@@ -151,7 +154,7 @@ ACP/external-harness sessions are excluded.
 
 The marker is a small private field on the existing session entry. It records the
 IDs of accepted user inputs still queued behind that session at shutdown. The
-Gateway writes one marker per running root session or parked message wait,
+Gateway writes one marker per running root session or recorded yield wait,
 batched by session store, before aborting work. It uses the existing session-entry JSON in SQLite and needs
 no schema migration.
 Crash recovery uses the nonterminal run marker committed with accepted plain
@@ -577,11 +580,22 @@ admission and retains task-owned result delivery. If the requester finishes or
 is released without continuing it, the wait closes with a recorded outcome.
 Ordinary ownerless mid-turn runs still follow the orphan recovery rules above.
 
-A requester yielded for running children keeps the ordinary root recovery path:
-those executions stop during shutdown, and its resume input reconciles their
-recorded work. It is not re-parked waiting for completions from stopped executions.
+A root or nested requester already parked in `sessions_yield` retains its exact
+yielded lifecycle when its recorded child dependency can still complete. This
+includes dashboard/operator sessions; existing `sessions_yield` rules still
+determine which completion they await. Startup
+does not send a resume input or run the model for that wait. A fresh continuation
+of the surviving child delivers its completion through the ordinary requester
+handoff.
 
-The parent's single resume input covers reconciliation of its children. It can
+If shutdown stopped the remaining child executions, or the recorded dependency
+chain has no surviving continuation source, startup closes the yielded run with
+a visible failure explaining that its child completion can no longer arrive.
+Its transcript remains available for inspection and a new user message. A failed
+completion handoff likewise closes its original parked requester at the handoff
+owner; it cannot close a newer turn or undo Stop.
+
+A running parent's single resume input covers reconciliation of its children. It can
 inspect their transcripts and results with the existing sub-agent tools, then
 send a new instruction or spawn replacements after checking what already happened.
 See [Sub-agent operations](/tools/subagents/operations).

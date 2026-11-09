@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  loadExactSessionEntryReadOnly,
+  replaceSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
+import { readTranscriptEventRows } from "../../../config/sessions/session-accessor.sqlite-read.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
@@ -195,6 +201,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
   waitForDeliveredCleanup,
   waitForAgentCallCount,
   getRequesterWakeCalls,
+  getFixture,
   createGatewayContext,
   sendMessageMock,
   setEmptyReply,
@@ -249,10 +256,12 @@ export function registerRequesterWakeReceiptBoundaryTests({
     "delivery replacement",
     "rejected wake",
     "rejected persistence",
+    "rejected newer yield",
+    "rejected stopped",
     "empty reply",
   ])("settles requester receipts: %s", async (scenario) => {
     const rejectPersistence = scenario === "rejected persistence";
-    const rejectRequesterWake = scenario === "rejected wake" || rejectPersistence;
+    const rejectRequesterWake = scenario.startsWith("rejected");
     const emptyReply = scenario === "empty reply";
     const receiptDrift = scenario === "transition drift";
     const outcomeDrift = scenario === "outcome drift";
@@ -296,12 +305,29 @@ export function registerRequesterWakeReceiptBoundaryTests({
       !rejectRequesterWake && !emptyReply
         ? holdRequesterWakeReceipts({ holdOutcome: outcomeDrift })
         : undefined;
-    const settleWakeOwner = outcomeDrift || rejectPersistence ? observeRootWork() : undefined;
+    const settleWakeOwner = outcomeDrift || rejectRequesterWake ? observeRootWork() : undefined;
     const yieldTool = createRequesterYieldTool(requesterSessionKey, requesterTurnRunId);
     await expect(
       yieldTool.execute("yield-requester-wake", { message: "Wait for visible children" }),
     ).resolves.toMatchObject({ details: { status: "yielded" } });
 
+    const requesterScope = {
+      agentId: "main",
+      sessionKey: requesterSessionKey,
+      storePath: getFixture().sessionStorePath,
+    };
+    if (rejectRequesterWake) {
+      const entry = getFixture().sessionStore[requesterSessionKey]!;
+      const runId = scenario === "rejected newer yield" ? "newer-yield" : requesterTurnRunId;
+      await replaceSessionEntry(requesterScope, {
+        ...entry,
+        lifecycleRunId: runId,
+        activeWriterRunId: runId,
+        startedAt: Date.now() - 1_000,
+        endedAt: Date.now(),
+        ...(scenario === "rejected stopped" ? { status: "killed" } : {}),
+      });
+    }
     setWakeRefusal(rejectRequesterWake, rejectPersistence);
     await settleTurn(requesterTurnRunId, [alpha, beta]);
     if (heldReceipts) {
@@ -422,6 +448,30 @@ export function registerRequesterWakeReceiptBoundaryTests({
         delivery: { status: "delivered" },
       });
       expect(entry?.requesterSettleWake).toBeUndefined();
+    }
+    if (rejectRequesterWake) {
+      // Cohort publication precedes its parked-lifecycle projection.
+      await settleWakeOwner?.(true);
+      const entry = loadExactSessionEntryReadOnly(requesterScope)?.entry;
+      expect(entry).toMatchObject(
+        scenario === "rejected newer yield"
+          ? { lifecycleRunId: "newer-yield", activeWriterRunId: "newer-yield" }
+          : scenario === "rejected stopped"
+            ? { status: "killed" }
+            : { status: "failed", lastRunId: requesterTurnRunId },
+      );
+      if (scenario === "rejected wake" || rejectPersistence) {
+        const events = readTranscriptEventRows(
+          openOpenClawAgentDatabase({ agentId: "main" }),
+          entry!.sessionId,
+        );
+        expect(events.map((event) => JSON.parse(event.eventJson))).toContainEqual(
+          expect.objectContaining({
+            customType: "run-failed-before-reply",
+            details: expect.objectContaining({ runId: requesterTurnRunId }),
+          }),
+        );
+      }
     }
 
     releaseAgentCall(beta.childSessionKey);
