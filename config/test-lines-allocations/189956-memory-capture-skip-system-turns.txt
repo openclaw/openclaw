@@ -1,0 +1,2 @@
+# Memory auto-capture skips OpenClaw's own [System] retry turns.
+62
