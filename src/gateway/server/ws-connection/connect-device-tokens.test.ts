@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureDeviceToken = vi.hoisted(() => vi.fn());
-vi.mock("../../../infra/device-pairing-tokens.js", () => ({ ensureDeviceToken }));
+vi.mock("../../../infra/device-pairing-tokens.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/device-pairing-tokens.js")>()),
+  ensureDeviceToken,
+}));
 
 import { issueGatewayConnectDeviceTokens } from "./connect-device-tokens.js";
 import type { AuthenticatedGatewayConnect } from "./message-handler-types.js";
