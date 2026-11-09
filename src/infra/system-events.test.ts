@@ -279,6 +279,20 @@ describe("system events (session routing)", () => {
     vi.useRealTimers();
   });
 
+  it.each(["heartbeat poll", "heartbeat wake"])(
+    "preserves reminders mentioning %s while filtering legacy wake prompts",
+    async (phrase) => {
+      const sessionKey = "agent:main:reminder-filter";
+      const reminder = "Reminder: review " + phrase + " failures";
+      enqueueSystemEvent(phrase + ": noop", { sessionKey });
+      enqueueSystemEvent(reminder, { sessionKey });
+      const text = await drainFormattedEvents(sessionKey);
+      expect(text).toContain(reminder);
+      expect(text).not.toContain(phrase + ": noop");
+      expect(peekSystemEvents(sessionKey)).toEqual([]);
+    },
+  );
+
   it("does not leak session-scoped events into main", async () => {
     enqueueSystemEvent("Discord reaction added: ✅", {
       sessionKey: "agent:main:discord:group:123",

@@ -124,6 +124,40 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
+  it.each([
+    ["get", ["approvals", "get"]],
+    ["set", ["approvals", "set", "--file", "must-not-read.json"]],
+    ["allowlist add", ["approvals", "allowlist", "add", "/usr/bin/uname"]],
+    ["allowlist remove", ["approvals", "allowlist", "remove", "/usr/bin/uname"]],
+  ] as const)("%s rejects conflicting targets before policy access", async (_label, args) => {
+    const before = structuredClone(localSnapshot);
+    await expect(runApprovalsCommand([...args, "--gateway", "--node", "macbook"])).rejects.toThrow(
+      "__exit__:1",
+    );
+    expect(runtimeErrors.join("\n")).toContain("Pass only one of --gateway or --node.");
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+    expect(localSnapshot).toEqual(before);
+  });
+
+  it("rejects conflicting targets after named-agent validation without policy access", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({ config: { agents: { entries: { main: {} } } } });
+    await expect(
+      runApprovalsCommand([
+        "approvals",
+        "allowlist",
+        "add",
+        "/usr/bin/uname",
+        "--agent",
+        "main",
+        "--gateway",
+        "--node",
+        "macbook",
+      ]),
+    ).rejects.toThrow("__exit__:1");
+    expect(runtimeErrors.join("\n")).toContain("Pass only one of --gateway or --node.");
+    expect(callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual(["config.get"]);
+  });
+
   it("renders an unstored fresh-install policy as defaults instead of absent", async () => {
     localSnapshot.exists = false;
 

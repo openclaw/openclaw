@@ -221,6 +221,59 @@ describe("managed npm retention", () => {
     expect(hasRetainedManagedNpmInstallMarker(packageDir)).toBe(false);
   });
 
+  it.each([
+    ["legacy", "malformed"],
+    ["legacy", "unreadable"],
+    ["project", "malformed"],
+    ["project", "unreadable"],
+  ] as const)("preserves %s packages when their marker is %s", async (layout, failure) => {
+    const npmDir = path.join(retentionTempDirs.make("openclaw-retention-read-"), "npm");
+    const projectRoot =
+      layout === "legacy"
+        ? npmDir
+        : resolvePluginNpmGenerationProjectDir({
+            npmDir,
+            packageName: "@openclaw/kept-plugin",
+            generationKey: "kept-v1",
+          });
+    const packageDir = path.join(projectRoot, "node_modules", "@openclaw", "kept-plugin");
+    fs.mkdirSync(packageDir, { recursive: true });
+    const sentinel = path.join(packageDir, "keep.txt");
+    fs.writeFileSync(sentinel, "retained bytes");
+    await markRetainedManagedNpmInstall({
+      packageDir,
+      pluginId: "kept-plugin",
+      reason: RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
+    });
+    const markerPath = resolveRetainedManagedNpmInstallMarkerPath(packageDir);
+    if (failure === "malformed") {
+      fs.writeFileSync(markerPath, '{"reason":');
+    }
+    const markerBytes = fs.readFileSync(markerPath);
+    const readFile = fs.readFileSync;
+    const readError = Object.assign(new Error("marker unreadable"), { code: "EACCES" });
+    const readSpy = vi.spyOn(fs, "readFileSync").mockImplementation((...args) => {
+      if (args[0] === markerPath && failure === "unreadable") {
+        throw readError;
+      }
+      return readFile(...args);
+    });
+    const assertCurrent = vi.fn();
+    try {
+      const cleanup = cleanupRetainedManagedNpmInstallGenerations({ npmDir, assertCurrent });
+      if (failure === "unreadable") {
+        await expect(cleanup).rejects.toBe(readError);
+      } else {
+        await expect(cleanup).rejects.toBeInstanceOf(SyntaxError);
+      }
+      expect(assertCurrent).not.toHaveBeenCalled();
+    } finally {
+      readSpy.mockRestore();
+    }
+    expect(fs.readFileSync(sentinel, "utf8")).toBe("retained bytes");
+    expect(fs.readFileSync(markerPath)).toEqual(markerBytes);
+  });
+
   it("preserves a noncanonical project root even when it has a retained marker", async () => {
     const stateDir = retentionTempDirs.make("openclaw-retention-noncanonical-");
     const npmDir = path.join(stateDir, "npm");

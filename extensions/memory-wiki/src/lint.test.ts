@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { describe, expect, it, vi } from "vitest";
+import * as compiler from "./compile.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import {
   renderWikiMarkdown,
@@ -556,6 +557,73 @@ describe("lintMemoryWikiVault", () => {
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain(
       "Frontmatter failed to parse: Unexpected scalar",
     );
+  });
+
+  it.each(["EACCES", "EIO"])(
+    "preserves report notes when the lint writer fails to read them (%s)",
+    async (code) => {
+      const { rootDir, config } = await createVault({
+        config: { render: { createBacklinks: false, createDashboards: false } },
+      });
+      // First run proves the absent report still receives its normal template.
+      const first = await lintMemoryWikiVault(config);
+      const reportPath = path.join(rootDir, "reports", "lint.md");
+      expect(first.reportPath).toBe(reportPath);
+      const note = "Human notes must survive a failed read.";
+      await fs.appendFile(reportPath, "\n## Notes\n" + note + "\n");
+      const originalBytes = await fs.readFile(reportPath);
+      const readError = Object.assign(new Error("injected report read failure"), { code });
+      const readFile = fs.readFile;
+      const compile = compiler.compileMemoryWikiVault;
+      let compiled = false;
+      let injected = false;
+      const readSpy = vi
+        .spyOn(fs, "readFile")
+        .mockImplementation(
+          async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
+            if (compiled && args[0] === reportPath) {
+              injected = true;
+              throw readError;
+            }
+            return readFile(...args);
+          },
+        );
+      const compileSpy = vi
+        .spyOn(compiler, "compileMemoryWikiVault")
+        .mockImplementationOnce(async (...args) => {
+          const result = await compile(...args);
+          compiled = true;
+          return result;
+        });
+      let failure: unknown;
+      try {
+        await lintMemoryWikiVault(config);
+      } catch (error) {
+        failure = error;
+      } finally {
+        readSpy.mockRestore();
+        compileSpy.mockRestore();
+      }
+
+      expect(injected).toBe(true);
+      expect(failure).toBe(readError);
+      expect(await fs.readFile(reportPath)).toEqual(originalBytes);
+      await lintMemoryWikiVault(config);
+      await expect(fs.readFile(reportPath, "utf8")).resolves.toContain(note);
+    },
+  );
+
+  it("does not rewrite an undecodable lint report", async () => {
+    const { rootDir, config } = await createVault({
+      initialize: true,
+      config: { render: { createBacklinks: false, createDashboards: false } },
+    });
+    const reportPath = path.join(rootDir, "reports", "lint.md");
+    const original = Buffer.from([0x23, 0x20, 0xff, 0x0a]);
+    await fs.writeFile(reportPath, original);
+
+    await expect(lintMemoryWikiVault(config)).rejects.toThrow("not valid UTF-8");
+    await expect(fs.readFile(reportPath)).resolves.toEqual(original);
   });
 
   it("keeps the previous lint report when atomic publication fails", async () => {

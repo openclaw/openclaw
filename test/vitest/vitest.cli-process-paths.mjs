@@ -26,6 +26,7 @@ export const cliProcessTestFiles = [
   "src/cli/completion-cli.visibility.test.ts",
   "src/cli/cron-output.process.test.ts",
   "src/cli/gateway-backed-exit-health.process.test.ts",
+  "src/cli/exec-approvals-targets.process.test.ts",
   "src/cli/gateway-backed-exit.process.test.ts",
   "src/cli/gateway-service-capability.process.test.ts",
   "src/cli/gateway-cli/shutdown-hard-exit.process.test.ts",

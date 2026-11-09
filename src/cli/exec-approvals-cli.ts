@@ -47,10 +47,11 @@ import { classifyExecAllowlistScope } from "../infra/exec-command-resolution.js"
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { loadSnapshotLocal, saveSnapshotLocal } from "./exec-approvals-local.js";
+import { resolveTargetNodeId } from "./exec-approvals-target.js";
 import { rethrowExpectedCliError } from "./failure-output.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
-import { nodesCallOpts, resolveCliNodeId } from "./nodes-cli/rpc.js";
+import { nodesCallOpts } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
@@ -122,17 +123,6 @@ async function readApprovalsFile(filePath: string): Promise<string> {
   } finally {
     await handle.close();
   }
-}
-
-async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string | null> {
-  if (opts.gateway) {
-    return null;
-  }
-  const raw = normalizeOptionalString(opts.node) ?? "";
-  if (!raw) {
-    return null;
-  }
-  return await resolveCliNodeId(opts, raw);
 }
 
 async function loadSnapshot(

@@ -70,7 +70,7 @@ describe("Heartbeat cron and exec event ownership", () => {
     expect(ctx.Body).toContain("scheduled reminder has been triggered");
     expect(ctx.Body).toContain(reminder);
     expect(ctx.Body).not.toContain("HEARTBEAT_OK");
-    expect(ctx.Body).not.toContain("heartbeat poll");
+    expect(ctx.Body).not.toContain("[OpenClaw heartbeat poll]");
   }
   const reminder = "Reminder: Send the nightly report";
   function withCronOwner(fn: (fixture: Fixture) => Promise<void>) {
@@ -107,56 +107,62 @@ describe("Heartbeat cron and exec event ownership", () => {
     expect(replySpy).not.toHaveBeenCalled();
   }
 
-  it.each(["outside active hours", "without delivery"])(
-    "builds the cron reminder prompt %s",
-    async (scenario) => {
-      const internal = scenario === "without delivery";
-      const outsideHours = scenario === "outside active hours";
-      await withHeartbeat(
-        async (f) => {
-          f.enqueue(reminder, outsideHours ? "cron:nightly-report" : undefined);
-          f.replySpy.mockResolvedValue({
-            text: internal
-              ? "Handled internally"
-              : outsideHours
-                ? "Overnight report sent"
-                : "Relay this reminder now",
+  it.each([
+    "outside active hours",
+    "without delivery",
+    "mentioning heartbeat wake",
+    "mentioning heartbeat poll",
+  ])("builds the cron reminder prompt %s", async (scenario) => {
+    const reminderText = scenario.startsWith("mentioning ")
+      ? "Reminder: review " + scenario.slice("mentioning ".length) + " failures"
+      : reminder;
+    const internal = scenario === "without delivery";
+    const outsideHours = scenario === "outside active hours";
+    await withHeartbeat(
+      async (f) => {
+        f.enqueue(reminderText, outsideHours ? "cron:nightly-report" : undefined);
+        f.replySpy.mockResolvedValue({
+          text: internal
+            ? "Handled internally"
+            : outsideHours
+              ? "Overnight report sent"
+              : "Relay this reminder now",
+        });
+        const result = await f.run(
+          outsideHours
+            ? {
+                sessionKey: f.sessionKey,
+                source: "cron",
+                intent: "immediate",
+                reason: "cron:nightly-report",
+                deps: { nowMs: () => Date.UTC(2025, 0, 1, 7) },
+              }
+            : { reason: "cron:reminder-job" },
+        );
+        expect(result.status).toBe("ran");
+        if (outsideHours) {
+          expect(f.replySpy).toHaveBeenCalledOnce();
+        }
+        if (internal) {
+          expect(getFirstReplyContext(f.replySpy)).toMatchObject({
+            InternalTurnSource: "cron",
+            Body: expect.stringContaining("Handle this reminder internally"),
           });
-          const result = await f.run(
-            outsideHours
-              ? {
-                  sessionKey: f.sessionKey,
-                  source: "cron",
-                  intent: "immediate",
-                  reason: "cron:nightly-report",
-                  deps: { nowMs: () => Date.UTC(2025, 0, 1, 7) },
-                }
-              : { reason: "cron:reminder-job" },
-          );
-          expect(result.status).toBe("ran");
-          if (outsideHours) {
-            expect(f.replySpy).toHaveBeenCalledOnce();
-          }
-          if (internal) {
-            expect(getFirstReplyContext(f.replySpy)).toMatchObject({
-              InternalTurnSource: "cron",
-              Body: expect.stringContaining("Handle this reminder internally"),
-            });
-            expect(f.sendTelegram).not.toHaveBeenCalled();
-            expect(peekSystemEvents(f.sessionKey)).toEqual([]);
-          } else {
-            expectCronPrompt(getFirstReplyContext(f.replySpy), reminder);
-            expect(f.sendTelegram).toHaveBeenCalled();
-          }
-        },
-        internal
-          ? { target: "none" }
-          : outsideHours
-            ? { activeHours: { start: "08:00", end: "24:00", timezone: "user" } }
-            : {},
-      );
-    },
-  );
+          expect(f.sendTelegram).not.toHaveBeenCalled();
+          expect(peekSystemEvents(f.sessionKey)).toEqual([]);
+        } else {
+          expectCronPrompt(getFirstReplyContext(f.replySpy), reminderText);
+          expect(f.sendTelegram).toHaveBeenCalled();
+          expect(peekSystemEvents(f.sessionKey)).toEqual([]);
+        }
+      },
+      internal
+        ? { target: "none" }
+        : outsideHours
+          ? { activeHours: { start: "08:00", end: "24:00", timezone: "user" } }
+          : {},
+    );
+  });
 
   it("executes a cron wake while its active owner waits for heartbeat settlement", async () => {
     await withCronOwner(async (f) => {
