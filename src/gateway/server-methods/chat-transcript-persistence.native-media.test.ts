@@ -32,3 +32,35 @@ it.each([1, 4].flatMap((count) => [false, true].map((usage) => ({ count, usage }
     ]);
   },
 );
+
+it.each([
+  {
+    name: "fenced MEDIA examples",
+    authored: "Answer ready.\n```\nMEDIA:/tmp/example.png\n```",
+    footer: "custom usage footer",
+  },
+  {
+    name: "an authored line equal to the usage footer",
+    authored: "Answer ready.\ncustom usage footer",
+    footer: "custom usage footer",
+  },
+])("keeps $name in the native final caption", ({ authored, footer }) => {
+  const url = "/tmp/native-0.png";
+  const image = { type: "image" as const, source: { type: "url", url } };
+  const final = `${authored}\nMEDIA:${url}`;
+  const rewritten = buildAssistantDisplayRewrite({
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: final }],
+      __openclaw: { externalId: "native-final" },
+    },
+    responseUsageLine: footer,
+    displayContent: [{ type: "text", text: `Checking files.\n\n${final}\n${footer}` }, image],
+    mediaBySource: new Map([[url, [image]]]),
+    managedMediaUrls: [url],
+  });
+  expect(rewritten.openclawDisplayContent).toEqual([
+    { type: "text", text: `${authored}\n${footer}` },
+    image,
+  ]);
+});
