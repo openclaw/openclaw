@@ -6,7 +6,7 @@ import {
   readPairingConnectErrorDetails,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { throwExpectedCliError } from "../cli/expected-cli-error.js";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
 import { withProgress } from "../cli/progress.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
@@ -117,7 +117,13 @@ export async function statusCommand(
 
   // Structured probe failures belong to nonthrowing JSON; text status keeps failures loud.
   if (health && "error" in health) {
-    throwExpectedCliError(health.error);
+    // Keep the machine output stable (the probe error alone) while the human output
+    // names a concrete recovery step, matching the actionable-error contract.
+    throw new ExpectedCliError({
+      message: health.error,
+      humanOutput: `${health.error}\nRun \`openclaw gateway start\` to start a managed gateway.`,
+      machineOutput: health.error,
+    });
   }
 
   const {
