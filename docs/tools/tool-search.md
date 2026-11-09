@@ -484,6 +484,22 @@ Tune search result limits (values shown are the defaults):
 The runtime clamps `maxSearchLimit` to 1-50 and `searchDefaultLimit` to
 1..`maxSearchLimit`.
 
+Tune the maximum serialized character budget for network-sourced control results
+before external-content wrapping (`20000` when unset, `"auto"` to scale with the
+active model's live tool-result cap less wrapper overhead, or a fixed positive
+integer capped at the live tool-result budget):
+
+```json5
+{
+  tools: {
+    toolSearch: {
+      mode: "tools",
+      maxResultChars: "auto",
+    },
+  },
+}
+```
+
 Disable it:
 
 ```json5

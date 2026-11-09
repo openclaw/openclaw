@@ -210,6 +210,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.toolSearch.exclude[].name": "Excluded Tool Name",
   "tools.toolSearch.searchDefaultLimit": "Tool Search Default Results",
   "tools.toolSearch.maxSearchLimit": "Tool Search Max Results",
+  "tools.toolSearch.maxResultChars": "Tool Search Max Result Chars",
   "tools.codeMode": "Code Mode",
   "tools.codeMode.enabled": "Enable Code Mode",
   "tools.codeMode.executor": "Code Mode Executor",

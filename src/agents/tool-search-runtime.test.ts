@@ -96,7 +96,6 @@ describe("Tool Search flattened call arguments", () => {
     },
   ])("preserves target arguments for $label", ({ arguments: args, expected }) => {
     const { catalogRef } = createRuntime([fakeTool("inspect_resource")]);
-
     expect(readToolSearchCallArgs(args, catalogRef.current)).toEqual({
       id: "inspect_resource",
       input: expected,
@@ -121,10 +120,8 @@ describe("Tool Search flattened call arguments", () => {
       const callTool = createToolSearchTools({ catalogRef, config }).find(
         (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
       );
-
       expect(callTool).toBeDefined();
       await callTool!.execute("structured-call", args);
-
       expect(target.execute).toHaveBeenCalledOnce();
       expect(vi.mocked(target.execute).mock.calls[0]?.[1]).toEqual(expected);
     },
@@ -137,7 +134,6 @@ describe("Tool Search flattened call arguments", () => {
     const callTool = createToolSearchTools({ catalogRef, config }).find(
       (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
     );
-
     expect(callTool).toBeDefined();
     await expect(
       callTool!.execute("ambiguous-call", { name: "inspect_resource", id: "search" }),
@@ -176,7 +172,6 @@ describe("Tool Search dispatcher argument preparation", () => {
         (tool) => tool.name === TOOL_DESCRIBE_RAW_TOOL_NAME,
       );
       expect(describeTool).toBeDefined();
-
       const doubleWrapped = { input: { id: "inspect_resource" } };
       const streamFn = createSingleToolCallStreamFn({
         id: "call-1",
@@ -191,9 +186,7 @@ describe("Tool Search dispatcher argument preparation", () => {
       agent.subscribe((event) => {
         events.push(event);
       });
-
       await agent.prompt("describe inspect_resource with a double-wrapped payload");
-
       expect(findToolExecutionEnd(events)).toMatchObject({
         toolCallId: "call-1",
         isError: false,
@@ -237,7 +230,6 @@ describe("Tool Search terminal results", () => {
     await runtime.call("first_action", {}, { parentToolCallId });
     const last = await runtime.call("second_action", {}, { parentToolCallId });
     const result = formatToolSearchControlResult(last, runtime, { parentToolCallId });
-
     expect(result.terminate).toBeUndefined();
     expect(first.execute).toHaveBeenCalledOnce();
     expect(second.execute).toHaveBeenCalledOnce();
@@ -259,7 +251,6 @@ describe("Tool Search input schemas", () => {
     const { catalogRef, runtime } = createRuntime(wrapped);
     const advertised = catalogRef.current?.entries[0]?.parameters;
     expect(advertised).toHaveProperty("properties.optional.enum", ["true"]);
-
     const input = { path: "nonexistent.txt", optional: true };
     await expect(runtime.call("read", input)).resolves.toBeDefined();
     expect(readTool.execute).toHaveBeenCalledOnce();
@@ -275,7 +266,6 @@ describe("Tool Search input schemas", () => {
     const parameters = Type.Object({ maxFires: Type.Integer({ minimum: 1 }) });
     const target = fakeTool("strict_limit", parameters);
     const { runtime } = createRuntime([target]);
-
     await expect(runtime.call("strict_limit", { maxFires: value })).rejects.toThrow(
       `maxFires: expected integer; received ${received}`,
     );
@@ -300,7 +290,6 @@ describe("Tool Search input schemas", () => {
     const failure = await runtime
       .call("private_limit", { [field]: value })
       .catch((error: unknown) => error);
-
     expect(failure).toBeInstanceOf(Error);
     const message = (failure as Error).message;
     expect(message).toContain(`expected boolean; received [redacted] (${typeof value})`);
@@ -312,7 +301,6 @@ describe("Tool Search input schemas", () => {
     registerSecretValueForRedaction("123456789");
     const target = fakeTool("registered_limit", Type.Object({ value: Type.Boolean() }));
     const { runtime } = createRuntime([target]);
-
     const failure = await runtime
       .call("registered_limit", { value })
       .catch((error: unknown) => error);
@@ -331,7 +319,6 @@ describe("Tool Search input schemas", () => {
         ["synthetic-private-key".repeat(100)]: true,
       })
       .catch((error: unknown) => error);
-
     expect(failure).toBeInstanceOf(Error);
     expect((failure as Error).message).toContain("[redacted]");
     expect((failure as Error).message).not.toContain("synthetic-private-key");
@@ -351,7 +338,6 @@ describe("Tool Search input schemas", () => {
       }),
     );
     const { runtime } = createRuntime([target]);
-
     const failure = await runtime
       .call("nested_limit", {
         "a.b": "10",
@@ -383,7 +369,6 @@ describe("Tool Search input schemas", () => {
     const value = Object.fromEntries(
       Object.keys(properties).map((name) => [name, "7".repeat(1_000_000)]),
     );
-
     const failure = await runtime.call("large_limits", value).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(Error);
     const message = (failure as Error).message;
@@ -404,7 +389,6 @@ describe("Tool Search input schemas", () => {
         ["unexpected".repeat(30_000)]: "synthetic-private-payload",
       })
       .catch((error: unknown) => error);
-
     expect(failure).toBeInstanceOf(Error);
     const message = (failure as Error).message;
     expect(message).toContain("must not have additional properties");
@@ -463,7 +447,6 @@ describe("Tool Search input schemas", () => {
       wrappedNested.execute("nested-policy-call", { marker: "nested" }),
     );
     const { runtime } = createRuntime([target]);
-
     await expect(runtime.call("strict_instruction", { instruction: "run" })).resolves.toMatchObject(
       {
         result: { details: { input: { marker: "nested" } } },
@@ -477,7 +460,6 @@ describe("Tool Search input schemas", () => {
   it("fails before side effects when a trusted input schema is invalid", async () => {
     const target = fakeTool("invalid_input", { type: "sting" } as never);
     const { runtime } = createRuntime([target]);
-
     await expect(runtime.call("invalid_input", {})).rejects.toThrow("invalid inputSchema");
     expect(target.execute).not.toHaveBeenCalled();
   });
@@ -491,11 +473,9 @@ describe("Tool Search input schemas", () => {
     };
     const target = fakeTool("mutable_instruction", parameters as never);
     const { runtime } = createRuntime([target]);
-
     await expect(runtime.call("mutable_instruction", { before: "run" })).resolves.toBeDefined();
     parameters.properties = { after: { type: "string" } };
     parameters.required = ["after"];
-
     await expect(runtime.call("mutable_instruction", { after: "run" })).resolves.toBeDefined();
     await expect(runtime.call("mutable_instruction", { before: "run" })).rejects.toThrow("after");
     expect(target.execute).toHaveBeenCalledTimes(2);
@@ -510,7 +490,6 @@ describe("Tool Search input schemas", () => {
     const callTool = createToolSearchTools({ catalogRef, config }).find(
       (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
     );
-
     expect(callTool).toBeDefined();
     const call = callTool!.execute("invalid-structured-call", {
       id: "strict_instruction",
@@ -559,7 +538,6 @@ describe("Tool Search input schemas", () => {
         resolveToolSearchConfig({ tools: { toolSearch: { mode: "tools" } } } as never),
         { validateInput: true },
       );
-
       await expect(runtime.call(target.name, { unexpected: true })).resolves.toMatchObject({
         result: { details: { input: { unexpected: true } } },
       });
@@ -582,12 +560,10 @@ describe("Tool Search catalog indexing", () => {
       catalogRef.current!.entries.map((entry) => compactToolSearchCatalogEntry(entry)),
     );
     const effectiveOptions = { limit: 1, allowedIds: projection.byId };
-
     await expect(runtime.search("harvesting", { limit: 1 })).resolves.toEqual([
       expect.objectContaining({ name: shadowed.name, source: "openclaw" }),
     ]);
     const matches = await runtime.search("harvesting", effectiveOptions);
-
     expect(matches).toEqual([expect.objectContaining({ name: visible.name })]);
     await expect(
       runtime.callExactId(matches[0]!.id, { request: "visible" }),
@@ -595,7 +571,6 @@ describe("Tool Search catalog indexing", () => {
     expect(visible.execute).toHaveBeenCalledOnce();
     expect(shadowed.execute).not.toHaveBeenCalled();
     expect(client.execute).not.toHaveBeenCalled();
-
     const clientOptions = {
       limit: 1,
       allowedIds: new Set(
@@ -617,12 +592,10 @@ describe("Tool Search catalog indexing", () => {
     const first = fakeTool("orchard_alpha");
     const second = fakeTool("meteor_beta");
     const { catalogRef, runtime } = createRuntime([first]);
-
     await expect(runtime.search("orchard_alpha")).resolves.toEqual([
       expect.objectContaining({ name: "orchard_alpha" }),
     ]);
     registerHeadlessToolSearchCatalog({ catalogRef, tools: [second] });
-
     await expect(runtime.search("meteor_beta")).resolves.toEqual([
       expect.objectContaining({ name: "meteor_beta" }),
     ]);
@@ -645,12 +618,10 @@ describe("Tool Search network error boundaries", () => {
         surface === "structured tool call"
           ? await runtime.call("raw_network", {}, { parentToolCallId })
           : await runtime.callValue("raw_network", {}, { parentToolCallId });
-
       const result = formatToolSearchControlResult(payload, runtime, {
         parentToolCallId: surface === "structured tool call" ? parentToolCallId : undefined,
       });
       const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-
       expect(text.length).toBeLessThan(21_000);
       expect(text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
       expect(text).toContain("[truncated]");
@@ -660,7 +631,6 @@ describe("Tool Search network error boundaries", () => {
       );
       expect(result.details).toBe(payload);
       expect(JSON.stringify(result.details)).toContain(huge);
-
       const isolated = formatToolSearchControlResult({ value: "local" }, runtime, {
         parentToolCallId: "other-parent",
       });
@@ -678,15 +648,38 @@ describe("Tool Search network error boundaries", () => {
     target.execute = vi.fn(async () => jsonResult(rawDetails));
     const { runtime } = createRuntime([target]);
     const payload = await runtime.callValue("expanding_network");
-
     const result = formatToolSearchControlResult(payload, runtime);
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-
     expect(text.length).toBeLessThan(21_000);
     expect(text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(text).toContain("[truncated]");
     expect(text).not.toContain("<s>");
     expect(result.details).toBe(payload);
+  });
+
+  it("scales network control output with maxResultChars='auto' or clamps a fixed limit to the live budget", async () => {
+    const body = "a".repeat(30_000);
+    const target = fakeTool("large_network_read");
+    target.resultContentSource = "network";
+    target.execute = vi.fn(async () => jsonResult({ body }));
+    const { catalogRef } = createRuntime([target]);
+    const runWith = async (maxResultChars: "auto" | number, modelContextWindowTokens: number) => {
+      const cfg = resolveToolSearchConfig({ tools: { toolSearch: { maxResultChars } } });
+      const rt = new ToolSearchRuntime({ catalogRef, modelContextWindowTokens }, cfg, {
+        validateInput: true,
+      });
+      const call = await rt.call("large_network_read", {}, { parentToolCallId: "p" });
+      const res = formatToolSearchControlResult(call, rt, { parentToolCallId: "p" });
+      return res.content[0]?.type === "text" ? res.content[0].text : "";
+    };
+    const autoText = await runWith("auto", 200_000);
+    expect(autoText).toContain(body);
+    expect(autoText).not.toContain("[truncated]");
+    expect(autoText.length).toBeLessThanOrEqual(resolveToolResultBudget(200_000)!.maxChars);
+    const clampedText = await runWith(50_000, 32_000);
+    expect(clampedText).toContain("[truncated]");
+    expect(clampedText).toMatch(/<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>$/);
+    expect(clampedText.length).toBeLessThanOrEqual(resolveToolResultBudget(32_000)!.maxChars);
   });
 
   it.each([
@@ -705,11 +698,9 @@ describe("Tool Search network error boundaries", () => {
     });
     const { runtime } = createRuntime([target]);
     const parentToolCallId = `parent-${shouldObserveNetwork}`;
-
     const error = await runtime
       .call("cancelled_network", {}, { parentToolCallId, signal: controller.signal })
       .catch((caught: unknown) => caught);
-
     expect(runtime.hasNetworkContent(parentToolCallId)).toBe(shouldObserveNetwork);
     if (!shouldObserveNetwork) {
       expect(error).toBe(cancelReason);
@@ -732,7 +723,6 @@ describe("Tool Search network error boundaries", () => {
     });
     expect(target).not.toBeNull();
     const { runtime } = createRuntime([target!]);
-
     const failure = await runtime
       .call("web_search", { query: "owner preflight" }, { parentToolCallId: "secret-parent" })
       .catch((error: unknown) => error);
