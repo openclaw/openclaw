@@ -23,43 +23,130 @@ export function rememberSkillInstructionDelivery(
 /**
  * Remembers the copy a skill read handed to the harness so a later tool-result
  * middleware pass can tell whether that copy reached the model unshortened.
+ *
+ * Deliveries are scoped to the attempt that served them: provider tool-call ids are
+ * only unique inside one response, so two sessions can both legitimately use
+ * `call_1` and must never consume each other's records. Several deliveries can also
+ * land on one id, because a Code Mode exec result delivers every nested read it made.
  */
-const deliveredSkillCopies = new Map<string, { fingerprint: string; forget: () => void }>();
+type PendingSkillDelivery = {
+  content: string;
+  fingerprint: string;
+  /** Set once a nested read has been reparented onto the outer exec result. */
+  wrapped: boolean;
+  forget: () => void;
+};
+
+const pendingSkillDeliveries = new Map<string, PendingSkillDelivery[]>();
 const MAX_TRACKED_SKILL_DELIVERIES = 64;
+const MAX_DELIVERIES_PER_TOOL_CALL = 16;
+
+function deliveryKey(runId: string | undefined, toolCallId: string): string {
+  return `${runId ?? ""}\u0000${toolCallId}`;
+}
+
+function takeDeliveries(
+  runId: string | undefined,
+  toolCallId: string,
+): PendingSkillDelivery[] | undefined {
+  const key = deliveryKey(runId, toolCallId);
+  const records = pendingSkillDeliveries.get(key);
+  if (records) {
+    pendingSkillDeliveries.delete(key);
+  }
+  return records;
+}
+
+function pendingDeliveryCount(): number {
+  let total = 0;
+  for (const records of pendingSkillDeliveries.values()) {
+    total += records.length;
+  }
+  return total;
+}
 
 export function rememberSkillInstructionDeliveryForToolCall(params: {
+  runId: string | undefined;
   toolCallId: string;
   content: string;
   forget: () => void;
 }): void {
-  const { toolCallId, content, forget } = params;
-  if (deliveredSkillCopies.size >= MAX_TRACKED_SKILL_DELIVERIES) {
-    const oldest = deliveredSkillCopies.keys().next();
-    if (!oldest.done) {
-      deliveredSkillCopies.delete(oldest.value);
-    }
+  const key = deliveryKey(params.runId, params.toolCallId);
+  const records = pendingSkillDeliveries.get(key) ?? [];
+  if (records.length >= MAX_DELIVERIES_PER_TOOL_CALL) {
+    records.shift()?.forget();
   }
-  deliveredSkillCopies.set(toolCallId, { fingerprint: sha256Hex(content), forget });
+  records.push({
+    content: params.content,
+    fingerprint: sha256Hex(params.content),
+    wrapped: false,
+    forget: params.forget,
+  });
+  pendingSkillDeliveries.set(key, records);
+  while (pendingDeliveryCount() > MAX_TRACKED_SKILL_DELIVERIES) {
+    const oldest = pendingSkillDeliveries.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    pendingSkillDeliveries.delete(oldest.value);
+  }
+}
+
+/**
+ * Moves a nested read's delivery onto the tool call whose result will carry it.
+ * Code Mode runs the read tool inside its own exec call, so the session's
+ * tool-result hook sees the outer id and would otherwise never reconcile the copy.
+ */
+export function reparentSkillInstructionDelivery(params: {
+  runId: string | undefined;
+  nestedToolCallId: string;
+  parentToolCallId: string;
+}): void {
+  const { runId, nestedToolCallId, parentToolCallId } = params;
+  if (nestedToolCallId === parentToolCallId) {
+    return;
+  }
+  const records = takeDeliveries(runId, nestedToolCallId);
+  if (!records) {
+    return;
+  }
+  const parentKey = deliveryKey(runId, parentToolCallId);
+  const parentRecords = pendingSkillDeliveries.get(parentKey) ?? [];
+  for (const record of records) {
+    record.wrapped = true;
+  }
+  parentRecords.push(...records);
+  pendingSkillDeliveries.set(parentKey, parentRecords);
 }
 
 /**
  * Compares the copy a skill read delivered with the copy the model received and
  * drops the whole-read cache entry when a tool-result reducer shortened it.
+ *
+ * A direct read must reach the model byte for byte, so any rewrite drops the cache.
+ * A reparented nested read is only checked for presence: the outer exec result wraps
+ * the copy in console output, and reformatting it there is not a reason to re-serve
+ * the whole document. Missing it means the reducer dropped the copy, so the cache is
+ * dropped too and the next read serves the document again.
  */
 export function reconcileSkillInstructionDelivery(params: {
+  runId: string | undefined;
   toolCallId: string;
   deliveredText: string | undefined;
 }): void {
-  const recorded = deliveredSkillCopies.get(params.toolCallId);
-  if (!recorded) {
+  const records = takeDeliveries(params.runId, params.toolCallId);
+  if (!records) {
     return;
   }
-  deliveredSkillCopies.delete(params.toolCallId);
   const { deliveredText } = params;
-  if (deliveredText !== undefined && sha256Hex(deliveredText) === recorded.fingerprint) {
-    return;
+  for (const record of records) {
+    const intact = record.wrapped
+      ? deliveredText !== undefined && deliveredText.includes(record.content)
+      : deliveredText !== undefined && sha256Hex(deliveredText) === record.fingerprint;
+    if (!intact) {
+      record.forget();
+    }
   }
-  recorded.forget();
 }
 
 export function createAlreadyDeliveredSkillResult(delivery: object) {

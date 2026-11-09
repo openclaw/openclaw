@@ -112,6 +112,7 @@ export function buildEmbeddedExtensionFactories(params: {
         // A reducer may have shortened a skill read after the tool served it whole;
         // drop the whole-read cache entry so an explicit re-read serves the document.
         reconcileSkillInstructionDelivery({
+          runId,
           toolCallId: eventToolCallId,
           deliveredText: deliveredTextOf(result),
         });

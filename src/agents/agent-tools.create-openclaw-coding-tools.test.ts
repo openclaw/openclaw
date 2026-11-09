@@ -34,7 +34,6 @@ import {
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import type { ReadToolDetails } from "./sessions/tools/tool-contracts.js";
-import { reconcileSkillInstructionDelivery } from "./skill-instruction-result.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import {
   expectReadWriteEditTools,
@@ -75,10 +74,7 @@ const fullSkillResult: AgentToolResult<ReadToolDetails> = {
   details: { kind: "text", content: skillContent },
 };
 
-function skillReadTool(
-  execute: Parameters<typeof wrapReadToolWithSkillContent>[0]["execute"],
-  cache: Map<string, Promise<boolean>> = new Map<string, Promise<boolean>>(),
-) {
+function skillReadTool(execute: Parameters<typeof wrapReadToolWithSkillContent>[0]["execute"]) {
   return wrapReadToolWithSkillContent(
     {
       name: "read",
@@ -88,7 +84,7 @@ function skillReadTool(
       execute,
     },
     [{ filePath: skillLocator }],
-    { instructionDeliveryCache: cache },
+    { instructionDeliveryCache: new Map<string, Promise<boolean>>() },
   );
 }
 
@@ -1118,43 +1114,6 @@ describe("createOpenClawCodingTools read behavior", () => {
     expect(extractToolText(await concurrent)).toContain("already served whole");
     expect(
       extractToolText(await tool.execute("sequential-skill-read", { path: locator })),
-    ).toContain("already served whole");
-    expect(execute).toHaveBeenCalledTimes(1);
-  });
-
-  it("re-serves a skill whose delivered copy a reducer shortened", async () => {
-    const execute = vi.fn(async () => fullSkillResult);
-    const tool = skillReadTool(execute);
-
-    expect(extractToolText(await tool.execute("reduced-skill-read", { path: skillLocator }))).toBe(
-      skillContent,
-    );
-
-    // tokenjuice and friends rewrite the result after the tool returns; only the
-    // shortened copy reached the model, so the whole document was never served.
-    reconcileSkillInstructionDelivery({
-      toolCallId: "reduced-skill-read",
-      deliveredText: "# Pond",
-    });
-
-    expect(extractToolText(await tool.execute("retry-skill-read", { path: skillLocator }))).toBe(
-      skillContent,
-    );
-    expect(execute).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps the dedupe when the delivered copy reached the model unchanged", async () => {
-    const execute = vi.fn(async () => fullSkillResult);
-    const tool = skillReadTool(execute);
-
-    await tool.execute("intact-skill-read", { path: skillLocator });
-    reconcileSkillInstructionDelivery({
-      toolCallId: "intact-skill-read",
-      deliveredText: skillContent,
-    });
-
-    expect(
-      extractToolText(await tool.execute("deduped-skill-read", { path: skillLocator })),
     ).toContain("already served whole");
     expect(execute).toHaveBeenCalledTimes(1);
   });

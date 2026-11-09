@@ -28,6 +28,7 @@ import {
 import { wrapReadToolWithSkillContent } from "./agent-tools.read.js";
 import { buildEmbeddedExtensionFactories } from "./embedded-agent-runner/extensions.js";
 import { consumeEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
+import { reparentSkillInstructionDelivery } from "./skill-instruction-result.js";
 import { cleanupTempPluginTestEnvironment } from "./test-helpers/temp-plugin-extension-fixtures.js";
 import { jsonResult } from "./tools/common.js";
 
@@ -292,6 +293,23 @@ describe("buildEmbeddedExtensionFactories", () => {
     },
   );
 
+  function createSkillRead(deliveryCache: Map<string, Promise<boolean>>, runId: string) {
+    return wrapReadToolWithSkillContent(
+      {
+        name: "read",
+        label: "read",
+        description: "read a file",
+        parameters: Type.Object({ path: Type.String() }),
+        execute: async () => ({
+          content: [{ type: "text" as const, text: skillInstructionText }],
+          details: { kind: "text" as const, content: skillInstructionText },
+        }),
+      },
+      [{ filePath: skillInstructionPath }],
+      { instructionDeliveryCache: deliveryCache, runId },
+    );
+  }
+
   it.each([
     ["shortened", "# Pond"],
     ["intact", "# Pond\ncomplete instructions"],
@@ -303,25 +321,13 @@ describe("buildEmbeddedExtensionFactories", () => {
         result: textToolResult(deliveredText, { kind: "text" as const, content: deliveredText }),
       }));
       const deliveryCache = new Map<string, Promise<boolean>>();
-      const cachedRead = wrapReadToolWithSkillContent(
-        {
-          name: "read",
-          label: "read",
-          description: "read a file",
-          parameters: Type.Object({ path: Type.String() }),
-          execute: async () => ({
-            content: [{ type: "text" as const, text: skillInstructionText }],
-            details: { kind: "text" as const, content: skillInstructionText },
-          }),
-        },
-        [{ filePath: skillInstructionPath }],
-        { instructionDeliveryCache: deliveryCache },
-      );
+      const runId = `run-skill-${label}`;
+      const cachedRead = createSkillRead(deliveryCache, runId);
       const toolCallId = `call-skill-${label}`;
       const served = await cachedRead.execute(toolCallId, { path: skillInstructionPath });
       expect(deliveryCache.size).toBe(1);
 
-      const handler = await createToolResultHandler();
+      const handler = await createToolResultHandler({ runId });
       await handler({
         toolName: "read",
         toolCallId,
@@ -331,6 +337,78 @@ describe("buildEmbeddedExtensionFactories", () => {
       });
 
       expect(deliveryCache.size).toBe(shortened ? 0 : 1);
+      // The reconciliation only matters through the next read: a shortened copy is
+      // served whole again, an intact one keeps deduping.
+      const reread = await cachedRead.execute(`call-skill-reread-${label}`, {
+        path: skillInstructionPath,
+      });
+      if (shortened) {
+        expect(reread.content[0]?.text).toBe(skillInstructionText);
+      } else {
+        expect(reread.content[0]?.text).toContain("already served whole");
+      }
+    },
+  );
+
+  it("keeps delivery records scoped to the attempt that served them", async () => {
+    const shortenedText = "# Pond";
+    installMiddleware(() => ({
+      result: textToolResult(shortenedText, { kind: "text" as const, content: shortenedText }),
+    }));
+    // Provider tool-call ids are only unique per response: both attempts may use call_1.
+    const cacheA = new Map<string, Promise<boolean>>();
+    const cacheB = new Map<string, Promise<boolean>>();
+    const readA = createSkillRead(cacheA, "run-scope-a");
+    const readB = createSkillRead(cacheB, "run-scope-b");
+    await readA.execute("call_1", { path: skillInstructionPath });
+    await readB.execute("call_1", { path: skillInstructionPath });
+
+    const handler = await createToolResultHandler({ runId: "run-scope-a" });
+    await handler({
+      toolName: "read",
+      toolCallId: "call_1",
+      input: { path: skillInstructionPath },
+      content: [{ type: "text" as const, text: skillInstructionText }],
+      details: { kind: "text" as const, content: skillInstructionText },
+    });
+
+    // Only the attempt whose copy was shortened loses its cache entry.
+    expect(cacheA.size).toBe(0);
+    expect(cacheB.size).toBe(1);
+  });
+
+  // A Code Mode script prints the copy it read, so the exec output carries it verbatim.
+  it.each([
+    ["shortened", 'console.log("# Pond")', 0],
+    ["intact", `console.log(${skillInstructionText})`, 1],
+  ])(
+    "reconciles a nested read against the exec result that carried it: %s",
+    async (label, deliveredText, expectedSize) => {
+      installMiddleware(() => ({
+        result: textToolResult(deliveredText, { kind: "text" as const, content: deliveredText }),
+      }));
+      const deliveryCache = new Map<string, Promise<boolean>>();
+      const runId = `run-code-mode-${label}`;
+      const nestedRead = createSkillRead(deliveryCache, runId);
+      await nestedRead.execute("call-nested", { path: skillInstructionPath });
+      expect(deliveryCache.size).toBe(1);
+
+      // Code Mode reports the read under the outer exec call, so the delivery moves there.
+      reparentSkillInstructionDelivery({
+        runId,
+        nestedToolCallId: "call-nested",
+        parentToolCallId: "call-exec",
+      });
+      const handler = await createToolResultHandler({ runId });
+      await handler({
+        toolName: "exec",
+        toolCallId: "call-exec",
+        input: {},
+        content: [{ type: "text" as const, text: skillInstructionText }],
+        details: { kind: "text" as const, content: skillInstructionText },
+      });
+
+      expect(deliveryCache.size).toBe(expectedSize);
     },
   );
 });

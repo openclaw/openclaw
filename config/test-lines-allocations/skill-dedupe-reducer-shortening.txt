@@ -1,2 +1,2 @@
-87
-# Re-serve a skill whose delivered copy a tool-result reducer shortened.
+# Net test-line growth for the whole-read skill cache reconciliation: hook coverage for the direct read, the nested Code Mode read, and two interleaved attempts.
+124

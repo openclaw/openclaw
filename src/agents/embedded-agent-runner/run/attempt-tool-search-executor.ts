@@ -11,6 +11,7 @@ import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import { reparentSkillInstructionDelivery } from "../../skill-instruction-result.js";
 import { retainToolSearchImplementation } from "../../tool-search-scheduling.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
@@ -171,6 +172,15 @@ export function createSubscribedToolSearchExecutor(params: {
                     toolParams.sourceName === "core" &&
                     toolParams.toolName === "message",
                 );
+                if (toolParams.parentToolCallId) {
+                  // A nested skill read delivers through the outer exec result, which is
+                  // the tool call the session's middleware hook actually observes.
+                  reparentSkillInstructionDelivery({
+                    runId: attempt.runId,
+                    nestedToolCallId: toolParams.toolCallId,
+                    parentToolCallId: toolParams.parentToolCallId,
+                  });
+                }
                 return toolParams.acceptResultBeforeProjection(result);
               }),
             ),
