@@ -75,7 +75,7 @@ public final class GatewayDiscoveryModel {
     public var gateways: [DiscoveredGateway] = []
     public var statusText: String = GatewayDiscoveryStatusText.idle
 
-    private let browserSession = GatewayDiscoveryBrowserSession()
+    private let browserSession: any GatewayDiscoveryBrowsing
     private var generation: UInt64 = 0
     private var resultsByDomain: [String: Set<NWBrowser.Result>] = [:]
     private var gatewaysByDomain: [String: [DiscoveredGateway]] = [:]
@@ -89,10 +89,22 @@ public final class GatewayDiscoveryModel {
     private var tailscaleServeFallbackTask: Task<Void, Never>?
     private var tailscaleServeFallbackBeacons: [TailscaleServeGatewayBeacon] = []
 
-    public init(
+    public convenience init(
         localDisplayName: String? = nil,
         filterLocalGateways: Bool = true)
     {
+        self.init(
+            localDisplayName: localDisplayName,
+            filterLocalGateways: filterLocalGateways,
+            browserSession: GatewayDiscoveryBrowserSession())
+    }
+
+    init(
+        localDisplayName: String? = nil,
+        filterLocalGateways: Bool = true,
+        browserSession: any GatewayDiscoveryBrowsing)
+    {
+        self.browserSession = browserSession
         self.filterLocalGateways = filterLocalGateways
         self.localIdentity = Self.localIdentity(
             hostName: ProcessInfo.processInfo.hostName, displayName: localDisplayName)
@@ -108,13 +120,15 @@ public final class GatewayDiscoveryModel {
         // Host resolution belongs to active discovery, not discarded SwiftUI models.
         self.refreshLocalIdentity()
 
+        let generation = self.generation
         self.browserSession.start(
             queueLabelPrefix: "ai.openclaw.macos.gateway-discovery",
             onState: { [weak self] _, _, status in
-                self?.statusText = status
+                guard let self, self.generation == generation else { return }
+                self.statusText = status
             },
             onResults: { [weak self] domain, results in
-                guard let self else { return }
+                guard let self, self.generation == generation else { return }
                 self.resultsByDomain[domain] = results
                 self.updateGateways(for: domain, results: results)
                 self.recomputeGateways()
@@ -586,3 +600,15 @@ struct ResolvedGatewayService: Equatable {
     var host: String?
     var port: Int?
 }
+
+@MainActor
+protocol GatewayDiscoveryBrowsing: AnyObject {
+    var isRunning: Bool { get }
+    func start(
+        queueLabelPrefix: String,
+        onState: @escaping @MainActor (String, NWBrowser.State, String) -> Void,
+        onResults: @escaping @MainActor (String, Set<NWBrowser.Result>) -> Void)
+    func stop()
+}
+
+extension GatewayDiscoveryBrowserSession: GatewayDiscoveryBrowsing {}
