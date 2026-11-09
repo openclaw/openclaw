@@ -1,3 +1,0 @@
-# Responses V2 retained-user astral-boundary regression (BMP/astral it.each).
-# 5 new test lines plus 59 inherited test-line debt at the CI ratchet base.
-64
