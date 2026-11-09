@@ -4,7 +4,6 @@ import {
   createMemo,
   createOptimistic,
   createSignal,
-  createUniqueId,
   Errored,
   isPending,
   latest,
@@ -19,7 +18,7 @@ import type { ConfigAutoSaveStatus } from "../lib/config/config-state-model.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { ConfigError } from "./config-error.tsx";
-import { Icon } from "./solid/icon.tsx";
+import { showConfirmDialog } from "./confirm-dialog.ts";
 
 registerSettingsSidebarEnglish();
 
@@ -53,27 +52,11 @@ function IndicatorAction(props: { label: string; busy: boolean; onClick: () => v
   );
 }
 
-/** The raw reason opens beside the status instead of stretching it into a paragraph. */
-function FailureReason(props: { reason: string }) {
-  const [open, setOpen] = createSignal(false);
-  const id = createUniqueId();
-  return (
-    <>
-      <button
-        class="settings-save-indicator__reason-toggle"
-        type="button"
-        aria-expanded={open() ? "true" : "false"}
-        aria-controls={id}
-        onClick={() => setOpen((current) => !current)}
-      >
-        {t(open() ? "configView.rejectionDetailsHide" : "configView.rejectionDetails")}
-      </button>
-      <div class="settings-save-indicator__reason" id={id} hidden={!open()}>
-        {props.reason}
-      </div>
-    </>
-  );
-}
+type FailureKind = "error" | "rejected" | "recovery";
+type Failure = { kind: FailureKind; reason: string | null };
+
+const isFailure = (state: string | undefined): state is FailureKind =>
+  state === "error" || state === "rejected" || state === "recovery";
 
 export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
   type Command = "retry" | "save" | "reload" | "apply";
@@ -165,112 +148,157 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
     }
     return latest(presentation().needsApply) ? "apply" : undefined;
   });
-  function RetryOrDiscard() {
+  // Retry keeps the failure in place until it has an outcome, so the card does not
+  // collapse into Saving… and grow back when the same write fails again.
+  const retrying = () => saving() && presentation().command() === "retry";
+  const failure = createMemo<Failure | undefined>(
+    (previous) => {
+      const shown = state();
+      if (isFailure(shown)) {
+        return { kind: shown, reason: props.lastError?.trim() || null };
+      }
+      return retrying() ? previous : undefined;
+    },
+    {
+      equals: (previous, next) =>
+        previous?.kind === next?.kind && previous?.reason === next?.reason,
+    },
+  );
+  // Discarding drops edits the Gateway never saved, so it always asks first.
+  function discard() {
+    if (busy()) {
+      return;
+    }
+    void showConfirmDialog({
+      title: t("configView.discardChangesTitle"),
+      message: t("configView.discardChangesMessage"),
+      confirmLabel: t("configView.discardChanges"),
+      danger: true,
+    }).then((confirmed) => {
+      if (confirmed) {
+        submit("reload");
+      }
+    });
+  }
+  function FailureCard(card: { failure: Failure; reason: string | null }) {
     return (
-      <div class="settings-save-indicator__actions">
-        <IndicatorAction
-          label={t("configView.retry")}
-          busy={busy()}
-          onClick={() => submit("retry")}
-        />
-        <IndicatorAction
-          label={busy() ? t("common.loading") : t("configView.recoveryReload")}
-          busy={busy()}
-          onClick={() => submit("reload")}
-        />
+      <div
+        class={[
+          "settings-save-indicator settings-save-indicator--failure",
+          { "settings-save-indicator--retrying": retrying() },
+        ]}
+        role="status"
+        aria-live="polite"
+        aria-busy={busy() ? "true" : undefined}
+      >
+        <span class="settings-save-indicator__title">
+          {retrying()
+            ? t("configView.autoSaveSaving")
+            : card.failure.kind === "rejected"
+              ? t("configView.autoSaveRejected")
+              : t("configView.autoSaveFailed")}
+        </span>
+        <Show when={card.reason}>
+          {(reason) => <p class="settings-save-indicator__reason">{reason()}</p>}
+        </Show>
+        <div class="settings-save-indicator__actions">
+          <Show when={card.failure.kind !== "recovery"}>
+            <button
+              class="btn btn--sm primary settings-save-indicator__action"
+              type="button"
+              disabled={busy()}
+              onClick={() => submit("retry")}
+            >
+              {t("configView.retry")}
+            </button>
+          </Show>
+          <button
+            class="btn btn--sm btn--ghost settings-save-indicator__action"
+            type="button"
+            disabled={busy()}
+            onClick={discard}
+          >
+            {t("configView.discardChanges")}
+          </button>
+        </div>
       </div>
     );
   }
   function Feedback(feedback: { error?: string }) {
     return (
-      <div
-        class={[
-          "settings-save-indicator",
-          {
-            "settings-save-indicator--recovery": state() === "recovery",
-            "settings-save-indicator--rejected": state() === "rejected",
-            "settings-save-indicator--error": state() === "error",
-            "settings-save-indicator--transient": state() === "saving" || state() === "saved",
-            "settings-save-indicator--saved": state() === "saved",
-          },
-        ]}
-        role="status"
-        aria-live="polite"
-        aria-busy={busy() ? "true" : undefined}
-        aria-label={
-          feedback.error ? `${t("configView.autoSaveFailed")}: ${feedback.error}` : undefined
+      <Show
+        when={failure()}
+        fallback={
+          <div
+            class={[
+              "settings-save-indicator",
+              {
+                "settings-save-indicator--transient": state() === "saving" || state() === "saved",
+                "settings-save-indicator--saved": state() === "saved",
+              },
+            ]}
+            role="status"
+            aria-live="polite"
+            aria-busy={busy() ? "true" : undefined}
+          >
+            <Switch>
+              <Match when={state() === "saving"}>
+                <span>{t("configView.autoSaveSaving")}</span>
+              </Match>
+              <Match when={state() === "saved"}>
+                <span>{t("configView.autoSaveSaved")}</span>
+              </Match>
+              <Match when={state() === "applying"}>
+                <span class="btn__spinner settings-save-indicator__spinner" aria-hidden="true" />
+                <span>{t("configView.applying")}</span>
+              </Match>
+              <Match when={state() === "paused"}>
+                <span>{t("configView.autoSavePaused")}</span>
+                <IndicatorAction
+                  label={t("configView.saveNow")}
+                  busy={busy()}
+                  onClick={() => submit("save")}
+                />
+              </Match>
+              <Match when={state() === "conflict"}>
+                <span class="settings-save-indicator__failure">
+                  {t("configView.autoSaveConflict")}
+                </span>
+                <IndicatorAction label={t("common.reload")} busy={busy()} onClick={discard} />
+              </Match>
+              <Match when={state() === "apply"}>
+                <button
+                  class="btn btn--xs settings-save-indicator__apply"
+                  type="button"
+                  disabled={busy() || props.applyDisabled}
+                  onClick={() => submit("apply")}
+                >
+                  {t("configView.applyChanges")}
+                </button>
+              </Match>
+            </Switch>
+          </div>
         }
       >
-        <Switch>
-          <Match when={state() === "saving"}>
-            <span>{t("configView.autoSaveSaving")}</span>
-          </Match>
-          <Match when={state() === "saved"}>
-            <span>{t("configView.autoSaveSaved")}</span>
-          </Match>
-          <Match when={state() === "applying"}>
-            <span class="settings-save-indicator__spinner" aria-hidden="true">
-              <Icon name="loader" />
-            </span>
-            <span>{t("configView.applying")}</span>
-          </Match>
-          <Match when={state() === "recovery"}>
-            <span class="settings-save-indicator__failure">{props.lastError}</span>
-            <IndicatorAction
-              label={busy() ? t("common.loading") : t("configView.recoveryReload")}
-              busy={busy()}
-              onClick={() => submit("reload")}
-            />
-          </Match>
-          <Match when={state() === "rejected"}>
-            <span>{t("configView.autoSaveRejected")}</span>
-            <span>{t("configView.autoSaveRejectedHint")}</span>
-            <Show when={props.lastError}>{(reason) => <FailureReason reason={reason()} />}</Show>
-            <RetryOrDiscard />
-          </Match>
-          <Match when={state() === "error"}>
-            <span class="settings-save-indicator__failure">{t("configView.autoSaveFailed")}</span>
-            <Show when={feedback.error}>
-              {(error) => <FailureReason reason={error().replace(/^GatewayRequestError: /u, "")} />}
-            </Show>
-            <RetryOrDiscard />
-          </Match>
-          <Match when={state() === "paused"}>
-            <span>{t("configView.autoSavePaused")}</span>
-            <IndicatorAction
-              label={t("configView.saveNow")}
-              busy={busy()}
-              onClick={() => submit("save")}
-            />
-          </Match>
-          <Match when={state() === "conflict"}>
-            <span class="settings-save-indicator__failure">{t("configView.autoSaveConflict")}</span>
-            <IndicatorAction
-              label={busy() ? t("common.loading") : t("common.reload")}
-              busy={busy()}
-              onClick={() => submit("reload")}
-            />
-          </Match>
-          <Match when={state() === "apply"}>
-            <button
-              class="btn btn--xs settings-save-indicator__apply"
-              type="button"
-              disabled={busy() || props.applyDisabled}
-              onClick={() => submit("apply")}
-            >
-              {t("configView.applyChanges")}
-            </button>
-          </Match>
-        </Switch>
-      </div>
+        {(shown) => (
+          <FailureCard
+            failure={shown()}
+            reason={
+              shown().kind === "error"
+                ? (feedback.error?.replace(/^GatewayRequestError: /u, "") ?? null)
+                : shown().reason
+            }
+          />
+        )}
+      </Show>
     );
   }
   return (
     <openclaw-settings-save-indicator>
       <Loading>
-        <Show when={state()}>
+        <Show when={state() || failure()}>
           <ConfigError
-            message={state() === "error" ? props.lastError?.trim() : undefined}
+            message={failure()?.kind === "error" ? (failure()?.reason ?? undefined) : undefined}
             fallback={<Feedback />}
           >
             {(message) => <Feedback error={message} />}

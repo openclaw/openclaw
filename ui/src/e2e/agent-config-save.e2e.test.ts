@@ -47,7 +47,7 @@ suite.define(() => {
           "config.get": {
             __mockError: {
               code: "INTERNAL_ERROR",
-              message: "Agent configuration unavailable; retry Reload config",
+              message: "Agent configuration unavailable",
               retryable: true,
             },
           },
@@ -65,22 +65,20 @@ suite.define(() => {
       );
       const decision = agentsPage.locator("openclaw-select-picker:has(#agent-decision-model)");
       const trigger = primary.locator(".picker-select__trigger");
-      const reload = agentsPage.getByRole("button", { name: "Reload config" });
-      await reload.waitFor();
-
       const error = agentsPage
         .getByRole("alert")
         .filter({ hasText: "Agent configuration unavailable" });
       await expect.poll(() => error.isVisible()).toBe(true);
       await expect.poll(() => trigger.getAttribute("disabled")).not.toBeNull();
 
-      const reloadConfig = async (hash: string) => {
-        await gateway.setMethodResponse("config.get", configResponse(config, hash));
-        const after = (await gateway.getRequests("config.get")).length;
-        await reload.click();
-        await gateway.waitForRequest("config.get", { after });
-      };
-      await reloadConfig("recovered-agent-config");
+      // A failed read offers its own Retry; the panel has no Reload to fall back on.
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(config, "recovered-agent-config"),
+      );
+      const readsBeforeRetry = (await gateway.getRequests("config.get")).length;
+      await error.getByRole("button", { name: "Retry" }).click();
+      await gateway.waitForRequest("config.get", { after: readsBeforeRetry });
       await expect.poll(() => error.count()).toBe(0);
       await expect.poll(() => trigger.getAttribute("disabled")).toBeNull();
 
@@ -105,8 +103,10 @@ suite.define(() => {
       await gateway.waitForRequest("config.get", { after: readsBeforeReconnect });
       await expect.poll(() => trigger.isEnabled()).toBe(true);
       await expect.poll(() => pickerValue(primary)).toBe("openai/reconnect-draft");
-      await expect.poll(() => indicator.textContent()).toContain("Save failed");
-      expect(await indicator.getByRole("status").getAttribute("aria-label")).toContain(
+      await expect
+        .poll(() => indicator.textContent())
+        .toContain("Couldn’t save settings. Try again.");
+      expect(await indicator.getByRole("status").textContent()).toContain(
         "The last configuration change could not be confirmed",
       );
       expect(await indicator.getByRole("button", { name: "Retry", exact: true }).isEnabled()).toBe(
@@ -114,23 +114,34 @@ suite.define(() => {
       );
       expect(await gateway.getRequests("config.set")).toHaveLength(writesBeforeReconnect + 1);
 
-      await reloadConfig("reloaded-agent-config");
-      await expect.poll(() => pickerValue(primary)).toBe("");
-      await expect.poll(() => trigger.isEnabled()).toBe(true);
-      await expect.poll(() => indicator.textContent()).not.toContain("Save failed");
+      // The kept draft retries as is, then edits resume saving on their own.
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(config, "reloaded-agent-config"),
+      );
+      const writesBeforeRetry = (await gateway.getRequests("config.set")).length;
+      expect(writesBeforeRetry).toBe(writesBeforeReconnect + 1);
+      await gateway.deferNext("config.set");
+      await indicator.getByRole("button", { name: "Retry", exact: true }).click();
+      const retried = await saveParams(gateway, writesBeforeRetry);
+      // The initial read-error fixture has no stateful config store; supply its acknowledgement.
+      await gateway.resolveDeferred("config.set", {
+        config: JSON.parse(String(retried.raw)),
+        hash: "retried-agent-config",
+      });
+      await expect
+        .poll(() => indicator.textContent())
+        .not.toContain("Couldn’t save settings. Try again.");
 
       const writesBeforeFreshEdit = (await gateway.getRequests("config.set")).length;
-      expect(writesBeforeFreshEdit).toBe(writesBeforeReconnect + 1);
       await gateway.deferNext("config.set");
       await selectPickerValue(primary, "openai/after-reload");
       const params = await saveParams(gateway, writesBeforeFreshEdit);
       const savedConfig = {
         agents: { entries: { main: { model: "openai/after-reload" } } },
       };
-      expect(params.baseHash).toBe("reloaded-agent-config");
       expect(JSON.parse(String(params.raw))).toEqual(savedConfig);
       expect(await gateway.getRequests("config.set")).toHaveLength(writesBeforeFreshEdit + 1);
-      // The initial read-error fixture has no stateful config store; supply its acknowledgement.
       await gateway.resolveDeferred("config.set", {
         config: savedConfig,
         hash: "saved-agent-config",
@@ -208,7 +219,9 @@ suite.define(() => {
           code: "INVALID_REQUEST",
           message: "mock validation failure",
         });
-        await page.getByRole("alert").filter({ hasText: "mock validation failure" }).waitFor();
+        await expect
+          .poll(() => page.locator(".settings-save-status").textContent())
+          .toContain("mock validation failure");
       });
     },
   );

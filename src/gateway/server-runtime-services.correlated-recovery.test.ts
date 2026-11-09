@@ -21,7 +21,7 @@ import {
 } from "../infra/session-delivery-queue-storage.js";
 import { SESSION_DELIVERY_QUEUE_NAME } from "../infra/session-delivery-queue.records.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
-import { workshopPluginConfig } from "../skills/workshop/config.test-support.js";
+import { workshopPluginConfig } from "../skills/test-support/workshop-config.test-support.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,

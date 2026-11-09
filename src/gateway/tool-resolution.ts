@@ -127,8 +127,9 @@ export async function resolveGatewayScopedTools(
     pairedNodeComputerUse?: import("../agents/computer-use-node-capabilities.js").PreparedPairedComputerUse;
     skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
     /**
-     * Run-owned configured MCP tools for an exclusive CLI grant. They enter the
-     * same policy pipeline as Gateway tools; core names always win collisions.
+     * Configured MCP tools owned by the caller: a run for an exclusive CLI grant,
+     * or one standalone invocation. They enter the same policy pipeline as
+     * Gateway tools; core names always win collisions.
      */
     bundledTools?: readonly AnyAgentTool[];
   },
@@ -360,6 +361,7 @@ export async function resolveGatewayScopedTools(
     sessionConfigSource: "runtime" as const,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
+    webSearchModelSelection: params.webSearchModelSelection,
     modelHasVision: params.modelHasVision,
     requesterModel: params.requesterModel,
     pairedNodeComputerUse: params.pairedNodeComputerUse,
@@ -602,12 +604,9 @@ export async function resolveGatewayScopedTools(
     : toolsWithMediatedCoding;
 
   const coreToolNames = new Set(allTools.map((tool) => normalizeToolPolicyName(tool.name)));
-  const bundledTools =
-    surface === "loopback"
-      ? (params.bundledTools ?? []).filter(
-          (tool) => !coreToolNames.has(normalizeToolPolicyName(tool.name)),
-        )
-      : [];
+  const bundledTools = (params.bundledTools ?? []).filter(
+    (tool) => !coreToolNames.has(normalizeToolPolicyName(tool.name)),
+  );
   const toolsForMessageProvider = filterToolsByMessageProvider(
     bundledTools.length > 0 ? [...allTools, ...bundledTools] : allTools,
     params.messageProvider,

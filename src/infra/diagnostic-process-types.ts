@@ -226,9 +226,26 @@ export type DiagnosticMemoryPressureMetrics = Partial<
 export type DiagnosticMemoryPressureFields = DiagnosticMemoryPressureMetrics & {
   type: "diagnostic.memory.pressure";
   level: "warning" | "critical";
-  reason: "rss_threshold" | "heap_threshold" | "worker_heap_threshold" | "rss_growth";
+  reason:
+    | "rss_threshold"
+    | "heap_threshold"
+    | "worker_heap_threshold"
+    | "process_memory_threshold"
+    | "rss_growth";
   memory: DiagnosticMemoryUsage;
 };
+
+export function isMemoryPressureReason(
+  reason: string,
+): reason is DiagnosticMemoryPressureFields["reason"] {
+  return (
+    reason === "rss_threshold" ||
+    reason === "heap_threshold" ||
+    reason === "worker_heap_threshold" ||
+    reason === "process_memory_threshold" ||
+    reason === "rss_growth"
+  );
+}
 
 export type DiagnosticChildProcessSpawnFields = {
   type: "diagnostic.child_process.spawn";

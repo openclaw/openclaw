@@ -4,6 +4,7 @@ import type { SQLInputValue } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import type {
   BoardSnapshot,
+  BoardWidgetDataQuery,
   BoardWidgetMaterializedPutParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -350,6 +351,58 @@ it("preserves HTML grants only for unchanged bytes with equal or narrower declar
     put("two", { ...narrow, netOrigins: ["https://one.example", "https://three.example"] }),
     { revision: 5, grantState: "pending" },
   );
+});
+
+it("reloads named query grants without promoting repository-only or malformed manifests", async () => {
+  const board = fixture();
+  const query: BoardWidgetDataQuery = {
+    name: "main-ci",
+    bindingId: "github.actions.runs",
+    params: {
+      repository: "OWNER/Repo",
+      workflow: "ci.yml",
+      branch: "main",
+      status: null,
+      created: null,
+      perPage: 1,
+      excludePullRequests: true,
+    },
+    fields: ["id", "conclusion"],
+  };
+  for (const name of ["named", "legacy"]) {
+    const declared =
+      name === "named" ? { queries: [query] } : { tools: ["github.actions.runs:owner/repo"] };
+    const saved = await board.put({ name, content: { kind: "html", html: "CI" }, declared });
+    const widget = saved.widgets.find((item) => item.name === name)!;
+    await board.grant(name, widget.revision, widget.instanceId);
+  }
+  await board.reopen();
+  const widgets = (await board.current()).widgets;
+  expect(widgets.find((widget) => widget.name === "named")).toMatchObject({
+    grantState: "granted",
+    declared: {
+      queries: [
+        {
+          ...query,
+          params: { ...query.params, repository: "owner/repo" },
+          fields: ["conclusion", "id"],
+        },
+      ],
+    },
+  });
+  expect(widgets.find((widget) => widget.name === "legacy")?.declared).toEqual({
+    tools: ["github.actions.runs:owner/repo"],
+  });
+  // Persisted unknown selectors must lose the whole grant instead of being dropped.
+  openOpenClawAgentDatabase(board.options)
+    .db.prepare(
+      "UPDATE board_widgets SET manifest = json_set(manifest, '$.queries[0].params.page', 2) WHERE name = ? AND session_key = ?",
+    )
+    .run("named", board.sessionKey);
+  await board.reopen();
+  expect((await board.current()).widgets.find((widget) => widget.name === "named")).toMatchObject({
+    grantState: "none",
+  });
 });
 
 it.each(["html", "mcp-app"] as const)(

@@ -27,3 +27,7 @@ export {
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
 } from "../tts/openai-speech-payload.js";
+export {
+  buildGradiumSpeechRequestBody,
+  DEFAULT_GRADIUM_VOICE_ID,
+} from "../tts/gradium-speech-payload.js";

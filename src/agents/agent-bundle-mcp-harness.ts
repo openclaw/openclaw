@@ -3,6 +3,7 @@ import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import {
   getAdvertisedScopedMcpCatalog,
   acquireRequesterScopedMcpRuntime,
@@ -19,7 +20,6 @@ import {
   mergeMcpConnectCatalog,
 } from "./agent-bundle-mcp-requester-connect.js";
 import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
-import type { McpToolCatalog } from "./agent-bundle-mcp-types.js";
 import type { CodexMcpServersConfig } from "./codex-mcp-config.types.js";
 import {
   prepareConversationCapabilityProfile,

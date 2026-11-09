@@ -235,6 +235,7 @@ async function runDoctorHealthFlowWithResult(
         assertCurrent: writeAuthority?.assertCurrent,
         lendPolicyCustody: writeAuthority?.lendPolicyCustody,
         databaseGenerations: writeAuthority?.databaseGenerations,
+        databaseWriteCapture: writeAuthority?.databaseWriteCapture,
         databasePluginOwners: writeAuthority?.databasePluginOwners,
         serviceInspectionDeadlineAtMs: writeAuthority?.serviceInspectionDeadlineAtMs,
         beforeStateMutation: createDoctorOriginalCaptureHook({
@@ -709,5 +710,5 @@ async function runDoctorHealthFlowWithResult(
     }
   }
 
-  startup.showDoctorOutro("Doctor complete.");
+  startup.showDoctorComplete({ watchExit: options.watchExitAfterComplete === true });
 }

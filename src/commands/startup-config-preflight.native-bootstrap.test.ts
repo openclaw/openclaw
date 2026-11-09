@@ -6,17 +6,24 @@ import {
   readMacNodeWorkerProofRows,
   seedMacNodeWorkerProofState,
 } from "../../scripts/lib/mac-node-worker-proof-state.mjs";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import {
   getGatewayStartGuardErrors,
   prepareGatewayRunBootstrap,
   recheckGatewayRunBootstrap,
 } from "../cli/gateway-cli/pre-bootstrap.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
+import { StateDatabaseOfflineMaintenanceError } from "../infra/gateway-state-owner-record.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { ExitError } from "../runtime.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
+import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
@@ -150,6 +157,89 @@ it("admits the recoverable config before migrating native credentials", async ()
     },
   );
 });
+
+/** Hold state custody from another process, as a concurrent CLI or Doctor would. */
+async function holdForeignStateOwner(
+  databasePath: string,
+  holder: "schema-lease" | "offline-maintenance",
+  signal: AbortSignal,
+) {
+  const ownerUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.gatewayStateOwner);
+  // A schema lease is the transient custody any state CLI takes (e.g. `gateway status`
+  // loading the device identity). The process root is the record Doctor's
+  // maintenance lock persists through acquireGatewayLock.
+  const acquire =
+    holder === "schema-lease"
+      ? `acquireStateDatabaseSchemaLease(${JSON.stringify(databasePath)})`
+      : `acquireGatewayStateOwner({ databasePath: ${JSON.stringify(databasePath)} })`;
+  let readOutput = () => ({ stdout: "", stderr: "" });
+  const exited = runNodeScript(
+    (workerArgv) => [
+      ...workerArgv(ownerUrl).slice(0, -1),
+      "--input-type=module",
+      "--eval",
+      `const owner = await import(${JSON.stringify(ownerUrl.href)});
+      const held = owner.${acquire};
+      process.stdout.write("held\\n");
+      ${holder === "schema-lease" ? "setTimeout(() => held.release(), 750);" : "setInterval(() => {}, 1_000);"}`,
+    ],
+    process.env,
+    30_000,
+    {
+      signal,
+      onReady(_child, read) {
+        readOutput = read;
+      },
+    },
+  ).catch(() => undefined);
+  const deadline = performance.now() + 20_000;
+  while (!readOutput().stdout.includes("held")) {
+    if (performance.now() > deadline) {
+      throw new Error(`Foreign state owner never held custody: ${readOutput().stderr}`);
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
+  return { exited };
+}
+
+it.each(["schema-lease", "offline-maintenance"] as const)(
+  "handles a foreign %s held after Gateway read admission",
+  async (holder) => {
+    await withOpenClawTestState({ label: `gateway-foreign-${holder}` }, async (state) => {
+      await state.writeConfig({ gateway: { mode: "local" }, plugins: { enabled: false } });
+      const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
+      await closeOpenClawStateDatabaseAsync();
+      const stop = new AbortController();
+      let foreignOwner: Promise<unknown> | undefined;
+      let preparations = 0;
+      const ready = runStartupConfigPreflight({
+        gateway: true,
+        observe: false,
+        // The second preparation runs after read admission, right before native bootstrap.
+        beforeStatePreparation: async () => {
+          if (++preparations === 2) {
+            foreignOwner = (await holdForeignStateOwner(databasePath, holder, stop.signal)).exited;
+          }
+          return true;
+        },
+      });
+      try {
+        if (holder === "schema-lease") {
+          await expect(ready).resolves.toMatchObject({ snapshot: { valid: true } });
+        } else {
+          await expect(ready).rejects.toBeInstanceOf(StateDatabaseOfflineMaintenanceError);
+        }
+        expect(foreignOwner).toBeDefined();
+      } finally {
+        stop.abort();
+        await foreignOwner;
+        await closeOpenClawStateDatabaseAsync();
+      }
+    });
+  },
+);
 
 it.each(["invalid config", "rejected guard"] as const)(
   "preserves pending native credentials before startup admission for %s",

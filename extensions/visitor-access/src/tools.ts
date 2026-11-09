@@ -75,7 +75,7 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       name: "visitor_invite",
       label: "Invite visitor",
       description:
-        "Grant or renew visitor access to the Team Gateway. Requires administrator or designated-owner authority. Provide exactly one Team sign-in email or GitHub login. A GitHub invitation uses the immutable account ID, not public email. Checks restricted guest access and preserves existing assigned roles. Grants expire after the configured duration (14 days by default); forever must be explicit. An optional note from you to the visitor, such as a session link to start from, is stored with the grant; renewal without a note keeps the existing one. The result includes invitationText: short plain text naming the inviter, sign-in address, identity to use, expiry, and note, ready to hand to the visitor.",
+        "Grant or renew visitor access to the Team Gateway. Requires administrator or designated-owner authority. Provide exactly one Team sign-in email or GitHub login. A GitHub invitation uses the immutable account ID, not public email. Checks restricted guest access and preserves existing assigned roles. Grants expire after the configured duration (14 days by default); forever must be explicit. An optional note from you to the visitor, such as a session link to start from, is stored with the grant; renewal without a note keeps the existing one. Reports fresh shared Cloudflare seat capacity separately from the visitor cap, and warns when a new login cannot obtain a seat. Grant success is not first-login success; existing seats and renewals are never blocked by this diagnostic. Unavailable seat reads are reported, never assumed to be zero. The result includes invitationText: short plain text naming the inviter, sign-in address, identity to use, expiry, and note, ready to hand to the visitor.",
       parameters: VisitorInviteParameters,
       outputSchema: VisitorInviteOutputSchema,
       run: async ({ service, readInviter, readSignInUrl }: VisitorRuntime, raw: unknown) =>
@@ -99,7 +99,7 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       name: "visitor_list",
       label: "List visitors",
       description:
-        "List recorded visitor grants, current verified GitHub identities, current Gateway access, invitation and expiry dates, and drift from the Access policy. Grant expiry does not describe independent staff access. Unmanaged policy targets are reported and retained; missing policy targets are never automatically restored.",
+        "List recorded visitor grants, current verified GitHub identities, current Gateway access, invitation and expiry dates, and drift from the Access policy. Includes fresh account-wide Cloudflare seat occupancy/allocation separately from these app-policy counts; full accounts warn about new logins, and unavailable reads stay explicitly unknown. Grant expiry does not describe independent staff access or reclaim account seats. Unmanaged policy targets are reported and retained; missing policy targets are never automatically restored.",
       parameters: VisitorListParameters,
       outputSchema: VisitorListOutputSchema,
       run: ({ service }: VisitorRuntime) => service.list(assertCurrent),

@@ -27,6 +27,7 @@ Preconditions:
   ```bash
   mkdir -p "$TELEGRAM_E2E_PROOF_DIR/basic-turns"
   node "$TELEGRAM_E2E_SKILL_DIR/scripts/run-mock-sut-user-e2e.mjs" \
+    --gateway-port "$TELEGRAM_GATEWAY_PORT" --mock-port "$TELEGRAM_MOCK_PORT" \
     --dm --timeout-ms 25000 \
     --text 'Please answer with OPENCLAW_E2E_BASIC only.' \
     --record "$TELEGRAM_E2E_PROOF_DIR/basic-turns/events.ndjson" \
@@ -45,6 +46,7 @@ Preconditions:
   ```bash
   mkdir -p "$TELEGRAM_E2E_PROOF_DIR/basic-group"
   node "$TELEGRAM_E2E_SKILL_DIR/scripts/run-mock-sut-user-e2e.mjs" \
+    --gateway-port "$TELEGRAM_GATEWAY_PORT" --mock-port "$TELEGRAM_MOCK_PORT" \
     --timeout-ms 25000 \
     --text '@{sut} Please answer with OPENCLAW_E2E_GROUP only.' \
     --record "$TELEGRAM_E2E_PROOF_DIR/basic-group/events.ndjson" \
@@ -59,6 +61,7 @@ Preconditions:
   ```bash
   mkdir -p "$TELEGRAM_E2E_PROOF_DIR/basic-command"
   node "$TELEGRAM_E2E_SKILL_DIR/scripts/run-mock-sut-user-e2e.mjs" \
+    --gateway-port "$TELEGRAM_GATEWAY_PORT" --mock-port "$TELEGRAM_MOCK_PORT" \
     --timeout-ms 25000 --text '/status@{sut}' \
     --record "$TELEGRAM_E2E_PROOF_DIR/basic-command/events.ndjson" \
     --output "$TELEGRAM_E2E_PROOF_DIR/basic-command/summary.json"

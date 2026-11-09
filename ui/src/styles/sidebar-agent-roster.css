@@ -60,7 +60,7 @@ openclaw-sidebar-agent-roster {
   height: auto;
   overflow: visible;
   min-height: 0;
-  margin: 0 0 0 16px;
+  margin: 0 0 0 6px;
   padding-inline-end: 7px;
 }
 .sidebar-recent-session--team:has(> .sidebar-child-session-toggle)

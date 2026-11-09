@@ -114,14 +114,21 @@ async function drain(...runs: Promise<unknown>[]) {
 }
 
 it.each([false, true])(
-  "bounds session adoption even without runner start (lane wait: %s)",
+  "bounds session adoption without charging lane wait to the payload (lane wait: %s)",
   async (waiting) => {
     const runner = pendingRunner();
+    let admitLane: (() => void) | undefined;
+    let waitAgain: (() => void) | undefined;
     const job = agentJob(`unstarted-session-${waiting}`, 1);
     job.sessionTarget = "main";
     const { state, advance, jobState } = await fixture(job, {
-      runSessionEvent: async ({ onLaneWait, abortSignal }) => {
+      runSessionEvent: async ({ onLaneWait, onExecutionStarted, abortSignal }) => {
         onLaneWait?.({ waiting });
+        admitLane = () => onLaneWait?.({ waiting: false });
+        waitAgain = () => {
+          onExecutionStarted?.();
+          onLaneWait?.({ waiting: true });
+        };
         runner.started.resolve(abortSignal);
         return await runner.result.promise;
       },
@@ -129,7 +136,20 @@ it.each([false, true])(
     const timer = onTimer(state);
     try {
       const signal = await runner.started.promise;
-      await advance(1_000);
+      if (waiting) {
+        await advance(20 * 60_000);
+        expect(signal?.aborted).toBe(false);
+        expect(jobState().runningAtMs).toBeDefined();
+        admitLane?.();
+        await advance(250);
+        waitAgain?.();
+        await advance(20 * 60_000);
+        expect(signal?.aborted).toBe(false);
+        admitLane?.();
+        await advance(749);
+        expect(signal?.aborted).toBe(false);
+      }
+      await advance(waiting ? 1 : 1_000);
       expect(signal?.reason).toMatchObject({ name: "TimeoutError" });
       await timer;
       expect(jobState().runningAtMs).toBeUndefined();

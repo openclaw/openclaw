@@ -109,7 +109,7 @@ describe("session workspace file reference resolution", () => {
     await vi.waitFor(() =>
       expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toEqual({
         kind: "unavailable",
-        message: "Failed to load REPORT.md",
+        message: "Couldn’t load REPORT.md. Check that the file still exists.",
       }),
     );
     expect(getFile).toHaveBeenCalledExactlyOnceWith("agent:main:current", "REPORT.md", {
@@ -294,7 +294,7 @@ describe("session workspace file reference resolution", () => {
       await openSessionWorkspaceFile(state, { path: "run.log", relativeTo: document });
 
       if (replaced) {
-        expect(state.sessionWorkspaceState?.error).toContain("The document's workspace changed");
+        expect(state.sessionWorkspaceState?.error).toContain("The document’s workspace changed");
         expect(state.sessionWorkspaceState?.activePreviewId).toBe(documentPreviewId);
         expect(await loadedSidebarContent(state)).toBe(document);
         expect(state.sessionWorkspaceState?.previews).toHaveLength(1);

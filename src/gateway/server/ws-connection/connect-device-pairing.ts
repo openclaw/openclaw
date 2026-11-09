@@ -30,6 +30,11 @@ import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing
 import { retireDeviceTokenClients } from "../../device-token-client-lifecycle.js";
 import { normalizeNodeHostCompatibilityMetadata } from "../../node-legacy-protocol-filter.js";
 import { isScopelessNodePairingRequest } from "../../node-pairing-auto-approve.js";
+import {
+  openclawIdPeerKeyOf,
+  recordDeviceTokenPeer,
+} from "../../openclaw-id/device-token-binding.js";
+import { approveOpenClawIdNodePairing } from "../../openclaw-id/node-pairing.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { broadcastRejectedDevicePairing } from "../../pairing-events.js";
 import { formatForLog } from "../../ws-log.js";
@@ -110,7 +115,11 @@ export async function authorizeGatewayConnectDevice(
     close(1008, truncateCloseReason(closeReason ?? message));
   };
   const roleConfiguredHumanOperator = role === "operator" && Boolean(configSnapshot.gateway?.roles);
-  const sharedSecretOwner = authMethod === "token" || authMethod === "password";
+  // An admitted OpenClaw ID owner device is the Gateway owner, like a shared-secret client.
+  const sharedSecretOwner =
+    authMethod === "token" ||
+    authMethod === "password" ||
+    (authMethod === "trusted-proxy" && authResult.openclawId?.kind === "owner");
   if (
     roleConfiguredHumanOperator &&
     !sharedSecretOwner &&
@@ -268,13 +277,34 @@ export async function authorizeGatewayConnectDevice(
         broadcastRejectedDevicePairing(requestContext.broadcast, superseded, supersededResolvedAt);
       }
       let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
+      const openclawIdNodePrincipal =
+        role === "node" &&
+        connectParams.client.mode === "node" &&
+        scopes.length === 0 &&
+        reason === "not-paired" &&
+        !existingPairedDevice &&
+        authResult.openclawId?.kind === "node"
+          ? authResult.openclawId
+          : undefined;
       const inlineApprovalAttempted =
+        openclawIdNodePrincipal !== undefined ||
         operatorApprovalScopes !== null ||
         pairing.request.silent === true ||
         // A previously interactive first-node request may now qualify locally.
         (role === "node" && reason === "role-upgrade" && plan.localApproval === "silent");
       if (inlineApprovalAttempted) {
-        if (operatorApprovalScopes !== null && plan.operatorApprovalKind) {
+        if (openclawIdNodePrincipal) {
+          approved = await approveOpenClawIdNodePairing({
+            requestId: pairing.request.requestId,
+            principal: openclawIdNodePrincipal,
+            deviceId: device.id,
+            publicKey: devicePublicKey,
+            commands: connectParams.commands ?? [],
+            caps: connectParams.caps ?? [],
+            accessMetadata: clientAccessMetadata,
+            isCurrent: isConnectAuthorizationCurrent,
+          });
+        } else if (operatorApprovalScopes !== null && plan.operatorApprovalKind) {
           approved = await approveDevicePairing(pairing.request.requestId, {
             callerScopes: operatorApprovalScopes,
             accessMetadata: clientAccessMetadata,
@@ -379,20 +409,23 @@ export async function authorizeGatewayConnectDevice(
             }
           }
         }
-      } else if (pairing.created) {
+      }
+      if (pairing.created && approved?.status !== "approved") {
         requestContext.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
       }
       // SSH verification runs detached; the live-record check below can admit
       // an approval that finishes before this handshake's final check.
-      const sshVerifyStarted = startGatewayNodePairingSshApproval({
-        context,
-        state: { ...state, scopes, handoffBootstrapProfile },
-        pairing,
-        existingPairedDevice,
-        devicePublicKey,
-        clientAccessMetadata,
-        reason,
-      });
+      const sshVerifyStarted =
+        !authResult.openclawId &&
+        startGatewayNodePairingSshApproval({
+          context,
+          state: { ...state, scopes, handoffBootstrapProfile },
+          pairing,
+          existingPairedDevice,
+          devicePublicKey,
+          clientAccessMetadata,
+          reason,
+        });
       // Approval may come from another connection or be revoked during the
       // awaits above. Only the current device record can authorize continuation.
       const livePaired = await getPairedDevice(device.id);
@@ -603,6 +636,19 @@ export async function authorizeGatewayConnectDevice(
           isIssuanceCurrent: isConnectAuthorizationCurrent,
         });
 
+  // A token issued over the OpenClaw ID tunnel belongs to the device key that obtained it.
+  const issuedPeerKey = openclawIdPeerKeyOf(context.handler.ingressAttribution);
+  if (issuedPeerKey && state.device) {
+    for (const issued of [deviceToken, ...bootstrapDeviceTokens]) {
+      if (issued) {
+        await recordDeviceTokenPeer({
+          deviceId: state.device.id,
+          role: issued.role,
+          peerKey: issuedPeerKey,
+        });
+      }
+    }
+  }
   context.recordAttachTiming?.("deviceTokensMs", tokensStartedAt);
 
   return {

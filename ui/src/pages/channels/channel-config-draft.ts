@@ -4,14 +4,25 @@ import {
   collectBaseArrayPaths,
   formatConfigPatchPath,
 } from "../../../../src/config/patch-replace-paths.js";
-import type { ChannelConfigBase, ChannelConfigEdit } from "../../lib/channels/index.ts";
+import { isSecretRefShape } from "../../../../src/config/redact-snapshot.secret-ref.js";
+import type { ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import {
+  resolveChannelConfigValue,
+  type ChannelConfigBase,
+  type ChannelConfigEdit,
+} from "../../lib/channels/index.ts";
+import {
+  isEnvPlaceholder,
+  isSecretConfigField,
   pruneEmptyConfigForm,
+  REDACTED_SENTINEL,
   removePathValue,
   setPathValue,
   type JsonSchema,
 } from "../../lib/config-form-utils.ts";
 import { coerceConfigFormValues } from "../../lib/config/config-draft-model.ts";
+import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
+import { storedSecretSource } from "../../lib/config/stored-secret-source.ts";
 
 /** The form's view of a channel: its saved values with the unsaved edits on top. */
 export function applyChannelConfigEdits(
@@ -32,8 +43,108 @@ export function applyChannelConfigEdits(
   return (root.channels as Record<string, Record<string, unknown>>)[channelId] ?? {};
 }
 
+function savedAt(
+  base: Record<string, unknown> | null,
+  channelId: string,
+  path: ReadonlyArray<string | number>,
+): unknown {
+  let node: unknown = { channels: { [channelId]: base ?? {} } };
+  for (const segment of path) {
+    node =
+      isRecord(node) || Array.isArray(node)
+        ? (node as Record<string, unknown>)[segment]
+        : undefined;
+  }
+  return node;
+}
+
+/** Emptying a field typed over a stored secret keeps the secret; nothing here deletes it. */
+function emptiesStoredSecret(
+  base: Record<string, unknown> | null,
+  channelId: string,
+  path: ReadonlyArray<string | number>,
+  value: unknown,
+): boolean {
+  return (
+    (value === undefined || value === "") && savedAt(base, channelId, path) === REDACTED_SENTINEL
+  );
+}
+
+/**
+ * Whether an edit would land on a stored secret that isn't proven plain text in the file. The
+ * field is read-only then, so only a reference that arrived after typing began gets here, and
+ * Save leaves it alone.
+ */
+function writesOverReference(
+  snapshot: ConfigSnapshot | null | undefined,
+  path: ReadonlyArray<string | number>,
+  hints: ConfigUiHints = {},
+): boolean {
+  let node: unknown = resolveEditableSnapshotConfig(snapshot);
+  for (const segment of path) {
+    if (isRecord(node) && isSecretRefShape(node)) {
+      return true;
+    }
+    node =
+      isRecord(node) || Array.isArray(node)
+        ? (node as Record<string, unknown>)[segment]
+        : undefined;
+  }
+  if (isRecord(node) && isSecretRefShape(node)) {
+    return true;
+  }
+  if (typeof node === "string" && isEnvPlaceholder(node)) {
+    return isSecretConfigField(path, hints);
+  }
+  return node === REDACTED_SENTINEL && storedSecretSource(snapshot, path).kind !== "literal";
+}
+
 function sameValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/**
+ * A list or object edited whole keeps each stored secret inside it, as a single field does:
+ * emptying one keeps it, and one that isn't proven plain text in the file is never written over.
+ * Returns undefined when, after that, the edit changes nothing.
+ */
+function keepStoredSecrets(params: {
+  base: Record<string, unknown> | null;
+  snapshot: ConfigSnapshot | null | undefined;
+  hints?: ConfigUiHints;
+  channelId: string;
+  path: ReadonlyArray<string | number>;
+  value: unknown;
+}): { value: unknown } | undefined {
+  const { base, snapshot, channelId } = params;
+  const keep = (path: ReadonlyArray<string | number>, value: unknown): unknown => {
+    if (
+      emptiesStoredSecret(base, channelId, path, value) ||
+      (value !== REDACTED_SENTINEL && writesOverReference(snapshot, path, params.hints))
+    ) {
+      return savedAt(base, channelId, path);
+    }
+    if (Array.isArray(value)) {
+      return value.map((item, index) => keep([...path, index], item));
+    }
+    if (!isRecord(value)) {
+      return value;
+    }
+    const saved = savedAt(base, channelId, path);
+    const kept: Record<string, unknown> = {};
+    for (const key of new Set([
+      ...Object.keys(value),
+      ...(isRecord(saved) ? Object.keys(saved) : []),
+    ])) {
+      const next = keep([...path, key], value[key]);
+      if (next !== undefined) {
+        kept[key] = next;
+      }
+    }
+    return kept;
+  };
+  const value = keep(params.path, params.value);
+  return sameValue(value, savedAt(base, channelId, params.path)) ? undefined : { value };
 }
 
 function diffInto(
@@ -121,7 +232,7 @@ const startsWith = (path: ConfigPath, prefix: ConfigPath) =>
 
 /** The saved value an edit was made against, at the unit Save writes whole: the edited field,
     or the whole list when the edit lands in one, since lists go out in full. */
-export function channelConfigEditBase(
+function channelConfigEditBase(
   saved: Readonly<Record<string, unknown>>,
   path: ConfigPath,
 ): ChannelConfigBase {
@@ -169,4 +280,58 @@ export function dropConflictingChannelConfigEdits(
     edits: edits.filter((edit) => !overlaps(edit.path)),
     bases: bases.filter((base) => !overlaps(base.path)),
   };
+}
+
+type ChannelEditState = {
+  configForm?: Record<string, unknown> | null;
+  configSnapshot?: ConfigSnapshot | null;
+  configUiHints?: ConfigUiHints;
+};
+
+/** Each edit with its stored secrets kept; an edit left changing nothing is dropped. */
+export function keptChannelEdits(
+  state: ChannelEditState,
+  channelId: string,
+  root: Record<string, unknown> | null,
+  edits: readonly ChannelConfigEdit[],
+): ChannelConfigEdit[] {
+  const base = resolveChannelConfigValue(root, channelId);
+  return edits.flatMap((edit) => {
+    const { path, value } = edit;
+    const kept = keepStoredSecrets({
+      base,
+      snapshot: state.configSnapshot,
+      hints: state.configUiHints,
+      channelId,
+      path,
+      value,
+    });
+    return kept ? [{ ...edit, value: kept.value }] : [];
+  });
+}
+
+/**
+ * Records a field's edit against the saved value it was made on. Inside a list edited whole too,
+ * a stored secret is never emptied or written over, and an edit left changing nothing is dropped.
+ */
+export function editChannelField(
+  channels: {
+    editConfig: (channelId: string, edit: ChannelConfigEdit, base?: ChannelConfigBase) => void;
+    restoreConfigField: (channelId: string, path: ChannelConfigEdit["path"]) => void;
+  },
+  state: ChannelEditState,
+  channelId: string,
+  edit: ChannelConfigEdit,
+): void {
+  const [kept] = keptChannelEdits(state, channelId, state.configForm ?? {}, [edit]);
+  const saved = resolveEditableSnapshotConfig(state.configSnapshot);
+  if (kept) {
+    channels.editConfig(
+      channelId,
+      kept,
+      saved ? channelConfigEditBase(saved, edit.path) : undefined,
+    );
+  } else {
+    channels.restoreConfigField(channelId, edit.path);
+  }
 }
