@@ -6,8 +6,7 @@ export const SessionsSendToolSchema = Type.Object({
   user: requesterProfileSchema({ defaultToTurnOwner: true }),
   sessionKey: Type.Optional(
     Type.String({
-      description:
-        "Target session key. For a spawned child, use the childSessionKey returned by sessions_spawn.",
+      description: "Target session key. For a spawned child, use the returned childSessionKey.",
     }),
   ),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),

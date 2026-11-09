@@ -1710,6 +1710,7 @@
               ]
             },
             "sessionKey": {
+              "description": "Target session key. For a spawned child, use the returned childSessionKey.",
               "type": "string"
             },
             "timeoutSeconds": {
