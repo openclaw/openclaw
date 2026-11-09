@@ -272,9 +272,9 @@ private func withNativeMuteFixture(_ body: (NativeMuteFixture) async throws -> V
             let runID = try #require(params["idempotencyKey"] as? String)
             await requests.record(prompt)
             sent.fulfill()
-            // The contract under test ends at the real send boundary. A terminal
-            // acknowledgement avoids invoking unrelated model and speech playback.
-            payload = "{\"runId\":\"\(runID)\",\"status\":\"aborted\"}"
+            // The contract under test ends at the real send boundary. A supported terminal
+            // error acknowledgement avoids waiting for unrelated model and speech playback.
+            payload = "{\"runId\":\"\(runID)\",\"status\":\"error\"}"
         default:
             throw URLError(.unsupportedURL)
         }
