@@ -1,0 +1,6 @@
+# Retained private native administrator/cron/recovery regression debt at 2e73417.
+# Current audited owner growth is 477 LF; native-app-cron-admin.txt already grants
+# 463 LF. This exact residual 14 credits no identity/auth/memory/cron-policy lines.
+# Keeps live role ceilings, denied/revoked callers, and recovery continuation proof.
+# Existing Gateway authority/recovery owner fixtures passed on 822184e.
+14

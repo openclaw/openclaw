@@ -1,0 +1,7 @@
+# Retained private personal-identity regression debt at pinned main 2e73417:
+# signed protocol bytes, scope/lifetime/final-effect revocation, canonical profile
+# reads, device invalidation, and both native UI producer/hello/recovery contracts.
+# Exact net growth across the 12 audited owners: 1138 LF; no existing grant covers it.
+# Gateway 223 + profile 2 + UI 70 checks passed on 822184e; device 31 on 4b4dfed.
+# Native owners retain independent crypto, SQLite, RPC, and transport proof.
+1138
