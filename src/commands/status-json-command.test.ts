@@ -12,11 +12,8 @@ it.each([
   [{ agent: "beta" }, "--agent is only valid with --usage"],
   [{ usage: true, agent: "" }, "--agent must not be blank"],
 ] as const)("rejects invalid agent selection %j before scanning", async (selection, error) => {
-  const runtime = createTestRuntime();
   const opts = { ...createStatusGatewayProbeBudget(), ...selection };
-  await expect(runStatusJsonCommand({ opts, runtime })).rejects.toMatchObject({
-    name: "ExpectedCliError",
-    message: error,
-  });
+  const run = runStatusJsonCommand({ opts, runtime: createTestRuntime() });
+  await expect(run).rejects.toMatchObject({ name: "ExpectedCliError", message: error });
   expect(scanStatusJsonFast).not.toHaveBeenCalled();
 });
