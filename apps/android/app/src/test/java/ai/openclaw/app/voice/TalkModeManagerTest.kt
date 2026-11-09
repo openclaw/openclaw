@@ -1497,7 +1497,10 @@ class TalkModeManagerTest {
         assertEquals("Denied focus must not reach the audio player", 0, player.playCalls)
         assertTrue(denied.isCompleted)
         assertFalse(manager.isSpeaking.value)
-        assertEquals("Speak failed: audio focus unavailable", manager.statusText.value)
+        assertEquals(
+          "Speak failed: audio is busy; finish the call or stop other audio, then try again",
+          manager.statusText.value,
+        )
         assertEquals(listOf("before", "after"), callbacks)
         val deniedFocus = checkNotNull(audio.lastAudioFocusRequest.audioFocusRequest)
         assertSame(deniedFocus, audio.lastAbandonedAudioFocusRequest)
@@ -1547,7 +1550,10 @@ class TalkModeManagerTest {
         assertTrue("Denied focus must not submit an utterance", speech.spokenTextList.isEmpty())
         assertTrue(denied.isCompleted)
         assertFalse(manager.isSpeaking.value)
-        assertEquals("Speak failed: audio focus unavailable", manager.statusText.value)
+        assertEquals(
+          "Speak failed: audio is busy; finish the call or stop other audio, then try again",
+          manager.statusText.value,
+        )
         assertEquals(listOf("before", "after"), callbacks)
         val deniedFocus = checkNotNull(audio.lastAudioFocusRequest.audioFocusRequest)
         assertSame(deniedFocus, audio.lastAbandonedAudioFocusRequest)

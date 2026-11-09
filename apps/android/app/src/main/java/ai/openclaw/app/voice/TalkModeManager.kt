@@ -2837,7 +2837,9 @@ class TalkModeManager internal constructor(
     lease.releaseAudioFocus = { am.abandonAudioFocusRequest(req) }
     val result = am.requestAudioFocus(req)
     Log.d(tag, "audio focus request result=$result")
-    check(result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { "audio focus unavailable" }
+    check(result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+      "audio is busy; finish the call or stop other audio, then try again"
+    }
   }
 
   private fun shouldInterrupt(transcript: String): Boolean {
