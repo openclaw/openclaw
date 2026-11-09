@@ -1,5 +1,8 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { buildSessionContext } from "../../packages/agent-core/src/harness/session/session.js";
+import type { SessionTreeEntry } from "../../packages/agent-core/src/harness/types.js";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import { limitHistoryTurns } from "../agents/embedded-agent-runner/history.js";
 import { validateReplayTurns } from "../agents/embedded-agent-runner/replay-history.js";
 import { resolveTranscriptPolicy } from "../agents/transcript-policy.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
@@ -142,3 +145,54 @@ it("runs built-in turn validation on in-place edits after a nullish provider res
   expect(JSON.stringify(validated)).toContain("appended");
   expect(messages).toHaveLength(1);
 });
+
+it.each(["sanitizeReplayHistoryAsync", "sanitizeReplayHistory", "validateReplayTurns"] as const)(
+  "%s preserves reset-retained history when limiting three newer turns to one",
+  async (hookName) => {
+    const timestamp = "2026-11-09T00:00:00.000Z";
+    const entries: SessionTreeEntry[] = [
+      {
+        type: "message",
+        id: "retained",
+        parentId: null,
+        timestamp,
+        message: { role: "user", content: "retained before reset", timestamp: 1 },
+      },
+      {
+        type: "reset",
+        id: "reset",
+        parentId: "retained",
+        timestamp,
+        reason: "reset",
+        firstKeptEntryId: "retained",
+      },
+      ...[1, 2, 3].map((turn) => ({
+        type: "message" as const,
+        id: `new-${turn}`,
+        parentId: turn === 1 ? "reset" : `new-${turn - 1}`,
+        timestamp,
+        message: { role: "user" as const, content: `new turn ${turn}`, timestamp: turn + 1 },
+      })),
+    ];
+    const context = {
+      provider: "demo",
+      sessionId: "reset-retained",
+      messages: buildSessionContext(entries).messages,
+    };
+    resolveProviderRuntimePlugin.mockReturnValue({
+      id: "demo",
+      label: "Demo",
+      auth: [],
+      [hookName]: (input: typeof context) => input.messages,
+    });
+    const invoke =
+      hookName === "validateReplayTurns"
+        ? validateProviderReplayTurnsWithPlugin
+        : sanitizeProviderReplayHistoryWithPluginAsync;
+    const replay = await invoke({ provider: "demo", context });
+    expect(limitHistoryTurns(replay ?? context.messages, 1)).toEqual([
+      expect.objectContaining({ content: "retained before reset" }),
+      expect.objectContaining({ content: "new turn 3" }),
+    ]);
+  },
+);

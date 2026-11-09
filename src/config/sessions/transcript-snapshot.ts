@@ -98,6 +98,13 @@ export function cloneTranscriptView<T>(
       descriptor.writable = true;
       Object.defineProperty(result, key, descriptor);
     }
+    for (const key of Object.getOwnPropertySymbols(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+      if ("value" in descriptor) {
+        descriptor.value = copy(descriptor.value);
+        Object.defineProperty(result, key, descriptor);
+      }
+    }
     return result;
   };
   try {
