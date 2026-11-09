@@ -44,6 +44,12 @@ async function configureProjectionFetch(
     signal: params.signal,
     beforeRun: params.assertCurrent,
   };
+  // Git-owned projection metadata; shared base clones must never get shallow defaults.
+  await requireGit(
+    params.destination,
+    ["config", "--local", "--replace-all", "openclaw.projection", "true"],
+    options,
+  );
   const origin = await runGit(params.source, ["config", "--get", "remote.origin.url"], options);
   if (origin.code !== 0 && origin.code !== 1) {
     throw commandError("git config remote.origin.url", origin);

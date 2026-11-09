@@ -111,9 +111,25 @@ these blobless repositories. This covers HTTPS, `git@github.com:owner/repo`, and
 `ssh://git@github.com/owner/repo` addresses through the agent's normal `git`
 command on POSIX hosts and Docker/Podman sandboxes. Git records the fetched URL
 as a promisor so later checkout and diff can retrieve fork-only file contents.
-Explicit `--filter` and `--no-filter` choices are preserved. Full repositories,
-other hosts, and direct invocations of a Git binary outside the wrapper retain
-Git's normal defaults.
+Explicit `--filter` and `--no-filter` choices are preserved. Outside projections,
+full repositories and non-GitHub URLs retain Git's normal defaults. Direct
+invocations of a Git binary outside the wrapper also keep native defaults.
+
+Standalone projections also default single-remote fetches to `--depth=64`,
+including implicit `origin` fetches (`git fetch`) and explicit blob filters. The projection owner marks this
+Git metadata when building or reusing the checkout; shared base clones are not
+marked and do not receive this depth default. This bounds each fetched tip's
+history instead of downloading all commits and trees. Explicit `--depth`,
+`--deepen`, `--shallow-since`, `--shallow-exclude`, `--unshallow`, and
+`--update-shallow` options take precedence. `--no-filter` changes blob filtering, not the history limit.
+
+Checkout and direct `git diff <base> <branch>` use complete file contents. History
+walks remain shallow: `git log <base>..<branch>` can omit older PR commits or
+include shared ancestors when the base's ancestry is missing. Fetch the base
+from `origin` and deepen the relevant tips explicitly when a complete range or
+merge base is required. A fixed depth is intentional: `--deepen` alone can still
+fetch an old fork's entire ancestry, and `--shallow-exclude` requires a remote
+branch or tag, not an arbitrary projection base SHA.
 
 Use `github_publish` with `action: "prepare_pr"` for eligible PR continuation and
 `refresh_base` for base updates. For separate commit inspection, prefer
