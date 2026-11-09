@@ -218,12 +218,17 @@ if (fixture) {
     isRecord(manifest) && manifest.format === "openclaw-team-shape-v1",
     "Expected an offline synthetic fixture",
   );
-  cpSync(fixture, stateDir, {
-    recursive: true,
-    errorOnExist: true,
-    force: false,
-    mode: constants.COPYFILE_FICLONE,
-  });
+  if (process.platform === "darwin") {
+    // Node can fall back to a full copy here; native cp preserves APFS clones.
+    execFileSync("/bin/cp", ["-cR", fixture, stateDir], { stdio: "pipe" });
+  } else {
+    cpSync(fixture, stateDir, {
+      recursive: true,
+      errorOnExist: true,
+      force: false,
+      mode: constants.COPYFILE_FICLONE,
+    });
+  }
 }
 const { summary, env } = fixture
   ? {
@@ -623,7 +628,16 @@ try {
         }
       }
       const settled = turnMode === "restart" ? { status: "resumed" } : await terminal(sent.runId);
-      assert.notEqual(settled.status, "timeout", JSON.stringify(settled));
+      const expectedStatus =
+        turnMode === "restart"
+          ? "resumed"
+          : ["abort", "failure"].includes(turnMode)
+            ? "error"
+            : "ok";
+      assert.equal(settled.status, expectedStatus, JSON.stringify(settled));
+      if (turnMode === "degenerate") {
+        assert(toolIssued, "Degenerate arguments never reached the runtime");
+      }
       if (followupId) {
         const followup = await terminal(followupId);
         assert.equal(followup.status, "ok", JSON.stringify(followup));
