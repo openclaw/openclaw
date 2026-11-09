@@ -316,24 +316,18 @@ describe("Tool Search input schemas", () => {
       outputSchema: Type.Optional(Type.Object({})),
       groupId: Type.Optional(Type.String()),
     };
-    const spawn = bindCollectorSpawnTool(
-      fakeTool(
-        "sessions_spawn",
-        Type.Object({
-          task: Type.String(),
-          optional: Type.Optional(Type.Literal(true)),
-          fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
-          ...collectorFields,
-        }),
-      ),
-      collectorFields,
-    );
+    const parameters = Type.Object({
+      task: Type.String(),
+      optional: Type.Optional(Type.Literal(true)),
+      fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
+      ...collectorFields,
+    });
+    const spawn = bindCollectorSpawnTool(fakeTool("sessions_spawn", parameters), collectorFields);
     const wait = markCollectorReaderTool(fakeTool("agents_wait"));
     const finalized = finalizeAgentTools({
       tools: [readTool, createLazyExecTool({ host: "gateway" }), spawn, wait],
       hookContext: { sessionId: "gemini-read" },
       modelProvider: "google",
-      modelId: "gemini-4-argon",
       wrapBeforeToolCallHook: false,
       registerRunCleanup: vi.fn(),
     });
