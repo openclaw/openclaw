@@ -86,6 +86,8 @@ function expectCall(mock: unknown, fields: object) {
 describe("runSetupModelAuthStep", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    applyAuthChoice.mockReset();
+    promptAuthChoiceGrouped.mockReset();
     promptDefaultModel.mockResolvedValue({});
     warnIfModelConfigLooksOff.mockResolvedValue(undefined);
     detectAvailableSetupProviderIds.mockResolvedValue(new Set(["ollama"]));
@@ -210,6 +212,75 @@ describe("runSetupModelAuthStep", () => {
     expect(result.config).toBe(config);
     expect(applyAuthChoice).not.toHaveBeenCalled();
   });
+
+  it("keeps a utility model while retrying primary-provider setup before regular chat", async () => {
+    promptAuthChoiceGrouped
+      .mockResolvedValueOnce("apple-fm")
+      .mockResolvedValueOnce("anthropic-cli")
+      .mockResolvedValueOnce("anthropic-cli");
+    applyAuthChoice
+      .mockResolvedValueOnce({ ...candidate({}), utilityModelOverride: "apple-fm/system" })
+      .mockRejectedValueOnce(new Error("Provider sign-in is unavailable"))
+      .mockImplementationOnce(async ({ config }) => ({
+        ...candidate(config),
+        agentModelOverride: "anthropic/chat-model",
+      }));
+
+    const result = await runStep();
+
+    expect(result.config.agents?.defaults).toMatchObject({
+      utilityModel: "apple-fm/system",
+      model: { primary: "anthropic/chat-model" },
+    });
+    expect(result.authProfiles).toEqual([]);
+  });
+
+  it.each(["existing-primary", "explicit-choice", "pending-credentials"] as const)(
+    "retains the utility-only setup contract for %s",
+    async (mode) => {
+      const config: OpenClawConfig =
+        mode === "existing-primary"
+          ? agentConfig({
+              ownership: "explicit",
+              defaults: { systemAgent: { agentId: "ops" } },
+              entries: { ops: { model: "anthropic/current" } },
+            })
+          : {};
+      const prepared = candidate(
+        config,
+        mode === "pending-credentials"
+          ? [
+              {
+                profileId: "utility:default",
+                credential: { type: "api_key", provider: "utility", key: "fixture-key" },
+              },
+            ]
+          : [],
+      );
+      promptAuthChoiceGrouped.mockResolvedValueOnce("apple-fm");
+      applyAuthChoice.mockImplementationOnce(async ({ config: preparedConfig }) => ({
+        ...prepared,
+        config: preparedConfig,
+        utilityModelOverride: "apple-fm/system",
+      }));
+
+      const result = await runStep({
+        config,
+        opts: mode === "explicit-choice" ? { authChoice: "apple-fm" } : {},
+      });
+
+      expect(result.config.agents?.entries?.ops?.model).toEqual(config.agents?.entries?.ops?.model);
+      const modelOwner =
+        mode === "existing-primary"
+          ? result.config.agents?.entries?.ops
+          : result.config.agents?.defaults;
+      expect(modelOwner?.utilityModel).toBe("apple-fm/system");
+      expect(result.authProfiles).toEqual(prepared.authProfiles);
+      expect(result.persistAuthProfiles).toBe(prepared.persistAuthProfiles);
+      expect(prepared.persistAuthProfiles).not.toHaveBeenCalled();
+      expect(promptDefaultModel).not.toHaveBeenCalled();
+    },
+  );
 
   it("re-prompts after a provider setup error instead of aborting", async () => {
     promptAuthChoiceGrouped.mockResolvedValueOnce("anthropic-cli").mockResolvedValueOnce("skip");

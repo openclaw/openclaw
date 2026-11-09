@@ -421,6 +421,8 @@ export const zh_TW = {
       authChoiceFailedRetry: "請選擇其他提供商或認證方式，或選擇暫時跳過。",
       authChoiceFailedTitle: "提供商設定失敗",
       authChoiceRequired: "必須選擇認證方式",
+      utilityNeedsPrimary: "此模型用於設定和輔助任務。請選擇另一個供應商，用於一般智慧體對話。",
+      utilityNeedsPrimaryTitle: "選擇主要模型",
       channelsTitle: "頻道",
       configHandling: "設定處理",
       durationNote:

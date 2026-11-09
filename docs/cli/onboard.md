@@ -141,6 +141,10 @@ fresh installation, it powers the OpenClaw setup assistant; choose a separate
 primary model before opening regular agent chat. Existing primary models and
 credentials remain unchanged when you add a utility model.
 
+In classic QuickStart, selecting a credential-free utility provider on a fresh
+installation returns to the provider picker so you can configure a primary model
+in the same setup flow. The utility selection is retained.
+
 Choose a detected connection or any supported provider in the shared picker.
 The selected connection runs a real completion. If it fails, the error is shown
 and the picker waits for your next choice. Cancellation stops the attempt without

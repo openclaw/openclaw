@@ -1,5 +1,6 @@
 // Model/auth provider selection step shared by the classic wizard and bootstrap onboarding.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import type { PreparedAuthChoiceResult } from "../commands/auth-choice.apply.types.js";
 import {
   applyOnboardingPrimaryModel,
@@ -311,6 +312,20 @@ export async function runSetupModelAuthStep(params: {
     }
     if (authResult.utilityModelOverride) {
       nextConfig = applyOnboardingUtilityModel(nextConfig, target, authResult.utilityModelOverride);
+      if (
+        authChoiceFromPrompt &&
+        !resolveAgentEffectiveModelPrimary(nextConfig, target.agentId) &&
+        authProfiles.length === 0
+      ) {
+        // Keep credential-free utility setup while the primary provider is selected.
+        // Pending credentials must stay with their own verification candidate.
+        replacementBaseConfig = nextConfig;
+        await prompter.note(
+          t("wizard.setup.utilityNeedsPrimary"),
+          t("wizard.setup.utilityNeedsPrimaryTitle"),
+        );
+        continue;
+      }
       break;
     }
 
