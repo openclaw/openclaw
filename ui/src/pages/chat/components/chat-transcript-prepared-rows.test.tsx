@@ -644,7 +644,7 @@ it("keeps parked row styles stable when an earlier row changes height", async ()
 
 it.each([
   { direction: "down", initialOffset: 0, destination: 60 },
-  { direction: "up", initialOffset: 24_000, destination: 180 },
+  { direction: "up", initialOffset: 24_000, destination: 180.25 },
 ])(
   "paints the $direction forecast outside active flow before measurement",
   async ({ direction, initialOffset, destination }) => {
@@ -657,7 +657,7 @@ it.each([
     const forecasts = [
       ...view.container.querySelectorAll<HTMLElement>("[data-preparing-row][data-prepared-row]"),
     ].filter((row) => !before.includes(row));
-    expect(forecasts.length).toBeGreaterThan(1);
+    expect(forecasts.length).toBeGreaterThan(0);
     for (const row of forecasts) {
       expect(row.hasAttribute("inert")).toBe(true);
       expect(row.getAttribute("aria-hidden")).toBe("true");

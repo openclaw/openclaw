@@ -453,7 +453,13 @@ export async function startTranscriptLayoutAudit(
         const geometry = await observation.evaluate((audit) => audit.finish());
         await page.screencast.stop();
         await Promise.all(writes);
-        const paintCalibrations = [];
+        const paintCalibrations: {
+          file: string;
+          scrollTop: number;
+          scrollHeight?: number;
+          stable?: boolean;
+          after: { scrollTop: number; scrollHeight: number };
+        }[] = [];
         if (paintProbe) {
           for (const offset of [0, 8191, 13979]) {
             const result = await observation.evaluate(
