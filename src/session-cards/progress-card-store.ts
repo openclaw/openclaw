@@ -3,6 +3,7 @@ import type { Selectable } from "kysely";
 import type { ProgressCard, ProgressCardStep } from "../../packages/gateway-protocol/src/index.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { withSqliteDatabaseWriteScope } from "../infra/sqlite-database-admission.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { ensureOpenClawAgentProgressCardSchemaInTransaction } from "../state/openclaw-agent-progress-card-schema.js";
@@ -44,18 +45,22 @@ function clearProgressCardInTransaction(
       updated_at: Date.now(),
     }))
     .where("session_key", "=", sessionKey);
-  return (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      (expectedRevision === undefined
-        ? query
-        : query
-            .where("revision", "=", expectedRevision)
-            .where((eb) =>
-              eb.or([eb("markdown", "is not", null), eb("steps_json", "is not", null)]),
-            )
-      ).returning(["revision", "created_at"]),
-    ) !== undefined
+  // Card payloads do not change session entries or transcripts, including during reset.
+  return withSqliteDatabaseWriteScope(
+    db,
+    [],
+    () =>
+      executeSqliteQueryTakeFirstSync(
+        db,
+        (expectedRevision === undefined
+          ? query
+          : query
+              .where("revision", "=", expectedRevision)
+              .where((eb) =>
+                eb.or([eb("markdown", "is not", null), eb("steps_json", "is not", null)]),
+              )
+        ).returning(["revision", "created_at"]),
+      ) !== undefined,
   );
 }
 
@@ -162,27 +167,29 @@ export function writePreparedSessionProgressCard(
       return { cleared: true };
     }
     const now = Date.now();
-    const written = executeSqliteQueryTakeFirstSync(
-      db,
-      kysely
-        .insertInto("session_progress_cards")
-        .values({
-          session_key: sessionKey,
-          markdown: markdown ?? null,
-          steps_json: stepsJson,
-          revision: 1,
-          created_at: now,
-          updated_at: now,
-        })
-        .onConflict((conflict) =>
-          conflict.column("session_key").doUpdateSet((eb) => ({
+    const written = withSqliteDatabaseWriteScope(db, [], () =>
+      executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .insertInto("session_progress_cards")
+          .values({
+            session_key: sessionKey,
             markdown: markdown ?? null,
             steps_json: stepsJson,
-            revision: eb("session_progress_cards.revision", "+", 1),
+            revision: 1,
+            created_at: now,
             updated_at: now,
-          })),
-        )
-        .returning(["revision", "created_at"]),
+          })
+          .onConflict((conflict) =>
+            conflict.column("session_key").doUpdateSet((eb) => ({
+              markdown: markdown ?? null,
+              steps_json: stepsJson,
+              revision: eb("session_progress_cards.revision", "+", 1),
+              updated_at: now,
+            })),
+          )
+          .returning(["revision", "created_at"]),
+      ),
     );
     return {
       card: {

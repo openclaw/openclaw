@@ -8,6 +8,12 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  readSqliteDatabaseScopedWriteToken,
+  readSqliteDatabaseWriteRevision,
+  sqliteSessionIdWriteScope,
+  withSqliteDatabaseWriteScope,
+} from "../infra/sqlite-database-admission.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
@@ -73,14 +79,18 @@ describe("session progress card store", () => {
     });
   };
 
-  beforeEach(() => {
-    dbPath = path.join(tempDirs.make("progress-card-"), "agent.sqlite");
-    db = openNodeSqliteDatabase(dbPath);
+  const open = (location: string) => {
+    db = openNodeSqliteDatabase(location);
     db.exec("PRAGMA foreign_keys = ON;");
     db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
     db.prepare(
       "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
     ).run(SESSION_KEY, "session-1", JSON.stringify({ sessionId: "session-1" }), 1);
+  };
+
+  beforeEach(() => {
+    dbPath = path.join(tempDirs.make("progress-card-"), "agent.sqlite");
+    open(dbPath);
   });
 
   afterEach(() => {
@@ -165,6 +175,51 @@ describe("session progress card store", () => {
     expect(getAdmittedSqliteSchemaFacts(sibling)).toBe(siblingFacts);
     expect(exec.mock.calls.filter(([sql]) => /CREATE/iu.test(sql))).toEqual([]);
     expect(reads.queries.filter((sql) => /sqlite_schema|sqlite_master/iu.test(sql))).toEqual([]);
+  });
+
+  it("preserves session receipts for warm card writes without hiding enclosing entry changes", () => {
+    clearNodeSqliteKyselyCacheForDatabase(db);
+    db.close();
+    open(":memory:");
+    dropLazyTable();
+    const beforeSchema = readSqliteDatabaseScopedWriteToken(db, SESSION_KEY);
+    expect(beforeSchema).toBeDefined();
+    write({ markdown: "Warm storage" });
+    expect(readSqliteDatabaseScopedWriteToken(db, SESSION_KEY)).not.toBe(beforeSchema);
+    const token = () =>
+      readSqliteDatabaseScopedWriteToken(db, [
+        SESSION_KEY,
+        sqliteSessionIdWriteScope("session-1"),
+        "agent:main:unrelated",
+      ]);
+    const before = token();
+    const revision = readSqliteDatabaseWriteRevision(db);
+    expect(before).toBeDefined();
+    for (const mutate of [
+      () => write({ markdown: "Updated" }),
+      () => write({ expectedRevision: 0 }),
+      () => write({ expectedRevision: 2 }),
+      () => write({ markdown: "Recreated" }),
+      reset,
+      () => runSqliteImmediateTransactionSync(db, () => write({ markdown: "Nested" })),
+      () => runSqliteImmediateTransactionSync(db, reset),
+    ]) {
+      mutate();
+      expect(token()).toBe(before);
+    }
+    expect(readSqliteDatabaseWriteRevision(db)).not.toBe(revision);
+    const entry = db.prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?");
+    expect(entry.get(SESSION_KEY)?.entry_json).toBe(JSON.stringify({ sessionId: "session-1" }));
+    withSqliteDatabaseWriteScope(db, [SESSION_KEY], () =>
+      runSqliteImmediateTransactionSync(db, () => {
+        write({ markdown: "Card inside session mutation" });
+        db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
+          JSON.stringify({ sessionId: "replacement" }),
+          SESSION_KEY,
+        );
+      }),
+    );
+    expect(token()).not.toBe(before);
   });
 
   it("recreates lazy storage after rolling back its first write", () => {
