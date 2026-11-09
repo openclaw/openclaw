@@ -18,6 +18,10 @@ import type { WorkerTurnExecutionIdentity } from "../../../gateway/worker-enviro
 import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { monotonicNow } from "../../../shared/monotonic-time.js";
+import {
+  captureRequesterModelPolicySnapshot,
+  intersectOperatorModelPolicies,
+} from "../../operator-model-policy.js";
 import { captureRequesterOrigin, requesterCreatorProfileId } from "../../requester-origin.js";
 import {
   getGatewayToolCallerIdentity,
@@ -72,6 +76,9 @@ export function captureSubagentSpawnGatewayContext() {
   return {
     gatewayContextResolver,
     operatorAuthority,
+    modelCeiling: captureRequesterModelPolicySnapshot(
+      intersectOperatorModelPolicies(gatewayCaller?.modelPolicy, operatorAuthority?.modelPolicy),
+    ),
     requester,
     // Personal-tool selection changes authority, not who caused this delegation.
     creatorProfileId: requesterCreatorProfileId(gatewayCaller?.requesterOrigin),
@@ -83,6 +90,7 @@ async function dispatchSubagentGateway(
   authorization?: SubagentLaunchAuthorization,
   options?: {
     agentRunTracking?: "native_subagent";
+    modelCeiling?: ReturnType<typeof captureSubagentSpawnGatewayContext>["modelCeiling"];
     gatewayContextResolver?: GatewayContextResolver;
     preparedLaunch?: PreparedSessionRun;
     requester?: ReturnType<typeof captureSubagentSpawnGatewayContext>["requester"];
@@ -188,6 +196,9 @@ async function dispatchSubagentGateway(
               : {}),
             ...(allowModelOverride ? { allowSyntheticModelOverride: true } : {}),
             ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
+            ...(isChildRunLaunch && options?.modelCeiling
+              ? { requesterModelPolicySnapshot: options.modelCeiling }
+              : {}),
             ...(gatewayContextResolver ? { resolveGatewayContext: gatewayContextResolver } : {}),
             ...(forceSyntheticClient ? { forceSyntheticClient: true } : {}),
             ...(typeof request.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}),
@@ -214,6 +225,13 @@ async function dispatchSubagentGateway(
         })
       : await dispatch();
     return { response, registrationRequired: true };
+  }
+  if (
+    request.method === "agent" &&
+    options?.modelCeiling &&
+    options.modelCeiling.kind !== "unbounded"
+  ) {
+    throw new Error("Requester model restrictions require trusted in-process Gateway admission.");
   }
   if (request.method === "agent" && options?.requester) {
     throw new Error("Requester provenance requires trusted in-process Gateway dispatch.");
@@ -313,6 +331,7 @@ export async function callNativeSubagentGateway(
   params: SubagentGatewayRequest,
   options?: {
     authorization?: SubagentLaunchAuthorization;
+    modelCeiling?: ReturnType<typeof captureSubagentSpawnGatewayContext>["modelCeiling"];
     gatewayContextResolver?: GatewayContextResolver;
     preparedLaunch?: PreparedSessionRun;
     requester?: ReturnType<typeof captureSubagentSpawnGatewayContext>["requester"];

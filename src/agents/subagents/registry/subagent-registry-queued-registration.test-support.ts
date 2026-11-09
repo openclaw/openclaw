@@ -14,7 +14,7 @@ import {
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-persistence.js";
 import { createSubagentManagerTestOptions } from "./subagent-registry-queued-recovery.test-support.js";
-import type { RegisterSubagentRunParams } from "./subagent-registry-run-launch-record.js";
+import type { NewSubagentRunRegistration } from "./subagent-registry-run-launch-record.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
@@ -101,7 +101,8 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
     completeCleanupBookkeeping: vi.fn(async () => {}),
   } satisfies SubagentManagerOptions;
   const manager = createSubagentRunManager(options);
-  const registration: RegisterSubagentRunParams = {
+  const registration: NewSubagentRunRegistration = {
+    requesterModelPolicySnapshot: { kind: "unbounded" },
     runId: "queued-original",
     childSessionKey: "agent:main:subagent:synthetic",
     childAgentId: "main",

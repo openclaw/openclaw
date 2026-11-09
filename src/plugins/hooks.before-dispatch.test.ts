@@ -20,6 +20,7 @@ describe("before_dispatch requester authority", () => {
   it("expires each plugin scope before the next handler settles", async () => {
     const requester = createPluginSubagentRequesterContext({
       sessionKey: "agent:main:telegram:direct:123",
+      requesterModelPolicySnapshot: { kind: "unbounded" },
       origin: { channel: "telegram", to: "telegram:123" },
     });
     if (!requester) {

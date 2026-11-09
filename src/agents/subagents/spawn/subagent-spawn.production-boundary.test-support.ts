@@ -139,6 +139,7 @@ export async function createSpawnBoundaryParent(params: {
   parentSessionKey: string;
   parentRunId: string;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  modelPolicy?: Parameters<typeof prepareAgentRunAdmission>[0]["modelPolicy"];
   requesterOrigin?: RequesterOrigin;
 }) {
   const { stateDir, parentSessionKey, parentRunId, operatorAuthority } = params;
@@ -162,6 +163,7 @@ export async function createSpawnBoundaryParent(params: {
   const admission = prepareAgentRunAdmission({
     cfg,
     operatorAuthority,
+    modelPolicy: params.modelPolicy,
     operationalRunInstance: createOperationalRunInstanceRef(parentRunId),
     facts: {
       runId: parentRunId,
@@ -340,7 +342,10 @@ type GatewayRuntime = ReturnType<typeof createGatewayInstanceRuntime>;
 export type NativePluginSpawnTestOptions = {
   createBoundParent: (
     authority?: AdmittedRunOperatorAuthority,
-    settings?: { guestProfileId?: string },
+    settings?: {
+      guestProfileId?: string;
+      modelPolicy?: Parameters<typeof prepareAgentRunAdmission>[0]["modelPolicy"];
+    },
   ) => Promise<BoundParent>;
   createBoundGateway: (
     bound: BoundParent,

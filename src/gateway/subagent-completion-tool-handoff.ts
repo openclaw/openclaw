@@ -4,16 +4,25 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  captureRequesterModelPolicySnapshot,
+  intersectOperatorModelPolicies,
+  restoreRequesterModelPolicySnapshot,
+  type PreparedOperatorModelPolicy,
+  type RequesterModelPolicySnapshot,
+} from "../agents/operator-model-policy.js";
 import type {
   SubagentCompletionToolHandoffRegistration,
   TrustedSubagentCompletionHandoff,
 } from "../agents/subagents/announce/subagent-announce-handoff.js";
+import { getLatestLiveSubagentRunByChildSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 const SUBAGENT_COMPLETION_TOOL_HANDOFF_TTL_MS = 5 * 60 * 1000;
 
 type SubagentCompletionToolHandoffEntry = SubagentCompletionToolHandoffRegistration & {
   expiresAtMs: number;
+  requesterModelPolicySnapshot: RequesterModelPolicySnapshot;
 };
 
 const handoffs = resolveGlobalMap<string, SubagentCompletionToolHandoffEntry>(
@@ -78,7 +87,30 @@ export function registerSubagentCompletionToolHandoff(
     return undefined;
   }
   const handoffId = randomUUID();
-  handoffs.set(handoffId, { ...normalized, expiresAtMs });
+  let requesterPolicy: PreparedOperatorModelPolicy | undefined;
+  let requesterModelPolicySnapshot: RequesterModelPolicySnapshot;
+  try {
+    for (const sourceKey of normalized.settleBatch?.sourceSessionKeys ?? [
+      normalized.sourceSessionKey,
+    ]) {
+      const source = getLatestLiveSubagentRunByChildSessionKey(
+        sourceKey,
+        (entry) =>
+          entry.requesterSessionKey === normalized.targetSessionKey &&
+          (!entry.completionRequesterSessionId ||
+            entry.completionRequesterSessionId === normalized.targetSessionId),
+      );
+      requesterPolicy = intersectOperatorModelPolicies(
+        requesterPolicy,
+        restoreRequesterModelPolicySnapshot(source?.requesterModelPolicySnapshot),
+      );
+    }
+    requesterModelPolicySnapshot = captureRequesterModelPolicySnapshot(requesterPolicy);
+  } catch {
+    // Result custody is independent of whether an old task can resume inference safely.
+    requesterModelPolicySnapshot = { kind: "unknown" };
+  }
+  handoffs.set(handoffId, { ...normalized, expiresAtMs, requesterModelPolicySnapshot });
   return handoffId;
 }
 
@@ -140,4 +172,35 @@ export function consumeSubagentCompletionToolHandoff(params: {
     model,
     ...(entry.settleBatch ? { settleBatch: entry.settleBatch } : {}),
   };
+}
+
+type CompletionRequesterTarget = {
+  handoffId: string | undefined;
+  targetSessionKey: string;
+  targetSessionId: string;
+  idempotencyKey: string;
+};
+
+function findCompletionRequesterTarget(params: CompletionRequesterTarget) {
+  const entry = params.handoffId ? handoffs.get(params.handoffId) : undefined;
+  return entry &&
+    entry.expiresAtMs > Date.now() &&
+    entry.targetSessionKey === params.targetSessionKey &&
+    entry.targetSessionId === params.targetSessionId &&
+    entry.idempotencyKey === params.idempotencyKey
+    ? entry
+    : undefined;
+}
+
+/** Read restriction facts before model selection; this never consumes or grants a capability. */
+export function readSubagentCompletionRequesterModelPolicy(
+  params: CompletionRequesterTarget,
+): RequesterModelPolicySnapshot {
+  return findCompletionRequesterTarget(params)?.requesterModelPolicySnapshot ?? { kind: "unknown" };
+}
+
+/** Only a current host-recorded completion relation can qualify its own System continuation. */
+export function isCurrentSubagentCompletionRequester(params: CompletionRequesterTarget): boolean {
+  const entry = findCompletionRequesterTarget(params);
+  return entry !== undefined && (entry.settleBatch?.isCurrent() ?? true);
 }

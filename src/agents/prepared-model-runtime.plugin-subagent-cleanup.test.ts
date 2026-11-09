@@ -79,6 +79,7 @@ it.each(["admitted", "inherited", "managed"] as const)(
       childSessionKey: "agent:work:subagent:plugin-run",
       childAgentId: "work",
       task: "background plugin task",
+      requesterModelPolicySnapshot: { kind: "unbounded" },
       pluginId: "fixture",
       assertCurrent: () => sessionEntry,
     });
@@ -86,12 +87,20 @@ it.each(["admitted", "inherited", "managed"] as const)(
     if (!registration) {
       throw new Error("Plugin run was not registered");
     }
-    const entry = createSubagentRegistrationRecord(registration, {
-      now: 1,
-      generation: 1,
-      lifecycleGeneration: "fixture",
-      childAgentId: "work",
-    });
+    const requesterModelPolicySnapshot = registration.requesterModelPolicySnapshot;
+    if (!requesterModelPolicySnapshot) {
+      throw new Error("Plugin run omitted its requester model-policy facts");
+    }
+    expect(requesterModelPolicySnapshot).toEqual({ kind: "unbounded" });
+    const entry = createSubagentRegistrationRecord(
+      { ...registration, requesterModelPolicySnapshot },
+      {
+        now: 1,
+        generation: 1,
+        lifecycleGeneration: "fixture",
+        childAgentId: "work",
+      },
+    );
     const cleanup = createSubagentRegistryContextCleanup({ isEndedHookOwnerCurrent: () => true });
     await cleanup.runContextEngineSubagentEnded({
       childSessionKey: entry.childSessionKey,

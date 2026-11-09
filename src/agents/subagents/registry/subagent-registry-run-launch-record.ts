@@ -35,6 +35,7 @@ export type RegisterSubagentRunParams = {
   sessionEntry?: SubagentRunRecord["childSessionIdentity"];
   controllerSessionKey?: string;
   requesterSessionKey: string;
+  requesterModelPolicySnapshot?: SubagentRunRecord["requesterModelPolicySnapshot"];
   requesterOrigin?: SubagentRunRecord["requesterOrigin"];
   progressOrigin?: SubagentRunRecord["progressOrigin"];
   requesterDisplayKey: string;
@@ -65,8 +66,13 @@ export type RegisterSubagentRunParams = {
   gatewayContextResolver?: GatewayContextResolver;
 };
 
+/** Internal new-launch facts; missing serialized legacy facts remain unknown, never unbounded. */
+export type NewSubagentRunRegistration = RegisterSubagentRunParams & {
+  requesterModelPolicySnapshot: import("../../operator-model-policy.js").RequesterModelPolicySnapshot;
+};
+
 export function createSubagentRegistrationRecord(
-  registerParams: RegisterSubagentRunParams,
+  registerParams: NewSubagentRunRegistration,
   prepared: {
     now: number;
     generation: number;
@@ -103,6 +109,7 @@ export function createSubagentRegistrationRecord(
       : undefined,
     controllerSessionKey,
     requesterSessionKey,
+    requesterModelPolicySnapshot: registerParams.requesterModelPolicySnapshot,
     requesterOrigin,
     progressOrigin: registerParams.progressOrigin,
     requesterDisplayKey: registerParams.requesterDisplayKey,

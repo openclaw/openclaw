@@ -27,6 +27,7 @@ import type { SessionControllerWatchdogAttempt } from "../../sessions/session-co
 import { AsyncContext } from "../../shared/async-context.js";
 import { runWithAsyncStore } from "../../shared/async-store.js";
 import {
+  readRunModelPolicy,
   captureAdmittedRunActiveAssertion,
   getAdmittedRunDelegatedAuthority,
   readAdmittedRunOperatorAuthority,
@@ -51,6 +52,8 @@ type ReceiptAuthority = (() => boolean | void) &
   Pick<SessionSourceAssertion, keyof SessionSourceAssertion>;
 
 type GatewayToolCallerIdentity = {
+  /** Restriction-only requester facts, independent of the source lease. */
+  modelPolicy?: import("../operator-model-policy.js").PreparedOperatorModelPolicy;
   watchdogAttempt?: SessionControllerWatchdogAttempt;
   personalToolParticipants?: ReplyTurnParticipants;
   personalToolUser?: string;
@@ -271,6 +274,7 @@ export function createAdmittedGatewayToolCallerIdentity(
     sessionKey,
     requesterOrigin: captureRequesterOrigin({ requesterOrigin: params.requesterOrigin }),
     operationalRunInstance: params.admittedRunContext.operationalRunInstance,
+    modelPolicy: readRunModelPolicy({ admittedRunContext: params.admittedRunContext }),
     ...(delegatedAuthority ? { approvalAuthority: delegatedAuthority } : {}),
     ...(operatorAuthority ? { operatorAuthority } : {}),
     ...(params.receiptAuthority ? { approvalAuthorityCheck: params.receiptAuthority } : {}),
@@ -635,6 +639,7 @@ export async function withGatewayToolCallerIdentity<T>(
         identity.embeddedRunToolAuthorityBinding ?? inheritedOwner?.embeddedRunToolAuthorityBinding,
       approvalAuthority,
       operatorAuthority: inheritedValue("operatorAuthority"),
+      modelPolicy: inheritedValue("modelPolicy"),
       approvalAuthorityCheck: inheritedValue("approvalAuthorityCheck"),
       approvalOwnerPluginId:
         identity.approvalOwnerPluginId?.trim() ||

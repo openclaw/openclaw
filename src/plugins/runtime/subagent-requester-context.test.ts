@@ -1,5 +1,6 @@
 import { assert, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import {
   createPluginSubagentRequesterContext,
   resolvePluginSubagentCompletionRequester,
@@ -8,6 +9,7 @@ import {
 } from "./subagent-requester-context.js";
 
 const lineage = {
+  requesterModelPolicySnapshot: { kind: "unbounded" as const },
   sessionKey: "agent:main:telegram:direct:123",
   origin: { channel: "telegram", to: "telegram:123", accountId: "work", threadId: 42 },
 };
@@ -22,6 +24,7 @@ function getActiveRequester(): PluginSubagentRequesterContext | undefined {
 
 function makeRequester(id: string) {
   const requester = createPluginSubagentRequesterContext({
+    requesterModelPolicySnapshot: { kind: "unbounded" },
     sessionKey: `agent:main:telegram:direct:${id}`,
     origin: { channel: "telegram", to: `telegram:${id}`, accountId: id },
   });
@@ -31,6 +34,7 @@ function makeRequester(id: string) {
 
 it("normalizes and freezes host-owned requester lineage", () => {
   const requester = createPluginSubagentRequesterContext({
+    requesterModelPolicySnapshot: { kind: "unbounded" },
     sessionKey: "  agent:main:telegram:direct:123  ",
     origin: {
       channel: " Telegram ",
@@ -49,7 +53,12 @@ it.each([
   { origin: lineage.origin },
   { sessionKey: lineage.sessionKey, origin: { channel: "telegram" } },
 ])("rejects missing or invalid requester lineage: %j", (input) => {
-  expect(createPluginSubagentRequesterContext(input)).toBeUndefined();
+  expect(
+    createPluginSubagentRequesterContext({
+      ...input,
+      requesterModelPolicySnapshot: { kind: "unbounded" },
+    }),
+  ).toBeUndefined();
 });
 
 it("expires requester authority when the hook invocation returns", async () => {
@@ -84,4 +93,18 @@ it("isolates concurrent requester scopes", async () => {
   gate.resolve();
   await Promise.all(runs);
   expect(getActiveRequester()).toBeUndefined();
+});
+
+it("keeps channel-less execution facts independent of communication requester context", () => {
+  const requesterModelPolicySnapshot = { kind: "unbounded" } as const;
+  expect(
+    createPluginSubagentRequesterContext({
+      sessionKey: "agent:main:rpc-parent",
+      requesterModelPolicySnapshot,
+    }),
+  ).toBeUndefined();
+  const client = createSyntheticPluginRuntimeClient({ requesterModelPolicySnapshot });
+  expect(client.internal?.requesterModelPolicySnapshot).toBe(requesterModelPolicySnapshot);
+  expect(client.internal?.pluginSubagentRequester).toBeUndefined();
+  expect(client.internal?.operatorRunAuthority).toBeUndefined();
 });

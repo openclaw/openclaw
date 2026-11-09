@@ -40,7 +40,11 @@ external delivery still follow their normal authorization and tool policies.
 Model fallback and other model-routing updates do not change a child's recorded
 return destination. Session identity, lifecycle, and spawn lineage still protect
 that destination; resumed execution follows its normal tool policy, sandbox, and
-execution-host constraints.
+execution-host constraints. The requester's model ceiling also survives as a
+restriction, not a human authority grant. Automatic model selection still chooses
+an allowed default. If an older task has no recoverable model-policy facts, its
+result remains recorded, but automatic inference is blocked rather than becoming
+unrestricted. Send a new message to continue the requester turn.
 
 New-turn capability preparation refreshes stale inherited session metadata once
 per affected lookup before evaluating current policy again. This lets ordinary

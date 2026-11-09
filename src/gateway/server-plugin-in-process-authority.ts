@@ -619,6 +619,7 @@ export function resolveInProcessGatewayDispatch(
       : {}),
     allowModelOverride: options?.allowSyntheticModelOverride === true,
     agentToolCaller: options?.agentToolCaller,
+    requesterModelPolicySnapshot: options?.requesterModelPolicySnapshot,
     agentRunTracking: options?.agentRunTracking,
     ...(operatorRoleActor ? { operatorRoleActor } : {}),
     ...(operatorRunAuthority ? { operatorRunAuthority } : {}),
@@ -634,10 +635,9 @@ export function resolveInProcessGatewayDispatch(
     ...(options?.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
     scopes: requestScopes,
   });
-  const scopedStreamClient = options?.nodeInvokeStream ? scope?.client : undefined;
   const syntheticClient = projectPluginRuntimeClientExecution({
     client: baseSyntheticClient,
-    streamClient: scopedStreamClient,
+    streamClient: options?.nodeInvokeStream ? scope?.client : undefined,
     identity: agentRuntimeIdentity,
     nodeInvokeStream: options?.nodeInvokeStream,
   });
@@ -645,6 +645,7 @@ export function resolveInProcessGatewayDispatch(
     scope?.client,
     pluginRuntimeOwnerId ||
       options?.agentRunTracking ||
+      options?.requesterModelPolicySnapshot ||
       options?.pluginSubagentRequester ||
       options?.runtimePluginToolGrant ||
       options?.pluginSubagentToolsAllow ||
@@ -652,6 +653,9 @@ export function resolveInProcessGatewayDispatch(
       scope?.client?.internal?.delegatedToolPolicyHandoffId
       ? {
           ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
+          ...(options?.requesterModelPolicySnapshot
+            ? { requesterModelPolicySnapshot: options.requesterModelPolicySnapshot }
+            : {}),
           ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
           ...(options?.pluginSubagentRequester
             ? { pluginSubagentRequester: options.pluginSubagentRequester }

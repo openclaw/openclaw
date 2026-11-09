@@ -302,3 +302,27 @@ it.each(["hook failure", "outer close"])("closes authority on %s during admissio
     prepared.close();
   }
 });
+
+it("enforces an own requester model ceiling without borrowing operator source authority", () => {
+  const allowed = { provider: "fixture", model: "allowed" };
+  const modelPolicy = {
+    models: [allowed],
+    allows: (ref: typeof allowed) =>
+      ref.provider === allowed.provider && ref.model === allowed.model,
+  };
+  expect(() =>
+    run.bindOperatorModelExecution(
+      undefined,
+      {
+        provider: "fixture",
+        model: "forbidden",
+      },
+      undefined,
+      modelPolicy,
+    ),
+  ).toThrow("cannot use this model");
+  // A pure restriction does not mint a source lease or operator grant.
+  expect(
+    run.bindOperatorModelExecution(undefined, allowed, undefined, modelPolicy),
+  ).toBeUndefined();
+});

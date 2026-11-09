@@ -12,6 +12,7 @@ import { isSmallModel } from "../../../shared/model-param-b.js";
 import {
   assertOperatorModelAllowed,
   readRunOperatorAuthority,
+  readRunModelPolicy,
 } from "../../admitted-run-context.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../embedded-agent-helpers/turns.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
@@ -142,13 +143,18 @@ export function installEmbeddedAttemptStreamGuards(
   const { sessionAgentId } = input.setup;
   const { signal: abortSignal } = input.runAbortController;
   const operatorAuthority = readRunOperatorAuthority(attempt);
-  if (operatorAuthority) {
+  const modelPolicy = readRunModelPolicy(attempt);
+  if (operatorAuthority || modelPolicy) {
     const providerStream = session.agent.streamFn;
     session.agent.streamFn = (model, context, options) => {
-      assertOperatorModelAllowed(operatorAuthority, {
-        provider: attempt.provider,
-        model: attempt.modelId,
-      });
+      assertOperatorModelAllowed(
+        operatorAuthority,
+        {
+          provider: attempt.provider,
+          model: attempt.modelId,
+        },
+        modelPolicy,
+      );
       return providerStream(model, context, options);
     };
   }

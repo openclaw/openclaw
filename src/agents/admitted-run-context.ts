@@ -34,6 +34,10 @@ import {
   type OperationalRunInstanceRef,
 } from "./operational-run-instance.js";
 import { isOperatorAccessProgramAllowed } from "./operator-access-program.js";
+import {
+  intersectOperatorModelPolicies,
+  type PreparedOperatorModelPolicy,
+} from "./operator-model-policy.js";
 
 type OperatorModelSelection = ModelRef & { cyberAccessProgram?: CyberAccessProgram };
 
@@ -45,6 +49,8 @@ export {
 /** Exact context carried by one admitted execution and every retry/fallback it owns. */
 export type AdmittedRunContext = Readonly<{
   operationalRunInstance: OperationalRunInstanceRef;
+  /** Restriction-only facts; never a credential or source lease. */
+  modelPolicy?: PreparedOperatorModelPolicy;
   /** Scheduler-authored ingress authority, independent of optional audit collection. */
   admissionSource?: "operator-schedule" | "requester-schedule";
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
@@ -148,22 +154,23 @@ export function assertAdmittedRunOperatorAuthority(
 export function assertOperatorModelAllowed(
   authority: AdmittedRunOperatorAuthority | undefined,
   model: OperatorModelSelection | undefined,
+  modelPolicy?: PreparedOperatorModelPolicy,
 ): void {
-  createOperatorModelSelectionAssertion(authority, model)();
+  createOperatorModelSelectionAssertion(authority, model, modelPolicy)();
 }
 
 /** Carry the operator's source checks into writes without rereading its store on the host. */
 export function createOperatorModelSelectionAssertion(
   authority: AdmittedRunOperatorAuthority | undefined,
   model: OperatorModelSelection | undefined,
+  modelPolicy?: PreparedOperatorModelPolicy,
 ): SessionSourceAssertion {
   return composeSessionSourceAssertion([authority?.assertCurrent], (assertSource) => {
-    if (!authority) {
-      return;
+    if (authority) {
+      assertAdmittedRunOperatorAuthority(authority);
+      assertSource();
     }
-    assertAdmittedRunOperatorAuthority(authority);
-    assertSource();
-    const policy = authority.modelPolicy;
+    const policy = intersectOperatorModelPolicies(modelPolicy, authority?.modelPolicy);
     if (policy && (!model || !policy.allows(model))) {
       throw new Error(
         "Your operator role cannot use this model. Choose an allowed model or ask a gateway administrator to update your role's model policy.",
@@ -195,12 +202,18 @@ export function bindOperatorModelExecution(
   authority: AdmittedRunOperatorAuthority | undefined,
   model: OperatorModelSelection | undefined,
   mapAuthorizationError?: (error: unknown) => Error,
+  modelPolicy?: PreparedOperatorModelPolicy,
 ): Readonly<{ signal: AbortSignal; assertCurrent: () => void; release: () => void }> | undefined {
   if (!authority) {
+    assertOperatorModelAllowed(undefined, model, modelPolicy);
     return undefined;
   }
   const selected = model ? { ...model } : undefined;
-  const assertModelAllowed = createOperatorModelSelectionAssertion(authority, selected);
+  const assertModelAllowed = createOperatorModelSelectionAssertion(
+    authority,
+    selected,
+    modelPolicy,
+  );
   const mapError = (error: unknown) => mapAuthorizationError?.(error) ?? error;
   let releaseAuthority: (() => void) | undefined;
   try {
@@ -260,8 +273,21 @@ export function readRunOperatorAuthority(params: {
   );
 }
 
+/** Current human policy can narrow, but never replace, captured execution restrictions. */
+export function readRunModelPolicy(params: {
+  preparedRunAdmission?: PreparedAgentRunAdmission;
+  admittedRunContext?: AdmittedRunContext;
+}): PreparedOperatorModelPolicy | undefined {
+  return intersectOperatorModelPolicies(
+    params.admittedRunContext?.modelPolicy ?? params.preparedRunAdmission?.modelPolicy,
+    readRunOperatorAuthority(params)?.modelPolicy,
+  );
+}
+
 export type PreparedAgentRunAdmission = Readonly<{
   operationalRunInstance: OperationalRunInstanceRef;
+  /** Restriction-only facts; never a credential or source lease. */
+  modelPolicy?: PreparedOperatorModelPolicy;
   /** Exact post-prepare owner; repeated fallback/retry returns the same object. */
   admit: (
     runtimeKind: ExecutionIdentityAdmissionFacts["runtime"]["kind"],
@@ -507,6 +533,7 @@ export function prepareSystemAgentRunAdmission(
 export function prepareAgentRunAdmission(params: {
   cfg: OpenClawConfig;
   admissionSource?: AdmittedRunContext["admissionSource"];
+  modelPolicy?: PreparedOperatorModelPolicy;
   facts: Omit<ExecutionIdentityAdmissionFacts, "runtime">;
   operationalRunInstance: OperationalRunInstanceRef;
   onAdmitted?: (context: AdmittedRunContext) => void | Promise<void>;
@@ -556,6 +583,7 @@ export function prepareAgentRunAdmission(params: {
   });
   const prepared: PreparedAgentRunAdmission = Object.freeze({
     operationalRunInstance,
+    modelPolicy: params.modelPolicy,
     assertCurrent: () => {
       assertPreparationOpen();
       if (!admittedContext) {
@@ -617,6 +645,7 @@ export function prepareAgentRunAdmission(params: {
           const context = admitPreparedAgentRun({
             cfg: params.cfg,
             admissionSource: params.admissionSource,
+            modelPolicy: params.modelPolicy,
             facts,
             operationalRunInstance,
             runtimeInstanceId: admittedRuntimeInstanceId,
@@ -673,6 +702,7 @@ export async function resolvePreparedRunAdmission(params: {
 function admitPreparedAgentRun(params: {
   cfg: OpenClawConfig;
   admissionSource?: AdmittedRunContext["admissionSource"];
+  modelPolicy?: PreparedOperatorModelPolicy;
   facts: ExecutionIdentityAdmissionFacts;
   operationalRunInstance: OperationalRunInstanceRef;
   runtimeInstanceId?: string;
@@ -684,6 +714,7 @@ function admitPreparedAgentRun(params: {
   const admitted = {
     operationalRunInstance,
     ...(params.admissionSource ? { admissionSource: params.admissionSource } : {}),
+    ...(params.modelPolicy ? { modelPolicy: params.modelPolicy } : {}),
   };
   if (!isExecutionIdentityCollectionEnabled(params.cfg)) {
     return Object.freeze(prepareGatewayContextBindingOwner(admitted));

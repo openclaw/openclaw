@@ -14,7 +14,10 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
-import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
+import {
+  prepareOperatorModelPolicy,
+  type PreparedOperatorModelPolicy,
+} from "../operator-model-policy.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -30,14 +33,43 @@ async function createSourceHost(
   abortSignal?: AbortSignal,
   nativeModelPolicySupport?: "exact",
   attempt: Partial<Parameters<typeof createAdmittedHostCapabilityTestFixture>[0]> = {},
+  modelPolicy?: PreparedOperatorModelPolicy,
 ) {
   const host = await createAdmittedHostCapabilityTestFixture(
     { runId: "retained-source", abortSignal, ...attempt },
-    { operatorAuthority, nativeModelPolicySupport },
+    { operatorAuthority, nativeModelPolicySupport, modelPolicy },
   );
   cleanup.push(host.closeAdmission, host.closeHost);
   return host;
 }
+
+it("preserves the requester model ceiling in retained native source authority", async () => {
+  const source = createAdmittedRunOperatorAuthority({
+    profileId: "system-source",
+    scopes: ["operator.write"],
+    assertCurrent: () => {},
+  });
+  const modelPolicy = prepareOperatorModelPolicy({
+    cfg: { agents: { defaults: { model: "fixture/allowed" } } },
+    policy: { allow: ["fixture/allowed"] },
+    manifestPlugins: [],
+  });
+  assert(modelPolicy);
+  const host = await createSourceHost(source, undefined, "exact", {}, modelPolicy);
+  const retained = retain(host);
+  try {
+    expect(retained.modelPolicyRequired).toBe(true);
+    expect(() =>
+      retained.bindModelExecution?.({ provider: "fixture", model: "forbidden" }),
+    ).toThrow("cannot use this model");
+    const binding = retained.bindModelExecution?.({ provider: "fixture", model: "allowed" });
+    assert(binding);
+    expect(() => binding.assertCurrent()).not.toThrow();
+    binding.release();
+  } finally {
+    retained.release();
+  }
+});
 
 function retain(host: Awaited<ReturnType<typeof createSourceHost>>) {
   const retained = host.hostCapabilities.retainSourceAuthority?.();

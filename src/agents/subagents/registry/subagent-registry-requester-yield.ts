@@ -47,6 +47,7 @@ export async function adoptSubagentRunForRequesterTurnInRuns(params: {
   requesterSessionKey: string;
   requesterAgentId: string;
   requesterTurnRunId: string;
+  requesterModelPolicySnapshot: import("../../operator-model-policy.js").RequesterModelPolicySnapshot;
   requesterRunInstance?: OperationalRunInstanceRef;
   assertCurrent: () => void;
   runs: Map<string, SubagentRunRecord>;
@@ -96,6 +97,7 @@ export async function adoptSubagentRunForRequesterTurnInRuns(params: {
       }
       const next = structuredClone(entry);
       next.requesterTurnRunId = requesterTurnRunId;
+      next.requesterModelPolicySnapshot = params.requesterModelPolicySnapshot;
       next.requesterTurnYielded = undefined;
       if (next.requesterSettleWake?.requesterYieldBatch === true) {
         delete next.requesterSettleWake.requesterYieldBatch;

@@ -59,7 +59,10 @@ import {
   resolveThinkingSelection,
 } from "../model-thinking-default.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
-import { resolveOperatorModelDefault } from "../operator-model-policy.js";
+import {
+  intersectOperatorModelPolicies,
+  resolveOperatorModelDefault,
+} from "../operator-model-policy.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
 import {
@@ -125,6 +128,10 @@ export async function resolveEmbeddedModelSelection(params: {
   runContext: AgentRunContext;
 }) {
   const operatorAuthority = params.opts.operatorAuthority;
+  const modelPolicy = intersectOperatorModelPolicies(
+    params.opts.modelPolicy,
+    operatorAuthority?.modelPolicy,
+  );
   if (operatorAuthority) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
     operatorAuthority.assertCurrent();
@@ -350,8 +357,7 @@ export async function resolveEmbeddedModelSelection(params: {
   const autoFallbackPrimaryProbe =
     !hasExplicitRunOverride &&
     !isModelSelectionLocked(sessionEntry) &&
-    (operatorAuthority?.modelPolicy?.allows({ provider: primaryProvider, model: primaryModel }) ??
-      true)
+    (modelPolicy?.allows({ provider: primaryProvider, model: primaryModel }) ?? true)
       ? resolveAutoFallbackPrimaryProbe({
           entry: sessionEntry,
           sessionKey: params.sessionKey,
@@ -387,7 +393,7 @@ export async function resolveEmbeddedModelSelection(params: {
     if (!explicitRef) {
       throw new Error("Invalid model override.");
     }
-    assertOperatorModelAllowed(operatorAuthority, explicitRef);
+    assertOperatorModelAllowed(operatorAuthority, explicitRef, modelPolicy);
     if (!visibilityPolicy.allows(explicitRef)) {
       const rejectedKey = `${sanitizeForLog(explicitRef.provider)}/${sanitizeForLog(explicitRef.model)}`;
       const policyPath = visibilityPolicy.allowConfigPath ?? "modelPolicy.allow";
@@ -417,11 +423,11 @@ export async function resolveEmbeddedModelSelection(params: {
           cfg: params.cfg,
           agentId: params.sessionAgentId,
           ...params.modelManifestContext,
-          policy: operatorAuthority?.modelPolicy,
+          policy: modelPolicy,
           model: allowedInitialSelection,
           allows: visibilityPolicy.allows,
         });
-  assertOperatorModelAllowed(operatorAuthority, operatorSelection);
+  assertOperatorModelAllowed(operatorAuthority, operatorSelection, modelPolicy);
   if (!operatorSelection) {
     throw new Error("No model is available for this operator role and agent.");
   }
@@ -446,7 +452,7 @@ export async function resolveEmbeddedModelSelection(params: {
     workspaceDir: params.workspaceDir,
     pluginRegistry: requireActivePluginRegistry(),
   });
-  assertOperatorModelAllowed(operatorAuthority, { provider, model });
+  assertOperatorModelAllowed(operatorAuthority, { provider, model }, modelPolicy);
 
   const authProfileId = sessionEntryForAttempt?.authProfileOverride;
   if (sessionEntryForAttempt && authProfileId) {
@@ -623,7 +629,7 @@ export async function resolveEmbeddedModelSelection(params: {
     };
   }
 
-  assertOperatorModelAllowed(operatorAuthority, { provider, model });
+  assertOperatorModelAllowed(operatorAuthority, { provider, model }, modelPolicy);
   // Fallback tokens must not adopt entries from a store without a nonempty session key.
   const sessionFile = params.sessionKey ?? params.sessionId;
   if (params.sessionKey && !params.suppressVisibleSessionEffects) {

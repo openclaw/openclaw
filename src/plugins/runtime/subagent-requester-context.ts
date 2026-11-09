@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { RequesterModelPolicySnapshot } from "../../agents/operator-model-policy.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   normalizeDeliveryContext,
@@ -8,6 +9,7 @@ import {
 
 export type PluginSubagentRequesterContext = Readonly<{
   sessionKey: string;
+  requesterModelPolicySnapshot?: RequesterModelPolicySnapshot;
   origin: Readonly<DeliveryContext>;
 }>;
 
@@ -26,6 +28,7 @@ const pluginSubagentRequesterScope = resolveGlobalSingleton<
 
 export function createPluginSubagentRequesterContext(params: {
   sessionKey?: string;
+  requesterModelPolicySnapshot: RequesterModelPolicySnapshot;
   origin?: DeliveryContext;
 }): PluginSubagentRequesterContext | undefined {
   const sessionKey = normalizeOptionalString(params.sessionKey);
@@ -35,6 +38,7 @@ export function createPluginSubagentRequesterContext(params: {
   }
   return Object.freeze({
     sessionKey,
+    requesterModelPolicySnapshot: params.requesterModelPolicySnapshot,
     origin: Object.freeze(origin),
   });
 }

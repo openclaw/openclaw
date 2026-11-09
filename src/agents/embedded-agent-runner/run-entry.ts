@@ -9,7 +9,7 @@ import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { modelKey } from "../../shared/model-key.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
-import { readPreparedRunOperatorAuthority } from "../admitted-run-context.js";
+import { readRunModelPolicy, readPreparedRunOperatorAuthority } from "../admitted-run-context.js";
 import { createAssistantErrorTranscript } from "../assistant-error-transcript.js";
 import { resolveModelFallbackError } from "../failover-error.js";
 import { isFallbackCandidateSkipped } from "../fallback-skip-cache.js";
@@ -112,6 +112,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
   params: EmbeddedAgentRunEntryParams<T>,
 ): Promise<EmbeddedAgentRunEntryResult<T>> {
   const operatorAuthority = readPreparedRunOperatorAuthority(params.preparedRunAdmission);
+  const modelPolicy = readRunModelPolicy(params);
   const lifecycleGeneration = captureAgentRunLifecycleGeneration(params.identity.runId);
   const runContext = getAgentRunContext(params.identity.runId);
   const placementRuntime = await resolveSessionPlacementRuntimeOverride(params.identity);
@@ -258,6 +259,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
         ...selection,
         ...params.identity,
         operatorAuthority,
+        modelPolicy,
         // Only the first initial candidate receives a hook reroute; stickiness must not bypass it.
         stickyRateLimitFallback:
           params.behavior.kind !== "maintenance" &&
@@ -504,7 +506,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       capturedCyberRefusal &&
       target &&
       params.selection.cyberAccessProgram === undefined &&
-      (!operatorAuthority?.modelPolicy || operatorAuthority.modelPolicy.allows(target)) &&
+      (!modelPolicy || modelPolicy.allows(target)) &&
       isOperatorAccessProgramAllowed(operatorAuthority, "daybreak_blue") &&
       !isFallbackCandidateSkipped({
         sessionId: params.identity.sessionId,

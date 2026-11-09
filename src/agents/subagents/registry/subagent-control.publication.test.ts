@@ -136,6 +136,7 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
             agentDir: path.join(fixture.stateDir, "agents", "main", "agent"),
             workspaceDir: path.join(fixture.stateDir, "workspace"),
             task: "unstarted operation",
+            requesterModelPolicySnapshot: { kind: "unbounded" },
             requester: {
               sessionKey: "agent:main:main",
               origin: { channel: "webchat", to: "requester" },

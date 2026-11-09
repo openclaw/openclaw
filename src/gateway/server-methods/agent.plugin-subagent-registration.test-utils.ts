@@ -26,6 +26,7 @@ export function registerPluginSubagentRequesterLineageCase() {
       const sessionEntry = { sessionId: "plugin-completion-session", updatedAt: 1 };
 
       await registerPluginSubagentRunFromGateway({
+        requesterModelPolicySnapshot: { kind: "unbounded" },
         assertCurrent: () => sessionEntry,
         cfg: {
           session: { mainKey: "main", scope: "per-sender" },
@@ -89,6 +90,7 @@ export function registerPluginSubagentFollowupAdoptionCase() {
         // A requester-bound follow-up lands at a higher generation than the paused
         // owner, so it becomes the newest row for this session.
         await registerPluginSubagentRunFromGateway({
+          requesterModelPolicySnapshot: { kind: "unbounded" },
           assertCurrent: () => sessionEntry,
           cfg,
           runId: "plugin-subagent-sibling",
@@ -105,6 +107,7 @@ export function registerPluginSubagentFollowupAdoptionCase() {
         });
 
         await registerPluginSubagentRunFromGateway({
+          requesterModelPolicySnapshot: { kind: "unbounded" },
           assertCurrent: () => sessionEntry,
           cfg,
           runId: "plugin-subagent-default-followup",

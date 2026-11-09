@@ -27,8 +27,82 @@ export type OperatorModelPolicySnapshot = {
 };
 const modelPolicySnapshots = new WeakMap<
   PreparedOperatorModelPolicy,
-  { snapshot: OperatorModelPolicySnapshot; membership: string }
+  {
+    snapshot?: OperatorModelPolicySnapshot;
+    constraints?: OperatorModelPolicySnapshot[];
+    membership: string;
+  }
 >();
+
+/** Durable restrictions are not operator identity, credentials, or permission grants. */
+export type RequesterModelPolicySnapshot =
+  | { kind: "unbounded" }
+  | { kind: "bounded"; constraints: OperatorModelPolicySnapshot[] }
+  | { kind: "unknown" };
+
+function modelPolicyConstraints(policy: PreparedOperatorModelPolicy) {
+  const retained = modelPolicySnapshots.get(policy);
+  return retained?.constraints ?? (retained?.snapshot ? [retained.snapshot] : undefined);
+}
+
+export function captureRequesterModelPolicySnapshot(
+  policy: PreparedOperatorModelPolicy | undefined,
+): RequesterModelPolicySnapshot {
+  if (!policy) {
+    return { kind: "unbounded" };
+  }
+  const constraints = modelPolicyConstraints(policy);
+  return constraints ? { kind: "bounded", constraints } : { kind: "unknown" };
+}
+
+/** Missing legacy facts never silently remove a requester ceiling. */
+export function restoreRequesterModelPolicySnapshot(
+  snapshot: RequesterModelPolicySnapshot | undefined,
+): PreparedOperatorModelPolicy | undefined {
+  if (
+    !snapshot ||
+    snapshot.kind === "unknown" ||
+    (snapshot.kind === "bounded" && snapshot.constraints.length === 0)
+  ) {
+    throw new Error(
+      "The requester model policy is unavailable; send a new message to resume this session.",
+    );
+  }
+  return snapshot.kind === "unbounded"
+    ? undefined
+    : snapshot.constraints.reduce<PreparedOperatorModelPolicy | undefined>(
+        (policy, constraint) =>
+          intersectOperatorModelPolicies(policy, restoreOperatorModelPolicySnapshot(constraint)),
+        undefined,
+      );
+}
+
+/** A restriction can narrow a live policy without retaining its source authority. */
+export function intersectOperatorModelPolicies(
+  original: PreparedOperatorModelPolicy | undefined,
+  current: PreparedOperatorModelPolicy | undefined,
+): PreparedOperatorModelPolicy | undefined {
+  const membership = readOperatorModelPolicyMembership(original);
+  if (
+    !original ||
+    !current ||
+    original === current ||
+    (membership !== undefined && membership === readOperatorModelPolicyMembership(current))
+  ) {
+    return current ?? original;
+  }
+  const policy = Object.freeze({
+    models: Object.freeze(current.models.filter(original.allows)),
+    allows: (ref: ModelRef) => original.allows(ref) && current.allows(ref),
+  });
+  const left = modelPolicyConstraints(original);
+  const right = modelPolicyConstraints(current);
+  if (left && right) {
+    const constraints = [...left, ...right];
+    modelPolicySnapshots.set(policy, { constraints, membership: JSON.stringify(constraints) });
+  }
+  return policy;
+}
 
 /** Preserve resolved identities and wildcard predicates, not only discovered default choices. */
 export function captureOperatorModelPolicySnapshot(

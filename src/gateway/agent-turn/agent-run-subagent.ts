@@ -1,6 +1,7 @@
 /** Native subagent registration and paused-run adoption precede Gateway acceptance. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { restoreRequesterModelPolicySnapshot } from "../../agents/operator-model-policy.js";
 import { resolveExactSubagentCompletionEvent } from "../../agents/subagents/announce/subagent-announce-handoff.js";
 import {
   readFollowupRequest,
@@ -13,6 +14,7 @@ import type {
 } from "../../agents/subagents/completion/session-followup-completion.types.js";
 import { resolveSubagentChildAuthority } from "../../agents/subagents/registry/subagent-child-owner-match.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry-read.js";
+import { getSubagentRunByRunId } from "../../agents/subagents/registry/subagent-registry.js";
 import type {
   SubagentRunRecord,
   SubagentAdmissionRejection,
@@ -36,7 +38,10 @@ import { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { registerPluginSubagentRunFromGateway } from "../server-methods/agent-subagent-registration.js";
 import { prepareParentSubagentResume } from "../session-subagent-resume.js";
-import { consumeSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
+import {
+  readSubagentCompletionRequesterModelPolicy,
+  consumeSubagentCompletionToolHandoff,
+} from "../subagent-completion-tool-handoff.js";
 import { formatForLog } from "../ws-log.js";
 import type { PrepareAgentRunDispatchParams } from "./agent-run-admission-types.js";
 import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
@@ -161,6 +166,8 @@ export async function prepareGatewaySubagentRun(params: {
               workspaceDir: params.workspaceDir,
               task: params.request.message.trim(),
               requester: params.client?.internal?.pluginSubagentRequester,
+              requesterModelPolicySnapshot: params.client?.internal
+                ?.requesterModelPolicySnapshot ?? { kind: "unknown" },
               pluginId: normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId),
               assertCurrent: params.assertResumeAdmissionCurrent,
               retainAdmission: params.retainPluginSubagentAdmission,
@@ -357,4 +364,34 @@ export function consumeGatewaySubagentCompletionToolHandoff(
         model: resolvedRuntime.model,
       })
     : undefined;
+}
+
+/** Restore requester restrictions without reconstructing its former human source. */
+export function resolveGatewaySubagentModelPolicy(params: PrepareAgentRunDispatchParams) {
+  const sourceTool =
+    params.inputProvenance?.kind === "inter_session"
+      ? params.inputProvenance.sourceTool
+      : undefined;
+  if (
+    params.client?.internal?.delegatedToolPolicyHandoffId ||
+    sourceTool === "subagent_announce" ||
+    sourceTool === "subagent_settle"
+  ) {
+    return restoreRequesterModelPolicySnapshot(
+      readSubagentCompletionRequesterModelPolicy({
+        handoffId: params.client?.internal?.delegatedToolPolicyHandoffId,
+        targetSessionKey: params.resolvedSessionKey ?? "",
+        targetSessionId: params.getAdmittedSessionId() ?? "",
+        idempotencyKey: params.request.idempotencyKey,
+      }),
+    );
+  }
+  if (params.client?.internal?.requesterModelPolicySnapshot) {
+    return restoreRequesterModelPolicySnapshot(params.client.internal.requesterModelPolicySnapshot);
+  }
+  const launchedChild = getSubagentRunByRunId(params.runId);
+  if (launchedChild && launchedChild.childSessionKey === params.resolvedSessionKey) {
+    return restoreRequesterModelPolicySnapshot(launchedChild.requesterModelPolicySnapshot);
+  }
+  return undefined;
 }

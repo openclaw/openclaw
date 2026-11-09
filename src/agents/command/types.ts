@@ -146,6 +146,8 @@ export type AgentCommandOpts = {
   assertSourceCurrent?: import("../../auto-reply/command-owner-authority.js").CommandOwnerAssertion;
   /** Original operator restriction; host-only and never accepted from public ingress. */
   operatorAuthority?: import("../admitted-run-context.js").AdmittedRunOperatorAuthority;
+  /** Restriction-only requester ceiling, independent of live operator grants. */
+  modelPolicy?: import("../operator-model-policy.js").PreparedOperatorModelPolicy;
   /** Host-captured requester identity for policy resolution across internal continuations. */
   requesterOrigin?: RequesterOrigin;
   lane?: string;

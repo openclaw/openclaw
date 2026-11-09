@@ -503,6 +503,7 @@ async function executeAgentRun(
                 swarmOutputSchema: params.request.swarmOutputSchema,
                 operationalRunInstance: prepared.operationalRunInstance,
                 operatorAuthority: prepared.operatorAuthority,
+                modelPolicy: prepared.modelPolicy,
                 onAdmittedRunContext: (admittedRunContext) => {
                   skillLibraryAuthoring?.bind(admittedRunContext);
                   bindGatewayContextResolver(

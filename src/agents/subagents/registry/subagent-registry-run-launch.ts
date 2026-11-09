@@ -289,22 +289,30 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           if (candidates.some((row) => !runIds.has(row.runId))) {
             throw new SubagentRegistryMutationRejectedError("Subagent registration cohort changed");
           }
-          const entry = createSubagentRegistrationRecord(registerParams, {
-            now: Date.now(),
-            generation: nextSubagentRunGeneration(rows.values(), childSessionKey, childAgentId),
-            lifecycleGeneration,
-            childAgentId,
-            requesterAgentId,
-            requesterOrigin: normalizeDeliveryContext(registerParams.requesterOrigin),
-            swarmWaitOwnerSessionKeys:
-              registerParams.collect && registerParams.swarmRequesterSessionKey
-                ? resolveSwarmWaitOwnerSessionKeys(
-                    this.options.getRunsForChildSession,
-                    registerParams.swarmRequesterSessionKey,
-                    requesterAgentId,
-                  )
-                : undefined,
-          });
+          const entry = createSubagentRegistrationRecord(
+            {
+              ...registerParams,
+              requesterModelPolicySnapshot: registerParams.requesterModelPolicySnapshot ?? {
+                kind: "unknown",
+              },
+            },
+            {
+              now: Date.now(),
+              generation: nextSubagentRunGeneration(rows.values(), childSessionKey, childAgentId),
+              lifecycleGeneration,
+              childAgentId,
+              requesterAgentId,
+              requesterOrigin: normalizeDeliveryContext(registerParams.requesterOrigin),
+              swarmWaitOwnerSessionKeys:
+                registerParams.collect && registerParams.swarmRequesterSessionKey
+                  ? resolveSwarmWaitOwnerSessionKeys(
+                      this.options.getRunsForChildSession,
+                      registerParams.swarmRequesterSessionKey,
+                      requesterAgentId,
+                    )
+                  : undefined,
+            },
+          );
           entry.requesterStorePath =
             previous?.requesterStorePath ??
             resolvePhysicalSessionStorePath(

@@ -21,10 +21,10 @@ describeLive("OpenAI requested child completion", () => {
     async () => {
       await runWithLiveSubagentGateway(
         { additionalTools: ["sessions_send"] },
-        async ({ gateway, gates, start, record, waitForFinal }) => {
+        async ({ gateway, gates, start, record, waitForFinal, waitForDescendantSettlement }) => {
           const id = randomUUID().replaceAll("-", "");
           const parentKey = `agent:main:live-late-result:${id}`;
-          const readyMarker = `READY_${id}`;
+          const readyMarker = "READY";
           const waitingMarker = `WAITING_${id}`;
           const parentMarker = `RESULT_${id}`;
           const lateResult = `CHILD_RESULT_${randomUUID()}`;
@@ -46,7 +46,7 @@ describeLive("OpenAI requested child completion", () => {
             [
               "This is a new request using the existing child, not a request to create another task.",
               `Call sessions_send exactly once with ${JSON.stringify({ sessionKey: child.childSessionKey, message: gateTask(gate.url), timeoutSeconds: 0 })}.`,
-              `After the send is accepted, finish this turn with exactly ${waitingMarker}. Do not call sessions_yield, spawn, read, exec, or poll the child yourself.`,
+              `After the send is accepted, call sessions_yield with acknowledgment exactly ${waitingMarker}. Do not spawn, read, exec, poll the child yourself, or send a final answer before it completes.`,
               `When the actual late child result arrives, your required user-facing final is ${parentMarker} on the first line and the exact child result on the second line. Do not send a message or acknowledgement back to the child.`,
             ].join("\n"),
           );
@@ -65,7 +65,15 @@ describeLive("OpenAI requested child completion", () => {
           );
           expect(parentTurn.status).toBe("ok");
           const before = await history(parentKey);
-          expect(finalReplies(before, waitingMarker)).toEqual([waitingMarker]);
+          expect(
+            before.filter(
+              (message) =>
+                message.role === "toolResult" &&
+                message.toolName === "sessions_yield" &&
+                asOptionalRecord(message.details)?.acknowledgment === waitingMarker,
+            ),
+            "the parent handed its result obligation back before the child completed",
+          ).toHaveLength(1);
           expect(finalReplies(before, parentMarker)).toEqual([]);
           const sends = before.filter(
             (message) => message.role === "toolResult" && message.toolName === "sessions_send",
@@ -88,6 +96,7 @@ describeLive("OpenAI requested child completion", () => {
             "parent consumes the requested late result",
             async () => finalReplies(await history(parentKey), parentMarker)[0],
           );
+          await waitForDescendantSettlement(parentKey);
           const rawMessages = await history(parentKey);
           const projected = await gateway.request<{ messages: unknown[] }>("chat.history", {
             sessionKey: parentKey,
@@ -113,7 +122,10 @@ describeLive("OpenAI requested child completion", () => {
             return (
               message.role === "user" &&
               provenance?.sourceSessionKey === child.childSessionKey &&
-              provenance.sourceTool === "subagent_announce"
+              (provenance.sourceTool === "subagent_announce" ||
+                provenance.sourceTool === "subagent_settle") &&
+              // A paused-child notice can use settle provenance without carrying the result.
+              JSON.stringify(message.content).includes(lateResult)
             );
           });
           expect(
@@ -132,7 +144,10 @@ describeLive("OpenAI requested child completion", () => {
             finalReplies(await history(child.childSessionKey), ""),
             "the child receives no automatic reply dance",
           ).toEqual([readyMarker, lateResult]);
-          expect(listSubagentRunsForRequester(parentKey)).toHaveLength(1);
+          expect(
+            [...new Set(listSubagentRunsForRequester(parentKey).map((run) => run.childSessionKey))],
+            "follow-up run records still belong to the original child",
+          ).toEqual([child.childSessionKey]);
           expect(gate.snapshot()).toEqual({ requests: 1, waiting: 0, released: true });
         },
       );

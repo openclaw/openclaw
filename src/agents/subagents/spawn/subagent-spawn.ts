@@ -84,7 +84,7 @@ export async function spawnSubagentDirect(
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
-  const { gatewayContextResolver, operatorAuthority, requester, creatorProfileId } =
+  const { gatewayContextResolver, operatorAuthority, modelCeiling, requester, creatorProfileId } =
     captureSubagentSpawnGatewayContext();
   const requestResolution = await resolveSubagentSpawnRequest(params, ctx);
   if (!requestResolution.ok) {
@@ -330,10 +330,8 @@ export async function spawnSubagentDirect(
       acpEnabled: isAcpRuntimeSpawnAvailable({ config: cfg, sandboxed: childRuntimeSandboxed }),
       nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({ surface: "subagent" }),
     });
-    const profiledSystemPrompt = systemPrompt(envelope.systemPrompt);
-    let childSystemPrompt = params.outputSchema
-      ? `${profiledSystemPrompt}\n\n${STRUCTURED_OUTPUT_INSTRUCTION}`
-      : profiledSystemPrompt;
+    let childSystemPrompt = systemPrompt(envelope.systemPrompt);
+    childSystemPrompt += params.outputSchema ? `\n\n${STRUCTURED_OUTPUT_INSTRUCTION}` : "";
 
     const materializedAttachments = await runWithAgentToolSourceExecutionScope(assertActive, () =>
       materializeSubagentAttachments({
@@ -421,6 +419,7 @@ export async function spawnSubagentDirect(
           {
             authorization: childLaunch.authorization,
             gatewayContextResolver,
+            modelCeiling,
             requester,
             preparedLaunch: launchContext.preparedLaunch,
           },
@@ -551,6 +550,7 @@ export async function spawnSubagentDirect(
         return {
           runId,
           requesterTurnRunId: ctx.requesterTurnRunId,
+          requesterModelPolicySnapshot: modelCeiling,
           nativePluginOwner: params.collect ? ctx.nativePluginOwner : undefined,
           subagentProfile: profileReceipt,
           ...childTarget,

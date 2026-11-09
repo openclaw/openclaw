@@ -2,7 +2,11 @@ import { createOperationalRunInstanceRef } from "../../agents/admitted-run-conte
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
+import { isCronSessionKey } from "../../routing/session-key.js";
+import {
+  isCronExecutionInputProvenance,
+  isSubagentCoordinationInputProvenance,
+} from "../../sessions/input-provenance.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   retargetSessionControllerSource,
@@ -17,6 +21,7 @@ import { SessionMutationAuthorizationChangedError } from "../session-mutation-au
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { authorizeResolvedSessionMutationAsync } from "../session-sharing.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import { isCurrentSubagentCompletionRequester } from "../subagent-completion-tool-handoff.js";
 import type { AgentRequestPreflight } from "./agent-request-preflight.js";
 import type { PrepareAgentRunDispatchParams } from "./agent-run-admission-types.js";
 import type { AgentTurnIo, AgentTurnPrincipal } from "./types.js";
@@ -227,4 +232,41 @@ export async function registerAgentTurnSourceAdmission({
     incarnation: loaded.entry?.sessionId,
   });
   return undefined;
+}
+
+/** Qualify System session ownership from a native source, never public provenance alone. */
+export function resolveAgentTurnSystemSource(
+  params: PrepareAgentRunDispatchParams,
+  inputProvenance: PrepareAgentRunDispatchParams["inputProvenance"],
+  lifecycleStorePath: string,
+  assertInputOwnerCurrent: () => void,
+) {
+  const context = params.context.resolveGatewayContext?.();
+  return context &&
+    params.canUseInternalRuntimeHandoff &&
+    params.client?.internal?.syntheticClient === true &&
+    params.client.internal.operatorRoleActor?.kind === "system" &&
+    !params.client.internal.operatorRunAuthority &&
+    !params.client.authenticatedUserProfile &&
+    !params.client.internal.cronRunContinuation &&
+    !params.restoredCronContinuation &&
+    params.resolvedSessionKey &&
+    !isCronSessionKey(params.resolvedSessionKey) &&
+    ((inputProvenance?.kind === "internal_system" &&
+      !isCronExecutionInputProvenance(inputProvenance)) ||
+      isCurrentSubagentCompletionRequester({
+        handoffId: params.client.internal.delegatedToolPolicyHandoffId,
+        targetSessionKey: params.resolvedSessionKey,
+        targetSessionId: params.getAdmittedSessionId() ?? "",
+        idempotencyKey: params.request.idempotencyKey,
+      }))
+    ? {
+        context,
+        agentId: params.activeSessionAgentId,
+        sessionKey: params.resolvedSessionKey,
+        sessionId: params.getAdmittedSessionId(),
+        storePath: lifecycleStorePath,
+        assertCurrent: assertInputOwnerCurrent,
+      }
+    : undefined;
 }

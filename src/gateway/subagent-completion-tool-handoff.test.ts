@@ -3,6 +3,8 @@ import {
   cancelSubagentCompletionToolHandoff,
   consumeSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
+  readSubagentCompletionRequesterModelPolicy,
+  isCurrentSubagentCompletionRequester,
 } from "./subagent-completion-tool-handoff.js";
 
 const identity = {
@@ -92,4 +94,30 @@ it("expires capabilities and removes cancelled capabilities", () => {
   const cancelledId = registerSubagentCompletionToolHandoff(registration);
   expect(cancelSubagentCompletionToolHandoff(cancelledId)).toBe(true);
   expect(consume(cancelledId)).toBeUndefined();
+});
+
+it("keeps legacy result handoff custody separate from unknown model restrictions", () => {
+  const handoffId = registerSubagentCompletionToolHandoff(registration);
+  const target = { ...registration, handoffId };
+  expect(readSubagentCompletionRequesterModelPolicy(target)).toEqual({ kind: "unknown" });
+  expect(isCurrentSubagentCompletionRequester(target)).toBe(true);
+  expect(isCurrentSubagentCompletionRequester({ ...target, targetSessionId: "replacement" })).toBe(
+    false,
+  );
+  expect(isCurrentSubagentCompletionRequester({ ...target, idempotencyKey: "other" })).toBe(false);
+  expect(consume(handoffId)).toMatchObject({ kind: "subagent-completion" });
+  expect(isCurrentSubagentCompletionRequester(target)).toBe(false);
+});
+
+it("requires the completion batch's current relation to qualify a System continuation", () => {
+  const isCurrent = vi.fn(() => true);
+  const handoffId = registerSubagentCompletionToolHandoff({
+    ...registration,
+    settleBatch: { sourceSessionKeys: [identity.sourceSessionKey], isCurrent },
+  });
+  const target = { ...registration, handoffId };
+  expect(isCurrentSubagentCompletionRequester(target)).toBe(true);
+  isCurrent.mockReturnValue(false);
+  expect(isCurrentSubagentCompletionRequester(target)).toBe(false);
+  cancelSubagentCompletionToolHandoff(handoffId);
 });

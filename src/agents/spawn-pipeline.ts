@@ -1,5 +1,6 @@
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
+import type { NewSubagentRunRegistration } from "./subagents/registry/subagent-registry-run-launch-record.js";
 import { registerSubagentRun } from "./subagents/registry/subagent-registry.js";
 import type { SubagentRegistrationScope } from "./subagents/registry/subagent-registry.types.js";
 
@@ -22,7 +23,7 @@ export type SpawnBackendAdapter<TState> = {
   }): Promise<void>;
 };
 
-type RegisterSubagentRunInput = Parameters<typeof registerSubagentRun>[0];
+type RegisterSubagentRunInput = NewSubagentRunRegistration;
 
 type SpawnProgressOrigin = {
   channel?: string;

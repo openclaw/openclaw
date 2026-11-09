@@ -1,5 +1,6 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import type { PreparedOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { scopePreparedModelRuntimeLease } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -18,11 +19,7 @@ import { captureRequesterCronAuthorityAdmissionAssertion } from "../../agents/su
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { claimAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
-import { isCronSessionKey } from "../../routing/session-key.js";
-import {
-  isCronExecutionInputProvenance,
-  isSubagentCoordinationInputProvenance,
-} from "../../sessions/input-provenance.js";
+import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   getRpcSourceIdentity,
@@ -59,6 +56,7 @@ import type {
 import { isGatewayAgentAbortRejection } from "./agent-run-dispatch-outcome.js";
 import {
   consumeGatewaySubagentCompletionToolHandoff,
+  resolveGatewaySubagentModelPolicy,
   prepareGatewaySubagentRun,
   resolveRegisteredSubagentTimeoutSeconds,
 } from "./agent-run-subagent.js";
@@ -70,7 +68,10 @@ import {
   releasePreparedAgentRunUserTurnAfterFailure,
   type PreparedAgentRunUserTurn,
 } from "./agent-run-user-turn.js";
-import { retainAgentTurnOperatorRun } from "./agent-turn-source-admission.js";
+import {
+  retainAgentTurnOperatorRun,
+  resolveAgentTurnSystemSource,
+} from "./agent-turn-source-admission.js";
 
 export async function prepareAgentRunDispatch(
   params: PrepareAgentRunDispatchParams,
@@ -290,6 +291,7 @@ export async function prepareAgentRunDispatch(
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
   let dispatchRuntimeLease: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
   let capturedOperator: Awaited<ReturnType<typeof retainAgentTurnOperatorRun>> | undefined;
+  let modelPolicy: PreparedOperatorModelPolicy | undefined;
   let cronCreatorAuthority: ReturnType<typeof prepareGatewayCronCreatorAuthorityAdmission>;
   let callerAuthorityReleased = false;
   const releaseCallerAuthority = () => {
@@ -540,35 +542,17 @@ export async function prepareAgentRunDispatch(
     return undefined;
   }
   try {
-    const context = params.context.resolveGatewayContext?.();
-    // Provenance is caller-supplied on public RPC. Only the host's system principal
-    // may resolve a session owner; explicitly requester-bound calls keep that requester.
-    const systemTurn =
-      context &&
-      params.canUseInternalRuntimeHandoff &&
-      params.client?.internal?.syntheticClient === true &&
-      params.client.internal.operatorRoleActor?.kind === "system" &&
-      !params.client.internal.operatorRunAuthority &&
-      !params.client.authenticatedUserProfile &&
-      !params.client.internal.cronRunContinuation &&
-      !params.restoredCronContinuation &&
-      params.resolvedSessionKey &&
-      !isCronSessionKey(params.resolvedSessionKey) &&
-      userTurn.inputProvenance?.kind === "internal_system" &&
-      !isCronExecutionInputProvenance(userTurn.inputProvenance)
-        ? {
-            context,
-            agentId: params.activeSessionAgentId,
-            sessionKey: params.resolvedSessionKey,
-            sessionId: params.getAdmittedSessionId(),
-            storePath: lifecycleStorePath,
-            assertCurrent: () => {
-              assertInputOwnerCurrent();
-              activeRunAbort.controller.signal.throwIfAborted();
-            },
-          }
-        : undefined;
+    const systemTurn = resolveAgentTurnSystemSource(
+      params,
+      userTurn.inputProvenance,
+      lifecycleStorePath,
+      () => {
+        assertInputOwnerCurrent();
+        activeRunAbort.controller.signal.throwIfAborted();
+      },
+    );
     // Accepted work retains this caller; the shared owner derives continuation from child lineage.
+    modelPolicy = resolveGatewaySubagentModelPolicy(params);
     capturedOperator = await retainAgentTurnOperatorRun({
       ...params,
       lifecycleStorePath,
@@ -592,6 +576,7 @@ export async function prepareAgentRunDispatch(
     }
     assertInputOwnerCurrent();
     capturedOperator.authority?.assertCurrent();
+    // The command selector enforces model policy after adjusting automatic defaults.
   } catch (error) {
     const failure = await releasePreparedAgentRunUserTurnAfterFailure(userTurn, error);
     return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, failure));
@@ -690,6 +675,7 @@ export async function prepareAgentRunDispatch(
       ...(cronCreatorAuthority ? { cronCreatorAuthority } : {}),
       releaseCallerAuthority,
       ...(capturedOperator.authority ? { operatorAuthority: capturedOperator.authority } : {}),
+      modelPolicy,
       operationalRunInstance,
       timeoutSeconds,
       ...modelSelection,

@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveTrustedGroupId } from "../../agents/agent-tools.policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import type { NewSubagentRunRegistration } from "../../agents/subagents/registry/subagent-registry-run-launch-record.js";
 import type {
   SubagentAdmissionRejection,
   SubagentSessionEffects,
@@ -204,6 +205,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   workspaceDir: string;
   task: string;
   requester?: PluginSubagentRequesterContext;
+  requesterModelPolicySnapshot: import("../../agents/operator-model-policy.js").RequesterModelPolicySnapshot;
   pluginId?: string;
   gatewayContextResolver?: GatewayContextResolver;
   assertCurrent: () => SessionEntry | undefined;
@@ -261,6 +263,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
       sessionEntry,
       controllerSessionKey: ownerSessionKey,
       requesterSessionKey,
+      requesterModelPolicySnapshot: params.requesterModelPolicySnapshot,
       requesterOrigin: params.requester?.origin,
       requesterDisplayKey: params.requester ? requesterSessionKey : "main",
       task: params.task,
@@ -277,7 +280,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
       expectsCompletionMessage: params.requester !== undefined,
       spawnMode: "run",
       gatewayContextResolver: params.gatewayContextResolver,
-    },
+    } satisfies NewSubagentRunRegistration,
     {
       assertCurrent: params.assertCurrent,
       retainAdmission: params.retainAdmission,
