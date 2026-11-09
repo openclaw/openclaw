@@ -83,6 +83,7 @@ export function buildPersistedUserTurnMetadata(
     ...(input.mentions?.length
       ? { humanMentions: input.mentions.map((mention) => ({ ...mention })) }
       : {}),
+    ...(input.humanAddressed ? { humanAddressed: true } : {}),
     ...(replyToId ? { replyToId } : {}),
     ...(replyPreviewText
       ? {
