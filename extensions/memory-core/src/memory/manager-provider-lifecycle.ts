@@ -679,12 +679,16 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   protected cacheProbeResult(result: MemoryEmbeddingProbeResult): MemoryEmbeddingProbeResult {
-    const checkedAtMs = performance.now();
+    // Expiry runs on the monotonic clock so a wall-clock step cannot extend the
+    // window, while the reported timestamps stay wall-clock epochs for clients
+    // reading doctor.memory.status as dates.
+    const checkedAtMonoMs = performance.now();
     this.embeddingProbeCache.set(this.cacheKey, {
       result,
       adapters: this.getEmbeddingProbeOwners(),
-      checkedAtMs,
-      expireAtMs: checkedAtMs + EMBEDDING_PROBE_CACHE_TTL_MS,
+      checkedAtMs: Date.now(),
+      checkedAtMonoMs,
+      expireAtMs: checkedAtMonoMs + EMBEDDING_PROBE_CACHE_TTL_MS,
     });
     return result;
   }
@@ -704,7 +708,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       checked: true,
       cached: true,
       checkedAtMs: cached.checkedAtMs,
-      cacheExpiresAtMs: cached.expireAtMs,
+      cacheExpiresAtMs: cached.checkedAtMs + EMBEDDING_PROBE_CACHE_TTL_MS,
     };
   }
 

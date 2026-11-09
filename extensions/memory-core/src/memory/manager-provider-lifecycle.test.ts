@@ -183,12 +183,12 @@ describe("memory index", () => {
     await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
     const cached = manager.getCachedEmbeddingAvailability();
     expect(cached?.checkedAtMs).toEqual(expect.any(Number));
-    const checkedAtMs = cached?.checkedAtMs ?? 0;
+    const monotonicBaseMs = performance.now();
 
     // The real elapsed window passes while the wall clock rolls back an hour:
     // a Date.now-keyed cache would never lapse, so the probe must be re-run.
-    const perfSpy = vi.spyOn(performance, "now").mockReturnValue(checkedAtMs + 31_000);
-    const dateSpy = vi.spyOn(Date, "now").mockReturnValue(checkedAtMs - 3_600_000);
+    const perfSpy = vi.spyOn(performance, "now").mockReturnValue(monotonicBaseMs + 31_000);
+    const dateSpy = vi.spyOn(Date, "now").mockReturnValue(Date.now() - 3_600_000);
     try {
       expect(manager.getCachedEmbeddingAvailability()).toBeNull();
     } finally {
@@ -198,6 +198,32 @@ describe("memory index", () => {
 
     // The next probe re-runs against the provider instead of serving stale readiness.
     await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+  });
+
+  it("reports cached probe timestamps as wall-clock epochs while expiring on the monotonic clock", async () => {
+    const manager = await getPersistentManager(createCfg({}));
+
+    // Push the monotonic clock far from any epoch so a leaked performance.now()
+    // value would be unmistakable in the reported fields.
+    const perfSpy = vi.spyOn(performance, "now").mockReturnValue(7_000);
+    const dateSpy = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    try {
+      await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+      const cached = manager.getCachedEmbeddingAvailability();
+      expect(cached?.checkedAtMs).toBe(1_800_000_000_000);
+      expect(cached?.cacheExpiresAtMs).toBe(1_800_000_000_000 + 30_000);
+    } finally {
+      perfSpy.mockRestore();
+      dateSpy.mockRestore();
+    }
+
+    // Expiry still follows elapsed time, not the epoch value above.
+    const expirySpy = vi.spyOn(performance, "now").mockReturnValue(7_001);
+    try {
+      expect(manager.getCachedEmbeddingAvailability()).not.toBeNull();
+    } finally {
+      expirySpy.mockRestore();
+    }
   });
 
   it("clears cached embedding probe readiness when local embeddings degrade", async () => {
