@@ -2,6 +2,7 @@ import "./personal-session-group-dialog.css";
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
+import { clearCompositionEnd, isComposingKeyboardEvent, recordCompositionEnd } from "../lib/ime.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import type {
   PersonalSessionGroup,
@@ -350,13 +351,17 @@ export function PersonalSessionGroupDialogView(props: {
                 ref={[
                   // Escape clears, then closes, search before the dialog treats it as cancel.
                   nativeListener("keydown", (event) => {
-                    if (event.isComposing) {
-                      return;
-                    }
                     if (event.key === "Enter") {
-                      // Enter filters; it must not submit (save) the section.
+                      // Enter filters; it must not submit (save) the section. Keeping the
+                      // default prevented during IME composition is safe: candidate
+                      // selection is handled by the input method, not the form.
                       event.preventDefault();
                     } else if (event.key === "Escape") {
+                      // During composition Escape belongs to the input method (it can
+                      // cancel the pending text), so let it through instead of closing.
+                      if (isComposingKeyboardEvent(event)) {
+                        return;
+                      }
                       event.preventDefault();
                       event.stopPropagation();
                       if (query()) {
@@ -367,8 +372,10 @@ export function PersonalSessionGroupDialogView(props: {
                       }
                     }
                   }),
+                  nativeListener("keyup", clearCompositionEnd),
                   (element: HTMLInputElement) => queueMicrotask(() => element.focus()),
                 ]}
+                onCompositionEnd={recordCompositionEnd}
                 type="search"
                 class="input personal-section-dialog__label"
                 aria-label={t("sessionsView.personalGroupSearch")}
