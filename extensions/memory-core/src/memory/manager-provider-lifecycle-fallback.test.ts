@@ -62,6 +62,9 @@ describe("memory index", () => {
     expect(manager.status().provider).toBe("fallback-provider");
 
     providerFixture.beforeEmbedQuery = null;
+    // Recovery retry windows run on the monotonic clock; the wall clock follows
+    // so either clock the fixture drives would let the retry deadline elapse.
+    vi.spyOn(performance, "now").mockReturnValue(performance.now() + 60_000);
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
     try {
       const recovered = await Promise.all([
