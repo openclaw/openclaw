@@ -570,6 +570,47 @@ it("renews the selected canonical OAuth owner between physical requests in one a
   );
 });
 
+it.each([true, false])(
+  "retries a 401 once with the canonical OAuth token a sibling run rotated (rotated: %s)",
+  async (rotated) => {
+    await withRequestFixture(async ({ state, credential, controller, authState, refresh }) => {
+      await controller.initializeAuthProfile();
+      const held = authState.apiKeyInfo?.apiKey;
+      if (rotated) {
+        // Another run refreshes the shared account after this attempt read its token.
+        refresh.mockResolvedValueOnce({
+          ...credential,
+          access: "synthetic-sibling-rotation",
+          refresh: "synthetic-sibling-refresh",
+          expires: Date.now() + 3_600_000,
+        });
+        const current = readAuthProfileStoreForTest(state.agentDir());
+        const stored = current.profiles[profileId];
+        if (stored?.type !== "oauth") {
+          throw new Error("Missing canonical credential");
+        }
+        await createOAuthManager().resolveOAuthAccess({
+          store: current,
+          credential: stored,
+          profileId,
+          agentDir: state.agentDir(),
+          forceRefresh: true,
+        });
+      }
+      const error = "401 Invalid or expired credentials (reason=no auth context)";
+      await expect(controller.maybeRefreshRuntimeAuthForAuthError(error, false)).resolves.toBe(
+        rotated,
+      );
+      expect(authState.apiKeyInfo?.apiKey === held).toBe(!rotated);
+      // The re-read never refreshes on its own: only the sibling's refresh ran.
+      expect(refresh).toHaveBeenCalledTimes(rotated ? 1 : 0);
+      await expect(controller.maybeRefreshRuntimeAuthForAuthError(error, true)).resolves.toBe(
+        false,
+      );
+    });
+  },
+);
+
 it.each(["during-prepare", "after-resolve"] as const)(
   "refuses a reconnected canonical account %s without an automation binding",
   async (boundary) => {

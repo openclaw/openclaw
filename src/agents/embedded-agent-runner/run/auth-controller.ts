@@ -13,7 +13,6 @@ import { resolveSafeTimeoutDelayMs } from "../../../utils/timer-delay.js";
 import {
   isProfileInCooldown,
   markAuthProfileFailure,
-  resolveProfilesUnavailableReason,
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
 import { advanceAuthProfileCandidate } from "../../auth-profiles/advance.js";
@@ -33,7 +32,6 @@ import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { classifyFailoverReason } from "../../failover/classify.js";
 import { getFailoverErrorCode } from "../../failover/error.js";
 import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
-import type { FailoverReason } from "../../failover/signal.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import { resolveProviderModelAuthPolicy } from "../../model-auth-policy.js";
 import { getApiKeyForModelCore, MissingProviderAuthError } from "../../model-auth.js";
@@ -44,8 +42,10 @@ import { protectPreparedProviderRuntimeAuth } from "../../provider-runtime-auth-
 import { unwrapSecretSentinelsForProviderEgress } from "../../provider-secret-egress.js";
 import { createRuntimeAuthDeadline } from "../../runtime-auth-refresh.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
+import { adoptRotatedOAuthCredential } from "./auth-controller-oauth-rotation.js";
 import type { EmbeddedRunAuthControllerParams, LogLike } from "./auth-controller.types.js";
 import {
+  resolveAuthProfileFailoverReason,
   resolveAuthProfileFailureReason,
   resolveEmbeddedAuthCooldownProbePolicy,
 } from "./auth-profile-failure-policy.js";
@@ -286,19 +286,6 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
     runtimeAuthState.refreshTimer = setTimeout(() => refresh("scheduled"), delayMs);
   };
 
-  const resolveAuthProfileFailoverReason = (failoverParams: {
-    allInCooldown: boolean;
-    message: string;
-  }): FailoverReason => {
-    if (failoverParams.allInCooldown) {
-      const profileIds = params.profileCandidates.filter(
-        (id): id is string => typeof id === "string" && id.length > 0,
-      );
-      return resolveProfilesUnavailableReason({ store: params.authStore, profileIds }) ?? "unknown";
-    }
-    return classifyFailoverReason(failoverParams.message, { provider: params.provider }) ?? "auth";
-  };
-
   const recordOAuthRefreshFailure = async (
     candidate: string | undefined,
     error: unknown,
@@ -319,7 +306,7 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
       error.retryable && params.authProfileFailurePolicy !== "local"
         ? "timeout"
         : resolveAuthProfileFailureReason({
-            failoverReason: resolveAuthProfileFailoverReason({
+            failoverReason: resolveAuthProfileFailoverReason(params, {
               allInCooldown: false,
               message: errorText,
             }),
@@ -356,7 +343,7 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
       ? formatErrorMessage(failoverParams.error).trim()
       : "";
     const code = failoverParams.error ? getFailoverErrorCode(failoverParams.error) : undefined;
-    const reason = resolveAuthProfileFailoverReason({
+    const reason = resolveAuthProfileFailoverReason(params, {
       allInCooldown: failoverParams.allInCooldown,
       message: messageForReason,
     });
@@ -701,7 +688,7 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
         /\btoken_expired\b|\bauthentication token is expired\b/iu.test(errorText)
       ) {
         await applyApiKeyInfo(state.lastProfileId, state.profileIndex, true);
-      } else {
+      } else if (!(await adoptRotatedOAuthCredential({ params, state, withAuthDeadline }))) {
         return false;
       }
       return true;
