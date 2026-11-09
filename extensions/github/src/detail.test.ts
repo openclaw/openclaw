@@ -399,7 +399,7 @@ describe("GitHub detail public read boundary", () => {
 
   it("expires cached visibility failures", async () => {
     const input = target();
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const fetchMock = fetchResponses(json({}, 404), json(publicRepo), json(item()));
     await expectStatus(loadGitHubDetail(input, undefined, fetchMock), 404);
     now.mockReturnValue(32_000);
