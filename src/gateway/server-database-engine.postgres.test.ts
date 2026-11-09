@@ -491,18 +491,30 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       const activeJob = await gateway.request<CronJob>("cron.get", { id: unfinishedJob.id });
       expect(activeJob).toMatchObject({
         enabled: true,
-        state: { runningAtMs: expect.any(Number), runningReceiptId: expect.any(String) },
+        state: { runningAtMs: expect.any(Number) },
       });
       const readUnfinishedReceipt = () =>
-        queryRows<{ receipt_id: string; request_run_id: string; status: string }>(
-          `SELECT receipt_id, request_run_id, status FROM ${quoteIdentifier(anchor.namespace)}.cron_run_receipts WHERE job_id = $1`,
+        queryRows<{
+          receipt_id: string;
+          request_run_id: string;
+          status: string;
+          state_json: string;
+        }>(
+          `SELECT r.receipt_id, r.request_run_id, r.status, j.state_json FROM ${quoteIdentifier(anchor.namespace)}.cron_run_receipts r JOIN ${quoteIdentifier(anchor.namespace)}.cron_jobs j ON j.store_key = r.store_key AND j.job_id = r.job_id WHERE r.job_id = $1`,
           [unfinishedJob.id],
         );
+      const activeReceipts = await readUnfinishedReceipt();
+      expect(activeReceipts).toHaveLength(1);
       const receipt = {
-        receipt_id: activeJob.state.runningReceiptId,
+        receipt_id: activeReceipts[0]!.receipt_id,
         request_run_id: unfinishedRun.runId,
       };
-      expect(await readUnfinishedReceipt()).toEqual([{ ...receipt, status: "running" }]);
+      expect(activeReceipts[0]).toMatchObject({ ...receipt, status: "running" });
+      // Public RPCs hide receipt IDs; bind the private marker and receipt in one SQL snapshot.
+      expect(JSON.parse(activeReceipts[0]!.state_json)).toMatchObject({
+        runningAtMs: activeJob.state.runningAtMs,
+        runningReceiptId: receipt.receipt_id,
+      });
       await instance.crashGateway();
       expect(firstChild.signalCode).toBe("SIGKILL");
       await disconnectGatewayClient(gateway);
@@ -596,10 +608,8 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         },
       });
       expect(recovered.state.runningAtMs).toBeUndefined();
-      expect(recovered.state.runningReceiptId).toBeUndefined();
       expect(recovered.state.nextRunAtMs).toBeUndefined();
       expect(recovered.state.consecutiveErrors).toBe(activeJob.state.consecutiveErrors);
-      expect(recovered.state.failureAlertIncident).toBeUndefined();
       const interruptedHistory = await restarted.request<{ entries: unknown[] }>("cron.runs", {
         id: unfinishedJob.id,
         limit: 10,
@@ -614,7 +624,14 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
           deliveryStatus: "unknown",
         }),
       ]);
-      expect(await readUnfinishedReceipt()).toEqual([{ ...receipt, status: "interrupted" }]);
+      const recoveredReceipts = await readUnfinishedReceipt();
+      expect(recoveredReceipts).toEqual([
+        { ...receipt, status: "interrupted", state_json: expect.any(String) },
+      ]);
+      const privateState = JSON.parse(recoveredReceipts[0]!.state_json);
+      expect(privateState.runningReceiptId).toBeUndefined();
+      expect(privateState.runningScheduleChangeId).toBeUndefined();
+      expect(privateState.failureAlertIncident).toBeUndefined();
       await disconnectGatewayClient(restarted);
       await instance.stopGateway();
       expect(await readAnchor(current)).toEqual(anchor);
