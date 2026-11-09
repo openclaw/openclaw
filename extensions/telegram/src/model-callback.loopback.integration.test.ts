@@ -353,7 +353,37 @@ describe("Telegram model callback loopback", () => {
           "ollama (1)",
         ]);
         await selectButton((button) => button.text === "anthropic (1)");
-        await selectButton((button) => button.text.includes("Claude Opus"));
+        // The default model offers both its configured runtime (claude-cli,
+        // listed first and marked current) and the API alternate as separate
+        // runtime-labelled rows, with the picker hint naming that behavior.
+        const anthropicRows = renderedButtons();
+        expect(anthropicRows.map((button) => button.text)).toEqual([
+          "Claude CLI · Claude Opus ✓",
+          "API · Claude Opus",
+          "<< Back",
+        ]);
+        expect(requests.at(-1)?.payload.text).toContain(
+          "Rows labelled with a runtime select that runtime; other rows apply the model's configured runtime.",
+        );
+        // Explicitly requesting the non-default API runtime on the default
+        // model pins it session-only, instead of resetting to defaults.
+        await tap(anthropicRows[1]!.callback_data);
+        expect(requests.at(-1)?.payload.text).toContain("Session-only model selection.");
+        expect(requests.at(-1)?.payload.text).toContain("Runtime set to <b>openclaw</b>.");
+        const pinnedEntry = await getSessionEntryAsync({
+          agentId: "main",
+          sessionKey: "agent:main:telegram:direct:1234",
+          storePath,
+        });
+        expect(pinnedEntry?.agentRuntimeOverride).toBe("openclaw");
+
+        // Re-opening the list and tapping the default model's own configured
+        // runtime resets the pinned session selection back to the agent's default.
+        // The pin moved the checkmark to the API row, so tap the claude-cli
+        // row's stable callback_data rather than its (now unmarked) text.
+        await tap("mdl_prov");
+        await selectButton((button) => button.text === "anthropic (1)");
+        await tap(anthropicRows[0]!.callback_data);
         expect(requests.at(-1)?.payload.text).toContain(
           "Runtime set to <b>claude-cli</b> from configured policy.",
         );
@@ -377,11 +407,11 @@ describe("Telegram model callback loopback", () => {
 
         expect(requests.map(({ method }) => method)).toEqual([
           "sendMessage",
-          ...Array.from({ length: 6 }, () => ["answerCallbackQuery", "editMessageText"]).flat(),
+          ...Array.from({ length: 9 }, () => ["answerCallbackQuery", "editMessageText"]).flat(),
         ]);
         // Compact callbacks cross generic-interactive and model auth; opaque refs skip generic dispatch.
         expect(callbackSteps).toEqual([
-          ...Array.from({ length: 5 }, () => [
+          ...Array.from({ length: 8 }, () => [
             "context",
             "sender",
             "model",
@@ -453,6 +483,105 @@ describe("Telegram model callback loopback", () => {
         expect(requests.at(-1)?.payload.text).toContain(
           `Model changed to <b>${PROVIDER}/${MODEL}</b>`,
         );
+      },
+    );
+  });
+
+  it("pages runtime-variant rows through the live callback router", async () => {
+    const stateDir = sessionDirs.make();
+    let sentMessage: Record<string, unknown> | undefined;
+    await withApi(
+      (method, payload, response) => {
+        if (method === "answerCallbackQuery") {
+          sendJson(response, true);
+        } else if (method === "sendMessage") {
+          sentMessage = telegramMessage(300, {
+            text: payload.text,
+            reply_markup: payload.reply_markup,
+          });
+          sendJson(response, sentMessage);
+        } else if (method === "editMessageText") {
+          sentMessage = { ...sentMessage, text: payload.text, reply_markup: payload.reply_markup };
+          sendJson(response, sentMessage);
+        } else {
+          sendError(response, 404, method);
+        }
+      },
+      async (apiRoot) => {
+        const storePath = join(stateDir, "sessions.json");
+        const { config, bot } = configureRouter(apiRoot, storePath);
+        // Seven plain models plus a two-runtime default model: 9 expanded
+        // entries, forcing a second page the same way the direct list does.
+        const models = [...Array.from({ length: 7 }, (_, index) => `model-${index}`), "model-h"];
+        config.agents = { defaults: { model: "openai/model-h", models: { "openai/model-h": {} } } };
+        callbackMocks.buildModelsProviderData.mockImplementation(async () => ({
+          byProvider: new Map([["openai", new Set(models)]]),
+          providers: ["openai"],
+          resolvedDefault: { provider: "openai", model: "model-h" },
+          modelNames: new Map<string, string>(),
+          modelCatalog: models.map((id) => ({ provider: "openai", id, name: id })),
+          runtimeChoicesByModel: new Map([
+            [
+              "openai/model-h",
+              [
+                { id: "openclaw", label: "API", description: "Use OpenClaw." },
+                { id: "codex", label: "Codex", description: "Use Codex." },
+              ],
+            ],
+          ]),
+          modelRuntimeIds: new Map([["openai/model-h", "openclaw"]]),
+        }));
+        await sendMessageTelegram(String(CHAT_ID), "Models:", {
+          cfg: config,
+          token: TOKEN,
+          buttons: [[{ text: "Browse", callback_data: "mdl_list_openai_1" }]],
+        });
+        let updateId = 900;
+        const tap = async (data: string) => {
+          await bot.handleUpdate({
+            update_id: ++updateId,
+            callback_query: {
+              id: `pg-${updateId}`,
+              chat_instance: "pg-chat",
+              data,
+              from: { id: 9, is_bot: false, first_name: "Operator", username: "operator" },
+              message: sentMessage as never,
+            },
+          });
+        };
+        const buttonTexts = () =>
+          (
+            sentMessage?.reply_markup as {
+              inline_keyboard?: Array<Array<{ text: string; callback_data: string }>>;
+            }
+          )?.inline_keyboard?.flat() ?? [];
+
+        await tap("mdl_list_openai_1");
+        const page1 = buttonTexts();
+        // The default model's configured runtime (API) lands on page one,
+        // marked current; its explicit alternate (Codex) is pushed to page two.
+        expect(page1.map((button) => button.text)).toEqual([
+          "model-0",
+          "model-1",
+          "model-2",
+          "model-3",
+          "model-4",
+          "model-5",
+          "model-6",
+          "API · model-h ✓",
+          "1/2",
+          "Next ▶",
+          "<< Back",
+        ]);
+
+        await tap(page1.find((button) => button.text === "Next ▶")!.callback_data);
+        const page2 = buttonTexts();
+        expect(page2.map((button) => button.text)).toEqual([
+          "Codex · model-h",
+          "◀ Prev",
+          "2/2",
+          "<< Back",
+        ]);
       },
     );
   });
