@@ -485,6 +485,14 @@ it("keyword search matches canonically equivalent Unicode spellings without rewr
   expect(
     sorted(await f.service.grep({ query: mixedGreekQuery, mode: "phrase" }, f.owner)),
   ).toStrictEqual(["mixed_greek_note"]);
+  // In any mode the mixed query reaches every row through its own word: each
+  // word's spelling group matches independently. The mixed record and both
+  // uniformly spelled άλφα notes surface; the unaccented note surfaces through
+  // the decomposed alternative (its combining marks fold away, the composed
+  // token does not), which the composed alternative alone would never reach.
+  expect(
+    sorted(await f.service.grep({ query: mixedGreekQuery, mode: "any" }, f.owner)),
+  ).toStrictEqual(["mixed_greek_note", "nfc_note", "nfd_note", "plain_note"]);
 
   // A uniformly spelled query must reach the mixed record word by word: per-word
   // spelling alternatives in all/any modes match each word in any canonical form,
