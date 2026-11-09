@@ -130,7 +130,7 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
           ).toHaveBeenCalledOnce();
           expectUncalled(f.restartGatewayProcessWithFreshPid, f.respawnGatewayProcessForUpdate);
           // Settled cleanup still bounds a leaked handle that would outlive the loop.
-          expect(f.requestSettledExitWatchdog).toHaveBeenCalledExactlyOnceWith(10_000);
+          expect(f.requestSettledExitWatchdog).toHaveBeenCalledExactlyOnceWith(100);
         }, true);
       } finally {
         closing.release();

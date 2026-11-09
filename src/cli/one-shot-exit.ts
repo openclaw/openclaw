@@ -1,4 +1,5 @@
 import { writeSync } from "node:fs";
+import { drainProcessOutput } from "../process/output-drain.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, ExitError, restoreRuntimeTerminalState } from "../runtime.js";
 import { waitForPendingCliDisposers } from "./runtime-cleanup.js";
@@ -74,8 +75,13 @@ export async function runCliWithExitFinalization(params: {
         // Ordinary command completion must not add ANSI bytes to its output.
         restoreRuntimeTerminalState("CLI exit", { resumeStdinIfPaused: false });
       }
-      // Node drains stdio and V8 compiler work naturally.
+      // Final disposers can log after the Gateway's earlier flush. Join those writes before
+      // bounding leftover handles; natural exit still avoids forcing V8 compiler teardown.
       if (settledExitWatchdog !== undefined) {
+        await (await import("../logging/logger.js")).flushLogger();
+        await new Promise<void>((resolve) => {
+          drainProcessOutput(resolve);
+        });
         armSettledExitWatchdog(settledExitWatchdog);
         settledExitWatchdog = undefined;
       }

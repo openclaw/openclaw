@@ -5,6 +5,7 @@ const entrypoint = createTestEntrypoint(import.meta.url, "plugins");
 // The child probes share invocation-owned preparation and module state.
 export const pluginProcessRuntimeEntrypoints = {
   nativeRequire: entrypoint("native-module-require"),
+  sourceBuild: entrypoint("plugin-source-build"),
   installRecordCommit: entrypoint("install-record-commit"),
   lifecycleLease: entrypoint("plugin-lifecycle-lease"),
   installedPluginIndex: entrypoint("installed-plugin-index-store"),

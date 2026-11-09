@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type {
   PluginControlUiActivation,
@@ -8,6 +11,7 @@ import type {
   PluginsControlUiCatalog,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   readPluginControlUiAssets,
@@ -20,7 +24,10 @@ import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { hasCanonicalPluginDistribution } from "../plugins/plugin-runtime-artifact-binding.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "../plugins/registry.js";
+import { pluginCompilerCommand } from "../plugins/runtime-compiler.js";
 import { getPluginRegistryForContext } from "../plugins/runtime.js";
+import { runExec } from "../process/exec.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isOpenClawIdPluginVisible } from "../shared/openclaw-id-policy.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import {
@@ -66,7 +73,12 @@ type BrowserPluginState = {
 // Exact backend records retain advertised bytes and browser receipts across unrelated
 // registry publications. Replaced records cannot inherit their predecessor's snapshots.
 const browserPluginStates = new WeakMap<PluginRecord, BrowserPluginState>();
-let pendingCatalogOperation: Promise<void> | undefined;
+const catalogOperations = resolveGlobalSingleton<{ pending?: Promise<void> }>(
+  Symbol.for("openclaw.controlUiPluginCatalogOperations"),
+  () => ({}),
+  (state) => state.pending,
+  "plugin-registry",
+);
 
 function getActiveBrowserRegistry(): PluginRegistry | null {
   const registry = getPluginRegistryForContext();
@@ -104,52 +116,68 @@ async function staticBrowserImports(
   assets: ReadonlyMap<string, PluginControlUiAsset>,
   assetUrl: (name: string) => string,
 ): Promise<string[]> {
-  const { build } = await import("esbuild");
-  const modules = new Map(
-    [...assets]
-      .filter(([name]) => /\.m?js$/u.test(name))
-      .map(([name, asset]) => [new URL(assetUrl(name), "http://localhost").href, asset]),
+  return withTempWorkspace(
+    { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "plugin-browser-imports-" },
+    async ({ dir }) => {
+      const source = path.join(dir, "source.js");
+      const metadata = path.join(dir, "meta.json");
+      const [command, ...args] = pluginCompilerCommand();
+      const modules = new Map(
+        [...assets]
+          .filter(([name]) => /\.m?js$/u.test(name))
+          .map(([name, asset]) => [new URL(assetUrl(name), "http://localhost").href, asset]),
+      );
+      const entry = new URL(entryUrl, "http://localhost").href;
+      const visited = new Set([entry]);
+      const pending = [entry];
+      for (const url of pending) {
+        const asset = modules.get(url);
+        if (!asset) {
+          continue;
+        }
+        let imports;
+        try {
+          // The native compiler reads imports without constructing a JavaScript AST on the Gateway.
+          await fs.writeFile(source, asset.body);
+          await runExec(
+            command,
+            [
+              ...args,
+              source,
+              "--format=esm",
+              "--tree-shaking=false",
+              `--outfile=${path.join(dir, "output.js")}`,
+              `--metafile=${metadata}`,
+              "--log-level=error",
+            ],
+            { maxBuffer: MAX_CONTROL_UI_CATALOG_BYTES },
+          );
+          const metafile: import("esbuild").Metafile = JSON.parse(
+            await fs.readFile(metadata, "utf8"),
+          );
+          imports = Object.values(metafile.outputs).flatMap((output) => output.imports);
+        } catch {
+          // Preloading is optional; parser support must not change browser build admission.
+          continue;
+        }
+        for (const imported of imports) {
+          const specifier = imported.path;
+          if (
+            imported.kind !== "import-statement" ||
+            (!specifier.startsWith("./") && !specifier.startsWith("../"))
+          ) {
+            continue;
+          }
+          const target = new URL(specifier, url).href;
+          if (modules.has(target) && !visited.has(target)) {
+            visited.add(target);
+            pending.push(target);
+          }
+        }
+      }
+      return pending.slice(1).map((url) => new URL(url).pathname);
+    },
   );
-  const entry = new URL(entryUrl, "http://localhost").href;
-  const visited = new Set([entry]);
-  const pending = [entry];
-  for (const url of pending) {
-    const asset = modules.get(url);
-    if (!asset) {
-      continue;
-    }
-    let imports;
-    try {
-      // The native compiler reads imports without constructing a JavaScript AST on the Gateway.
-      const result = await build({
-        stdin: { contents: asset.body.toString("utf8"), loader: "js" },
-        format: "esm",
-        treeShaking: false,
-        write: false,
-        metafile: true,
-        logLevel: "silent",
-      });
-      imports = Object.values(result.metafile.outputs).flatMap((output) => output.imports);
-    } catch {
-      // Preloading is optional; parser support must not change browser build admission.
-      continue;
-    }
-    for (const imported of imports) {
-      const specifier = imported.path;
-      if (
-        imported.kind !== "import-statement" ||
-        (!specifier.startsWith("./") && !specifier.startsWith("../"))
-      ) {
-        continue;
-      }
-      const target = new URL(specifier, url).href;
-      if (modules.has(target) && !visited.has(target)) {
-        visited.add(target);
-        pending.push(target);
-      }
-    }
-  }
-  return pending.slice(1).map((url) => new URL(url).pathname);
 }
 
 async function snapshotBrowserBuild(
@@ -331,7 +359,7 @@ async function loadControlUiPluginCatalog(
   if (!capturePluginLifecycleAuthority(registry)?.()) {
     throw new Error("plugin registry is no longer active");
   }
-  const operation = (pendingCatalogOperation ?? Promise.resolve()).then(async () => {
+  const operation = (catalogOperations.pending ?? Promise.resolve()).then(async () => {
     // A concurrent backend reload may finish this read against its old record.
     // The next request selects the new registry; cached bytes never transfer owners.
     await refreshBrowserCatalog(registry, pluginId, reloadManifest);
@@ -343,12 +371,12 @@ async function loadControlUiPluginCatalog(
     () => undefined,
     () => undefined,
   );
-  pendingCatalogOperation = pending;
+  catalogOperations.pending = pending;
   try {
     return await operation;
   } finally {
-    if (pendingCatalogOperation === pending) {
-      pendingCatalogOperation = undefined;
+    if (catalogOperations.pending === pending) {
+      catalogOperations.pending = undefined;
     }
   }
 }
