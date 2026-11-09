@@ -356,7 +356,8 @@ retries](/gateway/config-hooks#hook-retries-and-fan-out).
 
 When `hooks.enabled: true` and `hooks.gmail.account` is set, the Gateway starts
 `gog gmail watch serve` if its executable and required transport configuration
-are available, and renews the watch. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
+are available, and renews the watch. A failed watch start or renewal retries after
+1 minute, doubling up to `renewEveryMinutes`. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
 Do not start a second foreground watcher on the same listener. Setup output can
 contain tokens; see the [CLI reference](/cli/webhooks).
 
