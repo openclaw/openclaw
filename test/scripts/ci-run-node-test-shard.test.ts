@@ -30,7 +30,11 @@ import nativeBunQualification from "../../scripts/lib/ci-test-native-bun-qualifi
 import { resolveCiTestRuntimeSelections } from "../../scripts/lib/ci-test-runtime.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { collectVitestFileFilters } from "../../scripts/lib/vitest-cli-mode.mts";
-import { shouldUseRuntimeOnlyVitestWorkers } from "../../scripts/lib/vitest-runtime-selection.mts";
+import {
+  selectVitestWorkerPreset,
+  shouldUseRuntimeOnlyVitestWorkers,
+  shouldUseToolingOnlyVitestWorkers,
+} from "../../scripts/lib/vitest-runtime-selection.mts";
 import * as workerOwner from "../../scripts/lib/vitest-worker-run.mts";
 import { createVitestRunSpecs } from "../../scripts/test-projects.test-support.mts";
 import * as groupOwner from "../../scripts/vitest-process-group.mts";
@@ -287,6 +291,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: [
         "test/codex-settled-turn-finalization.integration.test.ts",
         "test/conversation-tools.codex.integration.test.ts",
+        "test/scripts/ci-test-timings-tooling.test.ts",
         "test/scripts/eager-import-closure.test.ts",
         "test/scripts/lint-suppressions.test.ts",
         "test/scripts/plugin-sdk-surface-report.test.ts",
@@ -298,10 +303,33 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     {
       configs: ["test/vitest/vitest.tooling.config.ts"],
       files: [
-        "test/codex-settled-turn-finalization.integration.test.ts",
+        "test/scripts/ci-test-timings-tooling.test.ts",
         "test/scripts/vitest-worker-shutdown.test.ts",
       ],
       preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      files: [
+        "test/scripts/ci-changed-build-selection.test.ts",
+        "test/scripts/ci-changed-node-test-plan.integration.test.ts",
+        "test/scripts/test-projects.test.ts",
+      ],
+      preset: "tooling",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      files: ["test/scripts/test-extension.test.ts", "unknown.test.ts"],
+      preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      files: ["test/scripts/plugin-sdk-surface-report.test.ts"],
+      sibling: {
+        configs: ["test/vitest/vitest.runtime-config.config.ts"],
+        includePatterns: ["src/config/io.load-async.test.ts"],
+      },
+      preset: "runtime",
     },
     { configs: [gatewayDatabaseConfig], files: [], preset: "full" },
     { configs: [gatewayDatabaseConfig], files: null, preset: "full" },
@@ -318,7 +346,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
   ])(
     "shares compatible $preset workers for $configs / $files",
-    async ({ configs, files, preset }) => {
+    async ({ configs, files, preset, sibling }) => {
       machine(8, 31);
       const createWorker = vi.spyOn(workerOwner, "createVitestWorkerRun");
       const inheritedInclude = path.join(makeScratchDir(), "include.json");
@@ -326,31 +354,42 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         inheritedInclude,
         JSON.stringify(["test/plugins/chat-abort-codex.gateway.test.ts"]),
       );
-      const code = await runPlans(groupPlans([{ configs, includePatterns: files }]), {
-        env: {
-          OPENCLAW_VITEST_INCLUDE_FILE: inheritedInclude,
-          OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
-        },
-        runChild: async (args, env) => {
-          if (preset === "runtime") {
-            expect(readList(env.OPENCLAW_VITEST_INCLUDE_FILE!)).toEqual(files);
-            const specs = createVitestRunSpecs(args, { baseEnv: env });
-            expect(specs).toHaveLength(1);
-            for (const spec of specs) {
-              expect(
-                shouldUseRuntimeOnlyVitestWorkers(
+      const code = await runPlans(
+        groupPlans([{ configs, includePatterns: files }, ...(sibling ? [sibling] : [])]),
+        {
+          env: {
+            OPENCLAW_VITEST_INCLUDE_FILE: inheritedInclude,
+            OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
+          },
+          runChild: async (args, env) => {
+            if (preset !== "full") {
+              if (!sibling) {
+                expect(readList(env.OPENCLAW_VITEST_INCLUDE_FILE!)).toEqual(files);
+              }
+
+              const specs = createVitestRunSpecs(args, { baseEnv: env });
+              expect(specs).toHaveLength(1);
+              for (const spec of specs) {
+                const selectionArgs = [
                   spec.config,
                   args,
                   spec.env,
                   undefined,
                   spec.includePatterns ?? undefined,
-                ),
-              ).toBe(true);
+                ] as const;
+                expect(
+                  selectVitestWorkerPreset(
+                    shouldUseRuntimeOnlyVitestWorkers(...selectionArgs),
+                    shouldUseToolingOnlyVitestWorkers(...selectionArgs),
+                    preset === "runtime" ? "runtime" : "tooling",
+                  ),
+                ).toBe(preset);
+              }
             }
-          }
-          return 0;
+            return 0;
+          },
         },
-      });
+      );
       expect(code).toBe(0);
       expect(createWorker).toHaveBeenCalledTimes(1);
       expect(createWorker.mock.results[0]!.value.descriptor.preset).toBe(preset);
@@ -364,10 +403,18 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "src/config/io.load-async.test.ts",
         "src/plugins/loader.runtime-registry.test.ts",
         "src/plugins/plugin-generation-worker.test.ts",
+        "test/scripts/ci-test-timings-tooling.test.ts",
+        "test/scripts/type-suppression-inventory.test.ts",
       ],
       args: [],
       jobArgs: undefined,
       preset: "runtime",
+    },
+    {
+      targets: ["test/scripts/run-vitest.test.ts"],
+      args: [],
+      jobArgs: undefined,
+      preset: "tooling",
     },
     { extra: [nodeTarget], args: [], jobArgs: undefined, preset: "full" },
     { extra: [], args: ["--root", "custom-root"], jobArgs: undefined, preset: "full" },
@@ -395,7 +442,9 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       const owner = createWorker.mock.results[0]!.value;
       expect(owner.descriptor.preset).toBe(preset);
       const child = resolveShardChildCommand(["run"], "node", "scripts/test-projects.mts", owner);
-      expect(child.args.includes("--worker-preset=runtime")).toBe(preset === "runtime");
+      for (const narrow of ["runtime", "tooling"]) {
+        expect(child.args.includes(`--worker-preset=${narrow}`)).toBe(preset === narrow);
+      }
     },
   );
 
