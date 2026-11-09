@@ -189,7 +189,7 @@ describe("OpenAI browser Talk catalog defaults", () => {
                 captureGatewayRootWorkReleaseObserver(),
                 "catalog refresh must own root work admission",
               )(catalogReleased.resolve);
-              return providerConfig.model === model;
+              return providerConfig.model === undefined;
             },
             createBridge: () => {
               throw new Error("unused");
