@@ -17,14 +17,20 @@ type Chunk = {
 type ChunkGraph = Record<string, Chunk | { type: "asset" }>;
 
 const mappedRoots = new Set(["control-ui-connection", "control-ui-boot-shared"]);
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const sourceInputs = [
   fileURLToPath(import.meta.url),
   path.join(path.dirname(fileURLToPath(import.meta.url)), "control-ui-boot-modules.json"),
 ];
 
 function moduleKey(id: string): string {
-  // Inline CSS and ordinary CSS are different modules; pnpm store versions are not.
-  return controlUiBootManifestKey(id) + (id.match(/[?#].*$/u)?.[0] ?? "");
+  // Cache identities must retain nested package ancestry: distinct versions of
+  // the same vendor file can appear in one build after dependency resolution.
+  const clean = id.replace(/[?#].*$/u, "");
+  const key = clean.includes("/node_modules/")
+    ? path.relative(repoRoot, clean)
+    : controlUiBootManifestKey(clean);
+  return key.replaceAll("\\", "/") + (id.match(/[?#].*$/u)?.[0] ?? "");
 }
 
 function chunkKey(chunk: Chunk): string {
