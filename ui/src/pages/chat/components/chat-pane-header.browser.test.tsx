@@ -83,6 +83,27 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       expect(actions.getBoundingClientRect().left).toBeCloseTo(title.getBoundingClientRect().right);
     });
 
+    it.each(["Main session", "A long session title that must keep the same header geometry"])(
+      "keeps the desktop menu in place when the pending title becomes %s",
+      async (title) => {
+        const { container, update } = mountChatPaneHeader(containers, {
+          title: "",
+          titlePending: true,
+          sessionMenuAction: chatPaneHeaderSessionMenu(),
+        });
+        const menu = container.querySelector<HTMLElement>(".chat-pane__identity-actions")!;
+        const trailing = container.querySelector<HTMLElement>(".chat-pane__header-trailing")!;
+        const before = [menu, trailing].map((element) => element.getBoundingClientRect());
+        update({ title, titlePending: false });
+        await waitForSolid(() => expect(container.textContent).toContain(title));
+        [menu, trailing].forEach((element, index) => {
+          const after = element.getBoundingClientRect();
+          expect(after.left).toBeCloseTo(before[index]!.left, 1);
+          expect(after.width).toBeCloseTo(before[index]!.width, 1);
+        });
+      },
+    );
+
     it.each([false, true])(
       "reserves the trailing header region before actions arrive (agent=%s)",
       async (agent) => {
