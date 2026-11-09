@@ -307,7 +307,6 @@ describe("embedded session history for configured ACP store owners", () => {
   let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
   let unbindProjection: (() => void) | undefined;
 
-
   beforeEach(async () => {
     projection = undefined;
     unbindProjection = undefined;
