@@ -8,6 +8,7 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { normalizeMediaFacts } from "../media/media-facts.js";
 import { isAudioAttachment } from "./attachments.normalize.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
@@ -15,7 +16,6 @@ import {
   resolveMediaAttachmentLocalRoots,
   runCapability,
 } from "./runner.js";
-import type { MediaUnderstandingProvider } from "./types.js";
 
 type AudioPreflightParams = {
   ctx: MsgContext;

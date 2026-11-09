@@ -208,10 +208,6 @@ export type OpenClawStateReadCommand =
       }[];
     }
   | { type: "workspace.snapshot"; workspaceDir: string }
-  | { type: "sandboxRegistry.list"; workspaceDir?: string }
-  | { type: "sandboxRegistry.get"; containerName: string }
-  | { type: "sandboxRegistry.runtimeIds"; backendId: string; scopeKey: string }
-  | { type: "sandboxRegistry.browsers"; workspaceDir?: string }
   | WorkspaceJournalReadCommand
   | { type: "workers.placementPreservation" }
   | { type: "workers.placementEnvironmentOwner"; environmentId: string }

@@ -370,7 +370,7 @@ describe("managed removal custody", () => {
     expect((await service.gc()).snapshotsPruned).toBe(1);
     expect(registry(created.id)).toBeUndefined();
     await expect(git(repo, "show-ref", "--verify", pendingRef)).rejects.toThrow();
-    expect(await git(repo, "rev-parse", created.branch)).toBe(head);
+    expect(await git(repo, "branch", "--list", created.branch)).toBe("");
   });
 });
 
@@ -454,21 +454,53 @@ describe("managed exact-state retirement", () => {
     return { created, retired, head };
   }
 
+  it("retains the detached branch through recovery and deletes it at expiry", async () => {
+    const { created, head } = await retiredFixture("expiry");
+    expect(await exactGit(repo, "rev-parse", created.branch)).toBe(head);
+    await service.gc();
+    expect(await exactGit(repo, "rev-parse", created.branch)).toBe(head);
+    await updateRegistryWorktree(env, created.id, {
+      removedAt: Date.now() - 31 * 24 * 60 * 60 * 1000 - 1,
+    });
+    const lock = path.join(repo, ".git", `refs/heads/${created.branch}.lock`);
+    await fs.writeFile(lock, "", { flag: "wx" });
+    try {
+      const failed = await service.gc();
+      expect(failed.snapshotsPruned).toBe(0);
+      expect(failed.issues).toContainEqual(
+        expect.objectContaining({
+          reason: expect.stringContaining("Managed branch cleanup failed"),
+        }),
+      );
+      expect(getRegistryWorktree(env, created.id)).toBeDefined();
+    } finally {
+      await fs.unlink(lock);
+    }
+    expect((await service.gc()).snapshotsPruned).toBe(1);
+    expect(await exactGit(repo, "branch", "--list", created.branch)).toBe("");
+    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
+  });
+
   it("round-trips detached HEAD, separate branch, split index and work bytes from snapshot objects", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), "saved.secret\ncache.tmp\n");
+    await fs.writeFile(path.join(repo, ".gitignore"), "saved.secret\ncache.tmp\nnode_modules/\n");
     await exactGit(repo, "add", ".gitignore");
     await exactGit(repo, "commit", "-m", "ignore fixture data");
     await fs.writeFile(path.join(repo, "saved.secret"), "provisioned secret\n");
+    await fs.mkdir(path.join(repo, "node_modules/pkg"), { recursive: true });
+    await fs.writeFile(path.join(repo, "node_modules/pkg/data"), "exact dependency bytes\n");
     const created = await fixture("exact-state", {
       ownerKind: "session",
       ownerId: "exact-state-owner",
-      provisionedPaths: ["saved.secret"],
+      provisionedPaths: ["saved.secret", "node_modules/pkg/data"],
     });
     const branchHead = await exactGit(created.path, "rev-parse", "HEAD");
     await exactGit(created.path, "checkout", "--detach", "HEAD~1");
     const head = await exactGit(created.path, "rev-parse", "HEAD");
     // Keep native ignore/provisioning policy while HEAD differs from the recorded branch.
-    await fs.writeFile(path.join(created.path, ".gitignore"), "saved.secret\ncache.tmp\n");
+    await fs.writeFile(
+      path.join(created.path, ".gitignore"),
+      "saved.secret\ncache.tmp\nnode_modules/\n",
+    );
     await fs.writeFile(
       path.join(created.path, ".gitattributes"),
       "*.txt text eol=crlf\n*.utf16 working-tree-encoding=UTF-16LE\n",
@@ -530,6 +562,7 @@ describe("managed exact-state retirement", () => {
       code: "ENOENT",
     });
     expect(await read(restored.path, "saved.secret")).toBe("saved ignored bytes\n");
+    expect(await read(restored.path, "node_modules/pkg/data")).toBe("exact dependency bytes\n");
     expect(await read(restored.path, "cache.tmp").catch(() => undefined)).toBeUndefined();
     if (process.platform !== "win32") {
       expect((await fs.stat(path.join(restored.path, "untracked.sh"))).mode & 0o777).toBe(0o751);

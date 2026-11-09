@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 
+import { createRouter } from "@openclaw/uirouter";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import * as providerData from "./data.ts";
@@ -8,6 +10,9 @@ import {
   appendPage,
   createApiKeyProviderData,
   createHarness,
+  createPage,
+  mountPage,
+  unmountPage,
   drainPageUpdates,
   expandProvider,
   modelPicker,
@@ -16,6 +21,7 @@ import {
   publishRouteData,
   waitForProviders,
 } from "./model-providers-page.test-support.tsx";
+import { page as modelsRoute, type ModelProvidersRouteData } from "./route.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -157,7 +163,7 @@ it("updates rendered facts from accepted catalog, auth, and notified mutable own
   settingsAgentSelection.state.selectedId = "writer";
   notifySelection();
   await waitForSolid(() => {
-    expect(page.renderRoot.textContent).toContain("Connections for Writer");
+    expect(page.renderRoot.textContent).toContain("Accounts for Writer");
     expect(page.renderRoot.textContent).not.toContain("Renamed Main");
   });
 });
@@ -180,3 +186,63 @@ it("filters providers while typing without rebuilding the provider presentation"
   await waitForSolid(() => expect(page.querySelectorAll("[data-provider-id]")).toHaveLength(0));
   expect(presentation).not.toHaveBeenCalled();
 });
+
+it.each(["settle", "retire"] as const)(
+  "keeps credentials interactive during initial discovery and handles %s",
+  async (completion) => {
+    const { context, request } = createHarness("main");
+    const catalog = createDeferred();
+    const original = request.getMockImplementation()!;
+    request.mockImplementation(async (method) => {
+      if (method === "models.list") {
+        await catalog.promise;
+        return {
+          models: [{ id: "known", name: "Known model", provider: "openai", available: true }],
+        };
+      }
+      return method === "models.authStatus"
+        ? createApiKeyProviderData().authStatus
+        : original(method);
+    });
+    const router = createRouter<"model-providers", typeof context, null, ModelProvidersRouteData>({
+      routes: [{ ...modelsRoute, component: () => null }],
+    });
+    const navigation = router.navigate("model-providers", context);
+    const page = createPage(context);
+    try {
+      await vi.waitFor(() => expect(router.getState().matches[0]?.data).toBeDefined());
+      page.routeData = router.getState().matches[0]!.data;
+      mountPage(page);
+      await waitForSolid(() => {
+        expect(page.querySelector('[data-provider-id="openai"]')).not.toBeNull();
+        expect(
+          page.querySelector('.model-providers__catalog-progress[role="status"]'),
+        ).not.toBeNull();
+      });
+      expect(page.querySelector("[data-model-readiness]")).toBeNull();
+      const input = page.querySelector<HTMLInputElement>(".model-providers__search input")!;
+      input.value = "openai";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await page.updateComplete;
+      expect(input.value).toBe("openai");
+      if (completion === "retire") {
+        const controller = page.routeData!.catalog!.controller;
+        unmountPage(page);
+        expect(controller.signal.aborted).toBe(true);
+        catalog.resolve();
+        await expect(page.routeData!.catalog!.promise).resolves.toMatchObject({
+          catalogRequestFailed: true,
+        });
+      } else {
+        catalog.resolve();
+        await waitForSolid(() => expect(page.view.props.configuredModels).toHaveLength(1));
+        expect(page.querySelector(".model-providers__catalog-progress")).toBeNull();
+        expect(input.value).toBe("openai");
+      }
+    } finally {
+      catalog.resolve();
+      await navigation;
+      router.stop();
+    }
+  },
+);

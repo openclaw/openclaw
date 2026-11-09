@@ -108,6 +108,36 @@ it.each(["menu", "padding"] as const)("keeps the mobile draft through %s focus",
     .toHaveAttribute("data-composer-editing", "false");
 });
 
+it("focuses the atomic editor during a mobile tap and consumes a retargeted toolbar click", async () => {
+  await page.viewport(390, 844);
+  const { props, container } = renderComposerFixture({
+    mobileComposer: true,
+    draft: "@Alex ",
+    mentions: [{ profileId: "alex-one", start: 0, end: 5 }],
+  });
+  document.body.append(container);
+  await expect
+    .poll(() => container.querySelector<HTMLElement>('[data-composer-editor="true"]'))
+    .not.toBeNull();
+  const editor = container.querySelector<HTMLElement>('[data-composer-editor="true"]')!;
+  document.activeElement instanceof HTMLElement && document.activeElement.blur();
+  let focusedDuringPointerDown = false;
+  editor.addEventListener(
+    "pointerdown",
+    () => {
+      focusedDuringPointerDown = editor.contains(document.activeElement);
+    },
+    { once: true },
+  );
+  editor.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+  expect(focusedDuringPointerDown).toBe(true);
+  const send = findPrimaryButton(container);
+  const click = new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 });
+  send.dispatchEvent(click);
+  expect(click.defaultPrevented).toBe(true);
+  expect(props.onSend).not.toHaveBeenCalled();
+});
+
 it("keeps attachment chips at the editing inset in the one-line mobile composer", async () => {
   await page.viewport(390, 844);
   const { container } = renderComposerFixture({

@@ -83,9 +83,9 @@ export async function buildTemplateAddPlan(params: {
   context?: TemplateAddPlanContext;
 }): Promise<TemplateAddPlan> {
   const context = params.context ?? {};
-  const finalId = context.agentId
-    ? context.agentId
-    : selectNextTemplateAgentId(params.manifest.agent.id, context.existingAgentIds ?? []);
+  const finalId =
+    context.agentId ??
+    selectNextTemplateAgentId(params.manifest.agent.id, context.existingAgentIds ?? []);
   const copyNumber = templateAgentCopyNumber(params.manifest.agent.id, finalId);
   const workspace = canonicalWorkspacePath(
     context.workspace ?? resolve(resolveRequiredHomeDir(), ".openclaw", `workspace-${finalId}`),

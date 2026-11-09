@@ -50,9 +50,14 @@ import { sessionManagerAppendInitialMetadata } from "../../sessions/session-mana
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { rewriteTranscriptEntriesInSessionManager } from "../transcript-rewrite.js";
+import {
+  cleanupEmbeddedAttemptSessionPhase,
+  createEmbeddedAttemptSessionSettleTracker,
+} from "./attempt-session-settle.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
+import { streamWithIdleTimeout } from "./llm-idle-timeout.js";
 import { preparePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
 import { claimAgentSessionWriter, prepareInitialSessionWriter } from "./session-bootstrap.js";
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
@@ -257,11 +262,17 @@ it.each([
   { existing: true, text: "Already streamed answer", closeAdmission: true },
   { existing: true, text: "Already streamed answer", incognito: true },
   { existing: true, text: "Already streamed answer", incognito: true, closeAdmission: true },
+  {
+    existing: true,
+    text: "Already streamed answer",
+    closeAdmission: true,
+    cleanupDuringAbort: true,
+  },
 ])(
-  "settles a restart-aborted stream (existing=$existing, text=$text, closed=$closeAdmission, incognito=$incognito)",
-  ({ existing, text, closeAdmission, incognito }) =>
+  "settles a restart-aborted stream (existing=$existing, text=$text, closed=$closeAdmission, incognito=$incognito, cleanup=$cleanupDuringAbort)",
+  ({ existing, text, closeAdmission, incognito, cleanupDuringAbort }) =>
     withInitialWriter(
-      async ({ manager, controller, target, transcript, admission }) =>
+      async ({ manager, controller, target, transcript, admission, runParams }) =>
         withOwnedSessionTranscriptWrites(transcript.ownedTranscriptWriteContext, async () => {
           const { session } = await createTestSession({
             sessionManager: manager,
@@ -269,19 +280,27 @@ it.each([
               transcript.transcriptLifecycle.withTranscriptWrite(write),
           });
           const reason = createAgentRunRestartAbortError();
+          const settleTracker = createEmbeddedAttemptSessionSettleTracker(session);
+          const providerAbort = createDeferredCore();
+          let cleanup: Promise<void> | undefined;
           session.agent.streamFn = (_model, _context, options) => {
             const stream = createAssistantMessageEventStream();
             const output = createAssistant(testModel, []);
             options?.signal?.addEventListener(
               "abort",
               () => {
-                Object.assign(output, {
-                  stopReason: "aborted",
-                  errorCode: "OPENCLAW_RESTART_ABORT",
-                  errorMessage: reason.message,
-                });
-                stream.push({ type: "error", reason: "aborted", error: output });
-                stream.end();
+                void (async () => {
+                  if (cleanupDuringAbort) {
+                    await providerAbort.promise;
+                  }
+                  Object.assign(output, {
+                    stopReason: "aborted",
+                    errorCode: "OPENCLAW_RESTART_ABORT",
+                    errorMessage: reason.message,
+                  });
+                  stream.push({ type: "error", reason: "aborted", error: output });
+                  stream.end();
+                })();
               },
               { once: true },
             );
@@ -306,6 +325,9 @@ it.each([
             });
             return stream;
           };
+          if (cleanupDuringAbort) {
+            session.agent.streamFn = streamWithIdleTimeout(session.agent.streamFn, 30_000);
+          }
           session.subscribe((event) => {
             if (
               ((text && event.type === "message_update") ||
@@ -316,14 +338,36 @@ it.each([
                 admission.close();
               }
               controller.abort(reason);
-              session.agent.abort(reason);
+              void settleTracker.abortActiveSession(reason).catch(() => {});
+              if (cleanupDuringAbort) {
+                cleanup = cleanupEmbeddedAttemptSessionPhase({
+                  attempt: runParams,
+                  session,
+                  sessionManager: manager,
+                  trajectoryRecorder: null,
+                  trajectoryEndRecorded: false,
+                  transcriptLifecycle: transcript.transcriptLifecycle,
+                  state: {
+                    terminal: { kind: "aborted", source: "external" },
+                    beforeAgentRunBlockedBy: undefined,
+                  },
+                  buildAbortSettlePromise: () => {
+                    providerAbort.resolve();
+                    return settleTracker.buildAbortSettlePromise();
+                  },
+                });
+                void cleanup.catch(() => {});
+              }
             }
           });
           try {
             // The canceled run may reject after its terminal row; storage is the contract here.
             await Promise.allSettled([
-              session.prompt("Keep my answer", { expandPromptTemplates: false }),
+              settleTracker.trackPromptSettlePromise(
+                session.prompt("Keep my answer", { expandPromptTemplates: false }),
+              ),
             ]);
+            await cleanup;
             const events = incognito
               ? await outsideWriter(() => loadTranscriptEvents(target))
               : readEvents(target);
@@ -347,6 +391,7 @@ it.each([
               ).rejects.toThrow();
             }
           } finally {
+            providerAbort.resolve();
             session.dispose();
           }
         }),

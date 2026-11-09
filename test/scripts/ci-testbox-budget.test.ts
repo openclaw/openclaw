@@ -38,13 +38,13 @@ describe("Testbox spending admission", () => {
     expect(groups.size).toBe(32);
   });
 
-  it("defaults routine proof to 16-class and requires the high-memory profile for 32-class", () => {
-    expect(planAdmission().runner).toBe("blacksmith-16vcpu-ubuntu-2404");
-    expect(() => planAdmission({ runner: "blacksmith-32vcpu-ubuntu-2404" })).toThrow(/not allowed/);
+  it("defaults routine proof to 4 CPUs and requires the high-memory profile for 8 CPUs", () => {
+    expect(planAdmission().runner).toBe("blacksmith-4vcpu-ubuntu-2404");
+    expect(() => planAdmission({ runner: "blacksmith-8vcpu-ubuntu-2404" })).toThrow(/not allowed/);
     const groups = new Set<string>();
     for (let index = 0; index < 128; index++) {
       const plan = planAdmission({ profile: "check-memory", id: `tbx_memory_${index}` });
-      expect(plan.runner).toBe("blacksmith-32vcpu-ubuntu-2404");
+      expect(plan.runner).toBe("blacksmith-8vcpu-ubuntu-2404");
       expect(plan.group).toMatch(/^openclaw-testbox-budget-v1-[0-3]$/);
       groups.add(plan.group);
     }

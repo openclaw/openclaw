@@ -12,7 +12,7 @@ export async function missingCommitObjects(
   const objects = (
     await requireGitBuffer(
       repoRoot,
-      ["rev-list", "--objects", "--missing=print", "--no-object-names", "--max-count=1", commit],
+      ["rev-list", "--objects", "--missing=print", "--quiet", "--max-count=1", commit],
       { ...options, env: { ...options.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" } },
     )
   ).toString("utf8");
@@ -68,6 +68,8 @@ export async function hydrateCommitObjects(
       [
         "fetch",
         "--refetch",
+        // Even refetch's noop negotiator otherwise parses every local ref tip.
+        `--negotiation-tip=${commit}`,
         "--no-auto-maintenance",
         remote,
         "--no-tags",

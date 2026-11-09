@@ -5,10 +5,6 @@
 
 /* Keep metadata, but do not charge a title for an empty endcap or a hidden draft badge. */
 .shell--mobile-nav .sidebar-recent-session--single-line:not(.sidebar-recent-session--team) {
-  .sidebar-recent-session__text {
-    gap: var(--sidebar-row-gap);
-  }
-
   .sidebar-recent-session__details:not(
     :has(.session-row-badge:not(.session-row-badge--draft), .viewer-facepile, .session-row-trail)
   ) {
@@ -23,7 +19,8 @@
     --session-row-actions-reserve: var(--sidebar-session-menu-size);
   }
 
-  :is([data-sidebar-session-pin], [data-sidebar-session-archive]) {
+  [data-sidebar-session-pin],
+  [data-sidebar-session-archive] {
     display: none;
   }
 
@@ -87,7 +84,7 @@
     text-overflow: clip;
     mask-image: linear-gradient(
       var(--hover-marquee-fade-direction, to right),
-      black calc(100% - var(--hover-marquee-fade-width, 24px)),
+      black calc(100% - var(--hover-marquee-fade-width, 6px)),
       transparent
     );
   }

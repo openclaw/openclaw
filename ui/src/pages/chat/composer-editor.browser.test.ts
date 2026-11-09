@@ -1,7 +1,9 @@
+import { redo, undo } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { userEvent } from "vitest/browser";
 import "../../test-helpers/load-styles.ts";
+import "../../styles/chat/composer-surface.css";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
@@ -29,7 +31,7 @@ function fixture(
 ) {
   const surface = document.createElement("div");
   surface.className = "agent-chat__input";
-  surface.style.cssText = `width: ${width}px; --chat-composer-editor-size:14px; --chat-composer-editor-line:20px; --chat-composer-editor-inset-block:0px; --chat-composer-editor-inset-inline:0px; --chat-composer-editor-max-lines:3; font:14px/20px Arial;`;
+  surface.style.cssText = `width: ${width}px; --chat-composer-editor-size:14px; --chat-composer-editor-line:20px; --chat-composer-editor-inset-block:0px; --chat-composer-editor-inset-inline:0px; --chat-composer-editor-max-lines:3; --chat-composer-min-height:0px; font:14px/20px Arial;`;
   const wrapper = document.createElement("div");
   wrapper.className = "agent-chat__composer-combobox";
   const input = document.createElement("textarea");
@@ -70,6 +72,27 @@ async function layout() {
 }
 
 describe.each(["chat", "new-session"] as const)("%s document-aware composer", (kind) => {
+  it.each(["'", "’"])(
+    "attaches a typed %s possessive without losing the chip or undo",
+    async (quote) => {
+      const f = fixture(kind, "@Alex ", 230, [{ profileId: "alex-one", start: 0, end: 5 }]);
+      focusComposerInput(f.input);
+      selectComposerInput(f.input, 6, 6);
+      await userEvent.keyboard(quote + "s");
+      expect(f.raw()).toBe("@Alex" + quote + "s");
+      expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 0, end: 5 }]);
+      expect(undo(f.view)).toBe(true);
+      expect(f.raw()).toBe("@Alex ");
+      expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 0, end: 5 }]);
+      expect(redo(f.view)).toBe(true);
+      expect(f.raw()).toBe("@Alex" + quote + "s");
+      selectComposerInput(f.input, 0, 0);
+      await userEvent.keyboard(quote);
+      expect(f.raw()).toBe(quote + "@Alex" + quote + "s");
+      expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 1, end: 6 }]);
+    },
+  );
+
   it("keeps required separators when deleting whitespace beside a chip", async () => {
     const f = fixture(kind);
     focusComposerInput(f.input);
@@ -146,7 +169,7 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
     ]);
   });
 
-  it("cuts the intended identical label without stripping the other person", () => {
+  it("cuts the intended identical label without stripping the other person", async () => {
     const f = fixture(kind, "@Alex @Alex", 230, [
       { profileId: "alex-one", start: 0, end: 5 },
       { profileId: "alex-two", start: 6, end: 11 },
@@ -161,6 +184,18 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
     );
     expect(f.raw()).toBe("@Alex");
     expect(f.mentions()).toEqual([{ profileId: "alex-two", start: 0, end: 5 }]);
+    for (let cycle = 0; cycle < 2; cycle++) {
+      focusComposerInput(f.input);
+      await userEvent.keyboard("{Control>}z{/Control}");
+      expect(f.raw()).toBe("@Alex @Alex");
+      expect(f.mentions()).toEqual([
+        { profileId: "alex-one", start: 0, end: 5 },
+        { profileId: "alex-two", start: 6, end: 11 },
+      ]);
+      await userEvent.keyboard("{Control>}{Shift>}z{/Shift}{/Control}");
+      expect(f.raw()).toBe("@Alex");
+      expect(f.mentions()).toEqual([{ profileId: "alex-two", start: 0, end: 5 }]);
+    }
   });
 
   it("pads incoming chip metadata when pasted into an ordinary word", () => {
@@ -396,6 +431,30 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
     expect(composerInputHasFocus(f.input)).toBe(false);
   });
 
+  it.each(["readOnly", "disabled"] as const)(
+    "does not mutate on rich paste or composition while %s",
+    async (lock) => {
+      const f = fixture(kind);
+      selectComposerInput(f.input, 9, 9);
+      f.input[lock] = true;
+      syncComposerInput(f.input);
+      await expect.poll(() => f.view.state.readOnly).toBe(true);
+      const clipboard = new DataTransfer();
+      clipboard.setData("text/plain", "@Bob");
+      clipboard.setData(
+        "application/x-openclaw-mentions",
+        JSON.stringify([{ profileId: "bob", start: 0, end: 4 }]),
+      );
+      f.content.dispatchEvent(
+        new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard }),
+      );
+      expect(f.raw()).toBe("Ask @Alex after");
+      f.content.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      expect(f.raw()).toBe("Ask @Alex after");
+      expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 4, end: 9 }]);
+    },
+  );
+
   it("keeps the focused caret visible when a compact pane shrinks the real scrollport", async () => {
     const f = fixture(kind, `@Alex ${"word ".repeat(160)}`);
     focusComposerInput(f.input);
@@ -440,6 +499,6 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
     expect(caret.bottom).toBeLessThanOrEqual(f.view.scrollDOM.getBoundingClientRect().bottom + 1);
     f.surface.style.width = "1000px";
     await layout();
-    expect(f.view.dom.getBoundingClientRect().height).toBeLessThan(before);
+    await expect.poll(() => f.view.dom.getBoundingClientRect().height).toBeLessThan(before);
   });
 });

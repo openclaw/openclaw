@@ -193,6 +193,8 @@ export class NewSessionPageOwner {
     this.dictation = new DirectDictationControl({
       textarea: this.submission.composerTextarea,
       getClient: () => this.gateway.client,
+      prepareSession: () => this.submission.sessionStartup.prepareDictationSession(),
+      getSessionKey: () => this.submission.sessionStartup.dictationSessionKey(),
       isConnected: () => this.gateway.connected,
       canCommit: () => !this.submission.submitting && !this.submission.pendingPlacement.sessionKey,
       onMessage: (message) => this.setMessageFromUser(message),
@@ -419,8 +421,6 @@ export class NewSessionPageOwner {
       },
       mentions: submission.mentions,
       getMentions: () => submission.mentions,
-      visibility: submission.visibility,
-      draftAvailable: capabilities.canStartAsDraft(context),
       ...capabilities.composerProps(context, gateway, place.agentId),
       modelControl: place.modelControl,
       requiresModifier: preferences?.chatSendShortcut === "modifier-enter",
@@ -440,11 +440,6 @@ export class NewSessionPageOwner {
       onInput: (message, mentions) => this.setMessageFromUser(message, mentions),
       onOpenImage: this.setImageLightbox,
       onOpenSidebar: this.openAttachmentPanel,
-      onVisibilityChange: (visibility) => {
-        if (!submission.submitting && !submission.pendingPlacement.sessionKey) {
-          submission.setVisibility(visibility);
-        }
-      },
       onSubmit: () => void this.submit(),
       onBackgroundSubmit:
         submission.visibility === "draft" || isCatalogTarget

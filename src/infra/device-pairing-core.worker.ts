@@ -6,9 +6,21 @@ import {
   registerDevicePairingJoinCodeInWorker,
   redeemDevicePairingJoinCodeInWorker,
 } from "./device-pairing-join-code.worker.js";
+import {
+  approveOpenClawIdNodeInWorker,
+  consumeOpenClawIdNodePairingInWorker,
+  removeOpenClawIdNodePairingsInWorker,
+} from "./device-pairing-openclaw-id.worker.js";
 import * as tokens from "./device-pairing-tokens.kernel.js";
 
 export const devicePairingOperations = {
+  "devicePairing.approveOpenClawIdNode": devicePairingMutation(
+    (input: Parameters<typeof approveOpenClawIdNodeInWorker>[1], { database }) =>
+      approveOpenClawIdNodeInWorker(database.db, input),
+  ),
+  "devicePairing.removeOpenClawIdNodes": devicePairingMutation(
+    removeOpenClawIdNodePairingsInWorker,
+  ),
   "devicePairing.registerJoinCode": devicePairingMutation(
     (input: Parameters<typeof registerDevicePairingJoinCodeInWorker>[1], { database }) =>
       registerDevicePairingJoinCodeInWorker(database.db, input),
@@ -93,9 +105,17 @@ export const devicePairingOperations = {
   "devicePairing.verifyToken": devicePairingMutation(tokens.verifyDeviceTokenInWorker, {
     pairedDeviceId: (input) => input.deviceId,
   }),
-  "devicePairing.ensureToken": devicePairingMutation(tokens.ensureDeviceTokenInWorker, {
-    pairedDeviceId: (input) => input.deviceId,
-  }),
+  "devicePairing.ensureToken": devicePairingMutation(
+    (input: Parameters<typeof tokens.ensureDeviceTokenInWorker>[0], { database }) => {
+      const token = tokens.ensureDeviceTokenInWorker(input);
+      if (token?.role === "node" && token.approval) {
+        // Same transaction as issuance: explicit removal must not restore this listing's eligibility.
+        consumeOpenClawIdNodePairingInWorker(database.db, token.approval);
+      }
+      return token;
+    },
+    { pairedDeviceId: (input) => input.deviceId },
+  ),
   "devicePairing.rotateToken": devicePairingMutation(
     (input: Parameters<typeof tokens.rotateDeviceTokenInWorker>[0], { recordRetiredNodeToken }) =>
       tokens.rotateDeviceTokenInWorker(input, recordRetiredNodeToken),

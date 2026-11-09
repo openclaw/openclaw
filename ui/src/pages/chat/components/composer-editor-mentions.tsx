@@ -73,6 +73,28 @@ export const separateTypedTextFromMentions = EditorState.transactionFilter.of((t
     insertedText += text.toString();
   });
   if (
+    transaction.isUserEvent("input.type") &&
+    typed.empty &&
+    typed.head > 0 &&
+    (insertedText === "'" || insertedText === "’") &&
+    transaction.startState.sliceDoc(typed.head - 1, typed.head) === " "
+  ) {
+    let chipPrecedes = false;
+    chips.between(typed.head - 1, typed.head - 1, (_from, to) => {
+      chipPrecedes ||= to === typed.head - 1;
+    });
+    if (chipPrecedes) {
+      return [
+        transaction,
+        {
+          changes: { from: typed.head - 1, to: typed.head },
+          sequential: true,
+          selection: EditorSelection.cursor(typed.head),
+        },
+      ];
+    }
+  }
+  if (
     insertedText === " " &&
     typed.empty &&
     transaction.startState.sliceDoc(typed.head, typed.head + 1) === " "
@@ -176,7 +198,7 @@ export const keepSelectionOutsideMentions = EditorState.transactionFilter.of((tr
       ]
     : transaction;
 });
-/** Recipients removed with their chip; history replays this on undo. */
+/** History carries complete recipient identity, including same-text selection changes. */
 export const restoreMentions = StateEffect.define<readonly HumanMention[]>({
   map: (mentions, mapping) =>
     mentions.flatMap((mention) => {
@@ -185,24 +207,29 @@ export const restoreMentions = StateEffect.define<readonly HumanMention[]>({
       return end > start ? [{ ...mention, start, end }] : [];
     }),
 });
-export const rememberRemovedMentions = invertedEffects.of((transaction) => {
+export const rememberMentionHistory = invertedEffects.of((transaction) => {
   const chips = transaction.startState.field(mentionDecorations, false);
-  if (!transaction.docChanged || !chips) {
+  if (
+    !chips ||
+    (!transaction.docChanged && !transaction.effects.some((effect) => effect.is(restoreMentions)))
+  ) {
     return [];
   }
-  const removed: HumanMention[] = [];
+  const previous: HumanMention[] = [];
+  let removed = false;
   chips.between(0, transaction.startState.doc.length, (start, end, value) => {
     const widget = value.spec.widget;
-    if (
-      widget instanceof MentionChip &&
-      // The chip is atomic: losing its first or last character removes it.
-      (transaction.changes.mapPos(start, 1, MapMode.TrackAfter) === null ||
-        transaction.changes.mapPos(end, -1, MapMode.TrackBefore) === null)
-    ) {
-      removed.push({ profileId: widget.profileId, start, end });
+    if (widget instanceof MentionChip) {
+      previous.push({ profileId: widget.profileId, start, end });
+      removed ||=
+        transaction.changes.mapPos(start, 1, MapMode.TrackAfter) === null ||
+        transaction.changes.mapPos(end, -1, MapMode.TrackBefore) === null;
     }
   });
-  return removed.length ? [restoreMentions.of(removed)] : [];
+  // Plain text and cancellable composition padding need no identity history.
+  return removed || transaction.effects.some((effect) => effect.is(restoreMentions))
+    ? [restoreMentions.of(previous)]
+    : [];
 });
 /** Mapped through every change so atomic boundaries never lag the document. */
 export const mentionDecorations = StateField.define<DecorationSet>({

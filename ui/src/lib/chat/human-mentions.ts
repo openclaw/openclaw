@@ -52,18 +52,22 @@ export function readHumanMentions(
 }
 
 let pendingRestoration:
-  | { text: string; mentions: readonly HumanMention[]; input: HumanMentionInput }
+  | {
+      text: string;
+      restoration: { mode: "merge" | "replace"; mentions: readonly HumanMention[] };
+      input: HumanMentionInput;
+    }
   | undefined;
 
 /** Supplies the editor's exact edit and restored recipients during one synchronous owner update. */
 export function withHumanMentionEdit<T>(
   text: string,
-  mentions: readonly HumanMention[],
+  restoration: { mode: "merge" | "replace"; mentions: readonly HumanMention[] },
   input: HumanMentionInput,
   run: () => T,
 ): T {
   const previous = pendingRestoration;
-  pendingRestoration = { text, mentions, input };
+  pendingRestoration = { text, restoration, input };
   try {
     return run();
   } finally {
@@ -75,8 +79,12 @@ function restoreHumanMentions(next: string, mentions: readonly HumanMention[]) {
   if (pendingRestoration?.text !== next) {
     return mentions;
   }
+  const restoration = pendingRestoration.restoration;
+  if (restoration.mode === "replace") {
+    return readHumanMentions(next, restoration.mentions) ?? [];
+  }
   const merged = [...mentions];
-  for (const restored of pendingRestoration.mentions) {
+  for (const restored of restoration.mentions) {
     if (
       readHumanMentions(next, [restored]) &&
       !merged.some((mention) => mention.start < restored.end && restored.start < mention.end)
@@ -95,10 +103,11 @@ export function updateHumanMentions(
   mentions: readonly HumanMention[] = [],
   inputHint?: HumanMentionInput,
 ): readonly HumanMention[] {
-  const input =
+  const editorInput =
     pendingRestoration?.text === next && pendingRestoration.input.value === previous
       ? pendingRestoration.input
-      : inputHint;
+      : undefined;
+  const input = editorInput ?? inputHint;
   if ((!input && previous === next) || mentions.length === 0) {
     return restoreHumanMentions(next, mentions);
   }
@@ -116,12 +125,13 @@ export function updateHumanMentions(
   }
   let previousEnd = previous.length - suffix;
   // Repeated labels make a text-only diff ambiguous. Invalidate the union of
-  // possible edits unless beforeinput proves exactly which occurrence changed.
+  // possible edits unless the input owner supplies the exact range.
   if (start + suffix > sharedLength) {
     previousEnd = start + Math.max(0, previous.length - next.length);
     start = sharedLength - suffix;
   }
-  if (input?.value === previous && !input.inputType.startsWith("history")) {
+  // Native undo exposes a caret, not an exact edit; the editor supplies its inverse range.
+  if (input?.value === previous && (editorInput || !input.inputType.startsWith("history"))) {
     const removed = previous.length - next.length;
     let inputStart = input.start;
     let inputEnd = input.end;

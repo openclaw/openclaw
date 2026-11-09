@@ -23,7 +23,6 @@ const overrides = {
   "../../infra/update-check.js": {
     checkUpdateStatus: mocks.check,
     formatGitInstallLabel: () => undefined,
-    compareSemverStrings: () => 0,
   },
   "../../infra/update-run-status.js": { readUpdateRunStatus: mocks.run },
   "../../infra/update-recovery-backup-status.js": { inspectUpdateRecoveryBackups: async () => [] },
@@ -68,6 +67,27 @@ it("keeps history available when a short update-check timeout expires first", as
   expect(mocks.writeJson.mock.lastCall?.[0]).toMatchObject({ lastRun });
   expect(mocks.writeJson.mock.lastCall?.[0]).not.toHaveProperty("runStatusError");
 });
+
+it.each(["2147483", "2147484", "9007199254740"])(
+  "retains available inspection results with a %s-second allowance",
+  async (timeout) => {
+    const update = {
+      root: "/fixture/openclaw",
+      installKind: "package",
+      packageManager: "npm",
+      registry: { latestVersion: "2026.11.9" },
+    };
+    mocks.check.mockImplementation(() => delayed(update, 100));
+    mocks.run.mockResolvedValue({ lastRun });
+    vi.useFakeTimers();
+    const pending = updateStatusCommand({ json: true, timeout });
+    await vi.advanceTimersByTimeAsync(250);
+    await pending;
+    expect(mocks.writeJson).toHaveBeenCalledOnce();
+    expect(mocks.writeJson.mock.lastCall?.[0]).toMatchObject({ update, lastRun });
+    expect(mocks.writeJson.mock.lastCall?.[0]).not.toHaveProperty("inspectionErrors");
+  },
+);
 
 it.each(["installation", "update history"])(
   "returns partial JSON at the overall deadline when %s never settles",

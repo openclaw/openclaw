@@ -21,7 +21,13 @@ import { resolveCronJobToolPolicyContext } from "../../cron/execution-context-ad
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
 import type { CronStoredJob } from "../../cron/types.js";
 import { parseConcreteConfigPathTokens } from "../../shared/dot-path.js";
+import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
+
+type PolicySelection = Omit<
+  Parameters<NonNullable<GetReplyOptions["onModelSelected"]>>[0],
+  "thinkLevel"
+>;
 
 /** A delayed producer can retain restrictions, never replace current session authority. */
 export function narrowSessionEventSettings(
@@ -53,7 +59,7 @@ export function captureSessionEventConfigPolicy(
     get changed() {
       return changed;
     },
-    selectModel(selection: { provider: string; model: string }) {
+    selectModel(selection: PolicySelection) {
       if (job) {
         matches = captureScheduledSessionEventConfigPolicy(captured, agentId, job, selection);
         // A fallback may consume auth that an earlier provider did not need.
@@ -83,9 +89,11 @@ export function captureScheduledSessionEventConfigPolicy(
   config: OpenClawConfig,
   agentId: string,
   job: CronStoredJob,
-  selection?: { provider: string; model: string },
+  selection?: PolicySelection,
 ) {
   const captured = captureRuntimeConfig(config);
+  const runtimeOwnsMcpServers =
+    selection?.agentRuntime === "openclaw" && selection.cliExecution === false;
   const creatorChannel = resolveScheduledToolCallerContext({
     scheduledToolPolicy: resolveCronJobToolPolicyContext(job, resolveCronRunToolsAllow(job)),
   }).channel;
@@ -146,6 +154,7 @@ export function captureScheduledSessionEventConfigPolicy(
         agents,
         auth,
         models,
+        mcp,
         channels: channelConfig,
         logging: _logging,
         meta: _meta,
@@ -154,6 +163,8 @@ export function captureScheduledSessionEventConfigPolicy(
       profiles: ReadonlySet<string>,
     ) => ({
       ...global,
+      // OpenClaw's MCP owner revokes exact servers; native runtimes can retain raw config.
+      mcp: runtimeOwnsMcpServers ? { ...mcp, servers: undefined } : mcp,
       models: selection
         ? {
             ...models,
@@ -199,7 +210,10 @@ export function captureScheduledSessionEventConfigPolicy(
     });
     const relevantPath = (path: string, profiles: ReadonlySet<string>) => {
       const tokens = parseConcreteConfigPathTokens(path);
-      if (tokens?.[0] === "logging") {
+      if (
+        tokens?.[0] === "logging" ||
+        (runtimeOwnsMcpServers && tokens?.[0] === "mcp" && tokens[1] === "servers")
+      ) {
         return false;
       }
       if (tokens?.[0] === "models" && tokens[1] === "providers" && selection) {

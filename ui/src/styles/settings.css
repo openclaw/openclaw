@@ -720,27 +720,13 @@ openclaw-appearance-background .settings-background-preview .session-background_
 }
 
 /* A row's own details chevron: the quiet disclosure's glyph, as a button after the row's action. */
-.btn.settings-details-toggle {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
-  padding: 0;
-  color: var(--muted);
-}
-
-.btn.settings-details-toggle svg {
-  width: var(--list-row-icon-size);
-  height: var(--list-row-icon-size);
-}
-
 .settings-details-toggle[aria-expanded="true"] svg {
   transform: rotate(90deg);
 }
 
 /* At the row's end, the glyph lines up with the other rows' chevrons, also when the control
    wraps under the title on phones. The tooltip host is display: contents. */
-.settings-row__control > openclaw-tooltip:last-child > .btn.settings-details-toggle {
+.settings-row__control > openclaw-tooltip:last-child > .settings-details-toggle {
   margin-inline: auto -6px;
 }
 
@@ -842,7 +828,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
   justify-content: flex-start;
 }
 
-@media (min-width: 769px) {
+@media not all and (max-width: 640px) {
   .settings-row--stacked-on-narrow,
   .settings-row--stacked-on-narrow .settings-row__control {
     width: auto;
@@ -1152,7 +1138,8 @@ openclaw-appearance-background .settings-background-preview .session-background_
 /* Short values line up with the selects in the same column. */
 .settings-row:not(.settings-row--stacked)
   .settings-row__control
-  > :is([data-settings-chat-message-width], [data-settings-terminal-font]) {
+  > [data-settings-chat-message-width],
+.settings-row:not(.settings-row--stacked) .settings-row__control > [data-settings-terminal-font] {
   width: 220px;
   text-align: start;
 }
@@ -1424,7 +1411,7 @@ textarea.settings-input {
 /* Narrow screens stack the Recovery row, so its actions get the full width.
    Whole buttons wrap and grow to fill each line; the primary retry leads on
    its own line. Wide screens keep the single right-aligned row. */
-@media (max-width: 768px) {
+@media (max-width: 640px) {
   .updates-recovery-actions {
     display: flex;
     flex-wrap: wrap;
@@ -1638,14 +1625,14 @@ textarea.settings-input {
     /* The shell topbar keeps one size on every route; resizing it here shifts
        the page when navigation enters or leaves Settings. */
     :is(button, .btn, summary, .settings-toggle):where(
-      :not([role="tab"], .topbar *, .settings-segmented__btn)
+      :not([role="tab"], .topbar *, .settings-segmented__btn, .oc-menu-item)
     ) {
       min-width: var(--settings-touch-control-height);
       min-height: var(--settings-touch-control-height);
     }
 
     .settings-segmented > .settings-segmented__btn {
-      min-width: 44px;
+      min-width: var(--settings-touch-control-height);
     }
 
     :is(input, select, textarea),
@@ -1658,12 +1645,38 @@ textarea.settings-input {
     }
 
     .settings-secret > :is(input, textarea) {
-      padding-right: calc(44px + var(--space-2));
+      padding-right: calc(var(--settings-touch-control-height) + var(--space-2));
     }
 
     .settings-section__help-button > span {
       width: var(--chrome-icon-size);
       height: var(--chrome-icon-size);
+    }
+  }
+}
+
+/* Between the phone layout and the docked sidebar, every settings page shares one gutter and
+   one column, so the title stays put from page to page. */
+@media not all and (max-width: 640px) {
+  .shell--settings.shell--mobile-nav:not(.shell--floating-header) {
+    .content:not(.content--custodian) {
+      --content-inline-padding: var(--space-6);
+      --settings-header-inline-padding: 0;
+      padding: var(--space-6) var(--space-6) var(--space-7);
+    }
+
+    .content .content-header,
+    .settings-page,
+    .settings-workspace,
+    .config-content,
+    .config-lead,
+    .config-content-callout {
+      max-width: none;
+      padding-inline: 0;
+    }
+
+    .content .content-header .page-title {
+      font-size: 26px;
     }
   }
 }
@@ -1821,15 +1834,10 @@ textarea.settings-input {
     }
 
     .settings-section__help-button {
-      position: relative;
-      min-width: 16px;
-      min-height: 16px;
-
-      &::after {
-        content: "";
-        position: absolute;
-        inset: -14px;
-      }
+      /* Reserve the touch target inline so it cannot overflow or cover adjacent actions. */
+      min-width: 44px;
+      min-height: 44px;
+      margin-block: -14px;
     }
 
     .settings-segmented > .settings-segmented__btn {
@@ -2100,6 +2108,21 @@ openclaw-approvals-page .data-table-pagination__info {
   }
 }
 
+.standing-grants-empty {
+  display: grid;
+
+  &::before,
+  & > span {
+    grid-area: 1 / 1;
+  }
+
+  /* Reserve the translated empty copy while the read still says Unknown. */
+  &::before {
+    content: attr(data-empty-message);
+    visibility: hidden;
+  }
+}
+
 /* Each grant is one exact command with one action, so the whole command stays
    visible and nothing hides behind a disclosure. */
 .standing-grants {
@@ -2206,7 +2229,7 @@ openclaw-approvals-page .data-table-pagination__info {
 
 @media (pointer: coarse) {
   .settings-sidebar__agent .agent-select__trigger {
-    min-height: 44px;
+    min-height: var(--settings-touch-control-height);
   }
 }
 

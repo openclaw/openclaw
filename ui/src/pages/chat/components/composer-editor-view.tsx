@@ -1,4 +1,3 @@
-import "../../../styles/chat/composer-surface.css";
 import { defaultKeymap, history, historyKeymap, isolateHistory } from "@codemirror/commands";
 import {
   Compartment,
@@ -32,7 +31,7 @@ import {
   setMentionDecorations,
   keepSelectionOutsideMentions,
   restoreMentions,
-  rememberRemovedMentions,
+  rememberMentionHistory,
   mentionDecorations,
 } from "./composer-editor-mentions.tsx";
 
@@ -112,10 +111,11 @@ export function mountComposerEditor(
     attrs.tabindex = input.disabled ? "-1" : "0";
     return attrs;
   }
+  const canEdit = () => !input.disabled && !input.readOnly;
   function extensions() {
     return [
-      EditorView.editable.of(!input.disabled),
-      EditorState.readOnly.of(input.disabled || input.readOnly),
+      EditorView.editable.of(canEdit()),
+      EditorState.readOnly.of(!canEdit()),
       EditorView.contentAttributes.of(attributes()),
       EditorView.editorAttributes.of({
         class: [
@@ -162,7 +162,8 @@ export function mountComposerEditor(
     return forwarded.defaultPrevented;
   }
 
-  currentMentions = initialHistory?.mentions ?? readHumanMentions(input.value, mentions()) ?? [];
+  const admittedMentions = readHumanMentions(input.value, mentions()) ?? [];
+  currentMentions = initialHistory?.mentions ?? admittedMentions;
   const view = new EditorView({
     parent: input.parentElement!,
     state: EditorState.create({
@@ -179,7 +180,7 @@ export function mountComposerEditor(
         mentionDecorations.init(() => decorations(initialHistory?.value ?? input.value)),
         separateTypedTextFromMentions,
         keepSelectionOutsideMentions,
-        rememberRemovedMentions,
+        rememberMentionHistory,
         configuration.of(extensions()),
         EditorView.lineWrapping,
         history(),
@@ -205,6 +206,9 @@ export function mountComposerEditor(
               return forward(event);
             },
             compositionstart(event) {
+              if (!canEdit()) {
+                return true;
+              }
               prepareComposition();
               forward(event);
               return false;
@@ -229,6 +233,10 @@ export function mountComposerEditor(
               return copySelection(event, true);
             },
             paste(event) {
+              if (!canEdit()) {
+                event.preventDefault();
+                return true;
+              }
               rememberPastedMentions(event);
               if (forwardPaste(event)) {
                 pendingPaste = undefined;
@@ -250,12 +258,15 @@ export function mountComposerEditor(
           if (syncing || destroyed) {
             return;
           }
-          if (update.docChanged) {
+          const restoring = update.transactions.some((transaction) =>
+            transaction.effects.some((effect) => effect.is(restoreMentions)),
+          );
+          if (update.docChanged || restoring) {
             input.value = update.state.doc.toString();
             publishSelection();
             let inserted = "";
             let editStart = update.startState.doc.length;
-            let editEnd = 0;
+            let editEnd = update.docChanged ? 0 : editStart;
             update.changes.iterChanges((from, to, _newFrom, _newTo, text) => {
               editStart = Math.min(editStart, from);
               editEnd = Math.max(editEnd, to);
@@ -263,7 +274,11 @@ export function mountComposerEditor(
             });
             const source =
               update.transactions
-                .find((transaction) => transaction.docChanged)
+                .find(
+                  (transaction) =>
+                    transaction.docChanged ||
+                    transaction.effects.some((effect) => effect.is(restoreMentions)),
+                )
                 ?.annotation(Transaction.userEvent) ?? "";
             const inputType = source.startsWith("input.paste")
               ? "insertFromPaste"
@@ -284,20 +299,18 @@ export function mountComposerEditor(
                             : inserted === "\n"
                               ? "insertLineBreak"
                               : "insertText";
-            // Undo restores the text of a deleted chip; restore its recipient too.
-            const restored = [
-              ...update.transactions.flatMap((transaction) =>
-                transaction.effects.flatMap((effect) =>
-                  effect.is(restoreMentions) ? effect.value : [],
-                ),
-              ),
-              ...pastedMentions(update),
-            ];
+            // Grouped history stores the earliest complete snapshot last.
+            // It must replace identity, not concatenate overlapping snapshots.
+            const historical = update.transactions
+              .flatMap((transaction) => transaction.effects)
+              .findLast((effect) => effect.is(restoreMentions))?.value;
+            const pasted = pastedMentions(update);
+            const restored = historical ?? pasted;
             publishing = true;
             try {
               withHumanMentionEdit(
                 input.value,
-                restored,
+                { mode: restoring ? "replace" : "merge", mentions: restored },
                 {
                   value: update.startState.doc.toString(),
                   start: editStart,
@@ -415,7 +428,7 @@ export function mountComposerEditor(
     event.clipboardData.setData("text/plain", view.state.sliceDoc(from, to));
     event.clipboardData.setData(HUMAN_MENTION_CLIPBOARD_TYPE, JSON.stringify(copied));
     event.preventDefault();
-    if (cut && !view.state.readOnly) {
+    if (cut && canEdit()) {
       view.dispatch({
         changes: { from, to },
         selection: EditorSelection.cursor(from),
@@ -627,14 +640,15 @@ export function mountComposerEditor(
     input.dispatchEvent(new Event("scroll")),
   );
   if (initialHistory) {
-    // The native paste already updated its owner while CM was loading. Seed
-    // that transition into CM history without publishing the paste twice.
+    // Native insertion already updated its owner while CM was loading. Seed
+    // text and recipient history without publishing that insertion twice.
     syncing = true;
     try {
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: input.value },
         selection: EditorSelection.single(initialSelection.start, initialSelection.end),
         userEvent: "input.paste",
+        effects: restoreMentions.of(admittedMentions),
       });
     } finally {
       syncing = false;

@@ -2,8 +2,9 @@ import { onSettled } from "solid-js";
 import { createOverlayAnchor } from "../../../components/overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../../../components/overlay-lifecycle.ts";
 import { registryFor } from "../../../components/overlay-registry.ts";
-import "../../../components/solid/overlay.css";
 import { consumeTooltipEscape } from "../../../components/tooltip.ts";
+import "../../../components/solid/overlay.css";
+import { focusComposerInput } from "../../../lib/composer-input.ts";
 import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusion.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { clearChatModelSearchOnEscape } from "./chat-model-picker-search.ts";
@@ -192,7 +193,7 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
     menu.element.parentElement?.dispatchEvent(
       new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT, { bubbles: true }),
     );
-    menu.getTextarea()?.focus({ preventScroll: true });
+    focusComposerInput(menu.getTextarea(), { preventScroll: true });
   }
 
   listen(ownerDocument, "pointerdown", dismissChatComposerPickersOutside, options);

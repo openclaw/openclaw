@@ -73,13 +73,19 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 32px;
-  padding: 6px 8px;
+  min-height: var(--menu-item-height);
+  padding: 4px 8px;
   border-radius: var(--menu-item-radius);
   font-size: calc(13px * var(--control-ui-text-scale));
   line-height: calc(1.25 / 0.875);
   color: var(--text);
   cursor: var(--cursor-action);
+}
+
+/* The model picker keeps its own rows, which carry a provider icon and detail. */
+.model-picker :is(.picker-select__option, .multi-select__option) {
+  min-height: 32px;
+  padding-block: 6px;
 }
 
 /* Windowed rows are absolute, so their gap comes from the virtualizer. */
@@ -271,7 +277,8 @@ openclaw-select-picker {
 
 .picker-select__options {
   min-height: 0;
-  overflow: auto;
+  /* Keep the same intrinsic gutter before and after filtering. */
+  overflow: auto scroll;
   outline: none;
 }
 
@@ -572,21 +579,6 @@ openclaw-select-picker {
   overscroll-behavior: contain;
 }
 
-.picker-select__menu--phone-sheet:has(.agent-select__menu-title) > .picker-select__page-header {
-  display: none;
-}
-
-.picker-select__menu--phone-sheet .agent-select__menu-title {
-  display: flex;
-  align-items: center;
-  min-height: 44px;
-  padding: 0 36px 0 0;
-  color: var(--text);
-  font-size: inherit;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
 @keyframes picker-sheet-in {
   from {
     transform: translateY(100%);
@@ -604,7 +596,8 @@ openclaw-select-picker {
   flex: 0 0 auto;
   width: max-content;
   height: 0;
-  overflow: hidden;
+  /* Match the real list without depending on asynchronous scroll-fade state. */
+  overflow: hidden scroll;
   visibility: hidden;
 }
 

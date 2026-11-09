@@ -12,6 +12,45 @@ afterEach(resetMentionComposerFixture);
 describe.each(["chat", "new-session"] as const)(
   "%s rich composer controller integration",
   (kind) => {
+    it.each(["@Bo", "@Bob "])(
+      "undoes and redoes the first person selected from %s",
+      async (query) => {
+        const f = composerFixture(kind, "", []);
+        vi.useRealTimers();
+        f.request.mockResolvedValue({
+          users: [{ profileId: "bob", displayName: "Bob", online: true }],
+          truncated: false,
+        });
+        const input = f.query("textarea") as HTMLTextAreaElement;
+        input.focus();
+        await userEvent.keyboard(query);
+        f.refresh();
+        await expect
+          .poll(() => document.querySelector('[role="option"]')?.textContent ?? "")
+          .toContain("Bob");
+        await userEvent.keyboard("{Enter}");
+        f.refresh();
+        await expect.poll(() => f.query('[data-composer-editor="true"]')).not.toBeNull();
+        focusComposerInput(input);
+        await userEvent.keyboard("{Control>}z{/Control}");
+        f.refresh();
+        expect(f.value()).toEqual({ draft: query, mentions: [] });
+        await userEvent.keyboard("{Control>}{Shift>}z{/Shift}{/Control}");
+        f.refresh();
+        expect(f.value()).toEqual({ draft: "@Bob ", mentions: [mention("bob", 0, 4)] });
+      },
+    );
+
+    it("does not turn a restored selected draft into a new undoable insertion", async () => {
+      const f = composerFixture(kind, "@Alex", [mention("alex-one", 0, 5)]);
+      vi.useRealTimers();
+      await expect.poll(() => f.query('[data-composer-editor="true"]')).not.toBeNull();
+      focusComposerInput(f.query("textarea") as HTMLTextAreaElement);
+      await userEvent.keyboard("{Control>}z{/Control}");
+      f.refresh();
+      expect(f.value()).toEqual({ draft: "@Alex", mentions: [mention("alex-one", 0, 5)] });
+    });
+
     it("pastes a recipient into a fresh native composer before the editor loads", async () => {
       const f = composerFixture(kind, "", []);
       vi.useRealTimers();

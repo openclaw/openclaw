@@ -111,11 +111,11 @@ enabled.define(() => {
         /\/assets\/unsupported-browser-[^/]+\.js$/u,
       );
       await page.goto(`${enabled.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
-      await page.getByRole("heading", { name: "Browser guidance could not load" }).waitFor();
+      await page.getByRole("heading", { name: "Browser guidance didn’t load" }).waitFor();
       await page.clock.runFor(30_000);
       expect(counts.recovery).toBe(0);
       expect(failure.documentCount()).toBe(1);
-      await page.getByRole("button", { name: "Try again", exact: true }).click();
+      await page.getByRole("button", { name: "Reload", exact: true }).click();
       await guidance(page).waitFor();
       expect(failure.documentCount()).toBe(2);
     }));

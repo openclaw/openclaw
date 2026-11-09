@@ -10,6 +10,7 @@ import {
   resolveRemoteEmbeddingClient,
   sanitizeEmbeddingCacheHeaders,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -162,7 +163,7 @@ export const clawrouterEmbeddingProvider: EmbeddingProviderAdapter = {
                   if (typeof init?.body !== "string") {
                     throw new Error("ClawRouter manifest embeddings require a JSON request body");
                   }
-                  return (client.fetchImpl ?? fetch)(input, {
+                  return (client.fetchImpl ?? fetchWithRuntimeDispatcherOrMockedGlobal)(input, {
                     ...init,
                     body: JSON.stringify({ body: JSON.parse(init.body) }),
                   });

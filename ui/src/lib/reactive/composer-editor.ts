@@ -14,7 +14,7 @@ export function createComposerEditorBinding() {
   const application = useOptionalApplication();
   let input: HTMLTextAreaElement | undefined;
   let composing = false;
-  let pasteHistory:
+  let entryHistory:
     | import("../../pages/chat/components/composer-editor-view.tsx").ComposerEditorSnapshot
     | undefined;
   let editor: { sync: () => void; destroy: () => void } | undefined;
@@ -35,8 +35,8 @@ export function createComposerEditorBinding() {
   }
   function activate() {
     if (input && !editor && !composing && mentions().length && mountEditor) {
-      editor = mountEditor(input, mentions, application, pasteHistory);
-      pasteHistory = undefined;
+      editor = mountEditor(input, mentions, application, entryHistory);
+      entryHistory = undefined;
     }
   }
   const loader = createIdleImport(
@@ -48,6 +48,26 @@ export function createComposerEditorBinding() {
   );
   return elementRef<HTMLTextAreaElement>((node) => {
     input = node;
+    let pasting = false;
+    const snapshot = () => ({
+      value: node.value,
+      mentions: mentions(),
+      selection: {
+        start: node.selectionStart,
+        end: node.selectionEnd,
+        direction: node.selectionDirection,
+      },
+    });
+    const stopFocus = listen(node, "focus", () => {
+      if (!editor && !composing && !mentions().length) {
+        entryHistory = snapshot();
+      }
+    });
+    const stopInput = listen(node, "input", () => {
+      if (!editor && !composing && !pasting) {
+        entryHistory = snapshot();
+      }
+    });
     // Solid owns the selected-range attribute; this foreign-DOM owner consumes
     // its committed changes without adding a second reactive state/effect.
     const observer = new MutationObserver(() => {
@@ -71,11 +91,7 @@ export function createComposerEditorBinding() {
       const start = node.selectionStart;
       const end = node.selectionEnd;
       const paste = prepareHumanMentionPaste(value, start, end, copied);
-      pasteHistory ??= {
-        value,
-        mentions: mentions(),
-        selection: { start, end, direction: node.selectionDirection },
-      };
+      entryHistory = snapshot();
       event.preventDefault();
       node.setRangeText(paste.text, start, end, "end");
       const restored = paste.mentions.map((mention) => ({
@@ -83,22 +99,30 @@ export function createComposerEditorBinding() {
         start: mention.start + start,
         end: mention.end + start,
       }));
-      withHumanMentionEdit(
-        node.value,
-        restored,
-        { value, start, end, inputType: "insertFromPaste" },
-        () => {
-          node.dispatchEvent(
-            new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: null }),
-          );
-        },
-      );
+      pasting = true;
+      try {
+        withHumanMentionEdit(
+          node.value,
+          { mode: "merge", mentions: restored },
+          { value, start, end, inputType: "insertFromPaste" },
+          () => {
+            node.dispatchEvent(
+              new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: null }),
+            );
+          },
+        );
+      } finally {
+        pasting = false;
+      }
     });
     const stopStart = listen(node, "compositionstart", () => {
       composing = true;
     });
     const stopEnd = listen(node, "compositionend", () => {
       composing = false;
+      if (!editor) {
+        entryHistory = snapshot();
+      }
       requestAnimationFrame(activate);
     });
     if (mentions().length) {
@@ -106,8 +130,10 @@ export function createComposerEditorBinding() {
     }
     return () => {
       input = undefined;
-      pasteHistory = undefined;
+      entryHistory = undefined;
       observer.disconnect();
+      stopFocus();
+      stopInput();
       stopPaste();
       stopStart();
       stopEnd();

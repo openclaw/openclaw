@@ -33,6 +33,58 @@ function runBash(root: string, script: string, env: NodeJS.ProcessEnv, shell = "
 const workflow = parse(fs.readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"));
 const frozenNotes = (version: string) => `## ${version}\n\n### Fixes\n\n- Frozen release fix.`;
 
+it.each(
+  ["attach_or_verify_release_asset", "replace_release_asset"].flatMap((operation) =>
+    ["current", "moved", "missing"].map((tagState) => ({ operation, tagState })),
+  ),
+)("allows $operation only for the current release tag ($tagState)", ({ operation, tagState }) => {
+  const root = createTempDir("release-publish-asset-tag-");
+  const mutations = join(root, "mutations");
+  const asset = join(root, "manifest.json");
+  fs.writeFileSync(asset, "{}");
+  const result = runBash(
+    root,
+    `
+source "$OWNER_SCRIPT"
+git() {
+  [[ "$TAG_STATE" != missing ]] || return 0
+  local commit="$TARGET_SHA"
+  [[ "$TAG_STATE" != moved ]] || commit="$MOVED_SHA"
+  printf '%s\\t%s\\n' "$commit" "refs/tags/$RELEASE_TAG"
+}
+gh() {
+  case "$1 $2" in
+    "release view") printf '{"assets":[]}\\n' ;;
+    "release upload") printf 'uploaded\\n' >> "$MUTATIONS" ;;
+    *) return 2 ;;
+  esac
+}
+"$OPERATION" "$ASSET" manifest.json
+`,
+    {
+      PATH: process.env.PATH,
+      OWNER_SCRIPT: resolve("scripts/lib/release-publish-children.sh"),
+      RELEASE_TAG: "v2026.11.2",
+      GITHUB_REPOSITORY: "fixture/repository",
+      TARGET_SHA: "a".repeat(40),
+      MOVED_SHA: "b".repeat(40),
+      OPERATION: operation,
+      TAG_STATE: tagState,
+      ASSET: asset,
+      MUTATIONS: mutations,
+    },
+    process.platform === "darwin" ? "/bin/bash" : "bash",
+  );
+  const current = tagState === "current";
+  expect(result.status, result.stderr).toBe(current ? 0 : 1);
+  expect(fs.existsSync(mutations)).toBe(current);
+  if (current) {
+    expect(fs.readFileSync(mutations, "utf8")).toBe("uploaded\n");
+  } else {
+    expect(result.stderr).toContain(tagState === "missing" ? "no longer exists" : "moved");
+  }
+});
+
 function publicationFixture(releaseVersion = "2026.9.4") {
   const root = fs.realpathSync(createTempDir("release-publish-historical-tooling-"));
   const io = files(root);

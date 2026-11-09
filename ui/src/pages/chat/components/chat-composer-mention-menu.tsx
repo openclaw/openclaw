@@ -1,12 +1,13 @@
 import { lazy, Repeat, Show } from "solid-js";
+import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { MAX_HUMAN_MENTIONS } from "../../../lib/chat/human-mentions.ts";
 import { focusComposerInput } from "../../../lib/composer-input.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import type { HumanMentionMenu, HumanMentionMenuHost } from "./chat-composer-mention-menu-state.ts";
-import { ComposerMenu, ComposerMenuLoadingRows } from "./chat-composer-menu.tsx";
 import "../../../styles/chat/mention-menu.css";
+import { ComposerMenu, ComposerMenuLoadingRows } from "./chat-composer-menu.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 const HumanMentionMenuOptions = lazy(() => import("./chat-composer-mention-menu-options.tsx"), {
@@ -47,8 +48,8 @@ export function HumanMentionMenuView(props: { args: [HumanMentionMenu, HumanMent
         revision={menu().state.search}
       >
         <div class="slash-menu-group" aria-busy={loading() ? "true" : "false"}>
-          <div class="slash-menu-group__label" role="status">
-            {message() ?? t("chat.mentions.menu")}
+          <div role="status">
+            <MenuHeading label={message() ?? t("chat.mentions.menu")} />
           </div>
           <Show when={error() === "unavailable" && !limited()}>
             <button
@@ -96,7 +97,7 @@ export function HumanMentionMenuView(props: { args: [HumanMentionMenu, HumanMent
             </Repeat>
           </Show>
           <Show when={result()?.truncated}>
-            <div class="slash-menu-group__label">{t("chat.mentions.truncated")}</div>
+            <MenuHeading label={t("chat.mentions.truncated")} />
           </Show>
         </div>
       </ComposerMenu>

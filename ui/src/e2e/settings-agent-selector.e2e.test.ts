@@ -152,7 +152,7 @@ suite.define(() => {
       });
       await page.locator(".agents-page-menu__trigger").click();
       await expect
-        .poll(() => page.getByRole("menuitem", { name: "Set Default", exact: true }).isEnabled())
+        .poll(() => page.getByRole("menuitem", { name: "Set default", exact: true }).isEnabled())
         .toBe(true);
       await page.keyboard.press("Escape");
       await expectSidebarPickerOnly(page);
