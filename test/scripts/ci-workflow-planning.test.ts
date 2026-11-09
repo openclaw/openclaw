@@ -268,6 +268,7 @@ describe("PostgreSQL conformance selection", () => {
     ].map((file): [string[], boolean] => [[file], true]),
     [["src/commands/doctor-database-port-migrations.ts"], true],
     [["src/infra/database-engine/matrix-roots.postgres.test.ts"], true],
+    [["src/infra/database-engine/pending-final-ack-loss.conformance.test.ts"], true],
     [["src/infra/database-engine/deleted.test.ts"], true],
     [["src/infra/database-engine/deleted.test.ts", "src/unrelated/renamed.test.ts"], true],
     [["src/infra/database-engine/unrelated.spec.ts"], false],
