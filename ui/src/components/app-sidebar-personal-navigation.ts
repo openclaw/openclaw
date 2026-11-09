@@ -12,6 +12,7 @@ import type {
   SessionListSnapshot,
 } from "../lib/sessions/session-capability.ts";
 import { readSessionChangedEvent } from "../lib/sessions/session-row-reconcile.ts";
+import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
 import { showToast } from "../lib/toast.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import { projectSidebarSessionReference } from "./app-sidebar-agent-session-rows.ts";
@@ -497,24 +498,31 @@ export function personalSidebarOwnerProjection(
 ) {
   const context = host.sessionDataContext;
   const self = context ? gatewayPresentationScope(context.gateway).displayUser : null;
+  const selectedOwnerId = host.sessionOwnerFilterId;
   return applySidebarSessionOwnerFilter({
     projected,
     ownerFacet,
-    selectedOwnerId: host.sessionOwnerFilterId,
-    selectedProfileId: host.sessionOwnerFilterId === self?.id ? self.id : undefined,
+    selectedOwnerId,
+    selectedProfileId: selectedOwnerId === self?.id ? self.id : undefined,
     self,
   });
 }
 
-/** Rendering and selection share archive visibility for personal references. */
+/** Rendering and selection share visibility for saved personal references. */
 export function sidebarPinnedSessionRows(
   zone: SidebarPinZone,
   archiveVisibility?: ApplicationContext["sessions"]["archiveVisibility"],
+  now = Date.now(),
 ): SidebarRecentSession[] {
   return zone.entries.flatMap((entry) => {
     const row =
       entry.type === "session" && !entry.rail ? zone.sessionRows.get(entry.key) : undefined;
-    return row && row.archived !== true && !archiveVisibility?.(row.key) ? [row] : [];
+    return row &&
+      row.archived !== true &&
+      !archiveVisibility?.(row.key) &&
+      !isSessionSnoozed(row, now)
+      ? [row]
+      : [];
   });
 }
 

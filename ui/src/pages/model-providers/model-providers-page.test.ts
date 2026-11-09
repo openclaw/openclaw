@@ -107,6 +107,22 @@ describe("ModelProvidersPage agent scope", () => {
     expect(context.navigate).toHaveBeenCalledExactlyOnceWith("usage");
   });
 
+  it("opens a requested connection after an empty preload stops pending", async () => {
+    const { context } = createHarness("main");
+    const page = createPage(context);
+    page.routeData = { ...createEmptyModelProvidersRouteData(context), connect: true };
+    page.loaderPending = true;
+    mountPage(page);
+    await page.updateComplete;
+    expect(page.querySelector("[data-models-login-discover]")).toBeNull();
+
+    page.loaderPending = false;
+
+    await waitForSolid(() =>
+      expect(page.querySelector("[data-models-login-discover]")).not.toBeNull(),
+    );
+  });
+
   it("does not readopt an old route snapshot when only loader pending changes", async () => {
     const { context, request } = createHarness("main");
     const page = appendPage(context);
@@ -495,7 +511,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.view.props.keyEditorProvider).toBeNull();
     expect(page.view.props.messages.openai).toEqual({
       kind: "success",
-      text: "API key saved.",
+      text: "API key saved and verified.",
       warning: "Authentication refresh failed. Provider refresh failed.",
     });
     await page.updateComplete;
@@ -563,27 +579,34 @@ describe("ModelProvidersPage agent scope", () => {
     const form = page.querySelector("[data-models-key-dialog]");
     expect(
       [...form!.querySelectorAll('[role="status"]')].map((message) => message.textContent?.trim()),
-    ).toEqual(["Added anthropic", "config.get failed after provider add"]);
+    ).toEqual(["Added anthropic. Access verified.", "config.get failed after provider add"]);
   });
 
   it.each([
     ["another provider fails", "ready", undefined],
+    ["the added provider is pending", "pending", undefined],
     ["the added provider fails", "unavailable", "Couldn’t load more models. Try again."],
+    ["the catalog request fails", "request-failed", "Catalog request failed."],
   ] as const)("provider-add feedback warns only when %s", async (_case, ownStatus, warning) => {
     const { context, runtimeConfig, request } = createHarness("main");
     const originalRequest = request.getMockImplementation()!;
-    request.mockImplementation(async (method) =>
-      method === "models.list"
-        ? {
-            models: [],
-            refreshFailed: true,
-            providerOutcomes: [
-              { provider: "anthropic", status: ownStatus },
-              { provider: "ollama", status: "unavailable" },
-            ],
-          }
-        : originalRequest(method),
-    );
+    request.mockImplementation(async (method) => {
+      if (method === "models.list") {
+        if (ownStatus === "request-failed") {
+          throw new Error("Catalog request failed.");
+        }
+        return {
+          models: [],
+          refreshFailed: true,
+          pendingProviders: ownStatus === "pending" ? ["anthropic"] : [],
+          providerOutcomes: [
+            ...(ownStatus === "pending" ? [] : [{ provider: "anthropic", status: ownStatus }]),
+            { provider: "ollama", status: "unavailable" },
+          ],
+        };
+      }
+      return originalRequest(method);
+    });
     const page = appendPage(context);
     await waitForProviders(page);
     await openApiKeyProvider(page, "anthropic");
@@ -595,9 +618,10 @@ describe("ModelProvidersPage agent scope", () => {
 
     expect(page.view.props.messages.add).toEqual({
       kind: "success",
-      text: "Added anthropic",
+      text: "Added anthropic. Access verified.",
       ...(warning ? { warning } : {}),
     });
+    expect(page.view.props.addProviderOpen).toBe(Boolean(warning));
   });
 
   it("keeps a newer global-model draft after an agent switch and earlier save", async () => {

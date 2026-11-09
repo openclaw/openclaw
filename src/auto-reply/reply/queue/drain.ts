@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { appendCurrentInboundContext } from "../../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { compareChannelAdmissionParticipants } from "../../../channels/message-access/admission-evidence.js";
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
+import { PluginInstanceUnavailableError } from "../../../plugins/plugin-instance-error.js";
 import {
   getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
@@ -28,6 +30,7 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../../state/agent-database-admission-error.js";
 import { buildCollectPrompt, previewQueueSummaryPrompt } from "../../../utils/queue-helpers.js";
+import { attachAmbientOverflowContext } from "./ambient-context.js";
 import {
   collectCurrentInboundContext,
   collectRuntimeMetadata,
@@ -200,6 +203,7 @@ async function executeClaim(
     }
   };
   for (const item of sources) {
+    attachAmbientOverflowContext(item);
     if (claim.summary) {
       queue.activeSummarySources.add(item);
     }
@@ -276,6 +280,8 @@ async function executeClaim(
   }
   let adoptionRefused = false;
   let waitForFreshKick = false;
+  let pluginUnavailable = false;
+  let executionFailed = false;
   try {
     if (admissionSessionRebind && run.run.sessionId === admissionSessionRebind.from) {
       run = { ...run, admissionSessionId: admissionSessionRebind.to };
@@ -284,6 +290,27 @@ async function executeClaim(
       (source.controllerInput && followupSourceRunners.get(source.controllerInput)) ?? execute;
     await runFollowup(run);
   } catch (error) {
+    executionFailed = true;
+    if (claim.retryBeforeExecution && error instanceof PluginInstanceUnavailableError) {
+      pluginUnavailable = !error.replacement;
+      if (error.replacement) {
+        // Keep FIFO custody until replacement or rollback, but let channel stop
+        // return the unexecuted source to ingress before disposing its instance.
+        const signal = AbortSignal.any([
+          claim.abortController.signal,
+          generation.signal,
+          getGatewayRestartDrainSignal(),
+          ...(cancellation.signal ? [cancellation.signal] : []),
+        ]);
+        try {
+          await racePromiseWithAbortSignal(error.replacement, signal);
+        } catch (waitError) {
+          if (!signal.aborted) {
+            throw waitError;
+          }
+        }
+      }
+    }
     updateFollowupRetryHeartbeats(error, sources);
     adoptionRefused = sources.some((item) => {
       const custody = item.controllerInput?.custody;
@@ -301,25 +328,33 @@ async function executeClaim(
       error instanceof AgentDatabaseExecutionAdmissionClosedError;
     defaultRuntime.error?.("mailbox execution failed for " + queue.key + ": " + String(error));
   } finally {
-    // Only the execution producer can return an explicit pre-execution refusal.
-    // Generic throws/returns and the operation's broader preparation marker never
-    // grant or revoke replayability; the producer-local receipt is authoritative.
+    // Only a producer receipt retries within this mailbox. An escaped runner error
+    // instead abandons unadopted lifecycle-backed input for durable ingress replay.
     const preparationRefused = claim.retryBeforeExecution === true;
-    const retrySources = claim.retryBeforeExecution
-      ? sources.filter((item) => {
-          try {
-            item.operatorAuthority?.assertCurrent();
-          } catch {
-            return false;
-          }
-          return (
-            !isFollowupRunAborted(item) &&
-            !item.controllerInput?.retirementRequested &&
-            (!adoptionRefused || !item.controllerInput?.custody.adopted) &&
-            !item.controllerInput?.custody.completed
-          );
-        })
-      : [];
+    if (preparationRefused && !pluginUnavailable) {
+      // Every retry yields so failed preparation cannot starve reload or cancellation.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 250).unref?.();
+      });
+    }
+    // An unavailable owner without a replacement cannot recover in this drain.
+    // Preserve the preparation refusal so its source records abandonment.
+    const retrySources =
+      claim.retryBeforeExecution && !pluginUnavailable
+        ? sources.filter((item) => {
+            try {
+              item.operatorAuthority?.assertCurrent();
+            } catch {
+              return false;
+            }
+            return (
+              !isFollowupRunAborted(item) &&
+              !item.controllerInput?.retirementRequested &&
+              (!adoptionRefused || !item.controllerInput?.custody.adopted) &&
+              !item.controllerInput?.custody.completed
+            );
+          })
+        : [];
     if (!retrySources.length) {
       claim.retryBeforeExecution = false;
     }
@@ -350,7 +385,12 @@ async function executeClaim(
         continue;
       }
       try {
-        completeFollowupRunLifecycle(item, preparationRefused ? undefined : "consumed");
+        completeFollowupRunLifecycle(
+          item,
+          preparationRefused || (executionFailed && item.turnAdoptionLifecycle)
+            ? undefined
+            : "consumed",
+        );
       } catch (error) {
         defaultRuntime.error?.("mailbox custody settlement failed: " + String(error));
       }

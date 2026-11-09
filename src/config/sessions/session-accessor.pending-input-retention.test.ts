@@ -1,5 +1,4 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
@@ -7,6 +6,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { forceFullGc } from "../../test-utils/retention.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
 import {
@@ -32,7 +32,7 @@ const message = (runId: string): PersistedUserTurnMessage => ({
 async function collectReleasedTargetForTest(): Promise<void> {
   for (let pass = 0; pass < 4; pass += 1) {
     await nextTurn();
-    queryObjects(WeakRef);
+    forceFullGc();
   }
   await nextTurn();
 }

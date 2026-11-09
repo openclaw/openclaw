@@ -34,7 +34,7 @@ const closedEntryPaths = {
   "sqlite-session": "dist/infra/sqlite-readonly-location.worker.js",
   "finalizer-check": "dist/infra/update-migrated-finalize.worker.js",
 };
-const currentProbeSha256 = "cdd22785b67a4371d10fe8a3152a8ae370507691f3e52bfb76c32cf83e03d0f4";
+const currentProbeSha256 = "8700a6c51bb2bd0040ec85d263d81ab1fd34057fa290290d568187ed945da1dc";
 // Fixed 2026.10.9/SRI fixture: runtime-paths-CNOx8gw6 + node-sqlite-C2ThNhQ8
 // emit this exact Node -e script. Its no-op selector and memory probe join locally.
 const publishedProbeSha256 = "954fe0502bbd8beb9de99ca78dced72c87b9a8ebd6110dd62fc25ee19eeb61ce";
@@ -53,7 +53,7 @@ const publishedWorkerRoots = {
 const publishedSqliteWorkerSha256 =
   "59e299b2d4e33c5cc0aef06eb87fc986906d69cae24d2f72daa0f179da75a322";
 const publishedProgressSha256 = "3f74e8b47c704a23722b1d6d444bfc189b15b36c88314a7e92d1943bcbc284c0";
-const reviewedRevision = "aedae9dc410202f22504c6183823fd411699f723";
+const reviewedRevision = "7ef902d3b4126b2f1f5d58aaad3d1340b1e0315d";
 const publishedRevision = "8b18b5578f66eab1501cba4cef2310d88bfb9a41";
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const workerUrlDescriptors = Object.getOwnPropertyDescriptors(URL.prototype);
@@ -252,10 +252,11 @@ function publishedWorkerOptions(data) {
 }
 
 function isolatedWorkerRole(launch, role) {
-  const allowed =
+  const allowed = new Set(
     role === "heartbeat"
       ? ["eval", "env", "execArgv", "workerData", "transferList", "stdout", "stderr"]
-      : ["eval", "env", "execArgv", "workerData"];
+      : ["eval", "env", "execArgv", "workerData"],
+  );
   return (
     launch?.environment === "empty" &&
     Array.isArray(launch.execArgv) &&
@@ -264,7 +265,7 @@ function isolatedWorkerRole(launch, role) {
     Array.isArray(launch.keys) &&
     launch.keys.includes("env") &&
     launch.keys.includes("execArgv") &&
-    launch.keys.every((key) => allowed.includes(key))
+    launch.keys.every((key) => allowed.has(key))
   );
 }
 
@@ -1480,6 +1481,13 @@ function readIsolates(directory) {
 // exit code or an earlier death; the reader keeps these processes' full traces.
 export function captureInstalledTerminalProcessAbsence(directory) {
   assert.equal(process.platform, "linux");
+  // Receipts must share the observed Node processes' monotonic clock;
+  // Bun's process-origin timer cannot bound those events.
+  assert.equal(
+    process.versions.bun,
+    undefined,
+    "Kernel absence capture requires the Node monotonic clock",
+  );
   const rows = readIsolates(directory).isolates.flat();
   const missing = rows.filter(
     (row) =>

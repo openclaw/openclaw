@@ -92,9 +92,7 @@ suite.define(() => {
         const previous = (await gateway.getRequests("sessions.usage")).length;
         const trigger = page.locator('[id="usage-filter-provider:trigger"]');
         await trigger.click();
-        await page
-          .locator('[id="usage-filter-provider:content"] [data-value="option:openai"]')
-          .click();
+        await page.getByRole("menuitemcheckbox", { name: "openai", exact: true }).click();
         await gateway.waitForRequest("sessions.usage", { after: previous });
         await expect.poll(() => rows.allTextContents()).toEqual(["Team Planning"]);
         await trigger.click();
@@ -230,9 +228,7 @@ suite.define(() => {
 
         const trigger = page.locator('[id="usage-filter-model:trigger"]');
         await trigger.click();
-        const option = page.locator(
-          '[id="usage-filter-model:content"] [data-value="option:Local%20Model"]',
-        );
+        const option = page.getByRole("menuitemcheckbox", { name: "Local Model", exact: true });
         await option.click();
         await expect.poll(() => option.getAttribute("aria-checked")).toBe("true");
         await trigger.click();

@@ -37,6 +37,10 @@ export const PluginRuntimeExecutionFrame: {
         return this.gatewayScope?.pluginId;
       }
 
+      override get canUseInteractiveStateReadCapacity(): boolean {
+        return this.gatewayScope?.canUseInteractiveStateReadCapacity?.() === true;
+      }
+
       override withScopes(scopes: PluginExecutionScopes): RuntimeFrame {
         return new RuntimeFrame(scopes, this.gatewayScope, this.generationRegistry);
       }

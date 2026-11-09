@@ -31,8 +31,11 @@
 }
 
 .dashboards-loading .dashboard-preview {
-  border-radius: 0;
   background: var(--skeleton-base, var(--bg-muted));
+}
+
+.dashboards-loading .dashboard-card__meta .skeleton-line {
+  width: 50%;
 }
 
 .dashboards-loading__label {
@@ -41,7 +44,7 @@
 }
 
 .dashboards-loading__title {
-  height: 1.3em;
+  height: 14px;
 }
 
 .dashboards-toolbar {
@@ -150,14 +153,10 @@
 }
 
 .dashboards-grid__item > .dashboard-card {
-  height: 100%;
-}
-
-.dashboard-card {
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--card);
   transition:
     border-color var(--duration-fast) ease,
@@ -173,24 +172,40 @@
 
 .dashboard-card__main {
   display: block;
+  padding: var(--space-2);
   color: inherit;
 }
 
 .dashboard-card__main:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+  border-radius: inherit;
 }
 
+/* The well frames the dashboard as a sheet; its lower edge runs off the well. */
 .dashboard-preview {
   position: relative;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 16 / 10;
   overflow: hidden;
-  border-bottom: 1px solid transparent;
-  background: var(--bg);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklab, var(--text) 6%, var(--card));
   pointer-events: none;
 }
 
-.dashboard-preview > openclaw-dashboard-preview,
+.dashboard-preview__sheet {
+  position: absolute;
+  inset-inline: 8%;
+  top: 10%;
+  aspect-ratio: 860 / 600;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--text) 9%, transparent),
+    0 2px 8px rgb(0 0 0 / 0.07);
+}
+
+.dashboard-preview__sheet > openclaw-dashboard-preview,
 .dashboard-preview openclaw-board-document {
   position: absolute;
   inset: 0;
@@ -242,74 +257,94 @@
 }
 
 .dashboard-card__body {
-  padding: var(--space-4);
+  padding: var(--space-3) 10px 6px;
 }
 
-.dashboard-card__heading,
-.dashboard-card__footer {
+/* Titles never ellipsize: they fade, and loop on card hover when they overflow. */
+.dashboard-card__heading {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
+  gap: 10px;
+  min-width: 0;
 }
 
 .dashboard-card__heading h2 {
+  flex: 1 1 auto;
   min-width: 0;
   margin: 0;
-  overflow: hidden;
   color: var(--text-strong);
-  font-size: var(--control-ui-text-md);
-  font-weight: 650;
-  letter-spacing: -0.02em;
-  line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: calc(15px * var(--control-ui-text-scale));
+  font-weight: var(--control-ui-font-weight-semibold);
+  letter-spacing: -0.01em;
+  line-height: 22px;
 }
 
-.dashboard-card__heading .settings-status {
+.dashboard-card .dashboard-card__title,
+.dashboard-card .dashboard-card__author-name {
+  --hover-marquee-fade-width: 24px;
+
+  display: block;
+  min-width: 0;
+}
+
+.dashboard-card__status {
+  display: inline-flex;
   flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.dashboard-card__status > .session-run-spinner {
+  width: 14px;
+  height: 14px;
+}
+
+.dashboard-card__meta {
+  display: flex;
+  align-items: center;
+  height: 20px;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .dashboard-card__author {
   display: flex;
+  flex: 0 1 auto;
   align-items: center;
-  gap: var(--space-2);
-  margin-top: var(--space-3);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  gap: 7px;
+  min-width: 0;
 }
 
-.dashboard-card__avatar {
-  display: inline-grid;
-  width: 22px;
-  height: 22px;
-  flex: none;
-  place-items: center;
-  border: 1px solid transparent;
-  border-radius: 50%;
-  color: var(--text);
-  background: var(--bg-hover);
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.dashboard-card__footer {
-  min-height: 42px;
-  padding: 0 var(--space-4);
-  border-top: 1px solid transparent;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-}
-
-.dashboard-card__open {
+.dashboard-card__author > openclaw-session-owner-chip {
   display: inline-flex;
-  width: 14px;
-  transition: transform var(--duration-fast) ease;
+  flex: none;
 }
 
-.dashboard-card:hover .dashboard-card__open {
-  color: var(--text-strong);
-  transform: translate(2px, -2px);
+.dashboard-card__author .session-owner-chip {
+  width: 16px;
+  height: 16px;
+  border: 0;
+  box-shadow: none;
+  font-size: 7px;
+  font-weight: 600;
+}
+
+/* The update time never clips; the author gives way first. */
+.dashboard-card__updated {
+  flex: none;
+  margin-inline-start: auto;
+  padding-inline-start: 14px;
+  white-space: nowrap;
+}
+
+.dashboard-card__updated-label {
+  color: var(--text-tertiary);
+}
+
+.dashboard-card__updated-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .dashboards-no-results {
@@ -388,22 +423,6 @@
     width: 14px;
     height: 14px;
   }
-
-  /* One meta row: author from the body, then the footer's update time and open arrow. */
-  .dashboard-card__main,
-  .dashboards-loading .dashboard-card {
-    display: grid;
-    grid-template-columns: minmax(0, max-content) minmax(max-content, 1fr);
-    gap: var(--space-2);
-    align-items: center;
-    padding-bottom: var(--space-3);
-  }
-  .dashboard-preview {
-    grid-column: 1 / -1;
-    height: 176px;
-    aspect-ratio: auto;
-    contain: inline-size;
-  }
   /* The preview is inert and the card already names it, so its widgets drop the title bar. */
   .dashboard-preview .board-widget {
     grid-template-rows: minmax(0, 1fr);
@@ -411,53 +430,5 @@
   .dashboard-preview .board-widget__chrome,
   .dashboard-preview .board-widget__grant-dot {
     display: none;
-  }
-  .dashboard-card__body {
-    display: contents;
-  }
-  /* Full-width rows must not size the meta row's columns. */
-  .dashboard-card__heading,
-  .dashboards-loading__title {
-    grid-column: 1 / -1;
-    margin: var(--space-1) var(--space-3) 0;
-    contain: inline-size;
-  }
-  .dashboard-card__author {
-    min-width: 0;
-    margin: 0;
-    padding-inline-start: var(--space-3);
-    line-height: 22px;
-  }
-  .dashboard-card__author > span:last-child {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .dashboard-card__footer {
-    min-height: 0;
-    padding: 0 var(--space-3) 0 0;
-    border-top: 0;
-    line-height: 22px;
-    white-space: nowrap;
-  }
-  .dashboard-card__footer > span:first-child {
-    margin-inline-end: auto;
-  }
-  .dashboard-card__footer > span:first-child::before {
-    margin-inline-end: var(--space-2);
-    content: "\00b7";
-  }
-  .dashboard-card__open,
-  .dashboard-card__open svg {
-    flex: none;
-    width: 14px;
-    height: 14px;
-  }
-  .dashboards-loading .dashboard-card__author .skeleton-line {
-    width: 64px;
-  }
-  .dashboards-loading .dashboard-card__footer .skeleton-line {
-    width: 112px;
   }
 }

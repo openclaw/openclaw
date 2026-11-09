@@ -22,7 +22,7 @@ function readInput(file) {
   return bytes;
 }
 
-export function installedTerminalNpmOwner(cli) {
+function installedTerminalNpmOwner(cli) {
   const actual = fs.realpathSync(cli);
   const root = path.dirname(path.dirname(actual));
   assert.equal(actual, path.join(root, "bin/npm-cli.js"));
@@ -210,13 +210,7 @@ export async function extractInstalledTerminalCachedPackage({
 }
 
 /** Run only after install joins, before initialize; no selected package is executed. */
-export async function attestInstalledTerminalDependencies({
-  root,
-  npmCli,
-  cache,
-  scratch,
-  reference,
-}) {
+async function attestInstalledTerminalDependencies({ root, npmCli, cache, scratch, reference }) {
   const owner = installedTerminalNpmOwner(npmCli);
   const require = createRequire(owner.cli);
   const Arborist = require("@npmcli/arborist");

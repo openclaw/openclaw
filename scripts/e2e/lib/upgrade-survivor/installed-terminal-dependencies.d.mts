@@ -11,11 +11,6 @@ export type InstalledTerminalDependencyEdge = {
   to: string | null;
   optionalAbsent: boolean;
 };
-export function installedTerminalNpmOwner(cli: string): {
-  cli: string;
-  version: string;
-  sha256: string;
-};
 export function extractInstalledTerminalCachedPackage(options: {
   npmCli: string;
   cache: string;
@@ -39,21 +34,3 @@ export function inspectInstalledTerminalDependencyNodes(
   selected: Map<string, unknown>;
   bins: Map<string, string[]>;
 };
-export function attestInstalledTerminalDependencies(options: {
-  root: string;
-  npmCli: string;
-  cache: string;
-  scratch: string;
-  reference: InstalledTerminalDependencyReference;
-}): Promise<{
-  npm: ReturnType<typeof installedTerminalNpmOwner>;
-  packages: Array<{
-    key: string;
-    location: string;
-    integrity: string;
-    entries: number;
-    contentSha256: string;
-  }>;
-  edges: InstalledTerminalDependencyEdge[];
-  tree: { identity: string; entries: number; sha256: string };
-}>;

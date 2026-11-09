@@ -49,7 +49,7 @@ const currentRoots = [
 const historicalRoots = ["@openclaw/fs-safe", "chalk", "json5", "koffi"];
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 
-export function prepareInstalledTerminalDependencyReference(role: "current" | "historical") {
+function prepareInstalledTerminalDependencyReference(role: "current" | "historical") {
   const source = fs.realpathSync(
     process.env.OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT ||
       fileURLToPath(new URL("../../../../", import.meta.url)),
@@ -94,7 +94,7 @@ export function prepareInstalledTerminalDependencyReference(role: "current" | "h
   const overrides = readNpmLockOverrides(selected, source);
   const normalized = packageJsonForNpmLock(selected, overrides);
   const requiredPackages = {
-    "@openclaw/fs-safe-linux-x64-gnu": role === "current" ? "0.27.0" : "0.26.0",
+    "@openclaw/fs-safe-linux-x64-gnu": role === "current" ? "0.27.1" : "0.26.0",
   };
   // Bind the reviewed allowed resolved closure, not unrelated workspace rules
   // or pnpm placement. Actual npm edges and content qualify each installation.

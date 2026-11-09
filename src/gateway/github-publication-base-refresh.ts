@@ -54,6 +54,7 @@ type VerifiedWorkspaceSource = {
   commit: string;
   githubHost: string;
   resuming: boolean;
+  verify: () => Promise<void>;
   accept: () => Promise<void>;
 };
 
@@ -283,7 +284,7 @@ export async function integrateManagedWorkspaceSource(
                 GIT_CONFIG_SYSTEM: gitNullConfigPath(),
               },
               `The selected repository base contents could not be fetched; retry ${action}.`,
-              { contents: true, commitPresent },
+              { contents: true, commitPresent, baseBranch: target.baseBranch },
             );
           await prepareContents(baseCommit, continuingIntegration);
           if (initialImport && !recoveredImport) {
@@ -325,6 +326,7 @@ export async function integrateManagedWorkspaceSource(
                   GIT_CONFIG_SYSTEM: gitNullConfigPath(),
                 },
                 `The selected PR base ancestry could not be fetched; retry ${action}.`,
+                { baseBranch: target.baseBranch },
               );
               const fromBase = await probe([
                 "merge-base",
@@ -363,6 +365,7 @@ export async function integrateManagedWorkspaceSource(
                     GIT_CONFIG_SYSTEM: gitNullConfigPath(),
                   },
                   `The current repository base ancestry could not be fetched; retry ${action}.`,
+                  { baseBranch: source.projectBase.branch },
                 );
                 const fromPublishedBase = await probe([
                   "merge-base",
@@ -432,14 +435,15 @@ export async function integrateManagedWorkspaceSource(
               }
             }
           }
-          // Do not reserve a source that cannot be integrated or whose ancestry is unavailable.
-          await integrationSource?.accept();
+          await integrationSource?.verify();
           check();
           if (!continuingIntegration) {
             await state.synchronize("canonical");
             await state.synchronize("projection");
             const ancestor = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
             if (ancestor.code === 0 && (!initialImport || initialHead === baseCommit)) {
+              await integrationSource?.accept();
+              check();
               return {
                 status: "current",
                 repository: target.repository,
@@ -475,6 +479,8 @@ export async function integrateManagedWorkspaceSource(
           }
           const integrated = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
           if (integrated.code === 0 && (!initialImport || initialHead === baseCommit)) {
+            await integrationSource?.accept();
+            check();
             // A native commit may have moved HEAD before its merge-state cleanup completed.
             await git(["merge", "--quit"]);
             return {
@@ -572,6 +578,10 @@ export async function integrateManagedWorkspaceSource(
             } finally {
               await fs.rm(temporary, { recursive: true, force: true });
             }
+            // Reserve only an admitted payload. A rejected source must not pin retries
+            // to its old PR head after the author removes generated output.
+            await integrationSource?.accept();
+            check();
             // The retained source payload precedes native merge state and all file effects.
             if (!baseCommit || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(baseCommit)) {
               throw new Error("Invalid pending base commit.");
@@ -591,6 +601,8 @@ export async function integrateManagedWorkspaceSource(
             await state.applyBaseRefresh(stagedRef);
             await git(["read-tree", tree]);
           } else {
+            await integrationSource?.accept();
+            check();
             await state.synchronize("canonical");
           }
           if (conflictPaths.length && !params.conflictsResolved) {
@@ -673,7 +685,7 @@ export async function integrateManagedWorkspaceSource(
         GIT_CONFIG_SYSTEM: gitNullConfigPath(),
       },
       reviewPreparationError,
-      { contents: true },
+      { contents: true, baseBranch: target.baseBranch },
     );
     // Importing an older PR head does not merge the current base tip into its files.
     // Review its changes from their common ancestor, not as deletions of newer base work.
@@ -713,6 +725,7 @@ export async function integrateManagedWorkspaceSource(
   });
   if (params.source?.reviewOnly) {
     // Keep the old binding retryable until its new comparison is installed.
+    await params.source.verify();
     await params.source.accept();
   }
   return { ...result, review };

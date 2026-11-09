@@ -63,6 +63,7 @@ struct ChatJumpToLatestSlot<Content: View>: View {
 
 struct ChatScrollCommand {
     struct Request: Equatable {
+        // periphery:ignore - Synthesized Equatable keeps identical scroll requests distinct.
         let id = UUID()
         let targetID: UUID
         let anchor: UnitPoint

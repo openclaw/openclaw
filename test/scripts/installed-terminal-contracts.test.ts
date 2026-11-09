@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, assert, expect, it } from "vitest";
 import { stableStringify } from "../../packages/normalization-core/src/stable-stringify.js";
 import { capturePackageTree } from "../../scripts/e2e/lib/upgrade-survivor/installed-recovery-observations.mjs";
 import {
@@ -73,7 +73,9 @@ it("extracts exact cached content without packuments and refuses wrong, missing 
     (row) => row.kind === "file" && row.path.startsWith(`content-v2${path.sep}`),
   );
   expect(cached).toHaveLength(1);
-  fs.writeFileSync(path.join(contentCache, cached[0].path), Buffer.alloc(bytes.length));
+  const cachedFile = cached[0];
+  assert.isDefined(cachedFile);
+  fs.writeFileSync(path.join(contentCache, cachedFile.path), Buffer.alloc(bytes.length));
   await expect(extract("corrupt")).rejects.toThrow("Canonical package SRI changed");
   expect(fs.existsSync(path.join(root, "corrupt/package"))).toBe(false);
 });
@@ -145,7 +147,7 @@ it("rejects a freshly self-certified application closure", () => {
       {
         roles: {
           "sqlite-session": {
-            sha256: "4f98f670025bac6c3991bdad503319724b7ae10a6518d5ebd7c0b4366e35ee63",
+            sha256: "929c3976791a8deb2e3942663d8f90f2cdf1c97f6bbeb2c8dc15e16dc30764c5",
             files: [],
           },
         },
@@ -324,7 +326,7 @@ it("refuses swapped npm bin targets even when both executables belong to the pac
   for (const [key, target] of [
     ["foo", "other.js"],
     ["bar", "index.js"],
-  ]) {
+  ] as const) {
     const link = path.join(fixture.modules, ".bin", key);
     fs.unlinkSync(link);
     fs.symlinkSync(`../demo/${target}`, link);
