@@ -18,60 +18,37 @@ import {
   latest,
   onSettled,
 } from "solid-js";
-import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
-import { renderSessionOwnerChip } from "../../components/solid/session-presentation.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerDashboardsEnglish } from "../../i18n/locales/en-dashboards.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import type { SessionCreatedActor } from "../../lib/session-owner.ts";
-import {
-  isSessionKeyAddressable,
-  sessionNavigationTarget,
-} from "../../lib/sessions/route-navigation.ts";
-import { HoverMarquee } from "../../lib/solid/hover-marquee.tsx";
 import "../../styles/dashboards.css";
-import { DashboardPreview } from "./dashboard-preview.tsx";
+import { DashboardDisplayMenu } from "./dashboard-display-menu.tsx";
+import {
+  DashboardEntry,
+  dashboardAuthor,
+  dashboardGroups,
+  type DashboardRow,
+} from "./dashboard-entry.tsx";
 import {
   DashboardAuthorChip,
   DashboardAuthorFilter,
   DashboardSearch,
-  authorDisplayName,
   type DashboardAuthorOption,
 } from "./dashboard-tools.tsx";
-import type { DashboardGalleryFilters, DashboardGalleryHandlers } from "./gallery-filters.ts";
+import type {
+  DashboardGalleryFilters,
+  DashboardGalleryHandlers,
+  DashboardsRouteData,
+} from "./gallery-filters.ts";
 
 registerDashboardsEnglish();
-
-export type DashboardsRouteData = {
-  result: SessionsListResult | null;
-  error: string | null;
-  basePath: string;
-  fallbackAgentId: string;
-  mainKey: string;
-  globalScope: boolean;
-};
-
-type DashboardRow = SessionsListResult["sessions"][number];
-
-function dashboardAuthor(row: DashboardRow, fallbackAgentId: string) {
-  const actor = row.createdActor ?? row.owner?.actor;
-  const id = actor?.id?.trim() || row.agentId?.trim() || fallbackAgentId;
-  const label = actor?.label?.trim() || id;
-  // Without an actor id the author is the session's agent, drawn with its agent avatar.
-  const avatar: SessionCreatedActor = actor?.id?.trim()
-    ? actor
-    : { type: "agent", id, label, identity: { type: "agent", id } };
-  return { id, label, avatar };
-}
 
 function dashboardAuthors(data: DashboardsRouteData): DashboardAuthorOption[] {
   const authors = new Map<string, DashboardAuthorOption>();
@@ -110,170 +87,92 @@ function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalle
     );
 }
 
-// Native Tab enters at either endpoint, then the neighboring track is ready.
-function pinnedTracks(rowCount: number, columns: number, focusedIndex: number | undefined) {
-  const count = Math.ceil(rowCount / columns);
-  const pinned = new Set([0, count - 1]);
-  if (focusedIndex !== undefined) {
-    const track = Math.floor(focusedIndex / columns);
-    for (const index of [track - 1, track, track + 1]) {
-      if (index >= 0 && index < count) {
-        pinned.add(index);
-      }
-    }
-  }
-  return pinned;
-}
-
 function DashboardGrid(props: {
   data: DashboardsRouteData;
-  rows: DashboardRow[];
+  groups: ReturnType<typeof dashboardGroups>;
+  view: DashboardGalleryFilters["view"];
   handlers: DashboardGalleryHandlers;
   gatewaySnapshot?: ApplicationGatewaySnapshot;
 }) {
-  function DashboardCard(childProps: {
-    row: DashboardRow;
-    contentRef: (element: HTMLElement) => void;
-  }) {
-    const target = createMemo(() =>
-      isSessionKeyAddressable(childProps.row.key, props.data.globalScope)
-        ? sessionNavigationTarget({
-            face: "dashboard",
-            sessionKey: childProps.row.key,
-            fallbackAgentId:
-              childProps.row.key === "global"
-                ? childProps.row.agentId?.trim() || props.data.fallbackAgentId
-                : props.data.fallbackAgentId,
-            basePath: props.data.basePath,
-            row: childProps.row,
-            mainKey: props.data.mainKey,
-          })
-        : null,
-    );
-    const author = () => dashboardAuthor(childProps.row, props.data.fallbackAgentId);
-    const authorName = () => authorDisplayName(author(), props.gatewaySnapshot?.selfUser?.id);
-    const title = createMemo(() => resolveSessionDisplayName(childProps.row.key, childProps.row));
-    let card!: HTMLElement;
-    const Content = () => (
-      <>
-        <div class="dashboard-preview" aria-hidden="true" inert>
-          <div class="dashboard-preview__sheet">
-            <DashboardPreview
-              gatewaySnapshot={props.gatewaySnapshot}
-              sessionKey={childProps.row.key}
-              agentId={childProps.row.agentId}
-            />
-          </div>
-        </div>
-        <div class="dashboard-card__body">
-          <div class="dashboard-card__heading">
-            <h2>
-              <HoverMarquee
-                content={title()}
-                class="dashboard-card__title"
-                options={{ loop: true, host: () => card }}
-              />
-            </h2>
-            {/* Reserved even while idle, so a run starting never shifts the title. */}
-            <span class="dashboard-card__status">
-              <Show when={childProps.row.status === "running"}>
-                <span
-                  class="session-run-spinner"
-                  role="img"
-                  aria-label={t("dashboardsPage.running")}
-                  title={t("dashboardsPage.running")}
-                />
-              </Show>
-            </span>
-          </div>
-          <div class="dashboard-card__meta">
-            <span class="dashboard-card__author">
-              {renderSessionOwnerChip(author().avatar, "row")}
-              <HoverMarquee
-                content={authorName()}
-                class="dashboard-card__author-name"
-                options={{ stationary: true, host: () => card }}
-              />
-            </span>
-            <span class="dashboard-card__updated">
-              <Show when={childProps.row.updatedAt} fallback={t("dashboardsPage.updatedUnknown")}>
-                {(updatedAt) => (
-                  <>
-                    <span class="dashboard-card__updated-label">
-                      {t("dashboardsPage.updatedLabel")}
-                    </span>{" "}
-                    <span class="dashboard-card__updated-time">
-                      {formatRelativeTimestamp(updatedAt())}
-                    </span>
-                  </>
-                )}
-              </Show>
-            </span>
-          </div>
-        </div>
-      </>
-    );
-    return (
-      <article
-        ref={(element) => (card = element)}
-        class="dashboard-card"
-        data-dashboard-session={childProps.row.key}
-      >
-        <Show
-          when={target()}
-          fallback={
-            <div class="dashboard-card__main" ref={childProps.contentRef}>
-              <Content />
-            </div>
-          }
-        >
-          {(destination) => (
-            <a
-              ref={childProps.contentRef}
-              class="dashboard-card__main"
-              href={destination().href}
-              aria-label={title()}
-              onClick={(event: MouseEvent) => {
-                const current = target();
-                if (current && props.handlers.onNavigate && shouldHandleNavigationClick(event)) {
-                  event.preventDefault();
-                  props.handlers.onNavigate("dashboard", current.options);
-                }
-              }}
-            >
-              <Content />
-            </a>
-          )}
-        </Show>
-      </article>
-    );
-  }
-
-  let grid!: HTMLDivElement;
+  let gallery!: HTMLDivElement;
   let scroller: HTMLElement | null = null;
-  let columns = 3;
-  let gap = 16;
-  let itemKeys:
-    | { rows: DashboardRow[]; columns: number; getItemKey: (index: number) => string }
-    | undefined;
+  const grids = new Map<string, HTMLDivElement>();
+  const headings = new Map<string, HTMLHeadingElement>();
   const content = new Map<string, HTMLElement>();
   const [focused, setFocused] = createSignal<string>();
+  const [metrics, setMetrics] = createSignal({ columns: 3, gap: 16, groupGap: 24 });
   const [view, setView] = createSignal<{
     tracks: VirtualItem[];
+    measurements: VirtualItem[];
     height: number;
-    columns: number;
-    gap: number;
     available: boolean;
-  }>({ tracks: [], height: 0, columns, gap, available: true });
-  const windowed = createMemo(() => props.rows.length > 60 && view().available);
-  const indexes = createMemo(() => new Map(props.rows.map((row, index) => [row.key, index])));
+  }>({ tracks: [], measurements: [], height: 0, available: true });
+  const rowCount = createMemo(() =>
+    props.groups.reduce((count, group) => count + group.rows.length, 0),
+  );
+  const windowed = createMemo(() => rowCount() > 60 && view().available);
+  const layout = createMemo(() => {
+    const tracks: Array<{
+      key: string;
+      heading: boolean;
+      gap: number;
+    }> = [];
+    const rowTracks: number[] = [];
+    const indexes = new Map<string, { track: number; column: number; position: number }>();
+    let position = 0;
+    const groups = props.groups.map((group, groupIndex) => {
+      const start = tracks.length;
+      if (group.label) {
+        tracks.push({
+          key: `heading:${group.key}`,
+          heading: true,
+          gap: groupIndex > 0 ? metrics().groupGap : 0,
+        });
+      }
+      const bodyStart = tracks.length;
+      for (let index = 0; index < group.rows.length; index += metrics().columns) {
+        const rows = group.rows.slice(index, index + metrics().columns);
+        const track = tracks.length;
+        rowTracks.push(track);
+        for (const [column, row] of rows.entries()) {
+          indexes.set(row.key, { track, column, position: position++ });
+        }
+        tracks.push({
+          key: `${props.view}:${metrics().columns}:${group.key}:${rows[0]!.key}`,
+          heading: false,
+          gap: index + metrics().columns < group.rows.length ? metrics().gap : 0,
+        });
+      }
+      return { ...group, start, bodyStart, end: tracks.length - 1, groupIndex };
+    });
+    return {
+      tracks,
+      rowTracks,
+      indexes,
+      groups,
+      getItemKey: (index: number) => tracks[index]!.key,
+    };
+  });
+  // Pin endpoints and neighboring dashboard tracks globally, including across group headings.
+  const pinned = () => {
+    const { rowTracks, indexes } = layout();
+    const result = new Set<number>([rowTracks[0]!, rowTracks.at(-1)!]);
+    const track = indexes.get(focused() ?? "")?.track;
+    if (track !== undefined) {
+      const index = rowTracks.indexOf(track);
+      for (const neighbor of rowTracks.slice(Math.max(0, index - 1), index + 2)) {
+        result.add(neighbor);
+      }
+    }
+    return result;
+  };
   const publish = () => {
     const tracks = virtualizer.getVirtualItems();
+    const measurements = virtualizer.measurementsCache;
     const height = virtualizer.getTotalSize();
     setView((previous) =>
       previous.height === height &&
-      previous.columns === columns &&
-      previous.gap === gap &&
+      previous.measurements === measurements &&
       previous.available === Boolean(scroller) &&
       previous.tracks.length === tracks.length &&
       previous.tracks.every((track, index) => {
@@ -281,14 +180,17 @@ function DashboardGrid(props: {
         return track.index === next.index && track.start === next.start && track.size === next.size;
       })
         ? previous
-        : { tracks, height, columns, gap, available: Boolean(scroller) },
+        : { tracks, measurements, height, available: Boolean(scroller) },
     );
   };
   const virtualizer = new Virtualizer<HTMLElement, HTMLDivElement>({
     count: 0,
     enabled: false,
     getScrollElement: () => scroller,
-    estimateSize: () => 320,
+    estimateSize: (index) => {
+      const track = layout().tracks[index]!;
+      return (track.heading ? 30 : props.view === "list" ? 64 : 320) + track.gap;
+    },
     observeElementRect,
     observeElementOffset,
     scrollToFn: elementScroll,
@@ -300,67 +202,80 @@ function DashboardGrid(props: {
     return mountVirtualizer();
   });
   const measure = createLayoutMeasurement(
-    () => ({ rows: props.rows, indexes: indexes(), focused: focused(), windowed: windowed() }),
+    () => ({
+      layout: layout(),
+      view: props.view,
+      focused: focused(),
+      windowed: windowed(),
+      metrics: metrics(),
+    }),
     (next) => {
-      if (!next) {
+      const firstGrid = grids.values().next().value;
+      if (!next || !firstGrid) {
         return undefined;
       }
-      const viewport = grid.closest<HTMLElement>(".content");
-      const style = getComputedStyle(grid);
-      const nextColumns = style.gridTemplateColumns.split(" ").filter(Boolean).length || 3;
+      const viewport = gallery.closest<HTMLElement>(".content");
+      const style = getComputedStyle(firstGrid);
+      const nextColumns =
+        next.view === "list" ? 1 : style.gridTemplateColumns.split(" ").filter(Boolean).length || 3;
       const nextGap = Number.parseFloat(style.rowGap) || 0;
-      // A new callback invalidates all tracks; only row order or column count changes their keys.
-      if (itemKeys?.rows !== next.rows || itemKeys.columns !== nextColumns) {
-        const rows = next.rows;
-        itemKeys = {
-          rows,
-          columns: nextColumns,
-          getItemKey: (index) => rows[index * nextColumns]!.key,
-        };
+      const groupGap = Number.parseFloat(style.getPropertyValue("--space-6")) || 24;
+      if (
+        nextColumns !== next.metrics.columns ||
+        nextGap !== next.metrics.gap ||
+        groupGap !== next.metrics.groupGap
+      ) {
+        return () => setMetrics({ columns: nextColumns, gap: nextGap, groupGap });
       }
-      const { getItemKey } = itemKeys;
       const margin = viewport
-        ? grid.getBoundingClientRect().top -
+        ? gallery.getBoundingClientRect().top -
           viewport.getBoundingClientRect().top +
           viewport.scrollTop
         : 0;
       const heights = new Map<number, number>();
-      for (const [key, element] of content) {
-        const index = next.indexes.get(key);
-        if (index !== undefined) {
-          const track = Math.floor(index / nextColumns);
-          // Measure intrinsic content, not the stretched card: a track must also shrink.
-          const height = element.getBoundingClientRect().height + 2;
-          heights.set(track, Math.max(heights.get(track) ?? 0, height));
+      for (const group of next.layout.groups) {
+        const heading = headings.get(group.key);
+        if (heading) {
+          const headingStyle = getComputedStyle(heading);
+          heights.set(
+            group.start,
+            heading.getBoundingClientRect().height +
+              (Number.parseFloat(headingStyle.marginTop) || 0) +
+              (Number.parseFloat(headingStyle.marginBottom) || 0) +
+              next.layout.tracks[group.start]!.gap,
+          );
         }
       }
-      const count = Math.ceil(next.rows.length / nextColumns);
-      const pinned = pinnedTracks(
-        next.rows.length,
-        nextColumns,
-        next.indexes.get(next.focused ?? ""),
-      );
+      for (const [key, element] of content) {
+        const index = next.layout.indexes.get(key);
+        if (index) {
+          // Measure intrinsic content so resizing can shrink a track as well as grow it.
+          const height =
+            element.getBoundingClientRect().height +
+            (next.view === "grid" ? 2 : 0) +
+            next.layout.tracks[index.track]!.gap;
+          heights.set(index.track, Math.max(heights.get(index.track) ?? 0, height));
+        }
+      }
+      const staticPinnedTracks = pinned();
       return () => {
         scroller = viewport;
-        if (columns !== nextColumns) {
-          virtualizer.measure();
-        }
-        columns = nextColumns;
-        gap = nextGap;
         virtualizer.setOptions({
           ...virtualizer.options,
-          count,
+          count: next.layout.tracks.length,
           enabled: next.windowed && Boolean(viewport),
-          getItemKey,
-          gap,
+          getItemKey: next.layout.getItemKey,
+          gap: 0,
           scrollMargin: margin,
           rangeExtractor: (range) =>
-            [...new Set([...defaultRangeExtractor(range), ...pinned])].toSorted((a, b) => a - b),
+            [...new Set([...defaultRangeExtractor(range), ...staticPinnedTracks])].toSorted(
+              (a, b) => a - b,
+            ),
         });
         const { _willUpdate: updateVirtualizer } = virtualizer;
         updateVirtualizer();
         for (const [index, height] of heights) {
-          if (height > 2) {
+          if (height > 0) {
             virtualizer.resizeItem(index, height);
           }
         }
@@ -368,26 +283,34 @@ function DashboardGrid(props: {
       };
     },
     {
-      targets: () => [grid, ...(scroller ? [scroller] : []), ...content.values()],
+      targets: () => [
+        gallery,
+        ...(scroller ? [scroller] : []),
+        ...grids.values(),
+        ...headings.values(),
+        ...content.values(),
+      ],
       fonts: true,
     },
   );
-  const tracks = createMemo(() => new Map(view().tracks.map((track) => [track.index, track])));
+  const positioned = () => windowed() && view().measurements.length > 0;
   const visible = createMemo(() => {
     if (!windowed()) {
-      return props.rows;
+      return layout().groups;
     }
-    if (view().tracks.length === 0) {
-      // Let CSS size the first rows before assigning measured virtual tracks.
-      return props.rows.slice(0, 12);
-    }
-    const pinned = pinnedTracks(props.rows.length, view().columns, indexes().get(focused() ?? ""));
-    const trackIndexes = new Set([...view().tracks.map((track) => track.index), ...pinned]);
-    return [...trackIndexes]
-      .toSorted((left, right) => left - right)
-      .flatMap((index) => props.rows.slice(index * view().columns, (index + 1) * view().columns));
+    const selected = new Set(
+      view().tracks.length > 0
+        ? [...view().tracks.map((track) => track.index), ...pinned()]
+        : layout()
+            .tracks.slice(0, 12)
+            .map((_, index) => index),
+    );
+    return layout().groups.flatMap((group) => {
+      const rows = group.rows.filter((row) => selected.has(layout().indexes.get(row.key)!.track));
+      return rows.length > 0 || selected.has(group.start) ? [{ ...group, rows }] : [];
+    });
   });
-  function CardSlot(card: { row: DashboardRow }) {
+  function CardSlot(card: { row: DashboardRow; bodyStart: number }) {
     let element: HTMLElement;
     let key: string | undefined;
     const bindContent = (next: HTMLElement) => {
@@ -408,50 +331,106 @@ function DashboardGrid(props: {
         }
       };
     });
-    const index = () => indexes().get(card.row.key)!;
+    const index = () => layout().indexes.get(card.row.key)!;
     const position = (): JSX.CSSProperties | undefined => {
-      if (!windowed() || view().tracks.length === 0) {
+      const track = view().measurements[index().track];
+      const first = view().measurements[card.bodyStart];
+      if (!positioned() || !track || !first) {
         return undefined;
       }
-      const trackIndex = Math.floor(index() / view().columns);
-      const track = tracks().get(trackIndex);
       return {
         position: "absolute",
-        top: `${(track?.start ?? trackIndex * (320 + view().gap)) - virtualizer.options.scrollMargin}px`,
-        "inset-inline-start": `calc(${index() % view().columns} * (100% + ${view().gap}px) / ${view().columns})`,
-        width: `calc((100% - ${(view().columns - 1) * view().gap}px) / ${view().columns})`,
-        height: `${track?.size ?? 320}px`,
+        top: `${track.start - first.start}px`,
+        "inset-inline-start": `calc(${index().column} * (100% + ${metrics().gap}px) / ${metrics().columns})`,
+        width: `calc((100% - ${(metrics().columns - 1) * metrics().gap}px) / ${metrics().columns})`,
+        height: `${track.size - layout().tracks[index().track]!.gap}px`,
       };
     };
     return (
       <div
         class="dashboards-grid__item"
         role="listitem"
-        aria-posinset={index() + 1}
-        aria-setsize={props.rows.length}
+        aria-posinset={index().position + 1}
+        aria-setsize={rowCount()}
         style={position()}
         onFocusIn={() => setFocused(card.row.key)}
       >
-        <DashboardCard row={card.row} contentRef={bindContent} />
+        <DashboardEntry
+          variant={props.view === "list" ? "row" : "card"}
+          data={props.data}
+          row={card.row}
+          handlers={props.handlers}
+          gatewaySnapshot={props.gatewaySnapshot}
+          contentRef={bindContent}
+        />
       </div>
+    );
+  }
+  function Group(groupProps: { group: ReturnType<typeof visible>[number] }) {
+    let grid: HTMLDivElement;
+    let heading: HTMLHeadingElement;
+    const group = () => groupProps.group;
+    onSettled(() => {
+      const staticKey = group().key;
+      grids.set(staticKey, grid);
+      if (heading) {
+        headings.set(staticKey, heading);
+      }
+      measure();
+      return () => {
+        grids.delete(staticKey);
+        headings.delete(staticKey);
+        measure();
+      };
+    });
+    const sectionPosition = (): JSX.CSSProperties | undefined => {
+      const first = view().measurements[group().start];
+      if (!positioned() || !first) {
+        return undefined;
+      }
+      return {
+        position: "absolute",
+        top: `${first.start - virtualizer.options.scrollMargin}px`,
+        width: "100%",
+        "margin-top": "0",
+        "padding-top": `${group().label && group().groupIndex > 0 ? metrics().groupGap : 0}px`,
+      };
+    };
+    const gridPosition = (): JSX.CSSProperties | undefined => {
+      const first = view().measurements[group().bodyStart];
+      const last = view().measurements[group().end];
+      if (!positioned() || !first || !last) {
+        return undefined;
+      }
+      return { position: "relative", height: `${last.end - first.start}px` };
+    };
+    return (
+      <section class="dashboards-group" style={sectionPosition()}>
+        <Show when={group().label}>
+          <h3 ref={(element) => (heading = element)} class="dashboards-group__heading">
+            {group().label}
+          </h3>
+        </Show>
+        <div
+          ref={(element) => (grid = element)}
+          class={props.view === "list" ? "dashboards-list" : "dashboards-grid"}
+          role="list"
+          style={gridPosition()}
+        >
+          <For each={group().rows} keyed={(row) => row.key}>
+            {(row) => <CardSlot row={row()} bodyStart={group().bodyStart} />}
+          </For>
+        </div>
+      </section>
     );
   }
   return (
     <div
-      ref={(element) => (grid = element)}
-      class="dashboards-grid"
-      role="list"
-      style={
-        windowed() && view().tracks.length > 0
-          ? {
-              position: "relative",
-              height: `${view().height}px`,
-            }
-          : undefined
-      }
+      ref={(element) => (gallery = element)}
+      style={positioned() ? { position: "relative", height: `${view().height}px` } : undefined}
     >
-      <For each={visible()} keyed={(row) => row.key}>
-        {(row) => <CardSlot row={row()} />}
+      <For each={visible()} keyed={(group) => group.key}>
+        {(group) => <Group group={group()} />}
       </For>
     </div>
   );
@@ -498,7 +477,13 @@ function DashboardList(props: {
           >
             <DashboardGrid
               data={props.data}
-              rows={visibleRows()}
+              groups={dashboardGroups(
+                props.data,
+                visibleRows(),
+                props.filters.group,
+                props.gatewaySnapshot?.selfUser?.id,
+              )}
+              view={props.filters.view}
               handlers={props.handlers}
               gatewaySnapshot={props.gatewaySnapshot}
             />
@@ -509,32 +494,54 @@ function DashboardList(props: {
   );
 }
 
-function DashboardGallerySkeleton() {
+function DashboardGallerySkeleton(props: { view: DashboardGalleryFilters["view"] }) {
   return (
     <section class="dashboards-gallery" aria-busy="true">
       <span class="sr-only" role="status">
         {t("common.loading")}
       </span>
       <div class="dashboards-loading" aria-hidden="true" inert>
-        <div class="dashboards-grid">
-          <For each={[0, 1, 2, 3, 4, 5]}>
-            {() => (
-              <div class="dashboard-card">
-                <div class="dashboard-card__main">
-                  <div class="dashboard-preview skeleton" />
-                  <div class="dashboard-card__body">
-                    <div class="dashboard-card__heading">
-                      <div class="skeleton skeleton-line skeleton-line--long dashboards-loading__title" />
-                    </div>
-                    <div class="dashboard-card__meta">
-                      <div class="skeleton skeleton-line skeleton-line--medium" />
+        <Show
+          when={props.view === "list"}
+          fallback={
+            <div class="dashboards-grid">
+              <For each={[0, 1, 2, 3, 4, 5]}>
+                {() => (
+                  <div class="dashboard-card">
+                    <div class="dashboard-card__main">
+                      <div class="dashboard-preview skeleton" />
+                      <div class="dashboard-card__body">
+                        <div class="dashboard-card__heading">
+                          <div class="skeleton skeleton-line skeleton-line--long dashboards-loading__title" />
+                        </div>
+                        <div class="dashboard-card__meta">
+                          <div class="skeleton skeleton-line skeleton-line--medium" />
+                        </div>
+                      </div>
                     </div>
                   </div>
+                )}
+              </For>
+            </div>
+          }
+        >
+          <div class="dashboards-list">
+            <For each={[0, 1, 2, 3, 4, 5]}>
+              {() => (
+                <div class="dashboard-row">
+                  <div class="dashboard-row__main">
+                    <div class="dashboard-row__thumb skeleton" />
+                    <div class="dashboard-row__title">
+                      <div class="skeleton skeleton-line skeleton-line--long" />
+                    </div>
+                    <div class="dashboard-row__author skeleton skeleton-line skeleton-line--medium" />
+                    <div class="dashboard-row__updated skeleton skeleton-line skeleton-line--medium" />
+                  </div>
                 </div>
-              </div>
-            )}
-          </For>
-        </div>
+              )}
+            </For>
+          </div>
+        </Show>
       </div>
     </section>
   );
@@ -572,22 +579,7 @@ export function DashboardsView(props: {
                   filters={props.filters}
                   handlers={props.handlers}
                 />
-                <label class="dashboards-select">
-                  <span class="sr-only">{t("dashboardsPage.sortLabel")}</span>
-                  <select
-                    class="settings-select"
-                    value={props.filters.sort}
-                    onChange={(event) => {
-                      const sort = event.currentTarget.value;
-                      if (sort === "updated" || sort === "title") {
-                        props.handlers.onFilterChange({ sort });
-                      }
-                    }}
-                  >
-                    <option value="updated">{t("dashboardsPage.sortUpdated")}</option>
-                    <option value="title">{t("dashboardsPage.sortTitle")}</option>
-                  </select>
-                </label>
+                <DashboardDisplayMenu filters={props.filters} handlers={props.handlers} />
               </div>
             )}
           </Show>
@@ -596,7 +588,7 @@ export function DashboardsView(props: {
       <SettingsWorkspace>
         <Loading
           on={!props.data?.result && !props.data?.error}
-          fallback={<DashboardGallerySkeleton />}
+          fallback={<DashboardGallerySkeleton view={props.filters.view} />}
         >
           <Show
             when={!props.data?.result && isPending(props.readReady)}
@@ -620,7 +612,7 @@ export function DashboardsView(props: {
               </Errored>
             }
           >
-            <DashboardGallerySkeleton />
+            <DashboardGallerySkeleton view={props.filters.view} />
           </Show>
           <Show when={props.data?.result ? props.data : undefined}>
             {(data) => (

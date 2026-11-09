@@ -6,10 +6,16 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import type { DashboardGalleryFilters } from "./gallery-filters.ts";
-import { DashboardsView, type DashboardsRouteData } from "./view.tsx";
+import type { DashboardGalleryFilters, DashboardsRouteData } from "./gallery-filters.ts";
+import { DashboardsView } from "./view.tsx";
 
-const filters: DashboardGalleryFilters = { query: "", ownerIds: [], sort: "updated" };
+const filters: DashboardGalleryFilters = {
+  query: "",
+  ownerIds: [],
+  sort: "updated",
+  view: "grid",
+  group: "none",
+};
 const handlers = { onFilterChange: vi.fn() };
 
 const dashboard = {
@@ -99,7 +105,7 @@ it.each([
     <DashboardsView
       data={routeData([dashboard])}
       readReady={() => undefined}
-      filters={{ query: "", sort: selected.sort, ownerIds: [...selected.ownerIds] }}
+      filters={{ ...filters, sort: selected.sort, ownerIds: [...selected.ownerIds] }}
       handlers={handlers}
     />
   ));

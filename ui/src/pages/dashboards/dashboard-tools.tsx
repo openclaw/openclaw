@@ -6,6 +6,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { Popover } from "../../components/solid/popover.tsx";
 import { SessionOwnerChip } from "../../components/solid/session-owner-chip.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionCreatedActor } from "../../lib/session-owner.ts";
 import type { DashboardGalleryFilters, DashboardGalleryHandlers } from "./gallery-filters.ts";
 
@@ -25,8 +26,14 @@ export function authorDisplayName(author: { id: string; label: string }, selfId?
   return author.id === selfId ? t("dashboardsPage.you") : author.label;
 }
 
-/** Search icon that becomes the field; it stays open while it holds a query. */
+// Phone already has the app-wide search magnifier in its topbar, so page search stays a field there.
+const PHONE_QUERY = "(max-width: 768px)";
+
+/** Search icon that becomes the field; it stays open while it holds a query. On phone it is always a field. */
 export function DashboardSearch(props: { query: string; onQueryChange: (query: string) => void }) {
+  const media = typeof matchMedia === "function" ? matchMedia(PHONE_QUERY) : null;
+  const [phone, setPhone] = createSignal(media?.matches ?? false);
+  onSettled(() => (media ? listen(media, "change", () => setPhone(media.matches)) : undefined));
   const [open, setOpen] = createSignal(false);
   let toggle: HTMLButtonElement | undefined;
   const close = () => {
@@ -36,7 +43,7 @@ export function DashboardSearch(props: { query: string; onQueryChange: (query: s
   };
   return (
     <Show
-      when={open() || props.query}
+      when={open() || props.query || phone()}
       fallback={
         <span class="dashboards-search-toggle">
           <IconButton
@@ -57,16 +64,19 @@ export function DashboardSearch(props: { query: string; onQueryChange: (query: s
           label={t("dashboardsPage.searchLabel")}
           placeholder={t("dashboardsPage.searchPlaceholder")}
           query={props.query}
+          focus={open()}
           onQueryChange={props.onQueryChange}
           onClose={close}
         />
-        <IconButton
-          size={28}
-          icon="x"
-          label={t("dashboardsPage.closeSearch")}
-          tooltip={false}
-          onClick={close}
-        />
+        <Show when={!phone() || props.query}>
+          <IconButton
+            size={28}
+            icon="x"
+            label={t("dashboardsPage.closeSearch")}
+            tooltip={false}
+            onClick={close}
+          />
+        </Show>
       </label>
     </Show>
   );
