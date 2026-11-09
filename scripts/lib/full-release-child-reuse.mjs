@@ -401,8 +401,19 @@ async function validateEvidence(selection, request, deps) {
     "receipt target, origin, or exact dispatch inputs changed",
   );
   const attempts = [];
-  for (let runAttempt = 1; runAttempt <= run.run_attempt; runAttempt += 1) {
-    attempts.push({ runAttempt, jobs: await readAttemptJobs(deps.github, run, runAttempt) });
+  // Match the shared gh process budget; settle each batch before failing or claiming more work.
+  for (let first = 1; first <= run.run_attempt; first += 4) {
+    const results = await Promise.allSettled(
+      Array.from({ length: Math.min(4, run.run_attempt - first + 1) }, async (_, index) => {
+        const runAttempt = first + index;
+        return { runAttempt, jobs: await readAttemptJobs(deps.github, run, runAttempt) };
+      }),
+    );
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed) {
+      throw failed.reason;
+    }
+    attempts.push(...results.map((result) => result.value));
   }
   const jobs = attempts.at(-1).jobs;
   validatePublisher(jobs, receipt);

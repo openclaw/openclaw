@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import { nativeMessage } from "./chat-thread-fixtures.test-support.ts";
 import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
+import * as causalBoundary from "./stream-causal-boundary.ts";
 
 type PendingInput = NonNullable<BuildChatItemsProps["pendingInputs"]>[number];
 
@@ -79,6 +80,59 @@ beforeEach(() => resetChatThreadState("input-order"));
 afterEach(() => resetChatThreadState("input-order"));
 
 describe("transcript input order", () => {
+  it("keeps interleaved tool bursts within each observed input", () => {
+    const rows = visibleRows({
+      runId: "live",
+      messages: [
+        makeMessage("user", "First input", 1, { idempotencyKey: "first:user", seq: 1 }),
+        makeMessage("user", "Second input", 2, { idempotencyKey: "second:user", seq: 2 }),
+      ],
+      toolMessages: Array.from({ length: 4 }, (_, index) => ({
+        role: "assistant",
+        content: `Tool ${index}`,
+        runId: "live",
+        timestamp: 100 + index,
+        openclawToolStreamAfterSendId: index % 2 ? "second" : "first",
+      })),
+    });
+    expect(rows).toEqual(["First input", "Tool 0", "Tool 2", "Second input", "Tool 1", "Tool 3"]);
+  });
+
+  it("bounds missing-run history scans independently of tool-burst length", () => {
+    const lookup = vi.spyOn(causalBoundary, "knownStreamCausalInterval");
+    try {
+      const rows = visibleRows({
+        runId: "live",
+        messages: [makeMessage("user", "Current input", 1, { seq: 1 })],
+        toolMessages: Array.from({ length: 40 }, (_, index) => ({
+          role: "assistant",
+          content: `Tool ${index}`,
+          runId: "live",
+          timestamp: 100 + index,
+        })),
+      });
+      expect(rows).toEqual(["Current input", ...Array.from({ length: 40 }, (_, i) => `Tool ${i}`)]);
+      expect(lookup.mock.calls.length).toBeLessThanOrEqual(3);
+    } finally {
+      lookup.mockRestore();
+    }
+  });
+
+  it("keeps a paged input separate from an unscoped lookup for the same run", () => {
+    const rows = visibleRows({
+      runId: "live",
+      messages: [makeMessage("user", "Current input", 1, { seq: 1 })],
+      toolMessages: Array.from({ length: 4 }, (_, index) => ({
+        role: "assistant",
+        content: `Tool ${index}`,
+        runId: "live",
+        timestamp: 100 + index,
+        ...(index % 2 ? { openclawToolStreamAfterSendId: "paged-input" } : {}),
+      })),
+    });
+    expect(rows).toEqual(["Tool 1", "Tool 3", "Current input", "Tool 0", "Tool 2"]);
+  });
+
   it("keeps parent output around a worker update in the same order live and saved", () => {
     const original = makeMessage("user", "Publish the change", 10, {
       id: "request",
