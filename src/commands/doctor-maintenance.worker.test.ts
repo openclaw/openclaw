@@ -167,9 +167,6 @@ describe("Doctor maintenance with shared-state workers", () => {
                   async (paths) => readUpdateDatabaseGenerations(paths),
                 );
               }
-              const admittedGenerations = databaseGenerations
-                ? readUpdateDatabaseGenerations([databasePath])
-                : undefined;
               const log = vi.fn();
               const maintenance = await beginDoctorMaintenance({
                 options: { repair: true, nonInteractive: true },
@@ -231,7 +228,7 @@ describe("Doctor maintenance with shared-state workers", () => {
                 // their missing generations as eligible for automatic restoration.
                 expect(maintenance!.databaseWrites).toEqual({
                   unchanged: false,
-                  fromGenerations: admittedGenerations,
+                  fromGenerations: databaseGenerations,
                   generations: readUpdateDatabaseGenerations([databasePath]),
                 });
                 expect(maintenance!.databaseWrites?.generations[databasePath]).not.toBe(

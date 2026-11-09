@@ -1436,3 +1436,13 @@ for when the setting takes effect.
 - [Migrating](/install/migrating): major version migration guides.
 
 Candidate rehearsal snapshots and update database backups tolerate only stale, exactly owned agent FTS indexes after a SQLite tokenizer change. They preserve the source; candidate startup rebuilds the derived indexes before admission. Unknown or mixed integrity damage remains fatal. The first update uses the candidate snapshot worker; activation backups require the installed updater to include this repair.
+
+During candidate Doctor maintenance, a loaded managed Gateway is stopped even
+when its previous process has already released its lease. The native service
+adapter retains ownership checks; disabled or unloaded services are not started.
+The candidate records the stopped service identity through the existing update
+ledger and carries the original database capture into Doctor. Only this one-shot
+receipt write is attributed to that capture. Unrelated writes before the repair
+handoff refuse repair; ordinary Doctor database mutations still leave automatic
+database restoration unverified. Finalization restores only the matching stopped
+service, including necessary recovery when the parent requested --no-restart.

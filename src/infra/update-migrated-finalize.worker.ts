@@ -39,6 +39,7 @@ import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { createDoctorServiceInspectionBudget } from "./update-doctor-deadline.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+  createUpdateDoctorDatabaseWriteCapture,
   recordUpdateDoctorConfigWriteRefusal,
   writeUpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
@@ -328,7 +329,20 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
       const { runDoctorHealthFlow } = await import("../flows/doctor-health.js");
       assertCurrent();
       remaining();
+      const databaseWriteCapture = createUpdateDoctorDatabaseWriteCapture(
+        input.databaseGenerations,
+        {
+          env: process.env,
+          root: input.root,
+          signal: new AbortController().signal,
+          assertCurrent,
+          warn: (message) => process.stderr.write(message + "\n"),
+        },
+      );
+      await databaseWriteCapture?.admit(true);
+      assertCurrent();
       await stopSupervisedPredecessorGateway(input, {
+        databaseWriteCapture,
         root: input.root,
         assertCurrent,
         serviceInspectionBudget: remaining,
@@ -352,6 +366,7 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
             : {}),
         },
         {
+          databaseWriteCapture,
           inputHash: input.configInputHash,
           assertCurrent,
           commandAuthority,

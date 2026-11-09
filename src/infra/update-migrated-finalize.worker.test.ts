@@ -17,7 +17,7 @@ const fixture = vi.hoisted(() => ({
   terminal: vi.fn(),
   writeFile: vi.fn(),
   stopService: vi.fn(),
-  ownerLease: vi.fn(),
+  createCapture: vi.fn(),
   recordStep: vi.fn(),
   recordLedgerStep: vi.fn(),
   adopt: vi.fn(),
@@ -59,10 +59,6 @@ vi.mock("../cli/update-cli/update-command-service-maintenance.js", () => ({
   createWindowsTaskAutoStartGuard: vi.fn(),
   maybeStopManagedServiceBeforeMutableUpdate: fixture.stopService,
 }));
-vi.mock("../state/openclaw-state-db-doctor-schema.js", () => ({
-  openDoctorStateSchemaReadAdmission: vi.fn(),
-}));
-vi.mock("./gateway-owner-lease.js", () => ({ readGatewayOwnerLease: fixture.ownerLease }));
 vi.mock("../cli/update-cli/update-command-terminal.js", () => ({
   withUpdateCommandTerminalResult: async (run: (registerRun: () => void) => Promise<unknown>) =>
     run(vi.fn()),
@@ -81,6 +77,7 @@ vi.mock("./update-finalization-budget.js", () => ({
   resolveUpdateFinalizationTimeoutMs: fixture.budget,
 }));
 vi.mock("./update-doctor-result.js", () => ({
+  createUpdateDoctorDatabaseWriteCapture: fixture.createCapture,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV: "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH",
   recordUpdateDoctorConfigWriteRefusal: vi.fn(),
   writeUpdatePostInstallDoctorResult: vi.fn(),
@@ -108,6 +105,8 @@ const result = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
+  fixture.createCapture.mockReset();
+  fixture.stopService.mockReset().mockResolvedValue({ stopped: false });
   stdout.length = 0;
   stderr.length = 0;
   loggingState.forceConsoleToStderr = false;
@@ -601,7 +600,6 @@ it("does not stop a supervised predecessor when the delegated Doctor deadline ex
     elapsedMs = 501;
     return { runDoctorHealthFlow: doctor };
   });
-  fixture.ownerLease.mockReturnValue({ state: "live", mode: "supervised" });
   process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH = "/synthetic/doctor.json";
   try {
     await runWorker(
@@ -635,7 +633,6 @@ it("bounds a supervised predecessor stop by the remaining Doctor deadline", asyn
   vi.spyOn(performance, "now").mockReturnValue(0);
   // mock-isolation: Keep real Doctor repair, service and database effects outside this worker fixture.
   vi.doMock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: doctor }));
-  fixture.ownerLease.mockReturnValue({ state: "live", mode: "supervised" });
   fixture.recordStep.mockImplementation(async (runId: string, step: unknown) => ({
     runId,
     status: "running",
@@ -682,28 +679,28 @@ it("bounds a supervised predecessor stop by the remaining Doctor deadline", asyn
 });
 
 it.each([
-  {
-    name: "stops a live supervised predecessor",
-    owner: { state: "live", mode: "supervised" },
-    stops: true,
-    uncertain: false,
-  },
+  { name: "stops a live supervised predecessor", stops: true, uncertain: false, bound: false },
   {
     name: "does not enter Doctor after an uncertain native stop",
-    owner: { state: "live", mode: "supervised" },
     stops: true,
     uncertain: true,
+    bound: false,
   },
   {
-    name: "leaves a foreground owner to Doctor's own wait",
-    owner: { state: "live", mode: "foreground" },
-    stops: false,
+    name: "retains the receipt when the port remains bound",
+    stops: true,
+    uncertain: false,
+    bound: true,
   },
-  { name: "does nothing without an owner", owner: undefined, stops: false },
-])("delegated Doctor $name before entering maintenance", async ({ owner, stops, uncertain }) => {
+  {
+    name: "does not publish a receipt when native inspection did not stop a service",
+    stops: false,
+    uncertain: false,
+    bound: false,
+  },
+])("delegated Doctor $name before entering maintenance", async ({ stops, uncertain, bound }) => {
   const doctor = vi.fn();
   vi.doMock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: doctor }));
-  fixture.ownerLease.mockReturnValue(owner);
   fixture.recordStep.mockImplementation(async (runId: string, step: unknown) => ({
     runId,
     status: "running",
@@ -720,10 +717,17 @@ it.each([
     serviceUpdateVerdict: { kind: "owned", root: "/synthetic", fingerprint: "f" },
   };
   fixture.stopService.mockImplementation(async (params: { onStopped?: (s: unknown) => void }) => {
+    if (!stops) {
+      return { stopped: false, inspected: true };
+    }
     params.onStopped?.(stoppedState);
-    throw uncertain
-      ? new CommandProcessCleanupError()
-      : new Error("port still bound after bootout");
+    if (uncertain) {
+      throw new CommandProcessCleanupError();
+    }
+    if (bound) {
+      throw new Error("port still bound after bootout");
+    }
+    return stoppedState;
   });
   process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH = "/synthetic/doctor.json";
   try {
@@ -773,6 +777,42 @@ it.each([
       );
     }
   } else {
-    expect(fixture.stopService).not.toHaveBeenCalled();
+    expect(fixture.stopService).toHaveBeenCalledOnce();
+    expect(fixture.recordStep).not.toHaveBeenCalled();
   }
+});
+
+it("passes the same original capture from worker admission into Doctor", async () => {
+  const doctor = vi.fn();
+  vi.doMock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: doctor }));
+  const capture = { admit: vi.fn(async () => undefined) };
+  fixture.createCapture.mockReturnValue(capture);
+  const generations = { "/synthetic/agent.sqlite": "original" };
+  process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH = "/synthetic/doctor.json";
+  try {
+    await runWorker(
+      {
+        executor: {},
+        runId: "synthetic-run",
+        root: "/synthetic",
+        configInputHash: "hash",
+        repair: true,
+        databaseGenerations: generations,
+      },
+      "--doctor",
+    );
+  } finally {
+    delete process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+    vi.doUnmock("../flows/doctor-health.js");
+  }
+  expect(fixture.createCapture).toHaveBeenCalledExactlyOnceWith(
+    generations,
+    expect.objectContaining({ assertCurrent: expect.any(Function) }),
+  );
+  expect(capture.admit).toHaveBeenCalledExactlyOnceWith(true);
+  expect(doctor).toHaveBeenCalledExactlyOnceWith(
+    expect.anything(),
+    expect.anything(),
+    expect.objectContaining({ databaseWriteCapture: capture, databaseGenerations: generations }),
+  );
 });

@@ -186,7 +186,9 @@ export function runScopedSqliteInspection<T>(
 function sqliteReadOnlyWorkerArgv(pathname: string, options: SqliteReadOnlyWorkerOptions) {
   const { moduleUrl, runtimeGeneration } = captureRuntimeWorkerSource(
     resolveRuntimeProcessEntrypointUrl(
-      options.mode === "content-version" || options.mode === "file-generation"
+      options.mode === "content-version" ||
+        options.mode === "file-generation" ||
+        options.mode === "update-generation"
         ? "sqliteSourceRevision"
         : "sqliteReadOnly",
     ),
@@ -530,7 +532,7 @@ export function runOneShotSqliteInspection<T>(params: {
 export function runSqliteReadOnlyWorkerSync(
   pathname: string,
   stagingRoot: string | undefined,
-  mode: "sync" | "content-version" | "file-generation" = "sync",
+  mode: "sync" | "content-version" | "file-generation" | "update-generation" = "sync",
 ): string {
   const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
   const started = log.isEnabled("trace") ? performance.now() : undefined;

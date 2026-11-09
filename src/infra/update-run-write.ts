@@ -152,6 +152,7 @@ export function mutateRun(
     {
       schemaSql: updateRunLedgerSchema,
       operationLabel: "update.run",
+      attributeUpdateWrite: options.attributeUpdateWrite,
       busyTimeoutMs: options.busyTimeoutMs,
     },
   );

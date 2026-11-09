@@ -10,7 +10,11 @@ import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budge
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import * as updateState from "../infra/update-candidate-state.js";
-import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
+import {
+  readUpdateDatabaseGenerationObservation,
+  readUpdateDatabaseGenerations,
+} from "../infra/update-database-generations.js";
+import * as attribution from "../infra/update-doctor-migration-attribution.js";
 import {
   collectUpdateDoctorFailureFacts,
   consumeUpdatePostInstallDoctorResult,
@@ -32,6 +36,11 @@ const settlement = await import("./doctor-maintenance.settlement.test-support.js
 const { begin, boundary, cleanupBarrier, root, tempDirs } = settlement;
 
 it("refuses rollback attribution for writes preceding Doctor admission", async () => {
+  // This settlement unit harness forbids native processes; the real isolated
+  // observation boundary is exercised by update-doctor-migration-attribution.test.
+  vi.spyOn(attribution, "readUpdateDoctorGeneration").mockImplementation(
+    readUpdateDatabaseGenerationObservation,
+  );
   vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async (paths) =>
     readUpdateDatabaseGenerations(paths),
   );
@@ -44,7 +53,6 @@ it("refuses rollback attribution for writes preceding Doctor admission", async (
   const foreign = new DatabaseSync(pathname);
   foreign.exec("INSERT INTO evidence VALUES (99)");
   foreign.close();
-  const admitted = readUpdateDatabaseGenerations([pathname, missing]);
   const maintenance = await beginDoctorMaintenance({
     root: null,
     options: { repair: true, nonInteractive: true },
@@ -56,7 +64,7 @@ it("refuses rollback attribution for writes preceding Doctor admission", async (
   const receipt = maintenance!.databaseWrites;
   expect(receipt).toEqual({
     unchanged: false,
-    fromGenerations: admitted,
+    fromGenerations: databaseGenerations,
     generations: readUpdateDatabaseGenerations([pathname, missing]),
   });
   expect(receipt?.generations[pathname]).not.toBe(databaseGenerations[pathname]);

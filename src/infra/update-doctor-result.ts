@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -27,6 +28,11 @@ import type {
   UpdateDoctorConfigWriteRefusal,
 } from "./update-doctor-config.js";
 import { UpdateDoctorLintFindingSchema } from "./update-doctor-lint-schema.js";
+import {
+  readUpdateDoctorGeneration,
+  runWithUpdateDoctorMigrationCapture,
+  type UpdateDoctorMigrationCapture,
+} from "./update-doctor-migration-attribution.js";
 import { normalizeUpdateFailureFacts, type UpdateFailureFact } from "./update-failure-facts.js";
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
 
@@ -172,6 +178,7 @@ export type UpdateDoctorWriteAuthority = {
   commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
   databaseGenerations?: UpdateDatabaseGenerations;
+  databaseWriteCapture?: ReturnType<typeof createUpdateDoctorDatabaseWriteCapture>;
   originalRecoveryCapture?: {
     runId: string;
     installRoot: string;
@@ -194,7 +201,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
     return undefined;
   }
   let expectedGenerations: UpdateDatabaseGenerations | undefined = { ...input };
-  let fromGenerations: UpdateDatabaseGenerations | undefined;
+  const fromGenerations = { ...input };
   let unchanged = true;
   let receipt: UpdateDatabaseWriteReceipt | undefined;
   const read = async () => {
@@ -223,19 +230,64 @@ export function createUpdateDoctorDatabaseWriteCapture(
     options.assertCurrent?.();
     return generations;
   };
+  const key = (pathname: string) => {
+    const canonical = realpathSync.native(pathname);
+    const keys = Object.keys(fromGenerations).filter((entry) => {
+      try {
+        return realpathSync.native(entry) === canonical;
+      } catch {
+        return false;
+      }
+    });
+    if (keys.length !== 1) {
+      throw new Error("Receipt source must match exactly one original capture key.");
+    }
+    return keys[0]!;
+  };
+  const authority: UpdateDoctorMigrationCapture = {
+    expected: (pathname) => expectedGenerations?.[key(pathname)],
+    assertCurrent() {
+      options.signal.throwIfAborted();
+      options.assertCurrent?.();
+    },
+    accept(pathname, before, after) {
+      authority.assertCurrent();
+      const originalKey = key(pathname);
+      if (!unchanged || !expectedGenerations || expectedGenerations[originalKey] !== before) {
+        throw new Error("Receipt no longer matches the original Doctor capture.");
+      }
+      expectedGenerations[originalKey] = after;
+    },
+    refuse(message) {
+      unchanged = false;
+      options.warn(message);
+    },
+  };
+  const matches = (generations: UpdateDatabaseGenerations) =>
+    Object.entries(expectedGenerations ?? {}).every(([pathname, generation]) => {
+      if (generations[pathname] === generation) {
+        return true;
+      }
+      const observed = readUpdateDoctorGeneration(pathname);
+      authority.assertCurrent();
+      return observed.generation === generation || observed.emptyReaderAlternate === generation;
+    });
   return {
     get receipt() {
       return receipt;
     },
-    async admit() {
+    run<T>(operation: () => T): T {
+      return runWithUpdateDoctorMigrationCapture(authority, operation);
+    },
+    async admit(strict = false) {
       receipt = undefined;
       const generations = await read();
       if (generations && expectedGenerations) {
-        fromGenerations ??= generations;
         // Earlier receipts or another process's writes must never become our baseline.
-        unchanged &&= Object.entries(expectedGenerations).every(
-          ([pathname, generation]) => generations[pathname] === generation,
-        );
+        unchanged &&= matches(generations);
+      }
+      if (strict && (!unchanged || !expectedGenerations)) {
+        throw new Error("Database changed before Doctor repair handoff.");
       }
     },
     async settle() {
@@ -243,9 +295,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
       if (generations && expectedGenerations) {
         // Maintenance excludes Gateway writers, not independent SQLite writers.
         // Without transaction attribution, even Doctor-time changes are unknown.
-        unchanged &&= Object.entries(expectedGenerations).every(
-          ([pathname, generation]) => generations[pathname] === generation,
-        );
+        unchanged &&= matches(generations);
         receipt = { unchanged, fromGenerations, generations };
       }
     },

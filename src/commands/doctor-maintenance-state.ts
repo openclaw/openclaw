@@ -50,13 +50,16 @@ export async function createDoctorMaintenanceState(options: {
     : env;
   let captureAdmitted = false;
   let liveAuthorityReadsAdmitted = false;
-  const capture = createUpdateDoctorDatabaseWriteCapture(params.databaseGenerations, {
-    env: selectedEnv,
-    root: params.root ?? undefined,
-    signal: options.signal,
-    assertCurrent: () => owner!.assertCurrent(options.assertCurrent),
-    warn: options.warn,
-  });
+  let firstCaptureAdmission = true;
+  const capture =
+    params.databaseWriteCapture ??
+    createUpdateDoctorDatabaseWriteCapture(params.databaseGenerations, {
+      env: selectedEnv,
+      root: params.root ?? undefined,
+      signal: options.signal,
+      assertCurrent: () => owner!.assertCurrent(options.assertCurrent),
+      warn: options.warn,
+    });
   const closeResources = async (agentRoot?: string | null) => {
     const drainRoot =
       agentRoot === null
@@ -134,7 +137,9 @@ export async function createDoctorMaintenanceState(options: {
   const settleCapture = async () => {
     if (owner && capture && captureAdmitted) {
       // Settle the original receipt keys before their canonical path can change.
+      owner.assertCurrent(options.assertCurrent);
       await settle(() => capture.settle());
+      owner.assertCurrent(options.assertCurrent);
       captureAdmitted = false;
     }
   };
@@ -173,7 +178,14 @@ export async function createDoctorMaintenanceState(options: {
       throw error;
     }
     if (capture && !captureAdmitted) {
-      await settle(() => resources!.run(() => capture.admit()));
+      acquired.assertCurrent(options.assertCurrent);
+      await settle(() =>
+        resources!.run(() =>
+          capture.admit(Boolean(params.databaseWriteCapture) && firstCaptureAdmission),
+        ),
+      );
+      acquired.assertCurrent(options.assertCurrent);
+      firstCaptureAdmission = false;
       captureAdmitted = true;
     }
   };

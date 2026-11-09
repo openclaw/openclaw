@@ -11,13 +11,17 @@ import {
 } from "../daemon/service-inspection-error.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
+import { defaultRuntime } from "../runtime.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "./gateway-shutdown-budget.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import {
+  SqliteCoordinatorError,
+  throwSqliteLifecycleErrors,
+  createSqliteLifecycleAggregateError,
+} from "./sqlite-lifecycle-errors.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { getUpdateRunAsync } from "./update-run-reader.js";
+import type { UpdateRunRecord, UpdateRunStep } from "./update-run-record.js";
 import { recordUpdateRunStepAsync } from "./update-run-write.async.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
@@ -95,6 +99,109 @@ async function readDoctorStop(runId: string, ledger: UpdateRunLedgerOptions) {
   return undefined;
 }
 
+type PredecessorStopParams = {
+  root: string;
+  assertCurrent: () => void;
+  serviceInspectionBudget?: () => number | undefined;
+  warn: (message: string) => void;
+  databaseWriteCapture?: ReturnType<
+    typeof import("./update-doctor-result.js").createUpdateDoctorDatabaseWriteCapture
+  >;
+};
+
+/** Attribute this required receipt on the existing ledger writer's own native connection. */
+async function recordCapturedPredecessorStop(
+  runId: string,
+  step: UpdateRunStep,
+  capture: NonNullable<PredecessorStopParams["databaseWriteCapture"]>,
+  params: PredecessorStopParams,
+  env: NodeJS.ProcessEnv,
+  persist: () => Promise<UpdateRunRecord | undefined>,
+) {
+  let cleanupFailed = false;
+  try {
+    const [
+      { acquireDoctorGatewayMaintenanceOwner },
+      { createOpenClawDatabaseMaintenanceScope },
+      { resolveOpenClawStateSqlitePath },
+      { withStateDatabaseSchemaMaintenance },
+      { recordUpdateRunStep },
+    ] = await Promise.all([
+      import("../commands/doctor-maintenance-foreground.js"),
+      import("../state/openclaw-state-db-async-lifecycle.js"),
+      import("../state/openclaw-state-db.paths.js"),
+      import("./state-database-maintenance.js"),
+      import("./update-run-ledger.js"),
+    ]);
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    const remaining = params.serviceInspectionBudget?.();
+    const owner = await acquireDoctorGatewayMaintenanceOwner(pathname, env, {
+      options: { repair: true },
+      runtime: defaultRuntime,
+      assertCurrent: params.assertCurrent,
+      deadlineMs: remaining === undefined ? undefined : performance.now() + remaining,
+    });
+    const errors: unknown[] = [];
+    let resources: ReturnType<typeof createOpenClawDatabaseMaintenanceScope> | undefined;
+    let result: UpdateRunRecord | undefined;
+    try {
+      resources = createOpenClawDatabaseMaintenanceScope({
+        schemaMaintenance: true,
+        assertOwnerCurrent: () => owner.assertCurrent(params.assertCurrent),
+        assertDatabaseAccess: owner.assertDatabaseAccess,
+      });
+      const scope = resources;
+      result = owner.run(() =>
+        withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () =>
+          scope.run(() =>
+            capture.run(() => {
+              params.assertCurrent();
+              return recordUpdateRunStep(runId, step, { env, attributeUpdateWrite: true });
+            }),
+          ),
+        ),
+      );
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      await resources?.close();
+    } catch (error) {
+      cleanupFailed = true;
+      errors.push(error);
+    }
+    try {
+      await owner.release();
+    } catch (error) {
+      cleanupFailed = true;
+      errors.push(error);
+    }
+    throwSqliteLifecycleErrors(errors, "Predecessor stop receipt and cleanup failed.");
+    return result;
+  } catch (error) {
+    if (
+      cleanupFailed ||
+      hasCommandProcessCleanupError(error) ||
+      collectNestedErrorCandidates(error).some((cause) => cause instanceof SqliteCoordinatorError)
+    ) {
+      throw error;
+    }
+    // Source refusal or expired inspection budget cannot erase a completed native stop.
+    // The existing idempotent ledger write retains recovery custody, but we still refuse
+    // Doctor migration: these writes have not been attributed to the parent's capture.
+    try {
+      await persist();
+    } catch (receiptError) {
+      throw createSqliteLifecycleAggregateError(
+        [error, receiptError],
+        "Predecessor stop attribution and recovery receipt persistence failed.",
+        error,
+      );
+    }
+    throw error;
+  }
+}
+
 /**
  * A legacy updater (through 2026.9.5) that could not inspect the managed
  * service leaves the predecessor Gateway running and then delegates Doctor to
@@ -105,27 +212,9 @@ async function readDoctorStop(runId: string, ledger: UpdateRunLedgerOptions) {
  */
 export async function stopSupervisedPredecessorGateway(
   input: { runId: string; repair: boolean },
-  params: {
-    root: string;
-    assertCurrent: () => void;
-    serviceInspectionBudget?: () => number | undefined;
-    warn: (message: string) => void;
-  },
+  params: PredecessorStopParams,
 ): Promise<boolean> {
   if (!input.repair || process.platform === "win32") {
-    return false;
-  }
-  let owner: ReturnType<typeof readGatewayOwnerLease>;
-  try {
-    owner = readGatewayOwnerLease({
-      env: process.env,
-      current: true,
-      openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
-    });
-  } catch {
-    return false;
-  }
-  if (owner?.state !== "live" || owner.mode !== "supervised") {
     return false;
   }
   params.assertCurrent();
@@ -140,10 +229,9 @@ export async function stopSupervisedPredecessorGateway(
     }
     const stoppedAtMs = state.stoppedAtMs ?? Date.now();
     const step = encodeReceipt(serviceIdentity(state, stoppedAtMs));
-    receipt = recordUpdateRunStepAsync(
-      runId,
-      { step, status: "completed", endedAtMs: stoppedAtMs },
-      {
+    const recordedStep: UpdateRunStep = { step, status: "completed", endedAtMs: stoppedAtMs };
+    const persist = () =>
+      recordUpdateRunStepAsync(runId, recordedStep, {
         env,
         context,
         assertCurrent: params.assertCurrent,
@@ -151,7 +239,18 @@ export async function stopSupervisedPredecessorGateway(
           const release = registerSignalExitGate(completion);
           void completion.then(release, release);
         },
-      },
+      });
+    receipt = (
+      params.databaseWriteCapture
+        ? recordCapturedPredecessorStop(
+            runId,
+            recordedStep,
+            params.databaseWriteCapture,
+            params,
+            env,
+            persist,
+          )
+        : persist()
     ).then((result) => {
       if (
         result?.runId !== runId ||
@@ -165,7 +264,8 @@ export async function stopSupervisedPredecessorGateway(
       recorded = true;
     });
     // The native callback stays synchronous; join its receipt after native cleanup below.
-    void receipt.catch(() => undefined);
+    const release = registerSignalExitGate(receipt);
+    void receipt.then(release, release);
   };
   let stopFailure: { error: unknown } | undefined;
   try {
