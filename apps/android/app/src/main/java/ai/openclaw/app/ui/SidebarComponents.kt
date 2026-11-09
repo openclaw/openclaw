@@ -164,7 +164,7 @@ internal fun SidebarCollapsibleHeader(
     modifier =
       modifier
         .fillMaxWidth()
-        .heightIn(min = 44.dp)
+        .heightIn(min = 48.dp)
         .clip(RoundedCornerShape(10.dp))
         .clickable(role = Role.Button, onClick = onClick)
         .semantics { stateDescription = if (expanded) nativeString("Expanded") else nativeString("Collapsed") }

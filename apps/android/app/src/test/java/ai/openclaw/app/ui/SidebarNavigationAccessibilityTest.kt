@@ -20,6 +20,7 @@ import android.view.inspector.WindowInspector
 import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.input.InputModeManager
@@ -45,7 +46,9 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.printToString
+import androidx.compose.ui.unit.dp
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
@@ -114,6 +117,29 @@ class SidebarNavigationAccessibilityTest {
       Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, previousScale)
       NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
     }
+  }
+
+  @Test
+  fun compactSidebarTargetsDoNotRouteEdgeTapsToAdjacentActions() {
+    showSidebar()
+    val pinned = composeRule.onNodeWithText("Pinned")
+    val pinnedCenter = pinned.fetchSemanticsNode().boundsInRoot.center
+    // A 44dp row can report expanded touch bounds, but the next row wins this tap.
+    composeRule.onRoot().performTouchInput {
+      click(pinnedCenter + Offset(0f, 23.dp.toPx()))
+    }
+    pinned.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded"))
+    composeRule.onNodeWithText("Recent").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+    pinned.performClick()
+
+    val menuCenter = composeRule.onNodeWithTag("sidebar-pages-menu").fetchSemanticsNode().boundsInRoot.center
+    // The pencil's left edge must open its menu, not collapse the neighboring Pages row.
+    composeRule.onRoot().performTouchInput {
+      click(menuCenter - Offset(23.dp.toPx(), 0f))
+    }
+    composeRule.onNode(isPopup()).assertIsDisplayed()
+    composeRule.onNode(hasText("Edit pinned items") and hasAnyAncestor(isPopup())).assertIsDisplayed()
+    composeRule.runOnIdle { assertTrue(selections.isEmpty()) }
   }
 
   @Test
