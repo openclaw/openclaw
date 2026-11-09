@@ -281,6 +281,9 @@ test("preserves the highest verified binding sequence when rejoining the same cl
 
 test("retains stronger verified authority before refusing a rejoin", async () => {
   let saved = await join();
+  // The owner removed W, so the pre-mail admission check sees it unlisted again.
+  receipt = undefined;
+  reads = 0;
   descriptor.descriptor.binding = await signStatement(
     "ServerBinding",
     {
