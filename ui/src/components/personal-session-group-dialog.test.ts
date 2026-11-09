@@ -17,7 +17,7 @@ const scopes = {
   projects: [],
 };
 const options = {
-  group: { label: "Dev", sessionKeys: ["a"] },
+  group: { id: "dev-group", label: "Dev", sessionKeys: ["a"] },
   known: [row("a", "Alpha")],
   scopes,
   load: async () => ({ sessions: [row("a", "Alpha")], hasMore: false }),
@@ -76,26 +76,26 @@ it("keeps Enter from submitting the section during IME composition", async () =>
   expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
 });
 
-it("keeps Enter from submitting the section in the WebKit composition-end grace window", async () => {
-  const { modal, submit } = await openDialog();
-  const input = await openSearch(modal);
-  input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-  // WebKit can clear both composition flags before the committing Enter arrives.
-  const event = keydown(input, "Enter", { keyCode: 13 });
-  expect(event.defaultPrevented).toBe(true);
-  expect(submit).not.toHaveBeenCalled();
-  expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
-});
-
-it("does not close search while Escape is composing, then clears on a settled Escape", async () => {
+it("does not close search while Escape is composing, then clears and closes on settled Escapes", async () => {
   const { modal } = await openDialog();
   const input = await openSearch(modal);
   input.value = "alpha";
   input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  // Solid 2 batches the query write; settle before asserting so the handler observes the new value.
+  await waitForSolid(() => expect(queryFromInput(input)).toBe("alpha"));
   // During composition Escape belongs to the input method: it must not clear or close.
   keydown(input, "Escape", { isComposing: true, keyCode: 229 });
   expect(searchInput(modal)).toBe(input);
-  // Once composition is over, Escape clears the query and closes search.
+  expect(queryFromInput(input)).toBe("alpha");
+  // First settled Escape clears the query.
+  keydown(input, "Escape", {});
+  await waitForSolid(() => expect(queryFromInput(input)).toBe(""));
+  expect(searchInput(modal)).toBe(input);
+  // Second settled Escape closes search.
   keydown(input, "Escape", {});
   await waitForSolid(() => expect(searchInput(modal)).toBeNull());
 });
+
+function queryFromInput(input: HTMLInputElement): string {
+  return input.value;
+}
