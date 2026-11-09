@@ -209,6 +209,7 @@ describe("Templates Gateway contract", () => {
       action: "schedule",
       blocked: false,
       proposed: {
+        enabled: false,
         schedule: { cron: "0 9 * * *", timezone: "UTC" },
         session: "isolated",
         delivery: "last-channel",
@@ -264,6 +265,7 @@ describe("Templates Gateway contract", () => {
       ...scheduledJob,
       action: "change",
       current: {
+        enabled: true,
         schedule: { cron: "0 8 * * *", timezone: "UTC" },
         session: "main",
         delivery: "none",
@@ -281,6 +283,9 @@ describe("Templates Gateway contract", () => {
       scheduledJobs: { ...plan.scheduledJobs, jobs: [updatedJob] },
     };
     checkPlan(updatePlan);
+    rejectPlan(
+      withJob({ ...updatedJob, proposed: { ...scheduledJob.proposed, enabled: "false" } }),
+    );
     rejectPlan(
       withJob({ ...updatedJob, proposed: { ...scheduledJob.proposed, message: undefined } }),
     );

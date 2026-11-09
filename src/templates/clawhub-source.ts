@@ -565,6 +565,7 @@ async function readClawHubTemplateContents(
               ],
               automations: manifest.automations.map((job) => ({
                 name: job.name || job.id,
+                enabled: job.enabled ?? true,
                 schedule: job.schedule.cron,
                 timezone: job.schedule.timezone,
               })),

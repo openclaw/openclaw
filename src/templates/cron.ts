@@ -92,7 +92,7 @@ function templateCronGatewayInput(agentId: string, ref: PersistedTemplateCronRef
     declarationKey: ref.declarationKey,
     ...(job.name ? { displayName: job.name } : {}),
     owner: { agentId },
-    enabled: true,
+    enabled: job.enabled ?? true,
     agentId,
     schedule: {
       kind: "cron",

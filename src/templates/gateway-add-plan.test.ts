@@ -367,6 +367,7 @@ describe("Gateway Template Add plan", () => {
           action: "schedule",
           blocked: false,
           proposed: {
+            enabled: true,
             schedule: { everyMs: 1_800_000 },
             session: "isolated",
             delivery: "owner",
@@ -379,6 +380,7 @@ describe("Gateway Template Add plan", () => {
           action: "schedule",
           blocked: false,
           proposed: {
+            enabled: true,
             schedule: { cron: "0 * * * *", timezone: "UTC" },
             session: "isolated",
             delivery: "last-channel",

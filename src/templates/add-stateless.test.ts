@@ -393,6 +393,96 @@ const baseConfig = (): OpenClawConfig => ({
   agents: { entries: { main: {} } },
   plugins: { enabled: false },
 });
+
+it.each([false, undefined])(
+  "installs an ordinary automation with enabled=%s and configures the same job before activation",
+  async (enabled) => {
+    await withOpenClawTestState({ label: "template-paused-add" }, async (fixture) => {
+      const manifestPath = fixture.statePath("CLAW.md");
+      await writeFile(
+        manifestPath,
+        `---\n${JSON.stringify({
+          schemaVersion: 1,
+          agent: { id: "watcher" },
+          automations: [
+            {
+              id: "weekly",
+              enabled,
+              schedule: { cron: "0 9 * * 1", timezone: "UTC" },
+              session: "isolated",
+              message: "Research the configured public pages.",
+            },
+          ],
+        })}\n---\n`,
+      );
+      const source = await readTemplateManifestFile(manifestPath);
+      assert(source.ok, JSON.stringify(source.diagnostics));
+      let config = baseConfig();
+      setRuntimeConfigSnapshot(config);
+      const plan = await buildGatewayTemplateAddPlan(source, { config, sourceMcpServers: {} });
+      expect(projectTemplateAddScheduledJobs(plan).jobs[0]?.proposed).toMatchObject({
+        enabled: enabled ?? true,
+      });
+      const run = vi.fn(async () => ({ status: "ok" as const }));
+      const cron = new CronService({
+        storePath: fixture.statePath("cron", "jobs.json"),
+        scheduler: createTestGatewayScheduler(),
+        cronEnabled: true,
+        defaultAgentId: "main",
+        log: createNoopLogger(),
+        enqueueSystemEvent: vi.fn(),
+        runSessionEvent: run,
+        runIsolatedAgentJob: run,
+      });
+      await cron.start();
+      try {
+        const result = await applyTemplateAddPlanStateless(plan, {
+          config,
+          consentPlanIntegrity: plan.planIntegrity,
+          getCurrentConfig: () => config,
+          commitConfig: async (transform) => {
+            config = transform(config);
+            setRuntimeConfigSnapshot(config);
+          },
+          cronGateway: createTemplateCronAdapter(cron),
+        });
+        expect(result.status, result.error?.message).toBe("complete");
+        const jobs = await cron.list({ includeDisabled: true });
+        expect(jobs).toHaveLength(1);
+        const job = jobs[0]!;
+        expect(job).toMatchObject({
+          enabled: enabled ?? true,
+          agentId: "watcher",
+          declarationKey: "template:watcher:weekly",
+        });
+        if (enabled !== false) {
+          return;
+        }
+        expect(await cron.run(job.id, "due")).toMatchObject({ ran: false });
+        expect(run).not.toHaveBeenCalled();
+        await cron.update(job.id, {
+          schedule: { kind: "cron", expr: "0 9 * * 1", tz: "Europe/Berlin" },
+          payload: { kind: "agentTurn", toolsAllow: ["read", "web_search"], timeoutSeconds: 600 },
+        });
+        expect(await cron.readJob(job.id)).toMatchObject({
+          enabled: false,
+          schedule: { tz: "Europe/Berlin" },
+          payload: { toolsAllow: ["read", "web_search"], timeoutSeconds: 600 },
+        });
+        await cron.update(job.id, { enabled: true });
+        expect(await cron.run(job.id, "force")).toMatchObject({ ran: true });
+        expect(run).toHaveBeenCalledOnce();
+        expect((await cron.list({ includeDisabled: true })).map((item) => item.id)).toEqual([
+          job.id,
+        ]);
+      } finally {
+        cron.stop();
+        await cron.waitForIdle();
+      }
+    });
+  },
+);
+
 async function portableSource(fixture: OpenClawTestState) {
   const packageRoot = fixture.statePath("package");
   await mkdir(packageRoot, { recursive: true });

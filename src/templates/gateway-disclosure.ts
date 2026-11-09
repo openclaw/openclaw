@@ -165,6 +165,7 @@ export function projectTemplateConfiguredAccess(params: {
 
 function scheduledDeclaration(job: TemplateCronJob): ScheduledDeclaration {
   return {
+    enabled: job.enabled ?? true,
     schedule: { cron: job.schedule.cron, timezone: job.schedule.timezone },
     session: job.session,
     delivery: job.delivery?.mode === "announce" ? "last-channel" : "none",
@@ -192,6 +193,7 @@ export function projectTemplateAddScheduledJobs(plan: TemplateAddPlan): Template
             action: action.action,
             blocked: action.blocked,
             proposed: {
+              enabled: job.enabled,
               schedule: { everyMs: job.schedule.everyMs },
               session: job.sessionTarget === "isolated" ? ("isolated" as const) : ("main" as const),
               delivery: "owner" as const,
@@ -204,6 +206,7 @@ export function projectTemplateAddScheduledJobs(plan: TemplateAddPlan): Template
         const parsed = cronJobSchema.safeParse({
           id: details?.id,
           name: details?.name,
+          enabled: details?.enabled,
           schedule: details?.schedule,
           session: details?.session,
           message: details?.message,

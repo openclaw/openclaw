@@ -32,6 +32,7 @@ export type TemplateSourceIdentity = {
 export type TemplateCronJob = {
   id: string;
   name?: string;
+  enabled?: boolean;
   schedule: { cron: string; timezone: string };
   session: "main" | "isolated";
   message: string;

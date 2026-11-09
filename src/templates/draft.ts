@@ -194,7 +194,7 @@ export async function prepareTemplateDraft(params: {
       id: `cron:${job.id}`,
       kind: "automation",
       label: job.name ?? job.id,
-      detail: `${job.schedule.cron} · ${job.schedule.timezone}`,
+      detail: `${job.schedule.cron} · ${job.schedule.timezone} · ${job.enabled === false ? "Paused" : "Enabled"}`,
     });
   }
   const known = new Set(items.map((item) => item.id));

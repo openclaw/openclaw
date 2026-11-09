@@ -404,6 +404,7 @@ export const cronJobSchema = z
   .object({
     id: agentId,
     name: optionalString,
+    enabled: z.boolean().optional(),
     schedule: z.object({ cron: nonEmptyString, timezone: nonEmptyString }).strict(),
     session: z.enum(["main", "isolated"]),
     message: nonEmptyString,

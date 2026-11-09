@@ -78,7 +78,13 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
       return "";
     }
     if ("schedule" in item) {
-      return item.schedule + " · " + item.timezone;
+      return (
+        item.schedule +
+        " · " +
+        item.timezone +
+        " · " +
+        t(item.enabled ? "templatesCatalog.automationEnabled" : "templatesCatalog.automationPaused")
+      );
     }
     if ("ref" in item) {
       return t("templatesCatalog.dependencyClawHub", { version: item.version });
@@ -218,7 +224,15 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                           : "excerpt" in item
                                             ? item.excerpt
                                             : "schedule" in item
-                                              ? item.schedule + " · " + item.timezone
+                                              ? item.schedule +
+                                                " · " +
+                                                item.timezone +
+                                                " · " +
+                                                t(
+                                                  item.enabled
+                                                    ? "templatesCatalog.automationEnabled"
+                                                    : "templatesCatalog.automationPaused",
+                                                )
                                               : ""}
                                       </small>
                                     </span>
