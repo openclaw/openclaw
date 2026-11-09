@@ -5,6 +5,17 @@ import Testing
 
 struct AnyCodableTests {
     @Test
+    func `encodes native fixed width numbers like their values`() throws {
+        let cases: [(Any, String)] = [
+            (UInt(7), "7"), (Int32(-3), "-3"), (UInt8(255), "255"), (Float(1.5), "1.5"),
+        ]
+        for (value, json) in cases {
+            #expect(try String(decoding: JSONEncoder().encode(AnyCodable(value)), as: UTF8.self) == json)
+        }
+        #expect(AnyCodable(UInt(7)) == AnyCodable(7))
+    }
+
+    @Test
     func `round trips epoch milliseconds beyond int 32`() throws {
         let epochMilliseconds: Int64 = 1_800_000_000_000
         let values = try self.representations([epochMilliseconds], json: "1800000000000")
