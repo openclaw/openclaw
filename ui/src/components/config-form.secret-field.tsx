@@ -7,7 +7,7 @@ import type {
   StoredSecretSources,
 } from "../lib/config/config-secret-fields.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { isComposingKeyboardEvent } from "../lib/ime.ts";
+import { isComposingKeyboardEvent, recordCompositionEnd } from "../lib/ime.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { Icon } from "./solid/icon.tsx";
 
@@ -260,6 +260,8 @@ export function secretInputProps(isSecret: () => boolean) {
     get "data-form-type"() {
       return when("other");
     },
+    // handleHeldSecretKey reads this to skip the Enter that commits an IME candidate.
+    onCompositionEnd: recordCompositionEnd,
   };
 }
 

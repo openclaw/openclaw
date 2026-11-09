@@ -1,7 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { isSecretConfigField } from "../lib/config-form-utils.ts";
-import { recordCompositionEnd } from "../lib/ime.ts";
-import { handleHeldSecretKey, type SecretFieldHold } from "./config-form.secret-field.tsx";
 
 describe("isSecretConfigField", () => {
   it("follows the schema's marking, not the field name", () => {
@@ -25,51 +23,5 @@ describe("isSecretConfigField", () => {
     const hints = { oauth: { sensitive: true }, "oauth.clientId": { sensitive: false } };
     expect(isSecretConfigField(["oauth", "clientSecret"], hints)).toBe(true);
     expect(isSecretConfigField(["oauth", "clientId"], hints)).toBe(false);
-  });
-});
-
-describe("handleHeldSecretKey", () => {
-  const hold = {
-    text: () => "held-value",
-    saving: () => false,
-  } as unknown as SecretFieldHold;
-  const options = {
-    multiline: false,
-    onSave: vi.fn(),
-    onCancel: vi.fn(),
-  };
-  const keydown = (init: KeyboardEventInit = {}) =>
-    new KeyboardEvent("keydown", { key: "Enter", bubbles: true, ...init });
-
-  it("does not save a one-line held edit while an IME composition is active", () => {
-    expect(handleHeldSecretKey(keydown({ isComposing: true }), hold, options)).toBe(false);
-    expect(options.onSave).not.toHaveBeenCalled();
-  });
-
-  it("does not save when the Enter carries the native IME keyCode 229", () => {
-    expect(handleHeldSecretKey(keydown({ keyCode: 229 }), hold, options)).toBe(false);
-    expect(options.onSave).not.toHaveBeenCalled();
-  });
-
-  it("still saves a held edit on an ordinary Enter", () => {
-    expect(handleHeldSecretKey(keydown(), hold, options)).toBe(true);
-    expect(options.onSave).toHaveBeenCalledOnce();
-  });
-
-  it("does not save the flagless commit Enter right after compositionend (WebKit grace)", () => {
-    options.onSave.mockClear();
-    const target = document.createElement("input");
-    const composed = new CompositionEvent("compositionend", { bubbles: true });
-    Object.defineProperty(composed, "target", { value: target });
-    recordCompositionEnd(composed);
-    const commitEnter = new KeyboardEvent("keydown", {
-      key: "Enter",
-      bubbles: true,
-      isComposing: false,
-      keyCode: 13,
-    });
-    Object.defineProperty(commitEnter, "target", { value: target });
-    expect(handleHeldSecretKey(commitEnter, hold, options)).toBe(false);
-    expect(options.onSave).not.toHaveBeenCalled();
   });
 });

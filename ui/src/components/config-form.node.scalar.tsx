@@ -4,7 +4,6 @@ import type { JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import { i18n } from "../i18n/index.ts";
 import { isEnvPlaceholder, REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
-import { clearCompositionEnd, recordCompositionEnd } from "../lib/ime.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { createNativeDraft } from "../lib/reactive/native-draft.ts";
 import {
@@ -446,8 +445,6 @@ function ScalarInput(props: {
     get readonly() {
       return state().effectiveRedacted;
     },
-    onCompositionEnd: recordCompositionEnd,
-    onKeyUp: clearCompositionEnd,
     // A narrow field clips this copy, and the variable's name is what matters.
     get title() {
       return state().effectiveRedacted ? state().placeholder : undefined;
@@ -518,7 +515,6 @@ function ScalarInput(props: {
       }
     },
     onBlur: (event: FocusEvent & { currentTarget: HTMLInputElement | HTMLTextAreaElement }) => {
-      clearCompositionEnd(event);
       const target = event.currentTarget;
       if (props.params.commitOnBlur && target.value !== state().renderedValue) {
         commitChange(target);
