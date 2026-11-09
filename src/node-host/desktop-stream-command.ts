@@ -3,11 +3,7 @@ import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type { DesktopHostConfig } from "../config/types.desktop.js";
-import {
-  classifyRfbSecurity,
-  connectRfbServer,
-  RFB_VNC_PASSWORD_UNAVAILABLE,
-} from "../gateway/desktop/rfb-probe.js";
+import { classifyRfbSecurity, connectRfbServer } from "../gateway/desktop/rfb-probe.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { NODE_DESKTOP_ATTACH_PATH } from "../shared/node-desktop-stream.js";
 import { isWorkerDesktopArdPassword } from "../shared/worker-desktop-descriptor.js";
@@ -131,16 +127,11 @@ async function runNodeDesktopStreamCommand(params: {
     );
   }
   try {
-    if (!params.username && params.passwordFile && !probe.securityTypes.includes(2)) {
-      throw new Error(RFB_VNC_PASSWORD_UNAVAILABLE);
-    }
     const auth = params.username
       ? probe.securityTypes.includes(30)
         ? "ard-account"
         : "unsupported"
-      : classifyRfbSecurity(probe.securityTypes, {
-          vncPasswordConfigured: Boolean(params.passwordFile),
-        });
+      : classifyRfbSecurity(probe.securityTypes);
     if (auth === "none") {
       throw new Error("refusing unauthenticated loopback RFB server");
     }

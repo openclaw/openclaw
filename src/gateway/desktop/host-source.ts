@@ -14,12 +14,7 @@ import {
 import { mintDesktopObserverToken } from "./observe-bridge.js";
 import type { DesktopObserveRequester } from "./observe-requester.js";
 import type { RfbPreauthDescriptor } from "./rfb-preauth.js";
-import {
-  classifyRfbSecurity,
-  probeRfbServer,
-  RFB_VNC_PASSWORD_UNAVAILABLE,
-  type RfbProbeResult,
-} from "./rfb-probe.js";
+import { classifyRfbSecurity, probeRfbServer, type RfbProbeResult } from "./rfb-probe.js";
 import type { DesktopSessionRegistry } from "./session-registry.js";
 
 const DEFAULT_HOST_DESKTOP_PORT = 5900;
@@ -181,9 +176,7 @@ async function inspectConfiguredHostDesktop(
   if (probe.kind === "not-rfb") {
     return unavailable(nonRfbError(port), "not-rfb");
   }
-  const auth = classifyRfbSecurity(probe.securityTypes, {
-    vncPasswordConfigured: Boolean(params.config?.passwordFile),
-  });
+  const auth = classifyRfbSecurity(probe.securityTypes);
   const security =
     auth === "unsupported"
       ? probe.securityTypes.includes(19)
@@ -199,9 +192,7 @@ async function inspectConfiguredHostDesktop(
   const detail =
     auth === "none"
       ? `unavailable: unauthenticated VNC server at 127.0.0.1:${port}; require a password-protected VncAuth server, then retry`
-      : params.config?.passwordFile && !probe.securityTypes.includes(2)
-        ? `unavailable: ${RFB_VNC_PASSWORD_UNAVAILABLE}`
-        : `unavailable: ${security} security is not supported; configure a VncAuth server and desktop.host.passwordFile, then retry`;
+      : `unavailable: ${security} security is not supported; configure a VncAuth server and desktop.host.passwordFile, then retry`;
   return unavailable(detail, "unsupported", security);
 }
 
@@ -223,18 +214,13 @@ export function createHostDesktopSource(params: {
   const acquireAttached = async (
     probe: Extract<RfbProbeResult, { kind: "rfb" }>,
   ): Promise<HostDesktopAcquireResult> => {
-    const security = classifyRfbSecurity(probe.securityTypes, {
-      vncPasswordConfigured: Boolean(params.config.passwordFile),
-    });
+    const security = classifyRfbSecurity(probe.securityTypes);
     if (security === "none") {
       throw new Error(
         `refusing unauthenticated VNC server on 127.0.0.1:${port}; require a password-protected VncAuth server, then retry`,
       );
     }
     if (security === "unsupported") {
-      if (params.config.passwordFile && !probe.securityTypes.includes(2)) {
-        throw new Error(RFB_VNC_PASSWORD_UNAVAILABLE);
-      }
       const name = probe.securityTypes.includes(19) ? "VeNCrypt" : "the offered VNC security";
       throw new Error(
         `${name} is not supported; configure a VncAuth server and desktop.host.passwordFile, then retry`,
@@ -447,9 +433,8 @@ export function createHostDesktopService(params: {
         registerSecretValueForRedaction(password);
         preauth = { auth: "ard-account", credentials: { username, password } };
       }
-      if (auth === "vnc-password" && acquired.vncPassword) {
-        // Preauthenticate explicit VNC secrets before noVNC can select ARD first.
-        // Audio shares this same authenticated screen outcome when available.
+      if (audio && auth === "vnc-password" && acquired.vncPassword) {
+        // The audio grant shares this screen authentication outcome; it cannot bypass VNC.
         preauth = { auth, credentials: { password: acquired.vncPassword } };
       }
       const minted = mintDesktopObserverToken({
@@ -473,10 +458,12 @@ export function createHostDesktopService(params: {
         expiresAtMs: minted.expiresAtMs,
         control: observeParams.control,
         auth,
-        ...(minted.audio ? { audio: minted.audio } : {}),
-        ...(preauth ? { preauthenticated: true } : {}),
+        ...(minted.audio ? { audio: minted.audio, preauthenticated: true } : {}),
         ...(!audio && acquired.audioUnavailableReason
           ? { audioUnavailableReason: "setup-unavailable" as const }
+          : {}),
+        ...(auth === "vnc-password" && acquired.vncPassword && !preauth
+          ? { vncPassword: acquired.vncPassword }
           : {}),
       };
     },

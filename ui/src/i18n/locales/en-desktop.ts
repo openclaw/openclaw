@@ -89,9 +89,6 @@ const enDesktop = {
     fit: "Fit",
     fitHeight: "Fit height",
     fitWidth: "Fit width",
-    focusArea: "Focus area",
-    focusAreaHint:
-      "Drag around a window, or use arrows to move, Shift+arrows to resize, and Enter to focus. Select Fit to reset.",
     actual: "Actual",
     actualSizeLabel: "Actual size",
     match: "Match",

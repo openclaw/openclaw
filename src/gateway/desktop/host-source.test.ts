@@ -99,7 +99,7 @@ function managedService(
 describe("gateway host desktop source", () => {
   it.each<[string, Parameters<typeof listenRfb>[0], "ready" | "unsupported" | "needs-server"]>([
     ["VncAuth", { securityTypes: [2] }, "ready"],
-    ["Screen Sharing", { banner: "RFB 003.889\n", securityTypes: [30, 2] }, "ready"],
+    ["Screen Sharing", { banner: "RFB 003.889\n", securityTypes: [30] }, "ready"],
     ["unauthenticated VNC", { securityTypes: [1] }, "unsupported"],
     ["VeNCrypt", { securityTypes: [19] }, "unsupported"],
     ["another service", { banner: "HTTP/1.1 200" }, "unsupported"],
@@ -168,9 +168,7 @@ describe("gateway host desktop source", () => {
       const withPassword = mode === "password-file";
       const managedMode = mode !== "prompt" && mode !== "password-file";
       const explicitPort = mode !== "default-port" && mode !== "managed";
-      const port = explicitPort
-        ? await listenRfb({ securityTypes: withPassword ? [30, 2] : [2] })
-        : 5900;
+      const port = explicitPort ? await listenRfb({ securityTypes: [2] }) : 5900;
       const password = "desktop-secret";
       let passwordFile: string | undefined;
       if (withPassword) {
@@ -246,39 +244,6 @@ describe("gateway host desktop source", () => {
       status: { state: "attached", security: "ARD" },
       detail: `attached (127.0.0.1:${port}, security: ARD)`,
     });
-
-    const vncConfig = {
-      enabled: true,
-      port,
-      passwordFile: path.resolve("unused-vnc-password"),
-    };
-    await expect(
-      inspectHostDesktop({ config: vncConfig, platform: "darwin" }),
-    ).resolves.toMatchObject({
-      status: { state: "unavailable" },
-      detail: expect.stringContaining("does not offer VNC password authentication"),
-    });
-    await expect(
-      createHostDesktopSource({ config: vncConfig, platform: "darwin" }).acquire(),
-    ).rejects.toThrow("does not offer VNC password authentication");
-  });
-
-  it("preauthenticates an explicit VNC password before noVNC sees ARD first", async () => {
-    const port = await listenRfb({ securityTypes: [30, 2] });
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-desktop-"));
-    cleanups.push(async () => fs.rm(root, { recursive: true, force: true }));
-    const passwordFile = path.join(root, "passwd");
-    await fs.writeFile(passwordFile, "vnc-only-secret\n");
-    const { service } = hostService(() => ({ enabled: true, port, passwordFile }));
-    const requester = { connId: "vnc-viewer", isCurrent: () => true };
-    const observed = await service.observe({ control: true, requester });
-    expect(observed).toMatchObject({
-      auth: "vnc-password",
-      control: true,
-      preauthenticated: true,
-    });
-    expect(observed).not.toHaveProperty("vncPassword");
-    expect(await releaseDesktopObserverToken(observed.wsPath, requester)).toBe(true);
   });
 
   it.each(["available", "absent", "failed"] as const)(
@@ -307,7 +272,7 @@ describe("gateway host desktop source", () => {
         });
         expect(observed.audio?.wsPath).toMatch(/^\/desktop\/audio\?token=/u);
         expect(observed.preauthenticated).toBe(true);
-        expect(observed).not.toHaveProperty("vncPassword");
+        expect(observed.vncPassword).toBeUndefined();
       } else {
         expect(observed.audio).toBeUndefined();
         expect(observed.audioUnavailableReason).toBe(reason ? "setup-unavailable" : undefined);

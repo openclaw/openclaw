@@ -210,12 +210,6 @@ also provides screen sharing, but the account must have **Observe** and **Contro
 rights in **System Settings → General → Sharing → Remote Management**. A correct
 password can still be rejected when those rights are missing. OpenClaw does not
 change these system permissions automatically.
-For control from the Control UI's non-Apple VNC viewer, macOS also needs **VNC
-viewers may control screen with password** enabled in Sharing settings and a
-distinct VNC password. Set `desktop.host.passwordFile` to an owner-only file
-containing that password. This legacy option broadens access to the Mac; use an
-isolated Mac or VM when possible. OpenClaw chooses VncAuth when that file is
-configured and the RFB server offers it, and reports an error otherwise.
 
 Observer tokens and observer connections are bound to the Gateway connection
 that requested them. Ending or revoking that connection refuses unused tokens
@@ -246,10 +240,9 @@ a Gateway connection keep TTL-only tokens.
   computer execution holds it. Default: `false`.
 - `desktop.host.port`: loopback RFB port on `127.0.0.1` (default: `5900`).
 - `desktop.host.passwordFile`: optional UTF-8 VNC password file for attach mode.
-  When supplied, VncAuth is selected even if the server advertises ARD first.
-  Without it, the Control UI prompts for a VNC password when the server selects
-  VncAuth and keeps it in browser memory for that connection. Managed mode
-  always creates its own ephemeral password.
+  Without it, the Control UI prompts for a VNC password and keeps it in browser
+  memory for that connection. Managed mode always creates its own ephemeral
+  password.
 
 Changes to `managed`, `port`, or `passwordFile` retire the current host source,
 close its observers, and release its computer execution holds. The replacement
@@ -404,11 +397,9 @@ for a session or a specific source connects when its assigned node becomes
 available; opening the picker yourself keeps source selection manual.
 
 For VncAuth, `desktop.host.passwordFile` stays on the node and is delivered only
-to the Gateway's authenticated relay. On a Mac whose server advertises both ARD
-and VncAuth, supplying the file selects VncAuth for the paired node. Without a
-password file, the Control UI prompts for the VNC password when VncAuth is
-selected; macOS ARD instead asks for account credentials when you first connect
-to a node in the Desktop panel. The panel keeps them in memory
+to the Gateway's authenticated relay. Without a password file, the Control UI
+prompts for the VNC password. macOS ARD asks for account credentials when you
+first connect to a node in the Desktop panel. The panel keeps them in memory
 for reconnects to the same node. Closing the panel, selecting another desktop,
 or losing the Gateway connection clears them; an authentication rejection asks
 for the password again. The Gateway completes ARD or VNC authentication before

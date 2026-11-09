@@ -6,9 +6,6 @@ const RFB_37_MINOR = 7;
 const RFB_37_BANNER = Buffer.from("RFB 003.007\n", "ascii");
 const RFB_38_BANNER = Buffer.from("RFB 003.008\n", "ascii");
 
-export const RFB_VNC_PASSWORD_UNAVAILABLE =
-  "desktop.host.passwordFile is configured, but the RFB server does not offer VNC password authentication; enable VNC viewer control on the host or remove passwordFile";
-
 export type RfbProbeResult =
   | { kind: "rfb"; securityTypes: number[] }
   | { kind: "not-rfb"; banner: string }
@@ -272,13 +269,7 @@ export async function probeRfbServer(params: {
 /** Maps standard RFB security numbers into the credential UX supported by OpenClaw. */
 export function classifyRfbSecurity(
   securityTypes: readonly number[],
-  options: { vncPasswordConfigured?: boolean } = {},
 ): "none" | "vnc-password" | "ard-account" | "unsupported" {
-  // Gateway preauthentication can choose VncAuth independently of noVNC when
-  // the operator explicitly supplies its password. Never downgrade silently.
-  if (options.vncPasswordConfigured) {
-    return securityTypes.includes(2) ? "vnc-password" : "unsupported";
-  }
   // noVNC selects the first security type it supports in the server's order.
   // Mirror that choice so the Gateway credential flow cannot disagree with the
   // browser (macOS advertises ARD before its VncAuth compatibility option).

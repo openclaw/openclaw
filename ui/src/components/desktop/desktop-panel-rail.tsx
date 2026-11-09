@@ -29,7 +29,6 @@ const paths = {
   ],
   "fit-height": ["m8 6 4-4 4 4M12 2v20m-4-4 4 4 4-4"],
   "fit-width": ["m6 8-4 4 4 4M2 12h20m-4-4 4 4-4 4"],
-  focus: ["M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5", "M8 12h8m-4-4v8"],
   match: [
     "M12 17H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v6M12 17v4M8 21h4",
     "M19 14v-1m0 9v-1m-4-4h-1m9 0h-1m-5.8-2.8-.7-.7m7 7-.7-.7m-5.6 0-.7.7m7-7-.7.7",
@@ -471,7 +470,6 @@ function createDesktopSizingMenu(
     return [
       { mode: "fit" as const, label: t("desktop.fit") },
       { mode: "actual" as const, label: t("desktop.actualSizeLabel") },
-      { mode: "focus" as const, label: t("desktop.focusArea") },
       ...(options.additionalModes ?? []),
       ...(options.canResize || options.mode === "match"
         ? [{ mode: "match" as const, label: t("desktop.match") }]
@@ -526,14 +524,7 @@ export function DesktopSizing(
           title={t("desktop.matchRequirement")}
           onChange={(event) => {
             const mode = event.currentTarget.value;
-            if (
-              mode === "fit" ||
-              mode === "actual" ||
-              mode === "fit-height" ||
-              mode === "fit-width" ||
-              mode === "focus" ||
-              (mode === "match" && props.canResize)
-            ) {
+            if (mode === "fit" || mode === "actual" || (mode === "match" && props.canResize)) {
               props.onChange(mode);
             }
           }}
@@ -543,15 +534,6 @@ export function DesktopSizing(
           </option>
           <option value="actual" selected={props.mode === "actual"}>
             {t("desktop.actual")}
-          </option>
-          <option value="fit-height" selected={props.mode === "fit-height"}>
-            {t("desktop.fitHeight")}
-          </option>
-          <option value="fit-width" selected={props.mode === "fit-width"}>
-            {t("desktop.fitWidth")}
-          </option>
-          <option value="focus" selected={props.mode === "focus"}>
-            {t("desktop.focusArea")}
           </option>
           {(props.canResize || props.mode === "match") && (
             <option value="match" selected={props.mode === "match"} disabled={!props.canResize}>

@@ -341,7 +341,7 @@ describe("DesktopClient", () => {
       expect([rfb.viewOnly, rfb.resizeSession]).toEqual([viewOnly, resizes]);
       handle.setSizingMode("actual");
       expect([rfb.scaleViewport, rfb.resizeSession]).toEqual([false, false]);
-      for (const mode of ["fit-height", "fit-width", "focus"] as const) {
+      for (const mode of ["fit-height", "fit-width"] as const) {
         handle.setSizingMode(mode);
         expect([rfb.scaleViewport, rfb.resizeSession]).toEqual([true, false]);
       }

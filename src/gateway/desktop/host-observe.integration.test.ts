@@ -1,9 +1,4 @@
-import { once } from "node:events";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSocketServer, listenLoopback } from "./desktop.test-support.js";
 import { createHostDesktopService } from "./host-source.js";
@@ -89,7 +84,7 @@ it.each(["connected", "access denied", "invalid security"] as const)(
       credentials: { username: "operator", password: "account-password" },
     });
     expect(observed.auth).toBe("ard-account");
-    expect(observed).not.toHaveProperty("vncPassword");
+    expect(observed.vncPassword).toBeUndefined();
 
     const gateway = await startObserveGateway(cleanups, registry);
     const { ws, nextFrame, closed } = await connectRfbObserver(
@@ -124,149 +119,5 @@ it.each(["connected", "access denied", "invalid security"] as const)(
     ws.send(Buffer.concat([keyEvent, FRAMEBUFFER_REQUEST]));
     await expect(script.promise).resolves.toBeUndefined();
     await vi.waitFor(() => expect(connectionCount).toBe(2));
-  },
-);
-
-it.each([true, false])(
-  "uses explicit VncAuth and enforces control=%s when ARD is offered first",
-  async (control) => {
-    let connectionCount = 0;
-    const receivedInput = createDeferred();
-    const { server: rfbServer } = createSocketServer(cleanups, (socket) => {
-      connectionCount += 1;
-      const current = connectionCount;
-      const reader = new SocketReader(socket);
-      void (async () => {
-        try {
-          socket.write(VERSION);
-          expect(await reader.readExactly(12)).toEqual(VERSION);
-          socket.write(Buffer.from([2, 30, 2]));
-          if (current === 1) {
-            return;
-          }
-          expect(await reader.readExactly(1)).toEqual(Buffer.from([2]));
-          socket.write(Buffer.alloc(16, 7));
-          expect(await reader.readExactly(16)).toHaveLength(16);
-          socket.write(Buffer.alloc(4));
-          expect(await reader.readExactly(1)).toEqual(Buffer.from([control ? 0 : 1]));
-          socket.write(Buffer.from("server-init", "ascii"));
-          const pointer = Buffer.from([5, 1, 0, 40, 0, 50]);
-          expect(
-            await reader.readExactly(control ? pointer.length : FRAMEBUFFER_REQUEST.length),
-          ).toEqual(control ? pointer : FRAMEBUFFER_REQUEST);
-          receivedInput.resolve();
-        } catch (error) {
-          receivedInput.reject(error instanceof Error ? error : new Error(String(error)));
-        }
-      })();
-    });
-    const port = await listenLoopback(rfbServer);
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-vnc-"));
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
-    const passwordFile = path.join(root, "password");
-    await fs.writeFile(passwordFile, "vnc-secret\n");
-    const registry = createDesktopSessionRegistry();
-    cleanups.push(() => registry.stopAll());
-    const service = createHostDesktopService({
-      getConfig: () => ({ enabled: true, port, passwordFile }),
-      registry,
-    });
-    const observed = await service.observe({ control });
-    expect(observed).toMatchObject({ auth: "vnc-password", preauthenticated: true, control });
-    expect(observed).not.toHaveProperty("vncPassword");
-    const gateway = await startObserveGateway(cleanups, registry);
-    const { ws, nextFrame } = await connectRfbObserver(cleanups, `${gateway}${observed.wsPath}`);
-    expect(await nextFrame()).toEqual(Buffer.alloc(4));
-    expect(await nextFrame()).toEqual(Buffer.from("server-init", "ascii"));
-    ws.send(Buffer.concat([Buffer.from([5, 1, 0, 40, 0, 50]), FRAMEBUFFER_REQUEST]));
-    await expect(receivedInput.promise).resolves.toBeUndefined();
-  },
-);
-
-it.each(["credential", "input"] as const)(
-  "revokes a configured-password observer before %s reaches the desktop",
-  async (boundary) => {
-    let connectionCount = 0;
-    const serverReady = createDeferred();
-    const releaseServer = createDeferred();
-    const serverDone = createDeferred();
-    const { server: rfbServer } = createSocketServer(cleanups, (socket) => {
-      connectionCount += 1;
-      const current = connectionCount;
-      const reader = new SocketReader(socket);
-      void (async () => {
-        try {
-          socket.write(VERSION);
-          expect(await reader.readExactly(12)).toEqual(VERSION);
-          socket.write(Buffer.from([2, 30, 2]));
-          if (current === 1) {
-            return;
-          }
-          expect(await reader.readExactly(1)).toEqual(Buffer.from([2]));
-          const received: Buffer[] = [];
-          const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
-          if (boundary === "credential") {
-            socket.on("data", (chunk) => received.push(Buffer.from(chunk)));
-            serverReady.resolve();
-            await releaseServer.promise;
-            socket.write(Buffer.alloc(16, 7));
-          } else {
-            socket.write(Buffer.alloc(16, 7));
-            expect(await reader.readExactly(16)).toHaveLength(16);
-            socket.write(Buffer.alloc(4));
-            expect(await reader.readExactly(1)).toEqual(Buffer.from([0]));
-            socket.write(Buffer.from("server-init", "ascii"));
-            socket.on("data", (chunk) => received.push(Buffer.from(chunk)));
-            serverReady.resolve();
-            await releaseServer.promise;
-          }
-          await closed;
-          expect(received).toEqual([]);
-          serverDone.resolve();
-        } catch (error) {
-          serverDone.reject(error instanceof Error ? error : new Error(String(error)));
-        }
-      })();
-    });
-    const port = await listenLoopback(rfbServer);
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-vnc-"));
-    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
-    const passwordFile = path.join(root, "password");
-    await fs.writeFile(passwordFile, "vnc-secret\n");
-    const registry = createDesktopSessionRegistry();
-    cleanups.push(() => registry.stopAll());
-    const service = createHostDesktopService({
-      getConfig: () => ({ enabled: true, port, passwordFile }),
-      registry,
-    });
-    const controller = new AbortController();
-    const observed = await service.observe({
-      control: true,
-      requester: { signal: controller.signal, isCurrent: () => !controller.signal.aborted },
-    });
-    expect(observed).toMatchObject({ auth: "vnc-password", preauthenticated: true });
-    const gateway = await startObserveGateway(cleanups, registry);
-    let ws: WebSocket;
-    if (boundary === "input") {
-      const observer = await connectRfbObserver(cleanups, `${gateway}${observed.wsPath}`);
-      ws = observer.ws;
-      expect(await observer.nextFrame()).toEqual(Buffer.alloc(4));
-      expect(await observer.nextFrame()).toEqual(Buffer.from("server-init", "ascii"));
-    } else {
-      ws = new WebSocket(`${gateway}${observed.wsPath}`);
-      cleanups.push(async () => ws.terminate());
-      await once(ws, "open");
-    }
-    const closed = new Promise<[number, string]>((resolve) =>
-      ws.once("close", (code, reason) => resolve([code, reason.toString()])),
-    );
-    await serverReady.promise;
-    controller.abort();
-    if (boundary === "input") {
-      ws.send(Buffer.from([5, 1, 0, 40, 0, 50]));
-    }
-    releaseServer.resolve();
-    await expect(closed).resolves.toEqual([4006, "authority_revoked"]);
-    await expect(serverDone.promise).resolves.toBeUndefined();
   },
 );
