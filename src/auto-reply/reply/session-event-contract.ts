@@ -215,6 +215,8 @@ export type SessionEventExecution = {
       meta?: EmbeddedAgentRunMeta;
       payloads?: EmbeddedAgentRunPayload[];
       resolved?: { provider: string; model: string };
+      /** The reply owner's recorded failure; an optional reply may present no failure text. */
+      failureCause?: unknown;
     },
   ) => void | Promise<void>;
 };

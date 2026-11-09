@@ -12,10 +12,7 @@ import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
-import type {
-  ReplyOperationObservation,
-  ReplyOperationResult,
-} from "../../sessions/reply-operation-state.js";
+import type { ReplyOperationObservation } from "../../sessions/reply-operation-state.js";
 import { runWithSessionControllerCleanup } from "../../sessions/session-controller.cleanup-context.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -142,8 +139,6 @@ export async function settleSessionEventTurn(params: {
   signal: AbortSignal;
   assertCurrent: () => void;
   onFailure: (error: string) => void;
-  /** The reply owner's recorded result; its failure cause outlives blank chat presentation. */
-  replyResult?: ReplyOperationResult | null;
   runId: string;
   deliveryEvidence: Parameters<SessionEventExecution["onTerminal"]>[2];
   prepareCurrent: () => Promise<void>;
@@ -160,7 +155,7 @@ export async function settleSessionEventTurn(params: {
 > {
   const { automation, runId, deliveryEvidence } = params;
   const failed = params.outcome !== "completed";
-  const failureCause = params.replyResult?.kind === "failed" ? params.replyResult.cause : undefined;
+  const failureCause = deliveryEvidence?.failureCause;
   const presentedError =
     deliveryEvidence?.meta?.error?.message ||
     deliveryEvidence?.payloads?.find((payload) => payload.isError && payload.text?.trim())?.text;

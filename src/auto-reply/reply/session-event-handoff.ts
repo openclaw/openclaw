@@ -696,7 +696,6 @@ function enqueueSessionEventAttempt(
               onFailure: (error) => {
                 failure ??= error;
               },
-              replyResult: operation?.result,
               runId,
               deliveryEvidence,
               prepareCurrent,
