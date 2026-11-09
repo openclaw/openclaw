@@ -1,8 +1,9 @@
 import { PassThrough } from "node:stream";
-import { multiselect } from "@clack/prompts";
-import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SkillInstallOption } from "../skills/discovery/status.types.js";
+import { createClackPrompter } from "../wizard/clack-prompter.js";
+import { runWizardWithPromptNavigation } from "../wizard/navigation-prompter.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { withPlatform } from "../wizard/setup.finalize.test-support.js";
 import { makePrompter, makeRuntime } from "./setup/__tests__/test-utils.js";
@@ -228,41 +229,35 @@ describe("setupSkills", () => {
     },
   );
 
-  it("finishes on Enter without installing, like the other optional setup steps", async () => {
+  it.each([
+    ["Enter skips", [{ name: "return" }], []],
+    [
+      "picking a dependency installs it",
+      [{ name: "down" }, { name: "space" }, { name: "return" }],
+      ["node-helper"],
+    ],
+  ] as const)("onboarding's real prompt: %s", async (_case, keys, installed) => {
     mockMissingBrewStatus([createNodeSkill()]);
-    const input = new PassThrough();
     const output = new PassThrough();
-    output.resume();
-    onTestFinished(() => {
-      input.destroy();
-      output.destroy();
-    });
-    let promptOpen = false;
-    const prompter = makePrompter({
-      // The real Clack prompt rejects an empty selection, so Enter must find a ticked option.
-      multiselect: async (params) => {
-        promptOpen = true;
-        const answer = multiselect({
-          message: params.message,
-          options: params.options.map((option) => ({ ...option, value: option })),
-          initialValues: params.options.filter((option) =>
-            params.initialValues?.includes(option.value),
-          ),
-          input,
-          output,
-        });
-        setImmediate(() => input.write("\r"));
-        const selected = await answer;
-        if (typeof selected === "symbol") {
-          throw new Error("Skills prompt was cancelled");
+    let sent = false;
+    output.on("data", (chunk: Buffer) => {
+      if (sent || !chunk.toString().includes("Skip for now")) {
+        return;
+      }
+      sent = true;
+      // Ctrl-C last: a prompt still open after Enter cancels instead of hanging.
+      setImmediate(() => {
+        for (const key of [...keys, { name: "c", ctrl: true, sequence: "\x03" }]) {
+          process.stdin.emit("keypress", key.name === "space" ? " " : undefined, key);
         }
-        return selected.map((option) => option.value);
-      },
+      });
     });
-    await setupSkills({}, "/tmp/ws", runtime, prompter);
-    expect(promptOpen).toBe(true);
-    expect(mocks.installSkill).not.toHaveBeenCalled();
-  }, 1_000);
+    await runWizardWithPromptNavigation(
+      createClackPrompter(output as unknown as NodeJS.WriteStream),
+      async (prompter) => void (await setupSkills({}, "/tmp/ws", runtime, prompter)),
+    );
+    expect(mocks.installSkill.mock.calls.map(([call]) => call.skillName)).toEqual(installed);
+  });
 
   it.each([
     [undefined, undefined, "npm"],
