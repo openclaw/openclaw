@@ -207,10 +207,7 @@ describe("runDaemonStatus", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(printDaemonStatus).toHaveBeenCalledTimes(1);
-    expect(printDaemonStatus).toHaveBeenCalledWith(expect.any(Object), {
-      json: true,
-      deep: false,
-    });
+    expect(printDaemonStatus).toHaveBeenCalledWith(expect.any(Object), { json: true, deep: false });
     expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
   });
