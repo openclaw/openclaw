@@ -21,7 +21,6 @@ import {
   captureAuthProfileAuthorization,
   type AuthProfileAuthorization,
 } from "../../auth-profiles/authorization.js";
-import { hasOAuthIdentity, isSafeToCopyOAuthIdentity } from "../../auth-profiles/oauth-identity.js";
 import { OAuthRefreshFailureError } from "../../auth-profiles/oauth-refresh-failure.js";
 import {
   getScopedSharedAuthStore,
@@ -42,7 +41,7 @@ import { protectPreparedProviderRuntimeAuth } from "../../provider-runtime-auth-
 import { unwrapSecretSentinelsForProviderEgress } from "../../provider-secret-egress.js";
 import { createRuntimeAuthDeadline } from "../../runtime-auth-refresh.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
-import { adoptRotatedOAuthCredential } from "./auth-controller-oauth-rotation.js";
+import { resolveCanonicalOAuthCredential } from "./auth-controller-oauth-rotation.js";
 import type { EmbeddedRunAuthControllerParams, LogLike } from "./auth-controller.types.js";
 import {
   resolveAuthProfileFailoverReason,
@@ -127,6 +126,7 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
     authMode: string;
     profileId?: string;
     signal?: AbortSignal;
+    assertCurrent?: () => void;
   }) =>
     withAuthDeadline(
       "runtime auth exchange",
@@ -137,10 +137,12 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
         signal.throwIfAborted();
         params.assertCurrent?.();
         params.authProfileBinding?.assertCurrent();
+        prepareParams.assertCurrent?.();
         const preparedAuth = await prepareProviderRuntimeAuth({
           assertCurrent: () => {
             signal.throwIfAborted();
             params.assertCurrent?.();
+            prepareParams.assertCurrent?.();
           },
           provider: prepareParams.runtimeModel.provider,
           config: params.config,
@@ -194,8 +196,25 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
       return runtimeAuthState.refreshInFlight;
     }
     // Publish only while the captured credential state is still active.
+    const authorization =
+      runtimeAuthState.authMode === "oauth" ? requestAuthAuthorization : undefined;
     const refreshPromise: Promise<void> = (async () => {
-      const sourceApiKey = runtimeAuthState.sourceApiKey.trim();
+      // Scheduled and 401 refreshes share this owner, including an in-flight join.
+      // Neither may exchange a stale OAuth source after a sibling rotates it.
+      const current = authorization
+        ? await resolveCanonicalOAuthCredential({
+            params,
+            model: state.models.runtime,
+            profileId: runtimeAuthState.profileId,
+            withAuthDeadline,
+            authorization,
+            secretSentinels: true,
+          })
+        : undefined;
+      if (authorization && !current?.apiKey) {
+        throw new Error("Runtime OAuth source no longer matches the selected profile.");
+      }
+      const sourceApiKey = (current?.apiKey ?? runtimeAuthState.sourceApiKey).trim();
       if (!sourceApiKey) {
         throw new Error(`Runtime auth refresh requires a source credential.`);
       }
@@ -205,7 +224,11 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
         apiKey: sourceApiKey,
         authMode: runtimeAuthState.authMode,
         profileId: runtimeAuthState.profileId,
+        assertCurrent: authorization?.assertCurrent,
       });
+      if (authorization) {
+        await assertSettledAuthProfileAuthorization(authorization.assertCurrent, authSignal);
+      }
       if (!preparedAuth?.apiKey) {
         throw new Error(
           `Provider "${runtimeModel.provider}" does not support runtime auth refresh.`,
@@ -219,9 +242,13 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
       }
       params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
       applyPreparedRuntimeRequestOverrides(runtimeModel, preparedAuth);
+      if (current) {
+        state.apiKeyInfo = current;
+      }
       state.runtimeAuthState = {
         ...runtimeAuthState,
         apiKey: preparedAuth.apiKey,
+        sourceApiKey,
         expiresAt: preparedAuth.expiresAt,
       };
     })()
@@ -541,48 +568,15 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
                 assertSelectionCurrent();
                 authorization.assertCurrent();
               };
-              // Omit the attempt's captured store. Canonical resolution owns refresh/rotation.
-              const current = await withAuthDeadline(
-                "credential resolution",
-                async (credentialSignal) => {
-                  await assertSettledAuthProfileAuthorization(assertCurrent, credentialSignal);
-                  while (true) {
-                    const resolved = await getApiKeyForModelCore({
-                      model: runtimeModel,
-                      cfg: params.config,
-                      profileId,
-                      lockedProfile: true,
-                      allowAuthProfileFallback: false,
-                      agentDir: params.agentDir,
-                      workspaceDir: params.workspaceDir,
-                      signal: credentialSignal,
-                      assertRefreshAdmission: assertCurrent,
-                      validateOAuthCredential: (credential) => {
-                        if (
-                          credential.provider !== selected.provider ||
-                          credential.authFlow !== selected.authFlow ||
-                          !isSafeToCopyOAuthIdentity(selected, credential) ||
-                          (!hasOAuthIdentity(selected) && credential.refresh !== selected.refresh)
-                        ) {
-                          throw new Error("Provider request credentials changed account identity.");
-                        }
-                      },
-                    });
-                    // A peer publication can begin as lookup completes. Settle it within the same
-                    // deadline, then resolve again so the request never carries the superseded token.
-                    if (
-                      !(await assertSettledAuthProfileAuthorization(
-                        assertCurrent,
-                        credentialSignal,
-                      ))
-                    ) {
-                      return resolved;
-                    }
-                  }
-                },
-                requestSignal,
-              );
-              if (current.profileId !== profileId || current.mode !== "oauth" || !current.apiKey) {
+              const current = await resolveCanonicalOAuthCredential({
+                params,
+                model: runtimeModel,
+                profileId,
+                withAuthDeadline,
+                authorization,
+                signal: requestSignal,
+              });
+              if (!current?.apiKey) {
                 throw new Error(
                   "Provider request credentials no longer match the selected OAuth profile.",
                 );
@@ -688,15 +682,21 @@ export function createEmbeddedRunAuthController(params: EmbeddedRunAuthControlle
         /\btoken_expired\b|\bauthentication token is expired\b/iu.test(errorText)
       ) {
         await applyApiKeyInfo(state.lastProfileId, state.profileIndex, true);
-      } else if (
-        !(await adoptRotatedOAuthCredential({
+      } else {
+        const current = await resolveCanonicalOAuthCredential({
           params,
-          state,
+          model: state.models.runtime,
+          profileId: state.apiKeyInfo?.mode === "oauth" ? state.apiKeyInfo.profileId : undefined,
+          secretSentinels: true,
           withAuthDeadline,
           authorization: requestAuthAuthorization,
-        }))
-      ) {
-        return false;
+        });
+        // Sentinels are stable per value; an unchanged direct token cannot recover a 401.
+        if (!current?.apiKey || current.apiKey === state.apiKeyInfo?.apiKey) {
+          return false;
+        }
+        params.authStorage.setRuntimeApiKey(state.models.runtime.provider, current.apiKey);
+        state.apiKeyInfo = current;
       }
       return true;
     } catch (error) {

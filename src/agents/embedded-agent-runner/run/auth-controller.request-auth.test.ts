@@ -26,6 +26,7 @@ import {
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
   getApiKeyForModelCore,
 } from "../../model-auth.js";
+import { unwrapSecretSentinelsForProviderEgress } from "../../provider-secret-egress.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import * as modelResolver from "../model.js";
@@ -570,65 +571,140 @@ it("renews the selected canonical OAuth owner between physical requests in one a
   );
 });
 
-it.each([true, false])(
-  "retries a 401 once with the canonical OAuth token a sibling run rotated (rotated: %s)",
-  async (rotated) => {
+it.each([
+  { rotated: true, runtimeExchange: false },
+  { rotated: false, runtimeExchange: false },
+  { rotated: true, runtimeExchange: true },
+  { rotated: false, runtimeExchange: true },
+])(
+  "retries a 401 once with canonical OAuth (rotated: $rotated, exchange: $runtimeExchange)",
+  async ({ rotated, runtimeExchange }) => {
+    await withRequestFixture(
+      async ({ state, credential, controller, authState, refresh, installed }) => {
+        const sources: string[] = [];
+        if (runtimeExchange) {
+          vi.spyOn(providerRuntime, "prepareProviderRuntimeAuth").mockImplementation(
+            async ({ context }) => {
+              const source = unwrapSecretSentinelsForProviderEgress(
+                context.apiKey,
+                "fixture exchange",
+              );
+              sources.push(source);
+              if (rotated && sources.length > 1 && source === credential.access) {
+                throw new Error("401 stale OAuth source");
+              }
+              return {
+                apiKey:
+                  source === "synthetic-sibling-rotation"
+                    ? "synthetic-runtime-after"
+                    : "synthetic-runtime-before",
+              };
+            },
+          );
+        }
+        await controller.initializeAuthProfile();
+        const held = authState.apiKeyInfo?.apiKey;
+        if (rotated) {
+          // Another run refreshes the shared account after this attempt read its token.
+          refresh.mockResolvedValueOnce({
+            ...credential,
+            access: "synthetic-sibling-rotation",
+            refresh: "synthetic-sibling-refresh",
+            expires: Date.now() + 3_600_000,
+          });
+          const current = readAuthProfileStoreForTest(state.agentDir());
+          const stored = current.profiles[profileId];
+          if (stored?.type !== "oauth") {
+            throw new Error("Missing canonical credential");
+          }
+          await createOAuthManager().resolveOAuthAccess({
+            store: current,
+            credential: stored,
+            profileId,
+            agentDir: state.agentDir(),
+            forceRefresh: true,
+          });
+        }
+        const error = "401 Invalid or expired credentials (reason=no auth context)";
+        await expect(controller.maybeRefreshRuntimeAuthForAuthError(error, false)).resolves.toBe(
+          rotated || runtimeExchange,
+        );
+        expect(authState.apiKeyInfo?.apiKey === held).toBe(!rotated);
+        if (runtimeExchange) {
+          const source = rotated ? "synthetic-sibling-rotation" : "synthetic-access-before";
+          expect(sources).toEqual(["synthetic-access-before", source]);
+          expect(
+            unwrapSecretSentinelsForProviderEgress(
+              authState.runtimeAuthState!.sourceApiKey,
+              "fixture source",
+            ),
+          ).toBe(source);
+          expect(unwrapSecretSentinelsForProviderEgress(installed(), "fixture request")).toBe(
+            rotated ? "synthetic-runtime-after" : "synthetic-runtime-before",
+          );
+        }
+        // The re-read never refreshes on its own: only the sibling's refresh ran.
+        expect(refresh).toHaveBeenCalledTimes(rotated ? 1 : 0);
+        await expect(controller.maybeRefreshRuntimeAuthForAuthError(error, true)).resolves.toBe(
+          false,
+        );
+      },
+    );
+  },
+);
+
+it.each([false, true])(
+  "refuses a 401 retry after same-account reconnect (exchange: %s)",
+  async (runtimeExchange) => {
     await withRequestFixture(async ({ state, credential, controller, authState, refresh }) => {
+      const exchange = runtimeExchange
+        ? vi
+            .spyOn(providerRuntime, "prepareProviderRuntimeAuth")
+            .mockResolvedValue({ apiKey: "synthetic-runtime-before" })
+        : undefined;
       await controller.initializeAuthProfile();
       const held = authState.apiKeyInfo?.apiKey;
-      if (rotated) {
-        // Another run refreshes the shared account after this attempt read its token.
-        refresh.mockResolvedValueOnce({
+      // A reconnect starts a new authorization lifetime even for the same account.
+      await upsertAuthProfileWithLockOrThrow({
+        profileId,
+        credential: {
           ...credential,
-          access: "synthetic-sibling-rotation",
-          refresh: "synthetic-sibling-refresh",
+          access: "synthetic-reconnected",
           expires: Date.now() + 3_600_000,
-        });
-        const current = readAuthProfileStoreForTest(state.agentDir());
-        const stored = current.profiles[profileId];
-        if (stored?.type !== "oauth") {
-          throw new Error("Missing canonical credential");
-        }
-        await createOAuthManager().resolveOAuthAccess({
-          store: current,
-          credential: stored,
-          profileId,
-          agentDir: state.agentDir(),
-          forceRefresh: true,
-        });
-      }
+        },
+        agentDir: state.agentDir(),
+      });
       const error = "401 Invalid or expired credentials (reason=no auth context)";
       await expect(controller.maybeRefreshRuntimeAuthForAuthError(error, false)).resolves.toBe(
-        rotated,
-      );
-      expect(authState.apiKeyInfo?.apiKey === held).toBe(!rotated);
-      // The re-read never refreshes on its own: only the sibling's refresh ran.
-      expect(refresh).toHaveBeenCalledTimes(rotated ? 1 : 0);
-      await expect(controller.maybeRefreshRuntimeAuthForAuthError(error, true)).resolves.toBe(
         false,
       );
+      expect(authState.apiKeyInfo?.apiKey).toBe(held);
+      if (exchange) {
+        expect(exchange).toHaveBeenCalledOnce();
+      }
+      expect(refresh).not.toHaveBeenCalled();
     });
   },
 );
 
-it("refuses a 401 retry with a token from an explicit reconnect of the same account", async () => {
-  await withRequestFixture(async ({ state, credential, controller, authState, refresh }) => {
+it("does not install a runtime-exchange token after reconnect during the exchange", async () => {
+  await withRequestFixture(async ({ state, credential, controller, authState, installed }) => {
+    const exchange = vi
+      .spyOn(providerRuntime, "prepareProviderRuntimeAuth")
+      .mockResolvedValue({ apiKey: "synthetic-runtime-before" });
     await controller.initializeAuthProfile();
-    const held = authState.apiKeyInfo?.apiKey;
-    // A reconnect starts a new authorization lifetime even for the same account.
-    await upsertAuthProfileWithLockOrThrow({
-      profileId,
-      credential: {
-        ...credential,
-        access: "synthetic-reconnected",
-        expires: Date.now() + 3_600_000,
-      },
-      agentDir: state.agentDir(),
+    const held = authState.runtimeAuthState;
+    exchange.mockImplementationOnce(async () => {
+      await upsertAuthProfileWithLockOrThrow({ profileId, credential, agentDir: state.agentDir() });
+      return { apiKey: "synthetic-runtime-retired" };
     });
-    const error = "401 Invalid or expired credentials (reason=no auth context)";
-    await expect(controller.maybeRefreshRuntimeAuthForAuthError(error, false)).resolves.toBe(false);
-    expect(authState.apiKeyInfo?.apiKey).toBe(held);
-    expect(refresh).not.toHaveBeenCalled();
+    await expect(
+      controller.maybeRefreshRuntimeAuthForAuthError("401 invalid credentials", false),
+    ).resolves.toBe(false);
+    expect(authState.runtimeAuthState).toBe(held);
+    expect(unwrapSecretSentinelsForProviderEgress(installed(), "fixture request")).toBe(
+      "synthetic-runtime-before",
+    );
   });
 });
 
