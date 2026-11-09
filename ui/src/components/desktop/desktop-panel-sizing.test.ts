@@ -129,6 +129,10 @@ it.each(sizingCases)("Match authentication: %j", async ({ documentMode, canResiz
   expect(handle.setSizingMode).toHaveBeenLastCalledWith("actual");
   selectSizing(panel, "fit");
   expect(handle.setSizingMode).toHaveBeenLastCalledWith("fit");
+  selectSizing(panel, "fit-height");
+  expect(handle.setSizingMode).toHaveBeenLastCalledWith("fit-height");
+  selectSizing(panel, "fit-width");
+  expect(handle.setSizingMode).toHaveBeenLastCalledWith("fit-width");
   if (canResize && control) {
     selectSizing(panel, "match");
     await panel.updateComplete;

@@ -3,7 +3,7 @@
 Use a paired Mac node for Xcode tools and the Control UI **Desktop** panel for
 live viewing and input. Xcode's SwiftUI canvas and iOS Simulator are native Mac
 windows, so the Desktop panel shows both at their actual interactive state. Its
-fit controls scale a tall phone screen to the available space. This path uses
+fit controls scale the shared Mac display to the available space. This path uses
 OpenClaw's existing node and Desktop transport; it needs no preview web server,
 Python process, Codex, or Claude.
 
@@ -28,6 +28,7 @@ Python process, Codex, or Claude.
    Restart the CLI node after changing its config. In the OpenClaw macOS app,
    use **Settings → This Mac → Capabilities → Desktop sharing** instead of the
    CLI setting. A same-Mac Gateway can also host the conversation locally.
+
 3. Check that macOS has an RFB listener on loopback with
    `nc -G 2 -z 127.0.0.1 5900`. If absent, enable **System Settings → General →
    Sharing → Screen Sharing**, or repair an existing **Remote Management** setup.
@@ -52,7 +53,8 @@ can use the published Xcode tools to edit, build, inspect issues, and test.
 Accept Xcode's connection prompt for this node. In Control UI, select the paired
 Mac in the Desktop picker, or use the Desktop tab in a device-hosted
 conversation. Select **Fit height** for a tall iPhone view, **Fit** for the full
-Mac display, and **Take Control** to send pointer and keyboard input. Full
+Mac display, and **Take Control** to send pointer and keyboard input. Fit height
+scales the whole display; it does not isolate the Simulator window. Full
 screen gives the Simulator more room.
 
 For a macOS SwiftUI app, keep Xcode's canvas visible and use its `#Preview`.

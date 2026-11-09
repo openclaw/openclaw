@@ -524,7 +524,13 @@ export function DesktopSizing(
           title={t("desktop.matchRequirement")}
           onChange={(event) => {
             const mode = event.currentTarget.value;
-            if (mode === "fit" || mode === "actual" || (mode === "match" && props.canResize)) {
+            if (
+              mode === "fit" ||
+              mode === "actual" ||
+              mode === "fit-height" ||
+              mode === "fit-width" ||
+              (mode === "match" && props.canResize)
+            ) {
               props.onChange(mode);
             }
           }}
@@ -534,6 +540,12 @@ export function DesktopSizing(
           </option>
           <option value="actual" selected={props.mode === "actual"}>
             {t("desktop.actual")}
+          </option>
+          <option value="fit-height" selected={props.mode === "fit-height"}>
+            {t("desktop.fitHeight")}
+          </option>
+          <option value="fit-width" selected={props.mode === "fit-width"}>
+            {t("desktop.fitWidth")}
           </option>
           {(props.canResize || props.mode === "match") && (
             <option value="match" selected={props.mode === "match"} disabled={!props.canResize}>
