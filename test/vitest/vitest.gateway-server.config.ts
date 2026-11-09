@@ -73,7 +73,6 @@ export function createGatewayServerVitestConfig(
           test: {
             ...config.test,
             name: "gateway-server-parallel",
-            maxWorkers: undefined,
             exclude: [
               ...(config.test?.exclude ?? []),
               ...relativizeScopedPatterns(gatewayServerSerialTestFiles, options.dir),

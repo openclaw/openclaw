@@ -213,6 +213,57 @@ describe("projects vitest config", () => {
     },
   );
 
+  it.each([1, 2])(
+    "preserves the Gateway worker cap %i after Vitest project resolution",
+    (workers) => {
+      const result = spawnNodeEvalSync(
+        `
+        import assert from "node:assert/strict";
+        import { globSync } from "node:fs";
+        import { resolveConfig } from "vitest/node";
+        const resolved = await resolveConfig({
+          config: "test/vitest/vitest.gateway-server.config.ts",
+        });
+        const projects = resolved.test.resolvedProjects.map(({ projectConfig }) => projectConfig);
+        assert.equal(projects.length, 2);
+        const [native, parallel] = projects;
+        assert.match(native.name, /gateway-server-native/);
+        assert.match(parallel.name, /gateway-server-parallel/);
+        assert.equal(native.maxWorkers, 1);
+        assert.equal(native.fileParallelism, false);
+        assert.equal(parallel.maxWorkers, Number(process.env.OPENCLAW_VITEST_MAX_WORKERS));
+        assert.equal(parallel.fileParallelism, Number(process.env.OPENCLAW_VITEST_MAX_WORKERS) > 1);
+        assert.equal(parallel.sequence.groupOrder, native.sequence.groupOrder + 1);
+        for (const project of projects) {
+          assert.equal(project.pool, "forks");
+          assert.equal(project.isolate, false);
+        }
+        const files = (project) => globSync(project.include, {
+          cwd: project.dir,
+          exclude: project.exclude,
+        });
+        const partition = projects.flatMap(files);
+        assert.equal(new Set(partition).size, partition.length);
+        assert.deepEqual(partition.sort(), files(resolved.test).sort());
+      `,
+        {
+          imports: ["tsx"],
+          env: {
+            ...process.env,
+            OPENCLAW_VITEST_MAX_WORKERS: String(workers),
+            OPENCLAW_VITEST_INCLUDE_FILE: undefined,
+            VITEST_MAX_WORKERS: undefined,
+          },
+          timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
+        },
+      );
+      const output = JSON.stringify({ stdout: result.stdout, stderr: result.stderr });
+      expect(result.error, output).toBeUndefined();
+      expect(result.signal, output).toBeNull();
+      expect(result.status, output).toBe(0);
+    },
+  );
+
   it("keeps Gateway tests needing native process state or module isolation in every aggregate", () => {
     const methodsIsolatedProject = "test/vitest/vitest.gateway-methods-isolated.config.ts";
     const serverIsolatedProject = "test/vitest/vitest.gateway-server-isolated.config.ts";
