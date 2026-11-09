@@ -149,10 +149,11 @@ function StatusRow(props: TalkViewProps) {
       label: t(catalog.ready ? "talkPage.status.ready" : "talkPage.status.notReady"),
     };
   };
+  // The first catalog reply supplies this line without moving the schema editor below it.
   return (
     <SettingsRow
       title={t("talkPage.status.title")}
-      description={status().description}
+      description={status().description ?? "\u00a0"}
       control={<SettingsStatus kind={status().kind} label={status().label} />}
     />
   );

@@ -8,7 +8,7 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-types.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-contexts.js";
 import { controlBridge, controlContext } from "../client-gateway-control.test-support.js";
 import { useRelayFixtures } from "./fixture.test-support.js";
 import { createIdleRelayProvider } from "./index.test-support.js";

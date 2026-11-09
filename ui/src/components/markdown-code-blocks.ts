@@ -147,7 +147,7 @@ function handleCodeBlockDisclosure(target: Element): void {
   updateCodeBlockWidthOverflow(wrapper);
 }
 
-export function updateCodeBlockWidthOverflow(wrapper: HTMLElement): void {
+function updateCodeBlockWidthOverflow(wrapper: HTMLElement): void {
   measureCodeBlockWidthOverflow(wrapper)?.();
 }
 

@@ -5,6 +5,7 @@
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/agent-deletion-blocked-measure.ts
  *   --state-dir <fixture> [--owner <baseline-module.ts>] [--iterations 10000] [--prepared]
  *   [--warmup 100000] [--samples 5]
+ *   [--first-use-audit --status-owner <baseline-status.ts> --expected-blocked 4]
  * Alternate base/candidate launches. Timing and sampled allocation are separate;
  * preparation is outside measurement. Both ordinary and inherited snapshot contexts
  * use the real owner and journal worker. This does not measure connected clients,
@@ -22,6 +23,9 @@ const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
     owner: { type: "string" },
+    "status-owner": { type: "string" },
+    "first-use-audit": { type: "boolean", default: false },
+    "expected-blocked": { type: "string", default: "0" },
     prepared: { type: "boolean", default: false },
     iterations: { type: "string", default: "10000" },
     warmup: { type: "string", default: "1000" },
@@ -45,19 +49,42 @@ const { isAgentDeletionBlocked, prepareAgentDeletionBlocked } = (await import(
 )) as typeof import("../../src/agents/agent-lifecycle-registry.js");
 const { readAgentDeletionJournalStatusInWorker } =
   await import("../../src/state/agent-deletion-journal.read.js");
-const { withOpenClawStateDatabaseReadSnapshot } =
+const { executeExistingOpenClawStateRead, withOpenClawStateDatabaseReadSnapshot } =
   await import("../../src/state/openclaw-state-db-readonly.js");
-const { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } =
-  await import("../../src/state/openclaw-state-db.js");
+const {
+  openOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
+  runOpenClawStateWriteTransaction,
+} = await import("../../src/state/openclaw-state-db.js");
+const { loadAgentDeletionJournalStatus } = (await import(
+  pathToFileURL(
+    path.resolve(values["status-owner"] ?? "src/state/agent-deletion-journal-status.ts"),
+  ).href
+)) as typeof import("../../src/state/agent-deletion-journal-status.js");
+const { ensureExecutionOwnerLifecycleBindingSchema } =
+  await import("../../src/audit/execution-owner-lifecycle-binding-store.js");
 const options = { env: process.env };
 const agents = ["main", "reviewer", "researcher", "planner"];
 const inspector = new Session();
 inspector.connect();
 try {
-  openOpenClawStateDatabase(options);
-  for (const agent of agents) {
-    assert.equal(await readAgentDeletionJournalStatusInWorker(agent, options), "absent");
-  }
+  const database = openOpenClawStateDatabase(options);
+  const prepare = async () => {
+    for (const agent of agents) {
+      const status = values["first-use-audit"]
+        ? await loadAgentDeletionJournalStatus(database.path, agent, async () => {
+            const reply = await executeExistingOpenClawStateRead(
+              options,
+              { type: "agentDeletionJournal.status", agentId: agent },
+              { current: true },
+            );
+            return reply?.status ?? "absent";
+          })
+        : await readAgentDeletionJournalStatusInWorker(agent, options);
+      assert.equal(status, "absent");
+    }
+  };
+  await prepare();
   const checks = agents.map((agent) =>
     values.prepared
       ? prepareAgentDeletionBlocked(agent, options)
@@ -70,6 +97,60 @@ try {
     }
     assert.equal(blocked, 0);
   };
+  const allocation = async (operation: () => void) => {
+    globalThis.gc!();
+    await inspector.post("HeapProfiler.startSampling", {
+      samplingInterval: 4096,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
+    });
+    operation();
+    const { profile } = await inspector.post("HeapProfiler.stopSampling");
+    const pending = [profile.head];
+    let allocatedBytes = 0;
+    while (pending.length) {
+      const node = pending.pop()!;
+      allocatedBytes += node.selfSize;
+      pending.push(...node.children);
+    }
+    return allocatedBytes;
+  };
+  if (values["first-use-audit"]) {
+    const reset = async () => {
+      // Task-owned synthetic fixture only; recreate the real optional first-use table.
+      runOpenClawStateWriteTransaction(
+        ({ db }) => db.exec("DROP TABLE IF EXISTS execution_owner_lifecycle_bindings"),
+        options,
+      );
+      await prepare();
+    };
+    const firstUse = () =>
+      runOpenClawStateWriteTransaction(
+        ({ db }) => ensureExecutionOwnerLifecycleBindingSchema(db),
+        options,
+      );
+    await reset();
+    const cpu = process.threadCpuUsage();
+    const start = performance.now();
+    firstUse();
+    const wallMs = performance.now() - start;
+    const used = process.threadCpuUsage(cpu);
+    const blockedAgents = checks.filter((check) => check()).length;
+    assert.equal(blockedAgents, Number(values["expected-blocked"]));
+    await reset();
+    const allocatedBytes = await allocation(firstUse);
+    console.log(
+      JSON.stringify({
+        context: "first-use-audit",
+        blockedAgents,
+        wallMs,
+        cpuMs: (used.user + used.system) / 1000,
+        allocatedBytes,
+        hostLoad: loadavg(),
+      }),
+    );
+    await prepare();
+  }
   const measure = async (context: string, sample: number) => {
     run(warmup);
     globalThis.gc!();
@@ -79,21 +160,7 @@ try {
     run(iterations);
     const wallMs = performance.now() - start;
     const used = process.threadCpuUsage(cpu);
-    globalThis.gc!();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
-    run(iterations);
-    const { profile } = await inspector.post("HeapProfiler.stopSampling");
-    const pending = [profile.head];
-    let allocatedBytes = 0;
-    while (pending.length) {
-      const node = pending.pop()!;
-      allocatedBytes += node.selfSize;
-      pending.push(...node.children);
-    }
+    const allocatedBytes = await allocation(() => run(iterations));
     console.log(
       JSON.stringify({
         context,

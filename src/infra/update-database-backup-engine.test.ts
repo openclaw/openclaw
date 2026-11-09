@@ -140,8 +140,8 @@ it.each(["auto", "off"] as const)(
     });
     expect(backup.sourceGenerations[payload]).toEqual(expect.any(String));
     expect(backup.warnings).toEqual([]);
-    expect(fs.readFileSync(entry!.snapshotPath)).toEqual(before);
-    expect(fs.readFileSync(payload)).toEqual(before);
+    expect(fs.readFileSync(entry!.snapshotPath).equals(before), "snapshot bytes").toBe(true);
+    expect(fs.readFileSync(payload).equals(before), "source bytes").toBe(true);
     expect(fs.readdirSync(f.stagingRoot)).toEqual([]);
   },
 );
@@ -260,7 +260,8 @@ it.each(["new content", "same-content WAL commit"] as const)(
     expect(source.prepare("SELECT value FROM payload").get()).toEqual({
       value: write === "new content" ? "new-value" : "retained",
     });
-    expect(f.generationImages).toHaveBeenCalledTimes(2);
+    // Only WAL frames need a private image; a drained new generation is read in place.
+    expect(f.generationImages).toHaveBeenCalledTimes(write === "new content" ? 1 : 2);
   },
 );
 
@@ -274,7 +275,7 @@ it("reacquires a metadata-drifted family and retains unchanged committed authori
       }
     },
   });
-  expect(f.generationImages).toHaveBeenCalledTimes(2);
+  expect(f.generationImages).toHaveBeenCalledOnce();
   expect(backup.sourceGenerations[f.shared]).toEqual(expect.any(String));
   expect(backup.warnings).toEqual([]);
   expect(fs.readdirSync(f.stagingRoot)).toEqual([]);
@@ -405,7 +406,6 @@ it.each(["acquisition", "settlement"] as const)(
     const f = await fixture();
     const failure = new Error(`generation ${phase} unavailable`);
     const before = fs.readFileSync(f.shared);
-    const engineImages = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
     if (phase === "acquisition") {
       f.generationImages.mockImplementationOnce(() => {
         throw failure;
@@ -417,10 +417,7 @@ it.each(["acquisition", "settlement"] as const)(
     }
 
     const backup = await f.capture();
-    expect(engineImages.mock.calls.map(([file]) => file)).toEqual(
-      phase === "acquisition" ? [f.shared] : [],
-    );
-    expect(f.generationImages.mock.calls.map(([file]) => file)).toEqual([f.shared, f.shared]);
+    expect(f.generationImages.mock.calls.map(([file]) => file)).toEqual([f.shared]);
     expect(backup.sourceGenerations[f.shared]).toBeUndefined();
     expect(backup.warnings).toEqual(
       expect.arrayContaining([

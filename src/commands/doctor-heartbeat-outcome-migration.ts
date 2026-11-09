@@ -8,15 +8,13 @@ import {
   resolveSessionResetType,
   resolveChannelResetConfig,
 } from "../config/sessions/reset.js";
-import {
-  loadSessionEntryReadOnly,
-  persistSessionTranscriptTurn,
-} from "../config/sessions/session-accessor.js";
+import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteAgentId,
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -25,6 +23,7 @@ import {
   resolveTargetSqliteOptions,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
+import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
@@ -34,7 +33,11 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 
-function readPendingHeartbeatOutcomes(target: ExistingAgentDatabaseTarget, env: NodeJS.ProcessEnv) {
+async function readPendingHeartbeatOutcomes(
+  target: ExistingAgentDatabaseTarget,
+  env: NodeJS.ProcessEnv,
+) {
+  await prepareArtifactPreservingSqliteRead(target.sqlitePath);
   return withOpenClawAgentDatabaseReadOnly(
     ({ db }) =>
       executeSqliteQuerySync(
@@ -48,14 +51,17 @@ function readPendingHeartbeatOutcomes(target: ExistingAgentDatabaseTarget, env: 
   );
 }
 
-export function hasPendingHeartbeatOutcomes(
+export async function hasPendingHeartbeatOutcomes(
   targets: readonly ExistingAgentDatabaseTarget[],
   env: NodeJS.ProcessEnv,
-): boolean {
-  return targets.some((target) => {
-    const read = readPendingHeartbeatOutcomes(target, env);
-    return read.found && read.value.length > 0;
-  });
+): Promise<boolean> {
+  for (const target of targets) {
+    const read = await readPendingHeartbeatOutcomes(target, env);
+    if (read.found && read.value.length > 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** The inert source table stays at the current agent schema; transcript idempotency owns import. */
@@ -64,7 +70,7 @@ export async function migrateHeartbeatOutcomes(
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
   for (const target of listExistingAgentDatabaseTargets(cfg, env)) {
-    const read = readPendingHeartbeatOutcomes(target, env);
+    const read = await readPendingHeartbeatOutcomes(target, env);
     if (!read.found) {
       continue;
     }
@@ -88,7 +94,7 @@ export async function migrateHeartbeatOutcomes(
         env,
         sessionKey: row.session_key,
       };
-      const entry = loadSessionEntryReadOnly(scope);
+      const entry = await readSessionEntryReadOnlyInWorker(scope);
       if (!entry) {
         throw new Error(
           `Pending heartbeat outcome for ${row.session_key} has no current session. Restore its session before completing Doctor cutover.`,

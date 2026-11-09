@@ -491,6 +491,21 @@ async function start(args: string[]) {
 }
 
 describe("full-suite timing metadata", () => {
+  it.each([
+    { extra: [], preset: "runtime" },
+    { extra: [modelTarget], preset: "full" },
+  ])(
+    "prepares the $preset worker owner before lending selected test artifacts",
+    async ({ extra, preset }) => {
+      await start(["src/auto-reply/reply/dispatch-from-config.delivery.test.ts", ...extra]);
+      await expectPassed();
+      expect(commands.reader.mock.calls.length).toBeGreaterThan(0);
+      for (const [spec] of commands.reader.mock.calls) {
+        expect(spec.workerRun?.descriptor.preset).toBe(preset);
+      }
+    },
+  );
+
   it("records inherited include selections without replacing whole-config history", async () => {
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_TIMINGS", "1");
     const timings = await import("../../scripts/lib/vitest-shard-timings.mts");
@@ -543,13 +558,18 @@ describe("full-suite timing metadata", () => {
     ]);
   });
 
-  it.each([false, true])(
-    "carries chunk targets without changing launch selection (inherited=%s)",
-    async (inherited) => {
+  it.each([
+    { inherited: false, maglev: "0" },
+    { inherited: true, maglev: "0" },
+    { inherited: false, maglev: "1" },
+    { inherited: true, maglev: "1" },
+  ])(
+    "carries chunk targets from the invocation environment (inherited=$inherited, maglev=$maglev)",
+    async ({ inherited, maglev }) => {
       vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "2");
       vi.stubEnv("OPENCLAW_VITEST_MAX_WORKERS", "1");
       vi.stubEnv("OPENCLAW_VITEST_SHARD_NAME", "same-parent");
-      vi.stubEnv("OPENCLAW_VITEST_ENABLE_MAGLEV", "0");
+      vi.stubEnv("OPENCLAW_VITEST_ENABLE_MAGLEV", maglev === "0" ? "1" : "0");
       const planner = await import("../../scripts/test-projects.test-support.mts");
       const timings = await import("../../scripts/lib/vitest-shard-timings.mts");
       const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
@@ -567,22 +587,26 @@ describe("full-suite timing metadata", () => {
       const writeTimings = vi.spyOn(timings, "writeShardTimings");
       commands.reader.mockImplementation(() => completedReader());
 
-      await runTestProjects(noExit, []);
+      await runTestProjects(noExit, [], {
+        ...process.env,
+        OPENCLAW_VITEST_ENABLE_MAGLEV: maglev,
+      });
 
       expect(commands.reader).toHaveBeenCalledTimes(2);
       const launches = commands.reader.mock.calls.map(([input]) => input);
       expect(launches.map((input) => input.pnpmArgs)).toEqual(
-        files.map((file) => [
-          "exec",
-          "node",
-          "--no-maglev",
-          "--no-concurrent-sparkplug",
-          resolveVitestCliEntry(),
-          "run",
-          "--config",
-          config,
-          file,
-        ]),
+        files.map((file) =>
+          ["exec", "node"].concat(maglev === "0" ? ["--no-maglev"] : [], [
+            "--no-concurrent-sparkplug",
+            "--js-base-64",
+            "--expose-gc",
+            resolveVitestCliEntry(),
+            "run",
+            "--config",
+            config,
+            file,
+          ]),
+        ),
       );
       for (const input of launches) {
         if (includeFile) {

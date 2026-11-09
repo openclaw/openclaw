@@ -18,11 +18,12 @@ import {
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
 import { findLocalSessionReference } from "../pages/chat/route-loader-short-cache.ts";
-import { stampSessionTitleLabel, type SessionTitleDisplay } from "./markdown-link-display.ts";
+import { stampSessionTitleLabel } from "./markdown-link-display.ts";
 import {
   markdownSessionPublicOrigin,
   parseLocalMarkdownSessionUrl,
 } from "./markdown-session-links.ts";
+import type { SessionTitleDisplay } from "./session-progress-hovercard-target.ts";
 
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;

@@ -643,7 +643,7 @@ describe("node bootstrap distribution", () => {
   );
 
   it("rejects source/built plugin dependency drift and nonexact native pins", async () => {
-    const { packageRoot, provider, pluginPackage } = await fixture();
+    const { packageRoot, provider, pluginPackage } = await fixture("package");
     const changed = { ...pluginPackage, dependencies: { "native-runtime": "^1.3.0" } };
     await write(packageRoot, "extensions/remote-runtime/package.json", changed);
     await expect(provider.prepare()).rejects.toThrow("does not match source metadata");

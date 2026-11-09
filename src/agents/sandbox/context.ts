@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { AGENT_GIT_SANDBOX_BIN } from "../../infra/agent-git-shim.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
+import { getGatewayAgentGitBinDir } from "../../infra/openclaw-cli-shim.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   ensureBrowserControlAuth,
@@ -458,6 +460,13 @@ async function resolveSandboxContextWithAuthority(
                 })();
           if (githubMount) {
             (readOnlyResourceMounts ??= []).push(githubMount);
+          }
+          const gitBinDir = getGatewayAgentGitBinDir();
+          if (gitBinDir && (cfg.backend === "docker" || cfg.backend === "podman")) {
+            (readOnlyResourceMounts ??= []).push({
+              hostPath: gitBinDir,
+              containerPath: AGENT_GIT_SANDBOX_BIN,
+            });
           }
 
           const provisionBackend = () => {

@@ -6,7 +6,7 @@
   height: 40px;
   padding: 0;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
   cursor: default;

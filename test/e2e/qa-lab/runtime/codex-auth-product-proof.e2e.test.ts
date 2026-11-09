@@ -3,7 +3,15 @@ import fs from "node:fs/promises";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createJsonlRequestTailer } from "../../../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mts";
+import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import {
+  resolveCronJobsStorePathFromConfig,
+  saveCronJobsStore,
+} from "../../../../src/cron/store.js";
+import type { CronStoredJob } from "../../../../src/cron/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import { withEnvAsync } from "../../../../src/test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../../../src/test-utils/session-state-cleanup.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -221,6 +229,123 @@ async function createAuthGateway(missingProfile = false) {
 }
 
 describe("Codex auth product proof", () => {
+  it(
+    "runs migrated heartbeat-main on explicit Codex after doctor --fix twice",
+    { timeout: 240_000 },
+    async ({ signal }) => {
+      instance = await createAuthGateway();
+      instance.env.OPENCLAW_SKIP_CRON = "0";
+      const config: OpenClawConfig = JSON.parse(await fs.readFile(instance.configPath, "utf8"));
+      await instance.state.writeConfig({
+        ...config,
+        agents: {
+          ...config.agents,
+          entries: {
+            main: { agentDir: instance.state.agentDir(), workspace: instance.state.workspaceDir },
+          },
+          defaults: {
+            ...config.agents?.defaults,
+            systemAgent: { agentId: "main" },
+          },
+        },
+      });
+      const requestLog = instance.state.path("codex-heartbeat-app-server.jsonl");
+      instance.env.OPENCLAW_QA_CODEX_AUTH_APP_SERVER_LOG = requestLog;
+      const appServerLog = createJsonlRequestTailer<AppServerLogEntry>(requestLog);
+      const createdAtMs = Date.now();
+      const job: CronStoredJob = {
+        id: "migrated-heartbeat-main",
+        name: "heartbeat-main",
+        agentId: "main",
+        enabled: true,
+        createdAtMs,
+        updatedAtMs: createdAtMs,
+        schedule: { kind: "every", everyMs: 3_600_000, anchorMs: createdAtMs },
+        sessionKey: "agent:main:main",
+        sessionTarget: "session:agent:main:main",
+        wakeMode: "now",
+        idleOnly: true,
+        payload: {
+          kind: "agentTurn",
+          message: `Reply with ${PRODUCT_OUTPUT}.`,
+          skipIfScratchEmpty: true,
+        },
+        delivery: { mode: "none", target: "owner" },
+        state: {},
+      };
+      // Preserve the existing post-migration job, including its name and absent account binding.
+      const testInstance = instance;
+      await withEnvAsync(instance.env, async () => {
+        await saveCronJobsStore(resolveCronJobsStorePathFromConfig(config, testInstance.env), {
+          version: 1,
+          jobs: [job],
+        });
+        await cleanupSessionStateForTest({
+          stateDir: testInstance.stateDir,
+          rootPath: testInstance.state.root,
+        });
+      });
+      // The first Doctor migrates the stable credential and adopts the automation's account.
+      await runCodexAuthDoctorMigrationProof(instance, {
+        accountId: ACCOUNT_ID,
+        oauthAccess,
+        shape: "oauth-only",
+      });
+      const repeated = await instance.cli(["doctor", "--fix", "--yes", "--non-interactive"], {
+        timeoutMs: 120_000,
+      });
+      expect(repeated.code, repeated.stderr).toBe(0);
+      await instance.startGateway();
+      const client = await connectGatewayStatusClient(instance);
+      try {
+        const { jobs } = await client.request<{ jobs: CronStoredJob[] }>("cron.list", {
+          includeDisabled: true,
+        });
+        const heartbeat = jobs.find((entry) => entry.id === job.id);
+        expect(heartbeat).toMatchObject({
+          payload: { kind: "agentTurn" },
+          sessionTarget: "session:agent:main:main",
+          delivery: { target: "owner" },
+        });
+        if (!heartbeat) {
+          throw new Error("Doctor did not migrate heartbeat-main");
+        }
+        const scratch = await client.request<{ currentRevision: number }>("cron.scratch.get", {
+          id: heartbeat.id,
+        });
+        await client.request("cron.scratch.set", {
+          id: heartbeat.id,
+          content: "Synthetic heartbeat work.",
+          expectedRevision: scratch.currentRevision,
+        });
+        const started = await client.request<{ runId: string }>("cron.run", {
+          id: heartbeat.id,
+          mode: "force",
+        });
+        const terminal = await vi.waitFor(
+          async () => {
+            const history = await client.request<{
+              entries: Array<{ runId?: string; status?: string; error?: string }>;
+            }>("cron.runs", { id: heartbeat.id, runId: started.runId, limit: 1 });
+            const entry = history.entries.find((candidate) => candidate.runId === started.runId);
+            if (!entry) {
+              throw new Error("Waiting for the heartbeat run to finish");
+            }
+            return entry;
+          },
+          { timeout: REQUEST_TIMEOUT_MS, interval: 100 },
+        );
+        expect(terminal).toMatchObject({ status: "ok" });
+        const login = await waitForRequest(appServerLog, requestLog, "account/login/start", signal);
+        expect(login.params).toMatchObject(EXPECTED_LOGIN);
+        expectRequestOrder(appServerLog.read(), "account/login/start", "turn/start");
+        await waitForAssistantHistory(instance, PRODUCT_OUTPUT);
+      } finally {
+        client.stop();
+      }
+    },
+  );
+
   it(
     "repairs mixed legacy auth into SQLite and sends the selected OAuth profile to app-server",
     { timeout: 180_000 },

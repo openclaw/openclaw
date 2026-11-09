@@ -72,6 +72,39 @@ afterEach(async () => {
   await i18n.setLocale("en");
 });
 
+it("checks default filters once per batch and keeps the first retained row in order", () => {
+  const levelReads = vi.fn(() => true);
+  const props = createProps({
+    status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+    onExport: vi.fn(),
+  });
+  for (const level of Object.keys(props.levelFilters)) {
+    Object.defineProperty(props.levelFilters, level, { get: levelReads });
+  }
+  const lines = Array.from({ length: 84 }, (_, id) => ({
+    id,
+    raw: `line ${id}`,
+    level: "info" as const,
+  }));
+  const [entries, setEntries] = createSignal(lines.slice(0, 64));
+  const view = mountSolid(() => <LogsView {...props} entries={entries()} />);
+  flush();
+  levelReads.mockClear();
+
+  setEntries(lines.slice(20));
+  flush();
+
+  expect(levelReads).toHaveBeenCalledTimes(6);
+  expect(view.container.querySelector('[aria-posinset="1"] .log-message')?.textContent).toBe(
+    "line 20",
+  );
+  view.getByRole("button", { name: "Export visible" }).click();
+  expect(props.onExport).toHaveBeenCalledWith(
+    Array.from({ length: 64 }, (_, index) => `line ${index + 20}`),
+    "visible",
+  );
+});
+
 it("formats only new rows until the locale or effective timezone changes", async () => {
   const validTimes = ["2026-09-22T12:00:37Z", "1970-01-01T00:00:00Z"];
   const allTimes = [...validTimes, "not a timestamp", "", null, undefined];
@@ -81,7 +114,7 @@ it("formats only new rows until the locale or effective timezone changes", async
       id: index,
       time,
       raw: "log entry",
-      message: index === 0 ? "keep initial" : "other entry",
+      message: index === 0 ? "A\u0308 Café initial" : "other entry",
     })),
   });
   const [entries, setEntries] = createSignal(props.entries);
@@ -109,10 +142,20 @@ it("formats only new rows until the locale or effective timezone changes", async
 
   const expectTimes = (times: typeof allTimes, locale = "en", formats?: number) => {
     flush();
+    expect(
+      container
+        .querySelector<HTMLElement>(".log-stream")!
+        .style.getPropertyValue("--log-time-width"),
+    ).toMatch(/^\d+ch$/);
     if (formats !== undefined) {
       expect(formatCalls.flatMap((format) => format.mock.calls)).toHaveLength(formats);
     }
-    const native = new NativeDateTimeFormat(locale, { timeStyle: "short", timeZone });
+    const native = new NativeDateTimeFormat(locale, {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZone,
+    });
     const expected = times.map((time) => {
       const date = new Date(time ?? "");
       return !time ? "" : Number.isNaN(date.getTime()) ? time : native.format(date);
@@ -132,21 +175,21 @@ it("formats only new rows until the locale or effective timezone changes", async
   const appendedTime = "2026-09-22T18:10:00Z";
   setEntries((rows) => [
     ...rows,
-    { id: allTimes.length, time: appendedTime, raw: "keep appended" },
+    { id: allTimes.length, time: appendedTime, raw: "A\u0308 Café appended" },
   ]);
   expectTimes([...allTimes, appendedTime], "en", 1);
 
-  filterInput.value = "keep";
+  filterInput.value = "ä";
   filterInput.dispatchEvent(new Event("input", { bubbles: true }));
   expectTimes([validTimes[0], appendedTime], "en", 0);
 
   timeZone = "America/Los_Angeles";
   const nextTime = "2026-09-22T20:00:00Z";
-  setEntries((rows) => [...rows, { id: allTimes.length + 1, time: nextTime, raw: "keep next" }]);
+  setEntries((rows) => [...rows, { id: allTimes.length + 1, time: nextTime, raw: "Ä Café next" }]);
   expectTimes([validTimes[0], appendedTime, nextTime], "en");
 
   timeZone = "Asia/Tokyo";
-  filterInput.value = "initial";
+  filterInput.value = "cafe\u0301 initial";
   filterInput.dispatchEvent(new Event("input", { bubbles: true }));
   expectTimes([validTimes[0]], "en");
 });
@@ -167,10 +210,14 @@ it("keeps the visible export filename suffix stable when labels are localized", 
   expect(onExport).toHaveBeenCalledWith([raw], "visible");
 });
 
-it.each([false, true])(
-  "keeps following appended logs when a row resizes before compensation is read back (queued resize: %s)",
-  (queuedResize) => {
-    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+it.each(["follow", "queued-follow", "reader"] as const)(
+  "preserves scroll intent through row resizes (%s)",
+  (mode) => {
+    const queuedResize = mode === "queued-follow";
+    const reader = mode === "reader";
+    vi.useFakeTimers({
+      toFake: ["requestAnimationFrame", "cancelAnimationFrame", "setTimeout", "clearTimeout"],
+    });
     const observers: Array<{
       callback: ResizeObserverCallback;
       targets: Set<Element>;
@@ -198,7 +245,7 @@ it.each([false, true])(
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
       this: HTMLElement,
     ) {
-      return this.classList.contains("log-stream") ? 380 : (heights.get(this) ?? 44);
+      return this.classList.contains("log-stream") ? 380 : (heights.get(this) ?? 20);
     });
     const lines = (count: number) =>
       Array.from({ length: count }, (_, id) => ({ id, raw: `line ${id}` }));
@@ -208,6 +255,7 @@ it.each([false, true])(
     const view = mountSolid(() => (
       <LogsView
         {...createProps({
+          autoFollow: !reader,
           status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
           onStreamRef: (element, scroll) => {
             stream = element;
@@ -224,12 +272,12 @@ it.each([false, true])(
     };
     const readBack = () => stream.dispatchEvent(new Event("scroll"));
     const resize = (row: Element) => {
-      heights.set(row, 91);
+      heights.set(row, 31);
       for (const observer of observers) {
         if (!observer.targets.has(row)) {
           continue;
         }
-        const size = [{ inlineSize: 900, blockSize: 91 }];
+        const size = [{ inlineSize: 900, blockSize: 31 }];
         observer.callback(
           [
             {
@@ -237,7 +285,7 @@ it.each([false, true])(
               borderBoxSize: size,
               contentBoxSize: size,
               devicePixelContentBoxSize: size,
-              contentRect: new DOMRect(0, 0, 900, 91),
+              contentRect: new DOMRect(0, 0, 900, 31),
             },
           ],
           observer.observer,
@@ -252,6 +300,13 @@ it.each([false, true])(
       for (let index = 0; index < 4; index++) {
         frame();
       }
+      if (reader) {
+        // The stream's border is outside the viewport; this reader has not reached the end.
+        stream.scrollTop -= 2;
+        stream.dispatchEvent(new WheelEvent("wheel", { deltaY: 1000 }));
+        readBack();
+      }
+      const readerTop = stream.scrollTop;
       const rows = Array.from(stream.querySelectorAll(".log-row"));
       resize(rows[0]!);
       resize(rows[1]!);
@@ -264,6 +319,15 @@ it.each([false, true])(
       flush();
       readBack();
       frame();
+      if (reader) {
+        expect(stream.scrollTop).toBe(readerTop);
+        vi.advanceTimersByTime(200);
+        flush();
+        resize(rows[2]!);
+        frame();
+        expect(stream.scrollTop).toBe(readerTop + 11);
+        return;
+      }
       expect(stream.scrollHeight - stream.scrollTop - stream.clientHeight).toBeLessThan(2);
       const afterCompensation = stream.scrollTop;
       const nextRow = rows[queuedResize ? 3 : 2]!;
@@ -285,6 +349,134 @@ it.each([false, true])(
     }
   },
 );
+
+it("shows whether the stream is following as the reader leaves and returns to the end", () => {
+  vi.useFakeTimers({
+    toFake: ["requestAnimationFrame", "cancelAnimationFrame", "setTimeout", "clearTimeout"],
+  });
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.classList.contains("log-stream") ? 380 : 20;
+  });
+  const lines = (count: number) =>
+    Array.from({ length: count }, (_, id) => ({ id, raw: `line ${id}` }));
+  const [entries, setEntries] = createSignal(lines(500));
+  const [autoFollow, setAutoFollow] = createSignal(true);
+  const onToggleAutoFollow = vi.fn(setAutoFollow);
+  const [filterText, setFilterText] = createSignal("");
+  let stream!: HTMLDivElement;
+  let jump!: () => void;
+  const view = mountSolid(() => (
+    <LogsView
+      {...createProps({
+        status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+        onToggleAutoFollow,
+        onStreamRef: (element, scroll) => {
+          stream = element;
+          jump = scroll;
+          installClampedLogsViewport(element, 378);
+        },
+      })}
+      autoFollow={autoFollow()}
+      filterText={filterText()}
+      entries={entries()}
+    />
+  ));
+  const frames = (count = 4) => {
+    for (let index = 0; index < count; index++) {
+      vi.advanceTimersByTime(16);
+      flush();
+      stream.dispatchEvent(new Event("scroll"));
+      flush();
+    }
+  };
+  const scrollTo = (top: number) => {
+    stream.scrollTop = top;
+    stream.dispatchEvent(new Event("scroll"));
+    flush();
+  };
+  const wheelTo = (top: number) => {
+    stream.dispatchEvent(new WheelEvent("wheel", { deltaY: top - stream.scrollTop }));
+    scrollTo(top);
+  };
+  const end = () => stream.scrollHeight - stream.clientHeight;
+  const expired = () => {
+    vi.advanceTimersByTime(250);
+    flush();
+  };
+  const toggle = view.container.querySelector<HTMLInputElement>('input[role="switch"]')!;
+  try {
+    flush();
+    jump();
+    frames();
+    expect(toggle.checked).toBe(true);
+
+    // Scrolling the reader did not ask for, such as a trim's anchor, leaves the switch alone.
+    scrollTo(end() - 200);
+    expect(onToggleAutoFollow).not.toHaveBeenCalled();
+    scrollTo(end());
+    expect(onToggleAutoFollow).not.toHaveBeenCalled();
+
+    // Wheel jitter of less than a row keeps following.
+    wheelTo(end() - 10);
+    expect(onToggleAutoFollow).not.toHaveBeenCalled();
+    wheelTo(end());
+    expired();
+
+    // Scrolling up releases, and appended lines no longer move the reader.
+    wheelTo(end() - 200);
+    expect(onToggleAutoFollow).toHaveBeenLastCalledWith(false);
+    expect(toggle.checked).toBe(false);
+    expired();
+    const readerTop = stream.scrollTop;
+    setEntries(lines(520));
+    frames();
+    expect(stream.scrollTop).toBe(readerTop);
+    expect(toggle.checked).toBe(false);
+
+    // Returning to the end resumes.
+    wheelTo(end());
+    frames(1);
+    expect(onToggleAutoFollow).toHaveBeenLastCalledWith(true);
+    expect(toggle.checked).toBe(true);
+    expired();
+
+    // A held pointer, on the scrollbar or selecting text, counts as the reader until released.
+    stream.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    expired();
+    scrollTo(end() - 200);
+    expect(toggle.checked).toBe(false);
+    document.dispatchEvent(new PointerEvent("pointerup"));
+    expired();
+
+    // End is a request for the live tail.
+    stream.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    flush();
+    expect(toggle.checked).toBe(true);
+    frames();
+    expired();
+
+    // Widening a filter while following lands on the newest line.
+    setFilterText("line 51");
+    frames();
+    setFilterText("");
+    frames(8);
+    expect(toggle.checked).toBe(true);
+    expect(Math.abs(end() - stream.scrollTop)).toBeLessThan(2);
+    expired();
+
+    // A switch turned off at the end stays off while the reader only nudges the wheel there.
+    toggle.click();
+    flush();
+    expect(toggle.checked).toBe(false);
+    wheelTo(end());
+    frames(1);
+    expect(toggle.checked).toBe(false);
+  } finally {
+    view.unmount();
+  }
+});
 
 it("keeps an in-flight hidden append at the end when the page becomes visible", async () => {
   vi.useFakeTimers({ toFake: ["performance", "setInterval", "clearInterval"] });
@@ -412,4 +604,70 @@ it("keeps an in-flight hidden append at the end when the page becomes visible", 
     }
     view.unmount();
   }
+});
+
+it("keeps one toolbar at phone width and moves page actions into a menu", async () => {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query === "(max-width: 640px)",
+    media: query,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }));
+  const onLevelToggle = vi.fn();
+  const onToggleAutoFollow = vi.fn();
+  const onExport = vi.fn();
+  const view = mountSolid(() => (
+    <LogsView
+      {...createProps({
+        status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+        file: "/tmp/openclaw/openclaw-gateway.log",
+        levelFilters: {
+          trace: false,
+          debug: true,
+          info: true,
+          warn: true,
+          error: true,
+          fatal: true,
+        },
+        onLevelToggle,
+        onToggleAutoFollow,
+        onExport,
+      })}
+    />
+  ));
+  flush();
+
+  const filter = view.container.querySelector<HTMLElement>(
+    '[aria-controls="logs-levels:content"]',
+  )!;
+  expect(filter.classList.contains("active")).toBe(true);
+  expect(filter.textContent).toContain("debug, info, warn, error, fatal");
+
+  filter.click();
+  flush();
+  await vi.waitFor(() => {
+    const debug = [...document.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')].find(
+      (item) => item.textContent?.trim() === "debug",
+    );
+    expect(debug).toBeTruthy();
+    debug!.click();
+  });
+  expect(onLevelToggle).toHaveBeenCalledWith("debug", false);
+
+  view.container.querySelector<HTMLInputElement>('.logs-toolbar input[role="switch"]')!.click();
+  expect(onToggleAutoFollow).toHaveBeenCalledWith(false);
+  expect(view.container.querySelector(".logs-footer")?.textContent).toContain(
+    "File: /tmp/openclaw/openclaw-gateway.log",
+  );
+
+  view.getByRole("button", { name: "More actions" }).click();
+  flush();
+  await vi.waitFor(() => {
+    const exportItem = [...document.querySelectorAll<HTMLElement>(".oc-menu-item")].find(
+      (item) => item.textContent?.trim() === "Export filtered",
+    );
+    expect(exportItem).toBeTruthy();
+    exportItem!.click();
+  });
+  expect(onExport).toHaveBeenCalledWith([raw], "filtered");
 });

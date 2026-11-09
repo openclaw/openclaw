@@ -550,6 +550,9 @@ describeLive("gateway live trajectory export", () => {
       });
       logLiveStep("agent-turn:done", { firstReply });
       expect(firstReply.trim()).toBe(replyToken);
+      // The native harness retires its runtime-config owner when the first turn
+      // settles. Republish this fixture before the follow-up gateway command.
+      useLiveTestRuntimeConfig(config);
 
       const { entry, storePath } = await loadSessionEntryAsync(sessionKey);
       if (!entry?.sessionId) {

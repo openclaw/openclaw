@@ -290,16 +290,17 @@ process.stdout.write(JSON.stringify({
     },
   );
 
-  it("retains dirty work and local branches", async ({ f }) => {
+  it.for(["", " 910001"])("retains dirty work and local branches (%s)", async (scope, { f }) => {
     const file = "unpublished.txt";
     const dir = await f.add(910001);
     writeFileSync(join(dir, file), "unpublished work\n");
     const unchanged = await preserve(f.branches, f.worktrees);
-    const dry = await f.run(["gc_pr_worktrees true"], "MERGED");
+    const dry = await f.run([`gc_pr_worktrees true${scope}`], "MERGED");
+    expect(dry.status, dry.output).toBe(scope ? 1 : 0);
     expect(dry.output).not.toContain("would remove .worktrees/pr-910001");
     await unchanged();
-    const result = await f.run(["gc_pr_worktrees false"], "MERGED");
-    expect(result.status, result.output).toBe(0);
+    const result = await f.run([`gc_pr_worktrees false${scope}`], "MERGED");
+    expect(result.status, result.output).toBe(scope ? 1 : 0);
     expect(existsSync(join(dir, file)), result.output).toBe(true);
     expect(readFileSync(join(dir, file), "utf8")).toBe("unpublished work\n");
     await unchanged();

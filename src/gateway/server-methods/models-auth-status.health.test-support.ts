@@ -1,4 +1,19 @@
 import type { AuthHealthSummary } from "../../agents/auth-health.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+
+export function oauthCredential(
+  provider: string,
+  overrides: Partial<Extract<AuthProfileStore["profiles"][string], { type: "oauth" }>> = {},
+) {
+  return {
+    type: "oauth" as const,
+    provider,
+    access: "access",
+    refresh: "refresh",
+    expires: 1_000_000,
+    ...overrides,
+  };
+}
 
 export type HealthProfile = AuthHealthSummary["profiles"][number];
 

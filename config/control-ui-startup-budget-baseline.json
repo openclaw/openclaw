@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 88758,
-  "reason": "Current-main Board containment build measures 88,758 B gzip, 7 B above its matched base, with three startup JavaScript requests and one CSS request; paired CPU qualification demonstrates the rendering win.",
-  "updatedAt": "2026-10-30"
+  "startupJsGzipBytes": 90908,
+  "reason": "PR #194142 (L293): Details first-frame prewarm loader in startup; lead byte exception",
+  "updatedAt": "2026-11-07"
 }

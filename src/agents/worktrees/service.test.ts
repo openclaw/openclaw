@@ -21,8 +21,9 @@ import {
   createWorktreeCapacityStatfs,
   useInProcessWorktreeCapacityTransport,
 } from "./capacity.test-support.js";
-import { isWorktreeAdd } from "./git-fixture.test-support.js";
+import { gitIdentity, isWorktreeAdd } from "./git-fixture.test-support.js";
 import * as worktreeGit from "./git.js";
+import { copyProvisionedPaths } from "./provisioned-copy.js";
 import * as worktreeRegistry from "./registry.js";
 import {
   getRegistryWorktreeProvisionedPaths,
@@ -337,16 +338,26 @@ describe("ManagedWorktreeService", () => {
   it.each(["aborted", "closed"] as const)(
     "handles stale remote checkout with %s admission",
     async (admission) => {
-      await addRemote(root, repo);
+      const remote = await addRemote(root, repo);
       const blob = await git(repo, "rev-parse", "HEAD:README.md");
       const tooLongForCheckout = "x".repeat(300);
       const tree = await gitWithInput(
-        repo,
+        remote,
         ["mktree"],
         `100644 blob ${blob}\t${tooLongForCheckout}\n`,
       );
-      const remoteCommit = await git(repo, "commit-tree", tree, "-p", "HEAD", "-m", "bad remote");
-      await git(repo, "push", "--force", "origin", `${remoteCommit}:refs/heads/main`);
+      const remoteCommit = await git(
+        remote,
+        ...gitIdentity,
+        "commit-tree",
+        tree,
+        "-p",
+        "HEAD",
+        "-m",
+        "bad remote",
+      );
+      // Advance origin independently so preparation must fetch the missing commit.
+      await git(remote, "update-ref", "refs/heads/main", remoteCommit);
       const runCommand = commandRunner.runCommandWithTimeout;
       const commandSpy = vi.spyOn(commandRunner, "runCommandWithTimeout");
       const controller = new AbortController();
@@ -430,8 +441,6 @@ describe("ManagedWorktreeService", () => {
   });
 
   it("rejects an included file replaced by a symlink after inspection", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), "settings.local\n");
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), "settings.local\n");
     const source = path.join(repo, "settings.local");
     await fs.writeFile(source, "included bytes\n");
     const outside = path.join(root, "outside.txt");
@@ -448,15 +457,13 @@ describe("ManagedWorktreeService", () => {
       return observed;
     });
 
-    await expect(
-      service.create({ repoRoot: repo, name: "swapped-source", baseRef: "HEAD" }),
-    ).rejects.toThrow();
+    const destination = path.join(root, "copy-destination");
+    await fs.mkdir(destination);
+    // Inject at the copy owner, which now runs in the filesystem worker.
+    await expect(copyProvisionedPaths(repo, destination, ["settings.local"], {})).rejects.toThrow();
 
     expect(replaced).toBe(true);
-    expect(listRegistryWorktrees(env)).toEqual([]);
-    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain(
-      "refs/heads/openclaw/swapped-source",
-    );
+    expect(await fs.readdir(destination)).toEqual([]);
     expect(await fs.readFile(outside, "utf8")).toBe("outside bytes\n");
   });
 

@@ -109,6 +109,22 @@ remain intact for older clients. Catalog publishers write both wires with
 `--out <v1-file> --out-v2 <v2-file>` when running
 `scripts/publish-model-catalog.mts`.
 
+Add `--out-v3 <v3-file>` to publish an opt-in task-capable catalog. V3 retains
+canonical `inference` facts for native Decision models and models that support
+both chat and Decisions. Native-only rows never become chat defaults or
+recommendations. Select a v3 mirror with the existing `models.catalogRefresh.url`;
+the default hosted URL and v1/v2 outputs stay unchanged. The v3 wire version is
+independent of the Decision provider SDK version. Installed plugins still own
+route eligibility, authentication, and execution; catalog metadata grants none
+of those capabilities.
+
+V3 changes only by adding fields. Readers ignore fields they do not know, at any
+level, so a newer publisher never needs a v4 for an additive change. The
+publisher still rejects unknown row, provider, and pricing fields, so typos
+there fail before publication. Never
+rename, retype, remove, or reuse a v3 field. Mark every non-chat row with
+`inference.chat: false` so older readers keep it out of chat.
+
 V2 includes pricing in each model row. Unknown or unavailable pricing does not
 mean a model is free. Models outside the catalog, such as older model IDs or
 models routed through a gateway, use standalone rates in the same file: a

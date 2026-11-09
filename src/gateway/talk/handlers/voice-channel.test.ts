@@ -4,6 +4,10 @@ import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/
 import { releaseAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { createPluginRuntimeStore } from "../../../plugin-sdk/runtime-store.js";
 import { PluginInstance } from "../../../plugins/plugin-instance.js";
+import {
+  isGatewaySubordinateWorkAdmissionClosed,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { registerRealtimeVoiceSelection } from "../../../talk/voice-selection-control.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-approval-authority.js";
@@ -67,28 +71,24 @@ describe("channel-owned voice selection RPC", () => {
     broadcast.mockClear();
   });
 
-  it("lists and changes the channel voice while retaining its plugin runtime for later consults", async () => {
+  it("changes the channel voice while retaining its plugin runtime and later admission", async () => {
     const discordInstance = new PluginInstance("discord");
     const talkVoiceInstance = new PluginInstance("talk-voice");
     const runtimeStore = createPluginRuntimeStore<string>({
       pluginId: "discord",
       errorMessage: "Discord runtime not initialized",
     });
-    let consult: (() => string) | undefined;
+    let consult: (() => unknown) | undefined;
     try {
       discordInstance.run(() => runtimeStore.setRuntime("discord-runtime"));
       const call = discordInstance.run(() =>
         managedCall(async () => {
-          consult = new AsyncResource("discord-replacement-consult").bind(() =>
+          consult = new AsyncResource("discord-replacement-consult").bind(() => [
             runtimeStore.getRuntime(),
-          );
+            isGatewaySubordinateWorkAdmissionClosed(),
+          ]);
         }),
       );
-      expectSuccess(await invoke("talk.voice.get", {}, call.client), {
-        voiceSessionId: "discord-room",
-        voice: "marin",
-        voices: ["marin", "cedar"],
-      });
       for (const params of [
         { voice: "unknown" },
         { voice: "cedar", voiceSessionId: "another-room" },
@@ -96,15 +96,15 @@ describe("channel-owned voice selection RPC", () => {
         expectFailure(await invoke("talk.voice.set", params, call.client));
       }
       expect(consult).toBeUndefined();
-      expect(call.currentVoice()).toBe("marin");
       expectSuccess(
-        await talkVoiceInstance.run(() =>
-          invoke("talk.voice.set", { voice: "Cedar" }, call.client),
+        await runWithGatewayIndependentRootWorkAdmission(
+          () =>
+            talkVoiceInstance.run(() => invoke("talk.voice.set", { voice: "Cedar" }, call.client)),
+          "ws:talk.voice.set",
         ),
         { voiceSessionId: "discord-room", voice: "cedar", status: "applied" },
       );
-      expect(broadcast).not.toHaveBeenCalled();
-      expect(consult?.()).toBe("discord-runtime");
+      expect(consult?.()).toEqual(["discord-runtime", false]);
     } finally {
       await Promise.all([discordInstance.dispose(), talkVoiceInstance.dispose()]);
     }

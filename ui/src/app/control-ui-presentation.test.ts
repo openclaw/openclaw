@@ -14,6 +14,7 @@ afterEach(() => {
   applyControlUiPresentation({ environment: null });
   initializeControlUiDocumentHead();
   document.documentElement.removeAttribute("style");
+  document.body.style.removeProperty("background-color");
   document.body.replaceChildren();
 });
 
@@ -48,11 +49,11 @@ describe("Control UI accent presentation", () => {
         expect(meta.hasAttribute("media")).toBe(false);
       }
       expect(unrelatedMeta.content).toBe("#123456");
-      expect(root.style.getPropertyValue("--control-ui-system-chrome-background")).toBe(color);
+      expect(document.body.style.backgroundColor).toBe(root.style.backgroundColor);
     };
     try {
       shell.className = "shell shell--chat";
-      syncControlUiSystemChrome(false, true);
+      syncControlUiSystemChrome(false, { contentCanvas: true, navScrim: false });
       expectChrome("rgb(10, 20, 30)");
       reads.mockClear();
       for (let commit = 0; commit < 20; commit++) {
@@ -110,14 +111,13 @@ describe("Control UI accent presentation", () => {
         meta.remove();
       }
       palette.remove();
-      root.classList.remove("control-ui-chat-shell");
       delete root.dataset.theme;
       delete root.dataset.themeMode;
       vi.unstubAllGlobals();
     }
   });
 
-  it("uses the shell's committed chat layout across palette changes, routes, and removal", () => {
+  it("uses the shell's committed content canvas across palette changes, routes, and removal", () => {
     const root = document.documentElement;
     const shell = document.body.appendChild(document.createElement("div"));
     root.style.setProperty("--bg", "rgb(10, 20, 30)");
@@ -128,31 +128,56 @@ describe("Control UI accent presentation", () => {
     );
     try {
       shell.className = "shell shell--chat";
-      syncControlUiSystemChrome(false, true);
-      expect(root.classList.contains("control-ui-chat-shell")).toBe(true);
-      expect(root.style.getPropertyValue("--control-ui-system-chrome-background")).toBe(
-        "rgb(20, 30, 40)",
-      );
+      syncControlUiSystemChrome(false, { contentCanvas: true, navScrim: false });
+      expect(root.style.backgroundColor).toBe("rgb(20, 30, 40)");
+      expect(document.body.style.backgroundColor).toBe("rgb(20, 30, 40)");
 
       shell.className = "shell";
       syncControlUiSystemChrome();
-      expect(root.classList.contains("control-ui-chat-shell")).toBe(true);
-      syncControlUiSystemChrome(false, false);
-      expect(root.classList.contains("control-ui-chat-shell")).toBe(false);
-      expect(root.style.getPropertyValue("--control-ui-system-chrome-background")).toBe(
-        "rgb(10, 20, 30)",
-      );
+      expect(root.style.backgroundColor).toBe("rgb(20, 30, 40)");
+      syncControlUiSystemChrome(false, { contentCanvas: false, navScrim: false });
+      expect(root.style.backgroundColor).toBe("");
+      expect(document.body.style.backgroundColor).toBe("");
 
       shell.className = "shell shell--chat";
       syncControlUiSystemChrome();
-      expect(root.classList.contains("control-ui-chat-shell")).toBe(false);
-      syncControlUiSystemChrome(false, true);
+      expect(root.style.backgroundColor).toBe("");
+      syncControlUiSystemChrome(false, { contentCanvas: true, navScrim: false });
       shell.remove();
-      syncControlUiSystemChrome(false, false);
-      expect(root.classList.contains("control-ui-chat-shell")).toBe(false);
+      syncControlUiSystemChrome(false, { contentCanvas: false, navScrim: false });
+      expect(root.style.backgroundColor).toBe("");
     } finally {
-      root.classList.remove("control-ui-chat-shell");
       vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps unchanged operator seams free of style writes and preserves accent priority", () => {
+    const root = document.documentElement;
+    root.style.setProperty("--bg", "#ffffff");
+    root.style.setProperty("--bg-content", "#ffffff");
+    applyControlUiPresentation({ environment: null, seamColor: "#123456" });
+    const mutations = new MutationObserver(() => {});
+    mutations.observe(root, { attributes: true, attributeFilter: ["style"] });
+    try {
+      applyControlUiPresentation({ environment: null, seamColor: "#123456" });
+      expect(mutations.takeRecords()).toEqual([]);
+
+      applyControlUiPresentation({ environment: null, seamColor: "#abcdef" });
+      expect(mutations.takeRecords().length).toBeGreaterThan(0);
+      expect(root.style.getPropertyValue("--accent")).toBe("#abcdef");
+
+      applyControlUiAccent("#fbbf24");
+      applyControlUiPresentation({ environment: null, seamColor: "#654321" });
+      expect(root.style.getPropertyValue("--accent")).toBe("#fbbf24");
+      mutations.takeRecords();
+      applyControlUiPresentation({ environment: null, seamColor: "#654321" });
+      expect(mutations.takeRecords()).toEqual([]);
+      expect(root.style.getPropertyValue("--accent")).toBe("#fbbf24");
+
+      applyControlUiAccent();
+      expect(root.style.getPropertyValue("--accent")).toBe("#654321");
+    } finally {
+      mutations.disconnect();
     }
   });
 
@@ -172,9 +197,7 @@ describe("Control UI accent presentation", () => {
       expect(style.getPropertyValue("--accent")).toBe("#fbbf24");
       expect(style.getPropertyValue("--primary")).toBe("#fbbf24");
       // Hover must ride the accent too; dark Claw/Knot primary buttons read it.
-      expect(style.getPropertyValue("--primary-hover")).toBe(
-        "color-mix(in srgb, var(--primary) 82%, white 18%)",
-      );
+      expect(style.getPropertyValue("--primary-hover")).toBe("#fccb4b");
       expect(style.getPropertyValue("--accent-foreground")).toBe("#000000");
       expect(style.getPropertyValue("--primary-foreground")).toBe("#000000");
 

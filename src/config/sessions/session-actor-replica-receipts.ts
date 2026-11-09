@@ -122,6 +122,7 @@ export function readSessionActorProjectionReceiptFromCells(
       ],
       facts: snapshot?.transcript.projection,
       contextStats: snapshot?.transcript.contextStats,
+      contextStatsVersion: snapshot?.transcript.version,
     };
   }
   return undefined;

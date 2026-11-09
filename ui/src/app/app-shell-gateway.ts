@@ -1,7 +1,7 @@
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
-import { isSessionRouteId } from "../app-route-paths.ts";
+import { isSessionRouteId, pathForAgentPanel } from "../app-route-paths.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
@@ -82,7 +82,6 @@ export class ShellGatewayOwner {
     client: GatewayBrowserClient;
     profileId: string;
     runtimeConfig: ApplicationContext["runtimeConfig"];
-    configObject: unknown;
     invalidationId: number;
     promise: Promise<void>;
   } | null = null;
@@ -151,7 +150,11 @@ export class ShellGatewayOwner {
           await import("../lib/chat/composer-draft-retirement.runtime.ts");
         retireDrafts = retireDeletedComposerDrafts;
       } catch {
-        showToast({ message: t("sessionsView.draftCleanupFailed") });
+        showToast({
+          placement: "top-right",
+          severity: "warning",
+          message: t("sessionsView.draftCleanupFailed"),
+        });
         return;
       }
       return retireDrafts(context, scope, deletedSessions);
@@ -261,7 +264,10 @@ export class ShellGatewayOwner {
       event.event === "chat.metadata.changed" ? asNullableRecord(event.payload) : undefined;
     const commandsChanged = metadataChange?.commandsChanged !== false;
     if (client && modelAuthEventInvalidates(event)) {
-      invalidateModelAuthStatusRequests(client);
+      invalidateModelAuthStatusRequests(
+        client,
+        typeof metadataChange?.agentId === "string" ? metadataChange.agentId : undefined,
+      );
     }
     if (
       client &&
@@ -328,6 +334,15 @@ export class ShellGatewayOwner {
     const commandParams = event.payload as UiCommandParams;
     const { command } = commandParams;
     if (!command) {
+      return;
+    }
+    if (command.kind === "agent-github-settings") {
+      const agentId = commandParams.agentId?.trim();
+      if (agentId) {
+        context.navigate("agents", {
+          pathname: pathForAgentPanel(agentId, "tools", context.basePath),
+        });
+      }
       return;
     }
     if (command.kind === "sidebar") {
@@ -517,6 +532,8 @@ export class ShellGatewayOwner {
     });
     const context = this.host.context;
     const generation = ++this.preferenceGeneration;
+    // Profile overrides and navigation do not depend on the operator config read.
+    const profileReady = context ? this.refreshProfileAppearancePrefs(context) : Promise.resolve();
     this.runtimeConfigReady = (
       runtimeConfig.state.bootstrapConfig ? Promise.resolve() : runtimeConfig.ensureDisplayLoaded()
     ).then(async () => {
@@ -530,6 +547,7 @@ export class ShellGatewayOwner {
         return;
       }
       await this.reconcileServerUiPrefs(runtimeConfig);
+      await profileReady;
     });
     return this.runtimeConfigReady;
   }
@@ -575,8 +593,7 @@ export class ShellGatewayOwner {
       return Promise.resolve();
     }
     const client = snapshot.client;
-    const configObject = currentDisplayConfig(context.runtimeConfig.state);
-    if (snapshot.phase !== "connected" || !client || !configObject) {
+    if (snapshot.phase !== "connected" || !client) {
       return Promise.resolve();
     }
     const runtimeConfig = context.runtimeConfig;
@@ -586,7 +603,6 @@ export class ShellGatewayOwner {
       previous?.client === client &&
       previous.profileId === profileId &&
       previous.runtimeConfig === runtimeConfig &&
-      previous.configObject === configObject &&
       previous.invalidationId === profilePreferencesState.invalidationId
     ) {
       return previous.promise;
@@ -596,7 +612,6 @@ export class ShellGatewayOwner {
       client,
       profileId,
       runtimeConfig,
-      configObject,
       invalidationId: profilePreferencesState.invalidationId,
       promise: Promise.resolve(),
     };
@@ -608,7 +623,6 @@ export class ShellGatewayOwner {
     const remainsCurrent = () =>
       this.host.context === context &&
       context.runtimeConfig === runtimeConfig &&
-      currentDisplayConfig(runtimeConfig.state) === configObject &&
       runtimeConfig.state.client === sourceClient &&
       context.gateway.snapshot.client === client &&
       context.gateway.snapshot.phase === "connected" &&
@@ -627,26 +641,32 @@ export class ShellGatewayOwner {
         if (!remainsCurrent()) {
           return;
         }
-        const pending = runtime.refreshProfileAppearancePrefs({
-          client,
-          profileId,
-          configObject,
-          scope,
+        const pending = runtime.loadProfileAppearancePrefs(client, profileId, scope, {
           isCurrent: remainsCurrent,
-          onApplied: () => {
-            if (remainsCurrent()) {
-              context.theme.refresh({ notify: true });
-            }
-          },
-          onThemeChanged: (theme) => {
-            if (remainsCurrent()) {
-              context.theme.recordServerSelection(theme, scope);
-            }
-          },
         });
         // Read admission may adopt the profile identity before its first await.
         source.invalidationId = profilePreferencesState.invalidationId;
-        const applied = await pending;
+        const loaded = await pending;
+        if (!remainsCurrent()) {
+          return;
+        }
+        const applied =
+          loaded &&
+          runtime.applyServerUiPrefs(currentDisplayConfig(runtimeConfig.state), {
+            profileId,
+            scope,
+            navigationConfirmed: true,
+            onApplied: () => {
+              if (remainsCurrent()) {
+                context.theme.refresh({ notify: true });
+              }
+            },
+            onThemeChanged: (theme) => {
+              if (remainsCurrent()) {
+                context.theme.recordServerSelection(theme, scope);
+              }
+            },
+          });
         if (remainsCurrent()) {
           if (!applied) {
             context.theme.refresh({ notify: true });

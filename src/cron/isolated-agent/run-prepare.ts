@@ -9,6 +9,7 @@ import {
   type PreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime.js";
 import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { resolveSessionModelOverrideSource } from "../../config/sessions/model-override-provenance.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
@@ -20,9 +21,11 @@ import {
 } from "../../sessions/agent-harness-session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { cronExecutionActor } from "../human-owner.js";
 import { resolveCronRuntimeSessionEntry } from "../inference-binding.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
@@ -37,7 +40,7 @@ import {
 } from "./model-selection.js";
 import { prepareCronAutomationPrompt } from "./run-automation-context.js";
 import { resolveCronCommandPromptPreflight } from "./run-command-preflight.js";
-import { resolveCronActiveRuntimeConfig, resolveCronAgentConfig } from "./run-config.js";
+import { resolveCronAgentConfig } from "./run-config.js";
 import {
   createCronToolsAllowPreflightDiagnostics,
   resolveCronDeliveryContext,
@@ -57,6 +60,7 @@ import {
   createPersistCronSessionEntry,
   setCronSessionRuntimeModel,
   setCronSessionAgentHarnessId,
+  type MutableCronSession,
 } from "./run-session-state.js";
 import { resolveCronRunTimeoutOverrideMs } from "./run-timeout.js";
 import { prepareCronSessionWorkspace } from "./run-workspace.js";
@@ -140,7 +144,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
   if (commandPromptPreflight) {
     return { ok: false as const, result: commandPromptPreflight };
   }
-  const requestedRuntimeCfg = resolveCronActiveRuntimeConfig(input.cfg);
+  const requestedRuntimeCfg = selectLiveRuntimeConfig(input.cfg);
   const requestedAgentId = input.agentId?.trim() || input.job.agentId?.trim();
   const normalizedRequested = requestedAgentId ? normalizeAgentId(requestedAgentId) : undefined;
   const requiredAgentId =
@@ -238,10 +242,10 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
     const now = Date.now();
     // A child run never runs looser than its parent.
     const sandbox =
-      resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor }) ??
+      resolveCreatorSandbox(runtimeCfg, { actor: cronExecutionActor(input.job) }) ??
       input.occurrence.childParent?.sandbox;
     const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
-    const cronSession = await prepareCronSession({
+    const cronSession: MutableCronSession = await prepareCronSession({
       cfg: runtimeCfg,
       sessionKey: agentSessionKey,
       sourceSessionKey,
@@ -313,7 +317,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
       const persistSessionEntry = createPersistCronSessionEntry({
         cronSession,
         agentSessionKey,
-        createdActor: input.job.createdActor,
+        createdActor: cronExecutionActor(input.job),
         sandbox,
         workspaceDir,
         persistSessionEntry: persistCronSessionRow,
@@ -483,33 +487,39 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           (candidate) => candidate.id === model,
         );
         const modelApi = catalogModel?.api ?? configuredModel?.api ?? configuredProvider?.api;
-        const preflightDiagnostics = await createCronToolsAllowPreflightDiagnostics({
-          cfg: admittedConfig,
-          jobId: input.job.id,
-          provider,
-          model,
-          modelApi,
-          modelBaseUrl:
-            catalogModel?.baseUrl ?? configuredModel?.baseUrl ?? configuredProvider?.baseUrl,
-          modelParams: catalogModel?.params ?? configuredModel?.params,
-          agentId: modelOwner.agentId,
-          agentDir: modelOwner.agentDir,
+        // Drain both readers before failure cleanup releases the admitted runtime.
+        const [
+          preflightDiagnostics,
+          {
+            deliveryPlan,
+            deliveryRequested,
+            resolvedDelivery,
+            sourceDelivery,
+            deliverySystemPrompt,
+            messageToolFormatPrompt,
+          },
+        ] = await settleCurrentReadPreparations([
+          createCronToolsAllowPreflightDiagnostics({
+            cfg: admittedConfig,
+            jobId: input.job.id,
+            provider,
+            model,
+            modelApi,
+            modelBaseUrl:
+              catalogModel?.baseUrl ?? configuredModel?.baseUrl ?? configuredProvider?.baseUrl,
+            modelParams: catalogModel?.params ?? configuredModel?.params,
+            agentId: modelOwner.agentId,
+            agentDir: modelOwner.agentDir,
 
-          sessionKey: agentSessionKey,
-          agentPayload,
-        });
-        const {
-          deliveryPlan,
-          deliveryRequested,
-          resolvedDelivery,
-          sourceDelivery,
-          deliverySystemPrompt,
-          messageToolFormatPrompt,
-        } = await resolveCronDeliveryContext({
-          cfg: admittedConfig,
-          job: input.job,
-          agentId,
-        });
+            sessionKey: agentSessionKey,
+            agentPayload,
+          }),
+          resolveCronDeliveryContext({
+            cfg: admittedConfig,
+            job: input.job,
+            agentId,
+          }),
+        ] as const);
         // Persistent wakes share chat's binding policy; announce targeting is turn-local.
         const cliSessionBindingFacts = {
           extraSystemPromptStatic: deliverySystemPrompt,
@@ -605,6 +615,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
                 cfg: admittedConfig,
                 provider,
                 modelId: model,
+                agentRuntime: effectiveAgentRuntime,
                 ...(provider === resolvedModelSelection.provider &&
                 resolvedModelSelection.configuredProfileId
                   ? { configuredProfileId: resolvedModelSelection.configuredProfileId }
@@ -630,7 +641,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           ? createCronRunContinuationSession({
               cronSession,
               runSessionKey,
-              createdActor: input.job.createdActor,
+              createdActor: cronExecutionActor(input.job),
               sandbox,
               thinkingLevel: requestedThinkLevel,
               toolsAllow: agentPayload?.toolsAllow,

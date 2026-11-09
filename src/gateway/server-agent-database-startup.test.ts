@@ -61,9 +61,9 @@ import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-e
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
+import "./server-methods/chat-send-external-entry.js";
 // Keep cold module evaluation outside the lifecycle and RPC behavior deadlines.
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
-import "./server-methods/chat-send-external-entry.js";
 import { gatewayReplyMock, testState } from "./test-helpers.runtime-state.js";
 import {
   connectWebchatClient,
@@ -546,7 +546,7 @@ it.for([
         }
         expect(fs.existsSync(pause!.preparationReleasePath)).toBe(false);
         expect(inspectionAlive(preparationEnteredPath)).toBe(false);
-        expect(fs.readFileSync(agentPath)).toEqual(agentBytes);
+        expect(fs.readFileSync(agentPath).equals(agentBytes), agentPath).toBe(true);
       } else if (outcome === "recover" || outcome === "superseded") {
         if (outcome === "recover") {
           chatClient = await connectWebchatClient({ port });
@@ -846,7 +846,7 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
       `Skipped ${leftover} (agent unowned): database is not a configured target; run openclaw doctor to inspect retained data.`,
     );
     for (const [index, pathname] of stalePaths.entries()) {
-      expect(fs.readFileSync(pathname)).toEqual(staleBytes[index]);
+      expect(fs.readFileSync(pathname).equals(staleBytes[index]!), pathname).toBe(true);
       expect(warnings).toHaveBeenCalledWith(
         `Skipped ${pathname} (agent ${agentIds[index]}): database is not a configured target; run openclaw doctor to inspect retained data.`,
       );

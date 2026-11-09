@@ -4,8 +4,8 @@ import { en } from "./en.ts";
 
 const enTemplateCreator = {
   templatesDraft: {
-    railHint: "Turn this agent into a shareable Template",
-    reviewTitle: "Review your Template",
+    railHint: "Turn this agent into a shareable template",
+    reviewTitle: "Review your template",
     intro: "Choose what to include. The archive below is rebuilt before publication.",
     name: "Name",
     description: "Description",
@@ -32,9 +32,9 @@ const enTemplateCreator = {
     pending: "Submitted to ClawHub. Publication pending security review.",
     viewPublication: "View on ClawHub",
     retryReview: "Retry review",
-    reopen: "Review Template package",
-    openingChat: "Opening the agent’s main chat…",
-    sendFailed: "The main chat did not accept the Create Template message.",
+    reopen: "Review template package",
+    openingChat: "Opening the agent’s main session…",
+    sendFailed: "Couldn’t start template creation. Try again.",
   },
 } satisfies TranslationMap;
 

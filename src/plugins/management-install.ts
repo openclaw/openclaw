@@ -185,7 +185,7 @@ async function resolveOfficialManagedInstallSpec(params: {
   if (request.source === "npm" && updateChannel !== "beta" && updateChannel !== "extended-stable") {
     return null;
   }
-  const specs =
+  const clawhub =
     request.source === "clawhub"
       ? resolveClawHubInstallSpecsForUpdateChannel({
           spec: request.recordSpec ?? request.spec,
@@ -194,17 +194,21 @@ async function resolveOfficialManagedInstallSpec(params: {
           coreVersion: resolveCompatibilityHostVersion(),
           preferCoreVersion: true,
         })
-      : await resolveNpmInstallSpecsForUpdateChannel({
-          spec: request.spec,
-          updateChannel,
-          officialPackageName: packageName,
-          coreVersion: VERSION,
-        });
+      : undefined;
+  const specs =
+    clawhub ??
+    (await resolveNpmInstallSpecsForUpdateChannel({
+      spec: request.spec,
+      updateChannel,
+      officialPackageName: packageName,
+      coreVersion: VERSION,
+    }));
   return specs.installSpec === request.spec || specs.installSpec === request.recordSpec
     ? null
     : {
         ...specs,
-        fallbackSpec: updateChannel === "stable" && specs.fallbackSpec ? request.spec : undefined,
+        fallbackSpec:
+          updateChannel === "stable" && clawhub?.fallbackSpec ? request.spec : undefined,
       };
 }
 
@@ -330,25 +334,29 @@ export async function installManagedPluginSource(
     }
     const isUnavailableTarget =
       request.source === "clawhub" ? isUnavailableClawHubTarget : isUnavailableNpmTarget;
-    const result = await installWithChannelFallback({
-      ...specs,
-      install: (spec) =>
-        installResolvedManagedPluginSource(
-          {
-            ...params,
-            request: {
-              ...request,
-              spec,
-              recordSpec: request.recordSpec ?? request.spec,
-              expectedIntegrity: spec === request.spec ? request.expectedIntegrity : undefined,
-            },
+    const install = (spec: string) =>
+      installResolvedManagedPluginSource(
+        {
+          ...params,
+          request: {
+            ...request,
+            spec,
+            recordSpec: request.recordSpec ?? request.spec,
+            expectedIntegrity: spec === request.spec ? request.expectedIntegrity : undefined,
           },
-          assertCurrent,
-          prepareSettlement,
-        ),
-      isRetryable: (attempt) => !attempt.ok && isUnavailableTarget(attempt),
-      onFallback: (message) => params.logger?.warn?.(message),
-    });
+        },
+        assertCurrent,
+        prepareSettlement,
+      );
+    const result =
+      request.source === "npm"
+        ? await install(specs.installSpec)
+        : await installWithChannelFallback({
+            ...specs,
+            install,
+            isRetryable: (attempt) => !attempt.ok && isUnavailableClawHubTarget(attempt),
+            onFallback: (message) => params.logger?.warn?.(message),
+          });
     if (result.ok || !isUnavailableTarget(result)) {
       return result;
     }

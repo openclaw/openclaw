@@ -188,8 +188,13 @@ const reviewedMembers = new Map<string, readonly string[]>([
 const nonRuntimeCandidates = new Map<string, readonly string[]>([
   [
     "src/config/sessions/session-cold-storage-chunks.ts",
-    ["readSessionColdChunks", "iterateSessionColdRecords"],
+    ["readSessionColdChunks", "readVerifiedSessionColdChunk", "iterateSessionColdRecords"],
   ],
+  [
+    "src/config/sessions/session-cold-storage-navigation.ts",
+    ["retainSessionColdNavigationInTransaction"],
+  ],
+  ["src/config/sessions/session-cold-storage-records.ts", ["writeSessionColdRecordsInTransaction"]],
   [
     "src/config/sessions/session-cold-storage-prepare.ts",
     [
@@ -424,9 +429,11 @@ export function inspectDatabaseWorkerBoundaries(
   const compilerSymbols = new Map<ts.Node, Symbol | undefined>();
   const symbolsAt = (nodes: readonly ts.Node[]): (Symbol | undefined)[] => {
     const missing = [...new Set(nodes.filter((node) => !compilerSymbols.has(node)))];
-    if (missing.length) {
-      const symbols = checker.getSymbolAtLocation(missing);
-      for (const [index, node] of missing.entries()) {
+    // An unbounded cross-file response can exceed Node's JSON string limit.
+    for (let offset = 0; offset < missing.length; offset += 256) {
+      const batch = missing.slice(offset, offset + 256);
+      const symbols = checker.getSymbolAtLocation(batch);
+      for (const [index, node] of batch.entries()) {
         compilerSymbols.set(node, symbols[index]);
       }
     }
@@ -601,7 +608,7 @@ export function inspectDatabaseWorkerBoundaries(
   });
   session.checkpoint?.("sources-registration");
   if (validateCredentialWriters) {
-    violations.push(...inspectPersonalCredentialWriters(sources, checker));
+    violations.push(...inspectPersonalCredentialWriters(sources, checker, symbolsAt));
     session.checkpoint?.("credential-writers");
   }
   // Follow named kernels from the reviewed boundaries. A symbol reference from
@@ -1008,7 +1015,7 @@ export function inspectDatabaseWorkerBoundaries(
         ts.isStringLiteral(expression.parent.argumentExpression))
     );
   };
-  for (const { file, source } of sources) {
+  const sourceReferences = sources.map(({ file, source }) => {
     const references: ts.Node[] = [];
     const visit = (node: ts.Node) => {
       // `extends` is a runtime reference even though its AST wrapper is a type.
@@ -1046,9 +1053,25 @@ export function inspectDatabaseWorkerBoundaries(
       node.forEachChild(visit);
     };
     source.forEachChild(visit);
+    return { file, source, references };
+  });
+  // Reference discovery is independent across files in this immutable snapshot.
+  // Resolve the full batch before classifying callers instead of one RPC per file.
+  symbolsAt(sourceReferences.flatMap(({ references }) => references));
+  for (const { file, source, references } of sourceReferences) {
     const symbols = symbolsAt(references);
     const pendingAccesses = new Set<ts.Expression>();
+    const receiverBindings = new Map<ts.Node, ts.ObjectBindingPattern>();
     for (const [index, node] of references.entries()) {
+      if (
+        ts.isIdentifier(node) &&
+        ts.isBindingElement(node.parent) &&
+        node.parent.name === node &&
+        !node.parent.propertyName &&
+        ts.isObjectBindingPattern(node.parent.parent)
+      ) {
+        receiverBindings.set(node, node.parent.parent);
+      }
       if (symbols[index]) {
         continue;
       }
@@ -1075,14 +1098,17 @@ export function inspectDatabaseWorkerBoundaries(
     // Query the same receiver nodes as the fallback, without a round trip per access.
     const accessLocations = [...pendingAccesses];
     symbolsAt(accessLocations);
+    // Members of one destructuring share a receiver type; query each pattern once.
+    const patterns = [...new Set(receiverBindings.values())];
+    const receiverTypes = patterns.length ? checker.getTypeAtLocation(patterns) : [];
+    const bindingTypes = new Map(
+      patterns.map((pattern, index) => [pattern, receiverTypes[index]!]),
+    );
     for (const [index, node] of references.entries()) {
+      const pattern = receiverBindings.get(node);
       const bindingMember =
-        ts.isIdentifier(node) &&
-        ts.isBindingElement(node.parent) &&
-        node.parent.name === node &&
-        !node.parent.propertyName &&
-        ts.isObjectBindingPattern(node.parent.parent)
-          ? checker.getTypeAtLocation(node.parent.parent).getProperty(node.text)
+        pattern && ts.isIdentifier(node)
+          ? bindingTypes.get(pattern)!.getProperty(node.text)
           : undefined;
       let symbol = resolveSymbol(
         bindingMember ??
