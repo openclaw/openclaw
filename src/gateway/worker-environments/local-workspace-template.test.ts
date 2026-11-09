@@ -225,6 +225,17 @@ it("refreshes source changes once, isolates clones, and rebuilds changed lockfil
     "template.priorSourceCommit": sourceCommit.slice(0, 12),
     "template.requestedSourceCommit": changedCommit.slice(0, 12),
   });
+  for (const commit of [baseCommit, sourceCommit, changedCommit]) {
+    const reused = await clone(`return-${commit}`, commit);
+    expect(await git(reused, "rev-parse", "HEAD")).toBe(commit);
+    expect(await read(reused, dependencyFile)).toBe(
+      commit === changedCommit ? secondLock : firstLock,
+    );
+    expect(await read(reused, "node_modules/source-derived.txt")).toBe(
+      commit === baseCommit ? sourceText : "export const version = 'updated';\n",
+    );
+  }
+  expect(mocks.install).toHaveBeenCalledTimes(3);
   const attributes = await clone("attributes", attributeCommit);
   expect(await read(attributes, "source.ts")).toBe("export const version = 'updated';\r\n");
   expect(backend.createTemplate).toHaveBeenCalledTimes(3);

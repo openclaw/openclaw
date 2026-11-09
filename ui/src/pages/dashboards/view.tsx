@@ -23,7 +23,7 @@ import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
-import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { renderSessionOwnerChip } from "../../components/solid/session-presentation.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerDashboardsEnglish } from "../../i18n/locales/en-dashboards.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -32,13 +32,21 @@ import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import type { SessionCreatedActor } from "../../lib/session-owner.ts";
 import {
   isSessionKeyAddressable,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import { HoverMarquee } from "../../lib/solid/hover-marquee.tsx";
 import "../../styles/dashboards.css";
-import { DashboardFilterPopover } from "./dashboard-filter-popover.tsx";
 import { DashboardPreview } from "./dashboard-preview.tsx";
+import {
+  DashboardAuthorChip,
+  DashboardAuthorFilter,
+  DashboardSearch,
+  authorDisplayName,
+  type DashboardAuthorOption,
+} from "./dashboard-tools.tsx";
 import type { DashboardGalleryFilters, DashboardGalleryHandlers } from "./gallery-filters.ts";
 
 registerDashboardsEnglish();
@@ -57,7 +65,22 @@ type DashboardRow = SessionsListResult["sessions"][number];
 function dashboardAuthor(row: DashboardRow, fallbackAgentId: string) {
   const actor = row.createdActor ?? row.owner?.actor;
   const id = actor?.id?.trim() || row.agentId?.trim() || fallbackAgentId;
-  return { id, label: actor?.label?.trim() || id };
+  const label = actor?.label?.trim() || id;
+  // Without an actor id the author is the session's agent, drawn with its agent avatar.
+  const avatar: SessionCreatedActor = actor?.id?.trim()
+    ? actor
+    : { type: "agent", id, label, identity: { type: "agent", id } };
+  return { id, label, avatar };
+}
+
+function dashboardAuthors(data: DashboardsRouteData): DashboardAuthorOption[] {
+  const authors = new Map<string, DashboardAuthorOption>();
+  for (const row of data.result?.sessions ?? []) {
+    const author = dashboardAuthor(row, data.fallbackAgentId);
+    const known = authors.get(author.id);
+    authors.set(author.id, known ? { ...known, count: known.count + 1 } : { ...author, count: 1 });
+  }
+  return [...authors.values()];
 }
 
 function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalleryFilters) {
@@ -65,7 +88,7 @@ function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalle
   return (data.result?.sessions ?? [])
     .filter((row) => {
       const author = dashboardAuthor(row, data.fallbackAgentId);
-      if (filters.ownerId && author.id !== filters.ownerId) {
+      if (filters.ownerIds.length > 0 && !filters.ownerIds.includes(author.id)) {
         return false;
       }
       return (
@@ -128,48 +151,74 @@ function DashboardGrid(props: {
         : null,
     );
     const author = () => dashboardAuthor(childProps.row, props.data.fallbackAgentId);
+    const authorName = () => authorDisplayName(author(), props.gatewaySnapshot?.selfUser?.id);
     const title = createMemo(() => resolveSessionDisplayName(childProps.row.key, childProps.row));
+    let card!: HTMLElement;
     const Content = () => (
       <>
         <div class="dashboard-preview" aria-hidden="true" inert>
-          <DashboardPreview
-            gatewaySnapshot={props.gatewaySnapshot}
-            sessionKey={childProps.row.key}
-            agentId={childProps.row.agentId}
-          />
+          <div class="dashboard-preview__sheet">
+            <DashboardPreview
+              gatewaySnapshot={props.gatewaySnapshot}
+              sessionKey={childProps.row.key}
+              agentId={childProps.row.agentId}
+            />
+          </div>
         </div>
         <div class="dashboard-card__body">
           <div class="dashboard-card__heading">
-            <h2>{title()}</h2>
-            <Show when={childProps.row.status === "running"}>
-              <SettingsStatus kind="running" label={t("dashboardsPage.live")} />
-            </Show>
-          </div>
-          <div class="dashboard-card__author">
-            <span class="dashboard-card__avatar" aria-hidden="true">
-              {author().label.trim().charAt(0).toLocaleUpperCase() || "?"}
+            <h2>
+              <HoverMarquee
+                content={title()}
+                class="dashboard-card__title"
+                options={{ loop: true, host: () => card }}
+              />
+            </h2>
+            {/* Reserved even while idle, so a run starting never shifts the title. */}
+            <span class="dashboard-card__status">
+              <Show when={childProps.row.status === "running"}>
+                <span
+                  class="session-run-spinner"
+                  role="img"
+                  aria-label={t("dashboardsPage.running")}
+                  title={t("dashboardsPage.running")}
+                />
+              </Show>
             </span>
-            <span>{t("dashboardsPage.byAuthor", { author: author().label })}</span>
+          </div>
+          <div class="dashboard-card__meta">
+            <span class="dashboard-card__author">
+              {renderSessionOwnerChip(author().avatar, "row")}
+              <HoverMarquee
+                content={authorName()}
+                class="dashboard-card__author-name"
+                options={{ stationary: true, host: () => card }}
+              />
+            </span>
+            <span class="dashboard-card__updated">
+              <Show when={childProps.row.updatedAt} fallback={t("dashboardsPage.updatedUnknown")}>
+                {(updatedAt) => (
+                  <>
+                    <span class="dashboard-card__updated-label">
+                      {t("dashboardsPage.updatedLabel")}
+                    </span>{" "}
+                    <span class="dashboard-card__updated-time">
+                      {formatRelativeTimestamp(updatedAt())}
+                    </span>
+                  </>
+                )}
+              </Show>
+            </span>
           </div>
         </div>
-        <footer class="dashboard-card__footer">
-          <span>
-            {childProps.row.updatedAt
-              ? t("dashboardsPage.updated", {
-                  time: formatRelativeTimestamp(childProps.row.updatedAt),
-                })
-              : t("dashboardsPage.updatedUnknown")}
-          </span>
-          <Show when={target()}>
-            <span class="dashboard-card__open" aria-hidden="true">
-              <Icon name="arrowUpRight" />
-            </span>
-          </Show>
-        </footer>
       </>
     );
     return (
-      <article class="dashboard-card" data-dashboard-session={childProps.row.key}>
+      <article
+        ref={(element) => (card = element)}
+        class="dashboard-card"
+        data-dashboard-session={childProps.row.key}
+      >
         <Show
           when={target()}
           fallback={
@@ -415,16 +464,7 @@ function DashboardList(props: {
   gatewaySnapshot?: ApplicationGatewaySnapshot;
 }) {
   const rows = createMemo(() => props.data.result?.sessions ?? []);
-  const owners = createMemo(() =>
-    Array.from(
-      new Map(
-        rows().map((row) => {
-          const author = dashboardAuthor(row, props.data.fallbackAgentId);
-          return [author.id, author] as const;
-        }),
-      ).values(),
-    ).toSorted((left, right) => left.label.localeCompare(right.label)),
-  );
+  const authors = createMemo(() => dashboardAuthors(props.data));
   const visibleRows = createMemo(() => visibleDashboardRows(props.data, props.filters));
   return (
     <Show when={!(props.data.error && !props.data.result)}>
@@ -438,61 +478,12 @@ function DashboardList(props: {
         }
       >
         <section class="dashboards-gallery" aria-label={t("tabs.dashboards")}>
-          <div class="dashboards-toolbar">
-            <label class="dashboards-search">
-              <span aria-hidden="true">
-                <Icon name="search" />
-              </span>
-              <span class="sr-only">{t("dashboardsPage.searchLabel")}</span>
-              <input
-                type="search"
-                value={props.filters.query}
-                placeholder={t("dashboardsPage.searchPlaceholder")}
-                onInput={(event) =>
-                  props.handlers.onFilterChange({ query: event.currentTarget.value })
-                }
-              />
-            </label>
-            <DashboardFilterPopover
-              owners={owners()}
-              filters={props.filters}
-              handlers={props.handlers}
-            />
-            <label class="dashboards-select">
-              <span>{t("dashboardsPage.authorFilter")}</span>
-              <select
-                class="settings-select"
-                value={props.filters.ownerId}
-                onChange={(event) =>
-                  props.handlers.onFilterChange({ ownerId: event.currentTarget.value })
-                }
-              >
-                <option value="">{t("dashboardsPage.allAuthors")}</option>
-                <For each={owners()} keyed={(owner) => owner.id}>
-                  {(owner) => <option value={owner().id}>{owner().label}</option>}
-                </For>
-              </select>
-            </label>
-            <label class="dashboards-select">
-              <span>{t("dashboardsPage.sortLabel")}</span>
-              <select
-                class="settings-select"
-                value={props.filters.sort}
-                onChange={(event) => {
-                  const sort = event.currentTarget.value;
-                  if (sort === "updated" || sort === "title") {
-                    props.handlers.onFilterChange({ sort });
-                  }
-                }}
-              >
-                <option value="updated">{t("dashboardsPage.sortUpdated")}</option>
-                <option value="title">{t("dashboardsPage.sortTitle")}</option>
-              </select>
-            </label>
-          </div>
-          <div class="dashboards-results" role="status">
-            {t("dashboardsPage.resultCount", { count: String(visibleRows().length) })}
-          </div>
+          <DashboardAuthorChip
+            authors={authors()}
+            selfId={props.gatewaySnapshot?.selfUser?.id}
+            filters={props.filters}
+            handlers={props.handlers}
+          />
           <Show
             when={visibleRows().length > 0}
             fallback={
@@ -525,35 +516,20 @@ function DashboardGallerySkeleton() {
         {t("common.loading")}
       </span>
       <div class="dashboards-loading" aria-hidden="true" inert>
-        <div class="dashboards-toolbar">
-          <div class="dashboards-search skeleton dashboards-loading__control" />
-          <div class="dashboards-filter skeleton dashboards-loading__filter" />
-          <For each={[0, 1]}>
-            {() => (
-              <div class="dashboards-select dashboards-loading__select">
-                <div class="skeleton skeleton-line dashboards-loading__label" />
-                <div class="skeleton dashboards-loading__control" />
-              </div>
-            )}
-          </For>
-        </div>
-        <div class="dashboards-results">
-          <div class="skeleton skeleton-line dashboards-loading__label" />
-        </div>
         <div class="dashboards-grid">
           <For each={[0, 1, 2, 3, 4, 5]}>
             {() => (
               <div class="dashboard-card">
-                <div class="dashboard-preview skeleton" />
-                <div class="dashboard-card__body">
-                  <div class="skeleton skeleton-line skeleton-line--long dashboards-loading__title" />
-                  <div class="dashboard-card__author">
-                    <div class="dashboard-card__avatar skeleton" />
-                    <div class="skeleton skeleton-line skeleton-line--medium" />
+                <div class="dashboard-card__main">
+                  <div class="dashboard-preview skeleton" />
+                  <div class="dashboard-card__body">
+                    <div class="dashboard-card__heading">
+                      <div class="skeleton skeleton-line skeleton-line--long dashboards-loading__title" />
+                    </div>
+                    <div class="dashboard-card__meta">
+                      <div class="skeleton skeleton-line skeleton-line--medium" />
+                    </div>
                   </div>
-                </div>
-                <div class="dashboard-card__footer">
-                  <div class="skeleton skeleton-line skeleton-line--medium" />
                 </div>
               </div>
             )}
@@ -583,11 +559,37 @@ export function DashboardsView(props: {
         docsUrl="https://docs.openclaw.ai/web/dashboards"
         class="dashboards-header"
         actions={
-          <Show when={props.data?.result}>
-            <div class="dashboards-header__count">
-              <strong>{props.data?.result?.sessions.length}</strong>
-              <span>{t("dashboardsPage.totalLabel")}</span>
-            </div>
+          <Show when={props.data?.result?.sessions.length ? props.data : undefined}>
+            {(data) => (
+              <div class="dashboards-tools">
+                <DashboardSearch
+                  query={props.filters.query}
+                  onQueryChange={(query) => props.handlers.onFilterChange({ query })}
+                />
+                <DashboardAuthorFilter
+                  authors={dashboardAuthors(data())}
+                  selfId={props.gatewaySnapshot?.selfUser?.id}
+                  filters={props.filters}
+                  handlers={props.handlers}
+                />
+                <label class="dashboards-select">
+                  <span class="sr-only">{t("dashboardsPage.sortLabel")}</span>
+                  <select
+                    class="settings-select"
+                    value={props.filters.sort}
+                    onChange={(event) => {
+                      const sort = event.currentTarget.value;
+                      if (sort === "updated" || sort === "title") {
+                        props.handlers.onFilterChange({ sort });
+                      }
+                    }}
+                  >
+                    <option value="updated">{t("dashboardsPage.sortUpdated")}</option>
+                    <option value="title">{t("dashboardsPage.sortTitle")}</option>
+                  </select>
+                </label>
+              </div>
+            )}
           </Show>
         }
       />

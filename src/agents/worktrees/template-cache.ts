@@ -37,7 +37,11 @@ import {
   readTemplateAsync,
   reserveTemplateAsync,
 } from "./template-registry-async.js";
-import type { WorktreeTemplateRecord } from "./template-registry.js";
+import {
+  retainedWorktreeTemplateKey,
+  worktreeTemplateMutationKey,
+  type WorktreeTemplateRecord,
+} from "./template-registry.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 export const WORKTREE_TEMPLATE_DIRECTORY = ".templates";
@@ -47,7 +51,7 @@ export async function retainWorktreeTemplate(
   env: NodeJS.ProcessEnv,
   selection:
     | WorktreeTemplateRecord
-    | Pick<WorktreeTemplateRecord, "cacheKey" | "contentKey" | "backend">,
+    | (Pick<WorktreeTemplateRecord, "cacheKey" | "contentKey" | "backend"> & { now?: number }),
   assertCurrent: () => void,
   unpublish?: true,
 ): Promise<PreparedWorktreeTemplate | undefined> {
@@ -144,29 +148,71 @@ async function retireWorktreeTemplate(
 export async function collectWorktreeTemplates(
   env: NodeJS.ProcessEnv,
   before: number,
-  options: WorktreeFilesystemOptions,
+  options: WorktreeFilesystemOptions & {
+    beforeRemoval?: () => Promise<void>;
+    maxRemovals?: number;
+    scope?: Pick<WorktreeTemplateRecord, "commonDir" | "worktreeRoot">;
+  },
   onError?: (error: unknown, id: string) => void,
 ): Promise<void> {
-  for (const record of await listTemplatesAsync(env)) {
-    const expiresBefore = record.cacheKey.startsWith("warm:")
-      ? Math.max(before, Date.now() - 60 * 60_000)
-      : before;
-    if (record.status === "ready" && record.lastUsedAt >= expiresBefore) {
+  const records = (await listTemplatesAsync(env)).filter(
+    (record) =>
+      !options.scope ||
+      (record.commonDir === options.scope.commonDir &&
+        record.worktreeRoot === options.scope.worktreeRoot),
+  );
+  const retained = new Set<string>();
+  const groups = new Map<string, { count: number; currentKey: string }>();
+  // Bound across runtime identities, so a changed image/store cannot add another allowance.
+  for (const record of records.toReversed()) {
+    if (record.status !== "ready" || !record.backend.startsWith("sandbox-")) {
+      continue;
+    }
+    const group = JSON.stringify([record.commonDir, record.worktreeRoot]);
+    const selection = groups.get(group) ?? {
+      count: 0,
+      currentKey: worktreeTemplateMutationKey(record.cacheKey),
+    };
+    groups.set(group, selection);
+    if (++selection.count <= 4) {
+      retained.add(record.id);
+    }
+  }
+  let removed = 0;
+  for (const record of records) {
+    const sandbox = record.backend.startsWith("sandbox-");
+    const overCapacity = sandbox && record.status === "ready" && !retained.has(record.id);
+    const supersededIdentity =
+      sandbox &&
+      groups.get(JSON.stringify([record.commonDir, record.worktreeRoot]))?.currentKey !==
+        worktreeTemplateMutationKey(record.cacheKey);
+    const expiresBefore = supersededIdentity
+      ? Math.max(before, Date.now() - 6 * 60 * 60_000)
+      : record.cacheKey.startsWith("warm:")
+        ? Math.max(before, Date.now() - 60 * 60_000)
+        : before;
+    if (record.status === "ready" && record.lastUsedAt >= expiresBefore && !overCapacity) {
       continue;
     }
     try {
+      // Wait for maintenance IO capacity without blocking this identity's foreground readers.
+      await options.beforeRemoval?.();
       await withWorktreeMutationLease(
-        { env, ...options, id: `template:${record.cacheKey}` },
+        { env, ...options, id: `template:${worktreeTemplateMutationKey(record.cacheKey)}` },
         async (guard) => {
           const current = await readTemplateAsync(env, record.cacheKey, guard.commitGuard);
           if (
             !current ||
             current.id !== record.id ||
-            (current.status === "ready" && current.lastUsedAt >= expiresBefore)
+            (current.status === "ready" &&
+              current.lastUsedAt >= expiresBefore &&
+              (!overCapacity || current.lastUsedAt !== record.lastUsedAt))
           ) {
             return;
           }
-          await retireWorktreeTemplate(env, current, guard);
+          if (await retireWorktreeTemplate(env, current, guard)) {
+            removed++;
+          }
         },
       );
     } catch (error) {
@@ -174,6 +220,9 @@ export async function collectWorktreeTemplates(
       options.commitGuard();
       onError?.(error, record.id);
       log.warn(`worktree template cleanup failed: ${String(error)}`);
+    }
+    if (options.maxRemovals !== undefined && removed >= options.maxRemovals) {
+      break;
     }
   }
 }
@@ -207,6 +256,8 @@ export async function prepareWorktreeTemplate(params: {
   ) => Promise<boolean>;
   prepare: (record: WorktreeTemplateRecord, options: WorktreeAllocationGuard) => Promise<void>;
 }): Promise<PreparedWorktreeTemplate | undefined> {
+  const retainCommits = params.backend.startsWith("sandbox-");
+  let built = false;
   let retained: PreparedWorktreeTemplate | undefined;
   let preparationKey: string | undefined;
   let finishPreparation: (() => void) | undefined;
@@ -218,7 +269,12 @@ export async function prepareWorktreeTemplate(params: {
     while (true) {
       retained = await retainWorktreeTemplate(
         params.env,
-        { cacheKey: params.cacheKey, contentKey: params.contentKey, backend: params.backend },
+        {
+          cacheKey: params.cacheKey,
+          contentKey: params.contentKey,
+          backend: params.backend,
+          now: retainCommits ? params.now() : undefined,
+        },
         assertCallerCurrent,
       );
       if (retained) {
@@ -269,11 +325,16 @@ export async function prepareWorktreeTemplate(params: {
         finishWait();
       }
     }
-    return await withWorktreeMutationLease(
+    const result = await withWorktreeMutationLease(
       { env: params.env, ...params.options, id: `template:${params.cacheKey}` },
       async (options) => {
         const assertCurrent = options.commitGuard;
-        const existing = await readTemplateAsync(params.env, params.cacheKey);
+        const existing = await readTemplateAsync(
+          params.env,
+          params.cacheKey,
+          assertCurrent,
+          retainCommits ? params.contentKey : undefined,
+        );
         assertCurrent();
         const hasReaders = existing
           ? await hasTemplateReadersAsync(params.env, existing.id, assertCurrent)
@@ -283,7 +344,7 @@ export async function prepareWorktreeTemplate(params: {
           existing?.status === "ready" &&
           existing.backend === params.backend &&
           (existing.contentKey === params.contentKey ||
-            (params.refresh && !params.reuseOnly && !hasReaders))
+            (params.refresh && !params.reuseOnly && (!hasReaders || retainCommits)))
         ) {
           // Idle validation is read-only and owned by the selection lease. Publishing
           // no reader until it succeeds keeps fast readers behind that validation.
@@ -315,7 +376,7 @@ export async function prepareWorktreeTemplate(params: {
           }
           refreshable = valid;
         }
-        if (params.reuseOnly || hasReaders) {
+        if (params.reuseOnly || (hasReaders && (!retainCommits || existing?.status !== "ready"))) {
           setWorktreePreparationTemplate("unavailable", {
             reason: hasReaders
               ? existing?.status === "preparing"
@@ -362,6 +423,7 @@ export async function prepareWorktreeTemplate(params: {
           lastUsedAt: params.now(),
         };
         await reserveTemplateAsync(params.env, record, assertCurrent);
+        built = true;
         retained = await retainWorktreeTemplate(params.env, record, assertCurrent);
         if (!retained) {
           throw new Error("Worktree template builder lost its reader custody");
@@ -388,14 +450,28 @@ export async function prepareWorktreeTemplate(params: {
         if (!refreshed) {
           await params.prepare(record, options);
         }
+        const cacheKey =
+          existing?.contentKey === params.contentKey ? existing.cacheKey : params.cacheKey;
         await markTemplateReadyAsync(params.env, id, params.now(), assertCurrent, {
-          cacheKey: params.cacheKey,
+          cacheKey,
           previousId: existing?.id,
+          retainedCacheKey:
+            retainCommits && refreshable && existing && existing.contentKey !== params.contentKey
+              ? retainedWorktreeTemplateKey(params.cacheKey, existing.contentKey)
+              : undefined,
         });
         setWorktreePreparationTemplate(refreshed ? "warm" : "cold", { reason: "ready" });
-        return { ...retained, cacheKey: params.cacheKey, status: "ready" };
+        return { ...retained, cacheKey, status: "ready" as const };
       },
     );
+    if (built && retainCommits) {
+      await collectWorktreeTemplates(params.env, 0, {
+        ...params.options,
+        maxRemovals: 1,
+        scope: { commonDir: params.commonDir, worktreeRoot: params.worktreeRoot },
+      });
+    }
+    return result;
   } catch (error) {
     await retained?.release(error);
     if (
