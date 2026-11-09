@@ -559,6 +559,8 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           ...(failure ? { error: failure } : {}),
         });
       } finally {
+        // Every exit, not only a completed native turn, hands liveness back to the host.
+        settled = true;
         await abortPromise?.catch(() => undefined);
         clearTimeout(timer);
         clearTimeout(forceCloseTimer);

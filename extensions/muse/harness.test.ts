@@ -451,6 +451,19 @@ describe("Muse native MSP harness", () => {
     expect(registeredRun.handle?.isStopped?.()).toBe(true);
   });
 
+  it("returns liveness to the host when the attempt fails before the turn settles", async () => {
+    const { run } = setup();
+    const result = await run({
+      prompt: "hello",
+      onExecutionStarted: () => {
+        throw new Error("callback failed");
+      },
+    });
+    expect(terminal(result).kind).toBe("failed");
+    expect(registeredRun.handle?.ownsLiveness?.()).toBe(false);
+    expect(registeredRun.handle?.isStopped?.()).toBe(true);
+  });
+
   it.each(["callback", "transcript", "abort", "timeout", "approval"] as const)(
     "waits for native settlement after %s interruption",
     async (failure) => {
