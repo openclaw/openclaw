@@ -64,6 +64,7 @@ private fun createLegacyDnsResolver(): DnsResolver = DnsResolver.getInstance()
 class GatewayDiscovery(
   context: Context,
   private val scope: CoroutineScope,
+  startActive: Boolean = true,
 ) {
   private val nsd = context.getSystemService(NsdManager::class.java)
   private val connectivity = context.getSystemService(ConnectivityManager::class.java)
@@ -99,12 +100,18 @@ class GatewayDiscovery(
       }
     }
 
-  private val discoveryListener =
+  private var discoveryListener: NsdManager.DiscoveryListener? = null
+
+  private fun newDiscoveryListener(): NsdManager.DiscoveryListener =
     object : NsdManager.DiscoveryListener {
       override fun onStartDiscoveryFailed(
         serviceType: String,
         errorCode: Int,
-      ) {}
+      ) {
+        synchronized(discoveryLock) {
+          if (discoveryListener === this) discoveryListener = null
+        }
+      }
 
       override fun onStopDiscoveryFailed(
         serviceType: String,
@@ -117,11 +124,14 @@ class GatewayDiscovery(
 
       override fun onServiceFound(serviceInfo: NsdServiceInfo) {
         if (serviceInfo.serviceType != this@GatewayDiscovery.serviceType) return
-        updateDiscovery { resolve(serviceInfo) }
+        updateDiscovery {
+          if (discoveryListener === this) resolve(serviceInfo)
+        }
       }
 
       override fun onServiceLost(serviceInfo: NsdServiceInfo) =
         updateDiscovery {
+          if (discoveryListener !== this) return@updateDiscovery
           val serviceName = BonjourEscapes.decode(serviceInfo.serviceName)
           val id = stableId(serviceName, "local.")
           localById.remove(id)
@@ -131,7 +141,7 @@ class GatewayDiscovery(
 
   init {
     startNetworkTracking()
-    startLocalDiscovery()
+    setActive(startActive)
     if (!wideAreaDomain.isNullOrBlank()) {
       startUnicastDiscovery(wideAreaDomain)
     }
@@ -149,11 +159,29 @@ class GatewayDiscovery(
     }
   }
 
-  private fun startLocalDiscovery() {
-    try {
-      nsd.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
-    } catch (_: Throwable) {
-      // ignore (best-effort)
+  fun setActive(active: Boolean) {
+    synchronized(discoveryLock) {
+      if (active) {
+        if (discoveryListener != null) return
+        val listener = newDiscoveryListener()
+        discoveryListener = listener
+        try {
+          nsd.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, listener)
+        } catch (_: Exception) {
+          discoveryListener = null
+        }
+      } else {
+        val listener = discoveryListener ?: return
+        // Retire the listener before stopping: queued callbacks must not restart resolution.
+        discoveryListener = null
+        try {
+          nsd.stopServiceDiscovery(listener)
+        } catch (_: Exception) {
+          // The platform may already have stopped discovery.
+        }
+        serviceInfoCallbacks.keys.toList().forEach(::unregisterServiceInfoCallback)
+        // Keep the last endpoints available for reconnecting while discovery is paused.
+      }
     }
   }
 

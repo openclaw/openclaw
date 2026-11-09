@@ -956,7 +956,8 @@ class NodeRuntime internal constructor(
   private val _activeAudioInputDevicePreference = MutableStateFlow<String?>(null)
   val activeAudioInputDevicePreference: StateFlow<String?> = _activeAudioInputDevicePreference.asStateFlow()
 
-  private val discovery = GatewayDiscovery(appContext, scope = scope)
+  private val discovery =
+    GatewayDiscovery(appContext, scope = scope, startActive = initialForeground && mode == NodeRuntimeMode.Live)
   val gateways: StateFlow<List<GatewayEndpoint>> = discovery.gateways
 
   private val identityStore = DeviceIdentityStore.withPrefs(appContext, prefs)
@@ -2388,6 +2389,7 @@ class NodeRuntime internal constructor(
         )
       _gatewayConnectionDisplay.value = display
       _isConnected.value = display.isConnected
+      refreshGatewayDiscovery()
     }
   }
 
@@ -3051,6 +3053,10 @@ class NodeRuntime internal constructor(
     }
   }
 
+  private fun refreshGatewayDiscovery() {
+    discovery.setActive(mode == NodeRuntimeMode.Live && _isForeground.value && !_isConnected.value && !_nodeConnected.value)
+  }
+
   /** Updates foreground state and triggers reconnect/presence behavior on app visibility changes. */
   fun setForeground(value: Boolean) {
     val visibilityChanged =
@@ -3061,6 +3067,7 @@ class NodeRuntime internal constructor(
           requestBackgroundGatewayReconciliation()
         }
       }
+    synchronized(gatewayStatusLock) { refreshGatewayDiscovery() }
     voiceWakeManager.setForeground(value)
     if (mode == NodeRuntimeMode.ScreenshotFixture) return
     if (visibilityChanged) {
