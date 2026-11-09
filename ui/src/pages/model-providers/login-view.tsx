@@ -135,7 +135,7 @@ function PickerDialog(props: {
               when={current().provider}
               fallback={
                 <>
-                  <div class="model-provider-login__search">
+                  <div class="model-provider-login__search field">
                     <input
                       class="input"
                       type="search"
@@ -305,7 +305,7 @@ function LoginOption(props: {
       <span class="model-provider-login__copy">
         <strong>{props.label}</strong>
         <Show when={props.hint !== undefined}>
-          <span>{props.hint}</span>
+          <span class="muted">{props.hint}</span>
         </Show>
       </span>
     </button>

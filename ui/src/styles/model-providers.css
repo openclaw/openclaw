@@ -32,7 +32,6 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-  color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
 
@@ -63,7 +62,6 @@
 
 .model-providers__profiles-heading-copy span,
 .model-providers__profile-copy span {
-  color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
 
@@ -241,7 +239,6 @@
 
 .model-providers__profile-position {
   min-width: 2ch;
-  color: var(--muted);
   font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -329,7 +326,6 @@
 
 .model-providers__probe-target small {
   flex-basis: 100%;
-  color: var(--muted);
 }
 
 .model-providers__label-with-help {
@@ -337,13 +333,6 @@
   align-items: center;
   gap: var(--space-2);
   width: fit-content;
-}
-
-.model-providers__help-button {
-  width: 16px;
-  height: 16px;
-  border: 0;
-  border-radius: 0;
 }
 
 .model-providers__help-button:hover,
@@ -439,7 +428,6 @@
   gap: var(--space-2);
   min-width: 0;
   margin-block-start: var(--space-2);
-  color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
 
@@ -448,7 +436,6 @@
 }
 
 .model-providers__account-plan {
-  color: var(--muted);
   font-size: var(--control-ui-text-xs);
   text-transform: capitalize;
 }
@@ -466,10 +453,6 @@
   inset-block-start: 0;
   padding-block: var(--space-3) var(--space-2);
   background: var(--overlay-modal-surface);
-}
-
-.model-provider-login__search .input {
-  width: 100%;
 }
 
 .model-provider-login__providers {
@@ -529,7 +512,6 @@
 }
 
 .model-provider-login__copy > span {
-  color: var(--muted);
   font-size: var(--control-ui-text-xs);
   font-weight: 400;
 }
@@ -584,7 +566,6 @@
 .model-providers__agents-missing {
   margin: 0;
   padding: var(--space-3) var(--space-4);
-  color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
 
@@ -596,7 +577,6 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--muted);
 }
 
 .model-providers__agent-icon svg {
@@ -636,8 +616,6 @@
   padding: var(--list-row-padding);
   border: 0;
   background: transparent;
-  color: inherit;
-  font: inherit;
   text-align: start;
   cursor: default;
   box-shadow: inset 2px 0 0 var(--oc-chart-color, transparent);
@@ -676,14 +654,8 @@
 
 .provider-row__meta {
   overflow: hidden;
-  color: var(--oc-text-muted);
-  font-size: var(--control-ui-text-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.provider-row__meta-part:empty {
-  display: none;
 }
 
 .provider-row__meta-part:not(:empty) ~ .provider-row__meta-part:not(:empty)::before {
@@ -827,5 +799,21 @@
 
   .provider-row--quiet .model-providers__card-actions {
     grid-column: 1 / -1;
+  }
+}
+
+/* The native dialog owns the surface, scrolling body, and fixed actions. */
+.custom-endpoint-dialog {
+  --openclaw-modal-width: 48rem;
+}
+
+.custom-endpoint-editor__connection {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
+@media (max-width: 640px) {
+  .custom-endpoint-editor__connection {
+    grid-template-columns: 1fr;
   }
 }

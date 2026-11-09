@@ -1,0 +1,4 @@
+# Endpoint editor regression coverage: 1068 feature-owned LF lines, 13
+# lines for the authored/runtime fixture contract, and 9 lines proving
+# the search field stays full-width with atomic geometry sampling. No new case.
+1090

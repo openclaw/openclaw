@@ -25,6 +25,7 @@ export type ModelProvidersViewProps = SharedModelProvidersProps & {
   providerDetailsReady?: boolean;
   installedAgents: JSX.Element | typeof undefined;
   providerScope?: JSX.Element;
+  customEndpoints?: JSX.Element;
   accountRecovery?: JSX.Element | typeof undefined;
   providerQuery?: string;
 };

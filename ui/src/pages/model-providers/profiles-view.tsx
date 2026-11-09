@@ -369,9 +369,9 @@ function ProfileIdentity(props: { profile: ProviderProfile; identity: string; av
       </Show>
       <div class="model-providers__profile-copy">
         <strong title={props.profile.profileId}>{props.identity}</strong>
-        {meta() ? <span>{meta()}</span> : undefined}
+        {meta() ? <span class="muted">{meta()}</span> : undefined}
         {isAccessTokenExpiry(props.profile) ? (
-          <span>{t("modelProviders.accessTokenExpiryHelp")}</span>
+          <span class="muted">{t("modelProviders.accessTokenExpiryHelp")}</span>
         ) : undefined}
       </div>
     </>
@@ -490,7 +490,9 @@ export function ProviderProfiles(
         <Show when={explanations().length > 0 || card().profileOrderStoredProviders.length > 0}>
           <div class="model-providers__profiles-heading">
             <div class="model-providers__profiles-heading-copy">
-              <For each={explanations()}>{(explanation) => <span>{explanation}</span>}</For>
+              <For each={explanations()}>
+                {(explanation) => <span class="muted">{explanation}</span>}
+              </For>
             </div>
             <div class="model-providers__profiles-heading-actions">
               <For each={card().profileOrderStoredProviders}>
@@ -646,7 +648,7 @@ function ProviderProfileRow(
           ) : undefined}
           {positioned() ? (
             <span
-              class="model-providers__profile-position"
+              class="model-providers__profile-position muted"
               aria-label={t("modelProviders.profiles.priority", {
                 position: String(index() + 1),
               })}

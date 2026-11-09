@@ -751,4 +751,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["openclawId.people", "openclaw-id", "operator.admin", "2026.11"],
   ["openclawId.authority", "openclaw-id", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
   ["chat.steerNow", "chat", "operator.write", "2026.11", OWN_SESSION_WRITE],
+  ["config.customEndpoint", "config", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

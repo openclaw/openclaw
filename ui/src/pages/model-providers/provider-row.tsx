@@ -81,7 +81,7 @@ function CredentialRow(props: { title: string; detail?: string; action?: JSX.Ele
       <div class="model-providers__profile-copy">
         <strong>{props.title}</strong>
         <Show when={props.detail}>
-          <span>{props.detail}</span>
+          <span class="muted">{props.detail}</span>
         </Show>
       </div>
       <span class="model-providers__profile-actions">{props.action}</span>
@@ -180,7 +180,9 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
                 ? ` · ${t("modelProviders.probe.latency", { ms: String(target.latencyMs) })}`
                 : ""}
             </span>
-            {target.error ? <small>{formatUiExternalText(target.error)}</small> : undefined}
+            {target.error ? (
+              <small class="muted">{formatUiExternalText(target.error)}</small>
+            ) : undefined}
           </div>
         )}
       </For>

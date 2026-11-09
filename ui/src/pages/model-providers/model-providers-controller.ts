@@ -717,6 +717,8 @@ export function createModelProviders(
     };
   }
   return {
+    refresh: () => refresh("forced"),
+    clearProbe: profileActions.clearProbe,
     viewProps,
     installedAgents,
     discovery,

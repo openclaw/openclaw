@@ -221,6 +221,7 @@ export function ModelProviders(props: ModelProvidersViewProps) {
               </div>
             }
           >
+            {props.customEndpoints}
             {props.installedAgents}
             <ProviderAccess {...props} />
             {props.providerUsageStalled ? (
