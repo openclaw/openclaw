@@ -237,49 +237,69 @@ function reconcileDeliveredMessagingFailure(
     : result;
 }
 
+export function createAgentToolResultMiddlewareApplier(
+  ctx: AgentToolResultMiddlewareContext,
+  handlers?: AgentToolResultMiddleware[],
+) {
+  const handlersLoader = createLazyPromiseLoader(async () => {
+    const [
+      { loadAgentToolResultMiddlewareRegistrationsForRuntime },
+      { agentToolResultMiddlewareRegistrationCoversTool },
+    ] = await Promise.all([
+      import("../../plugins/agent-tool-result-middleware-loader.js"),
+      import("../../plugins/agent-tool-result-middleware.js"),
+    ]);
+    const registrations = await loadAgentToolResultMiddlewareRegistrationsForRuntime({
+      runtime: ctx.runtime,
+    });
+    return (toolName: string) =>
+      registrations
+        .filter((entry) =>
+          agentToolResultMiddlewareRegistrationCoversTool(entry, ctx.runtime, toolName),
+        )
+        .map((entry) => entry.handler);
+  });
+  return async (
+    event: AgentToolResultMiddlewareEvent,
+  ): Promise<OpenClawAgentToolResult | undefined> => {
+    const handlersForRun = handlers ?? (await handlersLoader.load())(event.toolName);
+    if (handlersForRun.length === 0) {
+      return undefined;
+    }
+    // Retain confirmed delivery before middleware can change its presentation.
+    const deliveredMessagingFallback = buildDeliveredMessagingFailureFallback(event, event.result);
+    const fail = (message: string) => {
+      log.warn(`[${ctx.runtime}] ${message} for ${truncateUtf16Safe(event.toolName, 120)}`);
+      return reconcileDeliveredMessagingFailure(
+        buildMiddlewareFailureResult(),
+        deliveredMessagingFallback,
+      );
+    };
+    try {
+      // Loaded middleware follows the SDK's by-reference value contract;
+      // only the legacy native content wrapper needs adaptation here.
+      let current = normalizeNativeToolResult(event.result);
+      for (const handler of handlersForRun) {
+        const next = await handler({ ...event, result: current }, ctx);
+        current = normalizeNativeToolResult(next?.result ?? current);
+      }
+      return reconcileDeliveredMessagingFailure(current, deliveredMessagingFallback);
+    } catch {
+      return fail("tool result middleware failed");
+    }
+  };
+}
+
 export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
 ) {
-  const resolvedHandlersLoader = createLazyPromiseLoader(async () => {
-    const { loadAgentToolResultMiddlewaresForRuntime } =
-      await import("../../plugins/agent-tool-result-middleware-loader.js");
-    return loadAgentToolResultMiddlewaresForRuntime({
-      runtime: ctx.runtime,
-    });
-  });
+  const apply = createAgentToolResultMiddlewareApplier(ctx, handlers);
   return {
     async applyToolResultMiddleware(
       event: AgentToolResultMiddlewareEvent,
     ): Promise<OpenClawAgentToolResult> {
-      const handlersForRun = await (handlers ?? resolvedHandlersLoader.load());
-      if (handlersForRun.length === 0) {
-        return event.result;
-      }
-      // Retain confirmed delivery before middleware can change its presentation.
-      const deliveredMessagingFallback = buildDeliveredMessagingFailureFallback(
-        event,
-        event.result,
-      );
-      const fail = (message: string) => {
-        log.warn(`[${ctx.runtime}] ${message} for ${truncateUtf16Safe(event.toolName, 120)}`);
-        return reconcileDeliveredMessagingFailure(
-          buildMiddlewareFailureResult(),
-          deliveredMessagingFallback,
-        );
-      };
-      try {
-        // Loaded middleware follows the SDK's by-reference value contract;
-        // only the legacy native content wrapper needs adaptation here.
-        let current = normalizeNativeToolResult(event.result);
-        for (const handler of handlersForRun) {
-          const next = await handler({ ...event, result: current }, ctx);
-          current = normalizeNativeToolResult(next?.result ?? current);
-        }
-        return reconcileDeliveredMessagingFailure(current, deliveredMessagingFallback);
-      } catch {
-        return fail("tool result middleware failed");
-      }
+      return (await apply(event)) ?? event.result;
     },
   };
 }
