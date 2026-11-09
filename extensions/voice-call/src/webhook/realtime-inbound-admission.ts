@@ -28,7 +28,7 @@ export async function acceptRealtimeInboundRequest(params: {
     return false;
   }
 
-  const parsed = params.provider.parseWebhookEvent(params.request, {
+  const parsed = await params.provider.parseWebhookEvent(params.request, {
     verifiedRequestKey: params.verifiedRequestKey,
   });
   await params.processEvents(parsed.events);

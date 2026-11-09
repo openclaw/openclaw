@@ -1,0 +1,8 @@
+# PR #170000: exact +2529 test LF growth versus main aeeff2c634014c2a75ef56b3d10ecab971a987dd.
+# Covers LiveKit SIP/RTC peer admission before token-bearing connect, native audio,
+# awaited transcript/disposal ordering and failed/late cleanup, provider config,
+# and the actual compiled-consumer plus selected-package dependency boundary.
+# These synthetic regressions preserve security and lifecycle coverage; they do
+# not replace the separately disclosed installed/live acceptance requirements.
+# Keep the shared test-lines-baseline.txt scalar unchanged.
+2529
