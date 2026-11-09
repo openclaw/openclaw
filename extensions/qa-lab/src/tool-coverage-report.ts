@@ -9,12 +9,8 @@ import {
 } from "./native-workspace-behavior.js";
 import { escapeTableCell } from "./report.js";
 import type { RuntimeId } from "./runtime-id.js";
-import {
-  runtimeParityCellStatus,
-  normalizeRuntimePair,
-  type RuntimeParityDrift,
-  type RuntimeParityResult,
-} from "./runtime-parity.js";
+import { runtimeParityCellStatus, normalizeRuntimePair } from "./runtime-parity.js";
+import type { RuntimeParityDrift, RuntimeParityResult } from "./runtime-parity.types.js";
 import {
   readRuntimeToolCoverageConfig,
   readScenarioRuntimeToolCoverageMetadata,

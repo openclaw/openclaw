@@ -4,14 +4,12 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import {
   chmodSync,
-  closeSync,
   constants as fsConstants,
   cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readdirSync,
   readFileSync,
   readlinkSync,
@@ -25,6 +23,7 @@ import {
 } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { delimiter, dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   ANCHOR_PREFIX,
@@ -49,8 +48,12 @@ import {
   copyPrWrapperSources,
   copyPrRoutingWrapperSources,
   createSettledPrCacheEntry,
+  prDirectoryIdentity as identity,
+  runWithPrAnchor,
   prCacheEntries,
   readPrCacheState,
+  readPrCacheRows,
+  sealPrDependencyPlan,
   delegatingGitFixture,
   linkPrWrapperDependencies,
 } from "./pr-wrapper.test-support.js";
@@ -292,10 +295,23 @@ function createMismatchedWrapperTemplate({
   git(canonical, ["add", "."]);
   git(canonical, ["commit", "-m", "test: canonical wrapper"]);
   git(canonical, ["push", "-u", "origin", "main"]);
+  expect(git(canonical, ["rev-parse", "refs/remotes/origin/main"]).stdout.trim()).toBe(
+    git(canonical, ["rev-parse", "main"]).stdout.trim(),
+  );
+  // Prepare both histories once; worktree back-links belong to each private copy.
+  git(canonical, ["checkout", "-b", "feature"]);
+  writeFileSync(
+    join(canonical, "scripts", "pr-lib", "gates.sh"),
+    'ci_dispatch() { echo "local wrapper executed"; }\n',
+  );
+  git(canonical, ["add", "scripts/pr-lib/gates.sh"]);
+  git(canonical, ["commit", "-m", "test: local wrapper"]);
+  const localRevision = git(canonical, ["rev-parse", "HEAD"]).stdout.trim();
+  git(canonical, ["checkout", "main"]);
   // Pack once so private fixture copies do not repeat thousands of loose files.
   git(canonical, ["repack", "-ad"]);
   git(origin, ["repack", "-ad"]);
-  return { canonical, origin, bin };
+  return { canonical, origin, bin, localRevision };
 }
 
 function makeMismatchedWrapperRepo({
@@ -324,22 +340,9 @@ function makeMismatchedWrapperRepo({
   copyTreeCloseOnExec(template.canonical, canonical);
   cpSync(template.origin, origin, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
   git(canonical, ["remote", "set-url", "origin", origin]);
-  git(canonical, ["worktree", "add", "-b", "feature", linkedPath, "main"]);
+  git(canonical, ["worktree", "add", linkedPath, "feature"]);
 
   const linked = realpathSync(linkedPath);
-  git(linked, ["config", "commit.gpgSign", "false"]);
-  expect(git(linked, ["rev-parse", "refs/remotes/origin/main"]).stdout.trim()).toBe(
-    git(canonical, ["rev-parse", "main"]).stdout.trim(),
-  );
-
-  writeFileSync(
-    join(linked, "scripts", "pr-lib", "gates.sh"),
-    'ci_dispatch() { echo "local wrapper executed"; }\n',
-  );
-  git(linked, ["add", "scripts/pr-lib/gates.sh"]);
-  git(linked, ["commit", "-m", "test: local wrapper"]);
-  const localRevision = git(linked, ["rev-parse", "HEAD"]).stdout.trim();
-
   linkPrWrapperDependencies(canonical);
 
   return {
@@ -348,7 +351,7 @@ function makeMismatchedWrapperRepo({
     env: fixtureEnv,
     git,
     linked,
-    localRevision,
+    localRevision: template.localRevision,
     root,
     gitText(args: string[], cwd = canonical) {
       return git(cwd, args).stdout.trim();
@@ -388,6 +391,21 @@ function resolveCommand(command: string): string {
     }
   }
   throw new Error(`command not found in test PATH: ${command}`);
+}
+
+function useOfficialOrigin(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) {
+  fixture.git(fixture.canonical, [
+    "config",
+    "--add",
+    "url." + join(fixture.root, "origin.git") + ".insteadOf",
+    "https://github.com/openclaw/openclaw.git",
+  ]);
+  fixture.git(fixture.canonical, [
+    "remote",
+    "set-url",
+    "origin",
+    "https://github.com/openclaw/openclaw.git",
+  ]);
 }
 
 function seedReadyReview(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) {
@@ -434,11 +452,6 @@ describe("scripts/pr wrappers", () => {
 
   function reviewRecoveryFixture() {
     const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
-    // The real salvage owner additionally loads review-artifacts' record helper.
-    const recordHelper = "scripts/lib/record-shared.mjs";
-    cpSync(recordHelper, join(fixture.canonical, recordHelper));
-    const inventory = join(fixture.canonical, "scripts/pr-lib/wrapper-components.txt");
-    writeFileSync(inventory, readScript(inventory) + recordHelper + "\n");
     const bindingRef = "refs/openclaw/pr-workflow-bindings/123";
     const origin = join(fixture.root, "origin.git");
     const currentWrapper = readScript("scripts/pr");
@@ -462,29 +475,9 @@ describe("scripts/pr wrappers", () => {
       "scripts/pr",
       currentWrapper.replaceAll("review-transition-recover", "unavailable-review-recovery"),
     );
-    fixture.commit(
-      [
-        "scripts/pr",
-        "scripts/pr-lib/review.sh",
-        "scripts/pr-lib/wrapper-components.txt",
-        recordHelper,
-        "recovery-tracked.txt",
-      ],
-      true,
-    );
+    fixture.commit(["scripts/pr", "scripts/pr-lib/review.sh", "recovery-tracked.txt"], true);
     const oldSource = fixture.gitText(["rev-parse", "HEAD"]);
-    fixture.git(fixture.canonical, [
-      "config",
-      "--add",
-      "url." + origin + ".insteadOf",
-      "https://github.com/openclaw/openclaw.git",
-    ]);
-    fixture.git(fixture.canonical, [
-      "remote",
-      "set-url",
-      "origin",
-      "https://github.com/openclaw/openclaw.git",
-    ]);
+    useOfficialOrigin(fixture);
     const worktree = join(fixture.canonical, ".worktrees/pr-123");
     fixture.git(fixture.canonical, ["worktree", "add", "-b", "temp/pr-123", worktree, oldSource]);
     const run = () => runWrapper(fixture, ["review-guard", "123"], "canonical");
@@ -795,9 +788,7 @@ exit "$status"
       '#!/bin/sh\nPATH="$OPENCLAW_TEST_BACKEND_PATH" exec "$OPENCLAW_TEST_GIT" "$@"\n',
     );
 
-    const result = spawnSync(join(fixture.canonical, "scripts", "pr"), ["ls"], {
-      cwd: fixture.canonical,
-      encoding: "utf8",
+    const result = runWrapper(fixture, ["ls"], "canonical", {
       env: {
         ...fixture.env,
         PATH: fixture.bin,
@@ -1046,6 +1037,261 @@ exit "$status"
     );
   });
 
+  itPosix("authenticates dependency-cache recovery without packages or developer authority", () => {
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+    rmSync(join(fixture.canonical, "node_modules"), { recursive: true });
+    const cache = join(realpathSync(fixture.env.HOME), ".cache/openclaw/pr-dependencies/v3");
+    withDependencyCacheLock(cache, () => {});
+    const database = join(cache, "lifetime.sqlite");
+    const db = new DatabaseSync(database);
+    const oldDevice = String(lstatSync(cache, { bigint: true }).dev + 1n);
+    db.prepare("UPDATE owner SET cache_dev = ?, db_dev = ?").run(oldDevice, oldDevice);
+    const owner = db.prepare("SELECT * FROM owner").all();
+    db.close();
+    const plan = JSON.stringify({
+      version: 1,
+      cache,
+      reason: "Explicit fixture identity adoption",
+      before: { owner, installations: [], holds: [] },
+      physical: { cache: identity(cache), database: identity(database), installations: [] },
+    });
+    const args = [
+      "dependency-cache-recover",
+      ...sealPrDependencyPlan(fixture.root, plan, "--confirmed-operator-recovery"),
+    ];
+    const untouched = readFileSync(database);
+    for (const origin of [
+      join(fixture.root, "origin.git"),
+      "https://github.com/fixture/repo.git",
+    ]) {
+      fixture.git(fixture.canonical, ["remote", "set-url", "origin", origin]);
+      for (const command of [args, ["dependency-hold-release", "--dry-run"]]) {
+        const rejected = runWrapper(fixture, command, "canonical");
+        expect(rejected.status).not.toBe(0);
+        expect(rejected.stderr).toContain("requires the official OpenClaw repository origin");
+        expect(readFileSync(database)).toEqual(untouched);
+        expect(existsSync(join(cache, ".metadata-lock"))).toBe(false);
+      }
+    }
+    // Use the existing official-origin fixture transport without reaching the
+    // network; production admission still checks the configured official URL.
+    useOfficialOrigin(fixture);
+    const recovered = runWrapper(fixture, args, "canonical");
+    expect(recovered.status, recovered.stderr).toBe(0);
+    expect(JSON.parse(recovered.stdout).state).toBe("recovered");
+    const released = runWrapper(fixture, ["dependency-hold-release", "--dry-run"], "canonical");
+    expect(released.status, released.stderr).toBe(0);
+    expect(JSON.parse(released.stdout)).toEqual({ version: 1, cache, anchors: [], blocked: [] });
+    expect(readdirSync(cache)).toEqual(["lifetime.sqlite"]);
+    expect(existsSync(join(fixture.canonical, "node_modules"))).toBe(false);
+
+    const helper = "scripts/pr-lib/cache-lifetime.mjs";
+    const marker = join(fixture.root, "unlanded-helper-executed");
+    fixture.write(
+      helper,
+      `${readScript(join(fixture.linked, helper))}\n(await import("node:fs")).writeFileSync(${JSON.stringify(marker)}, "wrong helper");\n`,
+      fixture.linked,
+    );
+    fixture.commit([helper], false, fixture.linked);
+    const repeated = runWrapper(fixture, ["--dev-wrapper", ...args], "linked");
+    expect(repeated.status, repeated.stderr).toBe(0);
+    expect(repeated.stderr).toContain("classified landing; dev-wrapper opt-in is unavailable");
+    expect(JSON.parse(repeated.stdout).state).toBe("already-recovered");
+    expect(existsSync(marker)).toBe(false);
+
+    parkCanonicalOffAnchor(fixture);
+    const recoveredBytes = readFileSync(database);
+    const anchors = matchingEntries(fixture.root, ANCHOR_PREFIX);
+    const extracted = runWrapper(fixture, args, "linked");
+    expect(extracted.status, extracted.stderr).toBe(0);
+    expect(extracted.stderr).toContain("running wrapper code materialized from");
+    expect(JSON.parse(extracted.stdout).state).toBe("already-recovered");
+    const retained = matchingEntries(fixture.root, ANCHOR_PREFIX).filter(
+      (name) => !anchors.includes(name),
+    );
+    expect(retained).toHaveLength(1);
+    expect(extracted.stderr).toContain(
+      "Retaining PR recovery anchor without cache cleanup: " + join(fixture.root, retained[0]!),
+    );
+    expect(readFileSync(database)).toEqual(recoveredBytes);
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(join(fixture.canonical, "node_modules"))).toBe(false);
+
+    // Canonical execution does not need substitution, but still must match the
+    // main closure before importing a recovery helper or opening the database.
+    fixture.write(
+      helper,
+      `${readScript(join(fixture.canonical, helper))}\n// unlanded canonical edit\n`,
+    );
+    fixture.commit([helper]);
+    const before = readFileSync(database);
+    const refused = runWrapper(fixture, args, "canonical");
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("complete authenticated official-main wrapper");
+    expect(readFileSync(database)).toEqual(before);
+  });
+
+  itPosix("preserves a real hot journal when extracted recovery refuses the ledger", () => {
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+    const cache = join(realpathSync(fixture.env.HOME), ".cache/openclaw/pr-dependencies/v3");
+    const key = "a".repeat(64);
+    createSettledPrCacheEntry(cache, key);
+    const database = join(cache, "lifetime.sqlite");
+    const journal = database + "-journal";
+    const db = new DatabaseSync(database);
+    const oldDevice = String(lstatSync(cache, { bigint: true }).dev + 1n);
+    db.prepare("UPDATE owner SET cache_dev = ?, db_dev = ?, sequence = sequence + 128").run(
+      oldDevice,
+      oldDevice,
+    );
+    db.prepare(
+      "UPDATE installations SET dev = ?, settled = 0, last_used = (SELECT sequence FROM owner)",
+    ).run(oldDevice);
+    const hold = db.prepare("INSERT INTO holds VALUES (?, ?, ?, ?, ?, ?)");
+    for (let index = 0; index < 128; index += 1) {
+      hold.run(
+        key,
+        join(fixture.root, "absent-" + index),
+        oldDevice,
+        String(index + 1000),
+        String(process.getuid!()),
+        String(lstatSync(cache).mode),
+      );
+    }
+    const before = readPrCacheRows(db);
+    db.close();
+    const plan = JSON.stringify({
+      version: 1,
+      cache,
+      reason: "Explicit fixture identity adoption",
+      before,
+      physical: {
+        cache: identity(cache),
+        database: identity(database),
+        installations: [{ key, ...identity(join(cache, key)) }],
+      },
+    });
+    const args = sealPrDependencyPlan(fixture.root, plan, "--confirmed-operator-recovery");
+    useOfficialOrigin(fixture);
+    parkCanonicalOffAnchor(fixture);
+    // Spill dirty pages, then crash only this fixture's writer. Opening this
+    // ledger normally would roll it back before checking the stale owner row.
+    const writer = runCommand(
+      requireNodeTool("node"),
+      [
+        "--input-type=module",
+        "-e",
+        `
+import { DatabaseSync } from "node:sqlite";
+const db = new DatabaseSync(process.argv[1]);
+db.exec("PRAGMA cache_size=1; PRAGMA cache_spill=1; BEGIN IMMEDIATE");
+db.exec("UPDATE owner SET sequence = sequence + 1");
+db.exec("UPDATE holds SET anchor_ino = CAST(anchor_ino AS INTEGER) + 1000");
+process.kill(process.pid, "SIGKILL");
+`,
+        database,
+      ],
+      fixture.env,
+      fixture.canonical,
+    );
+    expect(writer.signal, writer.stderr).toBe("SIGKILL");
+    const databaseBytes = readFileSync(database);
+    const journalBytes = readFileSync(journal);
+    expect(journalBytes.length).toBeGreaterThan(512);
+    // Prove the journal is hot using an isolated copy; leave the subject pair
+    // unopened until the real extracted official wrapper reaches recovery.
+    const probe = join(fixture.root, "probe.sqlite");
+    cpSync(database, probe);
+    cpSync(journal, probe + "-journal");
+    const rolledBack = new DatabaseSync(probe);
+    const rows = readPrCacheRows(rolledBack);
+    expect(rows.owner).toEqual(before.owner);
+    expect(rows.holds).toEqual(before.holds);
+    rolledBack.close();
+    expect(existsSync(probe + "-journal")).toBe(false);
+    expect(readFileSync(probe)).not.toEqual(databaseBytes);
+    const result = runWrapper(fixture, ["dependency-cache-recover", ...args], "linked");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("running wrapper code materialized from");
+    expect(result.stderr).toContain("journal-free ledger");
+    expect(result.stderr).toContain("Retaining PR recovery anchor without cache cleanup:");
+    expect(existsSync(journal)).toBe(true);
+    expect(readFileSync(database)).toEqual(databaseBytes);
+    expect(readFileSync(journal)).toEqual(journalBytes);
+    expect(existsSync(join(cache, ".metadata-lock"))).toBe(false);
+  });
+
+  itPosix.each(["linked", "anchor reentry"])(
+    "rejects foreign recovery origins before %s bootstrap or cleanup",
+    (route) => {
+      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+      const cache = join(realpathSync(fixture.env.HOME), ".cache/openclaw/pr-dependencies/v3");
+      withDependencyCacheLock(cache, () => {});
+      const database = join(cache, "lifetime.sqlite");
+      const before = readFileSync(database);
+      const marker = join(fixture.root, "foreign-helper-executed");
+      const helper = "scripts/pr-lib/cache-lifetime.mjs";
+      fixture.write(
+        helper,
+        `${readScript(join(fixture.canonical, helper))}\n(await import("node:fs")).writeFileSync(${JSON.stringify(marker)}, "foreign helper");\n`,
+      );
+      fixture.commit([helper], true);
+      parkCanonicalOffAnchor(fixture);
+      const args = [
+        "dependency-cache-recover",
+        join(fixture.root, "unused-plan.json"),
+        "--plan-sha256",
+        "0".repeat(64),
+        "--confirmed-operator-recovery",
+      ];
+      for (const origin of [
+        join(fixture.root, "origin.git"),
+        "https://github.com/fixture/repo.git",
+      ]) {
+        fixture.git(fixture.canonical, ["remote", "set-url", "origin", origin]);
+        const anchors = matchingEntries(fixture.root, ANCHOR_PREFIX);
+        const rejected =
+          route === "linked"
+            ? runWrapper(fixture, args, "linked")
+            : runCommand(
+                "/bin/bash",
+                [
+                  "-c",
+                  `
+set -e
+anchor=$(mktemp -d "$TMPDIR/openclaw-pr-anchor-v3.$$.XXXXXX")
+mkdir "$anchor/scripts"
+cp "$1/scripts/pr" "$anchor/scripts/pr"
+export OPENCLAW_PR_ANCHOR_REPO_ROOT="$1"
+export OPENCLAW_PR_ANCHOR_CREATOR_PID=$$
+export OPENCLAW_PR_ANCHOR_FD=9
+exec 9<"$anchor"
+shift
+exec "$anchor/scripts/pr" "$@"
+`,
+                  "--",
+                  fixture.canonical,
+                  ...args,
+                ],
+                fixture.env,
+                fixture.canonical,
+              );
+        expect(rejected.status).not.toBe(0);
+        expect(rejected.stderr).toContain("requires the official OpenClaw repository origin");
+        expect(existsSync(marker)).toBe(false);
+        expect(readFileSync(database)).toEqual(before);
+        expect(existsSync(join(cache, ".metadata-lock"))).toBe(false);
+        const created = matchingEntries(fixture.root, ANCHOR_PREFIX).filter(
+          (name) => !anchors.includes(name),
+        );
+        expect(created).toHaveLength(route === "linked" ? 0 : 1);
+        for (const name of created) {
+          expect(existsSync(join(fixture.root, name, ".pr-bootstrap"))).toBe(false);
+        }
+      }
+    },
+  );
+
   it("runs a mismatched advisory wrapper locally with an explicit developer opt-in", () => {
     const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     const cliResult = runWrapper(fixture, ["--dev-wrapper", "ci-dispatch", "123"], "linked");
@@ -1074,7 +1320,7 @@ exit "$status"
   ])(
     "routes mismatched $command through the trusted wrapper (parked=$parked)",
     ({ command, parked }) => {
-      const fixture = makeMismatchedWrapperRepo();
+      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
       seedReadyReview(fixture);
       if (parked) {
         parkCanonicalOffAnchor(fixture);
@@ -1410,12 +1656,22 @@ if (targeted) {
 if (output) writeFileSync(1, output);
 `,
     );
-    for (const tool of ["git", "tar"]) {
-      writeExecutable(
-        join(fixture.bin, tool),
-        `#!/bin/sh\nexec "$OPENCLAW_TEST_NODE" "$OPENCLAW_TEST_FAULT_HELPER" ${tool} "$@"\n`,
-      );
-    }
+    writeExecutable(
+      join(fixture.bin, "git"),
+      `#!/bin/sh
+# Only archive verification needs Node; other prefixes retain its Git parser.
+# Restore the backend PATH for direct calls so policy Git cannot select this stub again.
+case "$1:\${3-}" in
+  -C:|-C:-*|-C:archive|-C:ls-tree|-C:hash-object) ;;
+  --version:|-C:*) PATH="$OPENCLAW_TEST_BACKEND_PATH" exec "$OPENCLAW_TEST_GIT" "$@" ;;
+esac
+exec "$OPENCLAW_TEST_NODE" "$OPENCLAW_TEST_FAULT_HELPER" git "$@"
+`,
+    );
+    writeExecutable(
+      join(fixture.bin, "tar"),
+      '#!/bin/sh\nexec "$OPENCLAW_TEST_NODE" "$OPENCLAW_TEST_FAULT_HELPER" tar "$@"\n',
+    );
     return {
       readerLog,
       archives,
@@ -1513,20 +1769,12 @@ if (output) writeFileSync(1, output);
         packages[name] = target;
       }
     }
-    const identity = (path: string) => {
-      const stat = lstatSync(path, { bigint: true });
-      return Object.fromEntries(
-        ["dev", "ino", "uid", "gid", "mode"].map((key) => [
-          key,
-          String(stat[key as keyof typeof stat]),
-        ]),
-      );
-    };
+    const recoveryIdentity = (path: string) => identity(path, ["dev", "ino", "uid", "gid", "mode"]);
     const projection = (directory: string) => {
       const entries: Record<string, Record<string, string>> = {};
       const visit = (name: string) => {
         const path = join(directory, name);
-        entries[name] = identity(path);
+        entries[name] = recoveryIdentity(path);
         if (lstatSync(path).isSymbolicLink()) {
           entries[name].target = readlinkSync(path);
         } else {
@@ -1551,14 +1799,14 @@ if (output) writeFileSync(1, output);
       runtime: JSON.parse(runtime.stdout),
       anchor: {
         path: anchor,
-        identity: identity(anchor),
-        parentIdentity: identity(fixture.root),
+        identity: recoveryIdentity(anchor),
+        parentIdentity: recoveryIdentity(fixture.root),
         projection: projection(modules),
       },
       donor: {
         path: donor,
-        identity: identity(donor),
-        parentIdentity: identity(fixture.root),
+        identity: recoveryIdentity(donor),
+        parentIdentity: recoveryIdentity(fixture.root),
         modulesSha256: hash(join(donorModules, ".modules.yaml")),
         installLockSha256: hash(join(store, "lock.yaml")),
         packages,
@@ -1591,7 +1839,7 @@ if (output) writeFileSync(1, output);
       run,
       validate,
       projection,
-      identity,
+      identity: recoveryIdentity,
       helper,
       frozenHelper,
     };
@@ -1804,14 +2052,15 @@ ${source}`,
     fixture.write(
       "pnpm",
       `#!${process.execPath}
-const fs = require("node:fs");
-const path = require("node:path");
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
 const root = args[1];
 if (root === ${JSON.stringify(fixture.tooling)}) process.exit(0);
 if (process.env.PR_TEST_INSTALL_GIT) {
-  const result = require("node:child_process").spawnSync("git", ["--version"], { stdio: "inherit", env: { ...process.env, PR_TEST_GIT_PHASE: "install-child" } });
+  const result = spawnSync("git", ["--version"], { stdio: "inherit", env: { ...process.env, PR_TEST_GIT_PHASE: "install-child" } });
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 fs.cpSync(fs.realpathSync(${JSON.stringify(join(fixture.tooling, "node_modules"))}), path.join(root, "node_modules"), { recursive: true });
@@ -1850,7 +2099,7 @@ if (process.env.PR_TEST_INSTALL_GATE) {
   }
 
   itPosix(
-    "keeps a live package reader after its bootstrap creator exits and newer installs collect",
+    "keeps a live package reader after its creator exits, then releases its finished hold",
     async ({ signal }) => {
       const fixture = makeFrozenDependencyFixture();
       const env = { ...fixture.env, OPENCLAW_PR_GIT: resolveCommand("git") };
@@ -1911,25 +2160,38 @@ while (readSync(0, command, 0, 1, null) > 0) {
 }
 closeSync(fd);
 `;
-      const first = prepare(0);
-      const creator = spawn(
-        node,
-        [
+      const creatorArgs = (index: number, retain: string) => {
+        const { archive, revision } = prepare(index);
+        return [
           "--input-type=module",
           "-e",
           creatorSource,
           fixture.root,
-          first.archive,
-          first.revision,
-          "yes",
+          archive,
+          revision,
+          retain,
           ANCHOR_PREFIX,
-        ],
-        {
-          cwd: fixture.canonical,
+        ];
+      };
+      const materialize = (index: number) => {
+        const result = runCommand(node, creatorArgs(index, "no"), env, fixture.canonical);
+        expect(result.status, result.stderr).toBe(0);
+        return JSON.parse(result.stdout);
+      };
+      const release = (args: string[]) => {
+        const result = runCommand(
+          node,
+          [join(process.cwd(), "scripts/pr-lib/dependency-hold-release.mjs"), ...args],
           env,
-          stdio: ["ignore", "pipe", "pipe", "pipe"],
-        },
-      );
+        );
+        expect(result.status, result.stderr).toBe(0);
+        return result.stdout;
+      };
+      const creator = spawn(node, creatorArgs(0, "yes"), {
+        cwd: fixture.canonical,
+        env,
+        stdio: ["ignore", "pipe", "pipe", "pipe"],
+      });
       const exited = once(creator, "exit");
       const closed = once(creator, "close");
       const control = creator.stdio[3];
@@ -1971,27 +2233,7 @@ closeSync(fd);
         const original = readScript(reader.path);
         const pressureEntries = new Set<string>();
         for (let index = 1; index <= 5; index++) {
-          const next = prepare(index);
-          const result = spawnSync(
-            node,
-            [
-              "--input-type=module",
-              "-e",
-              creatorSource,
-              fixture.root,
-              next.archive,
-              next.revision,
-              "no",
-              ANCHOR_PREFIX,
-            ],
-            {
-              cwd: fixture.canonical,
-              env,
-              encoding: "utf8",
-            },
-          );
-          expect(result.status, result.stderr).toBe(0);
-          const retired = JSON.parse(result.stdout);
+          const retired = materialize(index);
           expect(existsSync(retired.anchor)).toBe(false);
           expect(existsSync(retired.installation)).toBe(true);
           expect(readPrCacheState(retired.installation)).toEqual({
@@ -2015,12 +2257,52 @@ closeSync(fd);
             signal,
           ),
         ).toBe(original);
-      } finally {
+        const anchor = realpathSync(dirname(dirname(dirname(reader.path))));
+        const packagePath = realpathSync(reader.path);
+        const live = JSON.parse(release(["--dry-run"]));
+        expect(live.blocked).toMatchObject([
+          { path: anchor, blockers: ["process-references"], evidence: { creator: "gone" } },
+        ]);
+        const key = live.blocked[0].holds[0].key;
+        const installation = join(live.cache, key);
         control.end("q");
+        await withinTest(closed, signal);
+        const bytes = release(["--dry-run"]);
+        const plan = JSON.parse(bytes);
+        expect(plan.anchors).toMatchObject([{ path: anchor }]);
+        expect(plan.blocked).toEqual([]);
+        const args = sealPrDependencyPlan(fixture.root, bytes);
+        expect(JSON.parse(release(args))).toMatchObject({ state: "released", settled: [key] });
+        expect(existsSync(anchor)).toBe(false);
+        expect(existsSync(installation)).toBe(true);
+        expect(readScript(packagePath)).toBe(original);
+        expect(readPrCacheState(installation)).toEqual({
+          registered: true,
+          settled: true,
+          anchors: [],
+        });
+        expect(JSON.parse(release(args)).state).toBe("already-released");
+        materialize(6);
+        expect(existsSync(installation)).toBe(false);
+      } finally {
+        if (!control.writableEnded) {
+          control.end("q");
+        }
         await closed;
       }
     },
   );
+
+  itPosix("settles dependency holds when a closed reader signals the creator", () => {
+    const fixture = makeFrozenDependencyFixture();
+    const wrapper = join(fixture.linked, "scripts/pr");
+    const shell = `"$0" unknown-command 2>&1 | true; echo "\${PIPESTATUS[0]}"`;
+    const result = runCommand("/bin/bash", ["-c", shell, wrapper], fixture.env, fixture.linked);
+    expect(result.stdout.trim()).toBe("141");
+    const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies/v3");
+    const state = readPrCacheState(join(cache, prCacheEntries(cache)[0]!));
+    expect(state).toMatchObject({ anchors: [], settled: true });
+  });
 
   itPosix(
     "materializes and reuses an older anchor without changing the installed tooling root",
@@ -2097,30 +2379,14 @@ closeSync(fd);
       fixture.git(fixture.canonical, ["fetch", "origin", "main"]);
 
       const createdRun = (anchor: string, args: string[], input?: string) => {
-        const fd = openSync(anchor, "r");
-        try {
-          return spawnSync(node, args, {
-            cwd: fixture.canonical,
-            env: guard.env,
-            encoding: "utf8",
-            input,
-            stdio: [
-              "pipe",
-              "pipe",
-              "pipe",
-              "ignore",
-              "ignore",
-              "ignore",
-              "ignore",
-              "ignore",
-              "ignore",
-              fd,
-            ],
-          });
-        } finally {
-          closeSync(fd);
-        }
+        return runWithPrAnchor(anchor, args, {
+          cwd: fixture.canonical,
+          env: guard.env,
+          input,
+          runtime: node,
+        });
       };
+
       const materialize = (revision: string) => {
         const anchor = realpathSync(
           mkdtempSync(join(fixture.root, `openclaw-pr-anchor-v3.${process.pid}.`)),
@@ -2738,9 +3004,7 @@ fi
     "missing",
   ])("refuses anchor extraction on %s", (failure) => {
     const sourceFault = failure === "tampered" || failure === "missing";
-    const fixture = makeMismatchedWrapperRepo(
-      sourceFault ? { realModules: true } : { toolingOnly: true },
-    );
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true, realModules: sourceFault });
     if (sourceFault) {
       advanceAnchorReviewDependency(fixture);
     }
@@ -2822,7 +3086,7 @@ throw new Error("untrusted caller helper executed");
   });
 
   itPosix("executes extracted helpers through a symlinked temporary root", () => {
-    const fixture = makeMismatchedWrapperRepo({ realModules: true });
+    const fixture = makeMismatchedWrapperRepo({ realModules: true, toolingOnly: true });
     // Exercise the wrapper's own helper path, not a physical path reconstructed by the test.
     fixture.write(
       "scripts/pr-lib/gates.sh",
@@ -2846,7 +3110,7 @@ throw new Error("untrusted caller helper executed");
   itPosix(
     "executes review artifacts from the extracted anchor dependency closure with canonical dirty added dependency",
     () => {
-      const fixture = makeMismatchedWrapperRepo({ realModules: true });
+      const fixture = makeMismatchedWrapperRepo({ realModules: true, toolingOnly: true });
       advanceAnchorReviewDependency(fixture);
       fixture.write(
         "scripts/lib/anchor-review-record.mjs",

@@ -41,6 +41,7 @@ import {
   resolveConfigSetMode,
   type ConfigSetOptions,
 } from "./config-set-input.js";
+import { parseKeyValueEntries } from "./parse-key-value-entries.js";
 import { parseOptionalPositiveInteger } from "./parse-positive-integer.js";
 
 const CONFIG_PATCH_STDIN_MAX_BYTES = 1024 * 1024;
@@ -134,27 +135,6 @@ function parseProviderPositiveInteger(raw: string | undefined, flag: string): nu
     throw new Error(`${flag} must not be empty.`);
   }
   return parseOptionalPositiveInteger(raw, flag, ".");
-}
-
-function parseProviderEnvEntries(
-  entries: string[] | undefined,
-): Record<string, string> | undefined {
-  if (!entries || entries.length === 0) {
-    return undefined;
-  }
-  const env: Record<string, string> = {};
-  for (const entry of entries) {
-    const separator = entry.indexOf("=");
-    if (separator <= 0) {
-      throw new Error("--provider-env expects KEY=*** entries.");
-    }
-    const key = entry.slice(0, separator).trim();
-    if (!key) {
-      throw new Error("--provider-env key must not be empty.");
-    }
-    env[key] = entry.slice(separator + 1);
-  }
-  return Object.keys(env).length > 0 ? env : undefined;
 }
 
 function validateProviderAliasPath(path: PathSegment[]): void {
@@ -311,7 +291,7 @@ export function buildConfigSetOperations(params: {
       opts.providerMaxOutputBytes,
       "--provider-max-output-bytes",
     );
-    const providerEnv = parseProviderEnvEntries(opts.providerEnv);
+    const providerEnv = parseKeyValueEntries(opts.providerEnv, "--provider-env");
 
     let provider: SecretProviderConfig;
     if (source === "env") {

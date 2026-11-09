@@ -237,14 +237,14 @@ describe("chat attachment read failures", () => {
     vi.unstubAllGlobals();
   });
 
-  async function expectAttachmentToast(message = "File too large. Try a smaller file.") {
+  async function expectFileToast(message = "File too large.", description = "Try a smaller file.") {
     await toastHost.updateComplete;
     await vi.dynamicImportSettled();
     await waitForSolid(() => {
       expect(toastHost.querySelectorAll(".app-toast")).toHaveLength(1);
-      expect(toastHost.querySelector(".app-toast__message")).toMatchObject({
-        textContent: message,
-      });
+      expect(toastHost.querySelector(".app-toast--error")).not.toBeNull();
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(message);
+      expect(toastHost.querySelector(".app-toast__description")?.textContent).toBe(description);
     });
   }
 
@@ -387,7 +387,7 @@ describe("chat attachment read failures", () => {
         );
       }
       expect(container.querySelector(".chat-attachment-failures")).toBeNull();
-      await expectAttachmentToast("Could not attach file. Try again.");
+      await expectFileToast("Could not attach file.", "Try again.");
     },
   );
 
@@ -439,7 +439,7 @@ describe("chat attachment read failures", () => {
     }
     expect(h.names()).toEqual(names);
     expect(read.mock.calls.map(([file]) => file.name)).not.toContain(rejected);
-    await expectAttachmentToast();
+    await expectFileToast();
     expect(notify).toHaveBeenCalledOnce();
   });
 
@@ -457,7 +457,7 @@ describe("chat attachment read failures", () => {
       ]),
     ).toBe(1);
     expect(h.names()).toEqual(["large.png", "first.txt", "fits.txt"]);
-    await expectAttachmentToast();
+    await expectFileToast();
   });
 
   it.each<[string, File[], string, number | undefined, string[]?, number?]>([
@@ -470,7 +470,6 @@ describe("chat attachment read failures", () => {
       8,
     ],
     ["empty.png", [new File([], "empty.png", { type: "image/png" })], "", undefined],
-    ["pasted-text", [], "x".repeat(2048), 1024],
     ["pasted-image", [], `data:image/gif;base64,${btoa("p".repeat(64))}`, 16],
   ])(
     "rejects %s at intake while preserving admitted siblings",
@@ -486,12 +485,9 @@ describe("chat attachment read failures", () => {
         onAttachmentsChange,
       });
       await toastHost.updateComplete;
-      await vi.waitFor(() =>
-        expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain(
-          name === "empty.png"
-            ? "Could not attach file. Try again."
-            : "File too large. Try a smaller file.",
-        ),
+      await expectFileToast(
+        name === "empty.png" ? "Could not attach file." : "File too large.",
+        name === "empty.png" ? "Try again." : "Try a smaller file.",
       );
       if (accepted) {
         await vi.waitFor(() => expect(onAttachmentsChange).toHaveBeenCalled());

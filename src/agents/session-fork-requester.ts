@@ -27,7 +27,7 @@ export type SessionForkRequester = Pick<
 >;
 
 /** Copies only the requester fields, never the turn's live capabilities. */
-export function projectSessionForkRequester(context: SessionForkRequester): SessionForkRequester {
+function projectSessionForkRequester(context: SessionForkRequester): SessionForkRequester {
   const requester: SessionForkRequester = {};
   for (const field of REQUESTER_FIELDS) {
     if (context[field] !== undefined) {

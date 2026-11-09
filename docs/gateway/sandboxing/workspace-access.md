@@ -41,8 +41,9 @@ existing Docker or Podman runtime exposes the same file backing. A nested bind,
 container-only mount, or unrelated host path does not grant additional access.
 With `ro` access, `/agent` names the admitted agent workspace; the private
 container workdir is a different source and does not alias that workspace.
-Managed project references read the canonical worktree after its normal
-checkpoint. If the original runtime or its namespace mapping is unavailable,
+Managed project references read the live private checkout without pausing the
+sandbox or publishing a checkpoint. Reads use verified file descriptors and may
+observe an in-progress write, just like another reader inside the sandbox. If the original runtime or its namespace mapping is unavailable,
 an absolute alias can fail even when the saved file remains readable through an
 admitted workspace-relative reference. Reading never creates a sandbox or
 reconstructs an unavailable historical mapping.
@@ -85,18 +86,43 @@ paths are admitted before guest execution and retained in the projection binding
 Later host-created paths enter an existing projection only after the host stages
 them in the host Git index (`git add`); changing an ignore rule alone does
 not admit host files, including newly provisioned files. Existing admitted source
-edits and guest-created files continue to reconcile, including guest-created
-ignored files. Source filenames must be valid UTF-8; rename invalid Git paths
+edits and guest-created files continue to reconcile, including ignored reports
+and attachments. An ignore rule alone does not make an authored file disposable.
+Result capture excludes new ignored build outputs only under checkout-root
+`dist/` and `.cache/openclaw-bun/`, using the guest's `.gitignore` files and the
+trusted host repository's `.git/info/exclude` and global excludes. Tracked files
+and exact previously admitted or accepted paths remain protected when ignore
+rules change. Save durable reports and screenshots outside disposable build/cache
+roots; ordinary `.artifacts/` outputs remain available to saved message references.
+Source filenames must be valid UTF-8; rename invalid Git paths
 before retrying preparation. Publication uses the same admission boundary.
+
+New private checkouts are shallow snapshots. For GitHub.com projects, their
+credential-free HTTPS `origin` and the matching HTTPS repository URLs (with and
+without `.git`) default to `blob:none` fetches: history arrives without historical
+file contents, and checkout or diff fetches missing contents as needed. These
+defaults are reapplied when creating a checkout from a retained dependency
+template, including templates created before these defaults existed. Host object
+stores and credentials remain outside the sandbox; private repository access
+still requires the existing authorized publication workflow.
+
+Use `github_publish` with `action: "prepare_pr"` for eligible PR continuation and
+`refresh_base` for base updates. For separate commit inspection, prefer
+`git fetch --no-tags --depth=1 <url> <commit>...`; deepen explicitly if the task
+needs ancestry, or use `--filter=blob:none` when history is required. Existing
+checkouts, other hosts, forks, and other URL spellings need these explicit flags.
+An unbounded fetch in a shallow checkout can otherwise download the repository's
+entire history, including obsolete blobs. Servers must support filtering;
+Git warns and falls back to an unfiltered fetch when they do not.
 
 A newly created filename containing a literal backslash cannot pass workspace
 checkpoint validation. Its bytes and the pending checkpoint remain preserved.
 The same authorized session can continue using its retained sandbox workspace
 to inspect and explicitly correct that filename with its ordinary permitted
 tools. This workspace can still contain an older view of canonical files; newer
-canonical edits are not imported over the pending changes. File delivery and
-command finalization continue to report the checkpoint failure until correction
-allows normal reconciliation. Existing conflict checks protect concurrent
+canonical edits are not imported over the pending changes. File reads remain
+available from the live checkout; command finalization and file saves continue to
+report the checkpoint failure until correction allows normal reconciliation. Existing conflict checks protect concurrent
 canonical edits, and subsequent preparation imports those accepted changes.
 This continuation does not bypass staged conflicts, journal recovery, or the
 session's current permissions, and OpenClaw does not rename or omit the file.
@@ -118,7 +144,8 @@ recovery, including previously retained inputs. Similarly named source files
 such as `.gitignore`, `.gitmodules`, and `.git-notes` still reconcile normally.
 
 At the checkout root, `.cache/vitest/`, `.cache/bun-transpiler/`, `.cache/openclaw/bun/`,
-`.cache/ms-playwright/`, `.local/share/pnpm/store/`, `.openclaw/.pnpm-store/`, and `.openclaw/tools/` caches stay with the runtime
+`.cache/ms-playwright/`, `.local/share/pnpm/store/`,
+`artifacts/task-environment/local/share/pnpm/store/`, `.openclaw/.pnpm-store/`, and `.openclaw/tools/` caches stay with the runtime
 that produced them, along with `.artifacts/vitest-workers/` compiler outputs,
 `.artifacts/vitest-worker-cache/` retained compiler outputs,
 `.artifacts/vitest-shard-timings.json` scheduling samples, and
@@ -130,8 +157,9 @@ other `.openclaw/` content and nested project fixtures still reconcile.
 Synchronization and recovery of older pending results exclude these exact paths,
 so dependency and test-tool downloads do not count as authored workspace results.
 Other guest-created files under `.cache/`, `.local/`, and `.artifacts/` still
-reconcile, including nested paths and explicit staged inputs; an ignore
-rule alone does not make a file disposable. Source changes cannot remove a
+reconcile, including ignored paths and explicit staged inputs. Only the declared
+disposable build/cache roots are excluded before hashing and result-size accounting;
+their local bytes remain available to the sandbox. Source changes cannot remove a
 runtime-owned lock subtree by replacing its parent directory.
 
 pnpm can select `.openclaw/.pnpm-store/` when installing beneath a protected
@@ -171,15 +199,19 @@ differences; it does not restore the missing baseline. Keep both directories and
 ask a Gateway administrator to recover the saved baseline inventory before retrying.
 Recreating a sandbox does not repair missing baseline records.
 
-For Git-backed native-node and SSH workspaces, worker-side captures also exclude
-new generated files under those two build-cache roots. Tracked files, ignored
-files explicitly selected by `.worktreeinclude`, and exact inputs recorded in a
-prior capture remain part of the workspace. Ordinary `.artifacts/` reports still
-synchronize, and unreadable authored files still fail capture. Plain workspaces
-keep their existing capture policy even when staging creates Git metadata.
-Older remote manifests can contain cache files whose origin is unknown; those
-exact paths remain preserved. This does not change the initial Gateway-source
-snapshot policy or remove previously retained cache files.
+For Git-backed native-node and SSH workspaces, captures use Git eligibility:
+tracked and non-ignored files, marker-authenticated staged inputs, ignored files
+explicitly selected by `.worktreeinclude`, and exact paths recorded in prior
+captures. Unselected ignored project files stay private, including directories
+that resemble staged inputs but lack a valid ownership marker. Result captures
+also retain ordinary `.artifacts/` reports and screenshots, even when ignored;
+initial source admission and prepared-project verification keep Git eligibility.
+The declared disposable runtime and build-cache roots remain excluded, while
+tracked or previously admitted build-cache inputs remain protected. Unreadable
+eligible files fail capture. Plain workspaces keep their filesystem capture policy
+even when staging creates Git metadata. Older remote manifests can contain cache
+files whose origin is unknown; those exact paths remain preserved. This does not
+change the initial Gateway-source snapshot policy.
 
 If you are a guest, you can ask the agent:
 
@@ -245,7 +277,11 @@ this checkout while capturing or applying changes. An existing session first
 checks both workspaces against their accepted baseline without pausing. If both
 are unchanged and no recovery is pending, its runtimes keep running. Changed or
 interrupted checks return to paused reconciliation; file edits are never applied
-from the live check. Concurrent preparations of the same workspace and session
+from the live check. Checkpoints after commands and file mutations use the same
+check for the guest workspace: commands that leave accepted files unchanged do
+not pause the sandbox. Changed checkpoints still pause through capture and
+publication, including writes from background processes and termination handlers.
+Concurrent preparations of the same workspace and session
 generation share queued reconciliation. Once filesystem observation begins,
 later preparations require a fresh check so intervening edits remain visible.
 Completed preparation results are not cached. Each caller retains its own
@@ -253,13 +289,20 @@ cancellation and authority checks. OpenClaw records pending results and
 rollback journals in SQLite, and resumes
 only after settlement. New shell calls and command preparation wait for an active
 checkpoint to release the workspace before proceeding; background commands do not
-hold that preparation lease for their entire lifetime. Concurrent Files requests
-and command checkpoints share equivalent captures while waiting for workspace
-custody. Requests arriving after capture starts trigger a fresh checkpoint so
-later guest writes remain visible. Each caller retains its own authority checks.
-Files requests skip checkpoint custody when a live read confirms that the managed
-worktree has no sandbox projection. A later request observes a newly created
-projection and checkpoints it normally; lifecycle custody still owns absent rows.
+hold that preparation lease for their entire lifetime. Files and assistant-media
+reads select the current backing without acquiring checkpoint custody or pausing
+runtimes. Each read retains its session and workspace authority checks; sandbox
+aliases also verify the existing runtime mount. For local sandbox sessions, a retained
+private checkout remains the preview's live view; direct host edits enter that view during the next workspace
+preparation. File saves checkpoint guest changes, compare the editor hash, update
+the canonical file, and import the saved change into the private checkout under the
+same custody before resuming its runtimes. Capture,
+publication, and lifecycle operations retain their reconciliation lease and pause
+requirements.
+Each successful container pause records a `sandbox/quiescence` info log with a
+bounded reason (`checkpoint`, `preparation`, `publication`, `retirement`, `restore`,
+or `reconcile`) and that reason's process-lifetime counter. Already-paused runtimes
+and stopped containers do not increment it; counters restart with the Gateway.
 Captured workspace authority is checked again after
 filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner
@@ -291,6 +334,9 @@ With the OpenShell backend, `mirror` mode still uses the local workspace as the 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 Later conversation turns load retained images from that same staged copy.
 Missing copies and paths outside the active sandbox remain unavailable.
+If a previously included image becomes unavailable, replay keeps a resend notice
+and stops retrying that image for the retained session decision. Resend the image
+as a new attachment to make another attempt; other attachments remain available.
 For a managed project session, attachments on follow-up messages use that
 session's private checkout, including after its worktree has been created.
 Attachment staging retains the managed workspace owner until the copy settles.

@@ -267,7 +267,7 @@ function primaryUpdateFailure(error: unknown): unknown {
 }
 
 export function createUpdateCommandFailureResult(
-  params: Pick<UpdateRunResult, "mode" | "root" | "recovery" | "durationMs"> & {
+  params: Pick<UpdateRunResult, "mode" | "root" | "recovery" | "durationMs" | "runId"> & {
     failure: { cause: unknown; detail?: string };
     admission?: true;
     phase?: string;
@@ -289,18 +289,22 @@ export function createUpdateCommandFailureResult(
     (admissionFailure
       ? `The installation and Gateway were left unchanged. ${failure.detail ?? cause.message}`
       : failure.detail);
-  const reason =
-    cause instanceof UpdateRequesterRevokedError
-      ? cause.code
-      : ownershipFailure && admission
-        ? "config-read-failed"
-        : preMutationFailure || pkgOwnershipFailure
-          ? cause.reason
-          : admissionFailure
-            ? "managed-service-preflight"
-            : lockFailure
-              ? "file_lock_timeout"
-              : "update-failed";
+  // Progress receipts wrap the guard's refusal in their recording failure.
+  const revocation = collectNestedErrorCandidates(cause).find(
+    (candidate): candidate is UpdateRequesterRevokedError =>
+      candidate instanceof UpdateRequesterRevokedError,
+  );
+  const reason = revocation
+    ? revocation.code
+    : ownershipFailure && admission
+      ? "config-read-failed"
+      : preMutationFailure || pkgOwnershipFailure
+        ? cause.reason
+        : admissionFailure
+          ? "managed-service-preflight"
+          : lockFailure
+            ? "file_lock_timeout"
+            : "update-failed";
   const stepResult = preMutationFailure ? cause.stepResult : undefined;
   const doctorFailureFacts = collectUpdateDoctorFailureFacts(failure.cause);
   const failedStep: UpdateStepResult = stepResult?.failedStep ?? {
@@ -521,7 +525,7 @@ export type UpdateAdmissionReportParams = {
 
 export function createPreMutationUpdateResult(
   params: UpdateAdmissionReportParams,
-  outcome: Pick<UpdateRunResult, "status" | "recovery">,
+  outcome: Pick<UpdateRunResult, "status" | "recovery" | "runId">,
   phase = "requested",
 ): UpdateRunResult {
   const run = params.opts.run;

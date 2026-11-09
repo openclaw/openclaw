@@ -4,16 +4,73 @@ import path from "node:path";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
 import { withWorktreeGitConfig } from "../../agents/worktrees/checkout-git-config.js";
-import { gitEnvironment, requireGit } from "../../agents/worktrees/git.js";
+import { commandError, gitEnvironment, requireGit, runGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import { resolveStateDir } from "../../config/state-dir.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
+import { parseGitHubRemoteUrl } from "../github-remote.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
 import { runWorkspaceInventoryCommandToFile } from "./workspace-sync-inventory.js";
 
-export function localWorkspaceProjectionPath(owner: LocalWorkspaceOwner) {
+const RECONCILE_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile";
+
+function checkoutGitEnvironment(home: string) {
+  return {
+    PATH: process.env.PATH,
+    HOME: home,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+    GIT_CONFIG_SYSTEM: gitNullConfigPath(),
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+}
+
+async function configureProjectionFetch(
+  params: {
+    source: string;
+    destination: string;
+    signal: AbortSignal;
+    assertCurrent: () => void;
+  },
+  cleanEnv: NodeJS.ProcessEnv,
+) {
+  const options = {
+    baseEnv: cleanEnv,
+    env: cleanEnv,
+    signal: params.signal,
+    beforeRun: params.assertCurrent,
+  };
+  const origin = await runGit(params.source, ["config", "--get", "remote.origin.url"], options);
+  if (origin.code !== 0 && origin.code !== 1) {
+    throw commandError("git config remote.origin.url", origin);
+  }
+  const repository = parseGitHubRemoteUrl(origin.stdout);
+  if (!repository) {
+    return;
+  }
+  // Reconstruct the address: never export host credentials, helpers or local paths.
+  const url = `https://github.com/${repository.owner}/${repository.repo}`;
+  // A cached template may already have an origin; multiple URLs make push fan out.
+  const config: Record<string, string> = { "remote.origin.url": `${url}.git` };
+  // Git keys filters by the supplied remote name, even when that name is a URL.
+  for (const remote of ["origin", url, `${url}.git`]) {
+    config[`remote.${remote}.promisor`] = "true";
+    config[`remote.${remote}.partialclonefilter`] = "blob:none";
+  }
+  for (const [key, value] of Object.entries(config)) {
+    await requireGit(
+      params.destination,
+      ["config", "--local", "--replace-all", key, value],
+      options,
+    );
+  }
+}
+
+export function localWorkspaceProjectionPath(owner: Pick<LocalWorkspaceOwner, "worktree" | "env">) {
   if (!/^[a-f0-9-]{36}$/u.test(owner.worktree.id)) {
     throw new Error("Invalid managed worktree identity");
   }
@@ -25,16 +82,19 @@ export function localWorkspaceProjectionPath(owner: LocalWorkspaceOwner) {
   );
 }
 
-/** Build independent, source-only Git metadata before any guest can write this checkout. */
+/** Build or refresh private source-only metadata before any guest can write this checkout. */
 export async function prepareLocalWorkspaceCheckout(params: {
   source: string;
   destination: string;
   temporaryRoot: string;
   baseCommit: string;
+  /** The exclusive template owner has validated this existing checkout. */
+  retainedCommit?: string;
   branch: string;
   signal: AbortSignal;
   assertCurrent: () => void;
 }) {
+  using phases = observeDiagnosticsTimelinePhases(`${RECONCILE_PHASE}.checkout.pack`);
   const { signal, assertCurrent: current, destination: repo } = params;
   const temporary = await fs.mkdtemp(path.join(params.temporaryRoot, "git-"));
   try {
@@ -50,6 +110,7 @@ export async function prepareLocalWorkspaceCheckout(params: {
           prepareWorkerWorkspaceGitPack({
             root: params.source,
             baseCommit: params.baseCommit,
+            retainedCommit: params.retainedCommit,
             temporaryRoot: temporary,
             signal,
             baseEnv,
@@ -57,16 +118,9 @@ export async function prepareLocalWorkspaceCheckout(params: {
         ),
     );
     current();
+    phases.mark(`${RECONCILE_PHASE}.checkout.index`);
     await fs.mkdir(repo, { recursive: true, mode: 0o700 });
-    const cleanEnv = {
-      PATH: process.env.PATH,
-      HOME: temporary,
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: gitNullConfigPath(),
-      GIT_CONFIG_SYSTEM: gitNullConfigPath(),
-      GIT_NO_REPLACE_OBJECTS: "1",
-      GIT_TERMINAL_PROMPT: "0",
-    };
+    const cleanEnv = checkoutGitEnvironment(temporary);
     const git = (args: string[], input?: Uint8Array) =>
       requireGit(repo, args, {
         baseEnv: cleanEnv,
@@ -75,15 +129,17 @@ export async function prepareLocalWorkspaceCheckout(params: {
         signal,
         beforeRun: current,
       });
-    await git([
-      "init",
-      "--quiet",
-      "--template=",
-      "--object-format=" + (params.baseCommit.length === 40 ? "sha1" : "sha256"),
-    ]);
+    if (!params.retainedCommit) {
+      await git([
+        "init",
+        "--quiet",
+        "--template=",
+        "--object-format=" + (params.baseCommit.length === 40 ? "sha1" : "sha256"),
+      ]);
+    }
     current();
     await runWorkspaceInventoryCommandToFile({
-      argv: ["git", "-C", repo, "index-pack", "--stdin"],
+      argv: ["git", "-C", repo, "index-pack", "--stdin", "--fix-thin"],
       inputPath: pack,
       outputPath: path.join(temporary, "index-pack-result"),
       baseEnv: gitEnvironment(cleanEnv),
@@ -92,11 +148,29 @@ export async function prepareLocalWorkspaceCheckout(params: {
       maxOutputBytes: 4096,
     });
     current();
-    await fs.writeFile(path.join(repo, ".git", "shallow"), params.baseCommit + "\n", {
+    phases.mark(`${RECONCILE_PHASE}.checkout.materialize`);
+    // Earlier snapshot commits remain in objects/reflogs and still lack their ancestors.
+    await fs.appendFile(path.join(repo, ".git", "shallow"), params.baseCommit + "\n", {
       mode: 0o600,
     });
-    await git(["checkout", "--quiet", "-b", params.branch, params.baseCommit]);
+    await git([
+      "checkout",
+      "--quiet",
+      params.retainedCommit ? "-B" : "-b",
+      params.branch,
+      params.baseCommit,
+    ]);
+    if (params.retainedCommit) {
+      // A session may receive only this commit's source, including through Git objects.
+      // Template metadata is host-owned; every imported object lives in a pack.
+      await git(["reflog", "expire", "--expire=all", "--all"]);
+      await git(["repack", "-ad"]);
+      current();
+      await fs.writeFile(path.join(repo, ".git", "shallow"), params.baseCommit + "\n");
+    }
+    await configureProjectionFetch(params, cleanEnv);
   } finally {
+    phases.mark(`${RECONCILE_PHASE}.checkout.cleanup`);
     await fs.rm(temporary, { recursive: true, force: true });
   }
 }
@@ -122,6 +196,7 @@ export async function initializeLocalWorkspaceProjection(params: {
   buildCacheInputs: () => Promise<string[]>;
   dependencies?: { sandbox: SandboxConfig; allocation: WorktreeAllocationGuard };
 }) {
+  using phases = observeDiagnosticsTimelinePhases(`${RECONCILE_PHASE}.initialize`);
   const { signal, assertCurrent: current, dependencies } = params;
   const parent = path.dirname(params.projectionPath);
   await fs.mkdir(parent, { recursive: true, mode: 0o700 });
@@ -142,6 +217,7 @@ export async function initializeLocalWorkspaceProjection(params: {
       signal,
       assertCurrent: current,
     };
+    phases.mark(`${RECONCILE_PHASE}.template`);
     const cloned =
       dependencies &&
       (await (
@@ -164,8 +240,13 @@ export async function initializeLocalWorkspaceProjection(params: {
         },
       }));
     if (!cloned) {
+      phases.mark(`${RECONCILE_PHASE}.checkout`);
       await timeWorktreePreparationPhase("checkout", () => prepareLocalWorkspaceCheckout(checkout));
+    } else {
+      // A retained template may predate the fetch defaults; its key remains source-owned.
+      await configureProjectionFetch(checkout, checkoutGitEnvironment(temporary));
     }
+    phases.mark(`${RECONCILE_PHASE}.manifest_scan`);
     const initial = await timeWorktreePreparationPhase("snapshot", async () =>
       captureWorkspaceManifestDocument({
         root: repo,
@@ -175,9 +256,11 @@ export async function initializeLocalWorkspaceProjection(params: {
       }),
     );
     current();
+    phases.mark(`${RECONCILE_PHASE}.publish`);
     await fs.rename(repo, params.projectionPath);
     return initial;
   } finally {
+    phases.mark(`${RECONCILE_PHASE}.cleanup`);
     await fs.rm(temporary, { recursive: true, force: true });
   }
 }

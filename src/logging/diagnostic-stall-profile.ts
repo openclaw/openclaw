@@ -66,7 +66,7 @@ export function formatStallProfile(
   const selfFrames = new Map<string, SelfFrame>();
   const stacks = new Map<string, SampledStack>();
   let samples = 0;
-  let truncated = false;
+  let truncated = windows.length === 0;
   for (const window of windows) {
     if (window.json === undefined) {
       truncated = true;
@@ -167,8 +167,11 @@ export function formatStallProfile(
       }
     }
   }
+  const cpu = windows.length
+    ? `samples=${samples} intervalMs=${SAMPLE_MS}`
+    : "cpuProfile=unavailable";
   return formatStallFrames(
-    `windowMs=${Math.round(stall.endedAt - stall.startedAt)} windowStartMs=${Math.round(performance.timeOrigin + stall.startedAt)} windowEndMs=${Math.round(performance.timeOrigin + stall.endedAt)} reportedAtMs=${Math.round(performance.timeOrigin + performance.now())} samples=${samples} intervalMs=${SAMPLE_MS} truncated=${truncated}${kernelSummary}`,
+    `windowMs=${Math.round(stall.endedAt - stall.startedAt)} windowStartMs=${Math.round(performance.timeOrigin + stall.startedAt)} windowEndMs=${Math.round(performance.timeOrigin + stall.endedAt)} reportedAtMs=${Math.round(performance.timeOrigin + performance.now())} ${cpu} truncated=${truncated}${kernelSummary}`,
     counts,
     selfFrames,
     stacks,

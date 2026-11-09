@@ -750,11 +750,13 @@ suite.define(() => {
       await toast.waitFor();
       await expect.poll(() => toast.textContent()).toContain("Codex hidden");
       const drawerToastGeometry = await host.evaluate((node) => {
-        const toastElement = node.querySelector<HTMLElement>(".app-toast");
+        // Toasts stack inside a fixed lane container; that container owns placement.
+        let lane = node.querySelector<HTMLElement>(".app-toast");
+        while (lane && getComputedStyle(lane).position !== "fixed") {
+          lane = lane.parentElement;
+        }
         return {
-          computedTop: toastElement
-            ? Math.round(Number.parseFloat(getComputedStyle(toastElement).top))
-            : null,
+          computedTop: lane ? Math.round(Number.parseFloat(getComputedStyle(lane).top)) : null,
           placement: node.dataset.toastPlacement,
         };
       });

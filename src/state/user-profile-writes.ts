@@ -323,6 +323,14 @@ export async function ensureCanonicalUserProfileForTailscaleIdentity(
   }
   return unwrap(await write("userProfiles.ensureTailscale", identity, options));
 }
+
+/** Ensures an exact OCID profile without email aliases or implicit profile merging. */
+export async function ensureCanonicalUserProfileForOpenClawIdIdentity(
+  input: UserProfileWriteOperations["userProfiles.ensureOpenClawId"]["input"],
+  options: ProfileWriteOptions = {},
+): Promise<UserProfile> {
+  return unwrap(await write("userProfiles.ensureOpenClawId", input, options));
+}
 export async function syncCanonicalGitHubIdentity(
   input: UserProfileWriteOperations["userProfiles.syncGitHub"]["input"],
   options: ProfileWriteOptions = {},

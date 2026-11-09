@@ -243,6 +243,30 @@ describe("launchd uninstall", () => {
     },
   );
 
+  it.each(["mkdir", "rename"] as const)(
+    "removes the booted-out plist when Trash %s is denied without Full Disk Access",
+    async (operation) => {
+      state.files.set(PLIST, "RunAtLoad=true");
+      vi.mocked(fs[operation]).mockRejectedValueOnce(
+        Object.assign(new Error(`EPERM: operation not permitted, ${operation}`), { code: "EPERM" }),
+      );
+
+      await expect(uninstallLaunchAgent(control())).resolves.toBeUndefined();
+      expect(state.files.has(PLIST)).toBe(false);
+    },
+  );
+
+  it("moves the plist into the Trash without replacing an earlier same-name item", async () => {
+    const earlier = "/Users/test/.Trash/ai.openclaw.gateway.plist";
+    state.files.set(PLIST, "RunAtLoad=true");
+    state.files.set(earlier, "earlier");
+
+    await expect(uninstallLaunchAgent(control())).resolves.toBeUndefined();
+    expect(state.files.has(PLIST)).toBe(false);
+    expect(state.files.get(earlier)).toBe("earlier");
+    expect([...state.files.keys()].filter((file) => file.includes("/.Trash/"))).toHaveLength(2);
+  });
+
   it("preserves the plist when launchctl cannot boot out the service", async () => {
     state.files.set(PLIST, "RunAtLoad=true");
     state.bootoutError = "launchctl bootout permission denied";
@@ -351,6 +375,34 @@ describe("launchd install", () => {
       expect(await isLaunchAgentEnabled({ env: ENV })).toBe(enabled);
     },
   );
+  it.each([
+    [true, true],
+    [true, false],
+    [false, true],
+  ])(
+    "restores the previous LaunchAgent and runs the hook only once booted-out PIDs exit (replacement loads=%s, exits=%s)",
+    async (replacementLoads, exits) => {
+      const previous = setGatewayPlist(PREVIOUS_ARGS);
+      Object.assign(state, {
+        bootstrapError: "injected activation failure",
+        bootstrapTransient: true,
+        bootstrapLoadsServiceOnFailure: replacementLoads,
+      });
+      // The booted-out PID outlives bootout and exits on its third liveness check, or never.
+      let pidChecks = 0;
+      isPidDefinitelyDead.mockImplementation(() => exits && ++pidChecks > 2);
+      const checksAtHook: number[] = [];
+      const beforeRecovery = async () => void checksAtHook.push(pidChecks);
+
+      const error = await runWithFakeTimers(() =>
+        install({ beforeRecovery }).catch((e: unknown) => e),
+      );
+      expect(error instanceof AggregateError).toBe(!exits);
+      expect(checksAtHook).toEqual(exits ? [3] : []);
+      expect(state.files.get(PLIST)).toBe(previous);
+    },
+  );
+
   it.each(["install", "restart"] as const)(
     "refuses %s before user LaunchAgent mutation when a system daemon owns it",
     async (action) => {
@@ -803,6 +855,29 @@ describe("launchd install", () => {
     expect(state.cleanupProtectedPids).toEqual([4242]);
     expectCommands("print print print");
     expect(state.files.get(plistPath)).toBe(originalPlist);
+    expect(state.fileWrites).toHaveLength(0);
+  });
+
+  it("reloads the LaunchAgent when Doctor restoration fails on an unowned listener", async () => {
+    const env = createLaunchdEnvWithGatewayPort("19002");
+    setLaunchAgentPlist(env, "ai.openclaw.gateway", ["node", "gateway.js"]);
+    state.serviceLoaded = false;
+    state.serviceRunning = false;
+    cleanStaleGatewayProcessesSync.mockImplementationOnce(() => []);
+    mockPort(19002, "busy", [{ pid: 5151, address: "TCP 127.0.0.1:19002 (LISTEN)" }]);
+
+    await expect(
+      restartLaunchAgent(
+        launchAgentControlFixture(env, {
+          preserveDefinition: true,
+          preserveAutoStart: true,
+        }),
+      ),
+    ).rejects.toThrow("is loaded; launchd can retry its KeepAlive job");
+
+    expect(state.serviceLoaded).toBe(true);
+    expect(state.launchctlCalls.some(([command]) => command === "bootstrap")).toBe(true);
+    expect(state.launchctlCalls.some(([command]) => command === "kickstart")).toBe(false);
     expect(state.fileWrites).toHaveLength(0);
   });
 
