@@ -136,16 +136,18 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
       expect(calls("create")).toHaveLength(1);
       expect(calls("start")).toHaveLength(1);
 
-      registryMocks.readRegistryEntry.mockResolvedValue({ ...published, runtimeState: "stopped" });
+      registryMocks.readRegistryEntry.mockResolvedValue({
+        ...published,
+        idleStoppedAtLastUsedMs: published.lastUsedAtMs,
+      });
       spawnState.inspectRunning = false;
       const resumed = await createSandboxBackend(params);
       expect(resumed.runtimeId).toBe(first.runtimeId);
       expect(calls("create")).toHaveLength(1);
       expect(calls("start")).toHaveLength(2);
-      expect(registryMocks.updateRegistry.mock.calls.at(-1)?.[0]).toMatchObject({
-        runtimeState: "ready",
-        workspaceDir,
-      });
+      const resumedEntry = registryMocks.updateRegistry.mock.calls.at(-1)?.[0];
+      expect(resumedEntry).toMatchObject({ workspaceDir });
+      expect(resumedEntry.idleStoppedAtLastUsedMs).toBeUndefined();
 
       // An override of a built-in ID still relies on the generic publisher.
       using overrides = new DisposableStack();

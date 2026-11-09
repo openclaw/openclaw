@@ -169,13 +169,28 @@ try {
     now += 6 * 60_000;
   }
   const retirement = await measure(() => maybePruneSandboxes(config));
-  const stoppedRows = (await readRegistry()).entries.filter(
-    (entry) => entry.runtimeState === "stopped",
-  ).length;
+  const countStoppedRows = async () =>
+    (await readRegistry()).entries.filter(
+      (entry) =>
+        entry.idleStoppedAtLastUsedMs === entry.lastUsedAtMs ||
+        // Prior PR revisions recorded stops as provisioning state.
+        (entry.runtimeState as string | undefined) === "stopped",
+    ).length;
+  let stoppedRows = await countStoppedRows();
+  const draining = [];
+  while (stoppedRows < rows - active) {
+    now += 5 * 60_000;
+    draining.push(await measure(() => maybePruneSandboxes(config)));
+    const next = await countStoppedRows();
+    assert(next > stoppedRows, "Retirement made no progress; cannot measure steady state");
+    stoppedRows = next;
+  }
   const steady = [];
   for (let index = 0; index < iterations; index++) {
     now += 6 * 60_000;
-    steady.push(await measure(() => maybePruneSandboxes(config)));
+    const sample = await measure(() => maybePruneSandboxes(config));
+    assert.equal(sample.engineCalls, 0, "Steady-state sample still performed engine work");
+    steady.push(sample);
   }
   console.log(
     JSON.stringify({
@@ -186,6 +201,7 @@ try {
       allocations: values.allocations,
       beforeTtl,
       retirement,
+      draining,
       stoppedRows,
       steady,
       loadBefore,

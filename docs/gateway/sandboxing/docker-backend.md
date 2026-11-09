@@ -111,7 +111,8 @@ Docker and Podman tool containers stop after 15 minutes without a new sandbox
 admission, on the Gateway's five-minute housekeeping sweep. Active turns, retained
 background commands, and persistent executions prevent idle stopping. Each pass
 attempts at most 32 idle stops, sequentially; failed attempts count toward the
-limit. Backlogs drain over multiple sweeps. Dependency-builder cleanup can request
+limit. Each sweep resumes after the last attempted container, so repeated failures
+cannot starve later containers. Backlogs drain over multiple sweeps. Dependency-builder cleanup can request
 earlier sweeps. Existing age-based removal is separate from this idle-stop limit.
 A long turn becomes eligible for stopping as soon as it finishes.
 Stopping frees tmpfs contents and ends

@@ -20,6 +20,7 @@ import {
   maybeRunSandboxRegistryHousekeeping,
   startSandboxRegistryHousekeeping,
   withSandboxRuntimePrune,
+  type SandboxPruneCursor,
 } from "./registry-lifecycle.js";
 import {
   assertSandboxRegistryRetirementCurrent,
@@ -45,6 +46,7 @@ function shouldStopIdleContainer(entry: SandboxRegistryEntry, now: number): bool
       entry.backendId === "docker" ||
       entry.backendId === "podman") &&
     (entry.runtimeState === undefined || entry.runtimeState === "ready") &&
+    entry.idleStoppedAtLastUsedMs !== entry.lastUsedAtMs &&
     now - entry.lastUsedAtMs > IDLE_STOP_MS
   );
 }
@@ -68,6 +70,7 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
   config: OpenClawConfig;
   assertCurrent?: () => void;
   entries: TEntry[];
+  startAfter?: string;
   remove: (
     entry: TEntry,
     prune: SandboxRegistryPrune,
@@ -82,7 +85,16 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
   using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.prune.registry_read");
   const now = Date.now();
   params.assertCurrent?.();
-  for (const entry of params.entries) {
+  const startAfter = params.startAfter;
+  // Registry rows are name-ordered; resume even if the last attempted row was removed.
+  const start = startAfter
+    ? Math.max(
+        0,
+        params.entries.findIndex((entry) => entry.containerName > startAfter),
+      )
+    : 0;
+  for (let offset = 0; offset < params.entries.length; offset++) {
+    const entry = params.entries[(start + offset) % params.entries.length]!;
     const prune = {
       ...(entry.sessionKey.startsWith("worktree-dependencies:")
         ? { idleHours: 0, maxAgeDays: 0 }
@@ -124,6 +136,7 @@ async function pruneSandboxContainers(
   config: OpenClawConfig,
   guard: WorkspaceStateGuard,
   entries: SandboxRegistryEntry[],
+  cursor: SandboxPruneCursor,
 ) {
   const assertCurrent = guard.beforeLegacyApply;
   let idleStops = 0;
@@ -131,6 +144,7 @@ async function pruneSandboxContainers(
     config,
     assertCurrent,
     entries,
+    startAfter: cursor.afterContainerName,
     stopIdle: (entry, prune, assertPruneCurrent) => {
       if (idleStops >= MAX_IDLE_STOPS_PER_PASS) {
         return Promise.resolve();
@@ -166,9 +180,10 @@ async function pruneSandboxContainers(
               : dockerSandboxBackendManager;
           // Charge attempts, including failures, but not active/protected runtimes.
           idleStops++;
+          cursor.afterContainerName = current.containerName;
           await manager.stopRuntime(current, assertStopCurrent);
           await updateRegistry(
-            { ...current, runtimeState: "stopped" },
+            { ...current, idleStoppedAtLastUsedMs: current.lastUsedAtMs },
             {
               ...guard,
               beforeLegacyApply: assertStopCurrent,
@@ -269,7 +284,10 @@ async function pruneSandboxBrowsers(config: OpenClawConfig, assertCurrent?: () =
 }
 
 /** Coalesced housekeeping belongs to the state owner, not the requesting turn. */
-export async function runSandboxPrune(assertHost: () => void): Promise<void> {
+export async function runSandboxPrune(
+  assertHost: () => void,
+  cursor: SandboxPruneCursor,
+): Promise<void> {
   assertHost();
   const assertLiveHost = await captureSandboxStateOwner();
   const assertCurrent = () => {
@@ -277,12 +295,12 @@ export async function runSandboxPrune(assertHost: () => void): Promise<void> {
     assertLiveHost();
   };
   assertCurrent();
-  await pruneSandboxes(undefined, assertCurrent, assertCurrent);
+  await pruneSandboxes(cursor, undefined, assertCurrent, assertCurrent);
 }
 
 export function scheduleSandboxPrune(assertHost: () => void, request = false): void {
   startSandboxRegistryHousekeeping(
-    () => runSandboxPrune(assertHost),
+    (cursor) => runSandboxPrune(assertHost, cursor),
     (error) => defaultRuntime.error?.(`Sandbox prune failed: ${formatErrorMessage(error)}`),
     undefined,
     request,
@@ -295,12 +313,13 @@ export async function maybePruneSandboxes(
   assertHost?: () => void,
 ) {
   assertCurrent?.();
-  return maybeRunSandboxRegistryHousekeeping(() =>
-    pruneSandboxes(config, assertCurrent, assertHost),
+  return maybeRunSandboxRegistryHousekeeping((cursor) =>
+    pruneSandboxes(cursor, config, assertCurrent, assertHost),
   );
 }
 
 async function pruneSandboxes(
+  cursor: SandboxPruneCursor,
   config?: OpenClawConfig,
   assertCurrent?: () => void,
   assertHost?: () => void,
@@ -323,6 +342,7 @@ async function pruneSandboxes(
       currentConfig,
       { assertHost, beforeLegacyApply: assertCurrent },
       entries,
+      cursor,
     );
     assertCurrent?.();
     phases.mark("attempt.setup.sandbox.prune.browsers");

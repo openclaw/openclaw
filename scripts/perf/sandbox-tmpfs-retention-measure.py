@@ -16,6 +16,11 @@ reported without claiming a performance win from shrinking the capacity limit.
 CPU includes waited CLI children and the container cgroup, separately reported.
 Native allocation volume is not measured; tmpfs occupied bytes are read via df.
 
+Use --persistent --pairs 40 for matched same-policy A/A and counterbalanced A/B
+cycles on fixed containers/workspaces. This removes per-sample tree clone/unlink
+work; restore the same real dependency-store bytes before every stop. All samples,
+including tails, are retained in samples.jsonl with CPU and pressure snapshots.
+
 Example: python3 sandbox-tmpfs-retention-measure.py --root /owned/new-proof
   --before before-allocation.json --after after-allocation.json
   --image localhost/lane2341-node-pnpm:proof
@@ -82,11 +87,109 @@ def cgroup_cpu(directory):
     return int(fields["usage_usec"]) / 1000
 
 
+
+def persistent_matrix(root, source, captures, image, pairs):
+    """Matched A/A and A/B cycles without per-sample 62k-file clone/unlink churn."""
+    fixtures = {}
+    rows = []
+    try:
+        for slot, arm in [("A0", "A"), ("A1", "A"), ("B", "B")]:
+            workspace = root / slot
+            run(["cp", "-a", "--reflink=always", str(source), str(workspace)])
+            capture = captures[arm]
+            argv = list(capture["argv"])
+            argv[argv.index("--name") + 1] = f"tmpfs-persistent-{os.getpid()}-{slot.lower()}"
+            env = {**capture["env"], "CI": "1"}
+            container = engine(*argv, *capture["extraCreateArgs"], "--user", f"{os.getuid()}:{os.getgid()}",
+                "--workdir", "/workspace", "-v", f"{workspace}:/workspace:rw",
+                *sum((["-e", f"{key}={value}"] for key, value in env.items()), []),
+                image, "sleep", "infinity").strip()
+            fixtures[slot] = dict(container=container, workspace=workspace, arm=arm, env=env)
+            engine("start", container)
+            before = mounts(container)
+            if arm == "B":
+                assert {path: mount["capacityBytes"] for path, mount in before.items()} == {
+                    "/tmp": 1024 ** 3, "/var/tmp": 256 * 1024 ** 2,
+                    "/tmp/openclaw-deps": 4 * 1024 ** 3, "/run": 256 * 1024 ** 2}
+            output = engine("exec", container, "pnpm", "install", "--offline", "--no-frozen-lockfile",
+                "--config.optimistic-repeat-install=false", "--store-dir", env["PNPM_CONFIG_STORE_DIR"])
+            # Retain real install-created bytes on disk for identical pre-stop occupancy.
+            engine("exec", container, "cp", "-a", "/tmp/openclaw-deps/.", "/workspace/store-snapshot")
+            dependency = workspace / "node_modules/fixture-dependency/data-0"
+            fixtures[slot].update(before=before, installed=mounts(container),
+                inode=dependency.stat().st_ino, digest=hashlib.sha256(dependency.read_bytes()).hexdigest(),
+                modules=(workspace / "node_modules/.modules.yaml").read_text(),
+                labels=json.loads(engine("inspect", "--format", "{{json .Config.Labels}}", container)),
+                initialOutput=output)
+        # Every pair contains a true same-policy control and a policy comparison.
+        # Reverse both treatment and group order on alternating pairs.
+        for pair in range(1, pairs + 1):
+            groups = [("AA", ["A0", "A1"]), ("AB", ["A0", "B"])]
+            if pair % 2 == 0:
+                groups = [(group, list(reversed(slots))) for group, slots in reversed(groups)]
+            for group, slots in groups:
+                for position, slot in enumerate(slots):
+                    fixture = fixtures[slot]
+                    container, workspace = fixture["container"], fixture["workspace"]
+                    engine("exec", container, "cp", "-R", "/workspace/store-snapshot/.", "/tmp/openclaw-deps")
+                    occupied = mounts(container)
+                    assert occupied == fixture["installed"]
+                    pressure_before = {name: (pathlib.Path(f"/proc/pressure/{name}").read_text()
+                        if pathlib.Path(f"/proc/pressure/{name}").exists() else None)
+                                       for name in ["cpu", "io", "memory"]}
+                    def retire():
+                        state = json.loads(engine("inspect", "--format", "{{json .State}}", container))
+                        assert state["Running"] and not state["Paused"]
+                        engine("stop", "--time", "0", container)
+                    _, stop = measured(retire)
+                    _, restart = measured(lambda: engine("start", container))
+                    assert mounts(container) == fixture["before"]
+                    group_path = cgroup(container)
+                    cpu_before = cgroup_cpu(group_path)
+                    output, warm = measured(lambda: engine("exec", container, "pnpm", "install", "--offline",
+                        "--frozen-lockfile", "--config.optimistic-repeat-install=false",
+                        "--store-dir", fixture["env"]["PNPM_CONFIG_STORE_DIR"]))
+                    warm["guestCpuMs"] = cgroup_cpu(group_path) - cpu_before
+                    dependency = workspace / "node_modules/fixture-dependency/data-0"
+                    assert "recreating" not in output.lower()
+                    assert dependency.stat().st_ino == fixture["inode"]
+                    assert hashlib.sha256(dependency.read_bytes()).hexdigest() == fixture["digest"]
+                    assert (workspace / "node_modules/.modules.yaml").read_text() == fixture["modules"]
+                    assert engine("inspect", "--format", "{{.Id}}", container).strip() == container
+                    assert json.loads(engine("inspect", "--format", "{{json .Config.Labels}}", container)) == fixture["labels"]
+                    row = dict(pair=pair, group=group, position=position, slot=slot, arm=fixture["arm"],
+                        container=container, inode=fixture["inode"], occupied=occupied, stop=stop, restart=restart,
+                        warm=warm, warmOutput=output, hostLoad=list(os.getloadavg()),
+                        pressureBefore=pressure_before, pressureAfter={name: (pathlib.Path(f"/proc/pressure/{name}").read_text()
+                        if pathlib.Path(f"/proc/pressure/{name}").exists() else None)
+                            for name in pressure_before})
+                    rows.append(row)
+                    with (root / "samples.jsonl").open("a") as stream:
+                        stream.write(json.dumps(row) + "\n")
+                    print(json.dumps({key: row[key] for key in ["pair", "group", "slot", "stop", "warm"]}), flush=True)
+        summary = {}
+        for group, slots in [("AA", ["A0", "A1"]), ("AB", ["A0", "B"])]:
+            summary[group] = {}
+            for slot in slots:
+                selected = [row for row in rows if row["group"] == group and row["slot"] == slot]
+                summary[group][slot] = {phase: {metric: {"median": statistics.median(values),
+                    "p95": sorted(values)[math.ceil(.95 * len(values)) - 1]}
+                    for metric in selected[0][phase] for values in [[row[phase][metric] for row in selected]]}
+                    for phase in ["stop", "restart", "warm"]}
+        (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+        (root / "fixtures.json").write_text(json.dumps({slot: {key: str(value) if isinstance(value, pathlib.Path) else value
+            for key, value in fixture.items()} for slot, fixture in fixtures.items()}, indent=2) + "\n")
+    finally:
+        for fixture in fixtures.values():
+            engine("rm", "-f", fixture["container"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("root", "before", "after", "image"):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--pairs", type=int, default=5)
+    parser.add_argument("--persistent", action="store_true", help="Matched same-ID A/A and A/B cycles")
     parser.add_argument("--source", help="Reuse an earlier synthetic source tree")
     args = parser.parse_args()
     assert args.pairs >= 5
@@ -128,6 +231,9 @@ def main():
         "agentDatabase": "Not read by this experiment; no padding unrelated database",
     }
     (root / "identity.json").write_text(json.dumps(identity, indent=2) + "\n")
+    if args.persistent:
+        persistent_matrix(root, source, captures, args.image, args.pairs)
+        return
     rows = []
     series = [("AA1", "A"), ("AA2", "A")]
     for pair in range(1, args.pairs + 1):

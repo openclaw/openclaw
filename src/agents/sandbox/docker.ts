@@ -351,7 +351,6 @@ async function ensureSandboxContainerLifecycle<T>(
     image: params.cfg.docker.image,
     configLabelKind: "Image" as const,
     configHash: expectedHash,
-    ...(registryEntry?.runtimeState === "stopped" ? { runtimeState: "ready" as const } : {}),
   };
   const complete = async (configHash: string | null, currentConfig: boolean) => {
     const allocation = {

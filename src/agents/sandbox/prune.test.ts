@@ -159,6 +159,40 @@ beforeEach(async () => {
 });
 
 describe("maybePruneSandboxes", () => {
+  it("advances past more than a batch of persistently failing runtimes", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const entries: SandboxRegistryEntry[] = Array.from({ length: 70 }, (_, index) =>
+      entry(`idle-${String(index).padStart(2, "0")}`, "main", {
+        lastUsedAtMs: now - 20 * 60 * 1000,
+      }),
+    );
+    configMocks.getRuntimeConfig.mockReturnValue({
+      agents: { defaults: { sandbox: { prune: { idleHours: 0, maxAgeDays: 0 } } } },
+    });
+    registryMocks.readRegistry.mockImplementation(async () => ({ entries }));
+    registryMocks.updateRegistry.mockImplementation(async (updated: SandboxRegistryEntry) => {
+      entries[entries.findIndex((row) => row.containerName === updated.containerName)] = updated;
+    });
+    backendMocks.stopRuntime.mockImplementation(async (row: SandboxRegistryEntry) => {
+      if (row.containerName < "idle-40") {
+        throw new Error("recorded engine unavailable");
+      }
+    });
+    for (let pass = 0; pass < 3; pass++) {
+      const before = backendMocks.stopRuntime.mock.calls.length;
+      await maybePruneSandboxes();
+      expect(backendMocks.stopRuntime.mock.calls.length - before).toBe(32);
+      now += 5 * 60 * 1000;
+    }
+    expect(entries.slice(40).every((row) => row.idleStoppedAtLastUsedMs === row.lastUsedAtMs)).toBe(
+      true,
+    );
+    expect(entries.slice(0, 40).every((row) => row.idleStoppedAtLastUsedMs === undefined)).toBe(
+      true,
+    );
+  });
+
   it("drains idle backlogs in bounded passes without charging protected work or skipping failures", async () => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -178,14 +212,18 @@ describe("maybePruneSandboxes", () => {
     backendMocks.stopRuntime.mockRejectedValueOnce(new Error("engine busy"));
     await maybePruneSandboxes();
     expect(backendMocks.stopRuntime).toHaveBeenCalledTimes(32);
-    expect(entries.filter((row) => row.runtimeState === "stopped")).toHaveLength(31);
+    expect(entries.filter((row) => row.idleStoppedAtLastUsedMs === row.lastUsedAtMs)).toHaveLength(
+      31,
+    );
     await maybePruneSandboxes();
     expect(backendMocks.stopRuntime).toHaveBeenCalledTimes(32);
     now += 5 * 60 * 1000;
     await maybePruneSandboxes();
     expect(backendMocks.stopRuntime).toHaveBeenCalledTimes(36);
-    expect(entries.filter((row) => row.runtimeState === "stopped")).toHaveLength(35);
-    expect(entries[0]!.runtimeState).toBeUndefined();
+    expect(entries.filter((row) => row.idleStoppedAtLastUsedMs === row.lastUsedAtMs)).toHaveLength(
+      35,
+    );
+    expect(entries[0]!.idleStoppedAtLastUsedMs).toBeUndefined();
   });
 
   it("stops idle containers once, retaining their workspace and active runtime custody", async () => {
@@ -236,12 +274,16 @@ describe("maybePruneSandboxes", () => {
     await maybePruneSandboxes();
     expect(backendMocks.stopRuntime).toHaveBeenCalledTimes(2);
     expect(runtime).toMatchObject({
-      runtimeState: "stopped",
+      idleStoppedAtLastUsedMs: runtime.lastUsedAtMs,
       workspaceDir: "/synthetic/persistent-workspace",
     });
     now += 6 * 60 * 1000;
     await maybePruneSandboxes();
     expect(backendMocks.stopRuntime).toHaveBeenCalledTimes(2);
+    runtime = { ...runtime, lastUsedAtMs: now };
+    now += 20 * 60 * 1000;
+    await maybePruneSandboxes();
+    expect(backendMocks.stopRuntime).toHaveBeenCalledTimes(3);
     expect(backendMocks.removeRuntime).not.toHaveBeenCalled();
     expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
   });
