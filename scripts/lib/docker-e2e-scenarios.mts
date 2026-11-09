@@ -462,6 +462,7 @@ export const mainLanes: DockerE2eLane[] = [
   }),
   // Three sequential installed-parent cells share one immutable candidate.
   npmLane("installed-terminal", {
+    command: liveDockerScriptCommand("e2e/installed-terminal-docker.sh"),
     stateScenario: "empty",
     timeoutMs: 50 * 60 * 1000,
     weight: 3,
