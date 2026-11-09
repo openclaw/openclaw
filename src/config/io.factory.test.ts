@@ -148,7 +148,9 @@ describe("config factory writer boundary", () => {
         nextConfig: { ...config, gateway: { ...config.gateway, port: 19002 } },
       }),
     });
-    expect(health()).toEqual(beforeHealth);
+    const acceptedHealth = health();
+    expect(acceptedHealth?.last_known_good_json).not.toBe(beforeHealth?.last_known_good_json);
+    expect(acceptedHealth?.last_observed_suspicious_signature).toBeNull();
     expect(audit()).toContainEqual(
       expect.objectContaining({ event: "config.write", configPath, result: "rename" }),
     );

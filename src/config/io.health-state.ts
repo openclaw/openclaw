@@ -20,6 +20,7 @@ import type {
   ConfigHealthEntryChanges,
   ConfigHealthState,
   ConfigHealthSnapshot,
+  ConfigHealthUpdateResult,
 } from "./io.health-state.types.js";
 import { setBoundedConfigIoWarningEntry } from "./io.state.js";
 
@@ -177,13 +178,18 @@ export function patchConfigHealthEntryToStore(
 
 type ConfigHealthStateStore = Disposable & {
   isCurrent(): boolean;
-  captureContinuation(): ConfigHealthStateStore;
+  captureContinuation(mode?: "replace"): ConfigHealthStateStore;
   read(): Promise<ConfigHealthSnapshot | null>;
-  update(changes: ConfigHealthEntryChanges, previous: ConfigHealthSnapshot): Promise<void>;
+  update(
+    changes: ConfigHealthEntryChanges,
+    previous: ConfigHealthSnapshot,
+    assertEffectCurrent?: () => void,
+  ): Promise<ConfigHealthUpdateResult>;
   updateAfterFileCommit(
     changes: ConfigHealthEntryChanges,
     previous: ConfigHealthSnapshot,
-  ): Promise<void>;
+    assertEffectCurrent?: () => void,
+  ): Promise<ConfigHealthUpdateResult>;
 };
 
 /** Bind one asynchronous observation/recovery to its original shared-state owner. */
@@ -228,7 +234,7 @@ export function captureConfigHealthStateStore(
         throw supersededObservation;
       }
     };
-    const createOperationGuard = () => {
+    const createOperationGuard = (assertEffectCurrent?: () => void) => {
       let guardFailed = false;
       return {
         rethrowIfInvalid: (error: unknown) => {
@@ -243,6 +249,7 @@ export function captureConfigHealthStateStore(
         },
         assertCurrent: () => {
           try {
+            assertEffectCurrent?.();
             assertCurrent();
           } catch (error) {
             guardFailed = true;
@@ -253,7 +260,8 @@ export function captureConfigHealthStateStore(
     };
     const store: ConfigHealthStateStore = {
       isCurrent,
-      captureContinuation: () => captureScope(true),
+      // Replacement retries retain the original database and admission.
+      captureContinuation: (mode) => captureScope(mode !== "replace"),
       [Symbol.dispose]() {
         observations.delete(observation);
       },
@@ -282,12 +290,14 @@ export function captureConfigHealthStateStore(
       async update(
         changes: ConfigHealthEntryChanges,
         previous: ConfigHealthSnapshot,
-      ): Promise<void> {
-        const guard = createOperationGuard();
+        assertEffectCurrent?: () => void,
+      ): Promise<ConfigHealthUpdateResult> {
+        const guard = createOperationGuard(assertEffectCurrent);
+        let dispatched = false;
         try {
           const patch = prepareConfigHealthPatch(changes);
           if (Object.keys(patch).length === 0) {
-            return;
+            return { status: "applied" };
           }
           if ("error" in captured) {
             throw captured.error;
@@ -297,30 +307,44 @@ export function captureConfigHealthStateStore(
           const updatedAtMs = Date.now();
           const applied = await runOpenClawStateWorkerOperation(
             captured.context,
-            (scope) =>
-              scope.execute({
+            (scope) => {
+              guard.assertCurrent();
+              dispatched = true;
+              return scope.execute({
                 type: "config.health.patch",
                 input: { configPath, patch, expected, updatedAtMs },
-              }),
+              });
+            },
             { assertCurrent: guard.assertCurrent },
           );
-          if (applied && observations.has(observation)) {
+          // Acknowledged commit wins even if its observation/database retired afterward.
+          if (applied === true) {
             loggedHealthWriteFailures.delete(databasePath);
+            return { status: "applied" };
           }
+          return {
+            status: applied === false && expected !== undefined ? "conflict" : "unavailable",
+          };
         } catch (error) {
           guard.rethrowIfInvalid(error);
           if (error === supersededObservation) {
-            return;
+            return { status: dispatched ? "unavailable" : "superseded" };
           }
           handleHealthWriteFailure(deps, databasePath, error);
+          return { status: "unavailable" };
         }
       },
-      async updateAfterFileCommit(changes, previous): Promise<void> {
+      async updateAfterFileCommit(
+        changes,
+        previous,
+        assertEffectCurrent,
+      ): Promise<ConfigHealthUpdateResult> {
         try {
-          await store.update(changes, previous);
+          return await store.update(changes, previous, assertEffectCurrent);
         } catch (error) {
           // Ownership and maintenance refusals still propagate after the file commits.
           handleHealthWriteFailure(deps, databasePath, error);
+          return { status: "unavailable" };
         }
       },
     };

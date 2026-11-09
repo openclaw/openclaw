@@ -27,6 +27,7 @@ import { readLatestConfigSnapshotAuditRecord } from "./config-journal-snapshot.j
 import { getConfigValueAtPath, setConfigValueAtPath } from "./config-paths.js";
 import { hashConfigIncludeRaw } from "./includes.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
+import { readConfigHealthStateFromStore } from "./io.health-state.js";
 import {
   createConfigIO as createObservedConfigIO,
   getRuntimeConfigSourceSnapshot,
@@ -2770,6 +2771,11 @@ describe("config io write", () => {
     });
     io.loadConfig();
     expect(warn).toHaveBeenCalledTimes(1);
+    const readHealth = () =>
+      readConfigHealthStateFromStore({ env: process.env, homedir: () => home, logger: console })
+        .entries?.[configPath];
+    const healthBefore = readHealth();
+    expect(healthBefore?.lastKnownGood?.hash).toBe(hashConfigRaw(initialRaw));
 
     try {
       await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
@@ -2781,12 +2787,17 @@ describe("config io write", () => {
 
         await expect(
           writeConfigFile({
-            gateway: { mode: "local", port: 19001 },
+            gateway: {
+              mode: "local",
+              port: 19001,
+              trustedProxies: Array.from({ length: 60 }, (_, i) => "192.0.2." + i),
+            },
             plugins: { entries: { "google-gemini-cli-auth": { enabled: false } } },
           }),
         ).rejects.toThrow(/runtime snapshot refresh failed: synthetic refresh failure/);
 
         await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+        expect(readHealth()).toEqual(healthBefore);
         io.loadConfig();
         expect(warn).toHaveBeenCalledTimes(1);
       });

@@ -73,3 +73,30 @@ export function createConfigBackupReadEffect(
     async: () => deps.fs.promises.readFile(backupPath, "utf-8").catch(unavailable),
   };
 }
+
+export async function commitRecoveryFileIfCurrent(params: {
+  health: ReturnType<typeof captureConfigHealthStateStore>;
+  beforeCommit?: () => void;
+  write: (assertCurrent: () => void) => Promise<unknown>;
+}): Promise<boolean> {
+  let superseded: Error | undefined;
+  const assertObservationCurrent = () => {
+    if (!params.health.isCurrent()) {
+      superseded = new Error("Config recovery observation was superseded");
+      throw superseded;
+    }
+  };
+  try {
+    await params.write(() => {
+      assertObservationCurrent();
+      params.beforeCommit?.();
+      assertObservationCurrent();
+    });
+    return true;
+  } catch (error) {
+    if (superseded && error === superseded) {
+      return false;
+    }
+    throw error;
+  }
+}

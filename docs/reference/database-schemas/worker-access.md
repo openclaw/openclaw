@@ -225,6 +225,16 @@ synchronous proxy-capture SDK remains a deprecated compatibility path; bundled
 callers use the worker APIs. Schemas, stored bytes, retention, and update behavior
 are unchanged.
 
+Config health updates retain the captured database admission and identity across
+replacement observations; retries never reopen against changed environment paths.
+Accepted config writes advance their baseline through the existing conditional
+worker patch. Only confirmed comparison conflicts or pre-effect supersession may
+retry; an unavailable read or uncertain write result stops the transition. A
+confirmed applied result remains applied after observation supersession or database
+retirement. Runtime rollback awaits compensation and restores only the baseline
+and anomaly marker still owned by that write, preserving newer health decisions.
+The existing config-health schema and metadata-less reseed behavior are unchanged.
+
 Placement turn claims and releases execute through the shared-state writer,
 including their coordinator acquisition. Local turns retain durable claims:
 cloud dispatch closes admission and joins their settlement before preparing the

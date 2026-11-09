@@ -204,7 +204,7 @@ export async function finalizeCommittedConfigWrite(params: {
           before: envBeforeCanonicalRead,
           after: envAfterCanonicalRead,
         });
-        rollback?.restoreEffects(() => params.assertPostCommitCurrent?.());
+        await rollback?.restoreEffects(() => params.assertPostCommitCurrent?.());
       }
     } catch (rollbackError) {
       cause = new AggregateError(
