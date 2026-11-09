@@ -59,6 +59,8 @@ export type EmbeddingProviderRuntime = {
   }>;
   inlineQueryTimeoutMs?: number;
   inlineBatchTimeoutMs?: number;
+  /** Positive safe integer cap on simultaneous non-batch indexing jobs; omit for the host default. */
+  inlineIndexConcurrency?: number;
 } & Partial<EmbeddingProviderBatchRuntime>;
 
 /** Provider-owned canonical identity and exact aliases for persisted indexes. */

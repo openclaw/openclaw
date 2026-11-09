@@ -13,6 +13,7 @@ import { createGatewayMetadataObserver } from "../app/gateway-observers.ts";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { createRouteLoaderOptions } from "../test-helpers/route-loader-options.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -25,6 +26,7 @@ import {
   mountPage as mountModelProvidersPage,
   unmountPage as unmountModelProvidersPage,
 } from "./model-providers/model-providers-page.test-support.tsx";
+import { pages as skillsPages } from "./skills/route.ts";
 import { SkillsPage } from "./skills/skills-page.tsx";
 import type { SkillsRouteData } from "./skills/view-types.ts";
 import { createReport, createSkill } from "./skills/view.test-support.ts";
@@ -130,6 +132,7 @@ function contextWithClient(
     agentsList?: unknown;
     ensureList?: () => Promise<unknown>;
     selectedAgentId?: string | null;
+    scopes?: readonly string[];
   } = {},
 ) {
   const source = createApplicationGateway();
@@ -137,7 +140,7 @@ function contextWithClient(
     ...source.gateway.snapshot,
     client,
     phase: options.connected ? "connected" : "stopped",
-    hello: gatewayHelloForMethods([]),
+    hello: gatewayHelloForMethods([], options.scopes),
     sessionKey: "main",
   });
   const subscribe = () => () => undefined;
@@ -181,7 +184,7 @@ function contextWithClient(
       publish({
         ...gateway.snapshot,
         phase: connected ? "connected" : "stopped",
-        hello: connected ? gatewayHelloForMethods([]) : gateway.snapshot.hello,
+        hello: connected ? gatewayHelloForMethods([], options.scopes) : gateway.snapshot.hello,
       });
     },
     reconnect() {
@@ -218,14 +221,14 @@ async function mountUsagePage(
 function skillReport(
   name: string,
   overrides: Parameters<typeof createSkill>[0] = {},
-): NonNullable<SkillsRouteData["report"]> {
+): ReturnType<typeof createReport> {
   return createReport([createSkill({ name, skillKey: name, ...overrides })]);
 }
 
 function mountSkillsPage(
   context: ApplicationContext,
-  report: SkillsRouteData["report"],
   gatewaySnapshot = context.gateway.snapshot,
+  loadedRouteData?: SkillsRouteData,
 ) {
   const provider = createSolidApplicationContextProvider(context);
   const routeData: SkillsRouteData = {
@@ -234,8 +237,8 @@ function mountSkillsPage(
     agents: context.agents,
     selectedAgentId: context.settingsAgentSelection.state.selectedId,
     selectionIntentRevision: context.settingsAgentSelection.intentRevision,
-    report,
     error: null,
+    ...loadedRouteData,
   };
   const mounted = mountSolid(
     () => createComponent(SkillsPage, { routeData, surface: "settings" }),
@@ -377,7 +380,71 @@ it("discards Model Providers work from a replaced source that reuses its client"
   expect(providerNames()).not.toContain("Retired provider");
 });
 
-it("hydrates cloned skill route data and retires verdicts across disconnect and replacement", async () => {
+it.each(["resolve", "reject"])(
+  "adopts the Skills page while its route-prepared inventory read will %s",
+  async (outcome) => {
+    const pending = deferred<ReturnType<typeof skillReport>>();
+    const { client, request } = skillsClient({ "skills.status": () => pending.promise });
+    const context = contextWithClient(client, {
+      connected: true,
+      agentsList: mainAgents,
+      selectedAgentId: "main",
+    });
+    const route = await skillsPages[1].loader!(
+      context,
+      createRouteLoaderOptions({ pathname: "/skills/settings", search: "", hash: "" }),
+    );
+    if ("type" in route) {
+      throw new Error("Expected Skills settings route data");
+    }
+    expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" });
+    const mounted = mountSkillsPage(context, context.gateway.snapshot, route);
+    const input = mounted.find('input[name="skills-filter"]') as HTMLInputElement;
+    input.value = "prepared";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await waitForSolid(() => expect(input.value).toBe("prepared"));
+    expect(input.disabled).toBe(false);
+    expect(mounted.find(".plugins-toolbar .refresh-button")?.getAttribute("aria-busy")).toBe(
+      "true",
+    );
+    expect(mounted.find(".skills-toolbar__status option")?.textContent).toBe("All");
+    expect(mounted.text()).toContain("Loading");
+    expect(mounted.text()).not.toContain("No skills");
+    if (outcome === "resolve") {
+      pending.resolve(skillReport("Prepared skill"));
+      await waitForSolid(() => expect(mounted.text()).toContain("Prepared skill"));
+    } else {
+      pending.reject(new Error("Inventory unavailable"));
+      await waitForSolid(() => expect(mounted.text()).toContain("Inventory unavailable"));
+      expect(mounted.find(".skills-toolbar__status option")?.textContent).toBe("All");
+      expect(mounted.text()).not.toContain("No skills");
+    }
+    expect(mounted.find('input[name="skills-filter"]')).toBe(input);
+    expect(input.value).toBe("prepared");
+    expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(1);
+  },
+);
+
+it("does not prepare Skills inventory without operator read access", async () => {
+  const { client, request } = skillsClient({ "skills.status": () => skillReport("Private skill") });
+  const context = contextWithClient(client, {
+    connected: true,
+    agentsList: mainAgents,
+    selectedAgentId: "main",
+    scopes: ["operator.sessions.read"],
+  });
+  const route = await skillsPages[1].loader!(
+    context,
+    createRouteLoaderOptions({ pathname: "/skills/settings", search: "", hash: "" }),
+  );
+  if ("type" in route) {
+    throw new Error("Expected Skills settings route data");
+  }
+  mountSkillsPage(context, context.gateway.snapshot, route);
+  await waitForSolid(() => expect(request).not.toHaveBeenCalled());
+});
+
+it("loads skills from cloned route scope and retires verdicts across disconnect and replacement", async () => {
   const pending = deferred<{ schema: string; items: unknown[] }>();
   const verdicts = securityVerdicts();
   let verdictRequests = 0;
@@ -391,7 +458,7 @@ it("hydrates cloned skill route data and retires verdicts across disconnect and 
     agentsList: mainAgents,
     selectedAgentId: "main",
   });
-  const mounted = mountSkillsPage(harness, linkedSkillReport(), {
+  const mounted = mountSkillsPage(harness, {
     ...harness.gateway.snapshot,
   });
   await waitForSolid(() =>
@@ -456,7 +523,7 @@ it.each([
     async () => {
       const { client } = skillsClient({ "skills.status": () => skillReport("fresh") });
       const context = agentContext(client);
-      const mounted = mountSkillsPage(context, skillReport("stale"), staleSnapshot(context));
+      const mounted = mountSkillsPage(context, staleSnapshot(context));
       return mounted.text;
     },
   ],
@@ -476,7 +543,7 @@ it("discards an agent list from a replaced skills source that reuses its client"
     "skills.status": () => skillReport("Replacement agent skill"),
   });
   const context = contextWithClient(client, { connected: true, ensureList });
-  const mounted = mountSkillsPage(context, null, staleSnapshot(context));
+  const mounted = mountSkillsPage(context, staleSnapshot(context));
   await waitForSolid(() => expect(ensureList).toHaveBeenCalled());
   mounted.replaceContext(
     contextWithClient(client, {

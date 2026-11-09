@@ -9,14 +9,11 @@ import type { MemoryWikiPluginConfig } from "./config.js";
 import { loadMemoryWikiVaultIdentity, loadMemoryWikiValidatedVaultIdentity } from "./log.js";
 import { extractWikiLinks } from "./markdown-links.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
-
 const { createVault: createTestVault } = createMemoryWikiTestHarness();
 const createVault = (config?: MemoryWikiPluginConfig) =>
   createTestVault({ initialize: true, config });
-
 describe("compileMemoryWikiVault", () => {
   afterEach(() => vi.restoreAllMocks());
-
   it("keeps changed imports compile-required when auto-compile is disabled", async () => {
     const { config, page, read } = await createVault({
       ingest: { autoCompile: false },
@@ -32,14 +29,12 @@ describe("compileMemoryWikiVault", () => {
     await compileMemoryWikiVault(config);
     const snapshotBefore = await loadMemoryWikiCompiledCache(config);
     const indexBefore = await read("index.md");
-
     await writeSource("after");
     const refresh = await refreshMemoryWikiIndexesAfterImport({
       config,
       syncResult: { importedCount: 0, updatedCount: 1, removedCount: 0 },
     });
     const snapshotAfter = await loadMemoryWikiCompiledCache(config);
-
     expect(refresh).toMatchObject({ refreshed: false, reason: "auto-compile-disabled" });
     expect(JSON.stringify(snapshotBefore?.dashboards)).toContain("before");
     expect(snapshotAfter).toEqual(snapshotBefore);
@@ -49,7 +44,6 @@ describe("compileMemoryWikiVault", () => {
     });
     await expect(read("index.md")).resolves.toBe(indexBefore);
   });
-
   it.each(["Plain", "[x]", "[x", "]", "a\\", "`C:\\x[y]`"])(
     "preserves source bytes and native links: %s",
     async (title) => {
@@ -71,7 +65,6 @@ describe("compileMemoryWikiVault", () => {
       ] as const;
       await Promise.all(emptyPages.map(([file, bytes]) => write(file, bytes)));
       const preserved = await compileMemoryWikiVault(config, { sourcePageWrites: "preserve" });
-
       await expect(read(relativePath)).resolves.toBe(source);
       const index = await read("index.md");
       expect(extractWikiLinks(index, "index.md")).toContain(relativePath);
@@ -90,7 +83,6 @@ describe("compileMemoryWikiVault", () => {
       }
     },
   );
-
   it("rejects directory-index syntax-error frontmatter without changing its bytes", async () => {
     const { config, write, read } = await createVault({ render: { createDashboards: false } });
     const original =
@@ -99,10 +91,8 @@ describe("compileMemoryWikiVault", () => {
     await expect(compileMemoryWikiVault(config)).rejects.toThrow("Unexpected scalar");
     await expect(read("sources/index.md")).resolves.toBe(original);
   });
-
   it("bounds concurrent page reads and stops the queue after abort", async () => {
     const { rootDir, config, page } = await createVault();
-
     for (let index = 0; index < 24; index += 1) {
       await page(`sources/page-${index}.md`, { title: `Page ${index}` });
     }

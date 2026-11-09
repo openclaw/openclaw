@@ -25,6 +25,7 @@ const DERIVED_WORKSPACE_ROOT_PATHS = [
   ".cache/openclaw/bun",
   ".cache/ms-playwright",
   ".local/share/pnpm/store",
+  "artifacts/task-environment/local/share/pnpm/store",
   // pnpm falls back here for projects beneath the protected .openclaw self-bind.
   PNPM_FALLBACK_STORE_ROOT_PATH,
   // Managed binary installers keep re-downloadable tools beneath the state directory.
@@ -59,6 +60,25 @@ const DERIVED_WORKSPACE_SEGMENT_PATTERN = `(?:^|/)(?:${[
   ...DERIVED_WORKSPACE_FILE_SUFFIXES.map((suffix) => `[^/]*${suffix.replaceAll(".", "\\.")}`),
   WORKER_ATTACHMENT_DIRECTORY_PATTERN,
 ].join("|")})(?![^/])`;
+
+// Git ignores make only known build roots disposable, never arbitrary authored
+// reports. The Bun staging owner downloads its runtime under .cache/openclaw-bun.
+export function isIgnoredWorkspaceBuildOutput(relative: string, ignored: ReadonlySet<string>) {
+  const buildOutput = ["dist", ".cache/openclaw-bun"].some(
+    (root) => relative === root || relative.startsWith(root + "/"),
+  );
+  if (!buildOutput) {
+    return false;
+  }
+  let candidate = relative;
+  while (candidate) {
+    if (ignored.has(candidate) || ignored.has(candidate + "/")) {
+      return true;
+    }
+    candidate = candidate.slice(0, Math.max(0, candidate.lastIndexOf("/")));
+  }
+  return false;
+}
 
 // Derived caches and runtime attachment copies are not workspace edits. Keep
 // sync, manifest, divergence, apply, and recovery on this single predicate.

@@ -136,7 +136,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   }
 
   close(): void {
-    if (this.closed) {
+    if (this.closed || !this.ensureCurrent()) {
       return;
     }
     this.closed = true;
@@ -263,7 +263,12 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
       };
 
       const send = (payload: Buffer | string): boolean => {
-        if (!socket || !ownsSocket() || socket.readyState !== WEBSOCKET_OPEN) {
+        if (
+          !socket ||
+          !ownsSocket() ||
+          socket.readyState !== WEBSOCKET_OPEN ||
+          !this.ensureCurrent()
+        ) {
           return false;
         }
         const payloadBytes =
@@ -283,10 +288,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           if (!ownsSocket()) {
             return;
           }
-          this.closed = true;
-          this.cancelConnecting?.();
-          this.reconnectSupervisor.cancel();
-          this.forceClose(socket);
+          this.abortCurrent();
         },
         failConnect: (error) => {
           if (ownsSocket()) {
@@ -322,7 +324,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           if (settled) {
             return;
           }
-          if (!ownsGeneration() || this.closed) {
+          if (!ownsGeneration() || this.closed || !this.ensureCurrent()) {
             finishClosedConnect();
             return;
           }
@@ -510,6 +512,26 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     this.queuedAudio = [];
     this.queuedAudioHead = 0;
     this.queuedBytes = 0;
+  }
+
+  private ensureCurrent(): boolean {
+    try {
+      this.options.callbacks.assertCurrent?.();
+      return true;
+    } catch (error) {
+      // Queued audio and reconnects can outlive the request that admitted them.
+      this.abortCurrent();
+      this.emitError(error);
+      return false;
+    }
+  }
+
+  private abortCurrent(): void {
+    this.closed = true;
+    this.cancelConnecting?.();
+    this.reconnectSupervisor.cancel();
+    this.clearQueuedAudio();
+    this.forceClose();
   }
 
   private forceClose(socket: WebSocket | null | undefined = this.ws): void {

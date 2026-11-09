@@ -383,6 +383,14 @@ function useGatewayLogFixture() {
 }
 
 describe("kitchen-sink RPC isolated state", () => {
+  it("loads the branch-recorded fixture from the actual compiled consumer", async () => {
+    const compiled = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.kitchenSinkRpcWalk);
+    expect(compiled.pathname).toContain("/dist/legacy-finalizer/");
+    const result = await runCommand(process.execPath, [fileURLToPath(compiled), "--help"], {
+      env: { ...process.env, OPENCLAW_KITCHEN_SINK_NPM_SPEC: "" },
+    });
+    expect(result.stdout).toContain("branch-recorded npm version");
+  });
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it.for([

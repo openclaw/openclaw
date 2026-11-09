@@ -13,7 +13,37 @@ import { WIKI_PAGE_GROUPS } from "./wiki-page-kinds.js";
 
 const READ_PAGE_SUMMARIES_CONCURRENCY = 16;
 
-async function readPageSummaryEntries(rootDir: string, filePaths: string[], signal?: AbortSignal) {
+function scanPageSummary(params: Parameters<typeof scanWikiPageSummary>[0]) {
+  const scan = scanWikiPageSummary(params);
+  if (scan.status !== "valid") {
+    return { scan, importInsight: null, overviewItem: null };
+  }
+  const { parsed, ...summaryScan } = scan;
+  return {
+    scan: summaryScan,
+    importInsight: projectMemoryWikiImportInsight(scan.page, parsed),
+    overviewItem: projectMemoryWikiOverviewItem(scan.page, parsed.body),
+  };
+}
+
+// Keep at most 16 MiB of projections from each of the four most recent vaults.
+// Disk reads and source hashing still run on every pass, including cache hits.
+const pageSummaryCaches = new Map<string, Map<string, { digest: Buffer; summary: string }>>();
+
+async function readPageSummaryEntries(
+  rootDir: string,
+  filePaths: string[],
+  signal?: AbortSignal,
+  retainUnscanned = false,
+) {
+  const previous = pageSummaryCaches.get(rootDir);
+  const next = retainUnscanned
+    ? new Map(previous)
+    : new Map<string, { digest: Buffer; summary: string }>();
+  let cachedBytes = [...next.values()].reduce(
+    (total, entry) => total + Buffer.byteLength(entry.summary),
+    0,
+  );
   const readResult = await runTasksWithConcurrency({
     tasks: filePaths.map((relativePath) => async () => {
       signal?.throwIfAborted();
@@ -28,18 +58,24 @@ async function readPageSummaryEntries(rootDir: string, filePaths: string[], sign
       await yieldToEventLoop();
       signal?.throwIfAborted();
       const contentDigest = createHash("sha256").update(bytes).digest();
-      const scan = scanWikiPageSummary({ absolutePath, relativePath, raw: bytes.toString("utf8") });
-      if (scan.status !== "valid") {
-        return { relativePath, contentDigest, scan, importInsight: null, overviewItem: null };
+      const candidate = previous?.get(relativePath);
+      const cached = candidate?.digest.equals(contentDigest) ? candidate : undefined;
+      const result: ReturnType<typeof scanPageSummary> = cached
+        ? JSON.parse(cached.summary)
+        : scanPageSummary({ absolutePath, relativePath, raw: bytes.toString("utf8") });
+      // Serialization detaches substrings from large source pages and keeps
+      // mutable compile results separate from the retained cache.
+      const summary = cached?.summary ?? JSON.stringify(result);
+      const replaced = next.get(relativePath);
+      if (replaced) {
+        cachedBytes -= Buffer.byteLength(replaced.summary);
+        next.delete(relativePath);
       }
-      const { parsed, ...summaryScan } = scan;
-      return {
-        relativePath,
-        contentDigest,
-        scan: summaryScan,
-        importInsight: projectMemoryWikiImportInsight(scan.page, parsed),
-        overviewItem: projectMemoryWikiOverviewItem(scan.page, parsed.body),
-      };
+      cachedBytes += Buffer.byteLength(summary);
+      if (cachedBytes <= 16 * 1024 * 1024) {
+        next.set(relativePath, { digest: contentDigest, summary });
+      }
+      return { relativePath, contentDigest, ...result };
     }),
     limit: READ_PAGE_SUMMARIES_CONCURRENCY,
     errorMode: "stop",
@@ -48,6 +84,11 @@ async function readPageSummaryEntries(rootDir: string, filePaths: string[], sign
     throw readResult.firstError;
   }
   signal?.throwIfAborted();
+  pageSummaryCaches.delete(rootDir);
+  pageSummaryCaches.set(rootDir, next);
+  if (pageSummaryCaches.size > 4) {
+    pageSummaryCaches.delete(pageSummaryCaches.keys().next().value!);
+  }
 
   return readResult.results;
 }
@@ -99,6 +140,7 @@ export async function refreshPageSummaries(
       ),
     ],
     signal,
+    true,
   );
   const entries = new Map(previous.entries.map((entry) => [entry.relativePath, entry]));
   for (const entry of replacements) {

@@ -1,0 +1,3 @@
+# Canonical auth/auth_permanent guidance through terminal recording and durable history.
+# Extends the existing raw-401 privacy regression: 57 added minus 21 removed test lines.
+36

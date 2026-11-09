@@ -32,20 +32,20 @@ Completion releases the worker; reset and deletion prevent reuse.
 
 ## Native agents in the model picker
 
-Install GitHub Copilot CLI, Kilo Code, OpenCode, Pi ACP, or Qwen Code and complete its login on the Gateway host,
+Install GitHub Copilot CLI, Grok Build, Kilo Code, OpenCode, Pi ACP, Qoder CLI, or Qwen Code and complete its login on the Gateway host,
 then refresh the model catalog. Choose one of its models to use that agent in ordinary chat.
 The agent owns its credentials; OpenClaw keeps the conversation transcript and asks for approval
 when the agent requests permission. Pi does not request tool approval unless an extension adds it.
 The same selection works in the web app and channels.
 
-The runtime and provider IDs are `acp-copilot`, `acp-kilocode`, `acp-opencode`, `acp-pi`, and `acp-qwen`.
+The runtime and provider IDs are `acp-copilot`, `acp-grok-build`, `acp-kilocode`, `acp-opencode`, `acp-pi`, `acp-qoder`, and `acp-qwen`.
 Each model keeps its native ID, including any slashes. Configured ACP agent commands take
 precedence over installed defaults. Catalog refresh uses installed commands and does not install
 missing agents. Explicit ACP commands and bindings keep their existing agent names.
 
 Models settings lists detected agents on the Gateway machine. Turn each native agent on or off
-there, or set `plugins.entries.acpx.config.nativeAgents.<id>` to `false` (`copilot`, `kilocode`,
-`opencode`, `pi`, or `qwen`). Missing flags are enabled. Disabling an agent prevents new native turns
+there, or set `plugins.entries.acpx.config.nativeAgents.<id>` to `false` (`copilot`, `grok-build`, `kilocode`,
+`opencode`, `pi`, `qoder`, or `qwen`). Missing flags are enabled. Disabling an agent prevents new native turns
 and catalog discovery without interrupting a running turn or deleting history. Classic ACP
 commands and `acp.allowedAgents` keep their existing behavior. Detection checks installed
 executables; it does not prove that an agent is logged in or can serve a model.
@@ -56,12 +56,15 @@ configured BYOK providers remain CLI-owned and can incur separate API charges; O
 not select a BYOK route for it. See the
 [Copilot setup and billing notes](https://docs.openclaw.ai/tools/acp-agents-setup#github-copilot-cli-in-native-chat).
 
+Grok Build uses the installed `grok agent stdio` command and its own login and model catalog.
+See [Grok Build setup](https://docs.openclaw.ai/tools/acp-agents-setup#grok-build-in-native-chat).
+
 Native picker runtimes run on the Gateway host and use the native app's permissions.
 OpenClaw checks that execution choice before dispatching a chat turn; ACP runners do not
 implement OpenClaw sandboxing or workspace-only filesystem confinement.
 
 When optional chat restrictions cannot be enforced, an administrator can choose
-**Continue for this chat** to use the native app's permissions. This grants Full Access
+**Continue for this session** to use the native app's permissions. This grants Full Access
 and turns off optional sandboxing for that chat only; agent-wide and global settings
 stay unchanged. After a refused message, confirmation retries that message once.
 Confirming a model selection without a pending message does not send anything.
@@ -76,6 +79,11 @@ delegated filesystem writes do not encounter a second ACPX terminal approval gat
 Classic ACP sessions keep their configured `permissionMode`. The ACP client's
 delegated filesystem remains rooted at its session cwd; this is not a sandbox for
 the native process's own filesystem access.
+
+Qoder uses the pinned `qodercli --acp` launcher. Make `qodercli` available on `PATH`
+for the Gateway's OS account. Qoder owns its login, account model catalog, custom
+providers, and billing. See the
+[Qoder setup notes](https://docs.openclaw.ai/tools/acp-agents-setup#qoder-cli-in-native-chat).
 
 Catalog refresh closes its local connection. The native agent owns any history it creates.
 Reset and deletion close the local session and prevent its reuse, including after a Gateway restart.

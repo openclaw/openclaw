@@ -85,8 +85,13 @@ export async function sanitizeSessionMessagesImages(
       continue;
     }
     const content = (Array.isArray(msg.content) ? msg.content : []) as ContentBlock[];
+    // User and tool results can share frozen content, but only user text gets a placeholder.
     const policy =
-      msg.role === "assistant" ? assistantPolicy | (msg.stopReason === "error" ? 2 : 0) : 0;
+      msg.role === "assistant"
+        ? assistantPolicy | (msg.stopReason === "error" ? 2 : 0)
+        : msg.role === "toolResult"
+          ? 16
+          : 0;
     const cache = (imageFreeReplayContent[policy] ??= new WeakMap());
     let nextContent = cache.get(content);
     if (!nextContent) {
@@ -98,9 +103,10 @@ export async function sanitizeSessionMessagesImages(
         // Signed empty Responses text still occupies an ordered provider input item.
         nextContent = await sanitizeImages(dropEmptyTextBlocks(stripped, true));
       } else {
-        nextContent = dropEmptyTextBlocks(await sanitizeImages(content));
+        const sanitized = await sanitizeImages(content);
+        nextContent = msg.role === "toolResult" ? sanitized : dropEmptyTextBlocks(sanitized);
       }
-      if (msg.role !== "assistant" && nextContent.length === 0) {
+      if (msg.role === "user" && nextContent.length === 0) {
         nextContent = [{ type: "text", text: EMPTY_CONTENT_PLACEHOLDER }];
       }
       if (

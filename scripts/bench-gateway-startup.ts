@@ -73,6 +73,7 @@ import {
   writePluginFixtures,
   waitForInitialProbe as waitForProbe,
 } from "./lib/gateway-bench-runtime.ts";
+import { summarizeGatewayModuleLoads } from "./lib/gateway-startup-module-counts.mjs";
 import { selectSlowStartupTraceDurations } from "./lib/gateway-startup-trace-ranking.js";
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
@@ -98,7 +99,16 @@ type GatewayBenchCase = {
   runByDefault?: boolean;
 };
 
+type ExitListenerSnapshot = {
+  peak: number;
+  current: number;
+  defaultLimit: number;
+  registrations: { name: string; stack: string; count: number; removed: boolean }[];
+  warnings: { name: string; message: string; stack: string }[];
+};
+
 type GatewaySample = {
+  exitListeners?: ExitListenerSnapshot;
   pluginMigration?: { total: number; completed: number; warnings: number };
   publicationRecovery?: { startedAtMs: number; releasedAtMs: number; delayMs: number };
   publicationApi?: {
@@ -126,6 +136,8 @@ type GatewaySample = {
   healthz: InitialProbeResult;
   heapProfilePath?: string;
   snapshotCounts?: { directories: number; files: number; bytes: number; processes: number };
+  moduleCounts?: ReturnType<typeof summarizeGatewayModuleLoads>;
+  moduleCountsAtHttpListen?: ReturnType<typeof summarizeGatewayModuleLoads>;
   httpListenLogLine: string | null;
   httpListenLogMs: number | null;
   hostLoadBefore: number[];
@@ -152,6 +164,8 @@ type CliOptions = GatewayBenchRuntimeOptions & {
   cases: GatewayBenchCase[];
   cpuProfDir?: string;
   entry: string;
+  exitListeners: boolean;
+  assertExitListeners: boolean;
   heapProfDir?: string;
   installedCohort?: string;
   installedChild: boolean;
@@ -164,6 +178,7 @@ type CliOptions = GatewayBenchRuntimeOptions & {
   fixtureRoot?: string;
   seedOnly: boolean;
   snapshotCounts: boolean;
+  moduleCounts: boolean;
   agentDatabaseMib: number;
   agentGateDelayMs: number;
   startAt?: number;
@@ -185,6 +200,9 @@ const BOOLEAN_FLAGS = new Set([
   "--seed-only",
   "--team-scale",
   "--snapshot-counts",
+  "--module-counts",
+  "--exit-listeners",
+  "--assert-exit-listeners",
 ]);
 const VALUE_FLAGS = new Set([
   "--case",
@@ -459,6 +477,8 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       "--cpu-prof-dir",
       "--heap-prof-dir",
       "--timeout-ms",
+      "--exit-listeners",
+      "--assert-exit-listeners",
     ]) {
       if (argv.includes(flag)) {
         throw new CliArgumentError(`${flag} is not supported with --installed-cohort`);
@@ -543,10 +563,12 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     const value: unknown = JSON.parse(readFileSync(bundledPluginFixturePath, "utf8"));
     if (
       !isRecord(value) ||
-      Object.keys(value).some((key) => !["plugins", "models", "tools", "channels"].includes(key))
+      Object.keys(value).some(
+        (key) => !["plugins", "models", "tools", "channels", "secrets"].includes(key),
+      )
     ) {
       throw new CliArgumentError(
-        "--bundled-plugin-fixture may configure only plugins, models, tools, and channels",
+        "--bundled-plugin-fixture may configure only plugins, models, tools, channels, and secrets",
       );
     }
     const validated = validateConfigObjectRaw(value);
@@ -567,8 +589,8 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
         "--bundled-plugin-fixture requires 1–44 unique plugins.allow IDs and no plugins.load paths",
       );
     }
-    const { plugins, models, tools, channels } = validated.config;
-    cases = [{ ...cases[0], bundledPluginFixture: { plugins, models, tools, channels } }];
+    const { plugins, models, tools, channels, secrets } = validated.config;
+    cases = [{ ...cases[0], bundledPluginFixture: { plugins, models, tools, channels, secrets } }];
   }
   if (
     cases[0]?.pluginMigrationFixture &&
@@ -582,6 +604,8 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     cpuProfDir: flags.get("--cpu-prof-dir")?.[0],
     entry: resolveGatewayBenchEntry(flags.get("--entry")?.[0], DEFAULT_ENTRY),
     heapProfDir: flags.get("--heap-prof-dir")?.[0],
+    exitListeners: flags.has("--exit-listeners") || flags.has("--assert-exit-listeners"),
+    assertExitListeners: flags.has("--assert-exit-listeners"),
     installedCohort,
     installedChild,
     installedCpuDiagnostic,
@@ -593,6 +617,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     fixtureRoot: flags.get("--fixture-root")?.[0],
     seedOnly: flags.has("--seed-only"),
     snapshotCounts: flags.has("--snapshot-counts"),
+    moduleCounts: flags.has("--module-counts"),
     agentDatabaseMib: parseNonNegativeInt(
       flags.get("--agent-database-mib")?.[0],
       512,
@@ -626,6 +651,8 @@ Options:
   --timeout-ms <ms>    Per-run timeout (default: ${DEFAULT_TIMEOUT_MS})
   --cpu-prof-dir <dir> Write one V8 CPU profile per run
   --heap-prof-dir <dir> Sample main-thread allocations through /readyz, including collected objects
+  --exit-listeners     Trace every main-thread exit registration and warning through startup
+  --assert-exit-listeners Fail if startup exceeds the default exit-listener limit (implies tracing)
   --installed-cohort <path> Measure one fresh installed startup and eight retained-state restarts
   --installed-cpu-diagnostic Profile one established startup after an unprofiled fresh prime; requires --installed-cohort
   --output <path>      Write machine-readable JSON to a file
@@ -633,8 +660,9 @@ Options:
   --help, -h           Show this text
   --fixture-root <path> Prepared teamBoot or slowAgentDatabase fixture (requires --runs 1 --warmup 0)
   --snapshot-counts   Count private SQLite staging directories/bytes and retain full Gateway output
+  --module-counts     Count loaded module files at listener log and completion (diagnostic pass)
   --seed-only         Create a new --fixture-root without launching a Gateway
-  --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels config for teamBoot
+  --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels/secrets config for teamBoot
   --plugin-migration-fixture <status> Seed a pending or deferred config-only teamBoot obligation
   --team-scale                   Seed 46 plugins, 12 GiB shared/35 GiB agent data and 62k workspace files
   --publication-git-delay-ms <n> Seed one pending teamBoot publication with a slow local Git read (1–30000)
@@ -685,7 +713,10 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
   };
 }
 
-function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
+function collectResultFailures(
+  results: CaseResult[],
+  assertExitListeners = false,
+): BenchmarkFailure[] {
   const failures: BenchmarkFailure[] = [];
   for (const result of results) {
     result.samples.forEach((sample, index) => {
@@ -738,6 +769,17 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
         }
         if (sample.integrityGateMs?.["gate-passed"] === undefined) {
           missing.push("full integrity scan");
+        }
+      }
+      if (assertExitListeners) {
+        if (!sample.exitListeners) {
+          missing.push("exit-listener capture");
+        } else if (sample.exitListeners.peak > sample.exitListeners.defaultLimit) {
+          failures.push({
+            id: result.id,
+            reason: `exit listeners peaked at ${sample.exitListeners.peak} (default limit ${sample.exitListeners.defaultLimit})`,
+            sampleIndex: index + 1,
+          });
         }
       }
       if (missing.length > 0) {
@@ -1918,13 +1960,54 @@ async function captureStartupHeapProfile(
   });
 }
 
+async function captureStartupExitListeners(
+  child: ChildProcess,
+  timeoutMs: number,
+): Promise<ExitListenerSnapshot> {
+  return await new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.off("message", onMessage);
+      child.off("exit", onExit);
+      child.off("error", onError);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onExit = () => onError(new Error("Gateway exited before exit-listener capture"));
+    // The benchmark preload owns this IPC response.
+    const onMessage = (message: { type?: string; exitListeners?: ExitListenerSnapshot }) => {
+      if (message?.type !== "openclaw-startup-exit-listeners:captured" || !message.exitListeners) {
+        return;
+      }
+      cleanup();
+      resolve(message.exitListeners);
+    };
+    const timer = setTimeout(
+      () => onError(new Error("Exit-listener capture timed out")),
+      timeoutMs,
+    );
+    child.on("message", onMessage);
+    child.once("exit", onExit);
+    child.once("error", onError);
+    child.send({ type: "openclaw-startup-exit-listeners:capture" }, (error) => {
+      if (error) {
+        onError(error);
+      }
+    });
+  });
+}
+
 async function runGatewaySample(
   options: GatewayBenchRuntimeOptions & {
     benchCase: GatewayBenchCase;
     cpuProfDir?: string;
     entry: string;
     heapProfDir?: string;
+    exitListeners?: boolean;
     snapshotCounts?: boolean;
+    moduleCounts?: boolean;
     sampleIndex: number;
     timeoutMs: number;
     fixtureRoot?: string;
@@ -1989,6 +2072,15 @@ async function runGatewaySample(
       env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --import=${observer}`.trim();
     }
     const agentRecoveryMs: Record<string, number> = {};
+    const moduleCountPath = options.moduleCounts
+      ? path.join(root, "module-counts.jsonl")
+      : undefined;
+    if (moduleCountPath) {
+      writeFileSync(moduleCountPath, "");
+      env.OPENCLAW_BENCH_MODULE_COUNTS = moduleCountPath;
+      const observer = new URL("./lib/gateway-startup-module-counts.mjs", import.meta.url).href;
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --import=${observer}`.trim();
+    }
     const integrityGateMs: Record<string, number> = {};
     let agentDatabaseAdmissionErrors = 0;
     let pluginMigrationWarnings = 0;
@@ -2017,6 +2109,7 @@ async function runGatewaySample(
     let gatewayReadyLogMs: number | null = null;
     let httpListenLogLine: string | null = null;
     let httpListenLogMs: number | null = null;
+    let moduleCountsAtHttpListen: ReturnType<typeof summarizeGatewayModuleLoads> | undefined;
     let childExited = false;
     let heapProfilePath: string | undefined;
     let child: ChildProcess | undefined;
@@ -2024,6 +2117,13 @@ async function runGatewaySample(
 
     try {
       const nodeOptions = [
+        ...(options.exitListeners
+          ? [
+              "--trace-warnings",
+              "--import",
+              fileURLToPath(new URL("./lib/gateway-startup-exit-listeners.mjs", import.meta.url)),
+            ]
+          : []),
         ...(options.heapProfDir
           ? [
               "--import",
@@ -2044,7 +2144,12 @@ async function runGatewaySample(
         cwd: process.cwd(),
         detached: process.platform !== "win32",
         env,
-        stdio: ["pipe", "pipe", "pipe", ...(options.heapProfDir ? ["ipc" as const] : [])],
+        stdio: [
+          "pipe",
+          "pipe",
+          "pipe",
+          ...(options.heapProfDir || options.exitListeners ? ["ipc" as const] : []),
+        ],
       });
       try {
         await once(child, "spawn");
@@ -2087,6 +2192,11 @@ async function runGatewaySample(
         if (readyLogKind === "http-listen" && httpListenLogMs == null) {
           httpListenLogMs = nowMs;
           httpListenLogLine = line;
+          if (moduleCountPath) {
+            moduleCountsAtHttpListen = summarizeGatewayModuleLoads(
+              readFileSync(moduleCountPath, "utf8"),
+            );
+          }
         }
         if (readyLogKind === "gateway-ready" && gatewayReadyLogMs == null) {
           gatewayReadyLogMs = nowMs;
@@ -2127,7 +2237,7 @@ async function runGatewaySample(
       const [healthz, readyz, firstSessionRpc] = await Promise.all([
         healthzProbe,
         probe("/readyz").then(async (readiness) => {
-          if (readiness.status === 200 && options.heapProfDir) {
+          if (readiness.status === 200 && options.heapProfDir && !options.exitListeners) {
             heapProfilePath = await captureStartupHeapProfile(
               startedChild,
               options.heapProfDir,
@@ -2194,7 +2304,9 @@ async function runGatewaySample(
       // Compare CPU/RSS after the same optional startup work, even when publication
       // recovery overlaps that work on only one side of the comparison.
       const postReadyCompletion =
-        publicationMarker || options.benchCase.publicationApiDelayMs !== undefined
+        publicationMarker ||
+        options.benchCase.publicationApiDelayMs !== undefined ||
+        options.exitListeners
           ? await Promise.all(
               ["post-ready.startup-maintenance", "post-ready.gateway-data.plugins"].map((phase) =>
                 waitForStartupTracePhase({
@@ -2225,7 +2337,24 @@ async function runGatewaySample(
       const cpuMs =
         cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
       const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, completedAt - startAt);
+      if (options.heapProfDir && options.exitListeners && !childExited) {
+        heapProfilePath = await captureStartupHeapProfile(
+          startedChild,
+          options.heapProfDir,
+          Math.max(1, deadlineAt - performance.now()),
+        );
+      }
+      const exitListeners =
+        options.exitListeners && !childExited
+          ? await captureStartupExitListeners(
+              startedChild,
+              Math.max(1, deadlineAt - performance.now()),
+            )
+          : undefined;
       const shutdownStartedAt = performance.now();
+      const moduleCounts = moduleCountPath
+        ? summarizeGatewayModuleLoads(readFileSync(moduleCountPath, "utf8"))
+        : undefined;
       let shutdownForced = false;
       const exit = await stopChild(startedChild, {
         ...(options.benchCase.id === "teamBoot" ? { teardownGraceMs: 30_000 } : {}),
@@ -2251,6 +2380,8 @@ async function runGatewaySample(
             .map((line) => JSON.parse(line))
         : [];
       return {
+        ...(moduleCounts ? { moduleCounts } : {}),
+        ...(moduleCountsAtHttpListen ? { moduleCountsAtHttpListen } : {}),
         ...(snapshotCountPath
           ? {
               snapshotCounts: {
@@ -2295,6 +2426,7 @@ async function runGatewaySample(
         gatewayReadyLogMs,
         healthz,
         ...(heapProfilePath ? { heapProfilePath } : {}),
+        ...(exitListeners ? { exitListeners } : {}),
         httpListenLogLine,
         httpListenLogMs,
         hostLoadBefore,
@@ -2325,7 +2457,9 @@ async function runCase(
     cpuProfDir?: string;
     entry: string;
     heapProfDir?: string;
+    exitListeners?: boolean;
     snapshotCounts?: boolean;
+    moduleCounts?: boolean;
     runs: number;
     timeoutMs: number;
     warmup: number;
@@ -2522,7 +2656,7 @@ async function main() {
     }
   }
 
-  const failures = collectResultFailures(results);
+  const failures = collectResultFailures(results, options.assertExitListeners);
   if (failures.length > 0) {
     printBenchmarkFailures(failures);
     process.exitCode = 1;

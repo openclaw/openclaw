@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
+import { requireGit } from "../../agents/worktrees/git.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
@@ -11,7 +12,10 @@ import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { readWorkspaceGitEntry, writeWorkspaceGitInput } from "./workspace-git-input.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
 import { workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
-import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
+import {
+  parseWorkerWorkspaceManifest,
+  type WorkerWorkspaceManifest,
+} from "./workspace-manifest.js";
 import { manifestFor } from "./workspace-recovery.test-support.js";
 import { STAGED_RESULT_MESSAGE } from "./workspace-result-inventory.js";
 import {
@@ -30,6 +34,7 @@ const lock = ".artifacts/dist-artifacts.lock/owner.json";
 const packageCaches = [
   ".openclaw/tmp/toolchain/node/bin/node",
   ".local/share/pnpm/store/v11/files/10/package-content",
+  "artifacts/task-environment/local/share/pnpm/store/v11/files/10/package-content",
   ".openclaw/.pnpm-store/v11/files/10/package-content",
   ".cache/openclaw/bun/pinned/linux-x64/bin/bun",
   ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome",
@@ -132,9 +137,7 @@ export async function proveNestedGitWorkspaceRecovery(owner: LocalWorkspaceOwner
   const commit = await runGit(["commit-tree", resultTree], message(after.ref));
   await runGit(["update-ref", ref, commit]);
   expect(await readStagedWorkerWorkspaceResult(canonical, ref)).toMatchObject({
-    baseManifestRaw: before.raw,
     baseManifestRef: before.ref,
-    currentManifestRaw: after.raw,
     currentManifestRef: after.ref,
   });
   const invalid = workerWorkspaceResultRef(`historical-nested-git-v${version}-bad-digest`);
@@ -350,4 +353,121 @@ export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner
       "tree does not match its manifest",
     );
   }
+}
+
+export async function proveGitIgnoredWorkspaceOutputs(owner: LocalWorkspaceOwner, root: string) {
+  const canonical = owner.worktree.path;
+  const writeText = (directory: string, relative: string, data: string) =>
+    fs.writeFile(path.join(directory, relative), data);
+  const expectText = async (directory: string, relative: string, data: string) =>
+    expect(await fs.readFile(path.join(directory, relative), "utf8")).toBe(data);
+  const git = (cwd: string, ...args: string[]) => requireGit(cwd, args);
+  await writeText(
+    canonical,
+    ".gitignore",
+    ".env.local\ndist/tracked.txt\ndist/generated.js\n.cache/openclaw-bun/from-gitignore\n.artifacts/\nnotes/\n.cache/user-data.json\n",
+  );
+  await fs.mkdir(path.join(canonical, "dist"));
+  await writeText(canonical, "dist/tracked.txt", "tracked input\n");
+  await git(canonical, "add", "-f", ".gitignore", "dist/tracked.txt");
+  await git(canonical, "commit", "--quiet", "-m", "tracked ignored input");
+  const globalIgnore = path.join(root, "global-ignore");
+  await fs.writeFile(globalIgnore, ".cache/openclaw-bun/global-output/\n");
+  const globalConfig = path.join(root, "global-config");
+  await fs.writeFile(globalConfig, `[core]\nexcludesFile = ${JSON.stringify(globalIgnore)}\n`);
+  vi.stubEnv("GIT_CONFIG_GLOBAL", globalConfig);
+  const infoExclude = await git(canonical, "rev-parse", "--git-path", "info/exclude");
+  await fs.appendFile(path.resolve(canonical, infoExclude), "dist/info-output/\n");
+  const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+  await writeText(projection, "source.txt", "guest edit\n");
+  await writeText(projection, "dist/tracked.txt", "tracked edit\n");
+  const ignored = [
+    "dist/generated.js",
+    ".cache/openclaw-bun/from-gitignore",
+    "dist/info-output/generated",
+    ".cache/openclaw-bun/global-output/generated",
+  ];
+  for (const relative of ignored) {
+    await fs.mkdir(path.dirname(path.join(projection, relative)), { recursive: true });
+    await writeText(projection, relative, "disposable output\n");
+  }
+  const authored = [
+    ".artifacts/proof/screenshot.png",
+    "notes/report.txt",
+    ".cache/user-data.json",
+    "dist/authored.txt",
+  ];
+  for (const relative of authored) {
+    await fs.mkdir(path.dirname(path.join(projection, relative)), { recursive: true });
+    await writeText(projection, relative, "saved artifact\n");
+  }
+  // The guest owns these bytes, so host inventory must never load this configuration.
+  await writeText(projection, ".git/config", "invalid guest Git configuration\n");
+  await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+  await expectText(canonical, "source.txt", "guest edit\n");
+  await expectText(canonical, "dist/tracked.txt", "tracked edit\n");
+  const accepted = await withLocalWorkspaceProjection(owner, (state) => state.baselineDocument());
+  expect(
+    parseWorkerWorkspaceManifest(accepted.rawManifest, accepted.manifestRef).entries.map(
+      (entry) => entry.path,
+    ),
+  ).toEqual([...authored, ".gitignore", "dist/tracked.txt", "source.txt"].toSorted());
+  for (const relative of authored) {
+    await expectText(canonical, relative, "saved artifact\n");
+  }
+  for (const relative of ignored) {
+    await missing(canonical, relative);
+    await expectText(projection, relative, "disposable output\n");
+  }
+}
+
+export async function proveLegacyGitIgnoredWorkspaceOutputs(owner: LocalWorkspaceOwner) {
+  const { prepareLocalWorkspaceArchiveFixture } =
+    await import("./local-workspace-incremental.test-support.js");
+  const { service } = await prepareLocalWorkspaceArchiveFixture(owner);
+  const canonical = owner.worktree.path;
+  await fs.writeFile(
+    path.join(canonical, ".gitignore"),
+    ".env.local\ndist/\n.cache/openclaw-bun/\n",
+  );
+  await requireGit(canonical, ["add", ".gitignore"]);
+  await requireGit(canonical, ["commit", "--quiet", "-m", "ignore build outputs"]);
+  const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+  const outputs = ["dist/worker/main.js", ".cache/openclaw-bun/bin/bun"];
+  for (const root of [canonical, projection]) {
+    await writeWorkspaceFiles(root, cacheFiles(outputs, "previous build\n"));
+  }
+  const row = (await readLocalWorkspaceProjection(owner.worktree.id))!;
+  const legacy = legacyManifest({
+    ...(await manifestFor(projection)),
+    baseCommit: row.base_commit,
+  });
+  await updateProjection(owner, {
+    baseline_json: legacy.raw,
+    baseline_ref: legacy.ref,
+    tree_root_digest: null,
+    pending_ref: workerWorkspaceResultRef("legacy-unstaged-build-output"),
+    pending_target: "canonical",
+    checkpoint_json: null,
+  });
+  await writeWorkspaceFiles(projection, {
+    ...cacheFiles(outputs, "new build output\n"),
+    "source.txt": "saved source edit\n",
+  });
+  await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+  await expectWorkspaceFiles(canonical, {
+    ...cacheFiles(outputs, "previous build\n"),
+    "source.txt": "saved source edit\n",
+  });
+  await expectWorkspaceFiles(projection, cacheFiles(outputs, "new build output\n"));
+  const accepted = await withLocalWorkspaceProjection(owner, (state) => state.baselineDocument());
+  expect(
+    parseWorkerWorkspaceManifest(accepted.rawManifest, accepted.manifestRef).entries.map(
+      (entry) => entry.path,
+    ),
+  ).toEqual([".gitignore", "source.txt"]);
+  expect((await service.gc({ readOwnerState: () => "idle" })).removed).toContain(owner.worktree.id);
+  const restored = await service.restore({ id: owner.worktree.id });
+  await expectWorkspaceFiles(restored.path, { "source.txt": "saved source edit\n" });
+  await expectWorkspaceFiles(projection, cacheFiles(outputs, "new build output\n"));
 }

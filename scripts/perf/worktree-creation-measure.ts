@@ -3,7 +3,8 @@
  *   --repo <task-owned-clone> --output <new-directory> --samples 5
  * Run serial AB/BA arms from the respective source revisions, ten creations per
  * revision. The repository must be a disposable local clone; refs and worktrees
- * are created only there and below output. No network fetch, hooks or setup code.
+ * are created only there and below output. --default-base includes remote refresh
+ * and base hydration against the fixture's file:// origin. No hooks or setup code.
  * Each creation uses the real service, state leases, Git workers and native Git.
  * Workers drain between samples to model infrequent fresh-session creation.
  * Source-loader startup precedes timing; worker startup is included. Owner logs
@@ -12,8 +13,14 @@
  * Acceptance: same checkout commit/files, one fewer cold object census, lower
  * owner CPU/allocation, no material creation regression with matched controls.
  * Small samples describe latency, never establish p99. This is not Gateway load.
+ * --alternate-policy alternates ordinary/source-only requests at one commit.
+ * --prewarm drains the service's refill request between creates; its cost is
+ * reported separately. --checkout-owner loads a frozen baseline checkout.ts.
+ * Policy acceptance: two cold builds then warm reuse, identical clean contents,
+ * lower preparation cost without >20% CPU/allocation or same-mode regression.
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import { readFileSync } from "node:fs";
@@ -29,10 +36,15 @@ const { values } = parseArgs({
     repo: { type: "string" },
     output: { type: "string" },
     samples: { type: "string", default: "5" },
+    "default-base": { type: "boolean" },
+    "expected-commit": { type: "string" },
+    "alternate-policy": { type: "boolean" },
+    prewarm: { type: "boolean" },
+    "checkout-owner": { type: "string" },
+    fixture: { type: "boolean" },
   },
 });
 assert(values.repo && values.output, "--repo and --output are required");
-const repo = await fs.realpath(values.repo);
 const output = path.resolve(values.output);
 const samples = Number(values.samples);
 assert(Number.isSafeInteger(samples) && samples > 0);
@@ -54,6 +66,38 @@ Object.assign(process.env, {
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_ATTR_NOSYSTEM: "1",
 });
+if (values.fixture) {
+  // 50k tracked source files + 12k ignored dependency files, 1.10 GB in total.
+  // Managed source templates must never copy the host's node_modules.
+  await fs.mkdir(values.repo);
+  const payload = Buffer.alloc(17742, 120);
+  for (let index = 0; index < 62000; index++) {
+    const directory = path.join(
+      values.repo,
+      index < 50000 ? "src" : "node_modules/.pnpm/fixture/node_modules/dependency",
+      `group-${Math.floor(index / 100)}`,
+    );
+    if (index % 100 === 0) {
+      await fs.mkdir(directory, { recursive: true });
+    }
+    await fs.writeFile(path.join(directory, `file-${index}.txt`), payload);
+  }
+  await fs.writeFile(path.join(values.repo, ".gitignore"), "node_modules/\n");
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", values.repo!, ...args], { stdio: "pipe" });
+  git("init", "-q", "-b", "main");
+  git("add", ".");
+  git(
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "-qm",
+    "synthetic",
+  );
+}
+const repo = await fs.realpath(values.repo);
 const key = Symbol.for("openclaw.perf.worktree-creation");
 let gitTimings: Record<string, { count: number; elapsedMs: number }> = {};
 let workerTimings: Record<string, { count: number; elapsedMs: number }> = {};
@@ -76,6 +120,13 @@ Object.defineProperty(globalThis, key, {
 });
 const hooks = registerHooks({
   load(url, context, next) {
+    if (values["checkout-owner"] && url.endsWith("/src/agents/worktrees/checkout.ts")) {
+      return {
+        format: "module-typescript",
+        shortCircuit: true,
+        source: readFileSync(values["checkout-owner"], "utf8"),
+      };
+    }
     if (!url.endsWith("/src/infra/git-exec.ts")) {
       return next(url, context);
     }
@@ -114,10 +165,16 @@ setRuntimeConfigSnapshot(config, config);
 const { ManagedWorktreeService } = await import("../../src/agents/worktrees/service.js");
 const { requireGit } = await import("../../src/agents/worktrees/git.js");
 const { drainGlobalSingletonLifecycleState } = await import("../../src/shared/global-singleton.js");
-const commit = await requireGit(repo, ["rev-parse", "HEAD"]);
+if (values["default-base"]) {
+  assert((await requireGit(repo, ["remote", "get-url", "origin"])).startsWith("file://"));
+}
+const commit = values["expected-commit"] ?? (await requireGit(repo, ["rev-parse", "HEAD"]));
 const ownerSha256 = createHash("sha256")
   .update(
-    await fs.readFile(new URL("../../src/agents/worktrees/capacity.runtime.ts", import.meta.url)),
+    await fs.readFile(
+      values["checkout-owner"] ??
+        new URL("../../src/agents/worktrees/checkout.ts", import.meta.url),
+    ),
   )
   .digest("hex");
 const rows = [];
@@ -126,6 +183,11 @@ try {
     gitTimings = {};
     workerTimings = {};
     const service = new ManagedWorktreeService({ getConfig: () => config });
+    let refill: Parameters<typeof service.prewarm>[0] | undefined;
+    const unsubscribe = service.onWarmPoolNeeded((request) => {
+      refill = request;
+    });
+    const sourceOnly = !values["alternate-policy"] || index % 2 === 1;
     const loadBefore = loadavg();
     const cpu = process.threadCpuUsage();
     const allocated = getHeapStatistics().total_allocated_bytes;
@@ -135,11 +197,11 @@ try {
     const created = await service.create({
       repoRoot: repo,
       name: `measure-${path.basename(output)}-${index}`,
-      baseRef: commit,
+      baseRef: values["default-base"] ? undefined : commit,
       ownerKind: "session",
       ownerId: `synthetic-${index}`,
       runSetupScript: false,
-      provisionIgnoredFiles: false,
+      provisionIgnoredFiles: !sourceOnly,
       onPromptReady: async () => {
         promptReadyMs = performance.now() - start;
       },
@@ -148,6 +210,7 @@ try {
     const used = process.threadCpuUsage(cpu);
     const row = {
       index,
+      sourceOnly,
       ownerSha256,
       elapsedMs,
       promptReadyMs,
@@ -158,9 +221,29 @@ try {
       loadBefore,
       loadAfter: loadavg(),
       memory: process.memoryUsage(),
+      refillMs: 0,
+      refillMainCpuMs: 0,
+      refillMainAllocatedBytes: 0,
     };
     assert.equal(await requireGit(created.path, ["rev-parse", "HEAD"]), commit);
     assert.equal(await requireGit(created.path, ["status", "--porcelain"]), "");
+    if (values["alternate-policy"]) {
+      assert.equal(
+        await fs.stat(path.join(created.path, "node_modules")).catch(() => undefined),
+        undefined,
+      );
+    }
+    unsubscribe();
+    if (values.prewarm && refill) {
+      const refillStart = performance.now();
+      const refillCpu = process.threadCpuUsage();
+      const refillAllocated = getHeapStatistics().total_allocated_bytes;
+      await service.prewarm(refill, { commitGuard: () => {} });
+      row.refillMs = performance.now() - refillStart;
+      const refillUsed = process.threadCpuUsage(refillCpu);
+      row.refillMainCpuMs = (refillUsed.user + refillUsed.system) / 1000;
+      row.refillMainAllocatedBytes = getHeapStatistics().total_allocated_bytes - refillAllocated;
+    }
     rows.push(row);
     console.log(JSON.stringify(row));
     await fs.writeFile(path.join(output, "results.json"), JSON.stringify(rows, null, 2));

@@ -13,7 +13,6 @@ import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatCliCommand } from "../../src/cli/command-format.js";
-import { readSessionArchiveContentSync } from "../../src/config/sessions/archive-compression.js";
 import { formatSqliteSessionFileMarker } from "../../src/config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
@@ -41,6 +40,7 @@ import {
 } from "./openclaw-test-instance.js";
 import { withinTest } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
+import { readSessionArchiveText } from "./session-archive.js";
 import { stopChildProcess } from "./stop-child-process.js";
 
 type DoctorMode = "fix" | "import" | "inspect" | "validate" | "restore";
@@ -2051,7 +2051,7 @@ async function walkFiles(root: string, visit: (filePath: string) => Promise<void
 async function inventoryFile(filePath: string, relativeRoot: string) {
   const stat = await fs.stat(filePath);
   const text = await Promise.resolve()
-    .then(() => readSessionArchiveContentSync(filePath))
+    .then(() => readSessionArchiveText(filePath))
     .catch(() => undefined);
   const archive = parseArchiveArtifactName(path.basename(filePath));
   const jsonl = text !== undefined ? summarizeJsonl(text) : undefined;
