@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
 import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
+import { readConfigFileSnapshotForWrite } from "../config/config.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
@@ -12,11 +13,13 @@ import {
   runInitialConfigWriteHealth,
   runWriteConfigHealth,
 } from "../flows/doctor-health-contribution-runners.config.js";
+import { commitGatewayConfigWrite } from "../gateway/server-methods/config-write-flow.js";
 import { createUpdatePostInstallDoctorResultPath } from "../infra/update-doctor-result.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { updateRunWarningMessages } from "../infra/update-run-step.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { maybeMigrateAuthProfileJsonStoresToSqlite } from "./doctor-auth-flat-profiles.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
 import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { collectModelBillingRouteMigrationWarnings } from "./doctor/shared/model-billing-route-migration.js";
@@ -111,6 +114,46 @@ it("does not compare Decision selectors through conversational billing routes", 
           `Billing route changed for agents.entries.main.${selector} (agent main):`,
         ),
       ),
+    );
+  });
+});
+
+it("reports credential billing changes after a persisted Gateway config write", async () => {
+  await withDoctorConfigPreflightHome(async (home) => {
+    const withPrimary = (model: string): OpenClawConfig => ({
+      agents: { defaults: { model }, entries: { main: {} } },
+      gateway: { mode: "local" },
+    });
+    const before = withPrimary("anthropic/claude-opus-4-6@anthropic:default");
+    const configPath = await writeOpenClawConfig(home, before);
+    const agentDir = path.join(path.dirname(configPath), "agents", "main", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await writeFixtureJson(path.join(agentDir, "auth-profiles.json"), {
+      version: 1,
+      profiles: {
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "synthetic-api-key" },
+        "anthropic:sub": { type: "token", provider: "anthropic", token: "synthetic-token" },
+      },
+    });
+    await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: before,
+      prompter: { confirmAutoFix: async () => true },
+    });
+    const after = withPrimary("anthropic/claude-opus-4-6@anthropic:sub");
+    const respond = vi.fn();
+    const write = await commitGatewayConfigWrite({
+      ...(await readConfigFileSnapshotForWrite()),
+      nextConfig: after,
+      respond,
+    });
+    expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toMatchObject(after);
+    const warning =
+      "Billing route changed for agents.entries.main.model.primary (agent main): anthropic/claude-opus-4-6 via metered API-key profile anthropic:default -> anthropic/claude-opus-4-6 via subscription/OAuth profile anthropic:sub. Review its model and authentication settings.";
+    expect(write).toMatchObject({ billingRouteWarnings: expect.arrayContaining([warning]) });
+    write.reply(true, { ok: true });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ billingRouteWarnings: expect.arrayContaining([warning]) }),
     );
   });
 });
