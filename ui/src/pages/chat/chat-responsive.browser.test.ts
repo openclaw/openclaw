@@ -2655,11 +2655,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const widthBefore = (await card.boundingBox())?.width;
       const readSummaryState = () =>
         page.evaluate(() => {
-          const style = (selector: string) =>
-            getComputedStyle(document.querySelector<HTMLElement>(selector)!);
+          const style = (selector: string, pseudo?: string) =>
+            getComputedStyle(document.querySelector<HTMLElement>(selector)!, pseudo);
           const bounds = (selector: string) =>
             document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
-          const spinner = style(".session-progress-card__summary-indicator .session-run-spinner");
+          const spinner = style(".session-progress-card__summary .session-run-spinner", "::before");
           return {
             cardBackground: style(".session-progress-card--composer").backgroundColor,
             summaryBackground: style(".session-progress-card__summary").backgroundColor,

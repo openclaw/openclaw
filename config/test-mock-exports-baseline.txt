@@ -5608,7 +5608,6 @@
 ["src/node-host/runner.test-support.ts","../infra/executable-path.js","5e7de879c1b063b49a5b34612a899cad28e42b919c8007a0de9ed67e307a1cae",1]
 ["src/node-host/runner.test-support.ts","../infra/machine-model.js","f96a31307d14b95f26bf65d52d34edc101c75d69b37c207bf7bcdfdc6c23d972",1]
 ["src/node-host/runner.test-support.ts","../infra/machine-name.js","79234b4c070caa3f7d3f13479e029fb4e55ea777013d593ef01170e4fc1ce920",1]
-["src/node-host/runner.test-support.ts","./config.js","9cc3fc62eea02b22ab3344e94e774888a3e18ac170cefeac8a919a94bf91c9f8",1]
 ["src/node-host/runtime.commands.test.ts","../infra/path-env.js","a9614f85c0216d8b45f7ff68922336716a93b133a7108595edc8d57cf3c74696",1]
 ["src/node-host/runtime.commands.test.ts","./mcp.js","1eadbe6cf200ad3e8ca4e7f5357daaecd4a9e64ae72f372c497ee538a2795920",1]
 ["src/node-host/runtime.commands.test.ts","./skills.js","df023f3af299524cda9c82fd5f96385f8d13433048facd7654690fc528ef260e",1]

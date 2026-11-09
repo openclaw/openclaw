@@ -15,11 +15,8 @@ import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
-import type {
-  ProviderAuthMethodNonInteractiveContext,
-  ProviderAuthResult,
-  ProviderNonInteractiveApiKeyResult,
-} from "./types.js";
+import type { ProviderNonInteractiveApiKeyResult } from "./provider-auth-types.js";
+import type { ProviderAuthMethodNonInteractiveContext, ProviderAuthResult } from "./types.js";
 
 export {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,

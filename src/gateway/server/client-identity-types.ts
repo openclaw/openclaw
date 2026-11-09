@@ -15,6 +15,8 @@ export type GatewayAuthenticatedUserProfile = {
 
 export type RemoteIngressPrincipalSnapshot = Readonly<{
   bindingId: string;
+  /** Host-captured original admission, carried across further app approvals. */
+  admission?: string;
   recoverySource?: Readonly<{ pluginId: string; audienceId: string; recoveryId: string }>;
   authenticatedUserProfile: GatewayAuthenticatedUserProfile;
   preparedSessionProfile: UserProfileIdentity;

@@ -62,13 +62,26 @@ suite.define(() => {
           // WebCrypto and fetch use real threads; settle the handshake before advancing again.
           await expect
             .poll(async () => {
-              await page.clock.runFor(1);
-              const socketsClosed = await page.evaluate(() =>
-                (window as MockGatewayWindow)
-                  .openclawControlUiE2eGateway!.socketStates()
-                  .every((socket) => socket.readyState === WebSocket.CLOSED),
-              );
-              return socketsClosed;
+              const handshake = await page.evaluate(() => {
+                const mockGateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+                const sockets = mockGateway.socketStates();
+                const requests = mockGateway.requests.filter(
+                  (request) => request.method === "connect",
+                ).length;
+                return {
+                  preparing:
+                    requests < sockets.length &&
+                    sockets.some((socket) => socket.readyState === WebSocket.OPEN),
+                  settled:
+                    requests === sockets.length &&
+                    sockets.every((socket) => socket.readyState === WebSocket.CLOSED),
+                };
+              });
+              // Let real-thread signing finish before spending the socket's virtual deadline.
+              if (!handshake.preparing) {
+                await page.clock.runFor(1);
+              }
+              return handshake.settled;
             })
             .toBe(true);
         }

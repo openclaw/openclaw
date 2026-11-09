@@ -25,9 +25,11 @@ afterEach(() => {
   cleanupSolid();
   resetChatViewState();
   resetTranscriptTestDom();
+  vi.useRealTimers();
 });
 
 it("defers hidden transcripts, retains revealed content, and cancels a closed pane's mount", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const clock = createFrameClock();
   vi.stubGlobal("requestAnimationFrame", clock.request);
   vi.stubGlobal("cancelAnimationFrame", clock.cancel);
@@ -42,13 +44,16 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
   const settlePaints = async () => {
     for (let frame = 0; frame < 4; frame += 1) {
       await paint();
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
     }
   };
-  function mountPane(paneId: string) {
+  function mountPane(paneId: string, restoring = false) {
     const chat = createChatProps({
       paneId,
       sessionKey: `agent:main:${paneId}`,
       messages: [{ role: "assistant", content: "Initial history", timestamp: 1 }],
+      restoring,
     });
     chat.transcript.start();
     onTestFinished(() => chat.transcript.dispose());
@@ -110,6 +115,7 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
   expect(pane.container.querySelector(".chat-conversation-loading")).not.toBeNull();
   expect(pane.container.querySelector(".chat-thread--annotations")).not.toBeNull();
   await paint();
+  expect(pane.container.querySelector(".chat-conversation-loading")).not.toBeNull();
   pane.update({ presented: false });
   await settlePaints();
   expect(pane.chat.transcript.renderedSessionKey).toBeNull();
@@ -121,6 +127,11 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
   };
   pane.update({ presented: true, chat: latest });
   composer.focus();
+  await paint();
+  expect(pane.container.querySelector(".chat-conversation-loading")).not.toBeNull();
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(pane.container.querySelector(".chat-conversation-loading")).toBeNull();
   await settlePaints();
   expect(pane.container.textContent).toContain("Latest history");
   expect(pane.container.textContent).not.toContain("Initial history");
@@ -148,4 +159,9 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
   await settlePaints();
   expect(closed.chat.transcript.renderedSessionKey).toBeNull();
   expect(closed.container.querySelector(".chat-thread")).toBeNull();
+
+  const restored = mountPane("mount-restored", true);
+  expect(restored.container.querySelector('.chat-thread[role="log"]')).not.toBeNull();
+  expect(restored.container.querySelector(".chat-conversation-loading")).toBeNull();
+  restored.unmount();
 });

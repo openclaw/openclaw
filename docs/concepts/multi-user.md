@@ -231,6 +231,8 @@ Selected mentions render as distinct person references in the transcript. Hover,
 
 The picker includes known Gateway profiles eligible to read the session, including people who are offline. Its online indicator is only a connection hint, not an eligibility requirement. Sign in with a durable Gateway profile to use human mentions. Guests with session-only permissions can select eligible people in existing conversations they are allowed to write in. A mention adds personal discovery involvement, not authored participation or Git contributor credit. It never adds session membership, changes visibility, or grants access. The Gateway rechecks the recipient's current access when creating and displaying it.
 
+A message with selected people is addressed to them, not to the agent. The Gateway posts it to the transcript and notifies the recipients, but the agent does not reply, steer its current run, or queue a turn; it reads the message as context on its next turn. To involve the agent in the same message, name it in the text using its identity name (or a configured `mentionPatterns` entry), for example `@Bob look at this. Robo, put them on one sheet.` A selected person's own token is never treated as naming the agent.
+
 Mentions work for ordinary messages, queued or steered input, and the first message of a new session, including a remotely placed session. They are unavailable in incognito, Goal, catalog, suggestion-only, command-send, or terminal-launch modes. If selected mentions remain after switching to an unsupported mode, the composer blocks the send. It asks you to remove them, or to return to a normal chat. It does not silently discard selected recipients.
 
 <a id="temporary-mentions-inbox" />

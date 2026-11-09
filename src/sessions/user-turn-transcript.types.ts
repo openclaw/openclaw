@@ -54,6 +54,8 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
   provenance?: InputProvenance;
   __openclaw?: Record<string, unknown> & {
     humanMentions?: readonly HumanMention[];
+    /** Addressed to the selected people: no agent turn, and transparent to an active turn. */
+    humanAddressed?: true;
     /** Accepted delivery intent; readmission still checks the sender's current authority. */
     chatSendDelivery?: {
       deliver?: boolean;
@@ -81,6 +83,8 @@ export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeF
   workContext?: AttachedChatWorkContext;
   /** Explicit human selections bound to UTF-16 offsets in text. */
   mentions?: readonly HumanMention[];
+  /** The selected people are the recipients; no agent turn runs for this input. */
+  humanAddressed?: true;
   media?: readonly PersistedUserTurnMediaInput[] | null;
   /** Restart-safe native image placement; model-visible prompt bytes remain separate. */
   mediaImageLayout?: {
