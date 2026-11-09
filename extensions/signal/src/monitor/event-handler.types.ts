@@ -8,6 +8,7 @@ import type {
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { SignalTextStyleRange } from "../format.js";
 
 type SignalEnvelope = {
   sourceNumber?: string | null;
@@ -36,6 +37,7 @@ export type SignalDataMessage = {
   message?: string | null;
   attachments?: Array<SignalAttachment>;
   mentions?: Array<SignalMention> | null;
+  textStyles?: SignalTextStyleRange[] | null;
   groupInfo?: {
     groupId?: string | null;
     groupName?: string | null;

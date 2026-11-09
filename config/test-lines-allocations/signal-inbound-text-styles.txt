@@ -1,0 +1,2 @@
+197
+# Signal inbound text styles reach the agent as Markdown.

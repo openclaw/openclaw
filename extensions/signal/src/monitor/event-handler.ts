@@ -93,7 +93,7 @@ import {
 } from "./event-handler.control-lane.js";
 import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
 import { resolveSignalQuoteContext } from "./inbound-context.js";
-import { renderSignalMentions, resolveSignalMentionFacts } from "./mentions.js";
+import { renderSignalText, resolveSignalMentionFacts } from "./mentions.js";
 import {
   buildSignalReactionSystemEventText,
   isSignalReactionMessage,
@@ -770,10 +770,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         ? dataMessage?.reaction
         : null;
 
-    // Signal encodes mentions as the object replacement character; hydrate them from metadata first.
+    // Mentions and text styles come as metadata; commands and quotes match the plain text.
     const rawMessage = dataMessage?.message ?? "";
-    const normalizedMessage = renderSignalMentions(rawMessage, dataMessage?.mentions);
-    const messageText = normalizedMessage.trim();
+    const { plainText: messageText, formattedText } = renderSignalText(dataMessage);
     const groupId = dataMessage?.groupInfo?.groupId ?? reaction?.groupInfo?.groupId ?? undefined;
     const isGroup = Boolean(groupId);
     const hasControlCommandInMessage = isControlCommandMessage(messageText, cfg);
@@ -1028,14 +1027,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       });
       // Skipped messages intentionally avoid downloads; facts stay type-only.
       const pendingMediaText = formatSignalMediaText(mediaFacts);
-      const pendingBodyText = messageText || pendingMediaText || visibleQuoteText;
+      const pendingBodyText = formattedText || pendingMediaText || visibleQuoteText;
       const historyKey = groupId ?? "unknown";
       createChannelHistoryWindow({ historyMap: deps.groupHistories }).record({
         historyKey,
         limit: deps.historyLimit,
         entry: {
           sender: envelope.sourceName ?? senderDisplay,
-          body: messageText || visibleQuoteText,
+          body: formattedText || visibleQuoteText,
           media: toHistoryMediaEntries(mediaFacts),
           timestamp: inboundTimestamp,
           messageId,
@@ -1127,7 +1126,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
-    let bodyText = messageText;
+    let bodyText = formattedText;
     if (unavailableAttachmentCount > 0) {
       const attachmentLabel = unavailableAttachmentCount === 1 ? "attachment" : "attachments";
       bodyText = formatInboundMediaUnavailableText({
