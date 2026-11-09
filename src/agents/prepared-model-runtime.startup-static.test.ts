@@ -205,6 +205,7 @@ vi.mock("./agent-model-discovery.js", () => ({
     };
   },
   discoverAuthStorage: mocks.discoverAuthStorage,
+  discoverModelCatalog: mocks.discoverModels,
   discoverModelsAsync: mocks.discoverModels,
   discoverModelsFromCapturedSources: mocks.discoverModels,
 }));
