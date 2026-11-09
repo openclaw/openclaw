@@ -127,6 +127,8 @@ final class LocalSocketServer: @unchecked Sendable {
 
     private let logger: Logger
     private let socketPath: String
+    private let acceptClient: @Sendable (Int32) -> (client: Int32, error: Int32)
+    private let resourceBackoff: @Sendable () async throws -> Void
     private let stateLock = NSLock()
     private var openedSocket: OpenedSocket?
     private var acceptTask: Task<Void, Never>?
@@ -134,9 +136,21 @@ final class LocalSocketServer: @unchecked Sendable {
     private var shutdownTask: Task<Void, Never>?
     private var isRunning = false
 
-    init(socketPath: String, logger: Logger) {
+    init(
+        socketPath: String,
+        logger: Logger,
+        acceptClient: @escaping @Sendable (Int32) -> (client: Int32, error: Int32) = { fd in
+            let client = Darwin.accept(fd, nil, nil)
+            return (client, client < 0 ? errno : 0)
+        },
+        resourceBackoff: @escaping @Sendable () async throws -> Void = {
+            try await Task.sleep(for: .milliseconds(100))
+        })
+    {
         self.socketPath = socketPath
         self.logger = logger
+        self.acceptClient = acceptClient
+        self.resourceBackoff = resourceBackoff
     }
 
     var isListening: Bool {
@@ -243,15 +257,20 @@ final class LocalSocketServer: @unchecked Sendable {
 
         onReady(true)
         while self.stateLock.withLock({ self.isRunning }), !Task.isCancelled {
-            var addr = sockaddr_un()
-            var len = socklen_t(MemoryLayout.size(ofValue: addr))
-            let client = withUnsafeMutablePointer(to: &addr) { ptr in
-                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { rebound in
-                    accept(fd, rebound, &len)
-                }
-            }
+            let (client, acceptError) = self.acceptClient(fd)
             if client < 0 {
-                if errno == EINTR {
+                if acceptError == EINTR || acceptError == ECONNABORTED {
+                    continue
+                }
+                if acceptError == EMFILE || acceptError == ENFILE || acceptError == ENOMEM
+                    || acceptError == EAGAIN || acceptError == EWOULDBLOCK
+                {
+                    // Avoid spinning while descriptors or memory are short, or no connection is ready.
+                    do {
+                        try await self.resourceBackoff()
+                    } catch {
+                        break
+                    }
                     continue
                 }
                 break
