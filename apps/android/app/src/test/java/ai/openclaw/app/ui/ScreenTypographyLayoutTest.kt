@@ -28,9 +28,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
@@ -49,6 +51,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Density
@@ -384,6 +387,37 @@ class ScreenTypographyLayoutTest {
     assertTextStyle(composeRule.onAllNodesWithText("OpenClaw thread", useUnmergedTree = true)[0], type.caption)
     composeRule.onNodeWithContentDescription("Toggle thread layout").performScrollTo().performClick()
     composeRule.onNodeWithText("Layout: Compact").assertIsDisplayed()
+  }
+
+  @Test
+  @Config(sdk = [34], qualifiers = "w1000dp-h1000dp-mdpi")
+  fun threadsExposeOnlyTheActiveFilterAsSelected() {
+    show { SessionsScreen(model, showSidebarButton = false, onOpenSidebar = {}, onOpenChat = {}) }
+    val filters = listOf("Recent", "Current", "Snoozed", "Archived", "Automations")
+
+    fun filterPill(label: String) =
+      composeRule.onNode(
+        SemanticsMatcher.expectValue(SemanticsProperties.Text, listOf(AnnotatedString(label))),
+      )
+
+    fun assertSelectedFilter(selected: String) {
+      for (label in filters) {
+        val pill = filterPill(label)
+        pill.assertIsDisplayed()
+        if (label == selected) {
+          pill.assertIsSelected()
+        } else {
+          pill.assertIsNotSelected()
+        }
+      }
+    }
+
+    assertSelectedFilter("Recent")
+    for (label in filters.drop(1) + "Recent") {
+      filterPill(label).performClick()
+      composeRule.waitForIdle()
+      assertSelectedFilter(label)
+    }
   }
 
   @Test
