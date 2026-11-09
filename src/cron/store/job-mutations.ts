@@ -282,8 +282,12 @@ export function planCronJobMutation(
       next.jobs = next.jobs.map((job) => (job.id === nextJob.id ? nextJob : job));
       return plan;
     }
-    // Declarative re-registration is not a fresh authorization of an existing account.
-    if (options.inferenceBinding && (!previousJob || mutation.kind === "update")) {
+    // Declarative re-registration is not a fresh authorization of an existing account; a job
+    // without one records the account its declaring context resolved, as a create does.
+    if (
+      options.inferenceBinding &&
+      (!previousJob || mutation.kind === "update" || !previousJob.inferenceBinding)
+    ) {
       nextJob.inferenceBinding = options.inferenceBinding;
     } else if (mutation.kind === "update" && options.inferenceBinding === null) {
       delete nextJob.inferenceBinding;

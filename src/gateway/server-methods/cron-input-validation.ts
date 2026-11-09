@@ -472,6 +472,59 @@ export async function captureCronCreatorSession(
   }
 }
 
+/**
+ * An edit records no account its caller did not select, so it must not store an enabled job
+ * whose every run the unrecorded-account guard refuses. Create-time capture resolves that
+ * account from the same inputs the run uses; a resolved stored account proves the refusal.
+ */
+async function assertCronEditKeepsRunnableInference(
+  job: CronStoredJob,
+  cfg: OpenClawConfig,
+  agentId: string,
+): Promise<void> {
+  if (
+    job.inferenceBinding ||
+    !job.enabled ||
+    job.sessionTarget === "main" ||
+    job.payload.kind !== "agentTurn"
+  ) {
+    return;
+  }
+  const executionKey = resolveCronSessionTargetSessionKey(job.sessionTarget);
+  const executionEntry = executionKey
+    ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId }))?.entry
+    : undefined;
+  let unrecorded: Awaited<ReturnType<typeof captureCronInferenceBinding>>;
+  try {
+    unrecorded = await captureCronInferenceBinding({
+      cfg,
+      agentId,
+      model: job.payload.model,
+      isGmailHook: job.payload.externalContentSource === "gmail",
+      // A session-target run uses its target conversation's account selection.
+      sessionEntry: executionEntry,
+      executionSessionEntry: executionEntry,
+      runtimeSessionEntry: await loadCronRuntimeSessionEntry({
+        cfg,
+        job,
+        agentId,
+        executionEntry,
+      }),
+    });
+  } catch {
+    // Not this guard's refusal: the run reports any other resolution failure itself.
+    return;
+  }
+  if (!unrecorded) {
+    return;
+  }
+  const modelRef = job.payload.model?.split("@")[0] ?? `${unrecorded.provider}/<model>`;
+  throw new Error(
+    `This edit would leave the automation without a recorded inference account, so runtime ${unrecorded.runtime} would refuse every run with stored account ${unrecorded.profileId}. ` +
+      `Select the account in the edit with model ${modelRef}@${unrecorded.profileId}, or disable the automation.`,
+  );
+}
+
 /** Only an explicitly selected account changes an existing job’s inference ownership. */
 export async function captureCronUpdatedInferenceBinding(
   nextJob: CronStoredJob,
@@ -512,6 +565,7 @@ export async function captureCronUpdatedInferenceBinding(
         disposeInferenceAuthorization: () => authority.dispose(),
       };
     }
+    await assertCronEditKeepsRunnableInference(nextJob, cfg, agentId);
     return undefined;
   }
   // An account edit keeps the runtime the job records; otherwise it resolves the way create does.

@@ -315,11 +315,13 @@ export const cronHandlers: GatewayRequestHandlers = {
       }
       inference = runtimeAuthority
         ? undefined
-        : await captureCronUpdatedInferenceBinding(nextJob, patch, cfg, {
-            client,
-            context,
-            signal,
-          });
+        : await captureCronUpdatedInferenceBinding(
+            // A fresh capture without runtime authority removes the job's old grant on commit.
+            capture ? { ...nextJob, runtimeAuthority: undefined } : nextJob,
+            patch,
+            cfg,
+            { client, context, signal },
+          );
     } catch (err) {
       operatorCapture?.disposeOperatorSource?.();
       targetAccess?.release();

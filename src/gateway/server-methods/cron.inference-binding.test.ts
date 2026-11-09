@@ -3,6 +3,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.e
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { saveCronJobsStore } from "../../cron/store.js";
 import { recordCronRun } from "../../cron/store/run-history.js";
+import type { CronStoredJob } from "../../cron/types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createCronCreatorAuthorityRunScope,
@@ -51,6 +52,29 @@ const nativeAuthority: CronRuntimeAuthority = {
   namespace: "synthetic.inference",
   payload: { account: "synthetic-native-account" },
 };
+/** A stored session-target agent turn with no recorded inference account. */
+function unboundJob(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
+  return {
+    id: "supervisor",
+    name: "Supervisor",
+    agentId: "main",
+    enabled: true,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    schedule: { kind: "every", everyMs: 600_000 },
+    sessionTarget: "session:agent:main:orchestrator",
+    wakeMode: "now",
+    delivery: { mode: "none" },
+    payload: {
+      kind: "agentTurn",
+      message: "Check the workers.",
+      model: "openai/gpt-4.1",
+      toolsAllow: [],
+    },
+    state: {},
+    ...overrides,
+  };
+}
 function captureAuthority(
   client: ReturnType<typeof creatorClient>,
   authority?: CronRuntimeAuthority,
@@ -519,6 +543,86 @@ describe("cron handler inference binding persistence", () => {
       });
     },
   );
+
+  it("refuses an edit that leaves a Codex session job without its stored account", async ({
+    fixture,
+  }) => {
+    // Incident shape: an agent turn in an existing session, auto-disabled after every run was
+    // refused because no account was recorded while Codex resolved a stored one.
+    fixture.setOpenAICodexRuntime();
+    await saveCronJobsStore(fixture.storePath, {
+      version: 1,
+      jobs: [unboundJob({ enabled: false, state: { consecutiveErrors: 10 } })],
+    });
+    const stored = await fixture.reload();
+    const refusal = await fixture.invoke(
+      "cron.update",
+      { id: stored.id, patch: { enabled: true } },
+      null,
+      { expectedSuccess: false },
+    );
+    expect(refusal).toMatchObject({
+      message: expect.stringContaining(
+        `runtime codex would refuse every run with stored account ${platformId}. Select the account in the edit with model openai/gpt-4.1@${platformId}`,
+      ),
+    });
+    const unchanged = await fixture.reload();
+    expect(unchanged.enabled).toBe(false);
+    expect(unchanged.inferenceBinding).toBeUndefined();
+    await fixture.invoke("cron.update", {
+      id: stored.id,
+      patch: {
+        enabled: true,
+        payload: { kind: "agentTurn", model: "openai/gpt-4.1@" + platformId },
+      },
+    });
+    const recorded = await fixture.reload();
+    expect(recorded.enabled).toBe(true);
+    expect(recorded.inferenceBinding).toMatchObject({
+      ...binding(platformId, "user", "api-key"),
+      runtime: "codex",
+    });
+  });
+
+  it("records the resolved account when a declaration converges onto an unbound job", async ({
+    fixture,
+  }) => {
+    const stored = unboundJob({ declarationKey: "supervisor" });
+    await saveCronJobsStore(fixture.storePath, { version: 1, jobs: [stored] });
+    expect((await fixture.reload()).inferenceBinding).toBeUndefined();
+    const {
+      id: _id,
+      createdAtMs: _created,
+      updatedAtMs: _updated,
+      state: _state,
+      ...params
+    } = stored;
+    await fixture.invoke("cron.add", params);
+    const declared = await fixture.reload();
+    expect(declared.id).toBe("supervisor");
+    expect(declared.inferenceBinding).toMatchObject(binding(platformId, "auto", "api-key"));
+  });
+
+  it("refuses an agent edit that would drop native authority without recording an account", async ({
+    fixture,
+  }) => {
+    await fixture.setCreator(platformId);
+    const client = creatorClient();
+    {
+      using _ = captureAuthority(client, nativeAuthority);
+      await fixture.invoke("cron.add", { ...createParams(), enabled: true }, client);
+    }
+    const created = await fixture.reload();
+    expect(created.runtimeAuthority).toEqual(nativeAuthority);
+    expect(created.inferenceBinding).toBeUndefined();
+    // This edit's fresh capture has no native authority, so committing it removes the grant.
+    using _ = captureAuthority(client);
+    const patch = { payload: { kind: "agentTurn", message: "Revised", toolsAllow: [] } };
+    await fixture.invoke("cron.update", { id: created.id, patch }, client, {
+      expectedSuccess: false,
+    });
+    expect(await fixture.reload()).toMatchObject({ runtimeAuthority: nativeAuthority });
+  });
 
   it("replaces a host binding when a native creator adopts the job", async ({ fixture }) => {
     await fixture.setCreator(platformId);

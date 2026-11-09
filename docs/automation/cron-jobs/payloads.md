@@ -244,6 +244,11 @@ scheduled model falls back without retaining that model's account.
 
 To change an account deliberately, update the job with a model/profile selection,
 for example `--model "openai/gpt-4.1@work"`. This captures a fresh authorization.
+An edit without a selection never records an account, so an edit that would leave an
+enabled job with no recorded account while its runs would use a stored one is
+refused with the account to select; disabling the job is still allowed. A declaration
+that converges onto a job with no recorded account records the account its declaring
+context resolves, as creating the job would.
 For legacy jobs without a recorded inference owner, `openclaw doctor --fix` records
 the account the job's next unbound run would use: an explicit selection, or else the
 first account in the run's normal account order, ignoring temporary rate-limit

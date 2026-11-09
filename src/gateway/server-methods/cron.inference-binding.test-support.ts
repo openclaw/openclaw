@@ -300,6 +300,24 @@ async function createFixture(stateDir: string, agentDir: string) {
       }
       setRuntimeConfigSnapshot(cfg);
     },
+    /** OpenAI models run on a Codex harness that forwards host-stored accounts. */
+    setOpenAICodexRuntime() {
+      cfg.agents!.defaults = {
+        ...cfg.agents!.defaults,
+        models: { "openai/gpt-4.1": { agentRuntime: { id: "codex" } } },
+      };
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      registerAgentHarness({
+        id: "codex",
+        label: "Codex fixture",
+        authBootstrap: "harness",
+        supports: ({ provider }) => ({ supported: provider === "openai" }),
+        runAttempt: async () => {
+          throw new Error("Admission proof must not start the Harness");
+        },
+      });
+      setRuntimeConfigSnapshot(cfg);
+    },
     replaceAccountBeforeMutation(method: "add" | "update") {
       const replace = () =>
         persistAuthProfileBatch({
