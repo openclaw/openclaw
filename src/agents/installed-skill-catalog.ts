@@ -12,7 +12,7 @@ import { ToolInputError } from "./tools/common.js";
 
 export type InstalledSkill = CodeModeSkill & {
   /** Published content generation; projections preserve it, never read authority. */
-  catalogRevision?: { key: string; contentHash: string };
+  catalogRevision?: string;
   /** Prompt-listed instructions retain the shipped Code Mode whole-read contract. */
   promptListed?: boolean;
   assertCurrent?: () => void;
@@ -52,7 +52,9 @@ function getSearchView(skills: readonly InstalledSkill[]) {
   if (skills.some((skill) => !skill.catalogRevision)) {
     return undefined;
   }
-  const key = JSON.stringify(skills.map((skill) => skill.catalogRevision!.key));
+  const key = prepareTextLexicalDocument(
+    JSON.stringify(skills.map((skill) => [skill.catalogRevision, skill.name, skill.description])),
+  ).revision;
   let view = catalogViews.get(key);
   if (!view) {
     view = { key, bytes: 128 + key.length * 2, bodies: {} };
@@ -165,7 +167,7 @@ async function readSearchBody(
       document: skill.catalogRevision
         ? {
             text,
-            revision: `skill:${JSON.stringify([skill.catalogRevision.contentHash, maxBytes])}`,
+            revision: `skill:${JSON.stringify([skill.catalogRevision, maxBytes])}`,
           }
         : prepareTextLexicalDocument(text),
       truncated: prefix.length < inline.length || (bytes !== undefined && bytes.length > maxBytes),

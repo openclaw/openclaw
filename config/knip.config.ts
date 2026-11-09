@@ -67,6 +67,7 @@ const repositoryScriptEntries = [
   "scripts/perf/cron-own-receipts-measure.mjs!",
   "scripts/perf/spawn-broker-shutdown-measure.ts!",
   "scripts/perf/workspace-inventory-spawn-measure.ts!",
+  "scripts/perf/sandbox-projection-fetch-measure.ts!",
   // catalog-compare-released.mts copies and spawns this sandboxed reader by path.
   "scripts/lib/catalog-compare-released-worker.mts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.

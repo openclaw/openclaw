@@ -68,11 +68,13 @@ export async function modelsListCommand(
       { withPreparedModelCatalogOwner },
       { getPreparedModelRuntimeAuthMaterializations },
       { buildModelsListResult },
+      { UnknownModelCatalogProviderError },
     ] = await Promise.all([
       import("../../agents/prepared-model-catalog-owner.js"),
       import("../../agents/prepared-model-catalog.js"),
       import("../../agents/prepared-model-runtime-auth.js"),
       import("../../gateway/server-methods/models-list-result.js"),
+      import("../../gateway/server-methods/models-list-capabilities.js"),
     ]);
     const readLocal = async (refreshOwner?: {
       env: NodeJS.ProcessEnv;
@@ -135,19 +137,33 @@ export async function modelsListCommand(
         await stopProxy(proxy);
       }
     };
-    result = opts.refresh
-      ? await runWithLocalStateOwner({
-          method: "models.list",
-          params,
-          target: "local model catalog",
-          onForeignOwner: "refuse",
-          runLocal: async (owner) => {
-            const refreshed = await readLocal(owner);
-            owner.assertCurrent();
-            return refreshed;
-          },
-        })
-      : await readLocal();
+    try {
+      result = opts.refresh
+        ? await runWithLocalStateOwner({
+            method: "models.list",
+            params,
+            target: "local model catalog",
+            onForeignOwner: "refuse",
+            runLocal: async (owner) => {
+              const refreshed = await readLocal(owner);
+              owner.assertCurrent();
+              return refreshed;
+            },
+          })
+        : await readLocal();
+    } catch (error) {
+      // The Gateway answers an unknown provider filter with its message; the local read must too.
+      if (error instanceof UnknownModelCatalogProviderError) {
+        const message = error.message;
+        throw new ExpectedCliError({
+          message,
+          humanOutput: message,
+          machineOutput: message,
+          cause: error,
+        });
+      }
+      throw error;
+    }
   }
   for (const warning of getModelCatalogWarnings(result)) {
     runtime.error(`${warning.message} ${warning.fixHint}`);
