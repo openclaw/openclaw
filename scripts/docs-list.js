@@ -91,7 +91,7 @@ function walkMarkdownFiles(dir, base = dir, options = {}) {
  * @returns {{ summary: string | null; readWhen: string[]; error?: string }}
  */
 function extractMetadata(fullPath) {
-  const content = readFileSync(fullPath, "utf8");
+  const content = readFileSync(fullPath, "utf8").replace(/^\uFEFF/u, "");
 
   if (!content.startsWith("---")) {
     return { summary: null, readWhen: [], error: "missing front matter" };
@@ -282,7 +282,9 @@ export function renderDocsHeadingMap(docsDir = DOCS_DIR, options = {}) {
   ];
 
   for (const relativePath of files) {
-    const headings = extractHeadings(readFileSync(join(docsDir, relativePath), "utf8"));
+    const headings = extractHeadings(
+      readFileSync(join(docsDir, relativePath), "utf8").replace(/^\uFEFF/u, ""),
+    );
     lines.push(`## ${relativePath}`);
     lines.push("");
     lines.push(`- Route: ${routeForFile(relativePath)}`);

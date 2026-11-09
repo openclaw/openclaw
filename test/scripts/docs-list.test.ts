@@ -31,12 +31,13 @@ describe("docs-list", () => {
       ["inline", "\n", 'read_when: "Read this page when the hint is inline."\n---'],
       ["yaml-end", "\n", "..."],
       ["annotated", "\r\n", "--- # end   "],
+      ["bom", "\r\n", 'read_when: "Read BOM docs."\r\n---', "\uFEFF"],
     ] as const;
     const { root } = makeDocs(
       Object.fromEntries(
-        cases.map(([name, nl, end]) => [
+        cases.map(([name, nl, end, prefix = ""]) => [
           `${name}.md`,
-          `---${nl}summary: "Summary for ${name}"${nl}${end}${nl}`,
+          `${prefix}---${nl}summary: "Summary for ${name}"${nl}${end}${nl}`,
         ]),
       ),
     );
@@ -46,6 +47,7 @@ describe("docs-list", () => {
       expect(output).toContain(`${name}.md - Summary for ${name}`);
     }
     expect(output).toContain("Read when: Read this page when the hint is inline.");
+    expect(output).toContain("Read when: Read BOM docs.");
     expect(output).not.toContain("unterminated front matter");
   });
 
@@ -60,6 +62,7 @@ describe("docs-list", () => {
         "~~~md\n### Hidden tilde fence\n~~~json\n### Hidden invalid closer\n~~~\n# Visible after fence\n",
       ].join("\n"),
       "nested/index.mdx": "# Nested\n",
+      "bom.md": "\uFEFF---\n# Hidden BOM metadata\n---\n# Visible BOM body\n",
       "nested/page.md": "# Nested page\n",
       "AGENTS.md": "# Instructions\n",
     });
@@ -68,6 +71,7 @@ describe("docs-list", () => {
 
     expect(output).toContain("## page.md\n\n- Route: /page");
     expect(output).toContain("  - H1: Visible title");
+    expect(output).toContain("  - H1: Visible BOM body");
     expect(output).toContain("  - H2: `API[*]` &lt;script&gt;alert(1)&lt;/script&gt;");
     expect(output).toContain("  - H3: &lt;scr&lt;script&gt;ipt&gt;alert(1)&lt;/script&gt;");
     expect(output).toContain("  - H4: `![label](https://example.test/image)`");
