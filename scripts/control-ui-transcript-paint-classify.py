@@ -173,7 +173,9 @@ def assess(sample, offset, crop):
             continue
         if unmasked(project(body, sample, offset), crop):
             physical.append(key)
-        for text in row.get("textRects", []):
+            if row.get("textRects") is None:
+                uncertain.append("text geometry omitted outside sampled viewport")
+        for text in row.get("textRects") or []:
             text_bounds = (text[0], text[1], text[0] + text[2], text[1] + text[3])
             glyph = intersect(body, text_bounds)
             pieces = unmasked(project(glyph, sample, offset, common=True), crop) if glyph else []

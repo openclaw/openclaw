@@ -168,10 +168,12 @@ export function observeTranscriptPaint() {
         style.opacity === "0" ||
         style.visibility !== "visible" ||
         style.contentVisibility === "hidden";
-      const textRects: number[][] = [];
+      const textRects: number[][] | null =
+        !hidden && rect.bottom > viewport.top && rect.top < viewport.bottom ? [] : null;
       const textHiddenBy: string[] = [];
-      // Only potentially paintable rows need text geometry. Hidden rows retain their model slot.
-      if (!hidden) {
+      // Offscreen forecasts must not pay forced text layout just for this probe.
+      // Null records omitted geometry, distinct from a measured row with no text.
+      if (textRects) {
         for (const text of row.querySelectorAll<HTMLElement>(".chat-text")) {
           let textHidden = false;
           for (
