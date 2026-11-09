@@ -106,7 +106,7 @@ export function buildModelRegistryCatalog(
   }
 
   function loadCustomModels(
-    modelsJsonPath: string,
+    catalogPath: string,
     sourceOptions: {
       catalogPluginId?: string;
       contents?: string;
@@ -116,12 +116,12 @@ export function buildModelRegistryCatalog(
       includePluginCatalogs: true,
     },
   ): CustomModelsResult {
-    if (sourceOptions.contents === undefined && !existsSync(modelsJsonPath)) {
+    if (sourceOptions.contents === undefined && !existsSync(catalogPath)) {
       return emptyCustomModelsResult();
     }
 
     try {
-      const content = sourceOptions.contents ?? readFileSync(modelsJsonPath, "utf-8");
+      const content = sourceOptions.contents ?? readFileSync(catalogPath, "utf-8");
       const parsed = parseModelCatalogJson(content);
       if (
         sourceOptions.requireGeneratedCatalog === true &&
@@ -139,7 +139,7 @@ export function buildModelRegistryCatalog(
             .map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
             .join("\n") || "Unknown schema error";
         return emptyCustomModelsResult(
-          `Invalid models.json schema:\n${errors}\n\nFile: ${modelsJsonPath}`,
+          `Invalid models.json schema:\n${errors}\n\nFile: ${catalogPath}`,
         );
       }
 
@@ -174,7 +174,7 @@ export function buildModelRegistryCatalog(
             }
             const source = sourceOptions.requireGeneratedCatalog
               ? "the provider's catalog source"
-              : modelsJsonPath;
+              : catalogPath;
             catalogWarnings.push(
               `Skipped model ${providerName}/${model.id}: invalid cost. Fix or remove its cost block in ${source}, then refresh the model catalog.`,
             );
@@ -201,12 +201,12 @@ export function buildModelRegistryCatalog(
       }
 
       const pluginCatalogErrors = catalogWarnings.map(
-        (warning) => `${warning}\nFile: ${modelsJsonPath}`,
+        (warning) => `${warning}\nFile: ${catalogPath}`,
       );
       if (sourceOptions.includePluginCatalogs !== false) {
         let pluginCatalogs: readonly PersistedPluginModelCatalog[] = [];
         try {
-          pluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(dirname(modelsJsonPath));
+          pluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(dirname(catalogPath));
         } catch (error) {
           pluginCatalogErrors.push(
             `Failed to load generated plugin model catalogs: ${
@@ -230,11 +230,11 @@ export function buildModelRegistryCatalog(
           return emptyCustomModelsResult();
         }
         return emptyCustomModelsResult(
-          `Failed to parse models.json: ${error.message}\n\nFile: ${modelsJsonPath}`,
+          `Failed to parse models.json: ${error.message}\n\nFile: ${catalogPath}`,
         );
       }
       return emptyCustomModelsResult(
-        `Failed to load models.json: ${error instanceof Error ? error.message : String(error)}\n\nFile: ${modelsJsonPath}`,
+        `Failed to load models.json: ${error instanceof Error ? error.message : String(error)}\n\nFile: ${catalogPath}`,
       );
     }
   }

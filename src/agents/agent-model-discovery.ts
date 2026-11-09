@@ -43,6 +43,11 @@ type DiscoverCapturedModelsOptions = Omit<
   pluginCatalogs: readonly PersistedPluginModelCatalog[];
 };
 
+type ModelCatalogLookup = Omit<ModelLookup, "hasConfiguredAuth"> & {
+  // Serving-limit projections reuse auth without retaining the original inventory.
+  hasConfiguredAuth: (this: void, model: Model) => boolean;
+};
+
 function prepareModelRegistryOptions(options?: DiscoverModelsOptions) {
   const pluginMetadataSnapshot = resolveModelPluginMetadataSnapshot({
     ...(options?.config ? { config: options.config } : {}),
@@ -137,7 +142,7 @@ export function discoverModelCatalog(
     modelsJsonContents: string | null;
     pluginCatalogs: readonly PersistedPluginModelCatalog[];
   },
-): ModelLookup {
+): ModelCatalogLookup {
   const prepared = prepareModelRegistryOptions(options);
   const { models, providerRequestConfigs } = buildModelRegistryCatalog(
     authStorage,
@@ -158,8 +163,8 @@ export function discoverModelCatalog(
 /** Reuse route-scoped availability when projecting accepted serving limits onto catalog rows. */
 export function createModelCatalogLookup(
   models: Model[],
-  hasConfiguredAuth: ModelLookup["hasConfiguredAuth"],
-): ModelLookup {
+  hasConfiguredAuth: ModelCatalogLookup["hasConfiguredAuth"],
+): ModelCatalogLookup {
   return {
     getAll: () => models,
     getAvailable: () => models.filter(hasConfiguredAuth),

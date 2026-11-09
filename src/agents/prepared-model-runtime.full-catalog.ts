@@ -86,7 +86,8 @@ function projectCatalogServingLimits(
 
 /** Runtime owners retain an isolated baseline for later session forks. */
 export function prepareFullCatalogFacts(...args: CatalogPreparationParams) {
-  const [{ templateAuthStorage, input }, , , source] = args;
+  const { templateAuthStorage, input } = args[0];
+  const source = args[3];
   return prepareCatalogFacts(
     async (options) => {
       const registry = await discoverModelsAsync(templateAuthStorage, input.agentDir, options);
@@ -103,7 +104,8 @@ export function prepareFullCatalogFacts(...args: CatalogPreparationParams) {
 
 /** Publication owns rows, not mutable session state or a second full model graph. */
 export async function prepareCatalogPublicationFacts(...args: CatalogPreparationParams) {
-  const [{ templateAuthStorage, input }, , , source] = args;
+  const { templateAuthStorage, input } = args[0];
+  const source = args[3];
   const { templateModelRegistry: _registry, ...publication } = await prepareCatalogFacts(
     (options) => {
       const lookup = discoverModelCatalog(templateAuthStorage, input.agentDir, options);

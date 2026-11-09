@@ -535,9 +535,9 @@ describe("prepared catalog source composition", () => {
             id: providerId,
             label: "Source fixture",
             auth: [],
-            normalizeResolvedModel: ({ model }) => ({
-              ...model,
-              name: `Normalized ${model.name}`,
+            normalizeResolvedModel: ({ model: resolvedModel }) => ({
+              ...resolvedModel,
+              name: `Normalized ${resolvedModel.name}`,
               baseUrl: normalizedEndpoint,
             }),
             resolveDynamicModel: ({ modelId, modelRegistry }) => {
@@ -545,9 +545,9 @@ describe("prepared catalog source composition", () => {
               expect(row).toMatchObject(expected);
               expect(modelRegistry.getAll()).toContainEqual(row);
               expect(modelRegistry.hasConfiguredAuth(row)).toBe(kind !== "missing");
-              expect(modelRegistry.getAvailable().some((model) => model.id === "shared")).toBe(
-                kind !== "missing",
-              );
+              expect(
+                modelRegistry.getAvailable().some((available) => available.id === "shared"),
+              ).toBe(kind !== "missing");
               return { ...row, id: modelId };
             },
           },
