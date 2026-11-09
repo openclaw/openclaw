@@ -1,25 +1,31 @@
 import { expect, it } from "vitest";
 import { buildAssistantDisplayRewrite } from "./chat-transcript-persistence.js";
 
-it.each([1, 4].flatMap((count) => [false, true].map((usage) => ({ count, usage }))))(
-  "keeps only the native final caption ($count images, usage=$usage)",
-  ({ count, usage }) => {
+const footer = "custom usage footer";
+const cases = [1, 4].flatMap((count) =>
+  [undefined, footer].map((usage) => ({ count, usage, authored: "Answer ready." })),
+);
+cases.push(
+  { count: 1, usage: footer, authored: "Answer ready.\n```\nMEDIA:/tmp/example.png\n```" },
+  { count: 1, usage: footer, authored: `Answer ready.\n${footer}` },
+);
+it.each(cases)(
+  "keeps the native caption ($count images, usage=$usage, authored=$authored)",
+  ({ count, usage, authored }) => {
     const urls = Array.from({ length: count }, (_, i) => `/tmp/native-${i}.png`);
     const images = urls.map((url) => ({ type: "image" as const, source: { type: "url", url } }));
-    const final = `Answer ready.\n${urls.map((url) => `MEDIA:${url}`).join("\n")}`;
-    const message = {
-      role: "assistant",
-      content: [{ type: "text", text: final }],
-      __openclaw: { externalId: "native-final" },
-    };
-    const footer = usage ? "custom usage footer" : undefined;
+    const final = `${authored}\n${urls.map((url) => `MEDIA:${url}`).join("\n")}`;
     const rewritten = buildAssistantDisplayRewrite({
-      message,
-      responseUsageLine: footer,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: final }],
+        __openclaw: { externalId: "native-final" },
+      },
+      responseUsageLine: usage,
       displayContent: [
         {
           type: "text",
-          text: `Checking files.\n\nRendering images.\n\n${final}${footer ? `\n${footer}` : ""}`,
+          text: `Checking files.\n\nRendering images.\n\n${final}${usage ? `\n${usage}` : ""}`,
         },
         ...images,
       ],
@@ -27,40 +33,8 @@ it.each([1, 4].flatMap((count) => [false, true].map((usage) => ({ count, usage }
       managedMediaUrls: urls,
     });
     expect(rewritten.openclawDisplayContent).toEqual([
-      { type: "text", text: `Answer ready.${footer ? `\n${footer}` : ""}` },
+      { type: "text", text: `${authored}${usage ? `\n${usage}` : ""}` },
       ...images,
     ]);
   },
 );
-
-it.each([
-  {
-    name: "fenced MEDIA examples",
-    authored: "Answer ready.\n```\nMEDIA:/tmp/example.png\n```",
-    footer: "custom usage footer",
-  },
-  {
-    name: "an authored line equal to the usage footer",
-    authored: "Answer ready.\ncustom usage footer",
-    footer: "custom usage footer",
-  },
-])("keeps $name in the native final caption", ({ authored, footer }) => {
-  const url = "/tmp/native-0.png";
-  const image = { type: "image" as const, source: { type: "url", url } };
-  const final = `${authored}\nMEDIA:${url}`;
-  const rewritten = buildAssistantDisplayRewrite({
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: final }],
-      __openclaw: { externalId: "native-final" },
-    },
-    responseUsageLine: footer,
-    displayContent: [{ type: "text", text: `Checking files.\n\n${final}\n${footer}` }, image],
-    mediaBySource: new Map([[url, [image]]]),
-    managedMediaUrls: [url],
-  });
-  expect(rewritten.openclawDisplayContent).toEqual([
-    { type: "text", text: `${authored}\n${footer}` },
-    image,
-  ]);
-});
