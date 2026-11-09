@@ -1,2 +1,2 @@
-543
-# 187 lines for delayed /stop and /status replay admission, plus 356 lines main is already over its ceiling.
+187
+# Delayed /stop and /status replay admission, plus controls that ordinary commands and newer user messages still supersede.
