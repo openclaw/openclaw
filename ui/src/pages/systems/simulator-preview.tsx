@@ -61,21 +61,28 @@ export function SimulatorPreview(props: {
   const [error, setError] = createSignal<string | null>(null);
   const [fps, setFps] = createSignal(0);
   const [retry, setRetry] = createSignal(0);
+  const [text, setText] = createSignal("");
   let frameSession: { sessionId: string; executionId: string } | undefined;
   let moveTimer: ReturnType<typeof setTimeout> | undefined;
   let pendingMove: { x: number; y: number } | undefined;
   let dragging = false;
   let active = false;
+  let endCapture: (() => void) | undefined;
+  let previousStop: Promise<void> = Promise.resolve();
   const inputQueue = new SimulatorInputQueue(
-    () => active && props.canControl,
+    () => active && props.canControl && !error(),
     (cause) => {
-      if (active) setError(formatUiError(cause));
+      if (active) {
+        setError(formatUiError(cause));
+        setImage(null);
+        endCapture?.();
+      }
     },
   );
 
   const sendInput = (action: string, details: Record<string, unknown> = {}) => {
     const session = frameSession;
-    if (!session || !props.canControl || !active) {
+    if (!session || !props.canControl || !active || error()) {
       return;
     }
     const client = props.client;
@@ -87,6 +94,14 @@ export function SimulatorPreview(props: {
         ...details,
       }),
     );
+  };
+
+  const sendText = () => {
+    const value = text();
+    if (value && frameSession && image() && !error()) {
+      sendInput("type", { text: value });
+      setText("");
+    }
   };
 
   const point = (event: PointerEvent) => {
@@ -138,17 +153,43 @@ export function SimulatorPreview(props: {
       setError(null);
       setFps(0);
       let sessionId: string | undefined;
+      let startedRequest: Promise<unknown> | undefined;
+      let ended = false;
+      const end = () => {
+        if (ended) return;
+        ended = true;
+        active = false;
+        inputQueue.retire();
+        controller.abort();
+        frameSession = undefined;
+        previousStop = (async () => {
+          let startedSession = sessionId;
+          if (!startedSession && startedRequest) {
+            try {
+              startedSession = frameFrom(await startedRequest).sessionId;
+            } catch {
+              return;
+            }
+          }
+          if (startedSession) {
+            await invoke(client, nodeId, "simulator.capture", {
+              action: "stop",
+              sessionId: startedSession,
+              executionId,
+            }).catch(() => undefined);
+          }
+        })();
+      };
+      endCapture = end;
       void (async () => {
         try {
-          const started = frameFrom(
-            await invoke(
-              client,
-              nodeId,
-              "simulator.capture",
-              { action: "start", executionId },
-              controller.signal,
-            ),
-          );
+          await previousStop;
+          if (controller.signal.aborted) return;
+          startedRequest = invoke(client, nodeId, "simulator.capture", {
+            action: "start",
+            executionId,
+          });
+          const started = frameFrom(await startedRequest);
           sessionId = started.sessionId;
           if (controller.signal.aborted) {
             return;
@@ -190,24 +231,17 @@ export function SimulatorPreview(props: {
         } catch (cause) {
           if (!controller.signal.aborted) {
             setError(formatUiError(cause));
+            setImage(null);
+            end();
           }
         }
       })();
       return () => {
-        active = false;
-        inputQueue.retire();
+        end();
+        if (endCapture === end) endCapture = undefined;
         dragging = false;
         clearTimeout(moveTimer);
         pendingMove = undefined;
-        controller.abort();
-        frameSession = undefined;
-        if (sessionId) {
-          void invoke(client, nodeId, "simulator.capture", {
-            action: "stop",
-            sessionId,
-            executionId,
-          }).catch(() => undefined);
-        }
       };
     },
   );
@@ -229,15 +263,18 @@ export function SimulatorPreview(props: {
         </Show>
       </header>
       <div class="simulator-preview__stage">
-        <Show when={image()} fallback={<p>{t("systems.simulator.waiting")}</p>}>
+        <Show
+          when={!error() && image()}
+          fallback={<p>{error() ?? t("systems.simulator.waiting")}</p>}
+        >
           {(source) => (
             <img
               src={source()}
               width={size().width}
               height={size().height}
               alt={t("systems.simulator.title")}
-              tabindex={props.canControl ? 0 : -1}
-              class={props.canControl ? "simulator-preview__interactive" : undefined}
+              tabindex={props.canControl && !error() ? 0 : -1}
+              class={props.canControl && !error() ? "simulator-preview__interactive" : undefined}
               onPointerDown={(event) => {
                 if (!props.canControl || event.button !== 0) return;
                 event.preventDefault();
@@ -290,7 +327,34 @@ export function SimulatorPreview(props: {
         </Show>
       </div>
       <footer class="simulator-preview__footer">
-        {t(props.canControl ? "systems.simulator.controlActive" : "systems.simulator.viewOnly")}
+        <span>
+          {t(
+            error()
+              ? "systems.simulator.disconnected"
+              : image() && props.canControl
+                ? "systems.simulator.controlActive"
+                : "systems.simulator.viewOnly",
+          )}
+        </span>
+        <Show when={image() && props.canControl && !error()}>
+          <form
+            class="simulator-preview__text"
+            onSubmit={(event) => {
+              event.preventDefault();
+              sendText();
+            }}
+          >
+            <input
+              aria-label={t("systems.simulator.textLabel")}
+              placeholder={t("systems.simulator.textLabel")}
+              value={text()}
+              onInput={(event) => setText(event.currentTarget.value)}
+            />
+            <button type="submit" disabled={!text()}>
+              {t("systems.simulator.sendText")}
+            </button>
+          </form>
+        </Show>
       </footer>
     </section>
   );

@@ -41,6 +41,17 @@ openclaw-systems-page {
   border-bottom: 0;
   color: var(--muted);
   font-size: 12px;
+  flex-wrap: wrap;
+}
+.simulator-preview__text {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  min-width: min(100%, 240px);
+}
+.simulator-preview__text input {
+  flex: 1;
+  min-width: 0;
 }
 .simulator-preview__stage {
   display: flex;
