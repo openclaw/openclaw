@@ -12,6 +12,7 @@ import {
   createSidebarElement,
   TWO_AGENTS,
 } from "./app-sidebar.ts";
+import { storeSidebarSessionOwnerFilter } from "../components/app-sidebar-session-types.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
 import { createTestGatewayClient } from "./gateway-client.ts";
 import { settleLitElement } from "./lit-settle.ts";
@@ -42,6 +43,7 @@ export async function withOwnerSidebar(
     requests: Record<string, unknown>[];
     settle: () => Promise<void>;
   }) => Promise<void>,
+  options: { savedOwnerId?: string } = {},
 ) {
   const requests: Record<string, unknown>[] = [];
   const overflow = createDeferred<SessionsListResult>();
@@ -76,6 +78,12 @@ export async function withOwnerSidebar(
       return { ...sessionsResult(selected, 1), owners };
     }),
   );
+  if (options.savedOwnerId) {
+    storeSidebarSessionOwnerFilter(gateway.gateway.connection.gatewayUrl, viewer.id, {
+      ownerId: options.savedOwnerId,
+      involvingMe: false,
+    });
+  }
   gateway.publish({ selfUser: { id: viewer.id, name: viewer.label } });
   if (mode === "query") {
     const hello = gateway.gateway.snapshot.hello!;

@@ -1,4 +1,23 @@
 import type { Locator, Page } from "playwright";
+import { controlUiBundledGatewayUrl } from "../test-helpers/control-ui-e2e.ts";
+
+/** Save an owner-filter choice before the app mounts, as a returning browser would. */
+export async function seedSidebarOwnerFilter(
+  page: Page,
+  baseUrl: string,
+  profileId: string,
+  value: string,
+) {
+  const key = `openclaw.control.sidebarSessionOwnerFilter.v1:${controlUiBundledGatewayUrl(baseUrl)}:${encodeURIComponent(profileId)}`;
+  await page.addInitScript(
+    (entry) => {
+      if (localStorage.getItem(entry.key) === null) {
+        localStorage.setItem(entry.key, entry.value);
+      }
+    },
+    { key, value },
+  );
+}
 
 export async function openSidebarMenu(page: Page) {
   const menu = page.locator(".sidebar-session-sort-menu");
