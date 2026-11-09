@@ -23,7 +23,7 @@ afterEach(() => {
   vi.doUnmock("./backup-sqlite-snapshot.js");
   vi.doUnmock("../snapshot/database-backup.js");
   vi.doUnmock("./database-engine/physical-store.js");
-  vi.doUnmock("./sqlite-readonly-location.js");
+  vi.doUnmock("./sqlite-schema-header-inspection.js");
   vi.doUnmock("./update-candidate-state.postgres.js");
   vi.restoreAllMocks();
 });
@@ -95,7 +95,7 @@ it.each(["sqlite", "postgres"] as const)(
       );
     const readPostgres = vi.fn().mockResolvedValue(9);
     // mock-isolation: Supply a zero header without opening SQLite or acquiring a snapshot.
-    vi.doMock("./sqlite-readonly-location.js", () => ({
+    vi.doMock("./sqlite-schema-header-inspection.js", () => ({
       inspectSqliteSchemaHeaderInProcess: inspect,
     }));
     // mock-isolation: Select the physical engine without reading a database image.
@@ -131,7 +131,7 @@ it.each(["sqlite", "postgres"] as const)(
 it("reads a versioned SQLite header without importing an engine classifier", async () => {
   const file = path.join(stateDir, "versioned.sqlite");
   // mock-isolation: Supply a versioned header without opening SQLite or acquiring a snapshot.
-  vi.doMock("./sqlite-readonly-location.js", () => ({
+  vi.doMock("./sqlite-schema-header-inspection.js", () => ({
     inspectSqliteSchemaHeaderInProcess: vi.fn().mockResolvedValue({ userVersion: 7 }),
   }));
   // mock-isolation: Reject classification when a nonzero header makes it unnecessary.

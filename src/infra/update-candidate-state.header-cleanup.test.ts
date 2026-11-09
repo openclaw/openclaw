@@ -6,7 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as logging from "../logging/logger.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
-import { inspectSqliteSchemaHeaderInProcess } from "./sqlite-readonly-location.js";
+import { inspectSqliteSchemaHeaderInProcess } from "./sqlite-schema-header-inspection.js";
 import {
   readUpdateCandidateStateInventoryInProcess,
   readUpdateStateSchemaVersionsInProcess,
@@ -91,7 +91,10 @@ it.each(["versions", "snapshot", "strict", "read-error"] as const)(
           error: { message: expect.stringContaining("releasing its resource failed") },
         });
       } else if (mode === "read-error") {
-        expect(outcome).toEqual({ error: original });
+        if (!("error" in outcome)) {
+          throw new Error("Expected header read failure");
+        }
+        expect(outcome.error).toBe(original);
       } else {
         expect(outcome).toMatchObject({
           value: expect.arrayContaining([{ path: source, userVersion: 7 }]),

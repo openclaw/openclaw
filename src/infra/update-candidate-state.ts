@@ -27,10 +27,10 @@ import {
   withPreparedSqliteSnapshot,
 } from "./sqlite-readonly-location-cleanup.js";
 import {
-  inspectSqliteSchemaHeaderInProcess,
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
+import { inspectSqliteSchemaHeaderInProcess } from "./sqlite-schema-header-inspection.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import {
   StateDatabaseDiscoverySchema,

@@ -98,7 +98,8 @@ export async function readUpdateStoreSchemaVersion(
   file: string,
   input: StateInput & { stagingRoot?: string; preserveSourceArtifacts?: boolean },
 ): Promise<{ userVersion: number }> {
-  const { inspectSqliteSchemaHeaderInProcess } = await import("./sqlite-readonly-location.js");
+  const { inspectSqliteSchemaHeaderInProcess } =
+    await import("./sqlite-schema-header-inspection.js");
   const { userVersion } = await inspectSqliteSchemaHeaderInProcess(
     file,
     input.stagingRoot,
