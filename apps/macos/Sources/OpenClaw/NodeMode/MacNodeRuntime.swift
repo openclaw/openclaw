@@ -151,6 +151,8 @@ actor MacNodeRuntime {
         var action: String?
     }
 
+    // One desktop permit must cover admission, invoke, close, and revocation cleanup.
+    // swiftlint:disable:next cyclomatic_complexity
     private func handleDesktopInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let envelope: DesktopExecutionEnvelope
         do {

@@ -26,10 +26,18 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
         -> SimulatorCaptureService.Frame
     func stopSimulatorCapture(sessionId: String?) async throws
     func stopSimulatorCapture(forExecutionId executionId: String) async throws
+    // Keep the Gateway input envelope and its desktop permit visible at this boundary.
+    // swiftlint:disable:next function_parameter_count
     func simulatorInput(
-        sessionId: String, action: OpenClawComputerAction,
-        x: Double?, y: Double?, fromX: Double?, fromY: Double?,
-        text: String?, keys: String?, desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws
+        sessionId: String,
+        action: OpenClawComputerAction,
+        x: Double?,
+        y: Double?,
+        fromX: Double?,
+        fromY: Double?,
+        text: String?,
+        keys: String?,
+        desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws
 
     func locationAuthorizationStatus() -> CLAuthorizationStatus
     func locationAccuracyAuthorization() -> CLAccuracyAuthorization
@@ -108,15 +116,29 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
         try await self.simulatorCapture.stop(forExecutionId: executionId)
     }
 
+    // Keep the Gateway input envelope and its desktop permit visible at this boundary.
+    // swiftlint:disable:next function_parameter_count
     func simulatorInput(
-        sessionId: String, action: OpenClawComputerAction,
-        x: Double?, y: Double?, fromX: Double?, fromY: Double?,
-        text: String?, keys: String?, desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws
+        sessionId: String,
+        action: OpenClawComputerAction,
+        x: Double?,
+        y: Double?,
+        fromX: Double?,
+        fromY: Double?,
+        text: String?,
+        keys: String?,
+        desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws
     {
         try self.desktopAvailability.validate(desktopPermit)
         try await self.simulatorCapture.input(
-            sessionId: sessionId, action: action, x: x, y: y,
-            fromX: fromX, fromY: fromY, text: text, keys: keys,
+            sessionId: sessionId,
+            action: action,
+            x: x,
+            y: y,
+            fromX: fromX,
+            fromY: fromY,
+            text: text,
+            keys: keys,
             validate: { try self.desktopAvailability.validate(desktopPermit) })
         try self.desktopAvailability.validate(desktopPermit)
     }

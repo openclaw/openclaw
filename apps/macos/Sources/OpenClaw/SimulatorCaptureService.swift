@@ -74,12 +74,18 @@ final class SimulatorCaptureService {
             capture.standardOutput = capturePipe
             capture.standardError = captureErrorPipe
             capturePipe.fileHandleForReading.readabilityHandler = { handle in
-                do { try captureOutput.append(handle.read(upToCount: 65536) ?? Data()) }
-                catch { captureOutput.stop("capture output read failed") }
+                do {
+                    try captureOutput.append(handle.read(upToCount: 65536) ?? Data())
+                } catch {
+                    captureOutput.stop("capture output read failed")
+                }
             }
             captureErrorPipe.fileHandleForReading.readabilityHandler = { handle in
-                do { try captureOutput.appendError(handle.read(upToCount: 65536) ?? Data()) }
-                catch { captureOutput.stop("capture error output read failed") }
+                do {
+                    try captureOutput.appendError(handle.read(upToCount: 65536) ?? Data())
+                } catch {
+                    captureOutput.stop("capture error output read failed")
+                }
             }
             capture.terminationHandler = { process in
                 captureOutput.stop("capture exited with status \(process.terminationStatus)")
@@ -98,12 +104,18 @@ final class SimulatorCaptureService {
             touch.standardError = touchErrorPipe
             touch.standardOutput = touchAckPipe
             touchErrorPipe.fileHandleForReading.readabilityHandler = { handle in
-                do { try touchOutput.append(handle.read(upToCount: 65536) ?? Data()) }
-                catch { touchOutput.stop("input error output read failed") }
+                do {
+                    try touchOutput.append(handle.read(upToCount: 65536) ?? Data())
+                } catch {
+                    touchOutput.stop("input error output read failed")
+                }
             }
             touchAckPipe.fileHandleForReading.readabilityHandler = { handle in
-                do { try touchOutput.appendAck(handle.read(upToCount: 65536) ?? Data()) }
-                catch { touchOutput.stop("input acknowledgment read failed") }
+                do {
+                    try touchOutput.appendAck(handle.read(upToCount: 65536) ?? Data())
+                } catch {
+                    touchOutput.stop("input acknowledgment read failed")
+                }
             }
             touch.terminationHandler = { process in
                 touchOutput.stop("input exited with status \(process.terminationStatus)")
@@ -170,10 +182,18 @@ final class SimulatorCaptureService {
             height: latest.height)
     }
 
+    // Coordinate and text fields stay explicit so each HID write rechecks the permit closure.
+    // swiftlint:disable:next function_parameter_count
     func input(
-        sessionId: String, action: OpenClawComputerAction,
-        x: Double?, y: Double?, fromX: Double?, fromY: Double?,
-        text: String?, keys: String?, validate: @escaping () throws -> Void) async throws
+        sessionId: String,
+        action: OpenClawComputerAction,
+        x: Double?,
+        y: Double?,
+        fromX: Double?,
+        fromY: Double?,
+        text: String?,
+        keys: String?,
+        validate: @escaping () throws -> Void) async throws
     {
         guard self.sessionId == sessionId, !self.inputInProgress,
               self.touchReady?.ready == true, self.touchReady?.failure == nil,
@@ -399,8 +419,11 @@ final class SimulatorCaptureService {
     private static func pasteboard(_ action: String, udid: String, input: Data? = nil) async throws -> Data {
         do {
             let result = try await BoundedProcess.run(
-                path: "/usr/bin/xcrun", arguments: ["simctl", action, udid],
-                input: input, outputLimit: 64 * 1024, timeout: 2.5)
+                path: "/usr/bin/xcrun",
+                arguments: ["simctl", action, udid],
+                input: input,
+                outputLimit: 64 * 1024,
+                timeout: 2.5)
             guard result.terminationStatus == 0 else {
                 throw CaptureError.unavailable("device pasteboard command failed")
             }
@@ -414,8 +437,10 @@ final class SimulatorCaptureService {
         let data: Data
         do {
             let result = try await BoundedProcess.run(
-                path: "/usr/bin/xcrun", arguments: ["simctl", "list", "devices", "booted", "--json"],
-                outputLimit: 64 * 1024, timeout: 3)
+                path: "/usr/bin/xcrun",
+                arguments: ["simctl", "list", "devices", "booted", "--json"],
+                outputLimit: 64 * 1024,
+                timeout: 3)
             guard result.terminationStatus == 0 else {
                 throw CaptureError.unavailable("xcrun simctl could not list booted devices")
             }
@@ -527,6 +552,8 @@ final class SimulatorTouchReadiness: @unchecked Sendable {
 
     func append(_ data: Data) {
         self.lock.withLock {
+            // Pipe chunks can split UTF-8; the helper's ASCII ready marker must survive that split.
+            // swiftlint:disable:next optional_data_string_conversion
             self.output = String((self.output + String(decoding: data, as: UTF8.self)).suffix(500))
             if self.output.contains("touch-helper ready") { self.isReady = true }
         }

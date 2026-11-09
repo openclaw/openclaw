@@ -52,10 +52,14 @@ extension MacNodeRuntime {
         default:
             throw OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown simulator capture action")
         }
-        let payload = if let frame {
-            try String(decoding: JSONEncoder().encode(frame), as: UTF8.self)
+        let payload: String
+        if let frame {
+            guard let json = try String(bytes: JSONEncoder().encode(frame), encoding: .utf8) else {
+                throw OpenClawNodeError(code: .unavailable, message: "UNAVAILABLE: invalid simulator frame encoding")
+            }
+            payload = json
         } else {
-            #"{"stopped":true}"#
+            payload = #"{"stopped":true}"#
         }
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
@@ -74,9 +78,15 @@ extension MacNodeRuntime {
         }
         let services = await self.mainActorServices()
         try await services.simulatorInput(
-            sessionId: input.sessionId, action: input.action,
-            x: input.x, y: input.y, fromX: input.fromX, fromY: input.fromY,
-            text: input.text, keys: input.keys, desktopPermit: desktopPermit)
+            sessionId: input.sessionId,
+            action: input.action,
+            x: input.x,
+            y: input.y,
+            fromX: input.fromX,
+            fromY: input.fromY,
+            text: input.text,
+            keys: input.keys,
+            desktopPermit: desktopPermit)
         _ = lifecycleGeneration
         return BridgeInvokeResponse(
             id: req.id, ok: true, payloadJSON: #"{"ok":true}"#)
