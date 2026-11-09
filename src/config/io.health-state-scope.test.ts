@@ -220,12 +220,72 @@ it("keeps a confirmed health write successful when its database is then closed",
     }),
   );
   try {
-    await observation.update({ lastObservedSuspiciousSignature: "committed" }, before);
+    expect(
+      await observation.update({ lastObservedSuspiciousSignature: "committed" }, before),
+    ).toEqual({ status: "applied" });
   } finally {
     spy.mockRestore();
   }
   expect(applied).toBe(true);
   expect(deps.logger.warn).not.toHaveBeenCalled();
+  expect(
+    readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastObservedSuspiciousSignature,
+  ).toBe("committed");
+});
+
+it("distinguishes a CAS conflict, unavailable basis, and pre-effect supersession", async () => {
+  const { deps, configPath } = fixture();
+  using observation = captureConfigHealthStateStore(deps, configPath);
+  const before = await observation.read();
+  if (!before) {
+    throw new Error("Expected current observation");
+  }
+  expect(await observation.update({ lastObservedSuspiciousSignature: "first" }, before)).toEqual({
+    status: "applied",
+  });
+  expect(await observation.update({ lastObservedSuspiciousSignature: "stale" }, before)).toEqual({
+    status: "conflict",
+  });
+  expect(
+    await observation.update(
+      { lastObservedSuspiciousSignature: "unavailable" },
+      { state: {}, basis: null },
+    ),
+  ).toEqual({ status: "unavailable" });
+  using replacement = observation.captureContinuation("replace");
+  expect(
+    await observation.update({ lastObservedSuspiciousSignature: "superseded" }, before),
+  ).toEqual({ status: "superseded" });
+  expect(
+    (await replacement.read())?.state.entries?.[configPath]?.lastObservedSuspiciousSignature,
+  ).toBe("first");
+});
+
+it.each(["error", "missing"])("does not retry a lost post-effect reply (%s)", async (reply) => {
+  const { deps, configPath } = fixture();
+  using observation = captureConfigHealthStateStore(deps, configPath);
+  const before = await observation.read();
+  if (!before) {
+    throw new Error("Expected current observation");
+  }
+  const execute = sharedWorker.runOpenClawStateWorkerOperation;
+  const spy = vi.spyOn(sharedWorker, "runOpenClawStateWorkerOperation").mockImplementation(
+    new Proxy(execute, {
+      async apply(target, receiver, args) {
+        await Reflect.apply(target, receiver, args);
+        using newer = captureConfigHealthStateStore(deps, configPath);
+        expect(newer.isCurrent()).toBe(true);
+        if (reply === "error") {
+          throw new Error("fixture lost reply after commit");
+        }
+        return undefined;
+      },
+    }),
+  );
+  expect(
+    await observation.update({ lastObservedSuspiciousSignature: "committed" }, before),
+  ).toEqual({ status: "unavailable" });
+  spy.mockRestore();
   expect(
     readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastObservedSuspiciousSignature,
   ).toBe("committed");

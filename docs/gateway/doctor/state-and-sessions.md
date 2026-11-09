@@ -13,6 +13,10 @@ auth health, sandbox images, and plugin installs.
 
 <AccordionGroup>
   <Accordion title="3. Legacy state migrations (disk layout)">
+    Relative `session.store` paths resolve against the active state directory. Older versions resolved them against the Gateway's working directory, which could create a second store under `~/agents/` in a systemd installation. Doctor backs up the affected stores and shared state, copies sessions and retained history into the state-relative store, and retires the old registrations after verification. The original database and its backup remain available for recovery. Completed repairs do not replay that retained source or restore conversations deleted later.
+
+    Conflicting conversations with distinct session IDs are preserved under recovered session keys, with their original sharing state. Doctor preserves the canonical session's membership and existing delivery receipts. If the same session ID has conflicting history or membership, repair stops with a data-at-risk message and retains both originals and backups. Pending durable work, unexpired Goal operation receipts, or retained transcript archives without a safe transfer also prevent retirement of the original store. Resolve the named pending work or recover its history before retrying Doctor or update. Update rehearsals only repair copied stores. If an old store was not included in the rehearsal, run standalone `openclaw doctor --fix` against the original state before updating.
+
     Doctor can migrate older on-disk layouts into the current structure:
 
     - Session rows and transcripts: import legacy `sessions.json` and JSONL history from `~/.openclaw/sessions/` or per-agent `sessions/` directories into `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`

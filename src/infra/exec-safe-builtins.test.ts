@@ -25,6 +25,15 @@ const builtinSegment = (argv: string[], resolvedPath?: string) => ({
 });
 
 describe("isSafeBuiltinSegment", () => {
+  it.each([{ argv: ["test", "$'\\0\\''?v", "benign"] }, { argv: ["[", "-e", "*.txt", "]"] }])(
+    "rejects dynamic predicate argv $argv",
+    ({ argv }) => {
+      expect(isSafeBuiltinSegment({ segment: builtinSegment(argv), platform: "linux" })).toBe(
+        false,
+      );
+    },
+  );
+
   it("allows a safe shell builtin even when the host has a same-named binary", () => {
     expect(
       isSafeBuiltinSegment({
@@ -223,6 +232,22 @@ describe.skipIf(process.platform === "win32")(
           reason: "dynamic-argument",
         }),
       );
+    });
+
+    it.each([
+      { command: "test -d '/tmp/space path' && git status", allowed: true },
+      { command: "test -e *.txt && git status", allowed: false },
+      { command: "test -e 'literal[1]' && git status", allowed: false },
+      { command: String.raw`test $'\0\''?v benign`, allowed: false },
+    ])("classifies static predicate source $command", async ({ command, allowed }) => {
+      const result = await evaluateShellAllowlistWithAuthorization({
+        command,
+        allowlist: gitAllowlist,
+        safeBins: new Set(),
+        cwd: "/tmp",
+      });
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(allowed);
     });
 
     it("does not auto-allow safe builtin tokens in direct argv evaluation", () => {

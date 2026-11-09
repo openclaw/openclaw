@@ -49,6 +49,11 @@ import type { ConfigIoContext } from "./io.context.js";
 import { prepareCronOwnerWriteRefusal } from "./io.cron-owner-refusal.js";
 import { recordConfigWriteMetadata, stampConfigWriteMetadata } from "./io.meta.js";
 import {
+  advanceConfigHealthBaselineForAcceptedWrite,
+  captureConfigHealthBaselineForWrite,
+  restoreConfigHealthBaselineForRolledBackWrite,
+} from "./io.observe.js";
+import {
   containsConfigIncludeDirective,
   hashConfigRaw,
   hashConfigRevision,
@@ -520,6 +525,12 @@ export async function writeConfigFileFromContext(
       onDestinationState: writeGuard.onDestinationState,
     });
     await options.beforeCommit?.();
+    const healthBaselineCapture = await captureConfigHealthBaselineForWrite(
+      deps,
+      configPath,
+      options.assertConfigPathForWrite,
+    );
+    options.assertConfigPathForWrite?.();
     const result = withDeferredPluginMigrationsCurrent(
       { env: deps.env, configPath, expectedPending: deferredPluginMigrations },
       () => {
@@ -542,6 +553,17 @@ export async function writeConfigFileFromContext(
       result.method,
       undefined,
       await deps.fs.promises.stat(configPath).catch(() => null),
+    );
+    const healthBaselineCompensation = await advanceConfigHealthBaselineForAcceptedWrite(
+      deps,
+      healthBaselineCapture,
+      {
+        sourceSnapshot: snapshot,
+        raw: json,
+        parsed: stampedOutputConfig,
+        resolved: sourceConfigForPreflight,
+        assertCurrent: options.assertConfigPathForWrite,
+      },
     );
     options.assertConfigPathForWrite?.();
     if (
@@ -610,7 +632,7 @@ export async function writeConfigFileFromContext(
       },
       [configWritePostCommitRollback]: {
         restoreFile,
-        restoreEffects: (assertCurrent) => {
+        restoreEffects: async (assertCurrent) => {
           assertCurrent();
           restoreConfigSnapshotAuditRecord({
             env: deps.env,
@@ -627,6 +649,11 @@ export async function writeConfigFileFromContext(
               previousWarningFingerprint,
             );
           }
+          await restoreConfigHealthBaselineForRolledBackWrite(
+            deps,
+            healthBaselineCompensation,
+            assertCurrent,
+          );
         },
       },
     };

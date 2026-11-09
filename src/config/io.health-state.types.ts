@@ -41,3 +41,8 @@ export type ConfigHealthSnapshot = {
   /** Null means the read failed; an empty map proves there were no rows. */
   basis: Readonly<Record<string, ConfigHealthEntryBasis>> | null;
 };
+
+/** Superseded proves refusal before dispatch; unavailable never authorizes replay. */
+export type ConfigHealthUpdateResult = {
+  status: "applied" | "conflict" | "unavailable" | "superseded";
+};

@@ -116,6 +116,12 @@ The Gateway blocks writes that look like accidental clobbers - dropping the effe
 allows destructive changes. Mode checks resolve `$include` and environment references
 first. Missing `meta` is recorded as a write anomaly. Promotion to last-known-good is
 skipped when a candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
+It also preserves the existing recovery copy when a parseable external edit looks
+like a truncation. Accepted OpenClaw writes, including explicitly allowed size
+reductions and formatting changes, advance the health baseline. Writing an already
+suspicious file does not bless earlier data loss: the anomaly follows the written
+content until it is repaired. Missing `meta` alone does not make an otherwise valid
+reseed suspicious.
 
 ## Configuration pages
 

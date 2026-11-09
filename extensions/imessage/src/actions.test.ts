@@ -1,6 +1,7 @@
 // Imessage tests cover actions plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const probeMock = vi.hoisted(() => ({
   getCachedIMessagePrivateApiStatus: vi.fn(),
@@ -83,6 +84,9 @@ vi.mock("./monitor-reply-cache.js", async () => {
     rememberIMessageReplyCache: rememberIMessageReplyCacheMock,
   };
 });
+
+import { setIMessageRuntime } from "./runtime.js";
+import { registerIMessageSendStatus } from "./send-status.js";
 
 const { imessageMessageActions } = await import("./actions.js");
 
@@ -1599,6 +1603,51 @@ describe("imessage message actions", () => {
       ).rejects.toThrow(/requires chatGuid, chatId, chatIdentifier, or a chat target/);
     });
   });
+
+  it.each(["sendAttachment", "upload-file"] as const)(
+    "reports Automation failure and clears only confirmed %s completion",
+    async (action) => {
+      mockAvailableBridge();
+      const runtime = createPluginRuntimeMock();
+      setIMessageRuntime(runtime);
+      let status = { accountId: "default", lastError: null as string | null };
+      const patches: Array<typeof status> = [];
+      const lease = registerIMessageSendStatus({
+        accountId: "default",
+        channelRuntime: runtime.channel,
+        abortSignal: new AbortController().signal,
+        getStatus: () => status,
+        setStatus: (next) => {
+          status = { ...status, ...next };
+          patches.push(status);
+        },
+      });
+      onTestFinished(() => lease?.dispose());
+      const context = {
+        channel: "imessage" as const,
+        action,
+        cfg: cfg(),
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          filename: "photo.jpg",
+          buffer: Buffer.from("image").toString("base64"),
+        },
+      };
+      const error = new Error("Messages automation failed with AppleScript error -1743.");
+      runtimeMock.sendAttachment.mockRejectedValueOnce(error);
+      await expect(imessageMessageActions.handleAction?.(context)).rejects.toBe(error);
+      expect(status.lastError).toContain("-1743");
+      expect(patches).toHaveLength(1);
+      runtimeMock.sendAttachment.mockResolvedValueOnce({ messageId: "unknown" });
+      await imessageMessageActions.handleAction?.(context);
+      expect(patches).toHaveLength(1);
+      runtimeMock.sendAttachment.mockResolvedValueOnce({ messageId: "ok" });
+      await imessageMessageActions.handleAction?.(context);
+      expect(status.lastError).toBeNull();
+      expect(patches).toHaveLength(2);
+      expect(runtimeMock.sendAttachment).toHaveBeenCalledTimes(3);
+    },
+  );
 
   it.each([
     ["asVoice", { asVoice: true }],

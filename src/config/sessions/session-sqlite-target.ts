@@ -14,6 +14,7 @@ import {
 import { createOpenClawAgentDatabasePathMatcher } from "../../state/openclaw-agent-db.paths.js";
 import {
   listSqliteTargetCandidatePathsForSessionStorePath,
+  parseSqliteTargetSuffixIndex,
   resolveUnsuffixedSqliteTargetFromSessionStorePath,
 } from "./session-sqlite-target-paths.js";
 import {
@@ -219,22 +220,7 @@ function resolveCustomStoreSqlitePath(params: {
     resolvePersistedOwner(unsuffixedPath);
   const resolveSuffixedTarget = (ownerAgentId: string) => {
     const prefix = `${sqliteBaseName}.${ownerAgentId}`;
-    const parseIndex = (fileName: string): number | undefined => {
-      if (fileName === `${prefix}.sqlite`) {
-        return 1;
-      }
-      if (!fileName.startsWith(`${prefix}.`) || !fileName.endsWith(".sqlite")) {
-        return undefined;
-      }
-      const rawValue = fileName.slice(prefix.length + 1, -".sqlite".length);
-      if (!/^[1-9]\d*$/.test(rawValue)) {
-        return undefined;
-      }
-      const value = Number(rawValue);
-      return Number.isSafeInteger(value) && value >= 2 && String(value) === rawValue
-        ? value
-        : undefined;
-    };
+    const parseIndex = (fileName: string) => parseSqliteTargetSuffixIndex(fileName, prefix);
     const occupiedIndexes = new Set<number>();
     for (const registered of registeredDatabases) {
       if (!isSameDatabasePath(path.dirname(registered.path), sessionsDir)) {

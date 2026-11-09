@@ -4,6 +4,8 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveAgentDir } from "../../agent-scope-config.js";
+import { resolveCliRuntimeExecutionProvider } from "../../model-runtime-aliases.js";
+import { isCliProvider } from "../../model-selection.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.js";
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
 import {
@@ -187,6 +189,28 @@ export async function resolveSubagentChildPlan(params: {
     };
   }
   const { resolvedModel } = modelPlan;
+  // Recheck after model selection, before child creation. The final run seam
+  // also guards fallback candidates and later runtime overrides.
+  if (childRuntimeSandboxed) {
+    const { provider, model } = splitModelRef(resolvedModel);
+    const cliExecutionProvider =
+      resolveCliRuntimeExecutionProvider({
+        cfg: params.cfg,
+        provider: provider ?? "",
+        modelId: model,
+        agentId: params.targetAgentId,
+        authProfileId: modelPlan.initialSessionPatch.authProfileOverride,
+      }) ??
+      provider ??
+      "";
+    if (isCliProvider(cliExecutionProvider, params.cfg)) {
+      const error = `This spawn targets a sandboxed child, but model "${resolvedModel}" runs on host-executed CLI backend "${cliExecutionProvider}" and cannot honor the sandbox. Choose a sandbox-compatible (embedded/API) model for the child, or change the agent's sandbox policy explicitly.`;
+      return {
+        ok: false as const,
+        result: { status: "forbidden", error } satisfies SpawnSubagentResult,
+      };
+    }
+  }
   if (params.swarmEnabled && params.request.fastMode === undefined) {
     modelPlan.initialSessionPatch.fastMode = await readRequesterFastMode({
       cfg: params.cfg,

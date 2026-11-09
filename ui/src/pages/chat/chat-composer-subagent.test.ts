@@ -4,7 +4,13 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { resetComposerFixture } from "./chat-composer.test-support.ts";
+import {
+  findPrimaryButton as primaryButton,
+  resetComposerFixture,
+} from "./chat-composer.test-support.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { refreshChatMetadata, retireChatMetadataRequests } from "./chat-state-refresh.ts";
@@ -232,6 +238,85 @@ it("keeps catalog composition independent of local model credentials", () => {
   ];
   pane.render();
   expect(pane.chatProps?.modelRequiredReason).toBeUndefined();
+});
+
+describe("composer send readiness", () => {
+  it.each(["connection recovery", "retained initial turn"] as const)(
+    "keeps drafting but holds Send during %s independently of startup history",
+    async (hold) => {
+      const history = createDeferred<ChatHistoryResult>();
+      const historyRequested = createDeferred();
+      const client = createGatewayBrowserClientFixture({
+        request: (method) => {
+          if (method === "chat.startup") {
+            historyRequested.resolve();
+            return history.promise;
+          }
+          return {};
+        },
+      });
+      const { pane, state, context } = createRefreshChatPane(client);
+      state.sessionKey = "agent:main:held-composer";
+      state.chatMessage = "Keep composing";
+      const send = vi.spyOn(state, "handleSendChat").mockResolvedValue(undefined);
+      const readiness = vi.spyOn(client, "recoveryScopeReady", "get");
+      const retainedTurn = vi.spyOn(context.placementStartup, "hasPendingTurn");
+      if (hold === "connection recovery") {
+        readiness.mockReturnValue(false);
+      } else {
+        retainedTurn.mockReturnValue(true);
+      }
+      const container = document.createElement("div");
+      const draw = () => {
+        pane.render();
+        expect(pane.chatProps).toBeDefined();
+        render(renderChatComposer(pane.chatProps!), container);
+      };
+      const loading = loadChatHistory(state, { startup: true, deferBranches: true });
+      try {
+        await historyRequested.promise;
+        draw();
+        expect(isInitialChatHistoryUnavailable(state)).toBe(true);
+        expect(pane.chatProps?.canCompose).toBe(true);
+        expect(pane.chatProps?.canSend).toBe(false);
+        expect(pane.chatProps?.disabledReason).toBeNull();
+        expect(container.querySelector(".agent-chat__composer-status-band")).toBeNull();
+        expect(primaryButton(container).disabled).toBe(true);
+        const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+        expect(textarea.disabled).toBe(false);
+        textarea.value = "Keep composing while held";
+        textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        draw();
+        primaryButton(container).click();
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
+        );
+        await pane.chatProps!.onSend();
+        expect(send).not.toHaveBeenCalled();
+        expect(state.chatMessage).toBe("Keep composing while held");
+        expect(state.chatQueue).toHaveLength(0);
+
+        readiness.mockReturnValue(true);
+        retainedTurn.mockReturnValue(false);
+        draw();
+        expect(isInitialChatHistoryUnavailable(state)).toBe(true);
+        expect(primaryButton(container).disabled).toBe(false);
+        expect(send).not.toHaveBeenCalled();
+        primaryButton(container).click();
+        expect(send).toHaveBeenCalledOnce();
+
+        history.resolve({ messages: [], sessionId: "held-composer-session" });
+        await loading;
+        draw();
+        expect(isInitialChatHistoryUnavailable(state)).toBe(false);
+        expect(send).toHaveBeenCalledOnce();
+      } finally {
+        history.resolve({ messages: [], sessionId: "held-composer-session" });
+        await loading;
+        render(nothing, container);
+      }
+    },
+  );
 });
 
 describe("subagent composer", () => {

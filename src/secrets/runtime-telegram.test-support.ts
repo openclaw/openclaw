@@ -1,10 +1,18 @@
 /** Test bootstrap shim for Telegram runtime-secret surface coverage. */
 import { vi } from "vitest";
-import { loadChannelSecretContractApi } from "./channel-contract-api.js";
+import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
+import type { loadChannelSecretContractApi } from "./channel-contract-api.js";
 
-/** Test-only bootstrap registry mock for Telegram secret surface tests. */
-const telegramSecrets = loadChannelSecretContractApi({ channelId: "telegram", config: {} });
-if (!telegramSecrets?.collectRuntimeConfigAssignments) {
+// Load the fixed fixture through the test runner, independent of ambient discovery.
+const moduleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "telegram",
+  artifactBasename: "secret-contract-api.js",
+});
+const telegramSecrets: NonNullable<ReturnType<typeof loadChannelSecretContractApi>> = await import(
+  moduleId
+);
+if (!telegramSecrets.collectRuntimeConfigAssignments) {
   throw new Error("Missing Telegram secret contract api");
 }
 const telegramAssignments = telegramSecrets.collectRuntimeConfigAssignments;

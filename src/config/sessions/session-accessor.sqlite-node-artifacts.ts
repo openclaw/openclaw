@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   executeSqliteQuerySync,
@@ -124,6 +125,88 @@ export function clearSessionCollaborationForKey(
       db.deleteFrom("session_suggestions").where("session_key", "=", sessionKey),
     );
   }
+}
+
+/** Only overlapping authored content conflicts; disjoint artifacts remain additive. */
+export function sessionNodeArtifactsConflictForRepair(
+  source: Pick<OpenClawAgentDatabase, "db">,
+  destination: Pick<OpenClawAgentDatabase, "db">,
+  sourceKey: string,
+  destinationKey: string,
+): boolean {
+  const read = (database: Pick<OpenClawAgentDatabase, "db">, key: string) => {
+    const db = getSessionKysely(database.db);
+    const tables = readSessionNodeArtifactTables(database);
+    return {
+      tabs: tables.has("board_tabs")
+        ? executeSqliteQuerySync(
+            database.db,
+            db.selectFrom("board_tabs").selectAll().where("session_key", "=", key),
+          ).rows
+        : [],
+      widgets: tables.has("board_widgets")
+        ? executeSqliteQuerySync(
+            database.db,
+            db.selectFrom("board_widgets").selectAll().where("session_key", "=", key),
+          ).rows
+        : [],
+      suggestions: tables.has("session_suggestions")
+        ? executeSqliteQuerySync(
+            database.db,
+            db
+              .selectFrom("session_suggestions")
+              .select(["session_key", "id", "author_id", "author_label", "text"])
+              .where("session_key", "=", key),
+          ).rows
+        : [],
+      progress: tables.has("session_progress_cards")
+        ? executeSqliteQuerySync(
+            database.db,
+            db
+              .selectFrom("session_progress_cards")
+              .select(["markdown", "steps_json"])
+              .where("session_key", "=", key),
+          ).rows
+        : [],
+    };
+  };
+  const left = read(source, sourceKey);
+  const right = read(destination, destinationKey);
+  const overlapsDiffer = <
+    T extends {
+      session_key?: string;
+      created_at?: number;
+      updated_at?: number;
+      revision?: number;
+    },
+  >(
+    leftRows: readonly T[],
+    rightRows: readonly T[],
+    key: (row: T) => string,
+  ) => {
+    const content = (row: T) => {
+      const {
+        session_key: _key,
+        created_at: _created,
+        updated_at: _updated,
+        revision: _revision,
+        ...authored
+      } = row;
+      return authored;
+    };
+    const existing = new Map(rightRows.map((row) => [key(row), content(row)]));
+    return leftRows.some(
+      (row) => existing.has(key(row)) && !isDeepStrictEqual(content(row), existing.get(key(row))),
+    );
+  };
+  return (
+    overlapsDiffer(left.tabs, right.tabs, (row) => row.tab_id) ||
+    overlapsDiffer(left.widgets, right.widgets, (row) => row.name) ||
+    overlapsDiffer(left.suggestions, right.suggestions, (row) => row.id) ||
+    (left.progress.length > 0 &&
+      right.progress.length > 0 &&
+      !isDeepStrictEqual(left.progress, right.progress))
+  );
 }
 
 /** Copy logical-session artifacts into their canonical node within one agent store or across two. */

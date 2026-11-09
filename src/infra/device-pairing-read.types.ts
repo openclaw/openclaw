@@ -1,5 +1,6 @@
 import type { BoundDeviceBootstrapContext } from "./device-bootstrap.worker-types.js";
 import type { DevicePairingPendingRequest, PairedDevice } from "./device-pairing.types.js";
+import type { NodeApprovalSurface } from "./node-pairing-surface.js";
 
 export type DevicePairingReadCommand =
   | { type: "devicePairing.list"; nowMs: number; publishedRevision?: string }
@@ -40,4 +41,11 @@ export type DevicePairingCommitReceipt = {
   changed: DevicePairingBindingFact[];
   tokensReplaced?: { deviceId: string; roles: string[] };
   workerEnvironment?: CloudWorkerSetupCompletionPublication;
+  nodeApproval?: {
+    nodeId: string;
+    pairingIdentity: string;
+    previousPairingGeneration?: string;
+    nextPairingGeneration: string;
+    surface: NodeApprovalSurface;
+  };
 };

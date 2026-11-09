@@ -60,9 +60,32 @@ export function hasPreloadedOtelSdk(): boolean {
   return process.env[PRELOADED_OTEL_SDK_ENV] === "1";
 }
 
-export function normalizeOtelContentValue(value: unknown): string | undefined {
+export type OtelContentRedactor = (value: string) => string;
+
+// Redaction is the dominant cost of content capture, and a string's redaction does
+// not depend on which attribute or truncation budget it lands in. One redactor per
+// export redacts each captured string once instead of once per budget attempt and
+// per attribute that carries the same message. A memo rather than a pre-redacted
+// tree, because each attribute walks a different shape built from the same strings.
+// Scope it to one export: it holds the redacted copies until it is dropped.
+export function createOtelContentRedactor(): OtelContentRedactor {
+  const redacted = new Map<string, string>();
+  return (value) => {
+    let result = redacted.get(value);
+    if (result === undefined) {
+      result = redactSensitiveText(value);
+      redacted.set(value, result);
+    }
+    return result;
+  };
+}
+
+export function normalizeOtelContentValue(
+  value: unknown,
+  redact: OtelContentRedactor = createOtelContentRedactor(),
+): string | undefined {
   if (typeof value === "string") {
-    return normalizeOtelLogString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
+    return clampOtelLogText(redact(value), MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
   }
   if (Array.isArray(value)) {
     const items: string[] = [];
@@ -72,10 +95,10 @@ export function normalizeOtelContentValue(value: unknown): string | undefined {
       }
     }
     if (items.length > 0) {
-      return normalizeOtelLogString(items.join("\n"), MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
+      return clampOtelLogText(redact(items.join("\n")), MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
     }
   }
-  const json = safeJsonString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
+  const json = safeJsonString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS, redact);
   if (json) {
     return json;
   }
@@ -102,14 +125,24 @@ type JsonTruncationOptions = {
   maxObjectFields: number;
   maxStringChars: number;
   seen: WeakSet<object>;
+  redact: OtelContentRedactor;
 };
 
-export function safeJsonString(value: unknown, maxChars: number): string | undefined {
+// Values far beyond an attribute budget skip full redaction; each retained string
+// is still redacted before the bounded fallback truncates it.
+const MAX_OTEL_REDACTED_JSON_CANDIDATE_CHARS = 4 * MAX_OTEL_CONTENT_ATTRIBUTE_CHARS;
+
+export function safeJsonString(
+  value: unknown,
+  maxChars: number,
+  redact: OtelContentRedactor = createOtelContentRedactor(),
+): string | undefined {
   if (value === undefined || typeof value === "function" || typeof value === "symbol") {
     return undefined;
   }
-  const exact = stringifyJsonForOtelAttribute(value);
-  if (exact && exact.length <= maxChars) {
+  const json = serializeJsonForOtelAttribute(value);
+  const exact = redactJsonWithinAttributeBudget(json, maxChars);
+  if (exact) {
     return exact;
   }
   for (const maxArrayItems of JSON_TRUNCATION_ARRAY_ITEM_BUDGETS) {
@@ -120,31 +153,44 @@ export function safeJsonString(value: unknown, maxChars: number): string | undef
         maxObjectFields: JSON_TRUNCATION_MAX_OBJECT_FIELDS,
         maxStringChars,
         seen: new WeakSet<object>(),
+        redact,
       });
-      const json = stringifyJsonForOtelAttribute(candidate);
-      if (json && json.length <= maxChars) {
-        return json;
+      const truncated = redactJsonWithinAttributeBudget(
+        serializeJsonForOtelAttribute(candidate),
+        maxChars,
+      );
+      if (truncated) {
+        return truncated;
       }
     }
   }
-  const summary = stringifyJsonForOtelAttribute({
-    truncated: true,
-    reason: exact ? "max_attribute_size" : "unserializable_value",
-    type: describeJsonValue(value),
-  });
-  return summary && summary.length <= maxChars ? summary : undefined;
+  return redactJsonWithinAttributeBudget(
+    serializeJsonForOtelAttribute({
+      truncated: true,
+      reason: json ? "max_attribute_size" : "unserializable_value",
+      type: describeJsonValue(value),
+    }),
+    maxChars,
+  );
 }
 
-function stringifyJsonForOtelAttribute(value: unknown): string | undefined {
+function serializeJsonForOtelAttribute(value: unknown): string | undefined {
   try {
-    const json = JSON.stringify(value);
-    if (!json) {
-      return undefined;
-    }
-    return redactSensitiveText(json);
+    return JSON.stringify(value) || undefined;
   } catch {
     return undefined;
   }
+}
+
+function redactJsonWithinAttributeBudget(
+  json: string | undefined,
+  maxChars: number,
+): string | undefined {
+  if (!json || json.length > MAX_OTEL_REDACTED_JSON_CANDIDATE_CHARS) {
+    return undefined;
+  }
+  const redacted = redactSensitiveText(json);
+  return redacted.length <= maxChars ? redacted : undefined;
 }
 
 function truncateJsonValueForOtelAttribute(
@@ -152,13 +198,13 @@ function truncateJsonValueForOtelAttribute(
   options: JsonTruncationOptions,
 ): unknown {
   if (typeof value === "string") {
-    return truncateJsonTextForOtelAttribute(value, options.maxStringChars);
+    return truncateJsonTextForOtelAttribute(options.redact(value), options.maxStringChars);
   }
   if (typeof value === "number" || typeof value === "boolean" || value === null) {
     return value;
   }
   if (typeof value === "bigint") {
-    return truncateJsonTextForOtelAttribute(String(value), options.maxStringChars);
+    return truncateJsonTextForOtelAttribute(options.redact(String(value)), options.maxStringChars);
   }
   if (value === undefined || typeof value === "function" || typeof value === "symbol") {
     return undefined;
@@ -218,8 +264,7 @@ function truncateJsonObjectForOtelAttribute(
   return result;
 }
 
-function truncateJsonTextForOtelAttribute(value: string, maxChars: number): string {
-  const redacted = redactSensitiveText(value);
+function truncateJsonTextForOtelAttribute(redacted: string, maxChars: number): string {
   if (redacted.length <= maxChars) {
     return redacted;
   }

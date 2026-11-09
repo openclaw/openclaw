@@ -23,6 +23,7 @@ function execute(
   recordTokenReplacement: (
     facts: NonNullable<DevicePairingCommitReceipt["tokensReplaced"]>,
   ) => void,
+  recordNodeApproval: (facts: NonNullable<DevicePairingCommitReceipt["nodeApproval"]>) => void,
   recordWorkerEnvironment: (
     facts: NonNullable<DevicePairingCommitReceipt["workerEnvironment"]>,
   ) => void,
@@ -61,7 +62,7 @@ function execute(
     case "node.updateBins":
     case "node.updateSessionHost":
     case "node.rename":
-      return executeDevicePairingNodeMutation(command, database);
+      return executeDevicePairingNodeMutation(command, database, recordNodeApproval);
     default:
       return executeDeviceBootstrapMutation(command, database, recordWorkerEnvironment);
   }
@@ -77,12 +78,16 @@ export function executeDevicePairingMutationInWorker(
         withDevicePairingMutationAdmission(() => {
           const before = readPairedDevicePairingRecordsFromDatabase(database.db);
           let tokensReplaced: DevicePairingCommitReceipt["tokensReplaced"];
+          let nodeApproval: DevicePairingCommitReceipt["nodeApproval"];
           let workerEnvironment: DevicePairingCommitReceipt["workerEnvironment"];
           const result = execute(
             command,
             database,
             (facts) => {
               tokensReplaced = facts;
+            },
+            (facts) => {
+              nodeApproval = facts;
             },
             (facts) => {
               workerEnvironment = facts;
@@ -102,6 +107,7 @@ export function executeDevicePairingMutationInWorker(
             changed,
             ...(tokensReplaced ? { tokensReplaced } : {}),
             ...(workerEnvironment ? { workerEnvironment } : {}),
+            ...(nodeApproval ? { nodeApproval } : {}),
           } satisfies DevicePairingCommitReceipt);
           return result;
         }),

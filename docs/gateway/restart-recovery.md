@@ -16,7 +16,9 @@ until you inspect or replace it.
 
 Before accepting another message, the Gateway retires leftover recovery records
 whose runs are all recorded terminal and have no remaining execution or delivery
-owner. This lets a stopped conversation continue without resetting its history.
+owner. For a killed conversation, it also releases unfinished fences after checking
+that no run or session work remains active and no final delivery is pending. This
+lets a stopped conversation continue without resetting its history.
 
 Inter-session steering updates remain context for the executing turn. When that
 turn retains a human Control UI or channel source claim, recovery uses the claim

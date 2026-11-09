@@ -22,7 +22,15 @@ function isUpdateChannelOnlyRoot(value: unknown): boolean {
   return updateKeys.length === 1 && typeof update.channel === "string";
 }
 
+const inheritedAnomalyReason = "inherited-config-anomaly";
+
+export function createInheritedConfigAnomalySignature(hash: string): string {
+  return `${hash}:${inheritedAnomalyReason}`;
+}
+
 export function resolveConfigObserveSuspiciousReasons(params: {
+  hash?: string;
+  lastObservedSuspiciousSignature?: string | null;
   bytes: number;
   gatewayMode: string | null;
   parsed: unknown;
@@ -43,6 +51,13 @@ export function resolveConfigObserveSuspiciousReasons(params: {
   if (baseline.gatewayMode && isUpdateChannelOnlyRoot(params.parsed)) {
     reasons.push("update-channel-only-root");
   }
+  if (
+    reasons.length === 0 &&
+    params.hash &&
+    params.lastObservedSuspiciousSignature === createInheritedConfigAnomalySignature(params.hash)
+  ) {
+    reasons.push(inheritedAnomalyReason);
+  }
   return reasons;
 }
 
@@ -53,6 +68,8 @@ export function resolveConfigReadRecoveryContext(params: {
   backupBaseline?: ConfigHealthFingerprint;
 }): { suspicious: string[]; suspiciousSignature: string } | null {
   const suspicious = resolveConfigObserveSuspiciousReasons({
+    hash: params.current.hash,
+    lastObservedSuspiciousSignature: params.entry.lastObservedSuspiciousSignature,
     bytes: params.current.bytes,
     gatewayMode: params.current.gatewayMode,
     parsed: params.parsed,

@@ -19,9 +19,13 @@ import {
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
 import { hasLiveAgentRunContext, listAgentRunsForSession } from "../../infra/agent-run-registry.js";
-import { captureGatewaySessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import {
+  captureGatewaySessionWorkAdmissions,
+  isSessionWorkAdmissionActive,
+} from "../../sessions/session-lifecycle-admission.js";
 import { createCurrentProcessOwnerLookup } from "./main-session-recovery-live-owners.js";
 import {
+  isKilledMainSessionRecoveryFenceOnly,
   isMainRestartRecoveryAggregateTerminalOnly,
   isMainRestartRecoveryCandidate,
   isMainSessionRecoveryReconciliationCandidate,
@@ -58,6 +62,7 @@ async function markRecoveryStore(params: {
         runs?: RestartRecoveryRun[];
       }
     | { action: "retire_terminal" }
+    | { action: "release_killed" }
     | { action: "restore_yielded"; isCurrent: () => boolean }
     | undefined;
 }) {
@@ -86,8 +91,10 @@ async function markRecoveryStore(params: {
           counts.skipped++;
           continue;
         }
-        if (plan.action === "restore_yielded") {
-          yieldOwners.push(plan.isCurrent);
+        if (plan.action === "restore_yielded" || plan.action === "release_killed") {
+          if (plan.action === "restore_yielded") {
+            yieldOwners.push(plan.isCurrent);
+          }
           transitionMainSessionRecovery(entry, { kind: "clear" });
           replacements.push({ sessionKey, entry });
           counts.skipped++;
@@ -312,7 +319,7 @@ async function markOrphanedMainSessionStore(
   const orphanChecks: Array<() => boolean> = [];
   return await markRecoveryStore({
     ...params.target,
-    statuses: params.target.sessionKey ? undefined : ["running"],
+    statuses: params.target.sessionKey ? undefined : ["running", "killed"],
     assertCommitAllowed: () => {
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       params.assertCommitAllowed?.();
@@ -339,12 +346,14 @@ async function markOrphanedMainSessionStore(
         entry.lifecycleRunId,
         ...(entry.restartRecoveryRuns ?? []).map((run) => run.runId),
       ];
+      // Session work can outlive its agent/embedded run registration.
       const hasLiveOwner = () =>
         writerRunIds.some((runId) => runId && hasLiveAgentRunContext(runId)) ||
         listAgentRunsForSession({ sessionKey, sessionId: entry.sessionId }).some(({ runId }) =>
           hasLiveAgentRunContext(runId),
         ) ||
-        hasCurrentProcessOwner(entry, sessionKey);
+        hasCurrentProcessOwner(entry, sessionKey) ||
+        isSessionWorkAdmissionActive(params.target.storePath, [sessionKey, entry.sessionId]);
       if (hasLiveOwner()) {
         return undefined;
       }
@@ -372,6 +381,11 @@ async function markOrphanedMainSessionStore(
           };
         }
         return undefined;
+      }
+      if (isKilledMainSessionRecoveryFenceOnly(entry)) {
+        // Stop is terminal: release only ownerless fences, never replay the task.
+        orphanChecks.push(hasLiveOwner);
+        return { action: "release_killed" };
       }
       if (entry.abortedLastRun === true) {
         return undefined;
@@ -411,7 +425,7 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const storeTargets = await discoverRestartRecoveryStoreTargets({
     ...params,
-    statuses: ["running"],
+    statuses: ["running", "killed"],
   });
   for (const target of storeTargets) {
     const key = restartRecoveryStoreTargetKey(target);

@@ -284,7 +284,8 @@ export async function verifyCliBackendAnnounceOrdering({
       deliver: false,
       timeout: 240,
       message: [
-        "Run this exact OpenClaw CLI-backed completion announcement scenario. Use tool calls, not prose.",
+        "Run this exact OpenClaw CLI-backed completion announcement scenario.",
+        "Until the barrier tool returns, emit only tool calls: no assistant text, preamble, progress update, or narration before or between calls.",
         `Call sessions_spawn exactly once with taskName=cli_announce_${announceNonce.toLowerCase()} and task=${JSON.stringify(`Reply exactly ${announceChildToken} and nothing else.`)}.`,
         `After sessions_spawn returns status=accepted, call ${CLI_ANNOUNCE_BARRIER_TOOL_NAME} exactly once with no arguments.`,
         `After that tool returns, your entire reply must be exactly ${announceParentToken}, with no other text. Do not include or predict the child result in this reply.`,

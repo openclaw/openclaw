@@ -207,8 +207,10 @@ lookups from the previous connection.
 When you open an existing session, the conversation appears before supporting
 panels and pull-request details load. You can start typing as soon as its identity
 is resolved, while the transcript still shows its loading skeleton. The same
-composer keeps your draft and focus when the conversation appears. You can send
-ordinary messages and attachments while history loads: the message enters the
+composer keeps your draft and focus when the conversation appears. Connection
+recovery or a retained initial turn can temporarily hold Send without blocking
+draft editing. Once that hold clears, you can send ordinary messages and
+attachments while history loads: the message enters the
 outbox immediately, leaving the composer ready for your next draft. The open
 chat confirms its current session and conversation branch before delivery
 continues automatically. Switching chats keeps queued messages tied to their

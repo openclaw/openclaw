@@ -71,7 +71,7 @@ export function installIMessageStateRuntimeForTest(): void {
           options,
         )) as PluginRuntime["state"]["openSyncKeyedStore"],
     },
-    channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
+    channel: createPluginRuntimeMock().channel,
   } as PluginRuntime);
   createIMessagePluginStateSyncStoreForTest({
     namespace: "imessage.reply-cache",
@@ -132,7 +132,7 @@ export async function loadFreshIMessageReplyCacheForTest(options?: {
           storeOptions,
         )) as PluginRuntime["state"]["openSyncKeyedStore"],
     },
-    channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
+    channel: createPluginRuntimeMock().channel,
   } as PluginRuntime);
   createIMessagePluginStateSyncStoreForTest({
     namespace: "imessage.reply-cache",
@@ -166,6 +166,6 @@ export function installIMessageFailingStateRuntimeForTest(): void {
         throw new Error("test plugin-state failure");
       }) as PluginRuntime["state"]["openSyncKeyedStore"],
     },
-    channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
+    channel: createPluginRuntimeMock().channel,
   } as PluginRuntime);
 }

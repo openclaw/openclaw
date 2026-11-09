@@ -41,6 +41,8 @@ export type LegacyMainSessionMigrationResult = {
 export type PhysicalStore = {
   databaseAgentId: string;
   ownerStorePath: string;
+  /** Original database locator for adjacent external cold archives, when path is realpathed. */
+  archiveStorePath?: string;
   path: string;
 };
 

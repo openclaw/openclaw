@@ -35,6 +35,7 @@ import {
 import { imessageRpcSupportsMethod } from "./private-api-status.js";
 import { getCachedIMessagePrivateApiStatus, probeIMessagePrivateApi } from "./probe.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
+import { clearIMessageSendFailure, withIMessageSendFailureStatus } from "./send-status.js";
 import { parseIMessageTarget, type IMessageService, type IMessageTarget } from "./targets.js";
 
 const loadIMessageActionsRuntime = createLazyRuntimeNamedExport(
@@ -152,16 +153,19 @@ async function rememberOutboundBridgeMessage(params: {
   chatGuid: string;
 }): Promise<void> {
   const messageId = params.messageId?.trim();
-  if (!messageId || messageId === "ok" || messageId === "unknown") {
+  if (!messageId || messageId === "unknown") {
     return;
   }
-  await rememberIMessageReplyCache({
-    accountId: params.accountId,
-    messageId,
-    chatGuid: params.chatGuid,
-    timestamp: Date.now(),
-    isFromMe: true,
-  });
+  if (messageId !== "ok") {
+    await rememberIMessageReplyCache({
+      accountId: params.accountId,
+      messageId,
+      chatGuid: params.chatGuid,
+      timestamp: Date.now(),
+      isFromMe: true,
+    });
+  }
+  clearIMessageSendFailure(params.accountId);
 }
 
 /**
@@ -749,13 +753,15 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       const filename = readStringParam(params, "filename", { required: true });
       const asVoice = readBooleanParam(params, "asVoice");
       const resolvedChatGuid = await chatGuid();
-      const result = await runtime.sendAttachment({
-        chatGuid: resolvedChatGuid,
-        buffer: decodeBase64Buffer(params, action),
-        filename,
-        asVoice: asVoice ?? undefined,
-        options: { ...opts, chatGuid: resolvedChatGuid },
-      });
+      const result = await withIMessageSendFailureStatus(account.accountId, () =>
+        runtime.sendAttachment({
+          chatGuid: resolvedChatGuid,
+          buffer: decodeBase64Buffer(params, action),
+          filename,
+          asVoice: asVoice ?? undefined,
+          options: { ...opts, chatGuid: resolvedChatGuid },
+        }),
+      );
       await rememberOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,

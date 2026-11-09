@@ -10,11 +10,13 @@ import {
 } from "@opentelemetry/semantic-conventions/incubating";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  createOtelContentRedactor,
   MAX_OTEL_CONTENT_ARRAY_ITEMS,
   MAX_OTEL_CONTENT_ATTRIBUTE_CHARS,
   normalizeOtelContentValue,
   safeJsonString,
   type OtelContentCapturePolicy,
+  type OtelContentRedactor,
 } from "./service-content-normalization.js";
 
 export type OtelModelCallContent = {
@@ -170,6 +172,15 @@ function redactInternalReasoningParts(value: unknown): unknown {
     for (const field of INTERNAL_REASONING_PART_FIELDS) {
       delete redacted[field];
     }
+    // Oversized inline image bytes cannot fit whole in any exported attribute.
+    // Keep the part and MIME type rather than redacting an undecodable prefix.
+    if (
+      part.type === "image" &&
+      typeof part.data === "string" &&
+      part.data.length > MAX_OTEL_CONTENT_ATTRIBUTE_CHARS
+    ) {
+      delete redacted.data;
+    }
     return redacted;
   });
 }
@@ -279,45 +290,63 @@ function normalizeGenAiToolDefinitions(value: unknown) {
   return definitions;
 }
 
-function assignJsonAttribute(
+function assignJsonAttributes(
   attributes: Record<string, string | number | boolean>,
-  key: string,
+  keys: readonly string[],
   value: unknown,
-): void {
-  const json = safeJsonString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
-  if (json) {
+  redact: OtelContentRedactor,
+): boolean {
+  const json = safeJsonString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS, redact);
+  if (!json) {
+    return false;
+  }
+  for (const key of keys) {
     attributes[key] = json;
   }
+  return true;
 }
 
 function assignGenAiModelContentAttributes(
   attributes: Record<string, string | number | boolean>,
   content: OtelModelCallContent | undefined,
   policy: OtelContentCapturePolicy,
+  redact: OtelContentRedactor,
 ): void {
   if (policy.systemPrompt && typeof content?.systemPrompt === "string") {
     const systemInstructions = [textPart(content.systemPrompt)];
-    assignJsonAttribute(attributes, ATTR_GEN_AI_SYSTEM_INSTRUCTIONS, systemInstructions);
+    assignJsonAttributes(attributes, [ATTR_GEN_AI_SYSTEM_INSTRUCTIONS], systemInstructions, redact);
   }
   if (policy.inputMessages) {
     const inputMessages = normalizeGenAiMessages(content?.inputMessages, "user");
-    if (inputMessages.length > 0) {
-      assignJsonAttribute(attributes, ATTR_GEN_AI_INPUT_MESSAGES, inputMessages);
-      assignJsonAttribute(attributes, "input.value", inputMessages);
+    if (
+      inputMessages.length > 0 &&
+      assignJsonAttributes(
+        attributes,
+        [ATTR_GEN_AI_INPUT_MESSAGES, "input.value"],
+        inputMessages,
+        redact,
+      )
+    ) {
       attributes["input.mime_type"] = "application/json";
     }
   }
   if (policy.toolDefinitions) {
     const toolDefinitions = normalizeGenAiToolDefinitions(content?.toolDefinitions);
     if (toolDefinitions.length > 0) {
-      assignJsonAttribute(attributes, ATTR_GEN_AI_TOOL_DEFINITIONS, toolDefinitions);
+      assignJsonAttributes(attributes, [ATTR_GEN_AI_TOOL_DEFINITIONS], toolDefinitions, redact);
     }
   }
   if (policy.outputMessages) {
     const outputMessages = normalizeGenAiMessages(content?.outputMessages, "assistant");
-    if (outputMessages.length > 0) {
-      assignJsonAttribute(attributes, ATTR_GEN_AI_OUTPUT_MESSAGES, outputMessages);
-      assignJsonAttribute(attributes, "output.value", outputMessages);
+    if (
+      outputMessages.length > 0 &&
+      assignJsonAttributes(
+        attributes,
+        [ATTR_GEN_AI_OUTPUT_MESSAGES, "output.value"],
+        outputMessages,
+        redact,
+      )
+    ) {
       attributes["output.mime_type"] = "application/json";
     }
   }
@@ -327,8 +356,9 @@ function assignOtelContentAttribute(
   attributes: Record<string, string | number | boolean>,
   key: string,
   value: unknown,
+  redact: OtelContentRedactor,
 ): void {
-  const normalized = normalizeOtelContentValue(value);
+  const normalized = normalizeOtelContentValue(value, redact);
   if (normalized) {
     attributes[key] = normalized;
   }
@@ -363,12 +393,15 @@ export function assignOtelModelContentAttributes(
         outputMessages: redactInternalReasoningFromMessages(content.outputMessages),
       }
     : undefined;
-  assignGenAiModelContentAttributes(attributes, redactedContent, policy);
+  // Share redaction work across all projections of this model-call export.
+  const redact = createOtelContentRedactor();
+  assignGenAiModelContentAttributes(attributes, redactedContent, policy, redact);
   if (policy.inputMessages) {
     assignOtelContentAttribute(
       attributes,
       "openclaw.content.input_messages",
       redactedContent?.inputMessages,
+      redact,
     );
   }
   if (policy.toolDefinitions) {
@@ -376,6 +409,7 @@ export function assignOtelModelContentAttributes(
       attributes,
       "openclaw.content.tool_definitions",
       content?.toolDefinitions,
+      redact,
     );
   }
   if (policy.outputMessages) {
@@ -383,10 +417,16 @@ export function assignOtelModelContentAttributes(
       attributes,
       "openclaw.content.output_messages",
       redactedContent?.outputMessages,
+      redact,
     );
   }
   if (policy.systemPrompt) {
-    assignOtelContentAttribute(attributes, "openclaw.content.system_prompt", content?.systemPrompt);
+    assignOtelContentAttribute(
+      attributes,
+      "openclaw.content.system_prompt",
+      content?.systemPrompt,
+      redact,
+    );
   }
 }
 

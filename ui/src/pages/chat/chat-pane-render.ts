@@ -48,7 +48,7 @@ import { ChatProviderReviewController } from "./chat-provider-review-controller.
 import { createChatQuestionActions } from "./chat-question-actions.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
-import { chatSendPendingReason } from "./chat-send-support.ts";
+import { chatSendHoldReason, chatSendPendingReason } from "./chat-send-support.ts";
 import { refreshChatCommands } from "./chat-state-refresh.ts";
 import {
   resolveChatAgentId,
@@ -334,9 +334,12 @@ export class ChatPane extends ChatPaneLayoutRender {
         : !disabledReason &&
           !(selectedSessionArchived || restartRecoveryTombstoned || placementComposer.blocksSend) &&
           (!pendingReason || initialHistoryUnavailable));
+    // History loading permits drafting, not bypassing the send owner’s recovery hold.
+    // Placement presentation alone is not a retained initial turn.
+    const sendHoldReason = catalogKey ? null : chatSendHoldReason(state, state.sessionKey);
     const composerAvailability = {
       canCompose: composerAccess.canCompose && composerAvailable,
-      canSend: composerAccess.canSend && composerAvailable,
+      canSend: composerAccess.canSend && composerAvailable && !sendHoldReason,
       ...initialHistorySubmitState(state, initialHistoryUnavailable),
       modelRequiredReason,
       disabledReason:

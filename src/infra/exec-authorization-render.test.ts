@@ -55,6 +55,53 @@ async function prepareReviewedCommand(command: string, env: NodeJS.ProcessEnv, c
 }
 
 describe("exec authorization renderer", () => {
+  it.each([
+    [
+      String.raw`test $'\0\''?v benign`,
+      "enforced",
+      ["safeBuiltins"],
+      "shell expansion in enforced arguments",
+    ],
+    // A prompt-only eval plan lets the renderer inspect $$; ordinary commands are
+    // already rejected as dynamic arguments by the planner. No allowlist grant is supplied.
+    [
+      String.raw`eval git status $$'a\'?v`,
+      "enforced",
+      [null],
+      "shell expansion in enforced arguments",
+    ],
+    [
+      String.raw`eval git status $$$$'a\'?v`,
+      "enforced",
+      [null],
+      "shell expansion in enforced arguments",
+    ],
+  ] as const)("rejects dynamic quote source %s", async (command, mode, satisfiedBy, reason) => {
+    await expect(render(command, { mode, segmentSatisfiedBy: [...satisfiedBy] })).resolves.toEqual({
+      ok: false,
+      reason,
+    });
+  });
+
+  it.each([
+    [
+      String.raw`git status $'a\'?v'`,
+      "enforced",
+      ["allowlist"],
+      expect.stringMatching(/^\/.+\/git status \$'a\\'\?v'$/),
+    ],
+    [
+      String.raw`eval git status $$$'a\'?v'`,
+      "enforced",
+      [null],
+      String.raw`eval git status $$$'a\'?v'`,
+    ],
+  ] as const)("preserves static quote source %s", async (command, mode, satisfiedBy, expected) => {
+    expect(renderOk(await render(command, { mode, segmentSatisfiedBy: [...satisfiedBy] }))).toEqual(
+      expected,
+    );
+  });
+
   it("rewrites only approved executables while preserving pipeline arguments", async () => {
     const command = renderOk(
       await render("git diff | head", {

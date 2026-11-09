@@ -485,6 +485,50 @@ describe("maybeScanExtraGatewayServices", () => {
     expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
   });
 
+  it.each(["mkdir", "rename"] as const)(
+    "removes a confirmed-unloaded legacy plist when Trash %s is denied",
+    async (operation) => {
+      setupLegacyMacService();
+      mockConfirmedUnloaded();
+      vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+      vi.spyOn(fs, "access").mockResolvedValue(undefined);
+      const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
+      vi.mocked(fs[operation]).mockRejectedValueOnce(
+        Object.assign(new Error("EPERM"), { code: "EPERM" }),
+      );
+      const unlink = vi.spyOn(fs, "unlink").mockResolvedValue(undefined);
+
+      await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), makeDoctorPrompts());
+
+      expectBoundedLaunchctlCleanup();
+      expect(rename).toHaveBeenCalledTimes(operation === "rename" ? 1 : 0);
+      expect(unlink).toHaveBeenCalledWith(LEGACY_MAC_PLIST);
+      expectNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+      expectNoNoteContaining(".Trash", "Legacy gateway removed");
+      expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway cleanup skipped");
+    },
+  );
+
+  it("does not report removal when both legacy Trash and unlink fail", async () => {
+    setupLegacyMacService();
+    mockConfirmedUnloaded();
+    vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    vi.spyOn(fs, "access").mockResolvedValue(undefined);
+    const denied = Object.assign(new Error("EACCES"), { code: "EACCES" });
+    vi.spyOn(fs, "rename").mockRejectedValue(denied);
+    const unlink = vi.spyOn(fs, "unlink").mockRejectedValue(denied);
+
+    await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), makeDoctorPrompts());
+
+    expectBoundedLaunchctlCleanup();
+    expect(unlink).toHaveBeenCalledWith(LEGACY_MAC_PLIST);
+    expectNoteContaining(
+      LEGACY_MAC_LABEL + " (could not move plist)",
+      "Legacy gateway cleanup skipped",
+    );
+    expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+  });
+
   it("does not report removal when the confirmed-unloaded plist cannot be moved", async () => {
     setupLegacyMacService();
     mockConfirmedUnloaded();

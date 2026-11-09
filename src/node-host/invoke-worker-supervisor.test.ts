@@ -37,6 +37,14 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
+function readLauncherPid(pidPath: string): number {
+  const pid = Number(fs.readFileSync(pidPath, "utf8").trim());
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    throw new Error("launcher has not published a positive PID");
+  }
+  return pid;
+}
+
 function launchInput() {
   return testWorkerLaunchInput(path.resolve("workspace"), "launch-1", "wait");
 }
@@ -155,6 +163,16 @@ async function invokePrivate(params: {
 }
 
 describe("node-host worker supervisor commands", () => {
+  it.each(["", "0", "-1", "1.5", "not-a-pid"])(
+    "does not accept an incomplete or invalid launcher PID %j",
+    (contents) => {
+      const pidPath = path.join(tempDirs.make("node-worker-launcher-pid-"), "launcher.pid");
+      fs.writeFileSync(pidPath, contents);
+      expect(() => readLauncherPid(pidPath)).toThrow("positive PID");
+      fs.writeFileSync(pidPath, String(process.pid));
+      expect(readLauncherPid(pidPath)).toBe(process.pid);
+    },
+  );
   it("passes a bounded status wait and its connection cancellation to the supervisor", async () => {
     const supervisor = supervisorWith(fullReceipt());
     const controller = new AbortController();
@@ -349,19 +367,17 @@ describe("node-host worker supervisor commands", () => {
         supervisor: supervisorWith(fullReceipt()),
         signal: controller.signal,
       });
-      await vi.waitFor(() => expect(fs.existsSync(pidPath)).toBe(true));
-      const pid = Number(fs.readFileSync(pidPath, "utf8").trim());
       try {
+        // File creation precedes the shell's PID write; existence is not readiness.
+        const pid = await vi.waitFor(() => readLauncherPid(pidPath));
         controller.abort(new Error("desktop owner closed"));
 
         await expect(running).resolves.toMatchObject({ result: undefined });
         await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
       } finally {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // The expected path already reaped the launcher.
-        }
+        // The invoke owner holds the ChildProcess; never signal a file-derived PID.
+        controller.abort(new Error("desktop test cleanup"));
+        await running;
       }
     },
   );
