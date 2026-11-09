@@ -207,7 +207,7 @@ function startPrepublishArtifactServer() {
           channel: "official",
           isOfficial: true,
           latestVersion: entry.version,
-          tags: { latest: entry.version, beta: entry.version },
+          tags: { latest: entry.version, beta: entry.version, alpha: entry.version },
         },
       });
     } else if (!match[3]) {
