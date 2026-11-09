@@ -231,6 +231,13 @@ metadata: |
             '{!!str true: enabled, TRUE: active}',
             '{!!int 012: enabled, "012": active}',
             '{!!float .inf: enabled, ".inf": active}',
+            '{.nan: enabled, .NaN: active}',
+            '{!!bool yes: enabled, true: active}',
+            '{!!null bogus: enabled, null: active}',
+            '{&key yes: enabled, *key : active}',
+            '{! true: enabled, true: active}',
+            '{!!binary YWJj: enabled, YWJj: active}',
+            '{!!timestamp 2026-01-01: enabled, "2026-01-01": active}',
             '{&key !!str true: enabled, TRUE: active}',
         ):
             with self.subTest(metadata=metadata):
@@ -245,17 +252,229 @@ metadata: |
                 self.assertTrue(*self.validate_content(content))
 
     def test_duplicate_key_check_still_rejects_actual_duplicates(self):
+        for left, right in (
+            ("yes", "yes"),
+            (".inf", ".inf"),
+            ("1", "1.0"),
+            (".inf", "1e999"),
+            ("! true", '"true"'),
+            ('"😀"', r'"\uD83D\uDE00"'),
+        ):
+            with self.subTest(left=left, right=right):
+                content = (
+                    "---\n"
+                    "name: duplicate-skill\n"
+                    "description: Summarize meetings\n"
+                    f"metadata: {{{left}: enabled, {right}: active}}\n"
+                    "---\n"
+                    "# Skill\n"
+                )
+                valid, message = self.validate_content(content)
+                self.assertFalse(valid)
+                self.assertIn("found duplicate key", message)
+
+    def test_unicode_placeholder_does_not_collide_with_escaped_keys(self):
+        content = (
+            "---\n"
+            "name: unicode-keys-skill\n"
+            "description: Summarize meetings\n"
+            "# literal NEL: \u0085\n"
+            r'metadata: {"\u0085": enabled, "\uE000": active}' + "\n"
+            "---\n"
+            "# Skill\n"
+        )
+        self.assertTrue(*self.validate_content(content))
+
+    def test_unicode_placeholder_does_not_rewrite_description_escapes(self):
+        content = (
+            "---\n"
+            "name: unicode-description-skill\n"
+            r'description: "\uE000"' + "\n"
+            "# literal NEL: \u0085\n"
+            "---\n"
+            "# Skill\n"
+        )
+        self.assertTrue(*self.validate_content(content))
+
+    def test_nel_keys_survive_private_use_exhaustion(self):
+        private_use = "".join(
+            chr(codepoint)
+            for start, end in ((0xE000, 0xF900), (0xF0000, 0xFFFFD), (0x100000, 0x10FFFD))
+            for codepoint in range(start, end)
+        )
+        content = (
+            "---\n"
+            "name: unicode-exhaustion-skill\n"
+            "description: Summarize meetings\n"
+            "metadata:\n"
+            "  ? \"a\u0085b\"\n"
+            "  : enabled\n"
+            "  ? \"a b\"\n"
+            "  : active\n"
+            f"# {private_use}\n"
+            "---\n"
+            "# Skill\n"
+        )
+        self.assertTrue(*self.validate_content(content))
+
+    def test_multiline_unicode_breaks_are_not_folded_as_lf(self):
+        for character, escape in (("\u0085", "u0085"), ("\u2028", "u2028"), ("\u2029", "u2029")):
+            for second_key, expected in ((r'"a\nb"', True), (f'"a \\{escape}b"', False)):
+                with self.subTest(escape=escape, second_key=second_key, expected=expected):
+                    content = (
+                        "---\n"
+                        "name: multiline-unicode-skill\n"
+                        "description: Summarize meetings\n"
+                        "metadata:\n"
+                        f"  ? \"a\n    {character}b\"\n"
+                        "  : first\n"
+                        f"  ? {second_key}\n"
+                        "  : second\n"
+                        "---\n"
+                        "# Skill\n"
+                    )
+                    self.assertEqual(self.validate_content(content)[0], expected)
+
+    def test_multiline_unicode_breaks_reject_unindented_document_markers(self):
+        for character in ("\u0085", "\u2028", "\u2029"):
+            for marker in ("---", "..."):
+                with self.subTest(character=ord(character), marker=marker):
+                    content = (
+                        "---\n"
+                        "name: unicode-skill\n"
+                        "description: Summarize meetings\n"
+                        f"metadata: \"a\n{marker}{character}b\"\n"
+                        "---\n"
+                    )
+                    self.assertFalse(self.validate_content(content)[0])
+
+    def test_multiline_unicode_breaks_allow_indented_document_markers(self):
+        content = (
+            "---\n"
+            "name: unicode-skill\n"
+            "description: Summarize meetings\n"
+            "metadata: \"a\n  ---\u2028b\"\n"
+            "---\n"
+        )
+        self.assertTrue(*self.validate_content(content))
+
+    def test_duplicate_key_check_preserves_nel_in_quoted_keys(self):
+        content = (
+            "---\n"
+            "name: unicode-keys-skill\n"
+            "description: Summarize meetings\n"
+            "metadata:\n"
+            "  ? \"a\u0085b\"\n"
+            "  : enabled\n"
+            "  ? \"a b\"\n"
+            "  : active\n"
+            "---\n"
+            "# Skill\n"
+        )
+        self.assertTrue(*self.validate_content(content))
+
+    def test_duplicate_key_check_honors_tag_after_anchor_comment(self):
+        content = (
+            "---\n"
+            "name: tagged-keys-skill\n"
+            "description: Summarize meetings\n"
+            "metadata:\n"
+            "  ? &key # note\n"
+            "    !!str true\n"
+            "  : enabled\n"
+            "  ? true\n"
+            "  : active\n"
+            "---\n"
+            "# Skill\n"
+        )
+        self.assertTrue(*self.validate_content(content))
+
+    def test_duplicate_key_check_rejects_merge_mapping_duplicates(self):
+        for metadata in ("{<<: {a: 1}, <<: {b: 2}}", "{<<: {a: 1, a: 2}}"):
+            with self.subTest(metadata=metadata):
+                content = (
+                    "---\n"
+                    "name: duplicate-skill\n"
+                    "description: Summarize meetings\n"
+                    f"metadata: {metadata}\n"
+                    "---\n"
+                    "# Skill\n"
+                )
+                valid, message = self.validate_content(content)
+                self.assertFalse(valid)
+                self.assertIn("found duplicate key", message)
+
+    def test_duplicate_key_check_rejects_omap_duplicates(self):
+        for metadata in (
+            "!!omap [a: 1, a: 2]",
+            "!!omap [.nan: a, .NaN: b]",
+            "!!omap [{&key a: 1}, {*key : 2}]",
+            "!!omap [{&key !!binary YWJj: 1}, {*key : 2}]",
+        ):
+            with self.subTest(metadata=metadata):
+                content = (
+                    "---\n"
+                    "name: duplicate-skill\n"
+                    "description: Summarize meetings\n"
+                    f"metadata: {metadata}\n"
+                    "---\n"
+                    "# Skill\n"
+                )
+                valid, message = self.validate_content(content)
+                self.assertFalse(valid)
+                self.assertIn("found duplicate key", message)
+
+    def test_omap_alias_object_key_coexists_with_string_key(self):
+        content = (
+            "---\n"
+            "name: omap-keys-skill\n"
+            "description: Summarize meetings\n"
+            "metadata: {defaults: &pair {a: 1}, entries: !!omap [*pair, {a: 2}]}\n"
+            "---\n"
+            "# Skill\n"
+        )
+        self.assertTrue(*self.validate_content(content))
+
+    def test_duplicate_key_check_rejects_repeated_omap_pair_aliases(self):
         content = (
             "---\n"
             "name: duplicate-skill\n"
             "description: Summarize meetings\n"
-            "metadata: {yes: enabled, yes: active}\n"
+            "metadata:\n"
+            "  defaults: &pair {a: 1}\n"
+            "  entries: !!omap [*pair, *pair]\n"
             "---\n"
             "# Skill\n"
         )
         valid, message = self.validate_content(content)
         self.assertFalse(valid)
         self.assertIn("found duplicate key", message)
+
+    def test_duplicate_key_check_rejects_omap_complex_alias_keys(self):
+        content = (
+            "---\n"
+            "name: duplicate-skill\n"
+            "description: Summarize meetings\n"
+            "metadata: {defaults: &pair {a: 1}, entries: !!omap [*pair, {? *pair : 2}]}\n"
+            "---\n"
+            "# Skill\n"
+        )
+        valid, message = self.validate_content(content)
+        self.assertFalse(valid)
+        self.assertIn("found duplicate key", message)
+
+    def test_duplicate_key_check_accepts_long_decimal_zero(self):
+        content = (
+            "---\n"
+            "name: long-number-skill\n"
+            "description: Summarize meetings\n"
+            "metadata:\n"
+            f"  ? {'0' * 4301}\n"
+            "  : enabled\n"
+            "---\n"
+            "# Skill\n"
+        )
+        self.assertTrue(*self.validate_content(content))
 
     def test_colon_rich_recovery_keeps_other_yaml_errors(self):
         content = (

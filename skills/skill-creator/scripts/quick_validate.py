@@ -94,6 +94,24 @@ def _strip_quotes(value: str) -> str:
     return value[1:-1] if quote in {"'", '"'} and value.endswith(quote) else value
 
 
+_SURROGATE_PAIR = re.compile(r"[\uD800-\uDBFF][\uDC00-\uDFFF]")
+_YAML12_EXTRA_BREAKS = "\u0085\u2028\u2029"
+_EXPLICIT_TAG_PREFIX = re.compile(
+    r"^(?:(?:&[^\s]+|#[^\n]*(?:\n|$))\s*)*"
+    r"(?P<tag>!![^\s]+|!<[^>]+>|!(?=\s|$)|![^\s]+)"
+)
+
+
+def _js_string_value(value):
+    """Recover JavaScript string identity from PyYAML's scalar value."""
+
+    def join_pair(match):
+        high, low = map(ord, match.group(0))
+        return chr(0x10000 + ((high - 0xD800) << 10) + low - 0xDC00)
+
+    return _SURROGATE_PAIR.sub(join_pair, value)
+
+
 _CORE_NULL = re.compile(r"^(?:~|[Nn]ull|NULL)?$")
 _CORE_BOOL = re.compile(r"^(?:[Tt]rue|TRUE|[Ff]alse|FALSE)$")
 _CORE_INT = re.compile(r"^[-+]?[0-9]+$")
@@ -106,38 +124,55 @@ _CORE_FLOAT = re.compile(
 )
 
 
+def _js_number(value):
+    """Convert an integer to the runtime's IEEE-754 Number value."""
+
+    try:
+        return float(value)
+    except OverflowError:
+        return float("-inf" if value < 0 else "inf")
+
+
 def _core_int(value):
     """Resolve a YAML core integer, including leading-zero decimals."""
 
     if _CORE_INT.fullmatch(value):
-        return ("int", int(value, 10))
+        return ("number", float(value))
     if _CORE_INT_OCT.fullmatch(value):
-        return ("int", int(value[2:], 8))
+        return ("number", _js_number(int(value[2:], 8)))
     if _CORE_INT_HEX.fullmatch(value):
-        return ("int", int(value[2:], 16))
+        return ("number", _js_number(int(value[2:], 16)))
     return None
 
 
 def _core_float(value):
-    """Resolve a YAML core float, including the dotted inf/nan spellings."""
+    """Resolve a YAML core float with JavaScript Number identity."""
 
     if not _CORE_FLOAT.fullmatch(value):
         return None
     lowered = value.lower()
     if lowered.endswith("nan"):
-        return ("float", "nan")
+        # The runtime compares scalar values with ===, under which NaN is never equal.
+        return ("number", float("nan"))
     if lowered.endswith("inf"):
-        return ("float", -1 if value.startswith("-") else 1, "inf")
-    return ("float", float(value))
+        return ("number", float("-inf" if value.startswith("-") else "inf"))
+    return ("number", float(value))
 
 
 def _explicit_core_key(tag, value):
     """Resolve a key whose source carries an explicit YAML tag."""
 
+    if tag in {
+        "tag:yaml.org,2002:binary",
+        "tag:yaml.org,2002:timestamp",
+        "tag:yaml.org,2002:merge",
+    }:
+        # Runtime object values use reference identity, so separate nodes never collide.
+        return ("object", object())
     if tag == "tag:yaml.org,2002:null":
-        return ("null", None)
+        return ("null", None) if _CORE_NULL.fullmatch(value) else ("str", value)
     if tag == "tag:yaml.org,2002:bool":
-        return ("bool", value.strip().lower() in {"true", "yes", "on", "y"})
+        return ("bool", value[0] in "tT") if _CORE_BOOL.fullmatch(value) else ("str", value)
     if tag == "tag:yaml.org,2002:int":
         return _core_int(value) or ("str", value)
     if tag == "tag:yaml.org,2002:float":
@@ -155,8 +190,12 @@ def _core_scalar_key(node, source):
 
     value = node.value
     authored = source[node.start_mark.index : node.end_mark.index].lstrip()
-    # An anchor may precede the tag, so look past any `&name` prefixes.
-    if re.match(r"^(?:&[^\s]+\s+)*!", authored):
+    # YAML permits comments between node properties and allows either property order.
+    tag_match = _EXPLICIT_TAG_PREFIX.match(authored)
+    if tag_match:
+        if tag_match.group("tag") == "!":
+            # A non-specific `!` always selects the runtime's string scalar schema.
+            return ("str", value)
         return _explicit_core_key(node.tag, value)
     if node.style is None:
         if _CORE_NULL.fullmatch(value):
@@ -172,28 +211,143 @@ def _core_scalar_key(node, source):
 def _load_frontmatter(frontmatter_text: str):
     """Load YAML with the loader's duplicate-key rejection."""
 
+    visited = set()
+    object_identities = {}
+
+    def object_identity(node):
+        return object_identities.setdefault(id(node), ("object", object()))
+
+    def check_omap_key(key, key_node, parent_node, keys):
+        if key[0] == "number" and key[1] != key[1]:
+            key = ("number", "nan")
+        if key in keys:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                parent_node.start_mark,
+                f"found duplicate key {getattr(key_node, 'value', key_node)!r}",
+                key_node.start_mark,
+            )
+        keys.append(key)
+
+    def validate_node(node, omap_keys=None):
+        if id(node) in visited:
+            return
+        visited.add(id(node))
+        if isinstance(node, yaml.ScalarNode):
+            node.value = _js_string_value(node.value)
+            return
+        if isinstance(node, yaml.SequenceNode):
+            ordered_map_keys = [] if node.tag == "tag:yaml.org,2002:omap" else None
+            for child in node.value:
+                if ordered_map_keys is None:
+                    validate_node(child)
+                    continue
+
+                is_alias = id(child) in visited
+                if isinstance(child, yaml.MappingNode) and not is_alias:
+                    if len(child.value) == 1:
+                        validate_node(child, ordered_map_keys)
+                    else:
+                        validate_node(child)
+                        if not child.value:
+                            check_omap_key(("null", None), child, node, ordered_map_keys)
+                    continue
+
+                # resolvePairs wraps scalar and alias items as keys. An alias to
+                # a mapping is an object key, not an expansion of that map's pair.
+                validate_node(child)
+                if isinstance(child, yaml.ScalarNode):
+                    key = _core_scalar_key(child, frontmatter_text)
+                    if key[0] == "object":
+                        key = object_identity(child)
+                else:
+                    key = object_identity(child)
+                check_omap_key(key, child, node, ordered_map_keys)
+            return
+        if not isinstance(node, yaml.MappingNode):
+            return
+
+        keys = [] if omap_keys is None else omap_keys
+        for key_node, value_node in node.value:
+            # PyYAML replaces an alias with its anchored node, while the runtime
+            # keeps a distinct Alias node that never equals the anchored scalar.
+            is_alias = id(key_node) in visited
+            validate_node(key_node)
+            key = None
+            if omap_keys is not None:
+                # Ordered maps also resolve aliases and check their final Map keys
+                # with SameValueZero. Anchor object identity must survive aliasing.
+                if isinstance(key_node, yaml.ScalarNode):
+                    key = _core_scalar_key(key_node, frontmatter_text)
+                    if key[0] == "object":
+                        key = object_identity(key_node)
+                else:
+                    key = object_identity(key_node)
+            elif isinstance(key_node, yaml.ScalarNode):
+                # SafeLoader constructs YAML 1.1 values and flattens merge keys.
+                # Check the raw core-schema identities before either behavior.
+                key = ("alias", object()) if is_alias else _core_scalar_key(key_node, frontmatter_text)
+            if key is not None:
+                if omap_keys is not None:
+                    check_omap_key(key, key_node, node, keys)
+                else:
+                    if key in keys:
+                        raise yaml.constructor.ConstructorError(
+                            "while constructing a mapping",
+                            node.start_mark,
+                            f"found duplicate key {key_node.value!r}",
+                            key_node.start_mark,
+                        )
+                    keys.append(key)
+            validate_node(value_node)
+
     class UniqueKeyLoader(yaml.SafeLoader):
-        def construct_mapping(self, node, deep=False):
-            keys = []
-            for key_node, _ in node.value:
-                # Merge keys are flattened by SafeConstructor and have no constructor.
-                if key_node.tag == "tag:yaml.org,2002:merge":
-                    continue
-                # SafeLoader constructs YAML 1.1 booleans, so `yes`/`on` collide
-                # with `true`; the core schema used by the runtime reader keeps
-                # them distinct. Compare typed core values, not constructed keys.
-                if not isinstance(key_node, yaml.ScalarNode):
-                    continue
-                key = _core_scalar_key(key_node, frontmatter_text)
-                if key in keys:
-                    raise yaml.constructor.ConstructorError(
-                        "while constructing a mapping",
-                        node.start_mark,
-                        f"found duplicate key {key_node.value!r}",
-                        key_node.start_mark,
+        def scan_flow_scalar_non_spaces(self, double, start_mark):
+            if self.peek() in _YAML12_EXTRA_BREAKS:
+                # YAML 1.2 keeps NEL/LS/PS inside a quoted scalar instead of folding it.
+                character = self.peek()
+                self.forward()
+                return [character]
+            return super().scan_flow_scalar_non_spaces(double, start_mark)
+
+        def scan_flow_scalar_spaces(self, double, start_mark):
+            if self.peek() in _YAML12_EXTRA_BREAKS:
+                return []
+            if self.peek() in " \t":
+                length = 0
+                while self.peek(length) in " \t":
+                    length += 1
+                if self.peek(length) in _YAML12_EXTRA_BREAKS:
+                    whitespace = self.prefix(length)
+                    self.forward(length)
+                    return [whitespace]
+            return super().scan_flow_scalar_spaces(double, start_mark)
+
+        def scan_flow_scalar_breaks(self, double, start_mark):
+            chunks = []
+            while True:
+                prefix = self.prefix(3)
+                if prefix in {"---", "..."} and self.peek(3) in (
+                    "\0 \t\r\n" + _YAML12_EXTRA_BREAKS
+                ):
+                    raise yaml.scanner.ScannerError(
+                        "while scanning a quoted scalar",
+                        start_mark,
+                        "found unexpected document separator",
+                        self.get_mark(),
                     )
-                keys.append(key)
-            return super().construct_mapping(node, deep=deep)
+                while self.peek() in " \t":
+                    self.forward()
+                if self.peek() in _YAML12_EXTRA_BREAKS:
+                    return chunks
+                if self.peek() in "\r\n":
+                    chunks.append(self.scan_line_break())
+                else:
+                    return chunks
+
+        def construct_document(self, node):
+            validate_node(node)
+            return super().construct_document(node)
 
     return yaml.load(frontmatter_text, Loader=UniqueKeyLoader)
 
