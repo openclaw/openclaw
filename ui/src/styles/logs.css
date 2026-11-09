@@ -19,6 +19,12 @@ main.content:where(.content--logs-page) .content-header {
   flex: 0 0 auto;
 }
 
+/* Export sits level with the 32px Refresh beside it instead of the taller default button. */
+main.content:where(.content--logs-page) .page-header-actions .btn {
+  height: var(--settings-control-height);
+  padding-block: 0;
+}
+
 /* The page column stays in the fill-height chain, and the log's blocks keep their
    tight rhythm rather than the page's section gap. */
 .settings-workspace--fill-height > .settings-workspace__body > .settings-page {
