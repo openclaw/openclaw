@@ -80,7 +80,7 @@ export function searchQaBusMessages(params: {
 }) {
   const accountId = normalizeAccountId(params.input.accountId);
   const limit = Math.max(1, Math.min(params.input.limit ?? 20, 100));
-  const query = normalizeOptionalLowercaseString(params.input.query);
+  const query = normalizeOptionalLowercaseString(params.input.query)?.normalize("NFC");
   return Array.from(params.messages.values())
     .filter(
       (message) =>
@@ -113,7 +113,10 @@ export function searchQaBusMessages(params: {
         .map((toolCall) => toolCall.name)
         .join(" ")
         .toLowerCase();
-      return `${messageText} ${searchableAttachmentText} ${searchableToolText}`.includes(query);
+      // Normalize the search projection only; message and attachment bytes remain verbatim.
+      return `${messageText} ${searchableAttachmentText} ${searchableToolText}`
+        .normalize("NFC")
+        .includes(query);
     })
     .slice(-limit)
     .map(cloneMessage);

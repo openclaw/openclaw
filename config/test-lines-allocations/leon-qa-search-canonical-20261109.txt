@@ -1,0 +1,2 @@
+23
+# Canonical Unicode search across QA message text and attachment metadata; original message bytes and accent significance retained.
