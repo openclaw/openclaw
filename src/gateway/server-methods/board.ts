@@ -39,6 +39,7 @@ import {
   captureBoardRequestAuthority,
   readBoardDataBinding,
   runBoardActionVerb,
+  runBoardNamedAction,
   triggerBoardCronJob,
 } from "../board-host-tools.js";
 import { buildBoardWidgetSandboxPath } from "../board-sandbox.js";
@@ -64,6 +65,8 @@ import {
   projectBoardSnapshot,
   broadcastBoardChanged,
 } from "./board-handler-context.js";
+import { createBoardWidgetConversationHandler } from "./board-widget-conversation.js";
+import { createBoardWidgetSourceHandler } from "./board-widget-source.js";
 import { retainCanvasWidgetRead } from "./canvas-widget-read.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -72,6 +75,7 @@ import { assertValidParams } from "./validation.js";
 export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
   const resolveBoardWidgetApproval = createBoardWidgetApprovalResolver();
   return {
+    "board.widget.conversation": createBoardWidgetConversationHandler(store),
     "board.get": defineBoardMethod("board.get", validateBoardGetParams, async (invocation) => {
       const { params: boardParams, respond, context, client } = invocation;
       const ingress = client?.remoteControlUiIngress;
@@ -86,7 +90,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
       const projectedSnapshot = projectBoardSnapshot(snapshot, boardSession.agentId);
       let sandboxPort = context.getMcpAppSandboxPort?.();
       let sandboxOrigin: string | undefined | null = null;
-      for (const widget of snapshot.widgets) {
+      for (const widget of projectedSnapshot.widgets) {
         if (widget.grantState !== "none" && widget.grantState !== "granted") {
           continue;
         }
@@ -139,6 +143,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
       authority.assertActive();
       respond(true, projectedSnapshot);
     }),
+    "board.widget.source": createBoardWidgetSourceHandler(store),
     "board.update": defineBoardMethod(
       "board.update",
       validateBoardUpdateParams,
@@ -672,6 +677,10 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
       validateBoardActionParams,
       async (invocation) => {
         const { params: boardParams, respond } = invocation;
+        if ("bindingName" in boardParams) {
+          await runBoardNamedAction(store, boardParams, invocation);
+          return;
+        }
         const capability =
           "jobId" in boardParams ? `cron.trigger:${boardParams.jobId}` : boardParams.action;
         const authority = captureBoardCapabilityAuthority(

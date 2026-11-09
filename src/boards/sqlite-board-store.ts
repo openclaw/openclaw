@@ -44,6 +44,7 @@ import type {
   BoardSnapshotWithHtmlViewMetadata,
   BoardWidgetMcpAppDocument,
 } from "./board-store.js";
+import { assertComponentDocument, scopeBoardSnapshot } from "./component-conversation.js";
 import { createSessionActorBoardStore } from "./session-actor-board-store.js";
 import { reportBoardCleanupFailure } from "./sqlite-board-authority.js";
 import type { BoardWriteOperations, BoardWriteOutcome } from "./sqlite-board-operations.js";
@@ -245,9 +246,16 @@ export class SqliteBoardStore implements BoardStore {
       target,
       (store) => store.getSnapshotWithHtmlViewMetadata(target),
       (resolved) =>
-        this.consumeSnapshotWithHtmlViewMetadata(resolved, (snapshot) => snapshot, true),
+        this.consumeSnapshotWithHtmlViewMetadata(
+          resolved,
+          (value) => ({ ...value, snapshot: scopeBoardSnapshot(value.snapshot, target.component) }),
+          true,
+        ),
       () => ({
-        snapshot: { sessionKey: target.sessionKey, revision: 0, tabs: [], widgets: [] },
+        snapshot: scopeBoardSnapshot(
+          { sessionKey: target.sessionKey, revision: 0, tabs: [], widgets: [] },
+          target.component,
+        ),
         htmlViewMetadata: new Map(),
       }),
     );
@@ -330,8 +338,16 @@ export class SqliteBoardStore implements BoardStore {
       target,
       (store) => store.useSnapshot(target, consume),
       (resolved) =>
-        this.consumeSnapshotWithHtmlViewMetadata(resolved, ({ snapshot }) => consume(snapshot)),
-      async () => consume({ sessionKey: target.sessionKey, revision: 0, tabs: [], widgets: [] }),
+        this.consumeSnapshotWithHtmlViewMetadata(resolved, ({ snapshot }) =>
+          consume(scopeBoardSnapshot(snapshot, target.component)),
+        ),
+      async () =>
+        consume(
+          scopeBoardSnapshot(
+            { sessionKey: target.sessionKey, revision: 0, tabs: [], widgets: [] },
+            target.component,
+          ),
+        ),
     );
   }
 
@@ -343,8 +359,15 @@ export class SqliteBoardStore implements BoardStore {
     return await this.withSession(
       target,
       (store) => store.useWidgetDocument(target, name, consume),
-      (resolved) => this.consumeWidgetDocument(resolved, name, consume),
-      async () => consume(undefined),
+      (resolved) =>
+        this.consumeWidgetDocument(resolved, name, (document) => {
+          assertComponentDocument(target.component, name, document);
+          return consume(document);
+        }),
+      async () => {
+        assertComponentDocument(target.component, name, undefined);
+        return consume(undefined);
+      },
     );
   }
 
@@ -377,22 +400,23 @@ export class SqliteBoardStore implements BoardStore {
       return this.getSnapshot(target);
     }
     const capturedOps = structuredClone(ops);
-    return this.withSession(
+    const result = await this.withSession(
       target,
       (store) => store.applyOps(target, capturedOps, options),
       (resolved) =>
         this.write(resolved, options, (scope, sessionKey) =>
           scope.execute({
             type: "boards.applyOps",
-            input: { sessionKey, ops: capturedOps },
+            input: { sessionKey, ops: capturedOps, component: target.component },
           }),
         ),
     );
+    return scopeBoardSnapshot(result, target.component, true);
   }
 
   async putWidget(params: BoardWidgetMaterializedPutParams, options?: BoardWidgetWriteOptions) {
     let preparedParams = structuredClone(params);
-    return this.withSession(
+    const result = await this.withSession(
       params,
       (store) => store.putWidget(preparedParams, options),
       (resolved) => {
@@ -422,6 +446,26 @@ export class SqliteBoardStore implements BoardStore {
           prepare,
         );
       },
+    );
+    return scopeBoardSnapshot(result, params.component);
+  }
+
+  async ensureComponentIdentity(
+    target: BoardSessionTarget,
+    name: string,
+    instanceId: string,
+    options?: BoardWriteOptions,
+  ) {
+    return this.withSession(
+      target,
+      (store) => store.ensureComponentIdentity(target, name, instanceId, options),
+      (resolved) =>
+        this.write(resolved, options, (scope, sessionKey) =>
+          scope.execute({
+            type: "boards.ensureComponentIdentity",
+            input: { sessionKey, name, instanceId, proposedId: randomBytes(16).toString("hex") },
+          }),
+        ),
     );
   }
 

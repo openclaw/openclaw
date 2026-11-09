@@ -31,6 +31,7 @@ export {
   isProjectsRemoveParams,
   isWorktreesListParams,
   isBoardGetParams,
+  isBoardWidgetConversationParams,
   isBoardUpdateParams,
   isBoardWidgetContent,
   isBoardWidgetAppViewParams,
@@ -50,4 +51,5 @@ export {
   isWorktreesBranchesParams,
   isFsListDirParams,
   isFsListDirResult,
+  isBoardWidgetSourceParams,
 } from "./predicates.js";

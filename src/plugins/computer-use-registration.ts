@@ -42,13 +42,25 @@ export function registerComputerUseProvider(
   api: ComputerUseRegistrationApi,
   provider: ComputerUseProvider,
 ): void {
-  let execution: { id: string; promise: Promise<ComputerUseExecution> } | undefined;
+  type OwnedExecution = {
+    id: string;
+    promise: Promise<ComputerUseExecution>;
+    lease?: {
+      timeoutMs: number;
+      controller: AbortController;
+      timer: ReturnType<typeof setTimeout>;
+    };
+  };
+  let execution: OwnedExecution | undefined;
   let closingPromise: Promise<void> | undefined;
   let pendingClose: Promise<void> | undefined;
   const hasActiveWork = () =>
     execution !== undefined || closingPromise !== undefined || pendingClose !== undefined;
 
-  const executionEnvelopeFromParams = (paramsJSON: string | null | undefined) => {
+  const executionEnvelopeFromParams = (
+    paramsJSON: string | null | undefined,
+    allowTimeout = false,
+  ) => {
     let value: unknown;
     try {
       value = JSON.parse(paramsJSON ?? "{}");
@@ -56,6 +68,29 @@ export function registerComputerUseProvider(
       throw new Error("COMPUTER_INVALID_REQUEST: params must be valid JSON");
     }
     const executionId = isRecord(value) ? value.executionId : undefined;
+    const executionTimeoutMs = isRecord(value) ? value.executionTimeoutMs : undefined;
+    const requireExistingExecution = isRecord(value) ? value.requireExistingExecution : undefined;
+    if (
+      requireExistingExecution !== undefined &&
+      (allowTimeout || executionId === undefined || typeof requireExistingExecution !== "boolean")
+    ) {
+      throw new Error(
+        "COMPUTER_INVALID_REQUEST: requireExistingExecution needs a UUID and boolean on computer.act",
+      );
+    }
+    if (
+      executionTimeoutMs !== undefined &&
+      (!allowTimeout ||
+        executionId === undefined ||
+        typeof executionTimeoutMs !== "number" ||
+        !Number.isInteger(executionTimeoutMs) ||
+        executionTimeoutMs < 1_000 ||
+        executionTimeoutMs > 30_000)
+    ) {
+      throw new Error(
+        "COMPUTER_INVALID_REQUEST: execution deadline requires a UUID and 1000–30000ms on the first snapshot",
+      );
+    }
     if (executionId === undefined) {
       return { executionId: undefined, value };
     }
@@ -65,11 +100,13 @@ export function registerComputerUseProvider(
     ) {
       throw new Error("COMPUTER_INVALID_REQUEST: executionId is required");
     }
-    return { executionId, value };
+    return { executionId, value, executionTimeoutMs, requireExistingExecution };
   };
   const getExecution = async (
     executionId: string,
     context?: OpenClawPluginNodeHostCommandContext,
+    timeoutMs?: number,
+    requireExistingExecution = false,
   ) => {
     // An earlier queued close can replace the barrier while this acquisition resumes.
     for (let barrier = closingPromise; barrier !== undefined; barrier = closingPromise) {
@@ -77,6 +114,12 @@ export function registerComputerUseProvider(
     }
     if (execution && execution.id !== executionId) {
       throw new Error("COMPUTER_HOST_BUSY: another provider execution owns this computer");
+    }
+    if (execution && timeoutMs !== undefined && execution.lease?.timeoutMs !== timeoutMs) {
+      throw new Error("COMPUTER_INVALID_REQUEST: an existing execution deadline cannot change");
+    }
+    if (!execution && requireExistingExecution) {
+      throw new Error("COMPUTER_EXECUTION_EXPIRED: existing execution is required");
     }
     if (!execution) {
       const opened = provider.openExecution(
@@ -86,12 +129,28 @@ export function registerComputerUseProvider(
       // the next command call retries openExecution instead.
       opened.catch(() => {
         if (execution?.promise === opened) {
+          clearTimeout(execution.lease?.timer);
           execution = undefined;
         }
       });
-      execution = { id: executionId, promise: opened };
+      const owned: OwnedExecution = { id: executionId, promise: opened };
+      execution = owned;
+      if (timeoutMs !== undefined) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => {
+          if (execution !== owned) {
+            return;
+          }
+          controller.abort(new Error("COMPUTER_EXECUTION_EXPIRED: execution deadline elapsed"));
+          // Expiry is owned by the admitted native resource, independent of the
+          // Gateway caller still being allowed to issue an explicit close RPC.
+          void closeExecution(executionId, "execution-timeout").catch(() => {});
+        }, timeoutMs);
+        timer.unref?.();
+        owned.lease = { timeoutMs, controller, timer };
+      }
     }
-    return execution.promise;
+    return execution;
   };
   const closeCurrentExecution = (
     executionId: string | undefined,
@@ -110,13 +169,16 @@ export function registerComputerUseProvider(
     closingPromise = close;
     void close.then(
       () => {
+        clearTimeout(current.lease?.timer);
         if (execution === current) {
           execution = undefined;
         }
         pendingClose = undefined;
         closingPromise = undefined;
       },
-      () => {
+      (error: unknown) => {
+        clearTimeout(current.lease?.timer);
+        current.lease?.controller.abort(error);
         pendingClose = undefined;
         // Failed open owns nothing; failed physical close stays owned for an explicit close.
         if (execution !== current) {
@@ -150,6 +212,13 @@ export function registerComputerUseProvider(
     return joined;
   };
 
+  const executionSignal = (current: OwnedExecution, caller?: AbortSignal) =>
+    current.lease
+      ? caller
+        ? AbortSignal.any([caller, current.lease.controller.signal])
+        : current.lease.controller.signal
+      : caller;
+
   api.registerNodeHostCommand({
     command: "screen.snapshot",
     cap: "screen",
@@ -176,11 +245,17 @@ export function registerComputerUseProvider(
     },
     onDisconnect: async () => await closeExecution(undefined, "gateway-disconnect"),
     handle: async (paramsJSON, _io, context) => {
-      const envelope = executionEnvelopeFromParams(paramsJSON);
+      const envelope = executionEnvelopeFromParams(paramsJSON, true);
       if (envelope.executionId) {
-        return await (
-          await getExecution(envelope.executionId, context)
-        ).snapshot(paramsJSON, context?.signal);
+        const current = await getExecution(
+          envelope.executionId,
+          context,
+          envelope.executionTimeoutMs,
+        );
+        const opened = await current.promise;
+        const signal = executionSignal(current, context?.signal);
+        signal?.throwIfAborted();
+        return await opened.snapshot(paramsJSON, signal);
       }
       const executionId = randomUUID();
       const opened = await provider.openExecution(
@@ -213,9 +288,16 @@ export function registerComputerUseProvider(
         );
         return JSON.stringify({ ok: true });
       }
-      return await (
-        await getExecution(envelope.executionId, context)
-      ).act(paramsJSON, context?.signal);
+      const current = await getExecution(
+        envelope.executionId,
+        context,
+        undefined,
+        envelope.requireExistingExecution,
+      );
+      const opened = await current.promise;
+      const signal = executionSignal(current, context?.signal);
+      signal?.throwIfAborted();
+      return await opened.act(paramsJSON, signal);
     },
   });
   // The provider plugin must also register its dangerous `computer.act` invoke

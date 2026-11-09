@@ -48,6 +48,7 @@ struct RootTabs: View {
         Self.initialSidebarDestination.settingsRoute
     @State private var selectedSettingsRouteRequestID: Int = 0
     @State private var sidebarModel = RootSidebarModel()
+    @State private var lobbyModel = LobbyModel()
     // Embedded Settings rows push onto the sidebar stack; clear it before
     // changing sidebar roots so stale settings detail screens cannot survive.
     @State private var sidebarNavigationPath: [SettingsRoute] = []
@@ -91,6 +92,7 @@ struct RootTabs: View {
         else { return .chat }
         return switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "control", "overview": .overview
+        case "lobby": .lobby
         case "chat", "talk", "voice": .chat
         case "agent", "agents": .agents
         case "settings": .settings
@@ -265,6 +267,7 @@ struct RootTabs: View {
         RootSidebar(
             model: self.sidebarModel,
             selectedDestination: self.selectedSidebarDestination,
+            lobbySessionKey: self.lobbyModel.sessionKey,
             isDrawerLayout: self.isSidebarDrawerLayout,
             isDismissButtonEnabled: self.isSidebarVisible,
             selectDestination: self.selectSidebarDestination,
@@ -282,6 +285,8 @@ struct RootTabs: View {
     @ViewBuilder
     private var sidebarDetail: some View {
         switch self.selectedSidebarDestination.screen {
+        case .lobby:
+            LobbyScreen(model: self.lobbyModel, headerSidebarAction: self.sidebarHeaderAction)
         case .chat:
             // Agent identity pill owns the chat header (prototype parity).
             ChatProTab(
@@ -607,6 +612,12 @@ struct RootTabs: View {
 
     private func rootRequestLifecycle(_ content: some View) -> some View {
         content
+            .onChange(of: self.appModel.activeGatewayConnectConfig?.controlUIInputs) { _, _ in
+                self.lobbyModel.sync(appModel: self.appModel)
+            }
+            .onChange(of: self.appModel.isOperatorGatewayConnected) { _, _ in
+                self.lobbyModel.sync(appModel: self.appModel)
+            }
             .onAppear {
                 self.handleDashboardNavigationRequest(self.appModel.dashboardNavigationRequestID)
             }
@@ -706,6 +717,10 @@ struct RootTabs: View {
 
 extension RootTabs {
     private func selectSidebarSession(_ session: OpenClawChatSessionEntry) {
+        if session.key == self.lobbyModel.sessionKey {
+            self.selectSidebarDestination(.lobby)
+            return
+        }
         switch Self.sidebarPresentation(for: session) {
         case .chat:
             self.appModel.openChat(sessionKey: session.key)

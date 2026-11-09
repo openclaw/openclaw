@@ -11,6 +11,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "artifacts.get",
   "artifacts.download",
   "board.get",
+  "board.widget.source",
   "canvas.document.preview",
   "canvas.document.view",
   "controlUi.sessionPullRequests.subscribe",
@@ -67,6 +68,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
 ]);
 
 const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
+  "board.widget.conversation",
   "board.update",
   "board.widget.put",
   "question.request",

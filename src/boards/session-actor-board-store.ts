@@ -9,6 +9,7 @@ import type {
   BoardWidgetDocument,
   BoardSnapshotWithHtmlViewMetadata,
 } from "./board-store.js";
+import { assertComponentDocument, scopeBoardSnapshot } from "./component-conversation.js";
 import type { SessionActorBoardWrites } from "./session-actor-board-contract.js";
 
 /** The routing owner supplies the already-acquired actor; this store never acquires a backend. */
@@ -42,7 +43,10 @@ export function createSessionActorBoardStore(
     );
     // A disclosure uses current membership; detached content may be an older committed snapshot.
     binding.actor.snapshot(binding.authority);
-    return await consume(value);
+    return await consume({
+      ...value,
+      snapshot: scopeBoardSnapshot(value.snapshot, target.component),
+    });
   };
   const readDocument = async <T>(
     target: BoardSessionTarget,
@@ -59,9 +63,24 @@ export function createSessionActorBoardStore(
       binding.authority,
     );
     binding.actor.snapshot(binding.authority);
+    assertComponentDocument(target.component, name, value);
     return await consume(value);
   };
   const store: BoardStore = {
+    ensureComponentIdentity(target, name, instanceId, options) {
+      const binding = resolve(target);
+      return write(
+        binding,
+        "boards.ensureComponentIdentity",
+        {
+          sessionKey: binding.actor.target.sessionKey,
+          name,
+          instanceId,
+          proposedId: randomBytes(16).toString("hex"),
+        },
+        options,
+      );
+    },
     useSnapshot(target, consume) {
       return readSnapshot(target, ({ snapshot }) => consume(snapshot));
     },
@@ -77,15 +96,17 @@ export function createSessionActorBoardStore(
         return store.getSnapshot(target);
       }
       const binding = resolve(target);
-      return write(
+      const result = await write(
         binding,
         "boards.applyOps",
         {
           sessionKey: binding.actor.target.sessionKey,
           ops: structuredClone(ops),
+          component: target.component,
         },
         options,
       );
+      return scopeBoardSnapshot(result, target.component, true);
     },
     async putWidget(input, options) {
       const binding = resolve(input);
@@ -100,7 +121,7 @@ export function createSessionActorBoardStore(
       ) {
         params = { ...params, content: { ...content, interactive: false }, declared: undefined };
       }
-      return write(
+      const result = await write(
         binding,
         "boards.putWidget",
         {
@@ -110,6 +131,7 @@ export function createSessionActorBoardStore(
         },
         options,
       );
+      return scopeBoardSnapshot(result, input.component);
     },
     async grant(target, name, decision, revision, instanceId, options) {
       const binding = resolve(target);

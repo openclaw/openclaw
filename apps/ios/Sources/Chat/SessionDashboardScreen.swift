@@ -6,9 +6,121 @@ struct SessionDashboardScreen: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
     @State private var showsDesktop = false
+    let sessionKey: String
+    let agentId: String?
+
+    var body: some View {
+        SessionDashboardContent(
+            sessionKey: self.sessionKey,
+            agentId: self.agentId,
+            onNavigationOutsideScope: { self.dismiss() })
+            .navigationTitle("Dashboard")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if self.appModel.isDesktopObserveAvailable {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            self.showsDesktop = true
+                        } label: {
+                            Image(systemName: "display")
+                                .font(OpenClawType.subheadSemiBold)
+                        }
+                        .accessibilityLabel("Open Desktop")
+                        .accessibilityIdentifier("SessionDashboard.Desktop")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        self.dismiss()
+                    } label: {
+                        Text("Done")
+                            .font(OpenClawType.subheadSemiBold)
+                    }
+                }
+            }
+            .navigationDestination(isPresented: self.$showsDesktop) {
+                ControlUIHubScreen(
+                    page: .desktop(source: nil, session: self.sessionKey),
+                    usesNativeNavigationChrome: true)
+            }
+    }
+
+    /// Converts the active gateway WebSocket endpoint into the shell-free
+    /// dashboard focus route. Credentials stay in the startup script.
+    static func dashboardURL(
+        config: GatewayConnectConfig?,
+        sessionKey: String,
+        agentId: String? = nil,
+        isLobby: Bool = false) -> URL?
+    {
+        let normalizedSessionKey = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalizedSessionKey.lowercased() == "global" {
+            let normalizedAgentId = agentId?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased() ?? ""
+            guard !normalizedAgentId.isEmpty,
+                  let encodedAgent = Self.encodedRouteSegment(normalizedAgentId)
+            else { return nil }
+            return AuthenticatedControlUI.pageURL(
+                config: config,
+                path: ["focus", "dashboard", encodedAgent].joined(separator: "/"),
+                queryItems: isLobby ? [URLQueryItem(name: "presentation", value: "lobby")] : [])
+        }
+
+        let parts = normalizedSessionKey
+            .split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count >= 3,
+              parts[0].lowercased() == "agent",
+              parts.dropFirst().allSatisfy({ !$0.isEmpty })
+        else { return nil }
+
+        let encodedSegments = parts.dropFirst().map { Self.encodedRouteSegment(String($0)) }
+        let routeSegments = encodedSegments.compactMap(\.self)
+        guard routeSegments.count == encodedSegments.count,
+              let encodedAgent = routeSegments.first
+        else { return nil }
+        let route = (["focus", "dashboard", encodedAgent, "~key"] + routeSegments.dropFirst())
+            .joined(separator: "/")
+        return AuthenticatedControlUI.pageURL(
+            config: config,
+            path: route,
+            queryItems: isLobby ? [URLQueryItem(name: "presentation", value: "lobby")] : [])
+    }
+
+    private static func encodedRouteSegment(_ value: String) -> String? {
+        if value == "." {
+            return "~dot"
+        }
+        if value == ".." {
+            return "~dotdot"
+        }
+        guard let encoded = AuthenticatedControlUI.percentEncodedPathSegment(value) else { return nil }
+        var escaped = encoded.replacingOccurrences(of: ".", with: "%2E")
+        if escaped.hasPrefix("~") {
+            escaped.insert("~", at: escaped.startIndex)
+        }
+        return escaped
+    }
+
+    static func dashboardPathPrefix(config: GatewayConnectConfig?) -> String? {
+        AuthenticatedControlUI.pageURL(
+            config: config,
+            path: "focus/dashboard",
+            queryItems: [])?.path
+    }
+}
+
+/// Shared focused-board renderer. Both presentations retain the same authentication and navigation boundary.
+struct SessionDashboardContent: View {
+    @Environment(NodeAppModel.self) private var appModel
     @State private var failedAccessBoundaryIdentity: Int?
     let sessionKey: String
     let agentId: String?
+    var isLobby = false
+    var onLobbyPrompt: ((String) -> Bool)?
+    var onLobbySelection: ((LobbyComponentSelection?) -> Void)?
+    var lobbySettingsRequest = 0
+    let onNavigationOutsideScope: () -> Void
 
     var body: some View {
         let config = self.appModel.activeGatewayConnectConfig
@@ -19,7 +131,11 @@ struct SessionDashboardScreen: View {
             config: config,
             storedOperatorToken: storedOperatorToken,
             authorizationRevision: authorization?.revision)
-        let url = Self.dashboardURL(config: config, sessionKey: self.sessionKey, agentId: self.agentId)
+        let url = SessionDashboardScreen.dashboardURL(
+            config: config,
+            sessionKey: self.sessionKey,
+            agentId: self.agentId,
+            isLobby: self.isLobby)
         let accessCookieAdmission = AuthenticatedControlUI.dashboardAccessCookieAdmission(
             url: url,
             requiresCookie: authorization != nil,
@@ -48,7 +164,11 @@ struct SessionDashboardScreen: View {
             authScriptProvider = nil
         }
         return ZStack {
-            OpenClawProBackground()
+            if self.isLobby {
+                Color(uiColor: .systemBackground)
+            } else {
+                OpenClawProBackground()
+            }
             if let url,
                accessCookieAdmission.isAvailable,
                self.failedAccessBoundaryIdentity != webContentIdentity
@@ -57,51 +177,32 @@ struct SessionDashboardScreen: View {
                     url: url,
                     authScript: authScript,
                     tls: config?.tls,
+                    widgetSandboxTLSProvider: { host, port in
+                        await nativeAuthProvider?.widgetSandboxTLS(
+                            sessionKey: self.sessionKey, agentID: self.agentId, host: host, port: port)
+                    },
                     authScriptProvider: authScriptProvider,
                     nativeGatewayAuthProvider: nativeAuthProvider,
                     basicProxyCredentialProvider: {
                         AuthenticatedControlUI.basicProxyCredential(config: config)
                     },
-                    allowedMainFramePathPrefix: Self.dashboardPathPrefix(config: config),
+                    allowedMainFramePathPrefix: SessionDashboardScreen.dashboardPathPrefix(config: config),
                     onMainFrameNavigationOutsideScope: {
-                        self.dismiss()
+                        self.onNavigationOutsideScope()
                     },
+                    isLobby: self.isLobby,
+                    onLobbyPrompt: self.onLobbyPrompt,
+                    onLobbySelection: self.onLobbySelection,
+                    lobbySettingsRequest: self.lobbySettingsRequest,
                     accessCookie: accessCookieAdmission.cookie,
                     accessAdmissionIsCurrent: authorization?.isCurrent,
                     accessResponseCheck: authorization?.checkResponse,
                     onAccessCookieBoundaryFailure: { self.failedAccessBoundaryIdentity = webContentIdentity })
                     .id(webContentIdentity)
-                    .ignoresSafeArea(.container, edges: .bottom)
+                    .ignoresSafeArea(.container, edges: self.isLobby ? [] : .bottom)
             } else {
                 self.unavailableCard
             }
-        }
-        .navigationTitle("Dashboard")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if self.appModel.isDesktopObserveAvailable {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        self.showsDesktop = true
-                    } label: {
-                        Image(systemName: "display")
-                            .font(OpenClawType.subheadSemiBold)
-                    }
-                    .accessibilityLabel("Open Desktop")
-                    .accessibilityIdentifier("SessionDashboard.Desktop")
-                }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    self.dismiss()
-                } label: {
-                    Text("Done")
-                        .font(OpenClawType.subheadSemiBold)
-                }
-            }
-        }
-        .navigationDestination(isPresented: self.$showsDesktop) {
-            ControlUIHubScreen(page: .desktop(source: nil, session: self.sessionKey), usesNativeNavigationChrome: true)
         }
     }
 
@@ -116,68 +217,5 @@ struct SessionDashboardScreen: View {
                 .multilineTextAlignment(.center)
         }
         .padding(24)
-    }
-
-    /// Converts the active gateway WebSocket endpoint into the shell-free
-    /// dashboard focus route. Credentials stay in the startup script.
-    static func dashboardURL(
-        config: GatewayConnectConfig?,
-        sessionKey: String,
-        agentId: String? = nil) -> URL?
-    {
-        let normalizedSessionKey = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if normalizedSessionKey.lowercased() == "global" {
-            let normalizedAgentId = agentId?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .lowercased() ?? ""
-            guard !normalizedAgentId.isEmpty,
-                  let encodedAgent = Self.encodedRouteSegment(normalizedAgentId)
-            else { return nil }
-            return AuthenticatedControlUI.pageURL(
-                config: config,
-                path: ["focus", "dashboard", encodedAgent].joined(separator: "/"),
-                queryItems: [])
-        }
-
-        let parts = normalizedSessionKey
-            .split(separator: ":", omittingEmptySubsequences: false)
-        guard parts.count >= 3,
-              parts[0].lowercased() == "agent",
-              parts.dropFirst().allSatisfy({ !$0.isEmpty })
-        else { return nil }
-
-        let encodedSegments = parts.dropFirst().map { Self.encodedRouteSegment(String($0)) }
-        let routeSegments = encodedSegments.compactMap(\.self)
-        guard routeSegments.count == encodedSegments.count,
-              let encodedAgent = routeSegments.first
-        else { return nil }
-        let route = (["focus", "dashboard", encodedAgent, "~key"] + routeSegments.dropFirst())
-            .joined(separator: "/")
-        return AuthenticatedControlUI.pageURL(
-            config: config,
-            path: route,
-            queryItems: [])
-    }
-
-    private static func encodedRouteSegment(_ value: String) -> String? {
-        if value == "." {
-            return "~dot"
-        }
-        if value == ".." {
-            return "~dotdot"
-        }
-        guard let encoded = AuthenticatedControlUI.percentEncodedPathSegment(value) else { return nil }
-        var escaped = encoded.replacingOccurrences(of: ".", with: "%2E")
-        if escaped.hasPrefix("~") {
-            escaped.insert("~", at: escaped.startIndex)
-        }
-        return escaped
-    }
-
-    static func dashboardPathPrefix(config: GatewayConnectConfig?) -> String? {
-        AuthenticatedControlUI.pageURL(
-            config: config,
-            path: "focus/dashboard",
-            queryItems: [])?.path
     }
 }

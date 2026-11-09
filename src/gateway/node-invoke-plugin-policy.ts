@@ -27,7 +27,11 @@ import { createPluginNodeInvokeApprovalRuntime } from "./node-invoke-plugin-appr
 import { invokeNodeWithReadinessRetry } from "./node-invoke-readiness.js";
 import type { NodeInvokeResult, NodeSession } from "./node-registry.js";
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
-import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestOptions,
+} from "./server-methods/types.js";
 
 function parsePayload(payloadJSON: string | null | undefined, payload: unknown): unknown {
   if (!payloadJSON) {
@@ -115,6 +119,7 @@ export async function applyPluginNodeInvokePolicy(params: {
   idempotencyKey?: string;
   isInvocationCurrent?: () => boolean | Promise<boolean>;
   isApprovalAuthorityActive?: () => boolean;
+  nodeDispatchAuthority?: GatewayRequestOptions["nodeDispatchAuthority"];
   privateTransport?: PluginNodeInvokePrivateTransport;
   /** Internal callers carry an admitted run without inventing a client connection. */
   agentRuntimeIdentity?: AgentRuntimeIdentity;
@@ -391,18 +396,28 @@ export async function applyPluginNodeInvokePolicy(params: {
         onProgress: params.nodeInvokeStream.onProgress,
         idleTimeoutMs: params.nodeInvokeStream.idleTimeoutMs,
       }),
-      ...(standingGrantAuthorization.binding
+      ...(standingGrantAuthorization.binding || params.nodeDispatchAuthority
         ? {
-            authorizeDispatch: () =>
-              prepareNodeInvokePlacementGrant({
-                runtime: params.context.placementStandingGrants,
-                authorization: standingGrantAuthorization,
-              }),
+            authorizeDispatch: async () => {
+              if (
+                standingGrantAuthorization.binding &&
+                !(await prepareNodeInvokePlacementGrant({
+                  runtime: params.context.placementStandingGrants,
+                  authorization: standingGrantAuthorization,
+                }))
+              ) {
+                return false;
+              }
+              return params.nodeDispatchAuthority
+                ? await params.nodeDispatchAuthority.prepare()
+                : true;
+            },
           }
         : {}),
       isDispatchAuthorized: () => {
         try {
           sessionAuthority?.assertCurrent();
+          params.nodeDispatchAuthority?.assertCurrent();
         } catch {
           return false;
         }

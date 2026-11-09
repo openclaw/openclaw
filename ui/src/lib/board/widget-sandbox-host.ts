@@ -263,6 +263,8 @@ export class BoardWidgetSandboxHost {
         rateKey: this.documentKey(),
         confirmPrompt: this.options.confirmPrompt,
         widgetActivated: () => this.queryFrameActivation(),
+        actionBindingNames: () =>
+          this.options.widget.declared?.actionBindings?.map((binding) => binding.name) ?? [],
       });
     } else {
       this.bridgeOwner.updateIdentity(this.options.frame, ticket);

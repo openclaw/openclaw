@@ -6,6 +6,7 @@ export const CORE_BOARD_DATA_BINDING_IDS = [
   "usage.cost",
   "cron.list",
   "cron.status",
+  "cron.runs",
   "agents.list",
   "health",
 ] as const;

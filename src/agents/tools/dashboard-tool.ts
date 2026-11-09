@@ -5,11 +5,16 @@ import type {
   BoardCommand,
   BoardOp,
   BoardSnapshot,
+  BoardWidgetSourceResult,
   SessionRow,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { BOARD_REPORT_GUIDANCE } from "../../boards/board-report.js";
 import { BOARD_WEBSITE_GUIDANCE } from "../../boards/board-website.js";
+import { parseComponentConversation } from "../../boards/component-conversation.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
+import { describeDashboardCapabilityContract } from "../../plugins/dashboard-capability-contract.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   readNumberParam,
@@ -27,11 +32,13 @@ import {
 
 const DASHBOARD_ACTIONS = [
   "read",
+  "capability_describe",
   "tab_create",
   "tab_update",
   "tab_delete",
   "tabs_reorder",
   "widget_put",
+  "widget_read",
   "widget_move",
   "widget_resize",
   "widget_remove",
@@ -51,6 +58,13 @@ const DashboardToolSchema = Type.Object(
       enum: [...DASHBOARD_ACTIONS],
       description: "Dashboard action; widget_put creates or updates trusted plugin widgets only",
     }),
+    capabilityId: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: 256,
+        description: "Exact advertised capability ID for capability_describe; metadata only",
+      }),
+    ),
     tabId: Type.Optional(
       Type.String({ pattern: BOARD_TAB_ID_PATTERN, description: "Stable tab slug" }),
     ),
@@ -66,6 +80,23 @@ const DashboardToolSchema = Type.Object(
     ),
     name: Type.Optional(
       Type.String({ pattern: BOARD_WIDGET_NAME_PATTERN, description: "Stable widget name" }),
+    ),
+    expectedRevision: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        description:
+          "Required for subsequent source pages; use the revision returned by widget_read",
+      }),
+    ),
+    offset: Type.Optional(
+      Type.Integer({ minimum: 0, description: "Source UTF-16 offset returned as nextOffset" }),
+    ),
+    limit: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        maximum: 65_536,
+        description: "Source page length (default 32768 UTF-16 units)",
+      }),
     ),
     after: Type.Optional(
       Type.String({
@@ -234,24 +265,55 @@ function snapshotResult(
 }
 
 export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTool {
+  const componentConversation = parseComponentConversation(opts.agentSessionKey);
   const gatewayCall = opts.callGateway ?? callInProcessGatewayTool;
   const emitCommand = opts.emitCommand ?? emitBoardCommand;
   return {
     label: "Dashboard",
     name: "dashboard",
     description:
-      "Read and arrange this session dashboard; widget_put updates plugin widgets only. Follow the widget authoring tool's current placement guidance. Actions: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab opens the dashboard side panel; set_presentation shows the dashboard alongside chat (split) or across the task area (expanded). focus_tab and set_presentation require a connected Control UI and do not save a default. set_default_presentation saves split or expanded for subsequent opens without requiring a connected UI; read returns the effective defaultPresentation (split when unset). Personal viewer overrides still take precedence. Widgets use stable names. widget_put creates or updates trusted plugin widgets only; update other content through its owning authoring capability discovered in the tool catalog. Prefer session:report for data reports with text, metrics, tables, charts, and links; it renders directly without a document frame. Use session:progress props {sessionKey?} for live session progress (omit sessionKey for the current session). Use session:website props {url} for a live HTTPS website; size full and expanded presentation fill the task area. Other widget kinds are supplied by enabled plugins. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
+      "Read and arrange this session dashboard; widget_put updates plugin widgets only. Follow the widget authoring tool's current placement guidance. Actions: capability_describe returns bounded contracts for an advertised capabilityId without executing it or granting access; read snapshot; widget_read reads inert HTML source by name (bounded pages; expectedRevision required after the first page); tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab opens the dashboard side panel; set_presentation shows the dashboard alongside chat (split) or across the task area (expanded). focus_tab and set_presentation require a connected Control UI and do not save a default. set_default_presentation saves split or expanded for subsequent opens without requiring a connected UI; read returns the effective defaultPresentation (split when unset). Personal viewer overrides still take precedence. Widgets use stable names. widget_put creates or updates trusted plugin widgets only; update other content through its owning authoring capability discovered in the tool catalog. Prefer session:report for data reports with text, metrics, tables, charts, and links; it renders directly without a document frame. Use session:progress props {sessionKey?} for live session progress (omit sessionKey for the current session). Use session:website props {url} for a live HTTPS website; size full and expanded presentation fill the task area. Other widget kinds are supplied by enabled plugins. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis." +
+      (componentConversation
+        ? " This conversation edits only its own Lobby component. Read it before updating it; use the general Lobby conversation for other components or tabs."
+        : ""),
     parameters: DashboardToolSchema,
     execute: async (_toolCallId, rawArgs) => {
-      const params = rawArgs as Record<string, unknown>;
+      const params = { ...(rawArgs as Record<string, unknown>) };
       const action = readToolStringParam(params, "action", { required: true });
-      const sessionKey = opts.agentSessionKey?.trim();
+      const sessionKey = componentConversation?.sessionKey ?? opts.agentSessionKey?.trim();
+      if (componentConversation) {
+        if (
+          ![
+            "read",
+            "capability_describe",
+            "widget_read",
+            "widget_put",
+            "widget_move",
+            "widget_resize",
+            "widget_remove",
+          ].includes(action) ||
+          (params.name !== undefined && params.name !== componentConversation.component.name)
+        ) {
+          throw new ToolInputError(
+            "This conversation edits only its own component. Use the general Lobby conversation for other components or tabs.",
+          );
+        }
+        params.name = componentConversation.component.name;
+      }
       if (!sessionKey) {
         throw new ToolInputError("agent session required");
       }
       const assertTargetCurrent = opts.assertTargetCurrent;
       assertTargetCurrent?.();
       const admittedResolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
+      if (action === "capability_describe") {
+        const capabilityId = readToolStringParam(params, "capabilityId", { required: true });
+        const scope = getPluginRuntimeGatewayRequestScope();
+        // An admitted scope with no plugins must not borrow another Gateway's globals.
+        const registry = scope ? scope.pluginRegistry : getActivePluginRegistry();
+        const contract = describeDashboardCapabilityContract(capabilityId, registry);
+        return textResult(JSON.stringify(contract), contract);
+      }
       const gatewayOptions =
         admittedResolver || assertTargetCurrent
           ? {
@@ -260,19 +322,43 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
             }
           : undefined;
       const callGateway = <T>(method: string, gatewayParams: Record<string, unknown>) =>
-        gatewayCall<T>(method, gatewayParams, gatewayOptions);
+        gatewayCall<T>(
+          method,
+          {
+            ...gatewayParams,
+            ...(componentConversation && method.startsWith("board.")
+              ? { component: componentConversation.component }
+              : {}),
+          },
+          gatewayOptions,
+        );
       if (action === "read") {
         const [snapshot, described] = await Promise.all([
           callGateway<BoardSnapshot>("board.get", {
             sessionKey,
             agentId: opts.agentId,
           }),
-          callGateway<{ session: SessionRow | null }>("sessions.describe", {
-            key: sessionKey,
-            agentId: opts.agentId,
-          }),
+          componentConversation
+            ? Promise.resolve({ session: null })
+            : callGateway<{ session: SessionRow | null }>("sessions.describe", {
+                key: sessionKey,
+                agentId: opts.agentId,
+              }),
         ]);
         return snapshotResult(snapshot, described.session?.boardPresentation ?? "split");
+      }
+      if (action === "widget_read") {
+        const source = await callGateway<BoardWidgetSourceResult>("board.widget.source", {
+          sessionKey,
+          agentId: opts.agentId,
+          name: readToolStringParam(params, "name", { required: true }),
+          ...(params.expectedRevision !== undefined
+            ? { expectedRevision: requireInteger(params, "expectedRevision") }
+            : {}),
+          ...(params.offset !== undefined ? { offset: requireInteger(params, "offset") } : {}),
+          ...(params.limit !== undefined ? { limit: requireInteger(params, "limit") } : {}),
+        });
+        return textResult(JSON.stringify(source), source);
       }
       if (action === "set_default_presentation") {
         const presentation = readPresentation(params);

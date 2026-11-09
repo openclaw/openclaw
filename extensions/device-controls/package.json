@@ -1,0 +1,8 @@
+{
+  "name": "@openclaw/device-controls",
+  "version": "2026.11.1",
+  "description": "Opt-in bounded device audio and pointer controls",
+  "type": "module",
+  "devDependencies": { "@openclaw/plugin-sdk": "workspace:*" },
+  "openclaw": { "extensions": ["./index.ts"] }
+}

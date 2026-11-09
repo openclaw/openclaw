@@ -4,6 +4,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { Icon } from "../solid/icon.tsx";
 import { MenuHeading } from "../solid/menu-heading.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../solid/menu.tsx";
+import type { BoardWidgetCellProps } from "./board-widget-cell-options.ts";
 import { BOARD_SIZE_PRESETS } from "./board-widget-cell-options.ts";
 
 export function boardWidgetMenuEntries(params: {
@@ -107,4 +108,36 @@ export function BoardWidgetMenu(props: {
       }}
     />
   );
+}
+
+export function handleBoardWidgetMenuAction(options: {
+  value: string | undefined;
+  props: BoardWidgetCellProps;
+  run: (action: () => Promise<void>) => void;
+  close: () => void;
+}) {
+  const { value, props, run, close } = options;
+  const widget = props.widget;
+  const callbacks = props.callbacks;
+  if (!widget || !callbacks || props.active === false || props.canMutate === false) {
+    return;
+  }
+  if (props.lobby) {
+    close();
+    return;
+  }
+  if (value === "remove") {
+    run(() => callbacks.remove(widget));
+  } else if (value?.startsWith("move:")) {
+    run(() => callbacks.moveToTab(widget, value.slice(5)));
+  } else if (value?.startsWith("resize:")) {
+    const size = Object.entries(BOARD_SIZE_PRESETS).find(
+      ([preset]) => preset === value.slice(7),
+    )?.[1];
+    if (size) {
+      run(() => callbacks.resizeTo(widget, size.w, size.h));
+    }
+  } else if (value === "height:auto") {
+    run(() => callbacks.setHeightMode(widget, widget.heightMode !== "fixed" ? "fixed" : "auto"));
+  }
 }

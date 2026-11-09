@@ -112,3 +112,20 @@ it("BoardWidgetGrantParamsSchema: requires the widget revision and instance bein
   const { revision: _revision, ...missingRevision } = request;
   rejects(S.BoardWidgetGrantParamsSchema, missingInstance, missingRevision);
 });
+
+it("BoardWidgetSourceParamsSchema: bounds source pages and accepts revision checks", () => {
+  accepts(S.BoardWidgetSourceParamsSchema, widgetRef, {
+    ...widgetRef,
+    expectedRevision: 3,
+    offset: 12,
+    limit: 1024,
+  });
+  rejects(
+    S.BoardWidgetSourceParamsSchema,
+    { ...widgetRef, limit: 65_537 },
+    { ...widgetRef, limit: 0 },
+    { ...widgetRef, offset: -1 },
+    { ...widgetRef, expectedRevision: 0 },
+    { ...widgetRef, ticket: "not-an-authoring-credential" },
+  );
+});

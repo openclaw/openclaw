@@ -333,9 +333,10 @@ it("preserves HTML grants only for unchanged bytes with equal or narrower declar
     grantState: "granted",
     revision: 1,
   });
-  await expect(grant("scoped", 1, first.widgets[0]?.instanceId, "rejected")).rejects.toThrow(
-    "not pending",
-  );
+  await expectWidget(grant("scoped", 1, first.widgets[0]?.instanceId), {
+    grantState: "granted",
+    revision: 1,
+  });
 
   await expectWidget(put("one", wide), { revision: 2, grantState: "granted" });
   expect(await document("scoped")).toMatchObject({ html: "one", grantState: "granted" });
@@ -654,4 +655,25 @@ it("preserves a beta.5-format unmarked explicit row and reuses the generated fal
     preserved,
   );
   expect((await board.readHtml("cafe-menu"))?.html).toContain("approved");
+});
+
+it("persists component descriptions and preserves them when content is updated without metadata", async () => {
+  const { store, sessionKey } = boardFixture(tempDirs.make("lobby-description-"));
+  const content = htmlWidget(sessionKey, "plan", "<p>Plan</p>");
+  const created = await store.putWidget({
+    ...content,
+    description: "Compare launch approaches.",
+    declared: health,
+  });
+  const widget = created.widgets[0]!;
+  await store.grant({ sessionKey }, widget.name, "granted", widget.revision, widget.instanceId);
+  expect((await store.getSnapshot({ sessionKey })).widgets[0]?.description).toBe(
+    "Compare launch approaches.",
+  );
+  await store.putWidget({ ...content, content: { kind: "html", html: "<p>Updated plan</p>" } });
+  expect((await store.getSnapshot({ sessionKey })).widgets[0]?.description).toBe(
+    "Compare launch approaches.",
+  );
+  await store.putWidget({ ...content, description: "" });
+  expect((await store.getSnapshot({ sessionKey })).widgets[0]?.description).toBe("");
 });

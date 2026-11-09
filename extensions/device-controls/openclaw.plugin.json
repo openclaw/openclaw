@@ -1,0 +1,183 @@
+{
+  "id": "device-controls",
+  "name": "Device Controls",
+  "description": "Bounded remote audio and pointer controls. Disabled until explicitly configured.",
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "dashboard": {
+    "actionVerbs": [
+      {
+        "id": "audio",
+        "method": "device-controls.audio",
+        "requiredActionBindingParams": [
+          "nodeId",
+          "operationId"
+        ],
+        "paramShape": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "nodeId",
+            "operationId",
+            "notes"
+          ],
+          "properties": {
+            "nodeId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "operationId": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12}$"
+            },
+            "notes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "frequencyHz",
+                  "durationMs"
+                ],
+                "properties": {
+                  "frequencyHz": {
+                    "type": "number",
+                    "minimum": 20,
+                    "maximum": 8000
+                  },
+                  "durationMs": {
+                    "type": "number",
+                    "minimum": 20,
+                    "maximum": 2000
+                  }
+                }
+              }
+            },
+            "volume": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.25
+            }
+          }
+        },
+        "description": "Play a bounded tone sequence on the explicitly approved computer."
+      },
+      {
+        "id": "audio-stop",
+        "method": "device-controls.audio-stop",
+        "requiredActionBindingParams": [
+          "nodeId",
+          "operationId"
+        ],
+        "paramShape": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "nodeId",
+            "operationId"
+          ],
+          "properties": {
+            "nodeId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "operationId": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12}$"
+            }
+          }
+        },
+        "description": "Stop the exact approved audio operation on the selected computer."
+      },
+      {
+        "id": "pointer",
+        "method": "device-controls.pointer",
+        "requiredActionBindingParams": [
+          "nodeId",
+          "operation",
+          "screenIndex",
+          "referenceWidth",
+          "referenceHeight"
+        ],
+        "paramShape": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "nodeId",
+            "operation",
+            "screenIndex",
+            "referenceWidth",
+            "referenceHeight",
+            "x",
+            "y"
+          ],
+          "properties": {
+            "nodeId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "operation": {
+              "type": "string",
+              "enum": [
+                "move",
+                "scroll"
+              ]
+            },
+            "screenIndex": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 15
+            },
+            "referenceWidth": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 32768
+            },
+            "x": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 32768
+            },
+            "y": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 32768
+            },
+            "scrollDirection": {
+              "type": "string",
+              "enum": [
+                "up",
+                "down",
+                "left",
+                "right"
+              ]
+            },
+            "scrollAmount": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            },
+            "referenceHeight": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 32768
+            }
+          }
+        },
+        "description": "Move the pointer or scroll on the approved display without clicks or keys. Observes the selected screen internally to map coordinates; captured pixels are not returned to the component."
+      }
+    ]
+  }
+}

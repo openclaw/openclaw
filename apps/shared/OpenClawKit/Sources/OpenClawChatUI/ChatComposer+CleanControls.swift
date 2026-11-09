@@ -289,51 +289,11 @@ extension OpenClawChatComposer {
             .help(self.cleanInlineEffortDisabledHint ?? self.viewModel.composerInlineEffortLabel)
             .accessibilityHint(self.cleanInlineEffortDisabledHint ?? "")
             .fixedSize()
+        #elseif os(iOS)
+        OpenClawChatInlineEffortPicker(viewModel: self.viewModel)
+            .help(self.cleanInlineEffortDisabledHint ?? self.viewModel.composerInlineEffortLabel)
         #else
-        Menu {
-            if self.viewModel.showsThinkingPicker {
-                self.thinkingPicker
-            }
-            if self.viewModel.showsFastModeControls {
-                self.fastModeToggle
-            }
-        } label: {
-            ZStack(alignment: .topTrailing) {
-                ZStack {
-                    Circle()
-                        .trim(from: 0.12, to: 0.88)
-                        .stroke(.secondary, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-                        .rotationEffect(.degrees(90))
-                    Capsule()
-                        .fill(.secondary)
-                        .frame(width: 1.5, height: 7)
-                        .offset(y: -3.5)
-                        .rotationEffect(.degrees(self.viewModel.composerInlineEffortAngle))
-                }
-                .frame(width: 18, height: 18)
-                if self.viewModel.fastModeIsEnabled {
-                    Image(systemName: "bolt.fill")
-                        .font(OpenClawChatTypography.caption)
-                        .foregroundStyle(OpenClawChatTheme.accent)
-                        .offset(x: 7, y: -6)
-                }
-            }
-            .frame(
-                width: self.cleanControlHeight,
-                height: self.cleanControlHeight)
-            .contentShape(Rectangle())
-        }
-        .menuIndicator(.hidden)
-        .tint(OpenClawChatTheme.muted)
-        .disabled(
-            !self.viewModel.composerEffortMutationAvailable ||
-                self.viewModel.isUpdatingSessionSettings)
-        .disabled(self.viewModel.hasActiveRunForComposerSettings)
-        .help(self.cleanInlineEffortDisabledHint ?? self.viewModel.composerInlineEffortLabel)
-        .accessibilityLabel("Effort")
-        .accessibilityValue(self.viewModel.composerInlineEffortLabel)
-        .accessibilityHint(self.cleanInlineEffortDisabledHint ?? "")
-        .accessibilityIdentifier("chat-composer-inline-effort")
+        self.thinkingPicker
         #endif
     }
 

@@ -25,6 +25,7 @@ struct RootSidebarSessionButton: View, Equatable {
     var body: some View {
         let session = self.node.session
         let isSelected = self.isSelected
+        let isMain = CommandCenterTab.isMainSession(session.key, mainSessionKey: self.mainSessionKey)
         Button {
             self.open(session)
         } label: {
@@ -33,22 +34,22 @@ struct RootSidebarSessionButton: View, Equatable {
                     if self.node.badges.runningCount > 0 {
                         ProgressView()
                             .controlSize(.mini)
-                            .tint(OpenClawSidebarPalette.accent)
+                            .tint(OpenClawSidebarPalette.selectionForeground)
                     } else {
-                        Image(systemName: "bubble.left")
+                        Image(systemName: isMain ? CommandCenterTab.mainSessionSymbol : "bubble.left")
                             .font(OpenClawType.captionSemiBold)
                             .foregroundStyle(isSelected
-                                ? OpenClawSidebarPalette.accent
+                                ? OpenClawSidebarPalette.selectionForeground
                                 : OpenClawSidebarPalette.muted)
                     }
                 }
                 .frame(width: 18)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: CommandCenterTab.sessionTitle(session))
+                    Text(verbatim: CommandCenterTab.sessionTitle(session, mainSessionKey: self.mainSessionKey))
                         .font(OpenClawType.subheadSemiBold)
                         .foregroundStyle(isSelected
-                            ? OpenClawSidebarPalette.accent
+                            ? OpenClawSidebarPalette.selectionForeground
                             : OpenClawSidebarPalette.textStrong)
                         .lineLimit(1)
                     // Web-parity subtitle: the work line (repo/branch) names the
@@ -68,7 +69,7 @@ struct RootSidebarSessionButton: View, Equatable {
                 if session.pinned == true {
                     Image(systemName: "pin.fill")
                         .font(OpenClawType.caption2Medium)
-                        .foregroundStyle(OpenClawSidebarPalette.accent)
+                        .foregroundStyle(OpenClawSidebarPalette.selectionForeground)
                         .accessibilityHidden(true)
                 }
                 Text(verbatim: CommandCenterTab.sessionDetail(session))
@@ -77,7 +78,7 @@ struct RootSidebarSessionButton: View, Equatable {
                     .lineLimit(1)
                 if session.unread == true {
                     Circle()
-                        .fill(OpenClawSidebarPalette.accent)
+                        .fill(OpenClawSidebarPalette.selectionForeground)
                         .frame(width: 7, height: 7)
                         .accessibilityHidden(true)
                 }
@@ -106,6 +107,8 @@ struct RootSidebarSessionButton: View, Equatable {
                 mainSessionKey: self.mainSessionKey),
             performMutation: self.performMutation,
             fork: { self.fork(session) })
+        .accessibilityIdentifier("RootTabs.Sidebar.Session.\(session.key)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityValue(RootSidebar.sessionAccessibilityValue(
             isPinned: session.pinned == true,
             isUnread: session.unread == true))

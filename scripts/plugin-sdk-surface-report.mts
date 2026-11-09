@@ -315,7 +315,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: channel display-mention and mention-adapter types (#192473).
       // +1: shared plugin-owned Control UI message translation.
       // +1: GatewayIngressPrincipalRecovery on gateway-ingress (#193098).
-      3865,
+      // +1: Device Controls consumes the canonical validated screen-result parser.
+      3866,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -369,7 +370,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same plugin-command continuation classifier.
       // +2: the same settled execution lifecycle classifiers (#192413).
       // +1: the same Control UI message translator.
-      2235,
+      // +1: the same parseScreenSnapshotResult function on computer-use.
+      2236,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

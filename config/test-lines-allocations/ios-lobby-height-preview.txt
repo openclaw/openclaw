@@ -1,0 +1,2 @@
+# Height draft/cancel/visibility, frame nonce/bounds, semantic region lifecycle and hostile-getter regressions; focused non-browser proof.
+528

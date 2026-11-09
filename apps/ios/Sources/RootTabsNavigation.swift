@@ -18,6 +18,7 @@ extension RootTabs {
     static let sidebarHideButtonAccessibilityIdentifier = "RootTabs.Sidebar.Hide"
 
     enum SidebarDestination: String, CaseIterable, Hashable, Identifiable {
+        case lobby
         case chat
         case overview
         case activity
@@ -42,6 +43,7 @@ extension RootTabs {
 
         var title: String {
             switch self {
+            case .lobby: String(localized: "Lobby")
             case .chat: String(localized: "Chat")
             case .overview: String(localized: "Overview")
             case .activity: String(localized: "Activity")
@@ -71,6 +73,7 @@ extension RootTabs {
 
         var systemImage: String {
             switch self {
+            case .lobby: "rectangle.3.group"
             case .chat: "bubble.left"
             case .overview: "chart.bar"
             case .activity: "waveform.path.ecg"
@@ -100,6 +103,7 @@ extension RootTabs {
             case .dreaming: .dashboard(DashboardRouteMap.dreamingPagePath)
             case .usage: .dashboard(DashboardRouteMap.usagePagePath)
             case .cron: .dashboard(DashboardRouteMap.cronJobsPagePath)
+            case .lobby: .lobby
             case .chat: .chat
             case .overview: .overview
             case .agents: .agents
@@ -120,7 +124,7 @@ extension RootTabs {
 
     enum SidebarScreen: Equatable {
         case dashboard(String)
-        case chat, overview, agents, sessions, files, desktop, terminal, docs, settings, gateway
+        case lobby, chat, overview, agents, sessions, files, desktop, terminal, docs, settings, gateway
     }
 
     static func notificationSettingsPath(servingEnabled: Bool, disclosureAccepted: Bool) -> String {
@@ -261,6 +265,7 @@ extension RootTabs {
     }
 
     static let sidebarDestinations: [SidebarDestination] = [
+        .lobby,
         .chat,
         .overview,
         .workboard,
@@ -278,11 +283,11 @@ extension RootTabs {
         .docs,
     ]
 
-    /// Home (chat) is a fixed first row like the web sidebar; only these can be
+    /// Main Session is a fixed first row; only these pages can be
     /// pinned/unpinned by the user.
-    static let pinnableSidebarPages: [SidebarDestination] = sidebarDestinations.filter { $0 != .chat }
+    static let pinnableSidebarPages: [SidebarDestination] = sidebarDestinations.filter { $0 != .chat && $0 != .lobby }
 
-    /// Echoes the web first-run Pages zone (Home, Usage, Automations, …):
+    /// First-run Pages zone after the fixed Main Session shortcut:
     /// compact by default so sessions stay above the fold. The Sessions page is
     /// intentionally unpinned — the sessions section + "All Sessions…" own it.
     static let defaultPinnedSidebarPages: [SidebarDestination] = [.overview, .usage, .cron]

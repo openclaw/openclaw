@@ -126,6 +126,10 @@ export const validateBoardGetParams = createProtocolValidator(
   S.BoardGetParamsSchema,
   Checks.isBoardGetParams,
 );
+export const validateBoardWidgetConversationParams = createProtocolValidator(
+  S.BoardWidgetConversationParamsSchema,
+  Checks.isBoardWidgetConversationParams,
+);
 export const validateBoardUpdateParams = createProtocolValidator(
   S.BoardUpdateParamsSchema,
   Checks.isBoardUpdateParams,
@@ -201,4 +205,8 @@ export const validateFsListDirParams = createProtocolValidator(
 export const validateFsListDirResult = createProtocolValidator(
   S.FsListDirResultSchema,
   Checks.isFsListDirResult,
+);
+export const validateBoardWidgetSourceParams = createProtocolValidator(
+  S.BoardWidgetSourceParamsSchema,
+  Checks.isBoardWidgetSourceParams,
 );

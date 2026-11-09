@@ -11,6 +11,7 @@ import {
   type BoardWidgetDocument,
   type BoardWidgetHtmlViewMetadata,
 } from "./board-store.js";
+import { assertComponentOperations } from "./component-conversation.js";
 import type {
   SessionActorBoardCommand,
   SessionActorBoardQuery,
@@ -24,6 +25,7 @@ function emptyBoard(sessionKey: string): BoardSnapshot {
 function htmlMetadata(widget: BoardWidget, sha256: string): BoardWidgetHtmlViewMetadata {
   return {
     revision: widget.revision,
+    ...(widget.componentId ? { componentId: widget.componentId } : {}),
     sha256,
     viewGeneration: widget.instanceId!,
     grantState: widget.grantState,
@@ -46,6 +48,7 @@ function document(
     case "mcp-app":
       return {
         descriptor: stored.content.descriptor,
+        ...(widget.componentId ? { componentId: widget.componentId } : {}),
         revision: widget.revision,
         instanceId: widget.instanceId!,
         grantState: widget.grantState,
@@ -90,7 +93,25 @@ export function executeSessionActorBoardCommand(
   const previous = state.board;
   const snapshot = previous?.snapshot ?? emptyBoard(sessionKey);
   switch (command.type) {
+    case "boards.ensureComponentIdentity": {
+      const widget = snapshot.widgets.find((candidate) => candidate.name === command.input.name);
+      if (!widget || !previous || widget.instanceId !== command.input.instanceId) {
+        throw new BoardValidationError("not_found", "Component changed; reopen it from the Lobby.");
+      }
+      const id = widget.componentId ?? command.input.proposedId;
+      state.board = {
+        ...previous,
+        snapshot: {
+          ...snapshot,
+          widgets: snapshot.widgets.map((candidate) =>
+            candidate.name === widget.name ? { ...candidate, componentId: id } : candidate,
+          ),
+        },
+      };
+      return { id, title: widget.title ?? widget.name };
+    }
     case "boards.applyOps": {
+      assertComponentOperations(snapshot, command.input.component, command.input.ops);
       if (!command.input.ops.length) {
         return snapshot;
       }

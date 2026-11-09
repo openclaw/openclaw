@@ -54,6 +54,17 @@ A `status: "pinned"` tool result means the widget is on the session dashboard. O
 
 Capability transport covers embedded, Codex app-server, and CLI-backed model backends. Grant-authenticated MCP callers without `inline-widgets` are rejected unless their trusted run context matches a presenter. Authenticated direct HTTP `tools/invoke` requests cannot request inline rendering, but a request carrying eligible current-channel context can use the matching presenter. Authentication never bypasses presenter or route eligibility.
 
+## Read an existing widget before editing
+
+Use `dashboard` with `action: "read"` to inspect the current composition. For a stored
+HTML widget, use `action: "widget_read"` and its stable `name` to read inert source.
+The result includes `html`, `revision`, `sha256`, `offset`, `totalLength`, and an optional
+`nextOffset`. Continue source pages with `offset: nextOffset` and
+`expectedRevision: revision`; a changed revision requires restarting the read.
+This reads only the current session's component and never executes the returned code.
+Update that same name through its existing authoring capability. Plugin and MCP
+widgets keep their own source and update contracts.
+
 ## Design system
 
 Every Canvas widget includes a classless base stylesheet and a small token set:
@@ -341,6 +352,32 @@ The tool schema describes currently active plugin read bindings and action
 verbs, including action parameter schemas when provided. This discovery text is
 bounded: it includes complete entries and reports when entries were omitted.
 Disabled plugins are not advertised.
+
+### Bind an action to a fixed target
+
+A plugin can require target-bound actions by advertising
+`requiredActionBindingParams`. Declare a named `capabilities.actionBindings`
+entry with `name`, the advertised `actionId`, and fixed scalar `params`. For example,
+if an available action requires a node selector, keep that selector in the binding
+rather than accepting it from component JavaScript.
+
+Call `openclaw.action.run(bindingName, dynamicParams)` from a real user interaction.
+The host consumes activation from that component; loading the component or a timer
+cannot trigger a named action. Dynamic parameters cannot override any fixed field.
+The approval card shows the action and its fixed parameters. Changing the binding
+requires approval under the session's permission mode.
+
+Declarations allow up to 16 unique names, each using a lowercase stable slug of
+at most 64 characters. Fixed parameters use strings, finite numbers, booleans, or
+null, with up to 32 keys and 8 KiB per binding. Use the plugin's advertised schema
+for the combined fixed and dynamic parameters. A required bound action cannot be
+invoked through the legacy action-ID route.
+
+The Gateway checks the exact current binding at dispatch. Plugin node effects
+retain that check through asynchronous preparation to the final node transport;
+expired callers or removed grants cannot begin a new operation. An effect already
+handed to a device can finish: use the executor's Stop/cancellation and lifetime
+limits. A lost response does not authorize replaying an effect.
 
 ### Read GitHub Actions runs
 

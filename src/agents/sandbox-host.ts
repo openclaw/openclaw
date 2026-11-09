@@ -6,6 +6,7 @@ import { LruCache } from "../infra/lru-cache.js";
 import { KEYBOARD_SHORTCUT_MATCHER_SOURCE } from "../shared/keyboard-shortcuts.generated.js";
 import { COMMAND_PALETTE_SHORTCUTS } from "../shared/keyboard-shortcuts.js";
 import { WIDGET_THEME_MESSAGE_TYPE } from "../shared/widget-theme.js";
+import { buildSandboxWidgetPresentationBridgeHtml } from "./sandbox-widget-presentation-bridge.js";
 import { buildSandboxWidgetScrollBridgeHtml } from "./sandbox-widget-scroll-bridge.js";
 
 export type SandboxHostCsp = {
@@ -296,6 +297,7 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   const serializedDocumentGuard = JSON.stringify(
     buildSandboxDocumentGuardHtml(blockDescendantFrames) +
       buildSandboxShortcutBridgeHtml() +
+      buildSandboxWidgetPresentationBridgeHtml() +
       buildSandboxWidgetScrollBridgeHtml() +
       WIDGET_SIZE_CONFIRMATION_HTML,
   ).replaceAll("<", "\\u003c");

@@ -453,7 +453,10 @@ describe("board widget frame", () => {
     };
     const received: unknown[] = [];
     root.addEventListener(WIDGET_PROMPT_EVENT, (event) => {
-      received.push((event as CustomEvent<unknown>).detail);
+      const detail = (event as CustomEvent<{ text: string; respond: (accepted: boolean) => void }>)
+        .detail;
+      received.push({ text: detail.text });
+      detail.respond(true);
     });
     const awaitDialog = (response: Promise<unknown>) =>
       Promise.race([
@@ -645,4 +648,30 @@ describe("board widget frame", () => {
     reportHeight();
     expect(reportContentHeight).toHaveBeenCalledOnce();
   });
+});
+
+it("keeps Lobby sizing local and advertises collapse to the retained sandbox", () => {
+  const reportContentHeight = vi.fn();
+  let collapsed = false;
+  const widget = sandboxWidget();
+  const { owner, frame } = mountFrame(widget, {
+    reportContentHeight,
+    lobbyPresentation: () => ({ collapsed }),
+  });
+  disposers.push(() => owner.disconnect());
+  const post = vi.spyOn(frame.contentWindow!, "postMessage");
+  owner.connect();
+  for (const state of [false, true]) {
+    collapsed = state;
+    owner.postBoardHostState(frame);
+    expect(post).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "openclaw:widget-board-host",
+        presentation: { lobby: true, collapsed: state },
+      }),
+      "https://sandbox.example",
+    );
+    dispatchFrameMessage(frame, { data: { type: "openclaw:widget-size", height: 900 } });
+  }
+  expect(reportContentHeight).not.toHaveBeenCalled();
 });

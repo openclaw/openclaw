@@ -111,6 +111,188 @@ afterEach(() => {
 });
 
 describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
+  it("reports the selected component and current frame identity to the native conversation owner", async () => {
+    const previous = Object.getOwnPropertyDescriptor(window, "webkit");
+    const postMessage = vi.fn(async () => true);
+    Object.defineProperty(window, "webkit", {
+      configurable: true,
+      value: { messageHandlers: { openclawLobbyPrompt: { postMessage } } },
+    });
+    try {
+      const view = await mount();
+      view.lobby = true;
+      await updateSnapshot(view, {
+        widgets: [createBoardWidget({ name: "plan", instanceId: "frame-a" })],
+      });
+      view.querySelector<HTMLButtonElement>(".lobby-component__toggle")!.click();
+      await vi.waitFor(() =>
+        expect(postMessage).toHaveBeenCalledWith({
+          kind: "selection",
+          name: "plan",
+          instanceId: "frame-a",
+        }),
+      );
+      const componentId = "a".repeat(32);
+      await updateSnapshot(view, {
+        widgets: [createBoardWidget({ name: "plan", instanceId: "frame-a", componentId })],
+      });
+      await updateSnapshot(view, {
+        widgets: [createBoardWidget({ name: "plan", instanceId: "frame-b", componentId })],
+      });
+      await vi.waitFor(() =>
+        expect(postMessage).toHaveBeenCalledWith({
+          kind: "selection",
+          name: "plan",
+          instanceId: "frame-b",
+        }),
+      );
+      view.querySelector<HTMLButtonElement>(".lobby-component__toggle")!.click();
+      await vi.waitFor(() =>
+        expect(postMessage).toHaveBeenCalledWith({
+          kind: "selection",
+          name: null,
+          instanceId: null,
+        }),
+      );
+    } finally {
+      if (previous) {
+        Object.defineProperty(window, "webkit", previous);
+      } else {
+        Reflect.deleteProperty(window, "webkit");
+      }
+    }
+  });
+  it("fills the Lobby viewport and retains a top-square live preview across orientations", async () => {
+    const parent = document.createElement("div");
+    parent.style.width = "370px";
+    document.body.append(parent);
+    const applyOps = vi.fn(async () => undefined);
+    const view = await mount(applyOps, parent);
+    view.lobby = true;
+    view.style.height = "720px";
+    await updateSnapshot(view, {
+      widgets: [createBoardWidget({ name: "square", sizeH: 1, frameUrl: "/square" })],
+    });
+    const card = view.querySelector<HTMLElement>(".board-widget")!;
+    const body = view.querySelector<HTMLElement>(".board-widget__body")!;
+    const header = view.querySelector<HTMLElement>(".board-widget__chrome")!;
+    const toggle = view.querySelector<HTMLButtonElement>(".lobby-component__toggle")!;
+    await vi.waitFor(() => expect(view.querySelector("iframe")).not.toBeNull());
+    const frame = view.querySelector("iframe");
+    expect(getComputedStyle(toggle.querySelector(".board-widget__title")!).fontSize).toBe("18px");
+    toggle.click();
+    await settle(view);
+    for (const [width, height] of [
+      [370, 720],
+      [760, 370],
+    ]) {
+      parent.style.width = `${width}px`;
+      view.style.height = `${height}px`;
+      await vi.waitFor(() => {
+        expect(body.clientWidth).toBe(width - 2);
+        const padding = getComputedStyle(view);
+        expect(body.clientHeight).toBe(
+          height -
+            Number.parseFloat(padding.paddingTop) -
+            Number.parseFloat(padding.paddingBottom) -
+            header.clientHeight -
+            2,
+        );
+        expect(card.style.getPropertyValue("--lobby-source-side")).toBe(`${width - 2}px`);
+      });
+      const expandedWidth = card.getBoundingClientRect().width;
+      const headerHeight = header.getBoundingClientRect().height;
+      expect(headerHeight).toBe(96);
+      toggle.click();
+      await settle(view);
+      await vi.waitFor(() => {
+        const slot = view.querySelector<HTMLElement>(".lobby-component__preview-slot")!;
+        const visual = body.getBoundingClientRect();
+        expect(card.getBoundingClientRect().width).toBe(expandedWidth);
+        expect(header.getBoundingClientRect().height).toBe(headerHeight);
+        expect(slot.getBoundingClientRect().width).toBe(88);
+        expect(slot.clientWidth).toBe(slot.clientHeight);
+        expect(Math.abs(visual.width - slot.clientWidth)).toBeLessThan(1);
+        expect(getComputedStyle(body).clipPath).not.toBe("none");
+        expect(
+          Math.abs(visual.top - slot.getBoundingClientRect().top - slot.clientTop),
+        ).toBeLessThan(1);
+        expect(body.clientWidth).toBe(width - 2);
+      });
+      toggle.click();
+      await settle(view);
+      expect(view.querySelector("iframe")).toBe(frame);
+      expect(body.clientHeight).toBeGreaterThanOrEqual(120);
+    }
+    expect(view.querySelector(".board-widget__menu-trigger")).toBeNull();
+    expect(applyOps).not.toHaveBeenCalled();
+  });
+
+  it("shows component purpose instead of grant badges without shifting Lobby thumbnails", async () => {
+    const view = await mount();
+    view.style.width = "370px";
+    view.lobby = true;
+    await updateSnapshot(view, {
+      widgets: [
+        createBoardWidget({ name: "plain", title: "World Desk", position: 0 }),
+        createBoardWidget({
+          name: "permitted",
+          title: "Mac Pointer",
+          description: "Move the pointer on your paired Mac.",
+          position: 1,
+          grantState: "granted",
+          declared: { tools: ["health"] },
+        }),
+      ],
+    });
+    await vi.waitFor(() => {
+      const slots = [...view.querySelectorAll<HTMLElement>(".lobby-component__preview-slot")];
+      expect(slots).toHaveLength(2);
+      expect(slots[0].getBoundingClientRect().left).toBe(slots[1].getBoundingClientRect().left);
+      expect(view.querySelector('[data-test-id="board-capabilities-granted"]')).toBeNull();
+      const badge = view.querySelector<HTMLElement>(".lobby-component__description")!;
+      expect(badge.textContent).toBe("Move the pointer on your paired Mac.");
+      const heading = badge.closest(".lobby-component__heading")!;
+      const title = heading.querySelector(".board-widget__title")!;
+      expect(badge.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+        title.getBoundingClientRect().bottom,
+      );
+      expect(badge.closest(".lobby-component__toggle")).not.toBeNull();
+      expect(badge.getBoundingClientRect().right).toBeLessThan(
+        slots[1].getBoundingClientRect().left,
+      );
+    });
+  });
+
+  it("restores the Lobby list scroll position after visiting a component page", async () => {
+    const view = await mount();
+    view.style.cssText = "height: 320px; width: 370px; flex: none; overflow-y: auto";
+    view.lobby = true;
+    await updateSnapshot(view, {
+      widgets: Array.from({ length: 12 }, (_, i) =>
+        createBoardWidget({
+          name: `item-${i}`,
+          title: `Item ${i}`,
+          position: i,
+        }),
+      ),
+    });
+    await vi.waitFor(() => expect(view.scrollHeight).toBeGreaterThan(700));
+    view.scrollTop = 600;
+    const before = view.scrollTop;
+    expect(before).toBe(600);
+    const cell = cellsOf(view).find((candidate) => candidate.widget?.name === "item-7")!;
+    const button = cell.querySelector<HTMLButtonElement>(".lobby-component__toggle")!;
+    button.click();
+    await settle(view);
+    await vi.waitFor(() => expect(view.scrollTop).toBe(0));
+    expect(cellsOf(view).filter((candidate) => !candidate.hidden)).toHaveLength(1);
+    button.click();
+    await settle(view);
+    await vi.waitFor(() => expect(view.scrollTop).toBe(before));
+    expect(document.activeElement).toBe(button);
+  });
+
   it("preserves vertical ancestor scroll when a board mounts or its tabs refresh", async () => {
     const parent = document.createElement("div");
     parent.style.cssText = "height: 120px; overflow-y: auto";

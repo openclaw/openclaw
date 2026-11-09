@@ -336,3 +336,64 @@ final class DesktopPlatformProbe: MacDesktopAvailabilityPlatform {
         self.changed?()
     }
 }
+
+extension MacDesktopAvailabilityCoordinatorTests {
+    @Test func `bounded execution expires without renewal and requests scoped cleanup`() throws {
+        try self.withOwner { owner, platform in
+            var revoked: [Owner.Permit] = []
+            owner.onExecutionsRevoked = { permits, reason in
+                #expect(reason == "execution-expired")
+                revoked.append(contentsOf: permits)
+            }
+            owner.setRoute(generation: 1, connected: true, hostingEnabled: false)
+            let first = try owner.admit(executionId: "bounded", executionTimeoutMs: 1000)
+            platform.uptime = 0.7
+            #expect(try owner.admit(executionId: "bounded", executionTimeoutMs: 1000) == first)
+            #expect(try owner.admit(executionId: "bounded", requireExistingExecution: true) == first)
+            #expect(throws: Owner.AvailabilityError.invalidExecutionOptions) {
+                try owner.admit(executionId: "bounded", executionTimeoutMs: 2000)
+            }
+            platform.uptime = 1
+            platform.invalidate()
+            #expect(revoked == [first])
+            #expect(platform.assertions.isEmpty)
+            #expect(throws: Owner.AvailabilityError.executionClosed) {
+                try owner.admit(executionId: "bounded", requireExistingExecution: true)
+            }
+            #expect(owner.beginRevocationCleanup(first))
+            owner.finishRevocationCleanup(first, succeeded: true)
+            #expect(throws: Owner.AvailabilityError.executionClosed) {
+                try owner.admit(executionId: "bounded", requireExistingExecution: true)
+            }
+            #expect(platform.assertions.isEmpty)
+        }
+    }
+
+    @Test func `bounded options reject before admission and preserve legacy lifetime`() throws {
+        try self.withOwner { owner, platform in
+            owner.setRoute(generation: 1, connected: true, hostingEnabled: false)
+            for timeout in [0, 999, 30001] {
+                #expect(throws: Owner.AvailabilityError.invalidExecutionOptions) {
+                    try owner.admit(executionId: "invalid", executionTimeoutMs: timeout)
+                }
+            }
+            #expect(throws: Owner.AvailabilityError.invalidExecutionOptions) {
+                try owner.admit(executionId: nil, executionTimeoutMs: 1000)
+            }
+            #expect(throws: Owner.AvailabilityError.invalidExecutionOptions) {
+                try owner.admit(executionId: nil, requireExistingExecution: true)
+            }
+            #expect(throws: Owner.AvailabilityError.executionClosed) {
+                try owner.admit(executionId: "absent", requireExistingExecution: true)
+            }
+            #expect(platform.assertions.isEmpty)
+            let legacy = try owner.admit(executionId: "legacy")
+            #expect(throws: Owner.AvailabilityError.invalidExecutionOptions) {
+                try owner.admit(executionId: "legacy", executionTimeoutMs: 1000)
+            }
+            platform.uptime = 30
+            try owner.validate(legacy)
+            #expect(platform.assertions.count == 1)
+        }
+    }
+}

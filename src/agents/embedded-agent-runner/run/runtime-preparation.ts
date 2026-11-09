@@ -137,6 +137,7 @@ export async function prepareEmbeddedRunTransport(input: {
           provider,
           modelId,
           model: candidate,
+          nativeModelOwned,
           attempts,
           requestStreamTransportOverrides,
           pinnedHarnessId,

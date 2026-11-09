@@ -145,6 +145,22 @@ actor MacNodeRuntime {
     private struct DesktopExecutionEnvelope: Decodable {
         var executionId: String?
         var action: String?
+        var executionTimeoutMs: Int?
+        var requireExistingExecution: Bool?
+
+        func validateOptions(command: String) throws {
+            if let executionTimeoutMs,
+               command != OpenClawScreenCommand.snapshot.rawValue || self.executionId == nil ||
+               !(1000...30000).contains(executionTimeoutMs)
+            {
+                throw MacDesktopAvailabilityCoordinator.AvailabilityError.invalidExecutionOptions
+            }
+            if self.requireExistingExecution != nil,
+               command != OpenClawComputerCommand.act.rawValue || self.executionId == nil
+            {
+                throw MacDesktopAvailabilityCoordinator.AvailabilityError.invalidExecutionOptions
+            }
+        }
     }
 
     private func handleDesktopInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
@@ -158,6 +174,7 @@ actor MacNodeRuntime {
             if let id = envelope.executionId, UUID(uuidString: id) == nil {
                 return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: invalid executionId")
             }
+            try envelope.validateOptions(command: req.command)
             let generation = self.computerInputReleaseGeneration
             let closing = req.command == OpenClawComputerCommand.act.rawValue && envelope.action == "__close_execution"
             let desktop = if let desktopAvailability {
@@ -184,7 +201,10 @@ actor MacNodeRuntime {
                 await desktop.finishClose(permit, succeeded: response.ok)
                 return response
             }
-            let permit = try await desktop.admit(executionId: envelope.executionId)
+            let permit = try await desktop.admit(
+                executionId: envelope.executionId,
+                executionTimeoutMs: envelope.executionTimeoutMs,
+                requireExistingExecution: envelope.requireExistingExecution ?? false)
             self.activeDesktopInvokes[req.id] = permit
             defer { self.activeDesktopInvokes.removeValue(forKey: req.id) }
             let services = await self.mainActorServices()
@@ -254,6 +274,8 @@ actor MacNodeRuntime {
             }
             await desktop.finishInvocation(permit)
             return response
+        } catch MacDesktopAvailabilityCoordinator.AvailabilityError.invalidExecutionOptions {
+            return Self.invalidDesktopParamsResponse(req)
         } catch let error as OpenClawNodeError {
             return BridgeInvokeResponse(id: req.id, ok: false, error: error)
         } catch {

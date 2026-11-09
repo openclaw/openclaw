@@ -73,6 +73,72 @@ const app = (serverName = "server") => ({
 });
 
 describe("session actor BoardStore", () => {
+  it("preserves a component conversation identity through edits and rejects a recreated component", () =>
+    withStore(async (store) => {
+      const first = await store.putWidget(html("one"));
+      const widget = first.widgets[0]!;
+      const identity = await store.ensureComponentIdentity(target, widget.name, widget.instanceId!);
+      const scoped = { ...target, component: { name: widget.name, id: identity.id } };
+      await store.putWidget(html("two", "<p>Other</p>"));
+      await store.putWidget({ ...html("one", "<p>Edited</p>"), component: scoped.component });
+      expect((await store.getSnapshot(scoped)).widgets.map((item) => item.name)).toEqual(["one"]);
+      expect(await store.useWidgetDocument(scoped, "one", (value) => value)).toMatchObject({
+        html: "<p>Edited</p>",
+        componentId: identity.id,
+      });
+      await expect(
+        store.applyOps(scoped, [{ kind: "widget_remove", name: "two" }]),
+      ).rejects.toThrow("general Lobby");
+      await store.applyOps(target, [{ kind: "widget_remove", name: "one" }]);
+      await store.putWidget(html("one", "<p>Replacement</p>"));
+      await expect(
+        store.putWidget({ ...html("one", "bad"), component: scoped.component }),
+      ).rejects.toThrow("removed or replaced");
+      await expect(store.getSnapshot(scoped)).rejects.toThrow("removed or replaced");
+    }));
+  it("changes permissions without reviving stale decisions or changing component content", () =>
+    withStore(async (store) => {
+      const initial = await store.putWidget({
+        ...html("permissions"),
+        declared: { tools: ["health"] },
+      });
+      const widget = initial.widgets[0]!;
+      const denied = await store.grant(
+        target,
+        widget.name,
+        "rejected",
+        widget.revision,
+        widget.instanceId,
+      );
+      expect(denied.widgets[0]).toMatchObject({ revision: 2, grantState: "rejected" });
+      await expect(
+        store.grant(target, widget.name, "granted", 1, widget.instanceId),
+      ).rejects.toMatchObject({ code: "conflict" });
+      const allowed = await store.grant(target, widget.name, "granted", 2, widget.instanceId);
+      expect(allowed.widgets[0]).toMatchObject({ revision: 3, grantState: "granted" });
+      expect(await store.grant(target, widget.name, "granted", 3, widget.instanceId)).toEqual(
+        allowed,
+      );
+      const revoked = await store.grant(target, widget.name, "rejected", 3, widget.instanceId);
+      expect(revoked.widgets[0]).toMatchObject({ revision: 4, grantState: "rejected" });
+      expect(await store.useWidgetDocument(target, widget.name, (value) => value)).toMatchObject({
+        html: "<p>hello</p>",
+        revision: 4,
+        grantState: "rejected",
+      });
+      const plain = await store.putWidget(html("no-permissions"));
+      const plainWidget = plain.widgets.find((item) => item.name === "no-permissions")!;
+      await expect(
+        store.grant(
+          target,
+          plainWidget.name,
+          "granted",
+          plainWidget.revision,
+          plainWidget.instanceId,
+        ),
+      ).rejects.toMatchObject({ code: "invalid_operation" });
+    }));
+
   it("inherits the selected memory owner's custom state root after async preparation", () =>
     withStore(async () => {
       const binding = (await acquireSessionActorStorage(

@@ -563,6 +563,7 @@ RPCs (core method table, typebox schemas in `gateway-protocol`):
   `operator.read`. It accepts managed script-enabled Canvas documents up to 2 MiB,
   creates no board state, and returns no capability ticket.
 - `board.get { sessionKey }` → tabs + widget metadata and native props (no document bytes) — `operator.read`
+- `board.widget.source { sessionKey, name, expectedRevision?, offset?, limit? }` → inert stored HTML source, its revision and SHA-256 — `operator.read`, with the same session access boundary. The default page is 32,768 UTF-16 code units (maximum requested limit 65,536); a page boundary extends by one unit when necessary to preserve a surrogate pair. Continue with `nextOffset` and the returned revision as `expectedRevision`. Source reads mint no view ticket, execute no code, and do not require a widget capability grant. Non-HTML widgets remain owned by their plugin or MCP integration.
 - `board.update { sessionKey, ops[] }` — tab CRUD/reorder, widget move/resize/
   remove/unpin, dock state, focus-tab — `operator.write`
 - `board.widget.put { sessionKey, name, content, declared?, placement? }` —

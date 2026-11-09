@@ -14,7 +14,11 @@ export type McpAppHostSandboxCsp = NonNullable<
 
 /** Bubbling event handled by the owning chat pane through its normal send path. */
 export const WIDGET_PROMPT_EVENT = "openclaw-widget-prompt";
-export type WidgetPromptEventDetail = { text: string };
+export type WidgetPromptEventDetail = {
+  text: string;
+  /** A receipt from the normal conversation owner, not proof of model completion. */
+  respond: (accepted: boolean | Promise<boolean>) => void;
+};
 export const MCP_APP_VIEW_EXPIRED_EVENT = "openclaw-mcp-app-view-expired";
 
 const WIDGET_PROMPT_MAX_CHARS = 4_000;
@@ -85,14 +89,26 @@ export async function dispatchWidgetPrompt(
   ) {
     return false;
   }
+  const delivery: { receipt?: Promise<boolean> } = {};
+  let dispatching = true;
   frame.dispatchEvent(
     new CustomEvent<WidgetPromptEventDetail>(WIDGET_PROMPT_EVENT, {
       bubbles: true,
       composed: true,
-      detail: { text },
+      cancelable: true,
+      detail: {
+        text,
+        respond: (accepted) => {
+          if (dispatching && !delivery.receipt) {
+            delivery.receipt = Promise.resolve(accepted);
+          }
+        },
+      },
     }),
   );
-  return true;
+  dispatching = false;
+  // A focused standalone dashboard can have no chat owner. Dispatch is not custody.
+  return delivery.receipt ? delivery.receipt.catch(() => false) : false;
 }
 
 export function buildMcpAppHostCapabilities(

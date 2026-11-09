@@ -110,15 +110,18 @@ it("keeps the wrapped document bytes stable", () => {
 
   expect(html).toContain("--scrollbar-thumb-near:color-mix(in srgb,var(--muted) 16%,transparent)");
   expect(html).toContain("border:var(--scrollbar-thumb-inset,calc(var(--scrollbar-size)/4))");
-  expect(Buffer.byteLength(html)).toBe(18297);
+  expect(Buffer.byteLength(html)).toBe(18351);
   expect(createHash("sha256").update(html).digest("hex")).toBe(
-    "3f0bb5db25e373433f624ff2f152509661ec1f1615320fda7480624db1142848",
+    "61fe4b8d320ab44064ce2d653aea5e5555532c020088b109ac77062ba4dac7d1",
   );
 });
 // The host side reads port data through the pristine getter, so a widget
 // override of MessageEvent.prototype.data only ever sees the wrapper's reads.
 const messageData = Object.getOwnPropertyDescriptor(MessageEvent.prototype, "data")!;
-async function bootWrappedWidget(body: string) {
+async function bootWrappedWidget(
+  body: string,
+  activation?: { active: boolean; activateBeforeInit?: boolean },
+) {
   // jsdom has no MessageChannel and drops transferred ports, so the real wrapper
   // gets Node's channel (and its MessageEvent) and the parent's postMessage
   // records its port offers.
@@ -137,14 +140,28 @@ async function bootWrappedWidget(body: string) {
       observe() {}
     },
   });
+  if (activation) {
+    const userActivation = Object.create({
+      get isActive() {
+        return activation.active;
+      },
+    });
+    Object.defineProperty(frame.navigator, "userActivation", {
+      configurable: true,
+      value: userActivation,
+    });
+  }
   frame.document.open();
   frame.document.write(buildWidgetDocument("Links", body));
   frame.document.close();
   const port = offers.find((offer) => offer.type === "openclaw:widget-bridge-port-offer")!.port!;
   onTestFinished(() => port.close());
-  const received: Array<{ type: string; method?: string }> = [];
+  const received: Array<{ type: string; method?: string; userActivated?: boolean }> = [];
   port.addEventListener("message", (event) => received.push(messageData.get!.call(event)));
   port.start();
+  if (activation?.activateBeforeInit) {
+    activation.active = true;
+  }
   port.postMessage({ type: "openclaw:widget-host-init", ticket: "ticket" });
   await vi.waitFor(() => expect(received[0]?.type).toBe("openclaw:widget-host-init-ack"));
   return { frame, port, received };
@@ -205,4 +222,41 @@ it("keeps its private bridge port from a widget's MessageEvent data override", a
   expect(new MessageEvent("message", { data: control }).data).toBe(control);
   expect(widget.stolen).toHaveLength(1);
   expect(widget.stolen[0]).toBeNull();
+});
+
+it("captures native inner activation before queued delivery and ignores authored spoofing", async () => {
+  const activation = { active: false, activateBeforeInit: true };
+  const { frame, received } = await bootWrappedWidget(
+    '<script>Object.defineProperty(navigator,"userActivation",{value:{isActive:true}});void openclaw.action.run("play",{userActivated:true});</script>',
+    activation,
+  );
+  await vi.waitFor(() =>
+    expect(received.some((message) => message.method === "action.run")).toBe(true),
+  );
+  expect(received.find((message) => message.method === "action.run")?.userActivated).toBe(false);
+  void (
+    frame as unknown as { openclaw: { action: { run: (name: string) => unknown } } }
+  ).openclaw.action.run("play");
+  await vi.waitFor(() =>
+    expect(received.filter((message) => message.method === "action.run")).toHaveLength(2),
+  );
+  expect(received.at(-1)?.userActivated).toBe(true);
+});
+
+it.each(["<p>Saved component</p>", '<svg xmlns="http://www.w3.org/2000/svg"></svg>'])(
+  "keeps exact hosted source stable when pinned again: %s",
+  (markup) => {
+    const document = buildWidgetDocument("Example", markup);
+    expect(buildWidgetDocument("Example", document)).toBe(document);
+  },
+);
+
+it("does not trust a shell marker or a modified bridge when repinning HTML", () => {
+  const document = buildWidgetDocument("Example", "<p>Content</p>");
+  const modified = document.replace("Object.prototype.hasOwnProperty", "window.untrusted");
+  const result = buildWidgetDocument("Example", modified);
+  expect(result).not.toBe(modified);
+  expect(result.indexOf("Object.prototype.hasOwnProperty")).toBeLessThan(
+    result.indexOf("window.untrusted"),
+  );
 });

@@ -6,6 +6,7 @@ import {
   dispatchWidgetPrompt,
   negotiateMcpAppDisplayModes,
   WIDGET_PROMPT_EVENT,
+  type WidgetPromptEventDetail,
 } from "./mcp-app-security.ts";
 import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
@@ -124,6 +125,39 @@ describe("MCP App sandbox security", () => {
     expect(() => resolve(path + "/../other", path + "/../other")).toThrow();
   });
 
+  it("refuses a prompt when the focused dashboard has no conversation owner", async () => {
+    const frame = mountFrame();
+    frame.focus();
+    expect(await dispatchWidgetPrompt(frame, "Compare these plans", crypto.randomUUID())).toBe(
+      false,
+    );
+  });
+
+  it.each([true, false])("returns the owner's asynchronous receipt: %s", async (accepted) => {
+    const frame = mountFrame();
+    frame.focus();
+    const decision = createDeferred<boolean>();
+    frame.addEventListener(WIDGET_PROMPT_EVENT, (event) => {
+      (event as CustomEvent<WidgetPromptEventDetail>).detail.respond(decision.promise);
+    });
+    const pending = dispatchWidgetPrompt(frame, "Compare plans", crypto.randomUUID());
+    decision.resolve(accepted);
+    expect(await pending).toBe(accepted);
+  });
+
+  it("rejects a failed owner without replaying the request", async () => {
+    const frame = mountFrame();
+    frame.focus();
+    const receive = vi.fn((event: Event) => {
+      (event as CustomEvent<WidgetPromptEventDetail>).detail.respond(
+        Promise.reject(new Error("offline")),
+      );
+    });
+    frame.addEventListener(WIDGET_PROMPT_EVENT, receive);
+    expect(await dispatchWidgetPrompt(frame, "Compare plans", crypto.randomUUID())).toBe(false);
+    expect(receive).toHaveBeenCalledOnce();
+  });
+
   it("keeps the per-view prompt budget across iframe remounts", async () => {
     let active: HTMLIFrameElement;
     vi.spyOn(document, "activeElement", "get").mockImplementation(() => active);
@@ -132,6 +166,9 @@ describe("MCP App sandbox security", () => {
     });
     const key = `agent:main:main\0view-${crypto.randomUUID()}`;
     const first = (active = mountFrame());
+    first.addEventListener(WIDGET_PROMPT_EVENT, (event) => {
+      (event as CustomEvent<WidgetPromptEventDetail>).detail.respond(true);
+    });
     for (let index = 0; index < 10; index += 1) {
       expect(await dispatchWidgetPrompt(first, `Prompt ${index}`, key)).toBe(true);
     }

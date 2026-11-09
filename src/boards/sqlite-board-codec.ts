@@ -54,12 +54,14 @@ type BoardWidgetContentOwnership = {
 };
 
 type ParsedBoardManifest = {
+  componentId?: string;
   contentOwner?: BoardWidgetContentOwnership["contentOwner"];
   declared?: BoardWidgetDeclared;
   declarationInvalid?: true;
   grantSemanticsVersion?: number;
   presentation?: BoardWidget["presentation"];
   heightMode?: BoardWidget["heightMode"];
+  description?: string;
   nameIdentity?: BoardWidgetNameIdentityMarker;
   nameIdentityInvalid?: true;
   mcpAppInteractive?: boolean;
@@ -144,15 +146,22 @@ export function parseManifest(value: string): ParsedBoardManifest {
       ...(netOrigins?.length ? { netOrigins } : {}),
       ...(tools?.length ? { tools } : {}),
       ...(parsed.queries !== undefined ? { queries: parsed.queries } : {}),
+      ...(parsed.actionBindings !== undefined ? { actionBindings: parsed.actionBindings } : {}),
     });
     return {
       ...ownership,
+      ...(typeof parsed.componentId === "string" && /^[a-f0-9]{32}$/u.test(parsed.componentId)
+        ? { componentId: parsed.componentId }
+        : {}),
       ...(declared ? { declared } : {}),
       ...(parsed.grantSemanticsVersion === BOARD_GRANT_SEMANTICS_VERSION
         ? { grantSemanticsVersion: BOARD_GRANT_SEMANTICS_VERSION }
         : {}),
       ...(presentation ? { presentation } : {}),
       ...(heightMode ? { heightMode } : {}),
+      ...(typeof parsed.description === "string" && parsed.description.length <= 240
+        ? { description: parsed.description }
+        : {}),
       ...(nameIdentity ? { nameIdentity } : {}),
       ...(!nameIdentity && nameIdentityPresent ? { nameIdentityInvalid: true as const } : {}),
       ...(mcpAppInteractive !== undefined ? { mcpAppInteractive } : {}),
@@ -176,14 +185,16 @@ export function serializeManifest(
   widgetIdentity?:
     | { kind: "mcp-app"; interactive: boolean; instanceId: string }
     | { kind: "plugin"; instanceId: string },
-  widgetOptions?: Pick<BoardWidget, "presentation" | "heightMode">,
+  widgetOptions?: Pick<BoardWidget, "presentation" | "heightMode" | "description" | "componentId">,
   nameIdentity?: BoardWidgetNameIdentityMarker,
 ): string {
   return JSON.stringify({
     ...ownership,
+    ...(widgetOptions?.componentId ? { componentId: widgetOptions.componentId } : {}),
     ...declared,
     ...(widgetOptions?.presentation ? { presentation: widgetOptions.presentation } : {}),
     ...(widgetOptions?.heightMode ? { heightMode: widgetOptions.heightMode } : {}),
+    ...(widgetOptions?.description !== undefined ? { description: widgetOptions.description } : {}),
     ...(nameIdentity ? { nameIdentity } : {}),
     ...(grantState === "granted" ? { grantSemanticsVersion: BOARD_GRANT_SEMANTICS_VERSION } : {}),
     ...(widgetIdentity?.kind === "mcp-app"
@@ -200,7 +211,7 @@ export function createBoardWidgetContentFields(
   params: BoardWidgetMaterializedPutParams,
   // Effective frame options come from the materialized widget, not the raw put
   // params: re-pins that omit them must keep the inherited persisted values.
-  frame: Pick<BoardWidget, "presentation" | "heightMode">,
+  frame: Pick<BoardWidget, "presentation" | "heightMode" | "description" | "componentId">,
   revision: number,
   grantState: BoardWidget["grantState"],
   instanceId: string,
@@ -363,6 +374,7 @@ export function rowToBoardWidgetDocument(
   }
   return {
     descriptor: parseDescriptor(row.descriptor_json),
+    ...(manifest.componentId ? { componentId: manifest.componentId } : {}),
     revision: row.revision,
     instanceId: manifest.mcpAppInstanceId,
     grantState: effectiveGrantState(row.grant_state, manifest),
@@ -412,12 +424,14 @@ export function rowToWidget(
         : row.view_generation;
   return {
     name: row.name,
+    ...(manifest.componentId ? { componentId: manifest.componentId } : {}),
     tabId: row.tab_id,
     ...(row.title !== null ? { title: row.title } : {}),
     contentKind: row.content_kind as BoardWidget["contentKind"],
     contentOwner,
     ...(manifest.presentation ? { presentation: manifest.presentation } : {}),
     ...(manifest.heightMode ? { heightMode: manifest.heightMode } : {}),
+    ...(manifest.description !== undefined ? { description: manifest.description } : {}),
     ...(pluginContent
       ? {
           pluginKind: pluginContent.pluginKind,
@@ -450,6 +464,7 @@ export function rowToHtmlViewMetadata(
   return {
     revision: row.revision,
     sha256: row.sha256,
+    ...(manifest.componentId ? { componentId: manifest.componentId } : {}),
     viewGeneration,
     grantState: effectiveGrantState(row.grant_state, manifest),
     // View metadata and the mutable widget snapshot have independent consumers.

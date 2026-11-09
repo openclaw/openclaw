@@ -103,6 +103,7 @@ function actionObject<const Actions extends string[], const Properties extends T
   return closedObject({
     action: Type.Enum(actions, { type: "string" }),
     executionId: Type.Optional(Type.String({ pattern: COMPUTER_EXECUTION_ID_PATTERN })),
+    requireExistingExecution: Type.Optional(Type.Boolean()),
     ...properties,
   });
 }
@@ -393,6 +394,7 @@ export const ComputerUseCapabilityDescriptorSchema = closedObject({
 /** Canonical inner payload accepted by the `screen.snapshot` node command. */
 export const ScreenSnapshotParamsSchema = closedObject({
   executionId: Type.Optional(Type.String({ pattern: COMPUTER_EXECUTION_ID_PATTERN })),
+  executionTimeoutMs: Type.Optional(Type.Integer({ minimum: 1_000, maximum: 30_000 })),
   screenIndex: Type.Optional(Type.Integer({ minimum: 0 })),
   maxWidth: Type.Optional(Type.Integer({ minimum: 1 })),
   quality: Type.Optional(Type.Number()),

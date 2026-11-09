@@ -290,7 +290,6 @@ final class RootSidebarModel {
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             groups: groups,
-            excludesMainSession: true,
             query: query,
             sessionRoutingContract: sessionRoutingContract)
     }

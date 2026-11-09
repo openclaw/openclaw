@@ -53,6 +53,15 @@ struct SessionDashboardScreenTests {
             url?.absoluteString ==
                 "https://gateway.example.com:8443/tenant%2Fblue/focus/dashboard/main/~key/phone%20%26%20qa%3Fx%3D1")
         #expect(url?.absoluteString.contains("secret-token") == false)
+        let lobbyURL = SessionDashboardScreen.dashboardURL(
+            config: config,
+            sessionKey: "agent:main:phone & qa?x=1",
+            isLobby: true)
+        #expect(lobbyURL?.path == url?.path)
+        let resolvedLobbyURL = try #require(lobbyURL)
+        #expect(URLComponents(url: resolvedLobbyURL, resolvingAgainstBaseURL: false)?.queryItems == [
+            URLQueryItem(name: "presentation", value: "lobby"),
+        ])
     }
 
     @Test func `dashboard URL preserves literal session path segments`() throws {

@@ -20,58 +20,75 @@ function describeQueries(widget: BoardWidget) {
   );
 }
 
+function describeActions(widget: BoardWidget) {
+  return (widget.declared?.actionBindings ?? []).map((binding) =>
+    t("board.widget.actionCapability", {
+      name: binding.name,
+      action: binding.actionId,
+      target: Object.entries(binding.params)
+        .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+        .join("; "),
+    }),
+  );
+}
+
+function boardWidgetCapabilityGroups(widget: BoardWidget) {
+  return [
+    ["board.widget.networkAccess", widget.declared?.netOrigins ?? []],
+    ["board.widget.hostTools", widget.declared?.tools ?? []],
+    ["board.widget.dataQueries", describeQueries(widget)],
+    ["board.widget.boundActions", describeActions(widget)],
+  ] as const;
+}
+
 export function BoardPendingCapabilities(props: {
   widget: BoardWidget;
   disabled: boolean;
   onGrant: (decision: BoardGrantDecision) => void;
   error?: SolidJSX.Element;
+  details?: SolidJSX.Element;
 }) {
-  const groups = createMemo(
-    () =>
-      [
-        ["board.widget.networkAccess", props.widget.declared?.netOrigins ?? []],
-        ["board.widget.hostTools", props.widget.declared?.tools ?? []],
-        ["board.widget.dataQueries", describeQueries(props.widget)],
-      ] as const,
-  );
+  const groups = createMemo(() => boardWidgetCapabilityGroups(props.widget));
   return (
     <div class="board-widget__grant board-widget__grant--pending" data-test-id="board-pending">
       <div class="board-widget__grant-mark" aria-hidden="true">
         !
       </div>
       <strong>{t("board.widget.needsApproval")}</strong>
-      <Show
-        when={groups().some(([, values]) => values.length > 0)}
-        fallback={
-          <Show
-            when={props.widget.declaredSummary?.length}
-            fallback={<span>{t("board.widget.needsApprovalDetail")}</span>}
-          >
-            <ul class="board-widget__grant-summary">
-              <For keyed={false} each={props.widget.declaredSummary}>
-                {(summary) => <li>{summary()}</li>}
-              </For>
-            </ul>
-          </Show>
-        }
-      >
-        <div class="board-widget__grant-groups">
-          <For keyed={false} each={groups()}>
-            {(group) => (
-              <Show when={group()[1].length > 0}>
-                <section>
-                  <strong>{t(group()[0])}</strong>
-                  <ul class="board-widget__grant-summary">
-                    <For keyed={false} each={group()[1]}>
-                      {(capability) => <li>{capability()}</li>}
-                    </For>
-                  </ul>
-                </section>
-              </Show>
-            )}
-          </For>
-        </div>
-      </Show>
+      {props.details ?? (
+        <Show
+          when={groups().some(([, values]) => values.length > 0)}
+          fallback={
+            <Show
+              when={props.widget.declaredSummary?.length}
+              fallback={<span>{t("board.widget.needsApprovalDetail")}</span>}
+            >
+              <ul class="board-widget__grant-summary">
+                <For keyed={false} each={props.widget.declaredSummary}>
+                  {(summary) => <li>{summary()}</li>}
+                </For>
+              </ul>
+            </Show>
+          }
+        >
+          <div class="board-widget__grant-groups">
+            <For keyed={false} each={groups()}>
+              {(group) => (
+                <Show when={group()[1].length > 0}>
+                  <section>
+                    <strong>{t(group()[0])}</strong>
+                    <ul class="board-widget__grant-summary">
+                      <For keyed={false} each={group()[1]}>
+                        {(capability) => <li>{capability()}</li>}
+                      </For>
+                    </ul>
+                  </section>
+                </Show>
+              )}
+            </For>
+          </div>
+        </Show>
+      )}
       <div class="board-widget__grant-actions">
         <button
           class="btn btn--small btn--primary"
@@ -109,6 +126,7 @@ export function BoardGrantedCapabilities(props: {
       t("board.widget.toolCapability", { capability: tool }),
     ),
     ...describeQueries(props.widget),
+    ...describeActions(props.widget),
   ]);
   return (
     <Show when={props.widget.grantState === "granted" && capabilities().length > 0}>

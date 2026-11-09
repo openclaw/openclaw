@@ -21,7 +21,7 @@ struct RootTabsPresentationTests {
 
     @Test func `every sidebar destination resolves to a native screen or a valid Dashboard route`() {
         let expected: [RootTabs.SidebarDestination: RootTabs.SidebarScreen] = [
-            .chat: .chat, .overview: .overview, .agents: .agents, .sessions: .sessions,
+            .lobby: .lobby, .chat: .chat, .overview: .overview, .agents: .agents, .sessions: .sessions,
             .files: .files, .desktop: .desktop, .terminal: .terminal, .docs: .docs,
             .settings: .settings, .gateway: .gateway,
             .activity: .dashboard("/activity"), .workboard: .dashboard("/workboard"),
@@ -350,51 +350,6 @@ struct RootTabsPresentationTests {
             discoveredGatewayCount: 1)
 
         #expect(!shouldPresent)
-    }
-
-    @Test func `sidebar destinations match frozen page order`() {
-        let destinationIDs = RootTabs.SidebarDestination.allCases.map(\.rawValue)
-
-        #expect(RootTabs.sidebarDestinations == [
-            .chat,
-            .overview,
-            .workboard,
-            .usage,
-            .cron,
-            .sessions,
-            .activity,
-            .skillWorkshop,
-            .agents,
-            .instances,
-            .files,
-            .dreaming,
-            .desktop,
-            .terminal,
-            .docs,
-        ])
-        #expect(destinationIDs == [
-            "chat",
-            "overview",
-            "activity",
-            "agents",
-            "workboard",
-            "skillWorkshop",
-            "instances",
-            "sessions",
-            "files",
-            "dreaming",
-            "usage",
-            "cron",
-            "desktop",
-            "terminal",
-            "docs",
-            "settings",
-            "gateway",
-        ])
-        #expect(!destinationIDs.contains("agent"))
-        #expect(RootTabs.sidebarDestinations.contains(.chat))
-        #expect(!RootTabs.sidebarDestinations.contains(.settings))
-        #expect(!RootTabs.sidebarDestinations.contains(.gateway))
     }
 
     @Test func `sidebar uses compact labels for long routes`() {
@@ -1036,5 +991,55 @@ struct RootTabsPresentationTests {
             payload: AnyCodable(["kind": AnyCodable("agentTurn")]),
             state: [:],
             lastrunstatus: AnyCodable(status))
+    }
+}
+
+@MainActor
+extension RootTabsPresentationTests {
+    @Test func `sidebar destinations match frozen page order`() {
+        let destinationIDs = RootTabs.SidebarDestination.allCases.map(\.rawValue)
+
+        #expect(RootTabs.sidebarDestinations == [
+            .lobby,
+            .chat,
+            .overview,
+            .workboard,
+            .usage,
+            .cron,
+            .sessions,
+            .activity,
+            .skillWorkshop,
+            .agents,
+            .instances,
+            .files,
+            .dreaming,
+            .desktop,
+            .terminal,
+            .docs,
+        ])
+        #expect(destinationIDs == [
+            "lobby",
+            "chat",
+            "overview",
+            "activity",
+            "agents",
+            "workboard",
+            "skillWorkshop",
+            "instances",
+            "sessions",
+            "files",
+            "dreaming",
+            "usage",
+            "cron",
+            "desktop",
+            "terminal",
+            "docs",
+            "settings",
+            "gateway",
+        ])
+        #expect(!destinationIDs.contains("agent"))
+        #expect(RootTabs.sidebarDestinations.contains(.chat))
+        #expect(!RootTabs.sidebarDestinations.contains(.settings))
+        #expect(!RootTabs.sidebarDestinations.contains(.gateway))
     }
 }

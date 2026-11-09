@@ -115,8 +115,10 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   ) => ((completed?: boolean) => void) | undefined;
 };
 
-export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
-  Pick<
+export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams & {
+  /** Host-verified native catalog ownership for this attempt. */
+  nativeModelOwned?: boolean;
+} & Pick<
     RunEmbeddedAgentInternalParams,
     | "onContextAccountingEvent"
     | "onCompactionRequestBudget"

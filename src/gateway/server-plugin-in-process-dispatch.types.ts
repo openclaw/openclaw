@@ -63,6 +63,7 @@ export type DispatchGatewayMethodInProcessOptions = {
   signal?: AbortSignal;
   hasCurrentClientAuthority?: GatewayRequestOptions["hasCurrentClientAuthority"];
   resolveGatewayContext?: GatewayContextResolver;
+  nodeDispatchAuthority?: GatewayRequestOptions["nodeDispatchAuthority"];
   prepareDispatchCurrent?: () => Promise<void>;
   sessionMutationCommitGuard?: () => void;
 };

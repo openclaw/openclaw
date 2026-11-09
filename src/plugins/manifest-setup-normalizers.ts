@@ -258,9 +258,30 @@ export function normalizeManifestDashboard(value: unknown): DashboardManifestRes
           error: `dashboard.actionVerbs[${index}].paramShape must be a JSON Schema object`,
         };
       }
+      const requiredActionBindingParams =
+        field === "actionVerbs" && isRecord(entry) ? entry.requiredActionBindingParams : undefined;
+      if (
+        requiredActionBindingParams !== undefined &&
+        (!Array.isArray(requiredActionBindingParams) ||
+          requiredActionBindingParams.length === 0 ||
+          requiredActionBindingParams.length > 32 ||
+          requiredActionBindingParams.some(
+            (key) =>
+              typeof key !== "string" ||
+              !/^[A-Za-z][A-Za-z0-9_-]{0,79}$/u.test(key) ||
+              ["constructor", "prototype", "__proto__"].includes(key),
+          ) ||
+          new Set(requiredActionBindingParams).size !== requiredActionBindingParams.length)
+      ) {
+        return {
+          ok: false,
+          error: `dashboard.actionVerbs[${index}].requiredActionBindingParams must be unique parameter keys`,
+        };
+      }
       entries.push({
         ...normalized,
         ...(rawParamShape ? { paramShape: rawParamShape as JsonSchemaObject } : {}),
+        ...(requiredActionBindingParams ? { requiredActionBindingParams } : {}),
       });
     }
     if (entries.length > 0) {

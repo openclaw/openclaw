@@ -35,20 +35,20 @@ import { PluginContribution } from "../../plugins/control-ui-view.solid.tsx";
 import type { MenuHandle } from "../solid/menu.tsx";
 import { BoardMcpAppContent } from "./board-mcp-app-content.tsx";
 import { createBoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
-import {
-  BoardGrantedCapabilities,
-  BoardPendingCapabilities,
-} from "./board-widget-capabilities.solid.tsx";
-import {
-  BOARD_SIZE_PRESETS,
-  type BoardWidgetCellHandle,
-  type BoardWidgetCellMethods,
-  type BoardWidgetCellProps,
+import { BoardPendingCapabilities } from "./board-widget-capabilities.solid.tsx";
+import type {
+  BoardWidgetCellHandle,
+  BoardWidgetCellMethods,
+  BoardWidgetCellProps,
 } from "./board-widget-cell-options.ts";
 import { BoardWidgetError } from "./board-widget-error.tsx";
 import { createBoardWidgetFrame, BoardWidgetFrame } from "./board-widget-frame.tsx";
-import { BoardWidgetMenu } from "./board-widget-menu.tsx";
+import { BoardWidgetHeader } from "./board-widget-header.tsx";
+import { handleBoardWidgetKeyDown } from "./board-widget-keyboard.ts";
+import { handleBoardWidgetMenuAction } from "./board-widget-menu.tsx";
 import { CoreBoardWidget } from "./core-board-widget.tsx";
+import { LobbyAccessDetails } from "./lobby-access-details.tsx";
+import { createLobbyComponentDisclosure } from "./lobby-component-disclosure.tsx";
 
 registerEnglishCatalog(registerBoardDocumentEnglish);
 
@@ -91,6 +91,9 @@ function BoardWidgetCellContent(
   });
   const [actionPending, setActionPending] = createSignal(false);
   const [widgetRoot, setWidgetRoot] = createSignal<HTMLElement>();
+  const lobby = createMemo(() =>
+    props.lobby ? createLobbyComponentDisclosure(props, widgetRoot) : undefined,
+  );
   let mcpElement: HTMLElementTagNameMap["mcp-app-view"] | undefined;
   // Signals commit later; admission must reject a second action in the same tick.
   let actionInFlight = false;
@@ -170,6 +173,12 @@ function BoardWidgetCellContent(
           host.closest("openclaw-board-view")?.scrollBy({ top: deltaY, behavior: "auto" }),
         resolveFrameUrl: () => props.widgetFrameUrl,
         widget: () => props.widget,
+        lobbyPresentation: () =>
+          props.lobby
+            ? {
+                collapsed: lobby()?.collapsed() ?? false,
+              }
+            : undefined,
       });
       disconnectFrame = () => frame.disconnect();
       return {
@@ -236,27 +245,12 @@ function BoardWidgetCellContent(
     });
   }
   function selectMenuItem(value: string | undefined) {
-    const widget = props.widget;
-    const callbacks = props.callbacks;
-    if (!widget || !callbacks || !active() || !canMutate()) {
-      return;
-    }
-    if (value === "remove") {
-      runAction(() => callbacks.remove(widget));
-    } else if (value?.startsWith("move:")) {
-      runAction(() => callbacks.moveToTab(widget, value.slice(5)));
-    } else if (value?.startsWith("resize:")) {
-      const size = Object.entries(BOARD_SIZE_PRESETS).find(
-        ([preset]) => preset === value.slice(7),
-      )?.[1];
-      if (size) {
-        runAction(() => callbacks.resizeTo(widget, size.w, size.h));
-      }
-    } else if (value === "height:auto") {
-      runAction(() =>
-        callbacks.setHeightMode(widget, widget.heightMode !== "fixed" ? "fixed" : "auto"),
-      );
-    }
+    handleBoardWidgetMenuAction({
+      value,
+      props,
+      run: runAction,
+      close: () => menu?.close(),
+    });
   }
   const presentationReady = () =>
     !props.widget?.viewTicket ||
@@ -267,7 +261,14 @@ function BoardWidgetCellContent(
     get presentationReady() {
       return presentationReady();
     },
-    focusWidget: () => widgetRoot()?.focus(),
+    focusWidget: () => {
+      const disclosure = lobby();
+      if (disclosure) {
+        disclosure.focus();
+      } else {
+        widgetRoot()?.focus();
+      }
+    },
     selectMenuItem,
     teardown: async () => mcpElement?.teardown(),
     restartAfterTeardown: () => mcpElement?.restartAfterTeardown(),
@@ -276,7 +277,14 @@ function BoardWidgetCellContent(
     // Native widgets retain identity history without subscribing to frame activity.
     () =>
       resources()
-        ? ([props.widget, resources(), props.boardRevision, active(), gatewayBinding()] as const)
+        ? ([
+            props.widget,
+            resources(),
+            props.boardRevision,
+            active(),
+            gatewayBinding(),
+            lobby()?.collapsed(),
+          ] as const)
         : ([props.widget, undefined] as const),
     ([widget, current], previous) => {
       const previousWidget = previous?.[0];
@@ -350,6 +358,7 @@ function BoardWidgetCellContent(
     >
       <BoardPendingCapabilities
         widget={props.widget!}
+        details={props.lobby ? <LobbyAccessDetails widget={props.widget!} /> : undefined}
         disabled={props.busy || actionPending() || !canGrant()}
         onGrant={(decision) =>
           runAction(
@@ -533,6 +542,10 @@ function BoardWidgetCellContent(
     (props.widget?.contentKind === "plugin" && !props.widget.frameUrl);
   const style = (): SolidJSX.CSSProperties => {
     const rect = props.rect!;
+    const disclosure = lobby();
+    if (disclosure) {
+      return disclosure.style();
+    }
     const height =
       props.dragging || props.pageChrome || props.widget!.contentKind !== "html"
         ? undefined
@@ -554,30 +567,6 @@ function BoardWidgetCellContent(
       "align-self": height === undefined ? undefined : "start",
     };
   };
-  function keyDown(event: KeyboardEvent) {
-    if (event.target !== event.currentTarget || !canMutate() || props.pageChrome) {
-      return;
-    }
-    const direction =
-      event.key === "ArrowLeft"
-        ? "left"
-        : event.key === "ArrowRight"
-          ? "right"
-          : event.key === "ArrowUp"
-            ? "up"
-            : event.key === "ArrowDown"
-              ? "down"
-              : null;
-    if (!direction) {
-      return;
-    }
-    event.preventDefault();
-    if (event.altKey) {
-      runAction(() => props.callbacks!.nudge(props.widget!, direction));
-    } else {
-      props.callbacks!.focus(props.widget!, direction);
-    }
-  }
   return (
     <Show when={props.widget && props.rect && props.callbacks}>
       <section
@@ -588,6 +577,8 @@ function BoardWidgetCellContent(
             "board-widget--page-chrome": props.pageChrome,
             "board-widget--dragging": props.dragging,
             "board-widget--fixed-report": fixedReport(),
+            "board-widget--lobby": props.lobby,
+            "board-widget--collapsed": lobby()?.collapsed() ?? false,
           },
           presentation() && `board-widget--${presentation()}`,
         ]}
@@ -597,54 +588,41 @@ function BoardWidgetCellContent(
         aria-posinset={props.positionInSet ?? 1}
         aria-setsize={props.setSize ?? 1}
         aria-label={
-          !canMutate() || props.pageChrome
+          !canMutate() || props.pageChrome || props.lobby
             ? label()
             : t("board.widget.cellLabel", { title: label() })
         }
         data-widget-name={props.widget!.name}
         data-test-id="board-widget"
         onFocus={() => props.callbacks!.focusChanged(props.widget!.name)}
-        onKeyDown={keyDown}
+        onKeyDown={(event) => handleBoardWidgetKeyDown(event, props, runAction)}
       >
         <Show when={!props.pageChrome}>
-          <div class="board-widget__chrome">
-            <header class="board-widget__bar">
-              <Show when={canMutate()}>
-                <span
-                  class="board-widget__drag-handle"
-                  aria-hidden="true"
-                  title={t("board.widget.moveHandle", { title: label() })}
-                  onPointerDown={(event) => props.callbacks!.movePointerDown(props.widget!, event)}
-                >
-                  <span aria-hidden="true">⠿</span>
-                </span>
-              </Show>
-              <span class="board-widget__title" title={label()}>
-                {label()}
-              </span>
-              <span class="board-widget__kind">
-                {props.widget!.contentKind === "mcp-app"
-                  ? t("board.widget.kindMcp")
-                  : props.widget!.contentKind === "plugin"
-                    ? contribution()?.label || t("board.widget.kindPlugin")
-                    : t("board.widget.kindHtml")}
-              </span>
-              <BoardGrantedCapabilities widget={props.widget!} />
-              <Show when={canMutate() && (!fixedReport() || reportEntered())}>
-                <BoardWidgetMenu
-                  widget={props.widget!}
-                  tabs={props.tabs ?? []}
-                  disabled={props.busy || actionPending()}
-                  onSelect={selectMenuItem}
-                  ref={(handle) => {
-                    menu = handle;
-                  }}
-                />
-              </Show>
-            </header>
-          </div>
+          <BoardWidgetHeader
+            widget={props.widget!}
+            tabs={props.tabs ?? []}
+            disclosure={lobby()}
+            canMutate={canMutate()}
+            menuAvailable={!fixedReport() || reportEntered()}
+            disabled={props.busy || actionPending()}
+            kindLabel={
+              props.widget!.contentKind === "mcp-app"
+                ? t("board.widget.kindMcp")
+                : props.widget!.contentKind === "plugin"
+                  ? contribution()?.label || t("board.widget.kindPlugin")
+                  : t("board.widget.kindHtml")
+            }
+            onMove={(event) => props.callbacks!.movePointerDown(props.widget!, event)}
+            onSelect={selectMenuItem}
+            menuRef={(handle) => {
+              menu = handle;
+            }}
+          />
         </Show>
         <div
+          id={lobby()?.id}
+          inert={lobby()?.collapsed() ?? false}
+          aria-hidden={lobby()?.collapsed() ? "true" : undefined}
           class={[
             "board-widget__body",
             {
@@ -667,7 +645,7 @@ function BoardWidgetCellContent(
             </div>
           </Show>
         </div>
-        <Show when={canMutate() && !props.pageChrome}>
+        <Show when={canMutate() && !props.pageChrome && !props.lobby}>
           <span
             class="board-widget__resize-handle"
             aria-hidden="true"
@@ -709,6 +687,9 @@ export const BoardWidgetCell = defineSolidBridge<BoardWidgetCellProps, BoardWidg
       canMutate: { default: true, type: Boolean },
       canGrant: { default: true, type: Boolean },
       loadingCovered: { default: false, type: Boolean },
+      lobby: { default: false, type: Boolean },
+      lobbyPage: { default: false, type: Boolean },
+      onLobbyOpen: { default: undefined, attribute: false },
     },
     methods: {
       focusWidget: (host) => cells.get(host)?.focusWidget(),

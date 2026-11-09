@@ -540,6 +540,34 @@ applicable policy also requires fresh publication admission.
   </Accordion>
 </AccordionGroup>
 
+## Bounded computer executions
+
+Providers registered with `registerComputerUseProvider` from
+`openclaw/plugin-sdk/computer-use` support an optional `executionTimeoutMs` on the
+first `screen.snapshot` request carrying an `executionId`. Use an integer from
+1000 to 30000 milliseconds for short interactions that must release the computer
+if their caller disconnects before sending `computer.act` with
+`action: "__close_execution"`.
+
+The deadline belongs to the node's admitted execution. Later captures do not
+renew it, and callers cannot change it or add it to an already unbounded
+execution. Expiry aborts the signal passed to in-flight provider work and calls
+`close("execution-timeout")` for that execution. A replacement is admitted only
+after physical cleanup succeeds; failed cleanup remains owned and surfaces on
+subsequent acquisition. Providers must honor the supplied signal and settle
+`close()` only after their native resources are released.
+
+For input following that capture, send `requireExistingExecution: true` on
+`computer.act`. The owner rejects an expired or missing execution before opening
+any native resource, so delayed input cannot recreate an unbounded execution.
+The flag requires an `executionId` and is not valid on `screen.snapshot`.
+
+Callers without these opt-ins retain the existing lifecycle. The option does not
+grant screen access, input permission, or authority to send cleanup after
+revocation. Ordinary Gateway invocations remain bound to their caller.
+`parseScreenSnapshotResult`, exported by the same SDK subpath, validates and
+projects a snapshot response before its frame metadata is used for input.
+
 ## Gateway service events
 
 Gateway-hosted services can use `ctx.invokeNode?.()` for their own registered

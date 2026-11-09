@@ -9,6 +9,8 @@ type BoardWidgetBridgeRequest = {
   method: string;
   params: unknown;
   ticket: string;
+  /** Captured by the trusted inner wrapper over its private port, never request params. */
+  userActivated?: boolean;
 };
 
 export type BoardWidgetBridgeGatewayClient = {
@@ -71,6 +73,7 @@ export class BoardWidgetBridgeOwner {
       confirmPrompt: (text: string) => boolean | Promise<boolean>;
       /** Whether this widget's own sandbox frame holds live user activation. */
       widgetActivated: () => Promise<boolean>;
+      actionBindingNames?: () => readonly string[];
     },
   ) {
     this.options = { ...options };
@@ -208,9 +211,22 @@ export class BoardWidgetBridgeOwner {
             read ? "widget data binding params are invalid" : "widget action params are invalid",
           );
         }
+        const boundAction = !read && this.options.actionBindingNames?.().includes(target);
+        if (boundAction) {
+          const activated =
+            request.userActivated === true &&
+            navigator.userActivation?.isActive &&
+            (await this.options.widgetActivated());
+          if (options.isCurrent?.() === false) {
+            throw new Error("Widget request retired");
+          }
+          if (!activated || !consumeUserActivation()) {
+            throw new Error("Named actions require a fresh user interaction with this component");
+          }
+        }
         return await this.options.client.request(read ? "board.data.read" : "board.action", {
           ticket: this.options.ticket,
-          [key]: target,
+          [boundAction ? "bindingName" : key]: target,
           ...(read && callParams === undefined ? {} : { params: callParams ?? {} }),
         });
       }

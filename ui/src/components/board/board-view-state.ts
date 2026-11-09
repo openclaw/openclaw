@@ -59,6 +59,7 @@ export type BoardViewProps = {
   canGrant: boolean;
   fitAutoContent: boolean;
   pageWidgetName: string;
+  lobby?: boolean;
 };
 
 export type BoardViewMethods = {

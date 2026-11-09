@@ -2,28 +2,7 @@ import SwiftUI
 
 extension OpenClawChatComposer {
     var thinkingPicker: some View {
-        Picker(selection: Binding(
-            get: { self.viewModel.thinkingSelectionID },
-            set: { next in self.viewModel.selectThinkingLevel(next) }))
-        {
-            Text(String(localized: "Default (inherited)"))
-                .font(OpenClawChatTypography.captionSemiBold)
-                .tag(OpenClawChatViewModel.inheritedThinkingSelectionID)
-            ForEach(self.viewModel.thinkingLevelOptions) { option in
-                Text(String(
-                    format: String(localized: "%@ (override)"),
-                    option.label))
-                    .font(OpenClawChatTypography.captionSemiBold)
-                    .tag(option.id)
-            }
-        } label: {
-            Text("Thinking")
-                .font(OpenClawChatTypography.captionSemiBold)
-        }
-        .pickerStyle(.menu)
-        .controlSize(.small)
-        .frame(maxWidth: 140, alignment: .leading)
-        .disabled(self.viewModel.isUpdatingSessionSettings)
+        OpenClawChatThinkingPicker(viewModel: self.viewModel)
     }
 
     var verbosityPicker: some View {
@@ -80,89 +59,15 @@ extension OpenClawChatComposer {
     }
 
     var modelPicker: some View {
-        Menu {
-            ChatDeferredContent {
-                let sections = self.viewModel.modelPickerSections
-                if self.viewModel.canSelectDefaultModel {
-                    self.modelMenuOption(
-                        self.viewModel.defaultModelLabel,
-                        selectionID: OpenClawChatViewModel.defaultModelSelectionID)
-                }
-                if !sections.pinned.isEmpty {
-                    Section {
-                        self.modelOptions(sections.pinned)
-                    } header: {
-                        Text("Pinned")
-                            .font(OpenClawChatTypography.captionSemiBold)
-                    }
-                }
-                if !sections.recent.isEmpty {
-                    Section {
-                        self.modelOptions(sections.recent)
-                    } header: {
-                        Text("Recent")
-                            .font(OpenClawChatTypography.captionSemiBold)
-                    }
-                }
-                ForEach(sections.providers) { provider in
-                    Section {
-                        self.modelOptions(provider.models)
-                    } header: {
-                        HStack(spacing: 4) {
-                            Text(provider.displayName)
-                            if provider.isDefaultProvider {
-                                Text(String(localized: "Default"))
-                                    .font(OpenClawChatTypography.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-            }
-        } label: {
-            Text(self.viewModel.modelSelectionID == OpenClawChatViewModel.defaultModelSelectionID
-                ? self.viewModel.defaultModelLabel : self.viewModel.canonicalModelSelectionID)
-                .font(OpenClawChatTypography.captionSemiBold)
-        }
-        .accessibilityLabel("Model")
-        .controlSize(.small)
-        .frame(maxWidth: 240, alignment: .leading)
-        .help("Model")
-        .disabled(self.viewModel.isUpdatingSessionSettings)
+        OpenClawChatModelPicker(viewModel: self.viewModel)
     }
 
     func modelOptions(_ models: [OpenClawChatModelChoice], showsDefaultBadge: Bool = true) -> some View {
-        ForEach(models) { model in
-            let unavailable = self.viewModel.modelUnavailableDescription(model)
-            let defaultBadge = showsDefaultBadge && self.viewModel.isDefaultModel(model)
-                ? String(localized: "Default") : nil
-            self.modelMenuOption(
-                [model.displayLabel, model.capabilityDescription, unavailable, defaultBadge].compactMap(\.self)
-                    .filter { !$0.isEmpty }.joined(separator: " — "),
-                selectionID: model.selectionID)
-                .disabled(unavailable != nil)
-                .accessibilityHint(unavailable ?? "")
-        }
+        OpenClawChatModelPicker(viewModel: self.viewModel).modelOptions(models, showsDefaultBadge: showsDefaultBadge)
     }
 
     func modelMenuOption(_ title: String, selectionID: String) -> some View {
-        let selected = self.viewModel.canonicalModelSelectionID == selectionID
-        return Button {
-            self.viewModel.selectModel(selectionID)
-        } label: {
-            if selected {
-                Label {
-                    Text(verbatim: title)
-                } icon: {
-                    Image(systemName: "checkmark")
-                }
-            } else {
-                Text(verbatim: title)
-            }
-        }
-        .font(OpenClawChatTypography.captionSemiBold)
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        OpenClawChatModelPicker(viewModel: self.viewModel).modelMenuOption(title, selectionID: selectionID)
     }
 
     var modelPinButton: some View {

@@ -91,6 +91,17 @@ export const BoardWidgetDataQuerySchema = closedObject({
 });
 export type BoardWidgetDataQuery = Static<typeof BoardWidgetDataQuerySchema>;
 
+export const BoardWidgetActionBindingSchema = closedObject({
+  name: BoardWidgetNameSchema,
+  actionId: Type.String({ minLength: 1, maxLength: BOARD_WIDGET_TOOL_MAX_LENGTH }),
+  params: Type.Record(
+    Type.String({ minLength: 1, maxLength: 80 }),
+    Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]),
+    { maxProperties: 32 },
+  ),
+});
+export type BoardWidgetActionBinding = Static<typeof BoardWidgetActionBindingSchema>;
+
 export const BoardWidgetDeclaredSchema = closedObject({
   netOrigins: Type.Optional(
     Type.Array(Type.String({ minLength: 1, maxLength: 2048 }), { maxItems: 32 }),
@@ -100,6 +111,7 @@ export const BoardWidgetDeclaredSchema = closedObject({
       maxItems: 64,
     }),
   ),
+  actionBindings: Type.Optional(Type.Array(BoardWidgetActionBindingSchema, { maxItems: 16 })),
   queries: Type.Optional(
     Type.Array(BoardWidgetDataQuerySchema, {
       maxItems: 8,
@@ -112,8 +124,11 @@ export type BoardWidgetDeclared = Static<typeof BoardWidgetDeclaredSchema>;
 
 export const BoardWidgetSchema = closedObject({
   name: BoardWidgetNameSchema,
+  /** Stable across edits; regenerated after removal/recreation. Never a permission grant. */
+  componentId: Type.Optional(Type.String({ pattern: "^[a-f0-9]{32}$" })),
   tabId: BoardTabIdSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+  description: Type.Optional(Type.String({ maxLength: 240 })),
   contentKind: Type.Union([Type.Literal("html"), Type.Literal("mcp-app"), Type.Literal("plugin")]),
   contentOwner: Type.Optional(
     Type.Enum(["html", "mcp-app", "plugin", "registered"] as const, { type: "string" }),
@@ -136,6 +151,8 @@ export const BoardWidgetSchema = closedObject({
   revision: Type.Integer({ minimum: 1 }),
   instanceId: Type.Optional(NonEmptyString),
   declaredSummary: Type.Optional(Type.Array(Type.String())),
+  /** Current plugin-owned descriptions for consent UI, never persisted or used as authority. */
+  capabilityDescriptions: Type.Optional(Type.Record(Type.String(), Type.String())),
   declared: Type.Optional(BoardWidgetDeclaredSchema),
   frameUrl: Type.Optional(Type.String()),
   viewTicket: Type.Optional(Type.String()),
@@ -207,15 +224,53 @@ export const BoardOpSchema = Type.Union([
 ]);
 export type BoardOp = Static<typeof BoardOpSchema>;
 
+export const BoardComponentTargetSchema = closedObject({
+  name: BoardWidgetNameSchema,
+  id: Type.String({ pattern: "^[a-f0-9]{32}$" }),
+});
+export const BoardWidgetConversationParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  name: BoardWidgetNameSchema,
+  instanceId: NonEmptyString,
+});
+export type BoardWidgetConversationParams = Static<typeof BoardWidgetConversationParamsSchema>;
+
 export const BoardGetParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  component: Type.Optional(BoardComponentTargetSchema),
 });
 export type BoardGetParams = Static<typeof BoardGetParamsSchema>;
+
+/** Source is inert text; offsets and lengths count JavaScript UTF-16 code units. */
+export const BoardWidgetSourceParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  component: Type.Optional(BoardComponentTargetSchema),
+  name: BoardWidgetNameSchema,
+  expectedRevision: Type.Optional(Type.Integer({ minimum: 1 })),
+  offset: Type.Optional(Type.Integer({ minimum: 0, maximum: WIDGET_HTML_MAX_UTF8_BYTES })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536 })),
+});
+export type BoardWidgetSourceParams = Static<typeof BoardWidgetSourceParamsSchema>;
+
+export const BoardWidgetSourceResultSchema = closedObject({
+  sessionKey: NonEmptyString,
+  name: BoardWidgetNameSchema,
+  revision: Type.Integer({ minimum: 1 }),
+  sha256: NonEmptyString,
+  html: Type.String(),
+  offset: Type.Integer({ minimum: 0 }),
+  totalLength: Type.Integer({ minimum: 0 }),
+  nextOffset: Type.Optional(Type.Integer({ minimum: 0 })),
+});
+export type BoardWidgetSourceResult = Static<typeof BoardWidgetSourceResultSchema>;
 
 export const BoardUpdateParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  component: Type.Optional(BoardComponentTargetSchema),
   ops: Type.Array(BoardOpSchema),
 });
 export type BoardUpdateParams = Static<typeof BoardUpdateParamsSchema>;
@@ -281,8 +336,10 @@ export type BoardWidgetPutContent = Static<typeof BoardWidgetPutContentSchema>;
 export const BoardWidgetPutParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  component: Type.Optional(BoardComponentTargetSchema),
   name: BoardWidgetNameSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+  description: Type.Optional(Type.String({ maxLength: 240 })),
   content: BoardWidgetPutContentSchema,
   presentation: Type.Optional(BoardWidgetPresentationSchema),
   heightMode: Type.Optional(BoardWidgetHeightModeSchema),
@@ -389,6 +446,15 @@ export const BoardPluginActionParamsSchema = closedObject({
 export const BoardActionParamsSchema = Type.Union([
   BoardCronActionParamsSchema,
   BoardPluginActionParamsSchema,
+  closedObject({
+    ticket: BoardViewTicketSchema,
+    bindingName: BoardWidgetNameSchema,
+    params: Type.Optional(
+      Type.Record(Type.String({ minLength: 1, maxLength: 80 }), Type.Unknown(), {
+        maxProperties: 64,
+      }),
+    ),
+  }),
 ]);
 export type BoardActionParams = Static<typeof BoardActionParamsSchema>;
 

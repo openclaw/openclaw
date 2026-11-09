@@ -4,6 +4,7 @@ const loaded = vi.hoisted(() => vi.fn());
 const sessionsList = vi.hoisted(() => vi.fn());
 const usageStatus = vi.hoisted(() => vi.fn());
 const cronRun = vi.hoisted(() => vi.fn());
+const cronRuns = vi.hoisted(() => vi.fn());
 
 // mock-isolation: Count family loads without initializing the agent mutation runtime.
 vi.mock("./server-methods/agents.js", () => {
@@ -13,8 +14,9 @@ vi.mock("./server-methods/agents.js", () => {
 // mock-isolation: Test cron dispatch without the scheduler's process-wide state.
 vi.mock("./server-methods/cron.js", () => {
   loaded("cron");
-  return { cronHandlers: { "cron.run": cronRun } };
+  return { cronHandlers: { "cron.run": cronRun, "cron.runs": cronRuns } };
 });
+
 // mock-isolation: Count family loads without initializing health runtime dependencies.
 vi.mock("./server-methods/health.js", () => {
   loaded("health");
@@ -76,4 +78,46 @@ describe("board data handler loading", () => {
     expect(publish).toHaveBeenLastCalledWith(true, { ok: true });
     expect(loaded.mock.calls).toEqual([["sessions"], ["usage"], ["cron"]]);
   });
+});
+
+it("routes run history through the existing reader and rechecks the grant before disclosure", async () => {
+  const client = { connId: "scoped-history-reader" };
+  const publish = vi.fn();
+  const invocation: GatewayRequestHandlerOptions = {
+    req: { type: "req", id: "history", method: "board.data.read" },
+    params: {},
+    respond: publish,
+    isWebchatConnect: () => false,
+    context: {} as GatewayRequestHandlerOptions["context"],
+    client: client as GatewayRequestHandlerOptions["client"],
+  };
+  let current = true;
+  const authority = {
+    useCurrent: async <T>(run: () => T) => {
+      if (!current) {
+        throw new Error("history grant revoked");
+      }
+      return await run();
+    },
+  } as BoardCapabilityAuthority;
+  const params = { id: "fixture-job", view: "summary", limit: 5 };
+  const page = { entries: [{ jobId: "fixture-job", status: "ok", delivered: false }] };
+  cronRuns.mockImplementation(async ({ respond }) => respond(true, page));
+  cronRun.mockClear();
+  await readBoardDataBinding("cron.runs", params, invocation, authority, publish);
+  expect(cronRuns).toHaveBeenLastCalledWith(expect.objectContaining({ client, params }));
+  expect(publish).toHaveBeenLastCalledWith(true, page);
+  expect(cronRun).not.toHaveBeenCalled();
+
+  publish.mockClear();
+  cronRuns.mockImplementationOnce(async ({ respond }) => {
+    await Promise.resolve();
+    current = false;
+    respond(true, page);
+  });
+  await expect(
+    readBoardDataBinding("cron.runs", params, invocation, authority, publish),
+  ).rejects.toThrow("history grant revoked");
+  expect(publish).not.toHaveBeenCalled();
+  expect(cronRun).not.toHaveBeenCalled();
 });

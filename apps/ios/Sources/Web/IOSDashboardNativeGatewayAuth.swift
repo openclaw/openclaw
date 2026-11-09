@@ -39,6 +39,48 @@ final class IOSDashboardNativeGatewayAuthProvider {
         return credentials
     }
 
+    func widgetSandboxTLS(
+        sessionKey: String,
+        agentID: String?,
+        host: String,
+        port: Int) async -> DashboardWidgetTLSAdmission?
+    {
+        guard let root = self.controlUIRootURL, root.scheme == "https",
+              let gateway = GatewayTLSAuthority(url: root), (1...65535).contains(port), port != gateway.port,
+              var candidate = URLComponents(url: root, resolvingAgainstBaseURL: false)
+        else { return nil }
+        candidate.port = port
+        var params = ["sessionKey": AnyCodable(sessionKey)]
+        if let agentID { params["agentId"] = AnyCodable(agentID) }
+        guard let candidateURL = candidate.url,
+              GatewayTLSAuthority(url: candidateURL)?.matches(host: host, port: port) == true,
+              let tls = self.config.tls,
+              let fingerprint = tls.expectedFingerprint ?? tls.storeKey.flatMap({
+                  GatewayTLSStore.loadFingerprint(stableID: $0)
+              }),
+              let generation = self.appModel?.operatorAuthorityGeneration,
+              let route = await self.currentRoute(authorityGeneration: generation),
+              let data = try? await self.session.request(
+                  method: "board.get",
+                  params: params,
+                  timeoutMs: 5000,
+                  ifCurrentRoute: route),
+              await self.session.currentRoute() == route,
+              self.isCurrent(authorityGeneration: generation),
+              let snapshot = try? JSONDecoder().decode(DashboardWidgetSandboxSnapshot.self, from: data),
+              let parameters = snapshot.pinnedParameters(
+                  sessionKey: sessionKey,
+                  agentID: agentID,
+                  gatewayURL: root,
+                  fingerprint: fingerprint,
+                  host: host,
+                  port: port)
+        else { return nil }
+        return DashboardWidgetTLSAdmission(parameters: parameters) { [weak self] in
+            self?.isCurrent(authorityGeneration: generation) == true
+        }
+    }
+
     func authorize(nonce: String, signedAt: Int64) async throws -> IOSDashboardNativeGatewayAuthReply {
         // Retire in-flight challenges while allowing fresh requests after a same-route reconnect.
         guard let authorityGeneration = self.appModel?.operatorAuthorityGeneration,

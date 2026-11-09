@@ -123,6 +123,20 @@ it("uses board-only delivery when inline hosting is disabled", async () => {
   await expectNoDocument();
 });
 
+it("pins general Lobby authoring to its durable board without an inline composer prefix", async () => {
+  createBoardPutCaller();
+  const tool = createTool({
+    agentSessionKey: "agent:main:lobby-41cb5e72-0530-4e62-b2b6-5fb0c0a24c3d",
+  });
+  expect(tool.description).toContain("general Lobby conversation");
+  await expect(run(tool)).rejects.toThrow("pin=true is required");
+  expect(payload(await run(tool, { pin: true }))).toMatchObject({
+    status: "pinned",
+    boardWidgetName: "status",
+  });
+  await expectNoDocument();
+});
+
 it("routes node-panel presentation and reports the selected device", async () => {
   let hostedUrl: string | undefined;
   const result = await executeWidget({
@@ -380,6 +394,26 @@ it.each([
       }),
     ).rejects.toThrow(/same content kind.*remove/i);
     expect((await readBoardHtml(store, target, "release-status"))?.revision).toBe(1);
+
+    const beforeRejectedUpdate = await store.getSnapshot(target);
+    for (const [widgetCode, capabilities, message] of [
+      ["<script>const next = ;</script>", undefined, /JavaScript syntax error/],
+      ["<p>changed</p>", { netOrigins: ["http://example.test"] }, /exact HTTPS origin/],
+    ] as const) {
+      await expect(
+        executeWidget({
+          agentId,
+          agentSessionKey: sessionKey,
+          title,
+          widgetCode,
+          pin: true,
+          name: "release-status",
+          capabilities: capabilities ? { netOrigins: [...capabilities.netOrigins] } : undefined,
+        }),
+      ).rejects.toThrow(message);
+      expect(await store.getSnapshot(target)).toEqual(beforeRejectedUpdate);
+      await expectPinned(initialHtml, 1);
+    }
 
     const refreshed = await pinWidget("<p>refreshed</p>");
 

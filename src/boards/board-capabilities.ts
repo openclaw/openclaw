@@ -4,6 +4,7 @@ import {
   type BoardWidgetDeclared,
 } from "../../packages/gateway-protocol/src/schema/board.js";
 import { normalizeSandboxHostCsp } from "../agents/sandbox-host.js";
+import { normalizeBoardWidgetActionBindings } from "./board-action-bindings.js";
 import { BoardValidationError } from "./board-layout.js";
 import {
   normalizeBoardWidgetDataQueries,
@@ -59,7 +60,12 @@ function normalizeTool(value: string): string {
 }
 
 export function normalizeBoardWidgetDeclared(
-  declared: (Pick<BoardWidgetDeclared, "netOrigins" | "tools"> & { queries?: unknown }) | undefined,
+  declared:
+    | (Pick<BoardWidgetDeclared, "netOrigins" | "tools"> & {
+        queries?: unknown;
+        actionBindings?: unknown;
+      })
+    | undefined,
 ): BoardWidgetDeclared | undefined {
   if (!declared) {
     return undefined;
@@ -77,6 +83,7 @@ export function normalizeBoardWidgetDeclared(
   ].toSorted();
   const tools = [...new Set((declared.tools ?? []).map(normalizeTool))].toSorted();
   const queries = normalizeBoardWidgetDataQueries(declared.queries);
+  const actionBindings = normalizeBoardWidgetActionBindings(declared.actionBindings);
   let sandboxOrigins: string[] | undefined;
   try {
     sandboxOrigins = normalizeSandboxHostCsp({ connectDomains: netOrigins })?.connectDomains;
@@ -90,13 +97,19 @@ export function normalizeBoardWidgetDeclared(
   ) {
     return invalidDeclaration("board widget network origin is not supported by the sandbox host");
   }
-  if (netOrigins.length === 0 && tools.length === 0 && queries.length === 0) {
+  if (
+    netOrigins.length === 0 &&
+    tools.length === 0 &&
+    queries.length === 0 &&
+    actionBindings.length === 0
+  ) {
     return undefined;
   }
   return {
     ...(netOrigins.length > 0 ? { netOrigins } : {}),
     ...(tools.length > 0 ? { tools } : {}),
     ...(queries.length > 0 ? { queries } : {}),
+    ...(actionBindings.length > 0 ? { actionBindings } : {}),
   };
 }
 
@@ -110,7 +123,9 @@ export function boardDeclarationIsSubset(
     (requested?.netOrigins ?? []).every((origin) => grantedOrigins.has(origin)) &&
     (requested?.tools ?? []).every((tool) => grantedTools.has(tool)) &&
     // Definitions are canonical. Every query edit, including narrowing, needs a new decision.
-    JSON.stringify(requested?.queries ?? []) === JSON.stringify(granted?.queries ?? [])
+    JSON.stringify(requested?.queries ?? []) === JSON.stringify(granted?.queries ?? []) &&
+    JSON.stringify(requested?.actionBindings ?? []) ===
+      JSON.stringify(granted?.actionBindings ?? [])
   );
 }
 

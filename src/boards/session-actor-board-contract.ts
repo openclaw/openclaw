@@ -9,6 +9,7 @@ import type {
   BoardWidgetDocument,
   BoardWidgetNameIdentityMarker,
 } from "./board-store.js";
+import type { BoardComponentTarget } from "./component-conversation.js";
 
 export type SessionActorMemoryBoard = {
   snapshot: BoardSnapshot;
@@ -33,8 +34,12 @@ export type SessionActorBoardReads = {
   };
 };
 export type SessionActorBoardWrites = {
+  "boards.ensureComponentIdentity": {
+    input: { sessionKey: string; name: string; instanceId: string; proposedId: string };
+    output: { id: string; title: string };
+  };
   "boards.applyOps": {
-    input: { sessionKey: string; ops: readonly BoardOp[] };
+    input: { sessionKey: string; ops: readonly BoardOp[]; component?: BoardComponentTarget };
     output: BoardSnapshot;
   };
   "boards.putWidget": {

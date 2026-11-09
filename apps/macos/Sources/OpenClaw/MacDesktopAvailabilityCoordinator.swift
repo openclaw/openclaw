@@ -12,6 +12,7 @@ final class MacDesktopAvailabilityCoordinator {
         case executionClosed
         case capacity
         case assertionFailed
+        case invalidExecutionOptions
 
         var errorDescription: String? {
             switch self {
@@ -25,6 +26,8 @@ final class MacDesktopAvailabilityCoordinator {
                 "COMPUTER_EXECUTION_CLOSED: start a new Computer execution after the desktop is available"
             case .capacity:
                 "COMPUTER_DESKTOP_UNAVAILABLE: close previous Computer executions before starting another"
+            case .invalidExecutionOptions:
+                "COMPUTER_INVALID_REQUEST: invalid or changed execution options"
             case .assertionFailed:
                 "COMPUTER_DESKTOP_UNAVAILABLE: macOS could not keep the desktop awake for Computer use"
             }
@@ -50,6 +53,7 @@ final class MacDesktopAvailabilityCoordinator {
     private struct Execution {
         let permit: Permit
         let expiresAt: TimeInterval
+        var executionTimeoutMs: Int?
         var phase: Phase
     }
 
@@ -131,15 +135,31 @@ final class MacDesktopAvailabilityCoordinator {
         return observed
     }
 
-    func admit(executionId: String?) throws -> Permit {
+    func admit(
+        executionId: String?,
+        executionTimeoutMs: Int? = nil,
+        requireExistingExecution: Bool = false) throws -> Permit
+    {
+        if let executionTimeoutMs,
+           executionId == nil || !(1000...30000).contains(executionTimeoutMs)
+        {
+            throw AvailabilityError.invalidExecutionOptions
+        }
+        if requireExistingExecution, executionId == nil {
+            throw AvailabilityError.invalidExecutionOptions
+        }
         self.refresh()
         try self.requireAvailable()
         if let executionId,
            let existing = self.executions.values.first(where: { $0.permit.executionId == executionId })
         {
             try self.validate(existing.permit)
+            if let executionTimeoutMs, existing.executionTimeoutMs != executionTimeoutMs {
+                throw AvailabilityError.invalidExecutionOptions
+            }
             return existing.permit
         }
+        guard !requireExistingExecution else { throw AvailabilityError.executionClosed }
         guard !self.admissionOverflowed, self.executions.count < Self.maximumExecutions else {
             throw AvailabilityError.capacity
         }
@@ -153,7 +173,8 @@ final class MacDesktopAvailabilityCoordinator {
         if executionId == nil { self.legacyInputPermit = permit }
         self.executions[permit.recordID] = Execution(
             permit: permit,
-            expiresAt: self.platform.uptime + Self.executionLifetime,
+            expiresAt: self.platform.uptime + (executionTimeoutMs.map { Double($0) / 1000 } ?? Self.executionLifetime),
+            executionTimeoutMs: executionTimeoutMs,
             phase: .active)
         // The reservation is visible before dispatch can suspend or a close can arrive.
         self.reconcileAssertion()

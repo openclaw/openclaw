@@ -495,6 +495,11 @@ export type GatewayRequestOptions = {
   methodRegistry?: GatewayMethodRegistryView;
   /** Shared entry/publication precondition; never retained as accepted-run authority. */
   expectedProfileBinding?: import("../expected-profile.js").ExpectedProfileBinding;
+  /** Host-only capability rechecked by the node transport after asynchronous policy work. */
+  nodeDispatchAuthority?: {
+    prepare: () => Promise<boolean>;
+    assertCurrent: () => void;
+  };
   /** In-process source refresh before handler entry; never retained by the handler. */
   prepareDispatchCurrent?: () => Promise<void>;
   /**

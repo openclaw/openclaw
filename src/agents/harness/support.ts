@@ -82,25 +82,38 @@ export function resolveAgentHarnessPreparedRouteSupport(
     : {};
 }
 
-/** Projects one prepared compaction attempt into secret-free harness support facts. */
+/** Projects one prepared model attempt into secret-free harness support facts. */
 export function projectPreparedModelProvider(params: {
   model?: Pick<NonNullable<AgentHarnessSupportContext["modelProvider"]>, "api" | "baseUrl">;
   plan?: AgentRuntimeAuthPlan;
   attemptKind?: PreparedAgentRuntimeAuthAttempt["kind"];
+  /** Verified native catalog ownership; the model object contains only structural transport. */
+  nativeModelOwned?: boolean;
 }): NonNullable<AgentHarnessSupportContext["modelProvider"]> {
   const route = params.plan?.modelRoute;
+  const preparedAuth = params.plan
+    ? resolveAgentHarnessPreparedAuthSupport({
+        plan: params.plan,
+        source: params.attemptKind === "implicit" ? undefined : params.attemptKind,
+      })
+    : undefined;
+  // A native account resolves its transport. The structural model is not an
+  // authored endpoint. Concrete routes and forwarded credentials remain intact.
+  const nativeAccount =
+    params.nativeModelOwned === true &&
+    preparedAuth?.source === "harness" &&
+    preparedAuth.mode === undefined &&
+    preparedAuth.requirement === undefined &&
+    !route;
   return {
-    api: route?.api ?? params.model?.api,
-    baseUrl: route?.baseUrl ?? params.model?.baseUrl,
-    ...resolveAgentHarnessPreparedRouteSupport(params.plan),
-    ...(params.plan
+    ...(!nativeAccount
       ? {
-          preparedAuth: resolveAgentHarnessPreparedAuthSupport({
-            plan: params.plan,
-            source: params.attemptKind === "implicit" ? undefined : params.attemptKind,
-          }),
+          api: route?.api ?? params.model?.api,
+          baseUrl: route?.baseUrl ?? params.model?.baseUrl,
         }
       : {}),
+    ...resolveAgentHarnessPreparedRouteSupport(params.plan),
+    ...(preparedAuth ? { preparedAuth } : {}),
   };
 }
 

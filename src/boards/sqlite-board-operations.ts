@@ -6,6 +6,7 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import type { BoardSnapshotWithHtmlViewMetadata, BoardWidgetDocument } from "./board-store.js";
+import type { BoardComponentTarget } from "./component-conversation.js";
 
 export type BoardWriteOutcome<T> = { value: T; changes: SessionRowChange[] };
 
@@ -21,8 +22,12 @@ export type BoardReadOperations = {
 };
 
 export type BoardWriteOperations = {
+  "boards.ensureComponentIdentity": {
+    input: { sessionKey: string; name: string; instanceId: string; proposedId: string };
+    output: BoardWriteOutcome<{ id: string; title: string }>;
+  };
   "boards.applyOps": {
-    input: { sessionKey: string; ops: readonly BoardOp[] };
+    input: { sessionKey: string; ops: readonly BoardOp[]; component?: BoardComponentTarget };
     output: BoardWriteOutcome<BoardSnapshot>;
   };
   "boards.putWidget": {

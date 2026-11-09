@@ -233,6 +233,32 @@ describe("applyPluginNodeInvokePolicy", () => {
     }
   });
 
+  it("retains the caller grant at the final plugin-controlled node handoff", async () => {
+    setDangerousDemoCommandRegistry([createDemoPolicy((ctx) => ctx.invokeNode())]);
+    const { context, invoke } = createContext();
+    let current = true;
+    const authority = {
+      prepare: vi.fn(async () => {
+        await Promise.resolve();
+        return current;
+      }),
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("revoked");
+        }
+      },
+    };
+    invoke.mockImplementationOnce(async (request) => {
+      current = false;
+      expect(await request?.authorizeDispatch?.()).toBe(false);
+      expect(request?.isDispatchAuthorized?.()).toBe(false);
+      return { ok: false, error: { code: "APPROVAL_AUTHORITY_CLOSED", message: "revoked" } };
+    });
+    const result = await invokeDemoPolicy(context, null, { nodeDispatchAuthority: authority });
+    expect(authority.prepare).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ ok: false });
+  });
+
   it.each([
     { overrideTimeoutMs: 0, expectedTimeoutMs: 250, expectedDeadlineAtMs: 1_250 },
     { overrideTimeoutMs: 80, expectedTimeoutMs: 80, expectedDeadlineAtMs: 1_080 },

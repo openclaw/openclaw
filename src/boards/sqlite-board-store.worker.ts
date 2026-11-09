@@ -1,4 +1,5 @@
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
+import type { SynchronousSqliteCallback } from "../infra/sqlite-transaction-types.js";
 import { runSqliteWorkerTransactionSync } from "../infra/sqlite-transaction.js";
 import { bindSqliteWorkerDatabase } from "../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
@@ -13,6 +14,7 @@ import type { BoardWriteOperations } from "./sqlite-board-operations.js";
 import {
   applyBoardOpsToDatabase,
   ensureBoardSchema,
+  ensureBoardComponentIdentityInDatabase,
   grantBoardWidgetInDatabase,
   putBoardWidgetInDatabase,
   type BoardSessionIdentity,
@@ -49,55 +51,71 @@ export function bindSqliteWorkerBackend(
       if (input && command.input.sessionKey !== input.sessionKey) {
         throw new BoardValidationError("invalid_operation", "board session changed; retry");
       }
-      // Nested actor publication scopes flush after this receipt has returned.
-      const { result: value, changes } = captureSessionRowChanges(database.db, () =>
-        withSqlitePostCommitPublications(database.db, () =>
-          runSqliteWorkerTransactionSync(
-            context,
-            () => {
-              if (command.type === "boards.applyOps") {
-                return applyBoardOpsToDatabase(
-                  database,
-                  command.input.sessionKey,
-                  command.input.ops,
-                  input?.expectedSession,
-                );
-              }
-              if (command.type === "boards.putWidget") {
-                return putBoardWidgetInDatabase(
-                  database,
-                  command.input.sessionKey,
-                  normalizeBoardWidgetPutParams(command.input.params, command.input.sessionKey),
-                  command.input.viewGeneration,
-                  input?.expectedSession,
-                );
-              }
-              return grantBoardWidgetInDatabase(
-                database,
-                command.input.sessionKey,
-                command.input.name,
-                command.input.decision,
-                command.input.revision,
-                command.input.instanceId,
-                input?.expectedSession,
-              );
-            },
-            {
+      // Keep each command's result paired with its own receipt type.
+      const commit = <T>(operation: SynchronousSqliteCallback<T>) => {
+        const { result: value, changes } = captureSessionRowChanges(database.db, () =>
+          withSqlitePostCommitPublications(database.db, () =>
+            runSqliteWorkerTransactionSync<T>(context, operation, {
               databaseLabel: database.path,
               operationLabel: command.type,
-            },
+            }),
           ),
+        );
+        return {
+          value,
+          changes: changes.filter(
+            (change) =>
+              "sessionKey" in change &&
+              change.sessionKey === command.input.sessionKey &&
+              change.storePath === database.path,
+          ),
+        };
+      };
+      if (command.type === "boards.ensureComponentIdentity") {
+        return commit(() =>
+          ensureBoardComponentIdentityInDatabase(
+            database,
+            command.input.sessionKey,
+            command.input.name,
+            command.input.instanceId,
+            command.input.proposedId,
+            input?.expectedSession,
+          ),
+        );
+      }
+      if (command.type === "boards.applyOps") {
+        return commit(() =>
+          applyBoardOpsToDatabase(
+            database,
+            command.input.sessionKey,
+            command.input.ops,
+            input?.expectedSession,
+            command.input.component,
+          ),
+        );
+      }
+      if (command.type === "boards.putWidget") {
+        return commit(() =>
+          putBoardWidgetInDatabase(
+            database,
+            command.input.sessionKey,
+            normalizeBoardWidgetPutParams(command.input.params, command.input.sessionKey),
+            command.input.viewGeneration,
+            input?.expectedSession,
+          ),
+        );
+      }
+      return commit(() =>
+        grantBoardWidgetInDatabase(
+          database,
+          command.input.sessionKey,
+          command.input.name,
+          command.input.decision,
+          command.input.revision,
+          command.input.instanceId,
+          input?.expectedSession,
         ),
       );
-      return {
-        value,
-        changes: changes.filter(
-          (change) =>
-            "sessionKey" in change &&
-            change.sessionKey === command.input.sessionKey &&
-            change.storePath === database.path,
-        ),
-      };
     },
   });
 }

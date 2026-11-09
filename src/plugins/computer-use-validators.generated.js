@@ -555,69 +555,69 @@ function Hash(value) {
 }
 var validateComputerActParams = (() => {
     let External = [
-        /(^action$|^executionId$|^displayFrameId$|^x$|^y$|^modifiers$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^displayFrameId$|^x$|^y$|^modifiers$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^displayFrameId$|^x$|^y$|^fromX$|^fromY$|^durationMs$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^displayFrameId$|^x$|^y$|^fromX$|^fromY$|^durationMs$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^displayFrameId$|^x$|^y$|^modifiers$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^displayFrameId$|^x$|^y$|^modifiers$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^displayFrameId$|^x$|^y$|^modifiers$|^scrollDirection$|^scrollAmount$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^displayFrameId$|^x$|^y$|^modifiers$|^scrollDirection$|^scrollAmount$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^text$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^text$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^keys$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^keys$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^keys$|^durationMs$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^keys$|^durationMs$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^windowRef$|^query$|^depth$|^maxElements$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^windowRef$|^query$|^depth$|^maxElements$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^windowRef$|^includeScreenshot$|^query$|^depth$|^maxElements$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^windowRef$|^includeScreenshot$|^query$|^depth$|^maxElements$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^app$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^app$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^windowRef$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^windowRef$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^windowRef$|^elementRef$|^observationId$|^value$|^deliveryMode$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^windowRef$|^elementRef$|^observationId$|^value$|^deliveryMode$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^windowRef$|^path$|^deliveryMode$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^windowRef$|^path$|^deliveryMode$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^windowRef$|^observationId$|^x1$|^y1$|^x2$|^y2$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^windowRef$|^observationId$|^x1$|^y1$|^x2$|^y2$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^windowRef$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^windowRef$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^browserRef$|^pageRef$|^snapshotFormat$|^elementRef$|^observationId$|^query$|^continuation$|^includeScreenshot$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^snapshotFormat$|^elementRef$|^observationId$|^query$|^continuation$|^includeScreenshot$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^windowRef$|^profile$|^profileName$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^windowRef$|^profile$|^profileName$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
         /^[A-Za-z0-9._-]+$/u,
-        /(^action$|^executionId$|^browserRef$|^pageRef$|^url$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^url$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^browserRef$|^pageRef$|^observationId$|^elementRef$|^x$|^y$|^inputRoute$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^observationId$|^elementRef$|^x$|^y$|^inputRoute$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^browserRef$|^pageRef$|^observationId$|^elementRef$|^text$|^mode$|^replace$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^observationId$|^elementRef$|^text$|^mode$|^replace$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^browserRef$|^pageRef$|^dialogAction$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^dialogAction$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^browserRef$|^pageRef$|^dialogAction$|^dialogRef$|^promptText$|^deliveryMode$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^dialogAction$|^dialogRef$|^promptText$|^deliveryMode$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^browserRef$|^pageRef$|^dialogAction$|^dialogRef$|^deliveryMode$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^dialogAction$|^dialogRef$|^deliveryMode$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^browserRef$|^pageRef$|^observationId$|^elementRef$|^resourceHandles$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^observationId$|^elementRef$|^resourceHandles$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
         /^openclaw:computer-resource:v1:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^browserRef$|^pageRef$|^observationId$|^elementRef$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^observationId$|^elementRef$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^browserRef$|^pageRef$|^observationId$|^pointerAction$|^inputRoute$|^elementRef$|^x$|^y$|^destinationElementRef$|^toX$|^toY$|^deltaX$|^deltaY$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^observationId$|^pointerAction$|^inputRoute$|^elementRef$|^x$|^y$|^destinationElementRef$|^toX$|^toY$|^deltaX$|^deltaY$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^reason$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^reason$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^recordVideo$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^recordVideo$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-        /(^action$|^executionId$|^resourceHandle$|^delayMs$|^stopOnError$)/u,
+        /(^action$|^executionId$|^requireExistingExecution$|^resourceHandle$|^delayMs$|^stopOnError$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
         /^openclaw:computer-resource:v1:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
       ],
@@ -639,6 +639,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[1].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           (value.displayFrameId === void 0 ||
             !("displayFrameId" in value) ||
             typeof value.displayFrameId == "string") &&
@@ -688,6 +691,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[3].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           (value.displayFrameId === void 0 ||
             !("displayFrameId" in value) ||
             typeof value.displayFrameId == "string") &&
@@ -745,6 +751,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[5].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           (value.displayFrameId === void 0 ||
             !("displayFrameId" in value) ||
             typeof value.displayFrameId == "string") &&
@@ -794,6 +803,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[7].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           (value.displayFrameId === void 0 ||
             !("displayFrameId" in value) ||
             typeof value.displayFrameId == "string") &&
@@ -855,6 +867,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[9].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           (value.text === void 0 || !("text" in value) || typeof value.text == "string") &&
           (value.screenIndex === void 0 ||
             !("screenIndex" in value) ||
@@ -897,6 +912,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[11].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           (value.keys === void 0 || !("keys" in value) || typeof value.keys == "string") &&
           (value.screenIndex === void 0 ||
             !("screenIndex" in value) ||
@@ -939,6 +957,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[13].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           (value.keys === void 0 || !("keys" in value) || typeof value.keys == "string") &&
           (value.durationMs === void 0 ||
             !("durationMs" in value) ||
@@ -987,7 +1008,10 @@ var validateComputerActParams = (() => {
             value.action === "get_cursor_position") &&
           (value.executionId === void 0 ||
             !("executionId" in value) ||
-            (typeof value.executionId == "string" && External[15].test(value.executionId)))) ||
+            (typeof value.executionId == "string" && External[15].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean")) ||
         (typeof value == "object" &&
           value !== null &&
           !Array.isArray(value) &&
@@ -1000,6 +1024,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[17].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           (value.windowRef === void 0 ||
             !("windowRef" in value) ||
             (typeof value.windowRef == "string" &&
@@ -1029,6 +1056,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[19].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.windowRef == "string" &&
           (value.windowRef.length >= 2 ||
             (value.windowRef.length >= 1 && CodePointCount(value.windowRef) >= 1)) &&
@@ -1059,6 +1089,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[21].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.app == "string" &&
           (value.app.length >= 2 || (value.app.length >= 1 && CodePointCount(value.app) >= 1))) ||
         (typeof value == "object" &&
@@ -1074,6 +1107,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[23].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.windowRef == "string" &&
           (value.windowRef.length >= 2 ||
             (value.windowRef.length >= 1 && CodePointCount(value.windowRef) >= 1))) ||
@@ -1093,6 +1129,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[25].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.windowRef == "string" &&
           (value.windowRef.length >= 2 ||
             (value.windowRef.length >= 1 && CodePointCount(value.windowRef) >= 1)) &&
@@ -1121,6 +1160,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[27].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.windowRef == "string" &&
           (value.windowRef.length >= 2 ||
             (value.windowRef.length >= 1 && CodePointCount(value.windowRef) >= 1)) &&
@@ -1157,6 +1199,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[29].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.windowRef == "string" &&
           (value.windowRef.length >= 2 ||
             (value.windowRef.length >= 1 && CodePointCount(value.windowRef) >= 1)) &&
@@ -1184,6 +1229,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[31].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.windowRef == "string" &&
           (value.windowRef.length >= 2 ||
             (value.windowRef.length >= 1 && CodePointCount(value.windowRef) >= 1))) ||
@@ -1201,6 +1249,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[33].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.browserRef == "string" &&
           (value.browserRef.length >= 2 ||
             (value.browserRef.length >= 1 && CodePointCount(value.browserRef) >= 1)) &&
@@ -1244,6 +1295,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[35].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.windowRef == "string" &&
           (value.windowRef.length >= 2 ||
             (value.windowRef.length >= 1 && CodePointCount(value.windowRef) >= 1)) &&
@@ -1274,6 +1328,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[38].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.browserRef == "string" &&
           (value.browserRef.length >= 2 ||
             (value.browserRef.length >= 1 && CodePointCount(value.browserRef) >= 1)) &&
@@ -1297,6 +1354,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[40].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.browserRef == "string" &&
           (value.browserRef.length >= 2 ||
             (value.browserRef.length >= 1 && CodePointCount(value.browserRef) >= 1)) &&
@@ -1334,6 +1394,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[42].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.browserRef == "string" &&
           (value.browserRef.length >= 2 ||
             (value.browserRef.length >= 1 && CodePointCount(value.browserRef) >= 1)) &&
@@ -1369,6 +1432,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[44].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.browserRef == "string" &&
           (value.browserRef.length >= 2 ||
             (value.browserRef.length >= 1 && CodePointCount(value.browserRef) >= 1)) &&
@@ -1393,6 +1459,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[46].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.browserRef == "string" &&
           (value.browserRef.length >= 2 ||
             (value.browserRef.length >= 1 && CodePointCount(value.browserRef) >= 1)) &&
@@ -1427,6 +1496,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[48].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.browserRef == "string" &&
           (value.browserRef.length >= 2 ||
             (value.browserRef.length >= 1 && CodePointCount(value.browserRef) >= 1)) &&
@@ -1459,6 +1531,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[50].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.browserRef == "string" &&
           (value.browserRef.length >= 2 ||
             (value.browserRef.length >= 1 && CodePointCount(value.browserRef) >= 1)) &&
@@ -1493,6 +1568,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[53].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.browserRef == "string" &&
           (value.browserRef.length >= 2 ||
             (value.browserRef.length >= 1 && CodePointCount(value.browserRef) >= 1)) &&
@@ -1521,6 +1599,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[55].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.browserRef == "string" &&
           (value.browserRef.length >= 2 ||
             (value.browserRef.length >= 1 && CodePointCount(value.browserRef) >= 1)) &&
@@ -1574,6 +1655,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[57].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.reason == "string" &&
           (value.reason === "ax_tree_pixel_mismatch" ||
             value.reason === "background_delivery_failed" ||
@@ -1591,7 +1675,10 @@ var validateComputerActParams = (() => {
           (value.action === "get_recording_state" || value.action === "stop_recording") &&
           (value.executionId === void 0 ||
             !("executionId" in value) ||
-            (typeof value.executionId == "string" && External[59].test(value.executionId)))) ||
+            (typeof value.executionId == "string" && External[59].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean")) ||
         (typeof value == "object" &&
           value !== null &&
           !Array.isArray(value) &&
@@ -1604,6 +1691,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[61].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           (value.recordVideo === void 0 ||
             !("recordVideo" in value) ||
             typeof value.recordVideo == "boolean")) ||
@@ -1620,6 +1710,9 @@ var validateComputerActParams = (() => {
           (value.executionId === void 0 ||
             !("executionId" in value) ||
             (typeof value.executionId == "string" && External[63].test(value.executionId))) &&
+          (value.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value) ||
+            typeof value.requireExistingExecution == "boolean") &&
           typeof value.resourceHandle == "string" &&
           External[64].test(value.resourceHandle) &&
           (value.delayMs === void 0 ||
@@ -1894,7 +1987,7 @@ var validateComputerActParams = (() => {
   })(),
   validateScreenSnapshotParams = (() => {
     let External = [
-        /(^executionId$|^screenIndex$|^maxWidth$|^quality$|^format$)/u,
+        /(^executionId$|^executionTimeoutMs$|^screenIndex$|^maxWidth$|^quality$|^format$)/u,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
       ],
       check_0 = (value) =>
@@ -1907,6 +2000,14 @@ var validateComputerActParams = (() => {
         (value.executionId === void 0 ||
           !("executionId" in value) ||
           (typeof value.executionId == "string" && External[1].test(value.executionId))) &&
+        (value.executionTimeoutMs === void 0 ||
+          !("executionTimeoutMs" in value) ||
+          (Number.isInteger(value.executionTimeoutMs) &&
+            (!(
+              Number.isFinite(value.executionTimeoutMs) ||
+              typeof value.executionTimeoutMs == "bigint"
+            ) ||
+              (value.executionTimeoutMs >= 1e3 && value.executionTimeoutMs <= 3e4)))) &&
         (value.screenIndex === void 0 ||
           !("screenIndex" in value) ||
           (Number.isInteger(value.screenIndex) &&

@@ -141,9 +141,10 @@ export function buildWidgetDocument(
     'if(data?.type!=="openclaw:widget-bridge-response"||typeof data.id!=="string")return;' +
     "const entry=pending.get(data.id);if(!entry)return;pending.delete(data.id);" +
     'if(data.ok===true)entry.resolve(data.result);else entry.reject(new ErrorCtor(typeof data.error==="string"?data.error:"widget host request failed"));});b.port1.start();' +
-    'const request=(method,params)=>new P((resolve,reject)=>{const send=()=>{const id="widget-"+(++sequence);' +
+    // Capture the authored frame's native activation at call time, before queueing or cloning user params.
+    'const request=(method,params)=>new P((resolve,reject)=>{const userActivated=!!act&&act()===true;const send=()=>{const id="widget-"+(++sequence);' +
     "pending.set(id,{resolve,reject});" +
-    'try{bridgePost({type:"openclaw:widget-bridge-request",id,method,params,ticket});}' +
+    'try{bridgePost({type:"openclaw:widget-bridge-request",id,method,params,ticket,userActivated});}' +
     "catch(error){pending.delete(id);reject(error);}};" +
     'if(ticket)send();else if(hostInitExpired)reject(new ErrorCtor("widget host capabilities unavailable"));' +
     "else push.call(waiting,{send,reject});});" +
@@ -276,6 +277,17 @@ export function buildWidgetDocument(
     : "'none'";
   const cdnSources = WIDGET_CDN_ORIGINS.join(" ");
   const scriptSources = [...WIDGET_CDN_ORIGINS, ...(options.scriptOrigins ?? [])].join(" ");
-  return `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' ${cdnSources}; script-src 'unsafe-inline' ${scriptSources}; font-src data: ${cdnSources}; img-src data:; media-src data: ${WIDGET_MEDIA_SOURCES.join(" ")}; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${errorBridge}${themeBridge}${chatHostBridge}${snapshotBridge}${sizeReporter}${widgetCode}</body></html>`;
+  const prefix = `<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' ${cdnSources}; script-src 'unsafe-inline' ${scriptSources}; font-src data: ${cdnSources}; img-src data:; media-src data: ${WIDGET_MEDIA_SOURCES.join(" ")}; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${errorBridge}${themeBridge}${chatHostBridge}${snapshotBridge}${sizeReporter}`;
+  const suffix = "</body></html>";
+  // Re-pinning source must retain the exact trusted shell, not nest it. Match
+  // every shell byte (including CSP and bridges), never an author-controlled marker.
+  const svgPrefix = prefix.replace("<body>", '<body class="svg-widget">');
+  if (
+    (widgetCode.startsWith(prefix) || widgetCode.startsWith(svgPrefix)) &&
+    widgetCode.endsWith(suffix)
+  ) {
+    return widgetCode;
+  }
+  return `${prefix}${widgetCode}${suffix}`;
 }

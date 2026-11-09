@@ -24,7 +24,7 @@ const client = {
 };
 const confirmPrompt = () => true;
 const widgetActivated = vi.fn<() => Promise<boolean>>();
-const owner = () =>
+const owner = (actionBindingNames?: () => readonly string[]) =>
   new BoardWidgetBridgeOwner({
     frame: document.createElement("iframe"),
     ticket: "ticket",
@@ -32,6 +32,7 @@ const owner = () =>
     rateKey: "widget",
     confirmPrompt,
     widgetActivated,
+    actionBindingNames,
   });
 const dispatchPrompt = vi.mocked(dispatchWidgetPrompt);
 let controller: BoardWidgetBridgeOwner;
@@ -39,7 +40,17 @@ const handle = (
   method: string,
   params: Record<string, unknown>,
   context?: Parameters<BoardWidgetBridgeOwner["handle"]>[1],
-) => controller.handle({ ...envelope, id: crypto.randomUUID(), method, params }, context);
+) =>
+  controller.handle(
+    {
+      ...envelope,
+      id: crypto.randomUUID(),
+      method,
+      params,
+      ...(method === "action.run" ? { userActivated: true } : {}),
+    },
+    context,
+  );
 const emit = (payload: unknown) => handle("state.emit", { payload });
 // Stands in for WebKit: showPicker() consumes the page's transient activation
 // and throws NotAllowedError without it. Setting isActive models a new gesture.
@@ -361,4 +372,60 @@ it.each([
     ...params,
     ...(method === "cron.trigger" ? { action: "cron.trigger" } : {}),
   });
+});
+
+it("requires a gesture in the component for a named action and consumes it once", async () => {
+  controller = owner(() => ["play"]);
+  const activation = stubUserActivation(false);
+  await expect(handle("action.run", { action: "play" })).rejects.toThrow(/fresh user interaction/);
+  expect(client.request).not.toHaveBeenCalled();
+  activation.isActive = true;
+  widgetActivated.mockResolvedValueOnce(false);
+  await expect(handle("action.run", { action: "play" })).rejects.toThrow(/fresh user interaction/);
+  expect(client.request).not.toHaveBeenCalled();
+  await handle("action.run", { action: "play", params: { notes: [] } });
+  expect(client.request).toHaveBeenCalledExactlyOnceWith("board.action", {
+    ticket: "ticket",
+    bindingName: "play",
+    params: { notes: [] },
+  });
+  await expect(handle("action.run", { action: "play" })).rejects.toThrow(/fresh user interaction/);
+});
+
+it("rejects named actions retired during activation lookup and racing duplicate actions", async () => {
+  controller = owner(() => ["play"]);
+  const activation = stubUserActivation(true);
+  const deferred = createDeferred<boolean>();
+  widgetActivated.mockReturnValueOnce(deferred.promise);
+  let current = true;
+  const pending = handle("action.run", { action: "play" }, { isCurrent: () => current });
+  current = false;
+  deferred.resolve(true);
+  await expect(pending).rejects.toThrow(/retired/);
+  expect(client.request).not.toHaveBeenCalled();
+  expect(activation.isActive).toBe(true);
+  const results = await Promise.allSettled([
+    handle("action.run", { action: "play" }),
+    handle("action.run", { action: "play" }),
+  ]);
+  expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+  expect(client.request).toHaveBeenCalledOnce();
+});
+
+it("does not borrow proxy activation or a widget-supplied flag without inner wrapper activation", async () => {
+  controller = owner(() => ["play"]);
+  stubUserActivation(true);
+  for (const userActivated of [false, undefined]) {
+    await expect(
+      controller.handle({
+        ...envelope,
+        id: crypto.randomUUID(),
+        method: "action.run",
+        params: { action: "play", userActivated: true },
+        userActivated,
+      }),
+    ).rejects.toThrow(/fresh user interaction/);
+  }
+  expect(client.request).not.toHaveBeenCalled();
+  expect(widgetActivated).not.toHaveBeenCalled();
 });

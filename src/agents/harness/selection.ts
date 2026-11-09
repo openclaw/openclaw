@@ -68,8 +68,7 @@ import {
 } from "./selection-decision.js";
 import {
   assertPluginHarnessConversationToolPolicySupport,
-  resolveAgentHarnessPreparedAuthSupport,
-  resolveAgentHarnessPreparedRouteSupport,
+  projectPreparedModelProvider,
 } from "./support.js";
 import type { AgentHarness } from "./types.js";
 
@@ -237,14 +236,11 @@ export async function runAgentHarnessAttempt(
       : selectAgentHarnessDecision({
           provider: params.provider,
           modelId: params.modelId,
-          modelProvider: {
-            api: params.model.api,
-            baseUrl: params.model.baseUrl,
-            ...resolveAgentHarnessPreparedRouteSupport(params.runtimePlan?.auth),
-            preparedAuth: resolveAgentHarnessPreparedAuthSupport({
-              plan: params.runtimePlan?.auth,
-            }),
-          },
+          modelProvider: projectPreparedModelProvider({
+            model: params.model,
+            plan: params.runtimePlan?.auth,
+            nativeModelOwned: params.nativeModelOwned,
+          }),
           config: params.config,
           agentId: params.agentId,
           sessionKey: params.sessionKey,

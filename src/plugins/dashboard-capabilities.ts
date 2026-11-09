@@ -186,7 +186,7 @@ export function describeDashboardCapabilities(registry: PluginRegistry | null | 
     })),
     ...[...(registry?.dashboardActionVerbs.values() ?? [])].map((entry) => ({
       id: entry.capabilityId,
-      text: `action ${entry.capabilityId}: ${entry.description}${entry.paramShape ? `; params ${JSON.stringify(entry.paramShape)}` : ""}`,
+      text: `action ${entry.capabilityId}: ${entry.description}${entry.requiredActionBindingParams ? `; named action binding must fix ${entry.requiredActionBindingParams.join(", ")}; call openclaw.action.run(bindingName, dynamicParams) from a user interaction` : ""}${entry.paramShape ? `; params ${JSON.stringify(entry.paramShape)}` : ""}`,
     })),
   ].toSorted((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
   let omitted = 0;

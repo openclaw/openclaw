@@ -161,8 +161,26 @@ export function createChatPaneMcpApps(options: {
   function receiveWidgetPrompt(event: CustomEvent<WidgetPromptEventDetail>): void {
     const detail = event.detail;
     const text = typeof detail?.text === "string" ? detail.text.trim() : "";
-    if (text) {
-      void options.current()?.state.handleSendChat(text);
+    const owner = options.current();
+    if (
+      !event.defaultPrevented &&
+      owner?.presented &&
+      text &&
+      typeof detail.respond === "function"
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      detail.respond(
+        (async () => {
+          let admitted = false;
+          await owner.state.handleSendChat(text, {
+            onOutboxAdmitted: () => {
+              admitted = true;
+            },
+          });
+          return admitted;
+        })(),
+      );
     }
   }
 

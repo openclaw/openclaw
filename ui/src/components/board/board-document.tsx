@@ -57,6 +57,7 @@ export type BoardDocumentProps = {
   preparedSession?: BoardGetParams | null;
   onDocumentClose?: (() => void) | null;
   passive?: boolean;
+  lobby?: boolean;
 };
 
 // The provider binding remains synchronous; Solid observes its presentation facts.
@@ -70,6 +71,7 @@ function createBoardDocument(
   let activeTabId = "";
   let errorText = "";
   let ownedProvider: BoardProvider | null = null;
+  let ownedCallbacks: { active: BoardViewCallbacks; passive: BoardViewCallbacks } | undefined;
   let providerLease: BoardProviderLease | null = null;
   let ownedBinding:
     | (ProviderBinding & {
@@ -264,6 +266,10 @@ function createBoardDocument(
       );
       const provider = lease.provider;
       ownedProvider = provider;
+      ownedCallbacks = {
+        active: callbacksFor(provider, false),
+        passive: callbacksFor(provider, true),
+      };
       providerLease = lease;
       ownedBinding = nextBinding;
       // Reconcile tab intent from provider receipts and preserve ordered focus commands.
@@ -324,6 +330,7 @@ function createBoardDocument(
     ownedBinding?.observation?.dispose();
     providerLease?.release();
     ownedProvider = null;
+    ownedCallbacks = undefined;
     providerLease = null;
     ownedBinding = null;
     ownedSnapshot = undefined;
@@ -331,15 +338,13 @@ function createBoardDocument(
     errorText = "";
   }
 
-  function presentation(passive: boolean) {
-    const provider = ownedProvider;
-    const snapshot = ownedSnapshot;
-    const session = ownedBinding?.session;
-    if (!provider || !snapshot || !session) {
-      return undefined;
-    }
-    const callbacks = {
-      appViewGeneration: provider.appViewGeneration,
+  // Callback identity follows the provider lease, not each snapshot receipt.
+  // Pending grant feedback must survive same-owner refreshes and retire with the lease.
+  function callbacksFor(provider: BoardProvider, passive: boolean): BoardViewCallbacks {
+    return {
+      get appViewGeneration() {
+        return provider.appViewGeneration;
+      },
       applyOps: (ops) => provider.applyOps(ops),
       grant: (name, decision) => provider.grant(name, decision),
       selectTab: (tabId) => {
@@ -354,6 +359,16 @@ function createBoardDocument(
           }
         : {}),
     } satisfies BoardViewCallbacks;
+  }
+
+  function presentation(passive: boolean) {
+    const provider = ownedProvider;
+    const snapshot = ownedSnapshot;
+    const session = ownedBinding?.session;
+    if (!provider || !snapshot || !session || !ownedCallbacks) {
+      return undefined;
+    }
+    const callbacks = passive ? ownedCallbacks.passive : ownedCallbacks.active;
     // Previews admit only saved HTML and declared pure core widgets.
     const renderSnapshot = passive
       ? {
@@ -389,6 +404,9 @@ function BoardDocumentContent(
   props: BoardDocumentProps,
   host: SolidBridgeElement<BoardDocumentProps>,
 ) {
+  const lobbyDocument =
+    globalThis.location.pathname.includes("/focus/dashboard/") &&
+    new URLSearchParams(globalThis.location.search).get("presentation") === "lobby";
   const context = useOptionalApplication();
   const readPresentationScope = () =>
     context ? gatewayPresentationScope(context.gateway) : undefined;
@@ -430,7 +448,10 @@ function BoardDocumentContent(
         ? t("dashboardDocument.notFound")
         : t("dashboardDocument.unavailable");
   return (
-    <main class="board-document" aria-label={t("board.label")}>
+    <main
+      class={["board-document", { "board-document--lobby": props.lobby || lobbyDocument }]}
+      aria-label={t("board.label")}
+    >
       {props.onDocumentClose ? (
         <IconButton
           class="board-document__close"
@@ -459,6 +480,7 @@ function BoardDocumentContent(
               active={true}
               bridgeEnabled={!props.passive}
               fitAutoContent={true}
+              lobby={props.lobby || lobbyDocument}
               session={board().session}
               snapshot={board().snapshot}
               activeTabId={board().activeTabId}
@@ -496,6 +518,7 @@ export const OpenClawBoardDocument = defineSolidBridge<BoardDocumentProps>(
       preparedSession: { default: null, attribute: false },
       onDocumentClose: { default: null, attribute: false },
       passive: { default: false, type: Boolean },
+      lobby: { default: false, type: Boolean },
     },
   },
 );

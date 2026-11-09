@@ -3,12 +3,14 @@ import {
   errorShape,
   ErrorCodes,
   type BoardSnapshot,
+  type BoardWidgetDeclared,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerPluginDashboardCapabilities } from "../../plugins/dashboard-capabilities.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginGatewayMethodDescriptor } from "../methods/descriptor.js";
 import { createBoardHarness } from "./board.test-support.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -24,6 +26,7 @@ async function widgetHarness(
     actionHandler: GatewayRequestHandlers[string];
   },
   mode: "ask" | "full" = "full",
+  bound?: { declared: BoardWidgetDeclared; required: string[] },
 ) {
   const registry = createEmptyPluginRegistry();
   for (const [name, scope, handler] of [
@@ -54,6 +57,7 @@ async function widgetHarness(
           id: "dispatch",
           method: "workboard.cards.dispatch",
           description: "Dispatch fixture cards",
+          ...(bound ? { requiredActionBindingParams: bound.required } : {}),
           paramShape: {
             type: "object",
             properties: { force: { type: "boolean" } },
@@ -73,8 +77,9 @@ async function widgetHarness(
   const put = await harness.invoke("board.widget.put", {
     ...target,
     content: { kind: "html", html: "plugin" },
-    declared: { tools: ["workboard.cards.list", "workboard.dispatch"] },
+    declared: bound?.declared ?? { tools: ["workboard.cards.list", "workboard.dispatch"] },
   });
+  expect(put.mock.calls[0]?.[0], JSON.stringify(put.mock.calls[0])).toBe(true);
   const widget = (put.mock.calls[0]![1] as BoardSnapshot).widgets[0]!;
   const ticket = async () => {
     const board = await harness.invoke("board.get", { sessionKey: target.sessionKey });
@@ -109,6 +114,46 @@ function widgetRequest(
     params: { ticket, [field]: capability, ...(extra ? { params: extra } : {}) },
   };
 }
+
+it("presents current plugin permission descriptions without persisting them or losing frame access", async () => {
+  const handler: GatewayRequestHandlers[string] = ({ respond }) => respond(true, {});
+  const { invoke, store, registry, widget } = await widgetHarness(
+    { readHandler: handler, actionHandler: handler },
+    "full",
+    {
+      declared: {
+        tools: ["workboard.cards.list"],
+        actionBindings: [
+          { name: "dispatch", actionId: "workboard.dispatch", params: { force: true } },
+        ],
+      },
+      required: ["force"],
+    },
+  );
+  expect(widget.declaredSummary).toContain("workboard.dispatch: Dispatch fixture cards");
+  const read = async () => {
+    const result = await invoke("board.get", { sessionKey: target.sessionKey });
+    expect(result.mock.calls[0]?.[0]).toBe(true);
+    return (result.mock.calls[0]![1] as BoardSnapshot).widgets[0]!;
+  };
+  const presented = await read();
+  expect(presented.declaredSummary).toContain("workboard.cards.list: List fixture cards");
+  expect(presented.declaredSummary).toContain("workboard.dispatch: Dispatch fixture cards");
+  expect(presented.capabilityDescriptions).toMatchObject({
+    "workboard.dispatch": "Dispatch fixture cards",
+  });
+  expect(presented.viewTicket).toEqual(expect.any(String));
+  expect(presented.frameUrl).toEqual(expect.any(String));
+  const stored = (await store.getSnapshot({ sessionKey: target.sessionKey, agentId: "main" }))
+    .widgets[0]!;
+  expect(stored.declaredSummary).not.toContain("workboard.dispatch: Dispatch fixture cards");
+  expect(stored.capabilityDescriptions).toBeUndefined();
+  registry.dashboardActionVerbs.clear();
+  const unavailable = await read();
+  expect(unavailable.declaredSummary).not.toContain("workboard.dispatch: Dispatch fixture cards");
+  expect(unavailable.capabilityDescriptions).not.toHaveProperty("workboard.dispatch");
+  expect(unavailable.grantState).toBe(presented.grantState);
+});
 
 it.each([
   { operation: "read", phase: "start" },
@@ -259,4 +304,110 @@ it("routes granted bindings and actions only while their plugin registry is acti
     undefined,
     { message: expect.stringContaining("dashboard unavailable") },
   ]);
+});
+
+it("dispatches named actions only with their approved fixed fields, never legacy or overridden targets", async () => {
+  let finalGuard: (() => void) | undefined;
+  const actionHandler = vi.fn<GatewayRequestHandlers[string]>(async ({ params, respond }) => {
+    const scope = getPluginRuntimeGatewayRequestScope();
+    await scope?.revalidate?.();
+    finalGuard = scope?.assertSystemOwnerCurrent;
+    finalGuard?.();
+    respond(true, params);
+  });
+  const fixture = await widgetHarness({ readHandler: actionHandler, actionHandler }, "full", {
+    declared: {
+      tools: ["workboard.dispatch"],
+      actionBindings: [{ name: "send", actionId: "workboard.dispatch", params: { force: true } }],
+    },
+    required: ["force"],
+  });
+  const viewTicket = await fixture.ticket();
+  const good = await fixture.invoke("board.action", {
+    ticket: viewTicket,
+    bindingName: "send",
+    params: {},
+  });
+  expect(good.mock.calls[0]?.[0], JSON.stringify(good.mock.calls[0])).toBe(true);
+  expect(actionHandler).toHaveBeenCalledOnce();
+  expect(actionHandler.mock.calls[0]?.[0].params).toEqual({ force: true });
+  expect(finalGuard).toBeTypeOf("function");
+  expect(() => finalGuard!()).toThrow();
+  const override = await fixture.invoke("board.action", {
+    ticket: viewTicket,
+    bindingName: "send",
+    params: { force: false },
+  });
+  expect(override.mock.calls[0]?.[0]).toBe(false);
+  const legacy = await fixture.call("action", viewTicket, { force: true });
+  expect(legacy.mock.calls[0]?.[0]).toBe(false);
+  const missing = await fixture.invoke("board.action", {
+    ticket: viewTicket,
+    bindingName: "missing",
+  });
+  expect(missing.mock.calls[0]?.[0]).toBe(false);
+  expect(actionHandler).toHaveBeenCalledOnce();
+  await fixture.invoke("board.update", {
+    sessionKey: target.sessionKey,
+    ops: [{ kind: "widget_remove", name: target.name }],
+  });
+  const revoked = await fixture.invoke("board.action", {
+    ticket: viewTicket,
+    bindingName: "send",
+    params: {},
+  });
+  expect(revoked.mock.calls[0]?.[0]).toBe(false);
+  expect(actionHandler).toHaveBeenCalledOnce();
+});
+
+it("rejects named bindings missing a required fixed field", async () => {
+  const actionHandler = vi.fn<GatewayRequestHandlers[string]>(({ respond }) => respond(true, {}));
+  const fixture = await widgetHarness({ readHandler: actionHandler, actionHandler }, "full", {
+    declared: { actionBindings: [{ name: "send", actionId: "workboard.dispatch", params: {} }] },
+    required: ["force"],
+  });
+  const result = await fixture.invoke("board.action", {
+    ticket: await fixture.ticket(),
+    bindingName: "send",
+    params: { force: true },
+  });
+  expect(result.mock.calls[0]?.[0]).toBe(false);
+  expect(actionHandler).not.toHaveBeenCalled();
+});
+
+it("revalidates a named action after preparation and retires its deferred authority", async () => {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const effect = vi.fn();
+  let revalidate: (() => Promise<void>) | undefined;
+  const actionHandler: GatewayRequestHandlers[string] = async ({ respond }) => {
+    revalidate = getPluginRuntimeGatewayRequestScope()?.revalidate;
+    expect(revalidate).toBeTypeOf("function");
+    entered.resolve();
+    await release.promise;
+    await revalidate!();
+    effect();
+    respond(true, {});
+  };
+  const fixture = await widgetHarness({ readHandler: actionHandler, actionHandler }, "full", {
+    declared: {
+      actionBindings: [{ name: "send", actionId: "workboard.dispatch", params: { force: true } }],
+    },
+    required: ["force"],
+  });
+  const pending = fixture.invoke("board.action", {
+    ticket: await fixture.ticket(),
+    bindingName: "send",
+    params: {},
+  });
+  await entered.promise;
+  try {
+    await fixture.store.applyOps(target, [{ kind: "widget_remove", name: target.name }]);
+  } finally {
+    release.resolve();
+  }
+  const result = await pending;
+  expect(result.mock.calls[0]?.[0]).toBe(false);
+  expect(effect).not.toHaveBeenCalled();
+  await expect(revalidate!()).rejects.toThrow();
 });

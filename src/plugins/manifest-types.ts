@@ -311,6 +311,8 @@ export type PluginManifestDashboardActionVerb = {
   description: string;
   /** Optional JSON Schema for the action params object. */
   paramShape?: JsonSchemaObject;
+  /** Sensitive actions require these fields fixed in an approved named binding. */
+  requiredActionBindingParams?: string[];
 };
 
 export type PluginManifestDashboard = {

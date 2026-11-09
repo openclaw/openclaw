@@ -20,6 +20,8 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["agent", { fields: ["sessionKey"], runStart: true }],
   ["board.event", { fields: ["sessionKey"], required: true }],
   ["board.get", { fields: ["sessionKey"], required: true }],
+  ["board.widget.source", { fields: ["sessionKey"], required: true }],
+  ["board.widget.conversation", { fields: ["sessionKey"], required: true }],
   ["board.update", { fields: ["sessionKey"], required: true }],
   ["board.widget.grant", { fields: ["sessionKey"], required: true }],
   ["board.widget.put", { fields: ["sessionKey"], required: true }],
@@ -108,6 +110,7 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
 const DIRECT_SESSION_READ_METHODS = new Set([
   "talk.catalog",
   "board.get",
+  "board.widget.source",
   "chat.history",
   "controlUi.sessionPullRequests.subscribe",
   "controlUi.sessionPullRequests.checks",

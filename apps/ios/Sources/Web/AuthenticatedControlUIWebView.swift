@@ -435,16 +435,20 @@ final class DashboardEmbedCompatibility {
 final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDelegate {
     let deviceSettingsBridge: IOSDeviceSettingsBridge?
     let nativeAuth: ControlUINativeGatewayAuthHandler
+    var lobbyPromptBridge: LobbyPromptBridge?
+    var lobbySettingsRequest = 0
     private let embedCompatibility: DashboardEmbedCompatibility?
     private var compatibilityDocumentID: UUID?
     private let url: URL
     private var authScript: String?
     private let authScriptProvider: (@MainActor () async -> String?)?
     private let usesNativeEmbed: Bool
+    private let isLobby: Bool
     private let expectedOrigin: GatewayTLSAuthority?
     private let allowedMainFramePathPrefix: String?
     private let onMainFrameNavigationOutsideScope: (() -> Void)?
     private let tls: GatewayTLSParams?
+    private let widgetSandboxTLSProvider: DashboardWidgetTLSProvider?
     private let accessCookie: HTTPCookie?
     private let accessAdmissionIsCurrent: AuthenticatedControlUIAccessCookieInstaller.Admission?
     private let accessResponseCheck: (@Sendable (HTTPURLResponse) async throws -> Void)?
@@ -457,6 +461,7 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
     init(
         url: URL,
         tls: GatewayTLSParams?,
+        widgetSandboxTLSProvider: DashboardWidgetTLSProvider? = nil,
         basicProxyCredentialProvider: (() -> URLCredential?)? = nil,
         allowedMainFramePathPrefix: String? = nil,
         onMainFrameNavigationOutsideScope: (() -> Void)? = nil,
@@ -465,6 +470,7 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         nativeGatewayAuthProvider: IOSDashboardNativeGatewayAuthProvider? = nil,
         deviceSettingsBridge: IOSDeviceSettingsBridge? = nil,
         usesNativeEmbed: Bool = false,
+        isLobby: Bool = false,
         embedCompatibility: DashboardEmbedCompatibility? = nil,
         accessCookie: HTTPCookie? = nil,
         accessAdmissionIsCurrent: AuthenticatedControlUIAccessCookieInstaller.Admission? = nil,
@@ -481,11 +487,13 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
             accessAdmissionIsCurrent: accessAdmissionIsCurrent)
         self.deviceSettingsBridge = deviceSettingsBridge
         self.usesNativeEmbed = usesNativeEmbed
+        self.isLobby = isLobby
         self.embedCompatibility = embedCompatibility
         self.expectedOrigin = GatewayTLSAuthority(url: url)
         self.allowedMainFramePathPrefix = allowedMainFramePathPrefix.map(Self.normalizedPath)
         self.onMainFrameNavigationOutsideScope = onMainFrameNavigationOutsideScope
         self.tls = tls
+        self.widgetSandboxTLSProvider = widgetSandboxTLSProvider
         self.accessCookie = accessCookie
         self.accessAdmissionIsCurrent = accessAdmissionIsCurrent
         self.accessResponseCheck = accessResponseCheck
@@ -535,6 +543,35 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
                 injectionTime: .atDocumentStart,
                 forMainFrameOnly: true))
         }
+        if let script = self.lobbyPromptBridge?.script {
+            controller.addUserScript(WKUserScript(
+                source: script,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true))
+        }
+        if self.isLobby, let viewportScript = Self.lobbyViewportScript(url: self.url) {
+            controller.addUserScript(WKUserScript(
+                source: viewportScript,
+                injectionTime: .atDocumentEnd,
+                forMainFrameOnly: true))
+        }
+    }
+
+    static func lobbyViewportScript(url: URL) -> String? {
+        IOSDeviceSettingsBridge.originGatedScript(
+            """
+            (() => {
+              let viewport = document.querySelector('meta[name="viewport"]');
+              if (!viewport) {
+                viewport = document.createElement('meta');
+                viewport.name = 'viewport';
+                document.head.appendChild(viewport);
+              }
+              const content = (viewport.content || 'width=device-width,initial-scale=1')
+                .split(',').filter(part => !/^(minimum-scale|maximum-scale|user-scalable)\\s*=/i.test(part.trim()));
+              viewport.content = [...content, 'minimum-scale=1', 'maximum-scale=1', 'user-scalable=no'].join(',');
+            })();
+            """, url: url)
     }
 
     func prepareInitialLoad() async -> Bool {
@@ -556,6 +593,10 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
     func attachNativeAuthDocument(to webView: WKWebView) {
         self.nativeAuthWebView = webView
         self.nativeAuth.webView = webView
+        if self.isLobby {
+            // The document viewport owns page zoom; component pinch stays inside its sandbox.
+            webView.scrollView.bouncesZoom = false
+        }
     }
 
     static func embedScript(url: URL, isPad: Bool = UIDevice.current.userInterfaceIdiom == .pad) -> String? {
@@ -735,9 +776,34 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
             host: challenge.protectionSpace.host,
             port: challenge.protectionSpace.port)
         else {
-            // Cross-origin main-frame loads are already cancelled by navigation policy.
-            // Other authorities may belong to embedded content and do not inherit the Gateway pin.
-            completionHandler(.performDefaultHandling, nil)
+            guard let provider = self.widgetSandboxTLSProvider,
+                  let trust = challenge.protectionSpace.serverTrust
+            else {
+                completionHandler(.performDefaultHandling, nil)
+                return
+            }
+            Task {
+                let admission = await provider(challenge.protectionSpace.host, challenge.protectionSpace.port)
+                guard let admission else {
+                    completionHandler(.performDefaultHandling, nil)
+                    return
+                }
+                guard admission.isCurrent(), self.isAccessAdmissionCurrent(), !self.hasExitedNavigationScope else {
+                    completionHandler(.cancelAuthenticationChallenge, nil)
+                    return
+                }
+                switch GatewayTLSServerTrust.evaluate(
+                    trust: trust,
+                    host: challenge.protectionSpace.host,
+                    port: challenge.protectionSpace.port,
+                    params: admission.parameters)
+                {
+                case .accept:
+                    completionHandler(.useCredential, URLCredential(trust: trust))
+                case .reject:
+                    completionHandler(.cancelAuthenticationChallenge, nil)
+                }
+            }
             return
         }
         guard let trust = challenge.protectionSpace.serverTrust else {
@@ -830,12 +896,17 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
     let authScript: String?
     let authScriptProvider: (@MainActor () async -> String?)?
     let tls: GatewayTLSParams?
+    let widgetSandboxTLSProvider: DashboardWidgetTLSProvider?
     let nativeGatewayAuthProvider: IOSDashboardNativeGatewayAuthProvider?
     let basicProxyCredentialProvider: (() -> URLCredential?)?
     let allowedMainFramePathPrefix: String?
     let onMainFrameNavigationOutsideScope: (() -> Void)?
     let deviceSettingsBridge: IOSDeviceSettingsBridge?
     let usesNativeEmbed: Bool
+    let isLobby: Bool
+    let onLobbyPrompt: ((String) -> Bool)?
+    let onLobbySelection: ((LobbyComponentSelection?) -> Void)?
+    let lobbySettingsRequest: Int
     let embedCompatibility: DashboardEmbedCompatibility?
     let accessCookie: HTTPCookie?
     let accessAdmissionIsCurrent: AuthenticatedControlUIAccessCookieInstaller.Admission?
@@ -846,6 +917,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         url: URL,
         authScript: String?,
         tls: GatewayTLSParams?,
+        widgetSandboxTLSProvider: DashboardWidgetTLSProvider? = nil,
         authScriptProvider: (@MainActor () async -> String?)? = nil,
         nativeGatewayAuthProvider: IOSDashboardNativeGatewayAuthProvider? = nil,
         basicProxyCredentialProvider: (() -> URLCredential?)? = nil,
@@ -853,6 +925,10 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         onMainFrameNavigationOutsideScope: (() -> Void)? = nil,
         deviceSettingsBridge: IOSDeviceSettingsBridge? = nil,
         usesNativeEmbed: Bool = false,
+        isLobby: Bool = false,
+        onLobbyPrompt: ((String) -> Bool)? = nil,
+        onLobbySelection: ((LobbyComponentSelection?) -> Void)? = nil,
+        lobbySettingsRequest: Int = 0,
         embedCompatibility: DashboardEmbedCompatibility? = nil,
         accessCookie: HTTPCookie? = nil,
         accessAdmissionIsCurrent: AuthenticatedControlUIAccessCookieInstaller.Admission? = nil,
@@ -863,12 +939,17 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         self.authScript = authScript
         self.authScriptProvider = authScriptProvider
         self.tls = tls
+        self.widgetSandboxTLSProvider = widgetSandboxTLSProvider
         self.nativeGatewayAuthProvider = nativeGatewayAuthProvider
         self.basicProxyCredentialProvider = basicProxyCredentialProvider
         self.allowedMainFramePathPrefix = allowedMainFramePathPrefix
         self.onMainFrameNavigationOutsideScope = onMainFrameNavigationOutsideScope
         self.deviceSettingsBridge = deviceSettingsBridge
         self.usesNativeEmbed = usesNativeEmbed
+        self.isLobby = isLobby
+        self.onLobbyPrompt = onLobbyPrompt
+        self.onLobbySelection = onLobbySelection
+        self.lobbySettingsRequest = lobbySettingsRequest
         self.embedCompatibility = embedCompatibility
         self.accessCookie = accessCookie
         self.accessAdmissionIsCurrent = accessAdmissionIsCurrent
@@ -880,6 +961,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         AuthenticatedControlUIWebViewCoordinator(
             url: self.url,
             tls: self.tls,
+            widgetSandboxTLSProvider: self.widgetSandboxTLSProvider,
             basicProxyCredentialProvider: self.basicProxyCredentialProvider,
             allowedMainFramePathPrefix: self.allowedMainFramePathPrefix,
             onMainFrameNavigationOutsideScope: self.onMainFrameNavigationOutsideScope,
@@ -888,6 +970,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
             nativeGatewayAuthProvider: self.nativeGatewayAuthProvider,
             deviceSettingsBridge: self.deviceSettingsBridge,
             usesNativeEmbed: self.usesNativeEmbed,
+            isLobby: self.isLobby,
             embedCompatibility: self.embedCompatibility,
             accessCookie: self.accessCookie,
             accessAdmissionIsCurrent: self.accessAdmissionIsCurrent,
@@ -897,9 +980,21 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
+        if self.isLobby { configuration.ignoresViewportScaleLimits = false }
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        if self.isLobby, let onLobbyPrompt {
+            let coordinator = context.coordinator
+            let bridge = LobbyPromptBridge(url: self.url) { [weak coordinator] text in
+                guard coordinator?.isAccessAdmissionCurrent() == true else { return false }
+                return onLobbyPrompt(text)
+            }
+            bridge.onSelection = self.onLobbySelection
+            coordinator.lobbyPromptBridge = bridge
+            configuration.userContentController.addScriptMessageHandler(
+                bridge, contentWorld: .page, name: LobbyPromptBridge.name)
+        }
         context.coordinator.installUserScripts(in: configuration.userContentController)
         if self.nativeGatewayAuthProvider != nil {
             configuration.userContentController.addScriptMessageHandler(
@@ -914,6 +1009,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         context.coordinator.attachNativeAuthDocument(to: webView)
+        context.coordinator.lobbyPromptBridge?.webView = webView
         self.deviceSettingsBridge?.attach(to: webView) { [weak coordinator = context.coordinator, weak webView] in
             guard let coordinator, let webView else { return }
             coordinator.installUserScripts(in: webView.configuration.userContentController)
@@ -921,12 +1017,10 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         self.applyAppearance(to: webView)
         webView.navigationDelegate = context.coordinator
         webView.isOpaque = true
-        webView.backgroundColor = .black
         webView.allowsLinkPreview = false
         webView.allowsBackForwardNavigationGestures = true
 
         let scrollView = webView.scrollView
-        scrollView.backgroundColor = .black
         scrollView.contentInsetAdjustmentBehavior = .never
         scrollView.contentInset = .zero
         scrollView.verticalScrollIndicatorInsets = .zero
@@ -989,11 +1083,22 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
             return
         }
         self.applyAppearance(to: webView)
+        if self.isLobby, context.coordinator.lobbySettingsRequest != self.lobbySettingsRequest,
+           !webView.isLoading, LobbyPromptBridge.matches(webView.url, expected: self.url)
+        {
+            context.coordinator.lobbySettingsRequest = self.lobbySettingsRequest
+            webView.evaluateJavaScript(
+                "document.dispatchEvent(new Event('openclaw-lobby-settings'))",
+                completionHandler: nil)
+        }
         // Connection changes recreate the view via `.id`; unrelated SwiftUI passes must not reload it.
     }
 
     private func applyAppearance(to webView: WKWebView) {
         webView.overrideUserInterfaceStyle = self.colorScheme == .dark ? .dark : .light
+        let backgroundColor: UIColor = self.isLobby ? .systemBackground : .black
+        webView.backgroundColor = backgroundColor
+        webView.scrollView.backgroundColor = backgroundColor
     }
 
     static func dismantleUIView(
@@ -1003,6 +1108,9 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         coordinator.retireAccess(in: webView)
         coordinator.retireEmbedCompatibility()
         coordinator.deviceSettingsBridge?.detach(from: webView)
+        coordinator.lobbyPromptBridge?.webView = nil
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: LobbyPromptBridge.name, contentWorld: .page)
         coordinator.nativeAuth.document.retire()
         coordinator.nativeAuth.webView = nil
         webView.configuration.userContentController.removeScriptMessageHandler(

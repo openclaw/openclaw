@@ -39,6 +39,7 @@
   --navigation-selected-border: transparent;
 
   --card: #161920;
+  --lobby-surface: var(--card);
   --card-foreground: #f0f0f2;
   --card-highlight: rgba(255, 255, 255, 0.04);
   --popover: #191c24;
@@ -669,6 +670,7 @@
   --subagent-avatar-tint-strength: 100%;
 
   --card: #ffffff;
+  --lobby-surface: #ffffff;
   --card-foreground: #211e1a;
   --card-highlight: rgba(60, 42, 24, 0.03);
   --popover: #ffffff;

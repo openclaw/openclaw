@@ -13,6 +13,7 @@ import { listen } from "../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../../styles/board.css";
+import "../../styles/lobby.css";
 import { BoardTabs } from "./board-tabs.tsx";
 import {
   createBoardViewState,
@@ -23,6 +24,7 @@ import {
 } from "./board-view-state.ts";
 import type { BoardWidgetCellMethods, BoardWidgetCellProps } from "./board-widget-cell-options.ts";
 import { BoardWidgetCell } from "./board-widget-cell.solid.tsx";
+import { LobbySettings } from "./lobby-settings.tsx";
 
 registerEnglishCatalog(registerBoardDocumentEnglish);
 
@@ -38,6 +40,7 @@ type CellEntry = {
 };
 
 function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
+  const [lobbySelection, setLobbySelection] = createSignal("");
   const [layoutRevision, setLayoutRevision] = createSignal(0, { ownedWrite: true });
   const invalidateLayout = () => setLayoutRevision((value) => value + 1);
   // Grid coordinates change; map insertion order keeps iframe nodes in place.
@@ -47,6 +50,8 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
   );
   views.set(host, owner);
   let disposed = false;
+  let lobbyListScroll = 0;
+  let lobbyScrollFrame = 0;
   const cellKey = (name: string) =>
     JSON.stringify([
       props.session.agentId,
@@ -61,13 +66,20 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     const tabs = owner.tabs();
     const activeTab = owner.activeTab();
     const activeTabId = activeTab?.tabId ?? props.activeTabId;
-    const activeWidgets = snapshot && activeTab ? orderedWidgets(snapshot, activeTabId) : [];
+    const activeWidgets = snapshot
+      ? props.lobby
+        ? tabs.flatMap((tab) => orderedWidgets(snapshot, tab.tabId))
+        : activeTab
+          ? orderedWidgets(snapshot, activeTabId)
+          : []
+      : [];
     if (activeTab) {
       owner.visitedTabs.add(activeTabId);
     }
     // A widget moved to an unvisited tab keeps its already mounted document.
     const widgets = (snapshot?.widgets ?? []).filter(
-      (widget) => owner.visitedTabs.has(widget.tabId) || entries.has(cellKey(widget.name)),
+      (widget) =>
+        props.lobby || owner.visitedTabs.has(widget.tabId) || entries.has(cellKey(widget.name)),
     );
     const positions = new Map<string, number>();
     const rects = tabs.flatMap((tab) => {
@@ -84,7 +96,23 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
       tabRects.forEach((rect, index) => positions.set(rect.name, index));
       return tabRects;
     });
-    const activeNames = new Set(activeWidgets.map((widget) => widget.name));
+    // The Lobby is one continuous collection; persisted dashboard tabs only
+    // contribute their order, never a second navigation layer.
+    if (props.lobby) {
+      activeWidgets.forEach((widget, index) => positions.set(widget.name, index));
+    }
+    const selected = props.lobby
+      ? activeWidgets.find(
+          (widget) =>
+            `${cellKey(widget.name)}:${widget.componentId ?? widget.instanceId}` ===
+              lobbySelection() ||
+            // First conversation backfills legacy metadata without replacing the displayed frame.
+            `${cellKey(widget.name)}:${widget.instanceId}` === lobbySelection(),
+        )
+      : undefined;
+    const activeNames = new Set(
+      (selected ? [selected] : activeWidgets).map((widget) => widget.name),
+    );
     const activeRects = rects.filter((rect) => activeNames.has(rect.name));
     const fullWidth = activeWidgets.length === 1 && activeWidgets[0]?.sizeW === BOARD_GRID_COLUMNS;
     const page =
@@ -134,12 +162,32 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
           bridgeEnabled: props.bridgeEnabled,
           dragging: rect.name === state.gesture.name,
           focusTabIndex: rect.name === focusName ? 0 : -1,
-          positionInSet: (positions.get(rect.name) ?? 0) + 1,
+          positionInSet: selected ? 1 : (positions.get(rect.name) ?? 0) + 1,
           setSize: activeRects.length,
           busy: state.mutationPending,
           canMutate: props.canMutate,
           canGrant: props.canGrant,
           loadingCovered: loading,
+          lobby: props.lobby,
+          lobbyPage: selected?.name === rect.name,
+          onLobbyOpen: () => {
+            const returning = Boolean(selected);
+            if (!returning) {
+              lobbyListScroll = host.scrollTop;
+            }
+            setLobbySelection(
+              returning
+                ? ""
+                : `${key}:${widgetsByName.get(rect.name)?.componentId ?? widgetsByName.get(rect.name)?.instanceId}`,
+            );
+            cancelAnimationFrame(lobbyScrollFrame);
+            lobbyScrollFrame = requestAnimationFrame(() => {
+              if (!disposed) {
+                host.scrollTop = returning ? lobbyListScroll : 0;
+                entries.get(key)?.element?.focusWidget();
+              }
+            });
+          },
         },
       });
     }
@@ -174,6 +222,11 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
       }
     }
     return {
+      selection: lobbySelection(),
+      selected,
+      selectedIdentity: selected?.componentId
+        ? `${cellKey(selected.name)}:${selected.componentId}`
+        : undefined,
       tabs,
       activeTabId,
       activeNames,
@@ -185,11 +238,44 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
       state,
     };
   });
+  let lastNativeSelection = "";
   createEffect(
-    () => view(),
-    (current) => {
+    () => ({ current: view(), lobby: props.lobby }),
+    ({ current, lobby }) => {
+      if (current.selection && !current.selected) {
+        setLobbySelection("");
+      } else if (current.selectedIdentity && current.selection !== current.selectedIdentity) {
+        setLobbySelection(current.selectedIdentity);
+      }
       host.toggleAttribute("data-initial-loading", current.loading);
       owner.reconcileInitialPresentation();
+      // The same presentation owner publishes the current native selection.
+      // Keep a delivery signature so layout-only updates do not resend it.
+      const selection = JSON.stringify([current.selected?.name, current.selected?.instanceId]);
+      if (!lobby) {
+        lastNativeSelection = "";
+      } else if (selection !== lastNativeSelection) {
+        // SAFETY: WKWebView installs this optional handler; access remains guarded below.
+        const nativeWindow = window as Window & {
+          webkit?: {
+            messageHandlers?: {
+              openclawLobbyPrompt?: { postMessage: (body: unknown) => Promise<unknown> };
+            };
+          };
+        };
+        const handler = nativeWindow.webkit?.messageHandlers?.openclawLobbyPrompt;
+        if (handler) {
+          lastNativeSelection = selection;
+          // Native checks the document origin and frame, not a Window target origin.
+          // oxlint-disable unicorn/require-post-message-target-origin
+          void handler.postMessage({
+            kind: "selection",
+            name: current.selected?.name ?? null,
+            instanceId: current.selected?.instanceId ?? null,
+          });
+          // oxlint-enable unicorn/require-post-message-target-origin
+        }
+      }
     },
   );
   onSettled(() => {
@@ -199,6 +285,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     const stop = pointer ? listen(pointer, "change", invalidateLayout) : undefined;
     return () => {
       disposed = true;
+      cancelAnimationFrame(lobbyScrollFrame);
       views.delete(host);
       stop?.();
     };
@@ -221,24 +308,30 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
             "board-view--single-full-width": view().fullWidth,
             "board-view--page": view().page,
             "board-view--loading": view().loading,
+            "board-view--lobby": props.lobby,
           },
         ]}
         aria-label={t("board.label")}
         aria-busy={view().loading ? "true" : "false"}
         inert={view().loading}
       >
-        <BoardTabs
-          tabs={view().tabs}
-          activeTabId={view().activeTabId}
-          hoverTabId={view().state.hoverTabId}
-          onSelect={owner.selectTab}
-        />
+        <Show when={props.lobby}>
+          <LobbySettings {...props} componentName={view().selected?.name} />
+        </Show>
+        <Show when={!props.lobby}>
+          <BoardTabs
+            tabs={view().tabs}
+            activeTabId={view().activeTabId}
+            hoverTabId={view().state.hoverTabId}
+            onSelect={owner.selectTab}
+          />
+        </Show>
         <Show when={Boolean(props.snapshot) || view().cells.length > 0}>
           <div
             ref={owner.gridRef}
             class="board-grid"
             role="list"
-            aria-label={t("board.gridLabel")}
+            aria-label={t(props.lobby ? "board.lobby.label" : "board.gridLabel")}
             hidden={view().empty}
           >
             <For each={view().cells} keyed={(entry) => entry.key}>
@@ -270,11 +363,20 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
           </div>
           <Show when={view().empty}>
             <div class="board-empty" data-test-id="board-empty">
-              <span class="board-empty__mark" aria-hidden="true">
-                ＋
-              </span>
-              <strong>{t("board.emptyTitle")}</strong>
-              <span>{t("board.emptyHint")}</span>
+              <Show
+                when={props.lobby}
+                fallback={
+                  <>
+                    <span class="board-empty__mark" aria-hidden="true">
+                      ＋
+                    </span>
+                    <strong>{t("board.emptyTitle")}</strong>
+                    <span>{t("board.emptyHint")}</span>
+                  </>
+                }
+              >
+                <span>{t("board.lobby.empty")}</span>
+              </Show>
             </div>
           </Show>
         </Show>
@@ -319,6 +421,7 @@ export const BoardView = defineSolidBridge<BoardViewProps, BoardViewMethods>(
       canGrant: { default: true, type: Boolean },
       fitAutoContent: { default: false, type: Boolean },
       pageWidgetName: { default: "", attribute: false },
+      lobby: { default: false, type: Boolean },
     },
     methods: {
       selectPageWidgetMenuItem: (

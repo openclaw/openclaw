@@ -537,3 +537,48 @@ it.each(["operator.read", "operator.sessions.read", "operator.sessions.write"])(
     expect(request).toHaveBeenCalledOnce();
   },
 );
+
+it("retains a Lobby grant failure after the same provider refreshes its snapshot", async () => {
+  const initial = widgetSnapshot({ grantState: "granted" });
+  const recovery = createDeferred<typeof initial>();
+  let reads = 0;
+  const request = vi.fn(async (method: string) => {
+    if (method === "board.get") {
+      return ++reads === 1 ? initial : recovery.promise;
+    }
+    if (method === "board.widget.grant") {
+      throw new Error("board widget grant is not pending: alpha");
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+  const element = mountDocument({
+    preparedSession,
+    lobby: true,
+    gatewaySnapshot: connected(
+      documentClient(request),
+      gatewayHelloForMethods(
+        ["board.get", "board.widget.grant"],
+        ["operator.write", "operator.approvals"],
+      ),
+    ),
+  });
+  const view = await waitForView(element);
+  await settleCells(view);
+  view.querySelector<HTMLButtonElement>('[data-test-id="lobby-settings-open"]')!.click();
+  await settleCells(view);
+  view.querySelector<HTMLButtonElement>('[data-test-id="lobby-permission-deny"]')!.click();
+  const error = () => view.querySelector('[role="alert"]')?.textContent;
+  await waitForSolid(() => expect(error()).toContain("grant is not pending"));
+  const before = view.snapshot;
+  recovery.resolve(structuredClone(initial));
+  await waitForSolid(() => expect(view.snapshot).not.toBe(before));
+  await settleCells(view);
+  expect(error()).toContain("grant is not pending");
+  expect(
+    view.querySelector<HTMLButtonElement>('[data-test-id="lobby-permission-deny"]')!.disabled,
+  ).toBe(false);
+  expect(request).toHaveBeenCalledWith(
+    "board.widget.grant",
+    expect.objectContaining({ name: "alpha", decision: "rejected" }),
+  );
+});

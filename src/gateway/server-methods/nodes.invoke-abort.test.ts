@@ -113,6 +113,7 @@ function startNodeInvoke(options: {
   config?: Record<string, unknown>;
   commands?: string[];
   client?: GatewayRequestHandlerOptions["client"];
+  nodeDispatchAuthority?: GatewayRequestHandlerOptions["nodeDispatchAuthority"];
   requestParams?: Record<string, unknown>;
   validateAgentRuntimeApprovalAuthority?: () => boolean;
 }) {
@@ -141,6 +142,7 @@ function startNodeInvoke(options: {
     },
     validateAgentRuntimeApprovalAuthority: options.validateAgentRuntimeApprovalAuthority,
     signal: options.signal,
+    nodeDispatchAuthority: options.nodeDispatchAuthority,
   });
   return { invocation, respond };
 }
@@ -236,6 +238,35 @@ describe("node.invoke caller cancellation", () => {
       }
     },
   );
+
+  it("retains caller authority until the final raw node handoff", async () => {
+    let current = true;
+    let effects = 0;
+    const authority = {
+      prepare: vi.fn(async () => {
+        await Promise.resolve();
+        return current;
+      }),
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("revoked");
+        }
+      },
+    };
+    const invoke = vi.fn(async (params: NodeInvokeParams) => {
+      current = false;
+      const allowed = await params.authorizeDispatch?.();
+      if (allowed && params.isDispatchAuthorized?.()) {
+        effects++;
+      }
+      return { ok: false, error: { code: "APPROVAL_AUTHORITY_CLOSED", message: "revoked" } };
+    });
+    const { invocation } = startNodeInvoke({ invoke, nodeDispatchAuthority: authority });
+    await invocation;
+    expect(authority.prepare).toHaveBeenCalledOnce();
+    expect(invoke.mock.calls[0]?.[0].isDispatchAuthorized?.()).toBe(false);
+    expect(effects).toBe(0);
+  });
 
   it("carries trusted plugin duplex hooks through the canonical paired dispatch", async () => {
     let runtimeCurrent = true;

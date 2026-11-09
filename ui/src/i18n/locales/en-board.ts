@@ -11,6 +11,9 @@ const enBoard = {
       activeCapabilities: "Active widget capabilities",
       networkCapability: "Network: {capability}",
       toolCapability: "Tool: {capability}",
+      boundActions: "Actions on approved targets",
+      actionCapability:
+        "{name}: {action}; fixed target and operation: {target}. Requires interaction with this component.",
       dataQueries: "GitHub Actions queries",
       queryCapability:
         "GitHub Actions query {name}: {selectors}; fields={fields} (uses the agent's credentials; shares selected private and future results with session readers)",

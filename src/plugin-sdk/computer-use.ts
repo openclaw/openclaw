@@ -7,6 +7,7 @@ export {
   ScreenSnapshotResultSchema,
   parseComputerActParamsJSON,
   parseScreenSnapshotParamsJSON,
+  parseScreenSnapshotResult,
 } from "../plugins/computer-use-contract.js";
 export type {
   ComputerActParams,

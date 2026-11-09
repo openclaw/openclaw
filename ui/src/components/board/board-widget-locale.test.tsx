@@ -79,3 +79,39 @@ it("keeps mixed named-query approval details localized when the locale changes",
     expect(surface.textContent).not.toContain("Tool access:");
   }
 });
+
+it("shows the exact action target both before approval and in granted details", async () => {
+  const previous = i18n.getLocale();
+  onTestFinished(() => i18n.setLocale(previous));
+  await i18n.setLocale("en");
+  const widget = createBoardWidget({
+    grantState: "pending",
+    declared: {
+      actionBindings: [
+        {
+          name: "play",
+          actionId: "device-controls.audio",
+          params: { nodeId: "fixture-mac", operationId: "fixture-operation" },
+        },
+      ],
+    },
+  });
+  const mounted = mountSolid(() => (
+    <>
+      <BoardPendingCapabilities widget={widget} disabled={false} onGrant={() => {}} />
+      <BoardGrantedCapabilities
+        widget={{ ...widget, grantState: "granted" }}
+        presentation="details"
+      />
+    </>
+  ));
+  for (const surface of [
+    mounted.container.querySelector('[data-test-id="board-pending"]'),
+    mounted.container.querySelector(".board-widget__menu-capabilities"),
+  ]) {
+    expect(surface?.textContent).toContain('nodeId="fixture-mac"');
+    expect(surface?.textContent).toContain('operationId="fixture-operation"');
+    expect(surface?.textContent).toContain("device-controls.audio");
+    expect(surface?.textContent).toContain("Requires interaction");
+  }
+});

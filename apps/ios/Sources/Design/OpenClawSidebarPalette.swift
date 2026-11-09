@@ -7,6 +7,7 @@ enum OpenClawSidebarPalette {
     static let background = adaptive(light: 0xFAFAFA, dark: 0x000000)
     static let elevated = adaptive(light: 0xF2F2F2, dark: 0x1A1A1A)
     static let selection = adaptive(light: 0xEDEDED, dark: 0x232327)
+    static let selectionForeground = OpenClawBrand.accent
     static let text = adaptive(light: 0x171717, dark: 0xEDEDED)
     static let textStrong = adaptive(light: 0x171717, dark: 0xEDEDED)
     static let muted = adaptive(light: 0x8F8F8F, dark: 0x8F8F8F)

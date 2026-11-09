@@ -20,9 +20,11 @@ import {
 } from "./board-layout.js";
 import { BOARD_REPORT_WIDGET_KIND, parseBoardReport } from "./board-report.js";
 import { BOARD_WEBSITE_WIDGET_KIND, parseBoardWebsite } from "./board-website.js";
+import { requireBoardComponent, type BoardComponentTarget } from "./component-conversation.js";
 import { GITHUB_ACTIONS_GRANT_PREFIX } from "./github-actions-capability.js";
 
 type BoardWidgetHtmlDocument = {
+  componentId?: string;
   html: string;
   revision: number;
   sha256: string;
@@ -33,6 +35,7 @@ type BoardWidgetHtmlDocument = {
 };
 export type BoardWidgetHtmlViewMetadata = Omit<BoardWidgetHtmlDocument, "html">;
 export type BoardWidgetMcpAppDocument = {
+  componentId?: string;
   descriptor: BoardMcpAppDescriptor;
   revision: number;
   instanceId: string;
@@ -46,7 +49,11 @@ export type BoardSnapshotWithHtmlViewMetadata = {
   htmlViewMetadata: ReadonlyMap<string, BoardWidgetHtmlViewMetadata>;
 };
 
-export type BoardSessionTarget = { sessionKey: string; agentId?: string };
+export type BoardSessionTarget = {
+  sessionKey: string;
+  agentId?: string;
+  component?: BoardComponentTarget;
+};
 
 export type BoardWriteOptions = {
   /** Check owner-held source authority at admission; admitted writes may finish after revocation. */
@@ -59,6 +66,12 @@ export type BoardWidgetWriteOptions = BoardWriteOptions & {
 };
 
 export interface BoardStore {
+  ensureComponentIdentity(
+    target: BoardSessionTarget,
+    name: string,
+    instanceId: string,
+    options?: BoardWriteOptions,
+  ): Promise<{ id: string; title: string }>;
   /** Start consumption in the authoritative read turn; release the database before awaiting its result. */
   useSnapshot<T>(
     target: BoardSessionTarget,
@@ -119,6 +132,10 @@ export function createBoardDeclaredSummary(
       tool.startsWith(GITHUB_ACTIONS_GRANT_PREFIX)
         ? `GitHub Actions metadata: ${tool.slice(GITHUB_ACTIONS_GRANT_PREFIX.length)} (including private repository data accessible to the agent; shared with this widget/session audience)`
         : `Tool access: ${tool}`,
+    ),
+    ...(declared?.actionBindings ?? []).map(
+      (binding) =>
+        `Action ${binding.name}: ${binding.actionId}; fixed target and operation: ${JSON.stringify(binding.params)}; requires interaction`,
     ),
     ...(declared?.queries ?? []).map((query) => {
       const selectors = Object.entries(query.params)
@@ -243,6 +260,15 @@ export function createBoardWidgetPutSnapshot(
     layout.tabs.push({ tabId: "main", title: "Main", position: 0, chatDock: "right" });
   }
   const existing = layout.widgets.find((widget) => widget.name === params.name);
+  if (params.component) {
+    requireBoardComponent(prior, params.component);
+    if (params.name !== params.component.name || params.generatedIdentity) {
+      throw new BoardValidationError(
+        "invalid_operation",
+        "This conversation can update only its own component.",
+      );
+    }
+  }
   if (
     existing &&
     (existing.contentOwner !== params.content.kind ||
@@ -287,6 +313,7 @@ export function createBoardWidgetPutSnapshot(
     layout,
     {
       name: params.name,
+      componentId: existing?.componentId ?? context.instanceId,
       tabId,
       ...(params.title !== undefined
         ? { title: params.title }
@@ -299,6 +326,11 @@ export function createBoardWidgetPutSnapshot(
         ? { presentation: params.presentation }
         : existing?.presentation !== undefined
           ? { presentation: existing.presentation }
+          : {}),
+      ...(params.description !== undefined
+        ? { description: params.description }
+        : existing?.description !== undefined
+          ? { description: existing.description }
           : {}),
       ...(params.heightMode !== undefined
         ? { heightMode: params.heightMode }
@@ -366,14 +398,23 @@ export function createBoardGrantSnapshot(
   if (widget.instanceId !== undefined && widget.instanceId !== instanceId) {
     throw new BoardValidationError("conflict", `board widget instance changed: ${name}`);
   }
-  if (widget.grantState !== "pending") {
+  if (widget.grantState === "none") {
     throw new BoardValidationError(
       "invalid_operation",
-      `board widget grant is not pending: ${name}`,
+      `board widget has no permissions to decide: ${name}`,
     );
   }
   const snapshot = cloneBoardSnapshot(current);
-  snapshot.widgets.find((candidate) => candidate.name === name)!.grantState = decision;
+  if (widget.grantState === decision) {
+    return snapshot;
+  }
+  const updated = snapshot.widgets.find((candidate) => candidate.name === name)!;
+  updated.grantState = decision;
+  // Retire issued views and delayed decisions when access is denied or restored.
+  // Initial approval preserves the pending document's revision, as before.
+  if (decision === "rejected" || widget.grantState === "rejected") {
+    updated.revision += 1;
+  }
   snapshot.revision += 1;
   return snapshot;
 }

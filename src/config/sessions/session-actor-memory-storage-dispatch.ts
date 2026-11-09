@@ -203,6 +203,7 @@ export function mutateSessionActorMemoryStorage(
     case "session.trajectory.append":
       return mutateSessionActorMemorySideEffects(context, command);
     case "boards.applyOps":
+    case "boards.ensureComponentIdentity":
     case "boards.putWidget":
     case "boards.grant":
       return executeSessionActorBoardCommand(context, command);

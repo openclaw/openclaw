@@ -10,6 +10,7 @@ import type {
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
 } from "../../gateway/server-methods/types.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDashboardTool } from "./dashboard-tool.js";
@@ -104,7 +105,7 @@ it("declares dashboard actions without overriding widget placement", () => {
   expect(tool.parameters).toMatchObject({ additionalProperties: false });
   expect(tool.parameters).toHaveProperty(
     "properties.action.enum",
-    "read tab_create tab_update tab_delete tabs_reorder widget_put widget_move widget_resize widget_remove focus_tab set_presentation set_default_presentation".split(
+    "read capability_describe tab_create tab_update tab_delete tabs_reorder widget_put widget_read widget_move widget_resize widget_remove focus_tab set_presentation set_default_presentation".split(
       " ",
     ),
   );
@@ -321,4 +322,109 @@ it("reports commands as unavailable when no Control UI is connected", async () =
       new Set(),
     );
   });
+});
+
+it("reads source only for the admitted dashboard session and returns its source revision", async () => {
+  const source = {
+    sessionKey: snapshot.sessionKey,
+    name: "scene",
+    revision: 3,
+    sha256: "a".repeat(64),
+    html: "<p>scene</p>",
+    offset: 0,
+    totalLength: 12,
+  };
+  const requests = vi.fn();
+  const callGateway: InProcessGatewayCaller = async <T>(
+    ...args: Parameters<InProcessGatewayCaller>
+  ): Promise<T> => {
+    requests(...args);
+    return source as T;
+  };
+  const tool = createDashboardTool({
+    agentSessionKey: snapshot.sessionKey,
+    agentId: "main",
+    callGateway,
+  });
+  const result = await tool.execute("read-scene", {
+    action: "widget_read",
+    name: "scene",
+    expectedRevision: 3,
+    offset: 0,
+    limit: 100,
+  });
+  expect(requests).toHaveBeenCalledWith(
+    "board.widget.source",
+    {
+      sessionKey: snapshot.sessionKey,
+      agentId: "main",
+      name: "scene",
+      expectedRevision: 3,
+      offset: 0,
+      limit: 100,
+    },
+    undefined,
+  );
+  expect(result.details).toEqual(source);
+  await expect(tool.execute("invalid", { action: "widget_read" })).rejects.toThrow("name");
+  expect(requests).toHaveBeenCalledTimes(1);
+});
+
+it("discovers contracts without Gateway calls or board mutations and honors target retirement", async () => {
+  const callGateway = vi.fn(async () => {
+    throw new Error("Metadata discovery must not call the Gateway");
+  });
+  const assertTargetCurrent = vi.fn();
+  const tool = createDashboardTool({
+    agentSessionKey: snapshot.sessionKey,
+    callGateway,
+    assertTargetCurrent,
+  });
+  const result = await tool.execute("contract", {
+    action: "capability_describe",
+    capabilityId: "sessions.list",
+  });
+  expect(result.details).toMatchObject({ id: "sessions.list", resultCoverage: "partial" });
+  expect(callGateway).not.toHaveBeenCalled();
+  expect(assertTargetCurrent).toHaveBeenCalledTimes(1);
+  assertTargetCurrent.mockImplementation(() => {
+    throw new Error("retired");
+  });
+  await expect(
+    tool.execute("retired", { action: "capability_describe", capabilityId: "agents.list" }),
+  ).rejects.toThrow("retired");
+});
+
+it("uses each admitted registry at execution time, including component conversations", async () => {
+  const registry = createEmptyPluginRegistry();
+  const handler = vi.fn();
+  registry.dashboardDataBindings.set("fixture.read", {
+    id: "read",
+    capabilityId: "fixture.read",
+    pluginId: "fixture",
+    method: "fixture.read",
+    description: "Scoped fixture",
+    handler,
+  });
+  const callGateway = vi.fn(async () => {
+    throw new Error("Metadata discovery must not call the Gateway");
+  });
+  const tool = createDashboardTool({
+    agentSessionKey:
+      "agent:main:lobby-11111111-1111-1111-1111-111111111111:component:sample:11111111111111111111111111111111",
+    callGateway,
+  });
+  const args = { action: "capability_describe", capabilityId: "fixture.read" };
+  const first = await withPluginRuntimeGatewayRequestScope(
+    { pluginRegistry: registry, isWebchatConnect: () => false },
+    () => tool.execute("first", args),
+  );
+  expect(first.details).toMatchObject({ owner: "fixture", description: "Scoped fixture" });
+  const next = await withPluginRuntimeGatewayRequestScope(
+    { pluginRegistry: createEmptyPluginRegistry(), isWebchatConnect: () => false },
+    () => tool.execute("next", args),
+  );
+  expect(next.details).toMatchObject({ status: "unknown_or_inactive" });
+  expect(handler).not.toHaveBeenCalled();
+  expect(callGateway).not.toHaveBeenCalled();
 });

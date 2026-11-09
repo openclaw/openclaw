@@ -649,6 +649,27 @@ public final class OpenClawChatViewModel {
         startBootstrap()
     }
 
+    /// Hydrates a native conversation before a caller dispatches an automatic first turn.
+    /// A replaced route, failed metadata read, or retired owner never grants readiness.
+    public func loadAndWait() async -> Bool {
+        guard !self.isTransportDetached, !self.usesWebConversation else { return false }
+        self.startBootstrap()
+        let generation = self.bootstrapGeneration
+        let session = self.currentSessionSnapshot()
+        guard let task = self.bootstrapTask else { return false }
+        await task.value
+        guard !Task.isCancelled, self.bootstrapGeneration == generation, self.isCurrentSession(session),
+              !self.isLoading, self.hasCurrentSessionMetadata, self.healthOK
+        else { return false }
+        if !self.prefersExplicitThinkingLevel {
+            // Inherited profile defaults can arrive without a history-level override.
+            // Adopt the resolved owner value before an automatic first send captures the preference.
+            self.syncThinkingLevelOptions()
+            self.preferredThinkingLevel = self.thinkingLevel
+        }
+        return true
+    }
+
     @discardableResult
     public func resumeFromForeground() -> Task<Void, Never> {
         Task { await self.refreshRunStateAfterForeground() }
@@ -769,19 +790,6 @@ extension OpenClawChatViewModel {
 
     func markTimelineChanged() {
         self.timelineRevision &+= 1
-    }
-
-    func appendMessage(_ message: OpenClawChatMessage) {
-        self.messages.append(message)
-        self.markTimelineChanged()
-    }
-
-    func removeMessage(id: UUID) {
-        let previousCount = self.messages.count
-        self.messages.removeAll { $0.id == id }
-        if self.messages.count != previousCount {
-            self.markTimelineChanged()
-        }
     }
 
     func clearStreamingActivity() {

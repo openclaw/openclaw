@@ -38,13 +38,17 @@ function CodePointCount(value) {
 var isBoardSnapshot = (() => {
   let External = [
       /^[a-z0-9-]{1,40}$/u,
-      /(^name$|^tabId$|^title$|^contentKind$|^contentOwner$|^registeredContentKind$|^pluginKind$|^props$|^presentation$|^heightMode$|^sizeW$|^sizeH$|^position$|^grantState$|^revision$|^instanceId$|^declaredSummary$|^declared$|^frameUrl$|^viewTicket$|^viewTicketTtlMs$|^viewGeneration$|^sandboxUrl$|^sandboxPort$|^sandboxOrigin$|^kindLabel$)/u,
+      /(^name$|^componentId$|^tabId$|^title$|^description$|^contentKind$|^contentOwner$|^registeredContentKind$|^pluginKind$|^props$|^presentation$|^heightMode$|^sizeW$|^sizeH$|^position$|^grantState$|^revision$|^instanceId$|^declaredSummary$|^capabilityDescriptions$|^declared$|^frameUrl$|^viewTicket$|^viewTicketTtlMs$|^viewGeneration$|^sandboxUrl$|^sandboxPort$|^sandboxOrigin$|^kindLabel$)/u,
       /^[a-z0-9][a-z0-9._-]{0,63}$/u,
+      /^[a-f0-9]{32}$/u,
       /^[a-z0-9-]{1,40}$/u,
       /^[a-z][a-z0-9-]{0,31}$/u,
       /^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$/u,
       /^.*$/u,
-      /(^netOrigins$|^tools$|^queries$)/u,
+      /^.*$/u,
+      /(^netOrigins$|^tools$|^actionBindings$|^queries$)/u,
+      /^[a-z0-9][a-z0-9._-]{0,63}$/u,
+      /^.*$/u,
       /^[a-z0-9][a-z0-9._-]{0,63}$/u,
       /^[a-f0-9]{32}$/u,
     ],
@@ -108,8 +112,11 @@ var isBoardSnapshot = (() => {
           ) &&
           typeof unique_1.name == "string" &&
           External[2].test(unique_1.name) &&
+          (unique_1.componentId === void 0 ||
+            !("componentId" in unique_1) ||
+            (typeof unique_1.componentId == "string" && External[3].test(unique_1.componentId))) &&
           typeof unique_1.tabId == "string" &&
-          External[3].test(unique_1.tabId) &&
+          External[4].test(unique_1.tabId) &&
           (unique_1.title === void 0 ||
             !("title" in unique_1) ||
             (typeof unique_1.title == "string" &&
@@ -117,6 +124,12 @@ var isBoardSnapshot = (() => {
                 (unique_1.title.length >= 1 && CodePointCount(unique_1.title) >= 1)) &&
               (unique_1.title.length <= 80 ||
                 (unique_1.title.length <= 160 && CodePointCount(unique_1.title) <= 80)))) &&
+          (unique_1.description === void 0 ||
+            !("description" in unique_1) ||
+            (typeof unique_1.description == "string" &&
+              (unique_1.description.length <= 240 ||
+                (unique_1.description.length <= 480 &&
+                  CodePointCount(unique_1.description) <= 240)))) &&
           ((typeof unique_1.contentKind == "string" && unique_1.contentKind === "html") ||
             (typeof unique_1.contentKind == "string" && unique_1.contentKind === "mcp-app") ||
             (typeof unique_1.contentKind == "string" && unique_1.contentKind === "plugin")) &&
@@ -130,17 +143,17 @@ var isBoardSnapshot = (() => {
           (unique_1.registeredContentKind === void 0 ||
             !("registeredContentKind" in unique_1) ||
             (typeof unique_1.registeredContentKind == "string" &&
-              External[4].test(unique_1.registeredContentKind))) &&
+              External[5].test(unique_1.registeredContentKind))) &&
           (unique_1.pluginKind === void 0 ||
             !("pluginKind" in unique_1) ||
-            (typeof unique_1.pluginKind == "string" && External[5].test(unique_1.pluginKind))) &&
+            (typeof unique_1.pluginKind == "string" && External[6].test(unique_1.pluginKind))) &&
           (unique_1.props === void 0 ||
             !("props" in unique_1) ||
             (typeof unique_1.props == "object" &&
               unique_1.props !== null &&
               !Array.isArray(unique_1.props) &&
               Object.entries(unique_1.props).every(
-                ([unique_4, unique_5], _) => !External[6].test(unique_4) || !0,
+                ([unique_4, unique_5], _) => !External[7].test(unique_4) || !0,
               ))) &&
           (unique_1.presentation === void 0 ||
             !("presentation" in unique_1) ||
@@ -176,139 +189,183 @@ var isBoardSnapshot = (() => {
             !("declaredSummary" in unique_1) ||
             (Array.isArray(unique_1.declaredSummary) &&
               unique_1.declaredSummary.every((unique_6, index2) => typeof unique_6 == "string"))) &&
+          (unique_1.capabilityDescriptions === void 0 ||
+            !("capabilityDescriptions" in unique_1) ||
+            (typeof unique_1.capabilityDescriptions == "object" &&
+              unique_1.capabilityDescriptions !== null &&
+              !Array.isArray(unique_1.capabilityDescriptions) &&
+              Object.entries(unique_1.capabilityDescriptions).every(
+                ([unique_7, unique_8], _) =>
+                  !External[8].test(unique_7) || typeof unique_8 == "string",
+              ))) &&
           (unique_1.declared === void 0 ||
             !("declared" in unique_1) ||
             (typeof unique_1.declared == "object" &&
               unique_1.declared !== null &&
               !Array.isArray(unique_1.declared) &&
               Object.getOwnPropertyNames(unique_1.declared).every(
-                (unique_7, unique_8) => External[7].test(unique_7) || !1,
+                (unique_9, unique_10) => External[9].test(unique_9) || !1,
               ) &&
               (unique_1.declared.netOrigins === void 0 ||
                 !("netOrigins" in unique_1.declared) ||
                 (Array.isArray(unique_1.declared.netOrigins) &&
                   unique_1.declared.netOrigins.every(
-                    (unique_9, index2) =>
-                      typeof unique_9 == "string" &&
-                      (unique_9.length >= 2 ||
-                        (unique_9.length >= 1 && CodePointCount(unique_9) >= 1)) &&
-                      (unique_9.length <= 2048 ||
-                        (unique_9.length <= 4096 && CodePointCount(unique_9) <= 2048)),
+                    (unique_11, index2) =>
+                      typeof unique_11 == "string" &&
+                      (unique_11.length >= 2 ||
+                        (unique_11.length >= 1 && CodePointCount(unique_11) >= 1)) &&
+                      (unique_11.length <= 2048 ||
+                        (unique_11.length <= 4096 && CodePointCount(unique_11) <= 2048)),
                   ) &&
                   unique_1.declared.netOrigins.length <= 32)) &&
               (unique_1.declared.tools === void 0 ||
                 !("tools" in unique_1.declared) ||
                 (Array.isArray(unique_1.declared.tools) &&
                   unique_1.declared.tools.every(
-                    (unique_10, index2) =>
-                      typeof unique_10 == "string" &&
-                      (unique_10.length >= 2 ||
-                        (unique_10.length >= 1 && CodePointCount(unique_10) >= 1)) &&
-                      (unique_10.length <= 269 ||
-                        (unique_10.length <= 538 && CodePointCount(unique_10) <= 269)),
+                    (unique_12, index2) =>
+                      typeof unique_12 == "string" &&
+                      (unique_12.length >= 2 ||
+                        (unique_12.length >= 1 && CodePointCount(unique_12) >= 1)) &&
+                      (unique_12.length <= 269 ||
+                        (unique_12.length <= 538 && CodePointCount(unique_12) <= 269)),
                   ) &&
                   unique_1.declared.tools.length <= 64)) &&
+              (unique_1.declared.actionBindings === void 0 ||
+                !("actionBindings" in unique_1.declared) ||
+                (Array.isArray(unique_1.declared.actionBindings) &&
+                  unique_1.declared.actionBindings.every(
+                    (unique_13, index2) =>
+                      typeof unique_13 == "object" &&
+                      unique_13 !== null &&
+                      !Array.isArray(unique_13) &&
+                      "name" in unique_13 &&
+                      "actionId" in unique_13 &&
+                      "params" in unique_13 &&
+                      Object.getOwnPropertyNames(unique_13).length === 3 &&
+                      typeof unique_13.name == "string" &&
+                      External[10].test(unique_13.name) &&
+                      typeof unique_13.actionId == "string" &&
+                      (unique_13.actionId.length >= 2 ||
+                        (unique_13.actionId.length >= 1 &&
+                          CodePointCount(unique_13.actionId) >= 1)) &&
+                      (unique_13.actionId.length <= 269 ||
+                        (unique_13.actionId.length <= 538 &&
+                          CodePointCount(unique_13.actionId) <= 269)) &&
+                      typeof unique_13.params == "object" &&
+                      unique_13.params !== null &&
+                      !Array.isArray(unique_13.params) &&
+                      Object.entries(unique_13.params).every(
+                        ([unique_14, unique_15], _) =>
+                          !External[11].test(unique_14) ||
+                          typeof unique_15 == "string" ||
+                          Number.isFinite(unique_15) ||
+                          typeof unique_15 == "boolean" ||
+                          unique_15 === null,
+                      ) &&
+                      Object.getOwnPropertyNames(unique_13.params).length <= 32,
+                  ) &&
+                  unique_1.declared.actionBindings.length <= 16)) &&
               (unique_1.declared.queries === void 0 ||
                 !("queries" in unique_1.declared) ||
                 (Array.isArray(unique_1.declared.queries) &&
                   unique_1.declared.queries.every(
-                    (unique_11, index2) =>
-                      typeof unique_11 == "object" &&
-                      unique_11 !== null &&
-                      !Array.isArray(unique_11) &&
-                      "name" in unique_11 &&
-                      "bindingId" in unique_11 &&
-                      "params" in unique_11 &&
-                      "fields" in unique_11 &&
-                      Object.getOwnPropertyNames(unique_11).length === 4 &&
-                      typeof unique_11.name == "string" &&
-                      External[8].test(unique_11.name) &&
-                      typeof unique_11.bindingId == "string" &&
-                      unique_11.bindingId === "github.actions.runs" &&
-                      typeof unique_11.params == "object" &&
-                      unique_11.params !== null &&
-                      !Array.isArray(unique_11.params) &&
-                      "repository" in unique_11.params &&
-                      "workflow" in unique_11.params &&
-                      "branch" in unique_11.params &&
-                      "status" in unique_11.params &&
-                      "created" in unique_11.params &&
-                      "perPage" in unique_11.params &&
-                      "excludePullRequests" in unique_11.params &&
-                      Object.getOwnPropertyNames(unique_11.params).length === 7 &&
-                      typeof unique_11.params.repository == "string" &&
-                      (unique_11.params.repository.length >= 2 ||
-                        (unique_11.params.repository.length >= 1 &&
-                          CodePointCount(unique_11.params.repository) >= 1)) &&
-                      (unique_11.params.repository.length <= 140 ||
-                        (unique_11.params.repository.length <= 280 &&
-                          CodePointCount(unique_11.params.repository) <= 140)) &&
-                      ((typeof unique_11.params.workflow == "string" &&
-                        (unique_11.params.workflow.length >= 2 ||
-                          (unique_11.params.workflow.length >= 1 &&
-                            CodePointCount(unique_11.params.workflow) >= 1)) &&
-                        (unique_11.params.workflow.length <= 255 ||
-                          (unique_11.params.workflow.length <= 510 &&
-                            CodePointCount(unique_11.params.workflow) <= 255))) ||
-                        (Number.isInteger(unique_11.params.workflow) &&
+                    (unique_16, index2) =>
+                      typeof unique_16 == "object" &&
+                      unique_16 !== null &&
+                      !Array.isArray(unique_16) &&
+                      "name" in unique_16 &&
+                      "bindingId" in unique_16 &&
+                      "params" in unique_16 &&
+                      "fields" in unique_16 &&
+                      Object.getOwnPropertyNames(unique_16).length === 4 &&
+                      typeof unique_16.name == "string" &&
+                      External[12].test(unique_16.name) &&
+                      typeof unique_16.bindingId == "string" &&
+                      unique_16.bindingId === "github.actions.runs" &&
+                      typeof unique_16.params == "object" &&
+                      unique_16.params !== null &&
+                      !Array.isArray(unique_16.params) &&
+                      "repository" in unique_16.params &&
+                      "workflow" in unique_16.params &&
+                      "branch" in unique_16.params &&
+                      "status" in unique_16.params &&
+                      "created" in unique_16.params &&
+                      "perPage" in unique_16.params &&
+                      "excludePullRequests" in unique_16.params &&
+                      Object.getOwnPropertyNames(unique_16.params).length === 7 &&
+                      typeof unique_16.params.repository == "string" &&
+                      (unique_16.params.repository.length >= 2 ||
+                        (unique_16.params.repository.length >= 1 &&
+                          CodePointCount(unique_16.params.repository) >= 1)) &&
+                      (unique_16.params.repository.length <= 140 ||
+                        (unique_16.params.repository.length <= 280 &&
+                          CodePointCount(unique_16.params.repository) <= 140)) &&
+                      ((typeof unique_16.params.workflow == "string" &&
+                        (unique_16.params.workflow.length >= 2 ||
+                          (unique_16.params.workflow.length >= 1 &&
+                            CodePointCount(unique_16.params.workflow) >= 1)) &&
+                        (unique_16.params.workflow.length <= 255 ||
+                          (unique_16.params.workflow.length <= 510 &&
+                            CodePointCount(unique_16.params.workflow) <= 255))) ||
+                        (Number.isInteger(unique_16.params.workflow) &&
                           (!(
-                            Number.isFinite(unique_11.params.workflow) ||
-                            typeof unique_11.params.workflow == "bigint"
+                            Number.isFinite(unique_16.params.workflow) ||
+                            typeof unique_16.params.workflow == "bigint"
                           ) ||
-                            (unique_11.params.workflow >= 1 &&
-                              unique_11.params.workflow <= 9007199254740991))) ||
-                        unique_11.params.workflow === null) &&
-                      ((typeof unique_11.params.branch == "string" &&
-                        (unique_11.params.branch.length >= 2 ||
-                          (unique_11.params.branch.length >= 1 &&
-                            CodePointCount(unique_11.params.branch) >= 1)) &&
-                        (unique_11.params.branch.length <= 255 ||
-                          (unique_11.params.branch.length <= 510 &&
-                            CodePointCount(unique_11.params.branch) <= 255))) ||
-                        unique_11.params.branch === null) &&
-                      ((typeof unique_11.params.status == "string" &&
-                        (unique_11.params.status.length >= 2 ||
-                          (unique_11.params.status.length >= 1 &&
-                            CodePointCount(unique_11.params.status) >= 1)) &&
-                        (unique_11.params.status.length <= 32 ||
-                          (unique_11.params.status.length <= 64 &&
-                            CodePointCount(unique_11.params.status) <= 32))) ||
-                        unique_11.params.status === null) &&
-                      ((typeof unique_11.params.created == "string" &&
-                        (unique_11.params.created.length >= 2 ||
-                          (unique_11.params.created.length >= 1 &&
-                            CodePointCount(unique_11.params.created) >= 1)) &&
-                        (unique_11.params.created.length <= 32 ||
-                          (unique_11.params.created.length <= 64 &&
-                            CodePointCount(unique_11.params.created) <= 32))) ||
-                        unique_11.params.created === null) &&
-                      Number.isInteger(unique_11.params.perPage) &&
+                            (unique_16.params.workflow >= 1 &&
+                              unique_16.params.workflow <= 9007199254740991))) ||
+                        unique_16.params.workflow === null) &&
+                      ((typeof unique_16.params.branch == "string" &&
+                        (unique_16.params.branch.length >= 2 ||
+                          (unique_16.params.branch.length >= 1 &&
+                            CodePointCount(unique_16.params.branch) >= 1)) &&
+                        (unique_16.params.branch.length <= 255 ||
+                          (unique_16.params.branch.length <= 510 &&
+                            CodePointCount(unique_16.params.branch) <= 255))) ||
+                        unique_16.params.branch === null) &&
+                      ((typeof unique_16.params.status == "string" &&
+                        (unique_16.params.status.length >= 2 ||
+                          (unique_16.params.status.length >= 1 &&
+                            CodePointCount(unique_16.params.status) >= 1)) &&
+                        (unique_16.params.status.length <= 32 ||
+                          (unique_16.params.status.length <= 64 &&
+                            CodePointCount(unique_16.params.status) <= 32))) ||
+                        unique_16.params.status === null) &&
+                      ((typeof unique_16.params.created == "string" &&
+                        (unique_16.params.created.length >= 2 ||
+                          (unique_16.params.created.length >= 1 &&
+                            CodePointCount(unique_16.params.created) >= 1)) &&
+                        (unique_16.params.created.length <= 32 ||
+                          (unique_16.params.created.length <= 64 &&
+                            CodePointCount(unique_16.params.created) <= 32))) ||
+                        unique_16.params.created === null) &&
+                      Number.isInteger(unique_16.params.perPage) &&
                       (!(
-                        Number.isFinite(unique_11.params.perPage) ||
-                        typeof unique_11.params.perPage == "bigint"
+                        Number.isFinite(unique_16.params.perPage) ||
+                        typeof unique_16.params.perPage == "bigint"
                       ) ||
-                        (unique_11.params.perPage >= 1 && unique_11.params.perPage <= 30)) &&
-                      typeof unique_11.params.excludePullRequests == "boolean" &&
-                      Array.isArray(unique_11.fields) &&
-                      unique_11.fields.every(
-                        (unique_12, index3) =>
-                          unique_12 === "total_count" ||
-                          unique_12 === "id" ||
-                          unique_12 === "name" ||
-                          unique_12 === "display_title" ||
-                          unique_12 === "head_branch" ||
-                          unique_12 === "status" ||
-                          unique_12 === "conclusion" ||
-                          unique_12 === "html_url" ||
-                          unique_12 === "run_started_at" ||
-                          unique_12 === "created_at" ||
-                          unique_12 === "updated_at" ||
-                          unique_12 === "event" ||
-                          unique_12 === "workflow_id" ||
-                          unique_12 === "run_attempt",
+                        (unique_16.params.perPage >= 1 && unique_16.params.perPage <= 30)) &&
+                      typeof unique_16.params.excludePullRequests == "boolean" &&
+                      Array.isArray(unique_16.fields) &&
+                      unique_16.fields.every(
+                        (unique_17, index3) =>
+                          unique_17 === "total_count" ||
+                          unique_17 === "id" ||
+                          unique_17 === "name" ||
+                          unique_17 === "display_title" ||
+                          unique_17 === "head_branch" ||
+                          unique_17 === "status" ||
+                          unique_17 === "conclusion" ||
+                          unique_17 === "html_url" ||
+                          unique_17 === "run_started_at" ||
+                          unique_17 === "created_at" ||
+                          unique_17 === "updated_at" ||
+                          unique_17 === "event" ||
+                          unique_17 === "workflow_id" ||
+                          unique_17 === "run_attempt",
                       ) &&
-                      unique_11.fields.length >= 1 &&
-                      unique_11.fields.length <= 14,
+                      unique_16.fields.length >= 1 &&
+                      unique_16.fields.length <= 14,
                   ) &&
                   unique_1.declared.queries.length <= 8)))) &&
           (unique_1.frameUrl === void 0 ||
@@ -328,7 +385,7 @@ var isBoardSnapshot = (() => {
           (unique_1.viewGeneration === void 0 ||
             !("viewGeneration" in unique_1) ||
             (typeof unique_1.viewGeneration == "string" &&
-              External[9].test(unique_1.viewGeneration))) &&
+              External[13].test(unique_1.viewGeneration))) &&
           (unique_1.sandboxUrl === void 0 ||
             !("sandboxUrl" in unique_1) ||
             typeof unique_1.sandboxUrl == "string") &&

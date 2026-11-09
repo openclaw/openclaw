@@ -521,6 +521,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
         }
       : {}),
     runtimePlan,
+    nativeModelOwned,
     observeToolTerminal: createToolTerminalObserver(params.runId),
     model: applyAuthHeaderOverride(
       applyLocalNoAuthHeaderOverride(

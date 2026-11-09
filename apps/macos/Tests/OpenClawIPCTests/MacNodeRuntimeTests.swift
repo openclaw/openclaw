@@ -1507,3 +1507,76 @@ extension MacNodeRuntimeTests {
         #expect(controlHeavyProjection > 25 * 1024 * 1024)
     }
 }
+
+extension MacNodeRuntimeTests {
+    @Test(arguments: [ComputerControlProvider.peekaboo, .cua])
+    @MainActor
+    func `bounded desktop contract rejects late input and cleans exact provider`(
+        _ provider: ComputerControlProvider) async
+    {
+        let services = MainActorServicesProbe()
+        let worker = ComputerProviderWorkerProbe(commands: ["screen.snapshot", "computer.act"])
+        let runtime = MacNodeRuntime(
+            nodeHostWorker: worker,
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { provider })
+        let execution = "11111111-1111-4111-8111-111111111111"
+        var revoked: [MacDesktopAvailabilityCoordinator.Permit] = []
+        services.desktopAvailability.onExecutionsRevoked = { permits, _ in revoked.append(contentsOf: permits) }
+        let snapshot = await self.invoke(
+            runtime,
+            "bounded",
+            "screen.snapshot",
+            "{\"executionId\":\"\(execution)\",\"executionTimeoutMs\":1000}")
+        #expect(snapshot.ok)
+        services.desktopPlatform.uptime = 1
+        services.desktopPlatform.invalidate()
+        #expect(revoked.count == 1)
+        await runtime.revokeDesktopExecutions(revoked, reason: "execution-expired")
+        #expect(services.desktopPlatform.assertions.isEmpty)
+        let before = await worker.invokedCommands
+        let late = await self.invoke(
+            runtime,
+            "late",
+            "computer.act",
+            "{\"executionId\":\"\(execution)\",\"requireExistingExecution\":true," +
+                #""action":"mouse_move","x":1,"y":1}"#)
+        #expect(!late.ok)
+        #expect(late.error?.message.contains("COMPUTER_EXECUTION_CLOSED") == true)
+        #expect(await worker.invokedCommands == before)
+        #expect(services.desktopPlatform.assertions.isEmpty)
+        #expect(before == (provider == .cua ? ["screen.snapshot", "computer.act"] : []))
+    }
+
+    @MainActor
+    @Test func `malformed bounded desktop options do not acquire or dispatch`() async {
+        let services = MainActorServicesProbe()
+        let worker = ComputerProviderWorkerProbe(commands: ["screen.snapshot", "computer.act"])
+        let runtime = MacNodeRuntime(
+            nodeHostWorker: worker,
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { .cua })
+        for (command, params) in [
+            ("screen.snapshot", #"{"executionTimeoutMs":1000}"#),
+            ("screen.snapshot", #"{"executionId":"11111111-1111-4111-8111-111111111111","executionTimeoutMs":1000.5}"#),
+            (
+                "computer.act",
+                #"{"executionId":"11111111-1111-4111-8111-111111111111","# +
+                    #""executionTimeoutMs":1000,"action":"mouse_move"}"#),
+            (
+                "screen.snapshot",
+                #"{"executionId":"11111111-1111-4111-8111-111111111111","requireExistingExecution":true}"#),
+            ("computer.act", #"{"action":"mouse_move","requireExistingExecution":true}"#),
+        ] {
+            let response = await self.invoke(runtime, "invalid", command, params)
+            #expect(!response.ok)
+            #expect(response.error?.code == .invalidRequest)
+        }
+        #expect(await worker.invokedCommands.isEmpty)
+        #expect(services.desktopPlatform.assertions.isEmpty)
+    }
+}

@@ -60,6 +60,8 @@ export type GatewayCoreRequestParams = {
   "board.widget.appView": BoardSchema.BoardWidgetAppViewParams;
   "board.widget.grant": BoardSchema.BoardWidgetGrantParams;
   "board.widget.put": BoardSchema.BoardWidgetPutParams;
+  "board.widget.source": BoardSchema.BoardWidgetSourceParams;
+  "board.widget.conversation": BoardSchema.BoardWidgetConversationParams;
   "commands.list": CommandsListParams;
   "environments.session.create": EnvironmentsSessionCreateParams;
   "environments.session.status": EnvironmentsSessionStatusParams;

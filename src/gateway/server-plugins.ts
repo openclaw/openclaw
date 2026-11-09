@@ -258,6 +258,25 @@ export function createGatewayNodesRuntime(
       {
         ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
         nodeInvokeApprovalSessionKey: params.sessionKey,
+        ...(scope?.revalidate || params.assertCurrent
+          ? {
+              nodeDispatchAuthority: {
+                prepare: async () => {
+                  await scope?.revalidate?.();
+                  params.assertCurrent?.();
+                  return true;
+                },
+                assertCurrent: () => {
+                  scope?.signal?.throwIfAborted();
+                  scope?.assertSystemOwnerCurrent?.();
+                  params.assertCurrent?.();
+                  if (scope?.hasCurrentClientAuthority?.() === false) {
+                    throw new Error("Node action caller disconnected before dispatch");
+                  }
+                },
+              },
+            }
+          : {}),
         ...(syntheticScopes ? { syntheticScopes } : {}),
         ...(stream || syntheticScopes ? { forceSyntheticClient: true } : {}),
         ...(stream ? { nodeInvokeStream: stream } : {}),

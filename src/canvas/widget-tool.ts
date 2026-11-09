@@ -19,6 +19,10 @@ import {
   BOARD_REPORT_WIDGET_KIND,
   parseBoardReport,
 } from "../boards/board-report.js";
+import {
+  isLobbyConversation,
+  parseComponentConversation,
+} from "../boards/component-conversation.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   assertWidgetHtmlSize,
@@ -174,7 +178,10 @@ function assertPinnedWidgetDocumentSize(html: string): void {
 }
 
 export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAgentTool {
-  const pinnedOnly = options.pinnedOnly === true;
+  const componentConversation = parseComponentConversation(options.agentSessionKey);
+  const lobbyConversation = isLobbyConversation(options.agentSessionKey);
+  const pinnedOnly =
+    options.pinnedOnly === true || componentConversation !== undefined || lobbyConversation;
   const inlineHostEnabled = options.inlineHostEnabled !== false;
   const inlineAvailable =
     !pinnedOnly && inlineHostEnabled && options.inlineClientAvailable !== false;
@@ -210,6 +217,10 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       : inlineAvailable
         ? "Keep one-off visualizations inline; pin for explicit dashboard requests or multiple non-code visualizations."
         : "Inline previews are unavailable this turn; set pin=true to save to the session dashboard.";
+  const authoringGuidance =
+    lobbyConversation || componentConversation
+      ? "Load the built-in lobby skill and its relevant references before authoring or revising components."
+      : "Load the visualize skill when available for composition and dashboard authoring.";
   const capabilityGuidance = describeDashboardCapabilities(currentPluginRegistry());
   const presenterTargets = explicitPresenters.map((presenter) => presenter.target);
   const targets = ["assistant_message", ...presenterTargets] as const;
@@ -223,9 +234,15 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
   return {
     label: "Show Widget",
     name: "show_widget",
-    description: `Visual helps? Make widget. Do not wait for ask. ${usageGuidance} Update pinned HTML by name. Use for code architecture, execution traces, performance comparisons, interactive explanations, UI mockups, and dashboards. Text clearer? Skip. Load the visualize skill when available for composition and dashboard authoring. The source kind defaults to html. Send markup directly in widget_code. Scripts, stylesheets, and fonts may load from ${WIDGET_CDN_ORIGINS.join(", ")}; pin library versions. Use direct HTTPS URLs for audio/video, or data/blob URLs for embedded/generated clips. Default videos to controls playsinline preload="auto" so a first frame can appear before playback; do not autoplay. Images and video posters must be data URLs; media playback does not grant fetch access. Inline widgets cannot fetch APIs. Pinned data access needs declared and granted capabilities.netOrigins, capabilities.tools, or capabilities.queries; inline previews never inherit those grants. Keep filters and controls local; user-clicked openclaw.prompt.send(text) requests an agent follow-up in the Control UI. Data, action, state, and cron host APIs are dashboard-only. openclaw.host.controlUiBaseUrl is the Control UI origin plus base path after dashboard initialization, otherwise null; read it at click time. Dashboard HTML links support HTTP(S) destinations only; open them with target="_blank" and rel="noopener noreferrer". Put local workspace file links in chat Markdown, not widget HTML; file:// links cannot open the Files panel. \`title\` is host metadata. Start directly with content; do not repeat the title or recreate dashboard chrome. Use host theme variables such as --text, --muted, --card, --border, --accent, --font-body, and --font-mono. Inline script syntax errors return line and column; fix and retry. Check library loading and rendered interactions; hosting success alone is not visual proof.${reportGuidance}${presenterPrompt}`,
+    description: `Visual helps? Make widget. Do not wait for ask. ${usageGuidance} Update pinned HTML by name. Use for code architecture, execution traces, performance comparisons, interactive explanations, UI mockups, and dashboards. Text clearer? Skip. ${authoringGuidance} The source kind defaults to html. Send markup directly in widget_code. Scripts, stylesheets, and fonts may load from ${WIDGET_CDN_ORIGINS.join(", ")}; pin library versions. Use direct HTTPS URLs for audio/video, or data/blob URLs for embedded/generated clips. Default videos to controls playsinline preload="auto" so a first frame can appear before playback; do not autoplay. Images and video posters must be data URLs; media playback does not grant fetch access. Inline widgets cannot fetch APIs. Pinned data access needs declared and granted capabilities.netOrigins, capabilities.tools, or capabilities.queries; inline previews never inherit those grants. Keep filters and controls local; user-clicked openclaw.prompt.send(text) requests an agent follow-up in the Control UI. Data, action, state, and cron host APIs are dashboard-only. openclaw.host.controlUiBaseUrl is the Control UI origin plus base path after dashboard initialization, otherwise null; read it at click time. Dashboard HTML links support HTTP(S) destinations only; open them with target="_blank" and rel="noopener noreferrer". Put local workspace file links in chat Markdown, not widget HTML; file:// links cannot open the Files panel. \`title\` is host metadata. Start directly with content; do not repeat the title or recreate dashboard chrome. Use host theme variables such as --text, --muted, --card, --border, --accent, --font-body, and --font-mono. Inline script syntax errors return line and column; fix and retry. Check library loading and rendered interactions; hosting success alone is not visual proof.${reportGuidance}${presenterPrompt}${lobbyConversation ? " This is the general Lobby conversation. Follow the built-in lobby skill and pin new components to this dashboard; do not create inline-only previews." : ""}${componentConversation ? " This conversation updates only its existing Lobby component. Read its current source with dashboard before editing; keep its existing name and content kind." : ""}`,
     parameters: Type.Object({
       title: Type.String({ description: "Short host title; do not repeat it inside the widget" }),
+      description: Type.Optional(
+        Type.String({
+          maxLength: 240,
+          description: "Plain-language purpose shown below the host title",
+        }),
+      ),
       widget_code: reportAvailable ? Type.Optional(widgetCodeSchema) : widgetCodeSchema,
       ...(reportAvailable
         ? {
@@ -298,6 +315,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
             }),
           ),
           queries: BoardWidgetDeclaredSchema.properties.queries,
+          actionBindings: BoardWidgetDeclaredSchema.properties.actionBindings,
         }),
       ),
     }),
@@ -359,7 +377,9 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       if (capabilities && !shouldPin) {
         throw new WidgetHtmlInputError("capabilities require pin=true");
       }
-      const pinSessionKey = shouldPin ? options.agentSessionKey?.trim() : undefined;
+      const pinSessionKey = shouldPin
+        ? (componentConversation?.sessionKey ?? options.agentSessionKey?.trim())
+        : undefined;
       if (shouldPin && !pinSessionKey) {
         throw new WidgetHtmlInputError("pin requires an agent session");
       }
@@ -410,7 +430,17 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       let pinnedWidgetName: string | undefined;
       let capabilityState: BoardWidgetPutResult["widgets"][number]["grantState"] | undefined;
       if (pinSessionKey) {
-        const explicitName = readToolStringParam(params, "name");
+        const requestedName = readToolStringParam(params, "name");
+        if (
+          componentConversation &&
+          requestedName !== undefined &&
+          requestedName !== componentConversation.component.name
+        ) {
+          throw new WidgetHtmlInputError(
+            "This conversation can update only its own component. Use its existing name.",
+          );
+        }
+        const explicitName = componentConversation?.component.name ?? requestedName;
         const name = explicitName ?? slugWidgetName(title);
         const tab = readToolStringParam(params, "tab");
         const size = readToolStringParam(params, "size");
@@ -434,6 +464,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         const putParams = {
           sessionKey: pinSessionKey,
           agentId: options.agentId,
+          ...(componentConversation ? { component: componentConversation.component } : {}),
           name,
           title: pinnedTitle,
           // The Gateway owns the board document shell so agent-authored bytes
@@ -444,6 +475,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           ...(frame ? { presentation: frame } : {}),
           ...(capabilities ? { declared: capabilities } : {}),
           ...(!explicitName ? { generatedIdentity: generatedWidgetIdentity(title, name) } : {}),
+          ...(typeof params.description === "string" ? { description: params.description } : {}),
           ...(tab || size || after
             ? {
                 placement: {

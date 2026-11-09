@@ -63,6 +63,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
     req,
     signal,
     hasCurrentClientAuthority,
+    nodeDispatchAuthority,
   }) => {
     if (!assertValidParams(params, validateNodeInvokeParams, "node.invoke", respond)) {
       return;
@@ -429,6 +430,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
                 lifecycle: wakeLifecycle,
               })) && isUploadAllowed(),
             isApprovalAuthorityActive: isForwardedApprovalAuthorityActive,
+            nodeDispatchAuthority,
             ...(nodeInvokeStream ? { nodeInvokeStream } : {}),
           }),
         );
@@ -514,10 +516,19 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             onProgress: nodeInvokeStream.onProgress,
             idleTimeoutMs: nodeInvokeStream.idleTimeoutMs,
           }),
-          isDispatchAuthorized: () =>
-            isUploadAllowed() &&
-            (nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
-            runtimeAuthorityError() === undefined,
+          ...(nodeDispatchAuthority ? { authorizeDispatch: nodeDispatchAuthority.prepare } : {}),
+          isDispatchAuthorized: () => {
+            try {
+              nodeDispatchAuthority?.assertCurrent();
+              return (
+                isUploadAllowed() &&
+                (nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
+                runtimeAuthorityError() === undefined
+              );
+            } catch {
+              return false;
+            }
+          },
           onDispatchReady: (invokeId) => {
             nodeCommandDispatched = true;
             nodeInvokeStream?.onDispatchReady(invokeId);
@@ -536,7 +547,8 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             // Pending actions outlive this RPC. Closure-bound agent or approval
             // authority cannot be transferred to a later device pull.
             !client?.internal?.agentRuntimeIdentity &&
-            !forwardedParams.approvalAuthority
+            !forwardedParams.approvalAuthority &&
+            !nodeDispatchAuthority
           ) {
             // Foreground-only iOS commands become pullable pending actions instead
             // of failing permanently while the device is locked/backgrounded.

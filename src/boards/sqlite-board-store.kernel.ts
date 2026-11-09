@@ -20,6 +20,7 @@ import {
   type BoardWidgetHtmlViewMetadata,
   type BoardSnapshotWithHtmlViewMetadata,
 } from "./board-store.js";
+import { assertComponentOperations, type BoardComponentTarget } from "./component-conversation.js";
 import {
   createBoardWidgetContentFields,
   parseDescriptor,
@@ -339,8 +340,10 @@ export function applyBoardOpsToDatabase(
   sessionKey: string,
   ops: readonly BoardOp[],
   expectedSession?: BoardSessionIdentity,
+  component?: BoardComponentTarget,
 ): BoardSnapshot {
   const previous = readRequiredBoard(database, sessionKey, expectedSession);
+  assertComponentOperations(previous.snapshot, component, ops);
   const layout = applyBoardOps(previous.snapshot, ops);
   const next: BoardSnapshot = {
     sessionKey,
@@ -406,7 +409,12 @@ export function putBoardWidgetInDatabase(
   const db = getNodeSqliteKysely<BoardDatabase>(database.db);
   const fields = createBoardWidgetContentFields(
     canonicalParams,
-    { presentation: widget.presentation, heightMode: widget.heightMode },
+    {
+      presentation: widget.presentation,
+      heightMode: widget.heightMode,
+      description: widget.description,
+      componentId: widget.componentId,
+    },
     widget.revision,
     widget.grantState,
     widget.instanceId!,
@@ -472,6 +480,7 @@ export function grantBoardWidgetInDatabase(
       .updateTable("board_widgets")
       .set({
         grant_state: decision,
+        revision: widget.revision,
         granted_sha: decision === "granted" ? row.sha256 : null,
         manifest: serializeManifest(
           {
@@ -489,6 +498,8 @@ export function grantBoardWidgetInDatabase(
           {
             presentation: manifest.presentation,
             heightMode: manifest.heightMode,
+            description: manifest.description,
+            componentId: manifest.componentId,
           },
           manifest.nameIdentity,
         ),
@@ -498,4 +509,34 @@ export function grantBoardWidgetInDatabase(
       .where("name", "=", name),
   );
   return next;
+}
+
+/** Lazy backfill for boards created before stable component identities existed. */
+export function ensureBoardComponentIdentityInDatabase(
+  database: BoardDatabaseHandle,
+  sessionKey: string,
+  name: string,
+  instanceId: string,
+  proposedId: string,
+  expectedSession?: BoardSessionIdentity,
+) {
+  const previous = readRequiredBoard(database, sessionKey, expectedSession);
+  const widget = previous.snapshot.widgets.find((candidate) => candidate.name === name);
+  const row = previous.widgetRows.find((candidate) => candidate.name === name);
+  if (!widget || !row || widget.instanceId !== instanceId) {
+    throw new BoardValidationError("not_found", "Component changed; reopen it from the Lobby.");
+  }
+  const id = widget.componentId ?? proposedId;
+  if (!widget.componentId) {
+    const db = getNodeSqliteKysely<BoardDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("board_widgets")
+        .set({ manifest: JSON.stringify({ ...JSON.parse(row.manifest), componentId: id }) })
+        .where("session_key", "=", sessionKey)
+        .where("name", "=", name),
+    );
+  }
+  return { id, title: widget.title ?? name };
 }

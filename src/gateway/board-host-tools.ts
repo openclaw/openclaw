@@ -1,9 +1,12 @@
 import {
   type BoardWidgetDataQuery,
+  type BoardActionParams,
+  type BoardWidgetActionBinding,
   ErrorCodes,
   errorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import { boardWidgetActionParams } from "../boards/board-action-bindings.js";
 import { boardWidgetHasGrantedTool } from "../boards/board-capabilities.js";
 import { CORE_BOARD_DATA_BINDING_IDS } from "../boards/board-host-capability-ids.js";
 import { BoardValidationError } from "../boards/board-layout.js";
@@ -23,7 +26,10 @@ import {
 } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { isGatewaySubordinateWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import {
@@ -48,8 +54,9 @@ export type BoardRequestAuthority = {
 };
 
 export type BoardCapabilityAuthority = BoardRequestAuthority & {
-  boardSession: Required<BoardSessionTarget>;
+  boardSession: BoardSessionTarget & { agentId: string };
   query?: BoardWidgetDataQuery;
+  actionBinding?: BoardWidgetActionBinding;
   /** Validate the stored grant and start work together; assertActive only checks request liveness. */
   useCurrent: <T>(start: () => T) => Promise<Awaited<T>>;
 };
@@ -80,7 +87,7 @@ export function captureBoardCapabilityAuthority(
   store: BoardStore,
   ticket: string,
   invocation: GatewayHandlerInvocation,
-  capability: string | BoardWidgetDataQuery,
+  capability: string | BoardWidgetDataQuery | BoardWidgetActionBinding,
 ): BoardCapabilityAuthority {
   const authority = captureBoardRequestAuthority(invocation);
   const claims = verifyBoardViewTicket(ticket);
@@ -104,7 +111,11 @@ export function captureBoardCapabilityAuthority(
   return {
     ...authority,
     boardSession,
-    ...(typeof capability === "string" ? {} : { query: capability }),
+    ...(typeof capability === "string"
+      ? {}
+      : "actionId" in capability
+        ? { actionBinding: capability }
+        : { query: capability }),
     useCurrent: async <T>(start: () => T): Promise<Awaited<T>> =>
       await withAuthorizedBoardWidgetView(
         store,
@@ -128,15 +139,16 @@ export function captureBoardCapabilityAuthority(
                   capability,
                 )
               : view.document.grantState === "granted" &&
-                view.document.declared?.queries?.some(
-                  (query) => JSON.stringify(query) === JSON.stringify(capability),
-                );
+                ("actionId" in capability
+                  ? view.document.declared?.actionBindings
+                  : view.document.declared?.queries
+                )?.some((query) => JSON.stringify(query) === JSON.stringify(capability));
           if (!granted) {
             throw new BoardValidationError(
               "invalid_operation",
               typeof capability === "string"
                 ? `board widget tool is not granted: ${capability}`
-                : `board widget query is not granted: ${capability.name}`,
+                : `board widget named capability is not granted: ${capability.name}`,
             );
           }
           return start();
@@ -232,18 +244,57 @@ async function invokeGatewayHandler(
     | { kind: "reply"; ok: boolean; payload: unknown; error: ErrorShape | undefined }
     | { kind: "thrown"; error: unknown }
     | undefined;
+  const priorScope = getPluginRuntimeGatewayRequestScope();
+  let acceptingEffects = true;
+  const assertActionCurrent = () => {
+    if (!acceptingEffects) {
+      throw new BoardGatewayUnavailableError();
+    }
+    authority.assertActive();
+    priorScope?.assertSystemOwnerCurrent?.();
+  };
+  const run = () =>
+    handler({
+      ...invocation,
+      req: { ...invocation.req, method, params },
+      params,
+      respond: (ok, payload, error) => {
+        outcome ??= { kind: "reply", ok, payload, error };
+      },
+    });
   await authority.useCurrent(async () => {
     try {
-      await handler({
-        ...invocation,
-        req: { ...invocation.req, method, params },
-        params,
-        respond: (ok, payload, error) => {
-          outcome ??= { kind: "reply", ok, payload, error };
-        },
-      });
+      if (authority.actionBinding) {
+        await withPluginRuntimeGatewayRequestScope(
+          {
+            ...priorScope,
+            context: invocation.context,
+            client: invocation.client ?? undefined,
+            isWebchatConnect: invocation.isWebchatConnect,
+            resolveGatewayContext: invocation.context.resolveGatewayContext,
+            signal: invocation.signal,
+            hasCurrentClientAuthority: invocation.hasCurrentClientAuthority,
+            assertSystemOwnerCurrent: assertActionCurrent,
+            revalidate: async () => {
+              if (!acceptingEffects) {
+                throw new BoardGatewayUnavailableError();
+              }
+              await priorScope?.revalidate?.();
+              await authority.useCurrent(() => undefined);
+              if (!acceptingEffects) {
+                throw new BoardGatewayUnavailableError();
+              }
+            },
+          },
+          run,
+        );
+      } else {
+        await run();
+      }
     } catch (error) {
       outcome = { kind: "thrown", error };
+    } finally {
+      acceptingEffects = false;
     }
   });
   await authority.useCurrent(() => {
@@ -307,6 +358,41 @@ export async function readBoardDataBinding(
   );
 }
 
+export async function runBoardNamedAction(
+  store: BoardStore,
+  input: Extract<BoardActionParams, { bindingName: string }>,
+  invocation: GatewayHandlerInvocation,
+): Promise<void> {
+  const { ticket, bindingName } = input;
+  const binding = await withAuthorizedBoardWidgetView(
+    store,
+    ticket,
+    ({ document }) => {
+      const definition = document.declared?.actionBindings?.find(
+        (item) => item.name === bindingName,
+      );
+      if (!definition) {
+        throw new BoardValidationError(
+          "invalid_operation",
+          `board widget action binding is not declared: ${bindingName}`,
+        );
+      }
+      return definition;
+    },
+    { gatewayContext: invocation.context },
+  );
+  const actionParams = boardWidgetActionParams(binding, input.params ?? {});
+  assertBoardCapabilityParamsSize(actionParams, "action");
+  const authority = captureBoardCapabilityAuthority(store, ticket, invocation, binding);
+  await runBoardActionVerb(
+    binding.actionId,
+    actionParams,
+    invocation,
+    authority,
+    invocation.respond,
+  );
+}
+
 export async function runBoardActionVerb(
   actionId: string,
   params: Record<string, unknown>,
@@ -319,6 +405,18 @@ export async function runBoardActionVerb(
     throw new BoardValidationError(
       "invalid_operation",
       `board widget action verb is not allowed: ${actionId}`,
+    );
+  }
+  const required = registration.requiredActionBindingParams;
+  if (
+    required &&
+    (!authority.actionBinding ||
+      authority.actionBinding.actionId !== actionId ||
+      required.some((key) => !Object.hasOwn(authority.actionBinding!.params, key)))
+  ) {
+    throw new BoardValidationError(
+      "invalid_operation",
+      `board widget action requires an approved target-bound action: ${actionId}`,
     );
   }
   if (registration.paramShape) {

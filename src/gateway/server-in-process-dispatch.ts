@@ -29,6 +29,7 @@ type InProcessGatewayDispatchOptions = {
   onExecution?: (execution: Promise<void>) => void;
   onSignalAbort?: () => Promise<void> | void;
   requestIdPrefix?: string;
+  nodeDispatchAuthority?: GatewayRequestOptions["nodeDispatchAuthority"];
   prepareDispatchCurrent?: () => Promise<void>;
   assertPreparationCurrent?: () => void;
   questionCallerRead?: PreparedQuestionCallerRead;
@@ -220,6 +221,7 @@ export async function dispatchGatewayRequestInProcessRaw(
               },
               context: options.context,
               methodRegistry: options.methodRegistry,
+              nodeDispatchAuthority: options.nodeDispatchAuthority,
               prepareDispatchCurrent: options.prepareDispatchCurrent,
               sessionMutationCommitGuard: options.sessionMutationCommitGuard,
               ...(options.hasCurrentClientAuthority

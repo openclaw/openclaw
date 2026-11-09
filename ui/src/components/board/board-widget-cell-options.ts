@@ -60,6 +60,9 @@ export type BoardWidgetCellProps = {
   canMutate?: boolean;
   canGrant?: boolean;
   loadingCovered?: boolean;
+  lobby?: boolean;
+  lobbyPage?: boolean;
+  onLobbyOpen?: () => void;
 };
 export type BoardWidgetCellHandle = {
   readonly presentationReady: boolean;

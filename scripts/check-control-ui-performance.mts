@@ -80,8 +80,12 @@ const controlUiPerformanceBudgets = {
   // Retired selectors and supported-browser fallback removal: measured head plus 64 B.
   // Josh Lehman approved the OpenClaw ID account menu styles (#192352, 2026-11-06):
   // measured 325,045 B gzip / 1,675,690 B raw; retain 64 B headroom.
-  totalCssGzipBytes: 325_109,
-  totalCssRawBytes: 1_675_754,
+  // Lobby collection/detail/access presentation stays in the lazy Board stylesheet.
+  // Exact base c616f3a0: 325,586 B gzip / 1,676,630 B raw (already over the caps).
+  // Candidate: +790 B gzip / +4,232 B raw; allocate that measured surface and keep
+  // the same 64 B headroom. Startup budgets and the base-growth guard are unchanged.
+  totalCssGzipBytes: 326_440,
+  totalCssRawBytes: 1_680_926,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

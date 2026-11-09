@@ -401,6 +401,7 @@ export async function dispatchGatewayMethodInProcessRaw(
       onExecution: options?.onExecution,
       onSignalAbort: options?.onSignalAbort,
       requestIdPrefix: "plugin-subagent",
+      nodeDispatchAuthority: options?.nodeDispatchAuthority,
       prepareDispatchCurrent: options?.prepareDispatchCurrent,
       assertPreparationCurrent: composeSessionSourceAssertion([
         resolved.assertContextCurrent,

@@ -15398,3 +15398,74 @@ struct ChatHistoryMutationTests {
         #expect(model.messages.isEmpty)
     }
 }
+
+@MainActor
+struct ChatViewModelReadinessTests {
+    @Test(arguments: [false, true])
+    func `automatic first turn waits for history and session metadata`(explicitPreference: Bool) async throws {
+        let historyGate = AsyncGate()
+        let metadataGate = AsyncGate()
+        let key = "agent:main:lobby-readiness"
+        let (transport, vm) = await makeViewModel(
+            sessionKey: key,
+            activeAgentId: "main",
+            historyResponses: [OpenClawChatHistoryPayload(
+                sessionKey: key, sessionId: "lobby", messages: [], thinkingLevel: nil)],
+            requestHistoryHook: { _ in await historyGate.wait() },
+            listSessionsHook: { _ in
+                await metadataGate.wait()
+                return sessionsResponse(
+                    sessionEntry(key: key, updatedAt: 1),
+                    defaults: OpenClawChatSessionsDefaults(
+                        model: nil,
+                        contextTokens: nil,
+                        thinkingOptions: ["low", "medium", "high"],
+                        thinkingDefault: "medium"))
+            },
+            initialThinkingLevel: explicitPreference ? "high" : nil)
+        var completion: Bool?
+        let ready = Task {
+            let result = await vm.loadAndWait()
+            completion = result
+            return result
+        }
+        await transport.waitForState { $0.historyCallCount > 0 }
+        #expect(completion == nil)
+        #expect(vm.isLoading)
+        #expect(await transport.sentThinkingLevels().isEmpty)
+        await historyGate.open()
+        await transport.waitForState { $0.sessionsCallCount > 0 }
+        #expect(completion == nil)
+        #expect(vm.isLoading)
+        await metadataGate.open()
+        #expect(await ready.value)
+        vm.input = "Build my Lobby"
+        let send = try #require(vm.send())
+        await send.value
+        #expect(await transport.sentThinkingLevels() == [explicitPreference ? "high" : "medium"])
+    }
+
+    @Test func `healthy connection without session metadata does not grant readiness`() async {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            listSessionsHook: { _ in throw URLError(.cannotConnectToHost) })
+        vm.input = "Keep this draft"
+        #expect(await vm.loadAndWait() == false)
+        #expect(vm.healthOK)
+        #expect(vm.input == "Keep this draft")
+    }
+
+    @Test func `retired owner cannot become ready after its history returns`() async {
+        let historyGate = SessionSubscribeGate()
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            requestHistoryHook: { _ in await historyGate.wait() })
+        vm.input = "Keep this draft"
+        let ready = Task { await vm.loadAndWait() }
+        await historyGate.waitUntilBlocked()
+        vm.detachTransport()
+        await historyGate.release()
+        #expect(await ready.value == false)
+        #expect(vm.input == "Keep this draft")
+    }
+}

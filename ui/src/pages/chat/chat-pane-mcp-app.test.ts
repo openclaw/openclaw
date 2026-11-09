@@ -407,17 +407,35 @@ describe("MCP app pane actions", () => {
     ]);
   });
 
+  it.each([true, false])("widget receipt follows actual outbox custody: %s", async (admitted) => {
+    const f = fixture();
+    const received = createDeferred<boolean>();
+    f.state.handleSendChat = vi.fn(async (_text, options) => {
+      if (admitted) {
+        options?.onOutboxAdmitted?.();
+      }
+    });
+    f.dispatch(WIDGET_PROMPT_EVENT, {
+      text: "Compare plans",
+      respond: (value: boolean | Promise<boolean>) =>
+        void Promise.resolve(value).then(received.resolve),
+    });
+    expect(await received.promise).toBe(admitted);
+  });
+
   it("retires pane listeners with their owner and reads the current owner after remount", () => {
     const f = fixture();
     f.cleanup();
     expect(f.claim(MCP_APP_OPEN_EVENT, f.launch)).toBe(false);
-    f.dispatch(WIDGET_PROMPT_EVENT, { text: "not delivered" });
+    f.dispatch(WIDGET_PROMPT_EVENT, { text: "not delivered", respond: vi.fn() });
     expect(f.state.handleSendChat).not.toHaveBeenCalled();
     const next = { ...f.owner, state: { ...f.state, handleSendChat: vi.fn(async () => {}) } };
     f.setCurrent(next);
     f.mount();
-    f.dispatch(WIDGET_PROMPT_EVENT, { text: "  delivered once  " });
-    expect(next.state.handleSendChat).toHaveBeenCalledExactlyOnceWith("delivered once");
+    f.dispatch(WIDGET_PROMPT_EVENT, { text: "  delivered once  ", respond: vi.fn() });
+    expect(next.state.handleSendChat).toHaveBeenCalledExactlyOnceWith("delivered once", {
+      onOutboxAdmitted: expect.any(Function),
+    });
     expect(f.state.handleSendChat).not.toHaveBeenCalled();
   });
 });

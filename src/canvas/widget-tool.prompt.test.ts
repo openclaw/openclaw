@@ -11,6 +11,18 @@ describe("show_widget prompt", () => {
     resetPluginRuntimeStateForTest();
   });
 
+  it("routes Lobby authoring to its specific skill while preserving other surfaces", () => {
+    const lobby = "agent:main:lobby-11111111-1111-4111-8111-111111111111";
+    for (const agentSessionKey of [lobby, `${lobby}:component:example:${"a".repeat(32)}`]) {
+      const description = createShowWidgetTool({ agentSessionKey }).description;
+      expect(description).toContain("Load the built-in lobby skill");
+      expect(description).not.toContain("Load the visualize skill");
+    }
+    expect(createShowWidgetTool({ agentSessionKey: "agent:main:main" }).description).toContain(
+      "Load the visualize skill",
+    );
+  });
+
   it("discovers active host capabilities with usable contracts", () => {
     const registry = createEmptyPluginRegistry();
     const handler = () => {};

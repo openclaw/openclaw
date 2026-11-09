@@ -2635,6 +2635,11 @@ export function isWorktreesListParams(
 export function isBoardGetParams(
   value: unknown,
 ): value is import("typebox").Static<typeof import("../../schema-modules.js").BoardGetParamsSchema>;
+export function isBoardWidgetConversationParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").BoardWidgetConversationParamsSchema
+>;
 export function isBoardUpdateParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2729,6 +2734,11 @@ export function isFsListDirResult(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").FsListDirResultSchema
+>;
+export function isBoardWidgetSourceParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").BoardWidgetSourceParamsSchema
 >;
 export function isWorkerAdmissionResponseFrame(
   value: unknown,

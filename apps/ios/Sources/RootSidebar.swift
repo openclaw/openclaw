@@ -18,6 +18,7 @@ struct RootSidebar: View {
     @AppStorage("sidebar.pinnedPages") private var pinnedPagesStorage: String = ""
 
     let selectedDestination: RootTabs.SidebarDestination
+    var lobbySessionKey: String?
     let isDrawerLayout: Bool
     let isDismissButtonEnabled: Bool
     let selectDestination: (RootTabs.SidebarDestination) -> Void
@@ -428,7 +429,12 @@ struct RootSidebar: View {
                             for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
                     }
                     if !self.searchText.isEmpty || !self.collapsedGroups.contains(section.id) {
-                        ForEach(self.sessionNodes(for: section)) { row in
+                        ForEach(Self.sessionNodes(
+                            for: section,
+                            mainSessionKey: rowPass.mainSessionKey,
+                            searchText: self.searchText,
+                            collapsedParents: self.collapsedParents))
+                        { row in
                             self.sessionTreeRow(row, rowPass: rowPass)
                         }
                     }
@@ -479,6 +485,7 @@ struct RootSidebar: View {
                 .foregroundStyle(OpenClawSidebarPalette.muted)
                 .accessibilityLabel(String(localized: "Edit Pages"))
             }
+            self.destinationButton(.lobby)
             self.homeRow
             ForEach(self.displayRows(pinnedSessionNodes)) { row in
                 self.sessionTreeRow(row, rowPass: rowPass)
@@ -489,12 +496,12 @@ struct RootSidebar: View {
         }
     }
 
-    /// Fixed first Pages row like the web "Home": opens the agent's chat and
-    /// carries the main session's run/unread state.
+    /// The Pages shortcut and Sessions row open the same existing conversation.
+    /// Keep their name, symbol, selection, and run/unread state in sync.
     private var homeRow: some View {
         let mainKey = self.resolvedMainSessionKey
-        let isSelected = self.selectedDestination == .chat &&
-            self.resolvedSelectedSessionKey.caseInsensitiveCompare(mainKey) == .orderedSame
+        let isSelected = Self.isSessionSelected(
+            mainKey, selectedSessionKey: self.resolvedSelectedSessionKey, destination: self.selectedDestination)
         let mainSession = self.mainSessionEntry
         return HStack(spacing: 0) {
             Button {
@@ -502,20 +509,22 @@ struct RootSidebar: View {
                 self.selectSidebarDestination(.chat)
             } label: {
                 HStack(spacing: 9) {
-                    Image(systemName: "house")
+                    Image(systemName: CommandCenterTab.mainSessionSymbol)
                         .font(OpenClawType.subheadSemiBold)
                         .frame(width: 18)
-                    Text(String(localized: "Home"))
+                    Text(verbatim: CommandCenterTab.mainSessionTitle)
                         .font(OpenClawType.subheadSemiBold)
                         .lineLimit(1)
                     Spacer(minLength: 4)
                     if mainSession?.hasActiveRun == true {
                         ProgressView()
                             .controlSize(.mini)
-                            .tint(OpenClawSidebarPalette.accent)
+                            .tint(isSelected ? OpenClawSidebarPalette.selectionForeground : OpenClawSidebarPalette
+                                .accent)
                     } else if mainSession?.unread == true {
                         Circle()
-                            .fill(OpenClawSidebarPalette.accent)
+                            .fill(isSelected ? OpenClawSidebarPalette.selectionForeground : OpenClawSidebarPalette
+                                .accent)
                             .frame(width: 7, height: 7)
                             .accessibilityHidden(true)
                     }
@@ -525,11 +534,12 @@ struct RootSidebar: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .foregroundStyle(isSelected ? OpenClawSidebarPalette.accent : OpenClawSidebarPalette.text)
+            .foregroundStyle(isSelected ? OpenClawSidebarPalette.selectionForeground : OpenClawSidebarPalette.text)
             .background(isSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
                 cornerRadius: OpenClawProMetric.controlRadius,
                 style: .continuous))
             .accessibilityIdentifier("RootTabs.Sidebar.Destination.chat")
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
             .overlay(alignment: .leading) {
                 OpenClawSessionColorStripe(color: mainSession?.color)
             }
@@ -589,7 +599,8 @@ struct RootSidebar: View {
     }
 
     private var resolvedSelectedSessionKey: String {
-        self.model.resolvedSessionKey(
+        if self.selectedDestination == .lobby { return self.lobbySessionKey ?? "" }
+        return self.model.resolvedSessionKey(
             current: self.appModel.chatSessionKey,
             mainSessionKey: self.appModel.mainSessionKey,
             activeAgentID: self.appModel.chatAgentId,
@@ -635,12 +646,29 @@ struct RootSidebar: View {
         nodes.flatMap { [$0] + self.flattened($0.children) }
     }
 
-    private func sessionNodes(for section: ChatSessionSidebarModel.Section) -> [ChatSessionSidebarModel.Row] {
-        let nodes = self.displayRows(section.nodes)
-        guard section.id == "recent", let limit = Self.recentSessionCap(searchText: self.searchText) else {
-            return nodes
+    static func sessionNodes(
+        for section: ChatSessionSidebarModel.Section,
+        mainSessionKey: String,
+        searchText: String,
+        collapsedParents: Set<String> = []) -> [ChatSessionSidebarModel.Row]
+    {
+        var nodes = section.nodes
+        var limit = section.id == "recent" ? Self.recentSessionCap(searchText: searchText) : nil
+        if let recentLimit = limit,
+           let mainIndex = nodes.firstIndex(where: {
+               CommandCenterTab.isMainSession($0.session.key, mainSessionKey: mainSessionKey)
+           })
+        {
+            // Reserve a row without persisting a pin or changing shared recency.
+            // Move the whole tree so descendants stay adjacent and use the ordinary budget.
+            let main = nodes.remove(at: mainIndex)
+            nodes.insert(main, at: 0)
+            limit = recentLimit + 1
         }
-        return Array(nodes.prefix(limit))
+        let rows = ChatSessionSidebarModel.rows(nodes, showsChildren: {
+            !searchText.isEmpty || !collapsedParents.contains($0.id)
+        })
+        return limit.map { Array(rows.prefix($0)) } ?? rows
     }
 
     static func recentSessionCap(searchText: String) -> Int? {
@@ -685,12 +713,21 @@ struct RootSidebar: View {
         .modifier(RootSidebarAnchoredRow(id: row.id, anchor: self.scrollAnchor))
     }
 
+    static func isSessionSelected(
+        _ key: String,
+        selectedSessionKey: String,
+        destination: RootTabs.SidebarDestination) -> Bool
+    {
+        destination == .chat && key.caseInsensitiveCompare(selectedSessionKey) == .orderedSame
+    }
+
     private func sessionButton(
         _ node: ChatSessionSidebarModel.Node,
         rowPass: SessionRowPass) -> some View
     {
         let session = node.session
-        let isSelected = session.key == rowPass.selectedSessionKey
+        let isSelected = Self.isSessionSelected(
+            session.key, selectedSessionKey: rowPass.selectedSessionKey, destination: self.selectedDestination)
         return HStack(spacing: 0) {
             RootSidebarSessionButton(
                 node: node,
@@ -752,17 +789,23 @@ struct RootSidebar: View {
                         .font(OpenClawType.subheadSemiBold)
                         .lineLimit(1)
                 } icon: {
-                    Image(systemName: destination.systemImage)
-                        .font(OpenClawType.subheadSemiBold)
+                    if destination == .lobby {
+                        LobbyLobsterMark(size: 19)
+                    } else {
+                        Image(systemName: destination.systemImage)
+                            .font(OpenClawType.subheadSemiBold)
+                    }
                 }
                 Spacer(minLength: 6)
                 if badgeCount > 0 {
                     Text(verbatim: badgeCount.formatted())
                         .font(OpenClawType.caption2Bold)
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(isSelected ? OpenClawSidebarPalette.background : Color.white)
                         .padding(.horizontal, 6)
                         .frame(minWidth: 18, minHeight: 18)
-                        .background(OpenClawSidebarPalette.accent, in: Capsule())
+                        .background(
+                            isSelected ? OpenClawSidebarPalette.selectionForeground : OpenClawSidebarPalette.accent,
+                            in: Capsule())
                         .accessibilityLabel(String(localized: "Attention"))
                 }
             }
@@ -771,11 +814,12 @@ struct RootSidebar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(isSelected ? OpenClawSidebarPalette.accent : OpenClawSidebarPalette.text)
+        .foregroundStyle(isSelected ? OpenClawSidebarPalette.selectionForeground : OpenClawSidebarPalette.text)
         .background(isSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
             cornerRadius: OpenClawProMetric.controlRadius,
             style: .continuous))
         .accessibilityIdentifier("RootTabs.Sidebar.Destination.\(destination.rawValue)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     /// Attention lives on the rows that act on it (prototype parity): pending
@@ -860,7 +904,7 @@ struct RootSidebar: View {
 }
 
 /// Web-parity Pages editor (the pen menu): navigate to any page, pin/unpin
-/// which ones stay in the sidebar. Home is fixed and not listed.
+/// which ones stay in the sidebar. Main Session is fixed and not listed.
 struct RootSidebarPagesEditor: View {
     let destinations: [RootTabs.SidebarDestination]
     let pinnedPages: [RootTabs.SidebarDestination]
@@ -877,7 +921,7 @@ struct RootSidebarPagesEditor: View {
                         self.pageRow(destination)
                     }
                 } footer: {
-                    Text("Pinned pages stay in the sidebar. Home is always shown.")
+                    Text("Pinned pages stay in the sidebar. Main Session is always shown.")
                         .font(OpenClawType.caption)
                 }
             }

@@ -288,6 +288,42 @@ describe("board widget HTTP", () => {
     await expect(response.text()).resolves.toBe("<script>pending()</script>");
   });
 
+  it("revokes issued tickets permanently across a new permission decision", async () => {
+    const name = "revocable";
+    const initial = await putHtml(name, "<p>preserved</p>", {
+      declared: { netOrigins: ["https://example.com"] },
+    });
+    const widget = initial.widgets.find((item) => item.name === name)!;
+    await store.grant(mainSession, name, "granted", widget.revision, widget.instanceId);
+    const ticket = await ticketFor(name);
+    expect((await request(name, { ticket })).status).toBe(200);
+    const revoked = await store.grant(
+      mainSession,
+      name,
+      "rejected",
+      widget.revision,
+      widget.instanceId,
+    );
+    const denied = revoked.widgets.find((item) => item.name === name)!;
+    expect((await request(name, { ticket })).status).toBe(401);
+    await expect(
+      store.grant(mainSession, name, "granted", widget.revision, widget.instanceId),
+    ).rejects.toMatchObject({ code: "conflict" });
+    const allowed = await store.grant(
+      mainSession,
+      name,
+      "granted",
+      denied.revision,
+      denied.instanceId,
+    );
+    const current = allowed.widgets.find((item) => item.name === name)!;
+    expect((await request(name, { ticket })).status).toBe(401);
+    const fresh = await ticketFor(name, { revision: current.revision });
+    const response = await request(name, { ticket: fresh });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("<p>preserved</p>");
+  });
+
   it.each([false, true])("invalidates old widget tickets, recreated=%s", async (recreated) => {
     const name = recreated ? "recreated" : "revisioned";
     await putHtml(name, "<p>old</p>");

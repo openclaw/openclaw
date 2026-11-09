@@ -125,6 +125,44 @@ const stopHandlers = {
 };
 
 describe("invocation-owned session mutations", () => {
+  it("authorizes component conversations against the parent Lobby rather than a supplied child address", () =>
+    withState(async () => {
+      const { client, cfg } = ownerFixture("lobby-owner");
+      const member = roleClient("view", "lobby-viewer");
+      member.connect.scopes = ["operator.sessions.write"];
+      const lobbyKey = "agent:main:lobby-11111111-1111-4111-8111-111111111111";
+      const target = { agentId: "main", sessionKey: lobbyKey };
+      await upsertSessionEntryCore(target, {
+        ...ownedEntry(client, "lobby-owner-session"),
+        visibility: "shared",
+      });
+      const saved = await boardStore.putWidget({
+        ...target,
+        name: "plan",
+        content: { kind: "html", html: "<p>Plan</p>" },
+      });
+      const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
+      context.resolveGatewayContext = () => context;
+      const extraHandlers = createBoardHandlers(boardStore);
+      const params = { ...target, name: "plan", instanceId: saved.widgets[0]!.instanceId };
+      const reserve = (requestClient = client) =>
+        dispatchAuthorizationRequest("board.widget.conversation", params, {
+          client: requestClient,
+          context,
+          extraHandlers,
+        });
+      expect((await reserve()).mock.calls[0]).toMatchObject([
+        true,
+        { key: expect.stringContaining(`${lobbyKey}:component:plan:`) },
+      ]);
+      expect((await reserve(member)).mock.calls[0]).toMatchObject([
+        false,
+        undefined,
+        { code: "FORBIDDEN" },
+      ]);
+      client.connect.scopes = ["operator.sessions.read"];
+      expect((await reserve()).mock.calls[0]?.[0]).toBe(false);
+    }));
   it("lets session-only guests manage their own dashboard while preserving shared VIEW", () =>
     withState(async () => {
       const { client, cfg } = ownerFixture("board-owner");
@@ -186,6 +224,24 @@ describe("invocation-owned session mutations", () => {
         visibility: "draft",
       });
       expect((await dispatch("board.get", {}, member)).mock.calls[0]?.[0]).toBe(false);
+      await boardStore.putWidget({
+        ...scope,
+        name: "private",
+        content: { kind: "html", html: "<p>owner source</p>" },
+      });
+      const sourceDenied = await dispatch("board.widget.source", { name: "private" }, member);
+      // Match board.get's existence-hiding response for a session this member cannot read.
+      expect(sourceDenied.mock.calls[0]).toMatchObject([
+        false,
+        undefined,
+        { code: "INVALID_REQUEST", message: expect.stringContaining("was not found") },
+      ]);
+      expect(JSON.stringify(sourceDenied.mock.calls)).not.toContain("owner source");
+      const ownerSource = await dispatch("board.widget.source", { name: "private" });
+      expect(ownerSource.mock.calls[0], JSON.stringify(ownerSource.mock.calls[0])).toMatchObject([
+        true,
+        { html: "<p>owner source</p>" },
+      ]);
       client.connect.scopes = ["operator.sessions.write"];
       expect(
         (
@@ -199,23 +255,29 @@ describe("invocation-owned session mutations", () => {
       ).toMatchObject([false, undefined, { code: "FORBIDDEN" }]);
     }));
 
-  it.each(["current", "revoked", "replaced"] as const)(
-    "fences pending narrow board reads after authority is %s",
-    (change) =>
-      withState(async () => {
-        const { client, cfg } = ownerFixture("board-read-owner");
-        cfg.gateway!.roles!.definitions!.none!.scopes = [];
-        const entry = { ...ownedEntry(client, "board-read"), visibility: "draft" as const };
-        await upsertSessionEntryCore(scope, entry);
-        await boardStore.putWidget({
-          ...scope,
-          name: "private-report",
-          content: reportContent("private report"),
-        });
-        const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
-        context.resolveGatewayContext = () => context;
-        client.connect.scopes = ["operator.sessions.read"];
-        using gate = createRequestGate();
+  it.each(
+    (["board.get", "board.widget.source"] as const).flatMap((method) =>
+      (["current", "revoked", "replaced"] as const).map((change) => ({ method, change })),
+    ),
+  )("fences pending narrow $method reads after authority is $change", ({ method, change }) =>
+    withState(async () => {
+      const { client, cfg } = ownerFixture("board-read-owner");
+      cfg.gateway!.roles!.definitions!.none!.scopes = [];
+      const entry = { ...ownedEntry(client, "board-read"), visibility: "draft" as const };
+      await upsertSessionEntryCore(scope, entry);
+      await boardStore.putWidget({
+        ...scope,
+        name: "private-report",
+        content:
+          method === "board.get"
+            ? reportContent("private report")
+            : { kind: "html", html: "private source" },
+      });
+      const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
+      context.resolveGatewayContext = () => context;
+      client.connect.scopes = ["operator.sessions.read"];
+      using gate = createRequestGate();
+      if (method === "board.get") {
         const load = boardStore.getSnapshotWithHtmlViewMetadata.bind(boardStore);
         vi.spyOn(boardStore, "getSnapshotWithHtmlViewMetadata").mockImplementation(
           async (target) => {
@@ -224,36 +286,49 @@ describe("invocation-owned session mutations", () => {
             return result;
           },
         );
-        const { request, respond } = startExactAuthorizationRequest(
-          "board.get",
-          { sessionKey: key },
-          { client, context, extraHandlers: createBoardHandlers(boardStore) },
+      } else {
+        const load = boardStore.useWidgetDocument.bind(boardStore);
+        vi.spyOn(boardStore, "useWidgetDocument").mockImplementation(async (...args) => {
+          const result = await load(...args);
+          await gate.pause();
+          return result;
+        });
+      }
+      const { request, respond } = startExactAuthorizationRequest(
+        method,
+        {
+          sessionKey: key,
+          ...(method === "board.widget.source" ? { name: "private-report" } : {}),
+        },
+        { client, context, extraHandlers: createBoardHandlers(boardStore) },
+      );
+      const settled = Promise.allSettled([request]);
+      await gate.during(
+        request,
+        async () => {
+          expect(respond).not.toHaveBeenCalled();
+          if (change === "revoked") {
+            await setCanonicalUserProfileRole(client.authenticatedUserProfile!.profileId, "none");
+          } else if (change === "replaced") {
+            await upsertSessionEntryCore(scope, {
+              ...entry,
+              sessionId: "board-read-replacement",
+            });
+          }
+        },
+        settled,
+      );
+      expect(respond.mock.calls.some(([ok]) => ok)).toBe(change === "current");
+      if (change === "current") {
+        expect(respond.mock.calls[0]?.[1]).toMatchObject(
+          method === "board.get"
+            ? { widgets: [expect.objectContaining({ name: "private-report" })] }
+            : { name: "private-report", html: "private source" },
         );
-        const settled = Promise.allSettled([request]);
-        await gate.during(
-          request,
-          async () => {
-            expect(respond).not.toHaveBeenCalled();
-            if (change === "revoked") {
-              await setCanonicalUserProfileRole(client.authenticatedUserProfile!.profileId, "none");
-            } else if (change === "replaced") {
-              await upsertSessionEntryCore(scope, {
-                ...entry,
-                sessionId: "board-read-replacement",
-              });
-            }
-          },
-          settled,
-        );
-        expect(respond.mock.calls.some(([ok]) => ok)).toBe(change === "current");
-        if (change === "current") {
-          expect(respond.mock.calls[0]?.[1]).toMatchObject({
-            widgets: [expect.objectContaining({ name: "private-report" })],
-          });
-        } else {
-          expect(respond.mock.calls.every(([, payload]) => payload === undefined)).toBe(true);
-        }
-      }),
+      } else {
+        expect(respond.mock.calls.every(([, payload]) => payload === undefined)).toBe(true);
+      }
+    }),
   );
 
   it.each([

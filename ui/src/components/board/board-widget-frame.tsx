@@ -1,14 +1,11 @@
 import { createMemo, Match, onSettled, Show, Switch } from "solid-js";
-import type { ApplicationContext } from "../../app/context.ts";
 import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import { EventStream } from "../../lib/board/provider-signals.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
-import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
 import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-lifetime.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
-import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { subscribeDocumentVisibility } from "../../lib/reactive/platform.ts";
 import { observeWindowMessage } from "../../lib/reactive/window-message.ts";
@@ -20,7 +17,12 @@ import { McpAppConfirmation } from "../mcp-app-confirm-solid.tsx";
 import { createMcpAppConfirm } from "../mcp-app-confirm.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
-import { BoardWidgetTicketRefresh, type FrameRefresh } from "./board-widget-ticket-refresh.ts";
+import {
+  derivedRemoteSandboxOrigin,
+  resolveBoardFrameFailureMessage,
+} from "./board-widget-frame-failure.ts";
+import type { BoardWidgetFrameHost } from "./board-widget-frame-options.ts";
+import { BoardWidgetTicketRefresh } from "./board-widget-ticket-refresh.ts";
 
 registerEnglishCatalog(registerBoardEnglish);
 
@@ -37,45 +39,8 @@ function documentHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
 }
 
-// Without mcp.apps.sandboxOrigin the sandbox URL is the gateway origin with the
-// sandbox port substituted. On a non-loopback host that derived port often sits
-// behind a reverse proxy or tunnel that does not route it, and the browser
-// cannot distinguish that from a real authorization failure or an unreachable
-// sandbox — so terminal messages keep their fact but add the deployment hint
-// operators otherwise never find.
-function derivedRemoteSandboxOrigin(
-  widget: Pick<BoardWidget, "sandboxOrigin">,
-  resolvedSandboxOrigin: string,
-): boolean {
-  return (
-    !widget.sandboxOrigin &&
-    Boolean(resolvedSandboxOrigin) &&
-    !isLoopbackHostname(new URL(resolvedSandboxOrigin).hostname)
-  );
-}
-
-function resolveBoardFrameFailureMessage(
-  widget: Pick<BoardWidget, "sandboxOrigin">,
-  resolvedSandboxOrigin: string,
-): string {
-  return derivedRemoteSandboxOrigin(widget, resolvedSandboxOrigin)
-    ? t("board.widget.sandboxOriginRequired")
-    : t("board.widget.frameAuthorizationFailed");
-}
-
 export type BoardWidgetFrameOwner = ReturnType<typeof createBoardWidgetFrame>;
-export function createBoardWidgetFrame(host: {
-  active: () => boolean;
-  loadingCovered?: () => boolean;
-  bridgeEnabled?: () => boolean;
-  connected: () => boolean;
-  context: () => ApplicationContext | undefined;
-  refreshFrame: () => FrameRefresh | undefined;
-  reportContentHeight: (name: string, height: number) => void;
-  scrollBy: (deltaY: number) => void;
-  resolveFrameUrl: () => BoardWidgetFrameUrl | undefined;
-  widget: () => BoardWidget | undefined;
-}) {
+export function createBoardWidgetFrame(host: BoardWidgetFrameHost) {
   const changes = new EventStream<void>();
   let initialTheme = document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
   let sandboxRequestUrl = "";
@@ -134,6 +99,7 @@ export function createBoardWidgetFrame(host: {
     } | null;
     if (
       widget &&
+      !host.lobbyPresentation?.() &&
       data?.type === WIDGET_SIZE_MESSAGE_TYPE &&
       typeof data.height === "number" &&
       Number.isFinite(data.height) &&
@@ -578,7 +544,13 @@ export function createBoardWidgetFrame(host: {
       keyboardHostNonce = sandboxOrigin ? generateUUID() : "";
       postWidgetTheme(frame, sandboxOrigin || "*");
       frame.contentWindow?.postMessage(
-        { type: WIDGET_BOARD_HOST_MESSAGE_TYPE, nonce: boardHostNonce },
+        {
+          type: WIDGET_BOARD_HOST_MESSAGE_TYPE,
+          nonce: boardHostNonce,
+          ...(host.lobbyPresentation?.()
+            ? { presentation: { lobby: true, ...host.lobbyPresentation() } }
+            : {}),
+        },
         sandboxOrigin || "*",
       );
       if (keyboardHostNonce) {

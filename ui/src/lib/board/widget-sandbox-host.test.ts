@@ -122,7 +122,14 @@ const request = (
   method = "data.read",
   params: Record<string, unknown> = { bindingId: "health" },
   ticket = "ticket",
-) => ({ type: "openclaw:widget-bridge-request", id, method, params, ticket });
+) => ({
+  type: "openclaw:widget-bridge-request",
+  id,
+  method,
+  params,
+  ticket,
+  ...(method === "action.run" ? { userActivated: true } : {}),
+});
 const state = (id: string, phase: string, ticket = "ticket") =>
   request(id, "state.emit", { payload: { phase } }, ticket);
 const prompt = (id: string, text: string) => request(id, "prompt.send", { text });
@@ -337,6 +344,36 @@ describe("BoardWidgetSandboxHost", () => {
     expect(open).not.toHaveBeenCalled();
     expect(forgedReplies).toEqual([]);
   });
+  it("routes an approved named action through its own sandbox gesture and consumes it", async () => {
+    const activation = stubDashboardActivation();
+    const c = client();
+    const f = await readyHost({
+      client: c,
+      widget: widget({
+        declared: {
+          actionBindings: [
+            { name: "play", actionId: "device-controls.audio", params: { nodeId: "fixture" } },
+          ],
+        },
+      }),
+    });
+    const port = await f.port();
+    answerActivation(f, true);
+    await reply(port, request("first", "action.run", { action: "play", params: { notes: [] } }));
+    expect(c.request).toHaveBeenCalledExactlyOnceWith("board.action", {
+      ticket: "ticket",
+      bindingName: "play",
+      params: { notes: [] },
+    });
+    expect(activation.isActive).toBe(false);
+    await rejectRequest(
+      port,
+      request("second", "action.run", { action: "play" }),
+      "Named actions require a fresh user interaction with this component",
+    );
+    expect(c.request).toHaveBeenCalledOnce();
+  });
+
   it("opens native widget links only on activation reported by that widget's sandbox frame", async () => {
     const postMessage = vi.fn();
     vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });

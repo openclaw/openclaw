@@ -96,6 +96,7 @@ export function createNodeInvokeTestHarness({
     respond?: ReturnType<typeof vi.fn>;
     requestId?: string;
     signal?: AbortSignal;
+    nodeDispatchAuthority?: GatewayRequestHandlerOptions["nodeDispatchAuthority"];
     requestParams?: Partial<Record<string, unknown>>;
     validateAgentRuntimeApprovalAuthority?: () => boolean;
     execApprovalManager?: {
@@ -138,6 +139,7 @@ export function createNodeInvokeTestHarness({
       } as never,
       client: (params.client ?? null) as never,
       signal: params.signal,
+      nodeDispatchAuthority: params.nodeDispatchAuthority,
       req: { type: "req", id: params.requestId ?? "req-node-invoke", method: "node.invoke" },
       isWebchatConnect: () => false,
     });

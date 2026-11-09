@@ -37,72 +37,72 @@ function CodePointCount(value) {
 }
 var isNodeWorkerComputerInput = (() => {
   let External = [
-      /(^executionId$|^screenIndex$|^maxWidth$|^quality$|^format$)/u,
+      /(^executionId$|^executionTimeoutMs$|^screenIndex$|^maxWidth$|^quality$|^format$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^displayFrameId$|^x$|^y$|^modifiers$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^displayFrameId$|^x$|^y$|^modifiers$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^displayFrameId$|^x$|^y$|^fromX$|^fromY$|^durationMs$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^displayFrameId$|^x$|^y$|^fromX$|^fromY$|^durationMs$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^displayFrameId$|^x$|^y$|^modifiers$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^displayFrameId$|^x$|^y$|^modifiers$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^displayFrameId$|^x$|^y$|^modifiers$|^scrollDirection$|^scrollAmount$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^displayFrameId$|^x$|^y$|^modifiers$|^scrollDirection$|^scrollAmount$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^text$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^text$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^keys$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^keys$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^keys$|^durationMs$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^keys$|^durationMs$|^screenIndex$|^refWidth$|^windowRef$|^elementRef$|^observationId$|^deliveryMode$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^windowRef$|^query$|^depth$|^maxElements$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^windowRef$|^query$|^depth$|^maxElements$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^windowRef$|^includeScreenshot$|^query$|^depth$|^maxElements$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^windowRef$|^includeScreenshot$|^query$|^depth$|^maxElements$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^app$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^app$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^windowRef$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^windowRef$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^windowRef$|^elementRef$|^observationId$|^value$|^deliveryMode$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^windowRef$|^elementRef$|^observationId$|^value$|^deliveryMode$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^windowRef$|^path$|^deliveryMode$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^windowRef$|^path$|^deliveryMode$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^windowRef$|^observationId$|^x1$|^y1$|^x2$|^y2$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^windowRef$|^observationId$|^x1$|^y1$|^x2$|^y2$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^windowRef$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^windowRef$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^browserRef$|^pageRef$|^snapshotFormat$|^elementRef$|^observationId$|^query$|^continuation$|^includeScreenshot$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^snapshotFormat$|^elementRef$|^observationId$|^query$|^continuation$|^includeScreenshot$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^windowRef$|^profile$|^profileName$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^windowRef$|^profile$|^profileName$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
       /^[A-Za-z0-9._-]+$/u,
-      /(^action$|^executionId$|^browserRef$|^pageRef$|^url$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^url$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^browserRef$|^pageRef$|^observationId$|^elementRef$|^x$|^y$|^inputRoute$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^observationId$|^elementRef$|^x$|^y$|^inputRoute$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^browserRef$|^pageRef$|^observationId$|^elementRef$|^text$|^mode$|^replace$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^observationId$|^elementRef$|^text$|^mode$|^replace$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^browserRef$|^pageRef$|^dialogAction$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^dialogAction$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^browserRef$|^pageRef$|^dialogAction$|^dialogRef$|^promptText$|^deliveryMode$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^dialogAction$|^dialogRef$|^promptText$|^deliveryMode$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^browserRef$|^pageRef$|^dialogAction$|^dialogRef$|^deliveryMode$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^dialogAction$|^dialogRef$|^deliveryMode$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^browserRef$|^pageRef$|^observationId$|^elementRef$|^resourceHandles$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^observationId$|^elementRef$|^resourceHandles$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
       /^openclaw:computer-resource:v1:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^browserRef$|^pageRef$|^observationId$|^elementRef$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^observationId$|^elementRef$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^browserRef$|^pageRef$|^observationId$|^pointerAction$|^inputRoute$|^elementRef$|^x$|^y$|^destinationElementRef$|^toX$|^toY$|^deltaX$|^deltaY$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^browserRef$|^pageRef$|^observationId$|^pointerAction$|^inputRoute$|^elementRef$|^x$|^y$|^destinationElementRef$|^toX$|^toY$|^deltaX$|^deltaY$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^reason$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^reason$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^recordVideo$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^recordVideo$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      /(^action$|^executionId$|^resourceHandle$|^delayMs$|^stopOnError$)/u,
+      /(^action$|^executionId$|^requireExistingExecution$|^resourceHandle$|^delayMs$|^stopOnError$)/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
       /^openclaw:computer-resource:v1:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
@@ -142,6 +142,15 @@ var isNodeWorkerComputerInput = (() => {
           !("executionId" in value.params) ||
           (typeof value.params.executionId == "string" &&
             External[1].test(value.params.executionId))) &&
+        (value.params.executionTimeoutMs === void 0 ||
+          !("executionTimeoutMs" in value.params) ||
+          (Number.isInteger(value.params.executionTimeoutMs) &&
+            (!(
+              Number.isFinite(value.params.executionTimeoutMs) ||
+              typeof value.params.executionTimeoutMs == "bigint"
+            ) ||
+              (value.params.executionTimeoutMs >= 1e3 &&
+                value.params.executionTimeoutMs <= 3e4)))) &&
         (value.params.screenIndex === void 0 ||
           !("screenIndex" in value.params) ||
           (Number.isInteger(value.params.screenIndex) &&
@@ -204,6 +213,9 @@ var isNodeWorkerComputerInput = (() => {
             !("executionId" in value.params) ||
             (typeof value.params.executionId == "string" &&
               External[4].test(value.params.executionId))) &&
+          (value.params.requireExistingExecution === void 0 ||
+            !("requireExistingExecution" in value.params) ||
+            typeof value.params.requireExistingExecution == "boolean") &&
           (value.params.displayFrameId === void 0 ||
             !("displayFrameId" in value.params) ||
             typeof value.params.displayFrameId == "string") &&
@@ -267,6 +279,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[6].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             (value.params.displayFrameId === void 0 ||
               !("displayFrameId" in value.params) ||
               typeof value.params.displayFrameId == "string") &&
@@ -342,6 +357,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[8].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             (value.params.displayFrameId === void 0 ||
               !("displayFrameId" in value.params) ||
               typeof value.params.displayFrameId == "string") &&
@@ -405,6 +423,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[10].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             (value.params.displayFrameId === void 0 ||
               !("displayFrameId" in value.params) ||
               typeof value.params.displayFrameId == "string") &&
@@ -483,6 +504,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[12].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             (value.params.text === void 0 ||
               !("text" in value.params) ||
               typeof value.params.text == "string") &&
@@ -537,6 +561,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[14].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             (value.params.keys === void 0 ||
               !("keys" in value.params) ||
               typeof value.params.keys == "string") &&
@@ -591,6 +618,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[16].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             (value.params.keys === void 0 ||
               !("keys" in value.params) ||
               typeof value.params.keys == "string") &&
@@ -654,7 +684,10 @@ var isNodeWorkerComputerInput = (() => {
             (value.params.executionId === void 0 ||
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
-                External[18].test(value.params.executionId)))) ||
+                External[18].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean")) ||
           (typeof value.params == "object" &&
             value.params !== null &&
             !Array.isArray(value.params) &&
@@ -668,6 +701,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[20].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             (value.params.windowRef === void 0 ||
               !("windowRef" in value.params) ||
               (typeof value.params.windowRef == "string" &&
@@ -704,6 +740,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[22].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.windowRef == "string" &&
             (value.params.windowRef.length >= 2 ||
               (value.params.windowRef.length >= 1 &&
@@ -741,6 +780,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[24].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.app == "string" &&
             (value.params.app.length >= 2 ||
               (value.params.app.length >= 1 && CodePointCount(value.params.app) >= 1))) ||
@@ -758,6 +800,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[26].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.windowRef == "string" &&
             (value.params.windowRef.length >= 2 ||
               (value.params.windowRef.length >= 1 &&
@@ -779,6 +824,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[28].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.windowRef == "string" &&
             (value.params.windowRef.length >= 2 ||
               (value.params.windowRef.length >= 1 &&
@@ -812,6 +860,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[30].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.windowRef == "string" &&
             (value.params.windowRef.length >= 2 ||
               (value.params.windowRef.length >= 1 &&
@@ -851,6 +902,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[32].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.windowRef == "string" &&
             (value.params.windowRef.length >= 2 ||
               (value.params.windowRef.length >= 1 &&
@@ -881,6 +935,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[34].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.windowRef == "string" &&
             (value.params.windowRef.length >= 2 ||
               (value.params.windowRef.length >= 1 &&
@@ -900,6 +957,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[36].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.browserRef == "string" &&
             (value.params.browserRef.length >= 2 ||
               (value.params.browserRef.length >= 1 &&
@@ -950,6 +1010,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[38].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.windowRef == "string" &&
             (value.params.windowRef.length >= 2 ||
               (value.params.windowRef.length >= 1 &&
@@ -985,6 +1048,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[41].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.browserRef == "string" &&
             (value.params.browserRef.length >= 2 ||
               (value.params.browserRef.length >= 1 &&
@@ -1011,6 +1077,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[43].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.browserRef == "string" &&
             (value.params.browserRef.length >= 2 ||
               (value.params.browserRef.length >= 1 &&
@@ -1057,6 +1126,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[45].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.browserRef == "string" &&
             (value.params.browserRef.length >= 2 ||
               (value.params.browserRef.length >= 1 &&
@@ -1096,6 +1168,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[47].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.browserRef == "string" &&
             (value.params.browserRef.length >= 2 ||
               (value.params.browserRef.length >= 1 &&
@@ -1122,6 +1197,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[49].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.browserRef == "string" &&
             (value.params.browserRef.length >= 2 ||
               (value.params.browserRef.length >= 1 &&
@@ -1160,6 +1238,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[51].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.browserRef == "string" &&
             (value.params.browserRef.length >= 2 ||
               (value.params.browserRef.length >= 1 &&
@@ -1196,6 +1277,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[53].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.browserRef == "string" &&
             (value.params.browserRef.length >= 2 ||
               (value.params.browserRef.length >= 1 &&
@@ -1234,6 +1318,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[56].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.browserRef == "string" &&
             (value.params.browserRef.length >= 2 ||
               (value.params.browserRef.length >= 1 &&
@@ -1266,6 +1353,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[58].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.browserRef == "string" &&
             (value.params.browserRef.length >= 2 ||
               (value.params.browserRef.length >= 1 &&
@@ -1332,6 +1422,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[60].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.reason == "string" &&
             (value.params.reason === "ax_tree_pixel_mismatch" ||
               value.params.reason === "background_delivery_failed" ||
@@ -1351,7 +1444,10 @@ var isNodeWorkerComputerInput = (() => {
             (value.params.executionId === void 0 ||
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
-                External[62].test(value.params.executionId)))) ||
+                External[62].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean")) ||
           (typeof value.params == "object" &&
             value.params !== null &&
             !Array.isArray(value.params) &&
@@ -1365,6 +1461,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[64].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             (value.params.recordVideo === void 0 ||
               !("recordVideo" in value.params) ||
               typeof value.params.recordVideo == "boolean")) ||
@@ -1382,6 +1481,9 @@ var isNodeWorkerComputerInput = (() => {
               !("executionId" in value.params) ||
               (typeof value.params.executionId == "string" &&
                 External[66].test(value.params.executionId))) &&
+            (value.params.requireExistingExecution === void 0 ||
+              !("requireExistingExecution" in value.params) ||
+              typeof value.params.requireExistingExecution == "boolean") &&
             typeof value.params.resourceHandle == "string" &&
             External[67].test(value.params.resourceHandle) &&
             (value.params.delayMs === void 0 ||

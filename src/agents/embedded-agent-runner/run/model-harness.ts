@@ -8,10 +8,7 @@ import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
 } from "../../harness/selection.js";
-import {
-  resolveAgentHarnessPreparedAuthSupport,
-  resolveAgentHarnessPreparedRouteSupport,
-} from "../../harness/support.js";
+import { projectPreparedModelProvider } from "../../harness/support.js";
 import type { AgentHarness } from "../../harness/types.js";
 import {
   resolveAliasedParamValue,
@@ -125,28 +122,20 @@ function buildHarnessModelProvider(
     model: Model;
     plan?: AgentRuntimeAuthPlan;
     preparedAuthAttempt?: PreparedAgentRuntimeAuthAttempt;
+    nativeModelOwned?: boolean;
   },
 ): AgentHarnessPreparedModelProvider {
-  const route = params.plan?.modelRoute;
-  const routeSupport = resolveAgentHarnessPreparedRouteSupport(params.plan);
+  const provider = projectPreparedModelProvider({
+    model: params.model,
+    plan: params.plan,
+    attemptKind: params.preparedAuthAttempt?.kind,
+    nativeModelOwned: params.nativeModelOwned,
+  });
   const requestTransportOverrides =
-    params.requestStreamTransportOverrides ?? routeSupport.requestTransportOverrides;
+    params.requestStreamTransportOverrides ?? provider.requestTransportOverrides;
   return {
-    api: route?.api ?? params.model.api,
-    baseUrl: route?.baseUrl ?? params.model.baseUrl,
+    ...provider,
     ...(requestTransportOverrides ? { requestTransportOverrides } : {}),
-    ...(routeSupport.runtimePolicy ? { runtimePolicy: routeSupport.runtimePolicy } : {}),
-    ...(params.plan
-      ? {
-          preparedAuth: resolveAgentHarnessPreparedAuthSupport({
-            plan: params.plan,
-            ...(params.preparedAuthAttempt?.kind === "profile" ||
-            params.preparedAuthAttempt?.kind === "direct"
-              ? { source: params.preparedAuthAttempt.kind }
-              : {}),
-          }),
-        }
-      : {}),
   };
 }
 
