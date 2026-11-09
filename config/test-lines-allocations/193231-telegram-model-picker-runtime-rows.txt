@@ -1,0 +1,7 @@
+# Telegram per-runtime model-picker rows (PR #193231): retained regression
+# growth after removing the wording-only picker-hint test. Covers the
+# runtime-variant keyboard/callback contracts in model-buttons.test.ts and
+# model-runtime-variants.test.ts, plus live-router proof in
+# model-callback.loopback.integration.test.ts for the configured-default
+# runtime reset and callback-driven pagination over expanded runtime rows.
+429
