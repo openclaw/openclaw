@@ -139,7 +139,7 @@ describe("subagent spawn sandbox-CLI admission", () => {
     }
     try {
       const plan = await resolveSubagentChildPlan({
-        ...preparation.resolved,
+        ...preparation.resolved.runtime,
         request,
         ctx,
         sandboxMode: params.sandbox ?? "require",
@@ -147,7 +147,7 @@ describe("subagent spawn sandbox-CLI admission", () => {
       });
       return { plan, preparation };
     } catch (err) {
-      preparation.resolved.admissionReservation?.release();
+      preparation.resolved.admission.reservation?.release();
       throw err;
     }
   }
@@ -169,7 +169,7 @@ describe("subagent spawn sandbox-CLI admission", () => {
       expect(plan.result.error).toContain("test-cli");
       expect(plan.result.error).toContain("cannot honor the sandbox");
     } finally {
-      preparation.resolved.admissionReservation?.release();
+      preparation.resolved.admission.reservation?.release();
     }
   });
 
@@ -182,7 +182,7 @@ describe("subagent spawn sandbox-CLI admission", () => {
       expect(plan.resolved.childRuntimeSandboxed).toBe(true);
       expect(plan.resolved.resolvedModelMetadata.resolvedProvider).toBe("openai");
     } finally {
-      preparation.resolved.admissionReservation?.release();
+      preparation.resolved.admission.reservation?.release();
     }
   });
 
@@ -198,7 +198,7 @@ describe("subagent spawn sandbox-CLI admission", () => {
       expect(plan.resolved.childRuntimeSandboxed).toBe(false);
       expect(plan.resolved.resolvedModelMetadata.resolvedModel).toBe("test-cli/haiku");
     } finally {
-      preparation.resolved.admissionReservation?.release();
+      preparation.resolved.admission.reservation?.release();
     }
   });
 

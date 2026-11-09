@@ -375,10 +375,10 @@ describe("gateway-hosted exec approvals", () => {
             let id: string | undefined;
             await vi.waitFor(
               async () => {
-                const pending = await operator.request<
+                const pendingApprovals = await operator.request<
                   Array<{ id: string; request: { command?: string } }>
                 >("exec.approval.list", {});
-                id = pending.find((entry) => entry.request.command === command)?.id;
+                id = pendingApprovals.find((entry) => entry.request.command === command)?.id;
                 expect(id).toBeDefined();
               },
               { timeout: 15_000, interval: 100 },

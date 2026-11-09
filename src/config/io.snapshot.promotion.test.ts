@@ -145,8 +145,9 @@ it("refuses a source changed after promotion preparation", async () => {
     new Proxy(stat, {
       async apply(target, receiver, args) {
         const result: unknown = await Reflect.apply(target, receiver, args);
-        if (args[0] === f.configPath)
+        if (args[0] === f.configPath) {
           fs.writeFileSync(f.configPath, JSON.stringify({ gateway: { mode: "remote" } }));
+        }
         return result;
       },
     }),
@@ -230,9 +231,12 @@ it.each(["none", "new-baseline", "same-candidate", "marker-only"] as const)(
         ? before?.lastKnownGood?.hash
         : hashConfigRaw(f.healthy.raw),
     );
-    if (newer === "new-baseline" || newer === "same-candidate") expect(f.entry()).toEqual(before);
-    if (newer === "marker-only")
+    if (newer === "new-baseline" || newer === "same-candidate") {
+      expect(f.entry()).toEqual(before);
+    }
+    if (newer === "marker-only") {
       expect(f.entry()?.lastObservedSuspiciousSignature).toBe("newer-independent-marker");
+    }
   },
 );
 
@@ -379,7 +383,9 @@ it("restores the pre-write baseline when an intervening read records the publish
             observe: false,
             assertConfigPathForWrite: () => {
               const raw = fs.readFileSync(f.configPath, "utf8");
-              if (observedCandidateHash || raw === originalRaw) return;
+              if (observedCandidateHash || raw === originalRaw) {
+                return;
+              }
               observedCandidateHash = hashConfigRaw(raw);
               clock = observationTime;
               const parsed: OpenClawConfig = JSON.parse(raw);

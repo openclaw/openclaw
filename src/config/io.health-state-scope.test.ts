@@ -237,7 +237,9 @@ it("distinguishes a CAS conflict, unavailable basis, and pre-effect supersession
   const { deps, configPath } = fixture();
   using observation = captureConfigHealthStateStore(deps, configPath);
   const before = await observation.read();
-  if (!before) throw new Error("Expected current observation");
+  if (!before) {
+    throw new Error("Expected current observation");
+  }
   expect(await observation.update({ lastObservedSuspiciousSignature: "first" }, before)).toEqual({
     status: "applied",
   });
@@ -263,14 +265,19 @@ it.each(["error", "missing"])("does not retry a lost post-effect reply (%s)", as
   const { deps, configPath } = fixture();
   using observation = captureConfigHealthStateStore(deps, configPath);
   const before = await observation.read();
-  if (!before) throw new Error("Expected current observation");
+  if (!before) {
+    throw new Error("Expected current observation");
+  }
   const execute = sharedWorker.runOpenClawStateWorkerOperation;
   const spy = vi.spyOn(sharedWorker, "runOpenClawStateWorkerOperation").mockImplementation(
     new Proxy(execute, {
       async apply(target, receiver, args) {
         await Reflect.apply(target, receiver, args);
         using newer = captureConfigHealthStateStore(deps, configPath);
-        if (reply === "error") throw new Error("fixture lost reply after commit");
+        expect(newer.isCurrent()).toBe(true);
+        if (reply === "error") {
+          throw new Error("fixture lost reply after commit");
+        }
         return undefined;
       },
     }),

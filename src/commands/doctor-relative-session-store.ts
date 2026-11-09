@@ -330,7 +330,7 @@ export async function repairRelativeSessionStores(params: {
             JSON.stringify(memberIds) ===
             JSON.stringify(destinationSnapshot.memberIds.get(candidateKey) ?? []);
           const hasArtifactConflict = (candidate: SessionClaim) => {
-            const source = withOpenClawAgentDatabaseReadOnly(
+            const comparison = withOpenClawAgentDatabaseReadOnly(
               (sourceDatabase) =>
                 withOpenClawAgentDatabaseReadOnly(
                   (destinationDatabase) =>
@@ -348,10 +348,10 @@ export async function repairRelativeSessionStores(params: {
                 env: params.env,
               },
             );
-            if (!source.found || !source.value.found) {
+            if (!comparison.found || !comparison.value.found) {
               refuse("a store disappeared while comparing user-authored session artifacts");
             }
-            return source.value.value;
+            return comparison.value.value;
           };
           if (
             canonical &&

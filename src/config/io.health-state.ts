@@ -318,13 +318,15 @@ export function captureConfigHealthStateStore(
             { assertCurrent: guard.assertCurrent },
           );
           // Acknowledged commit wins even if its observation/database retired afterward.
-          if (applied === true) {
-            loggedHealthWriteFailures.delete(databasePath);
-            return { status: "applied" };
+          switch (applied) {
+            case true:
+              loggedHealthWriteFailures.delete(databasePath);
+              return { status: "applied" };
+            case false:
+              return { status: expected !== undefined ? "conflict" : "unavailable" };
+            default:
+              return { status: "unavailable" };
           }
-          return {
-            status: applied === false && expected !== undefined ? "conflict" : "unavailable",
-          };
         } catch (error) {
           guard.rethrowIfInvalid(error);
           if (error === supersededObservation) {

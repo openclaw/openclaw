@@ -46,9 +46,15 @@ test("redacts each string of a large transcript once and masks it in every attri
 });
 
 test("exports a value whole when masking brings it under the attribute budget", () => {
-  const attr = capture([text("user", `sk-${"a".repeat(MAX + 10_000)}`)]);
+  // Remains over the fallback string budget after masking, so early truncation
+  // would lose content even though the redacted value fits the attribute budget.
+  const prefix = `${"x".repeat(9_000)} `;
+  const input = `${prefix}${`Bearer ${"a".repeat(128)} `.repeat(1_000)}`;
+  const expected = `${prefix}${"Bearer aaaaaa…aaaa ".repeat(1_000)}`;
+
+  const attr = capture([text("user", input)]);
   expect(JSON.parse(attr("gen_ai.input.messages"))[0].parts).toEqual([
-    { type: "text", content: "sk-aaa…aaaa" },
+    { type: "text", content: expected },
   ]);
 });
 
