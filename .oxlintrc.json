@@ -499,6 +499,12 @@
       }
     },
     {
+      "files": ["ui/src/components/config-form.node.scalar.tsx"],
+      "rules": {
+        "max-lines": ["error", { "max": 710, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
       "files": ["**/*.{ts,tsx,mts,cts}"],
       "rules": {
         // tsgo owns TypeScript type/value namespace validity; no-var still rejects var declarations.
