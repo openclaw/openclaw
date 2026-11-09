@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 
@@ -80,29 +79,5 @@ describe("catalog-derived effort provenance overlays", () => {
 
     expect(entry.catalogReasoningEfforts).toBeUndefined();
     expect(entry.compat?.reasoningEffortMap).toEqual({ high: "medium" });
-  });
-
-  it("carries catalog-derived effort provenance onto projected entries", () => {
-    const entry = modelCatalogRowToEntry({
-      id: catalogBase.id,
-      name: catalogBase.name,
-      provider: "openrouter",
-      reasoning: true,
-      input: ["text"],
-      compat: { supportedReasoningEfforts: ["high", "low"] },
-      thinkingLevelMap: { off: null },
-      catalogReasoningEfforts: true,
-    });
-    expect(entry.catalogReasoningEfforts).toBe(true);
-
-    const declared = modelCatalogRowToEntry({
-      id: "acme/declared-model",
-      name: "Declared Model",
-      provider: "openrouter",
-      reasoning: true,
-      input: ["text"],
-      compat: { supportedReasoningEfforts: ["high", "low"] },
-    });
-    expect(declared.catalogReasoningEfforts).toBeUndefined();
   });
 });

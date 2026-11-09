@@ -446,10 +446,26 @@ export default defineSingleProviderPluginEntry({
           return { provider: buildOpenrouterProvider() };
         },
       },
-      resolveDynamicModel: (ctx) =>
-        isOpenRouterDecisionModel(normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId)
-          ? undefined
-          : buildDynamicOpenRouterModel(ctx),
+      resolveDynamicModel: (ctx) => {
+        const apiModelId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
+        if (isOpenRouterDecisionModel(apiModelId)) {
+          return undefined;
+        }
+        // Without loaded capabilities (cold cache plus a failed /models fetch), a rebuilt
+        // row could only carry synthetic defaults: reasoning false, text-only input, zero
+        // prices. When the registry already prepared a row for this model, decline so the
+        // host keeps that usable metadata instead of the fallback (#160758).
+        if (
+          !getLoadedOpenRouterModelCapabilities(apiModelId) &&
+          (ctx.modelRegistry.find(ctx.provider, ctx.modelId) ??
+            (apiModelId !== ctx.modelId
+              ? ctx.modelRegistry.find(ctx.provider, apiModelId)
+              : undefined))
+        ) {
+          return undefined;
+        }
+        return buildDynamicOpenRouterModel(ctx);
+      },
       // Resolve the catalog model even when a configured row already exists.
       preferRuntimeResolvedModel: (ctx) => {
         const configuredProvider = findNormalizedProviderValue(
