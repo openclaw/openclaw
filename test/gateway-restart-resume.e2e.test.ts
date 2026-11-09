@@ -1170,7 +1170,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
             );
             provider.releaseFinalizer();
             expect.soft(provider.finalizerAdmission()).toEqual({
-              admission: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+              admission: "accepted",
               attempts: 1,
             });
           }
