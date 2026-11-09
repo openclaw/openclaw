@@ -20,7 +20,6 @@ openclaw-systems-page {
   width: 100%;
   height: 100%;
   min-height: 0;
-  color: var(--text);
 }
 .simulator-preview__header,
 .simulator-preview__footer {
@@ -63,20 +62,16 @@ openclaw-systems-page {
   justify-content: center;
   overflow: hidden;
   padding: 12px;
-  background: var(--bg);
 }
 .simulator-preview__stage img {
-  display: block;
   width: auto;
   height: auto;
   max-width: 100%;
   max-height: 100%;
-  object-fit: contain;
   border-radius: 12px;
-  box-shadow: 0 12px 40px rgb(0 0 0 / 25%);
 }
 .simulator-preview__interactive {
-  cursor: pointer;
+  cursor: var(--cursor-action);
   touch-action: none;
 }
 .simulator-preview__interactive:focus-visible {

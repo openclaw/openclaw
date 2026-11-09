@@ -546,6 +546,7 @@ build_swift_architecture() {
   echo "🔨 Building openclaw-mac ($BUILD_CONFIG) [$arch]"
   swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product openclaw-mac --build-path "$BUILD_PATH" --arch "$arch" "${target_flags[@]}" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
   for simulator_product in openclaw-simulator-touch openclaw-simulator-capture; do
+    verify_snapshot_swift_lock
     echo "🔨 Building $simulator_product ($BUILD_CONFIG) [$arch]"
     swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product "$simulator_product" --build-path "$BUILD_PATH" --arch "$arch" "${target_flags[@]}"
   done

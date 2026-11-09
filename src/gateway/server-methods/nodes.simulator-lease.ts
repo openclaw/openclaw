@@ -58,10 +58,6 @@ export function isSimulatorAdmissionCurrent(admission: { lease: Lease }): boolea
   return current(lease, lease.connId, lease.pairingGeneration);
 }
 
-export function abandonSimulatorAdmission(admission: { lease: Lease }): void {
-  release(admission.lease);
-}
-
 /** Cancel input before stopping pixels so no queued drag can outlive its viewer. */
 export async function cleanupSimulatorNodeSession(
   lease: Lease,

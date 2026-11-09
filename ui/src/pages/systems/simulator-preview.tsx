@@ -87,7 +87,7 @@ export function SimulatorPreview(props: {
   ) => {
     const session = frameSession;
     if (!session || !props.canControl || !active || error()) {
-      return;
+      return undefined;
     }
     const client = props.client;
     const nodeId = props.nodeId;
@@ -103,7 +103,9 @@ export function SimulatorPreview(props: {
 
   const sendText = () => {
     const value = text();
-    if (!value || !frameSession || !image() || error() || sendingText()) return;
+    if (!value || !frameSession || !image() || error() || sendingText()) {
+      return;
+    }
     if (new TextEncoder().encode(value).byteLength > 4096) {
       setTextError(t("systems.simulator.textTooLong"));
       return;
@@ -156,7 +158,7 @@ export function SimulatorPreview(props: {
 
   createEffect(captureScope, ({ nodeId, client, presented }) => {
     if (!presented) {
-      return;
+      return undefined;
     }
     const controller = new AbortController();
     const executionId = crypto.randomUUID();
@@ -169,7 +171,9 @@ export function SimulatorPreview(props: {
     let startedRequest: Promise<unknown> | undefined;
     let ended = false;
     const end = () => {
-      if (ended) return;
+      if (ended) {
+        return;
+      }
       ended = true;
       active = false;
       inputQueue.retire();
@@ -197,7 +201,9 @@ export function SimulatorPreview(props: {
     void (async () => {
       try {
         await previousStop;
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted) {
+          return;
+        }
         startedRequest = invoke(client, nodeId, "simulator.capture", {
           action: "start",
           executionId,
@@ -239,7 +245,9 @@ export function SimulatorPreview(props: {
               "Simulator produced no device frames. Check that an iOS Simulator is booted and reopen the preview.",
             );
           }
-          await new Promise((resolve) => setTimeout(resolve, 75));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 75);
+          });
         }
       } catch (cause) {
         if (!controller.signal.aborted) {
@@ -251,7 +259,9 @@ export function SimulatorPreview(props: {
     })();
     return () => {
       end();
-      if (endCapture === end) endCapture = undefined;
+      if (endCapture === end) {
+        endCapture = undefined;
+      }
       gesture = undefined;
     };
   });
@@ -286,7 +296,9 @@ export function SimulatorPreview(props: {
               tabindex={props.canControl && !error() ? 0 : -1}
               class={props.canControl && !error() ? "simulator-preview__interactive" : undefined}
               onPointerDown={(event) => {
-                if (!props.canControl || event.button !== 0) return;
+                if (!props.canControl || event.button !== 0) {
+                  return;
+                }
                 event.preventDefault();
                 event.currentTarget.focus();
                 event.currentTarget.setPointerCapture(event.pointerId);
@@ -295,20 +307,30 @@ export function SimulatorPreview(props: {
               }}
               onPointerUp={(event) => {
                 const from = gesture;
-                if (!from || from.pointerId !== event.pointerId) return;
+                if (!from || from.pointerId !== event.pointerId) {
+                  return;
+                }
                 gesture = undefined;
                 const to = point(event);
                 if (Math.hypot(to.x - from.fromX, to.y - from.fromY) < 0.01) {
-                  sendInput("left_click", to);
+                  void sendInput("left_click", to);
                 } else {
-                  sendInput("left_click_drag", { fromX: from.fromX, fromY: from.fromY, ...to });
+                  void sendInput("left_click_drag", {
+                    fromX: from.fromX,
+                    fromY: from.fromY,
+                    ...to,
+                  });
                 }
               }}
               onPointerCancel={(event) => {
-                if (gesture?.pointerId === event.pointerId) gesture = undefined;
+                if (gesture?.pointerId === event.pointerId) {
+                  gesture = undefined;
+                }
               }}
               onKeyDown={(event) => {
-                if (!props.canControl || event.metaKey || event.ctrlKey || event.altKey) return;
+                if (!props.canControl || event.metaKey || event.ctrlKey || event.altKey) {
+                  return;
+                }
                 const keys: Record<string, string> = {
                   Enter: "RETURN",
                   Backspace: "BACKSPACE",
@@ -321,10 +343,10 @@ export function SimulatorPreview(props: {
                 };
                 if (event.key.length === 1) {
                   event.preventDefault();
-                  sendInput("type", { text: event.key });
+                  void sendInput("type", { text: event.key });
                 } else if (keys[event.key]) {
                   event.preventDefault();
-                  sendInput("key", { keys: keys[event.key] });
+                  void sendInput("key", { keys: keys[event.key] });
                 }
               }}
             />
@@ -345,7 +367,9 @@ export function SimulatorPreview(props: {
           <button
             type="button"
             class="systems-text-button"
-            onClick={() => sendInput("key", { keys: "HOME" })}
+            onClick={() => {
+              void sendInput("key", { keys: "HOME" });
+            }}
           >
             {t("systems.simulator.home")}
           </button>

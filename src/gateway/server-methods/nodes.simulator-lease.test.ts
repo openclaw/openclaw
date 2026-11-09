@@ -48,7 +48,9 @@ describe("Simulator Gateway lease", () => {
     const cleanup = cleanupSpy();
     const admission = start({ nodeId, client: first.client, executionId, cleanup });
     expect(admission).toHaveProperty("started", true);
-    if (!("lease" in admission)) return;
+    if (!("lease" in admission)) {
+      return;
+    }
     expect(
       completeSimulatorInvoke(
         admission,
@@ -97,7 +99,9 @@ describe("Simulator Gateway lease", () => {
     const first = viewer();
     const cleanup = cleanupSpy();
     const admission = start({ nodeId, client: first.client, executionId, cleanup });
-    if (!("lease" in admission)) throw new Error("expected lease");
+    if (!("lease" in admission)) {
+      throw new Error("expected lease");
+    }
     completeSimulatorInvoke(
       admission,
       "simulator.capture",
@@ -126,7 +130,9 @@ describe("Simulator Gateway lease", () => {
       cleanup,
       connId: "conn-2",
     });
-    if (!("lease" in next)) throw new Error("expected lease");
+    if (!("lease" in next)) {
+      throw new Error("expected lease");
+    }
     expect(
       completeSimulatorInvoke(
         next,
@@ -154,7 +160,9 @@ describe("Simulator Gateway lease", () => {
       cleanup,
       isClientCurrent: () => authorized,
     });
-    if (!("lease" in admission)) throw new Error("expected lease");
+    if (!("lease" in admission)) {
+      throw new Error("expected lease");
+    }
     completeSimulatorInvoke(
       admission,
       "simulator.capture",
@@ -174,7 +182,9 @@ describe("Simulator Gateway lease", () => {
       isClientCurrent: () => authorized,
       cleanup,
     });
-    if (!("lease" in read)) throw new Error("expected read lease");
+    if (!("lease" in read)) {
+      throw new Error("expected read lease");
+    }
     authorized = false;
     expect(
       completeSimulatorInvoke(
@@ -195,7 +205,9 @@ describe("Simulator Gateway lease", () => {
     const executionId = crypto.randomUUID();
     const first = viewer();
     const admission = start({ nodeId, client: first.client, executionId, cleanup: cleanupSpy() });
-    if (!("lease" in admission)) throw new Error("expected lease");
+    if (!("lease" in admission)) {
+      throw new Error("expected lease");
+    }
     completeSimulatorInvoke(
       admission,
       "simulator.capture",
