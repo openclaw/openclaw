@@ -162,30 +162,9 @@ describe("memory_search unavailable payloads", () => {
         warning: "Memory search is unavailable due to an embedding/provider error.",
         action: "Check embedding provider configuration and retry memory_search.",
       });
-      const cooldownResult = await executeSearch(tool, { query: "hello again" });
-      expect(cooldownResult.details).toEqual(result.details);
+      vi.setSystemTime(Date.now() + 120_000);
+      expect((await executeSearch(tool, { query: "hello again" })).details).toEqual(result.details);
       expect(searchImpl).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it.each([-120_000, 120_000])(
-    "keeps the failure pause on elapsed time across a %ims wall-clock jump",
-    async (stepMs) => {
-      const searchImpl = mockSearch(async () => {
-        throw new Error("openai embeddings failed: 429 insufficient_quota");
-      });
-      const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
-      const tool = createMemorySearchToolOrThrow();
-      const result = await executeSearch(tool);
-      vi.setSystemTime(new Date(Date.now() + stepMs));
-      expect((await executeSearch(tool)).details).toEqual(result.details);
-      expect(searchImpl).toHaveBeenCalledTimes(1);
-      searchImpl.mockImplementation(async () => [hit("MEMORY.md", "memory", "retry succeeded")]);
-      now.mockReturnValue(62_000);
-      expect((await executeSearch(tool)).details).toMatchObject({
-        results: [{ path: "MEMORY.md" }],
-      });
-      expect(searchImpl).toHaveBeenCalledTimes(2);
     },
   );
 

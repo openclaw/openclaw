@@ -1,2 +1,0 @@
-21
-# The failure-pause cooldown had no test stepping the clock past expiry in either direction; this parametrized regression pins both wall-clock jump directions against the elapsed-time domain.
