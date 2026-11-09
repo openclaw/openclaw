@@ -132,7 +132,7 @@ async function compileVitestWorkerArtifacts(
         : { ...vitestWorkerBuildEntries, ...vitestWorkerDeclarationEntries };
   const preservedSources =
     preset === "tooling"
-      ? ["scripts/lib/vitest-batch-runner.mts"]
+      ? ["scripts/lib/vitest-batch-runner.mts", "scripts/test-projects.mts"]
       : preset === "runtime"
         ? []
         : preservedModuleBuildSources;

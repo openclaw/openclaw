@@ -65,15 +65,17 @@ const runtimeOnlyUnitFiles = new Set([
   "test/vitest-projects-config.test.ts",
 ]);
 
-// These tooling proofs use the compiled batch runner, not production workers.
+// These tooling proofs use compiled harness entries, not production workers.
 const toolingOnlyUnitFiles = new Set([
   "test/scripts/vitest-prebuilt-ai.test.ts",
   "test/scripts/ci-changed-build-selection.test.ts",
+  "test/scripts/ci-changed-node-test-plan.integration.test.ts",
   "test/scripts/vitest-worker-artifacts.batch.test.ts",
   "test/scripts/run-vitest-progress.test.ts",
   "test/scripts/run-vitest.test.ts",
   "test/scripts/extension-test-plan.test.ts",
   "test/scripts/test-extension.test.ts",
+  "test/scripts/test-projects.test.ts",
   "test/scripts/plugin-sdk-surface-report.test.ts",
 ]);
 

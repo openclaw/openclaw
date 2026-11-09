@@ -309,7 +309,11 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
     {
       configs: ["test/vitest/vitest.tooling.config.ts"],
-      files: ["test/scripts/test-extension.test.ts", "test/scripts/run-vitest.test.ts"],
+      files: [
+        "test/scripts/ci-changed-build-selection.test.ts",
+        "test/scripts/ci-changed-node-test-plan.integration.test.ts",
+        "test/scripts/test-projects.test.ts",
+      ],
       preset: "tooling",
     },
     {
