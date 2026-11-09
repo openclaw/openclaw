@@ -105,7 +105,7 @@ it.each([
   { host: "sandbox" as const, expected: "host=sandbox" },
 ])("uses current exec policy for native completion: $expected", async ({ host, expected }) => {
   const { opts } = await prepare({
-    cfg: { agents: { list: [{ id: "main", tools: { exec: { host: "gateway" } } }] } },
+    cfg: { agents: { entries: { main: { tools: { exec: { host: "gateway" } } } } } },
     opts: {
       message: "Child finished.",
       privateCompletion: true,
