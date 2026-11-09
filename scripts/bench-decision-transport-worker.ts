@@ -370,6 +370,8 @@ async function benchmarkRegisteredV1(evaluations: number, fixture: string, mode:
     evidence: "x".repeat(fixture === "small" ? 32 : decisionJsonLimits.maxBytes - 2048),
   };
   const batch: DecisionBatch = { state, questions: { truth: { type: "boolean" } } };
+  const inputJsonBytes = Buffer.byteLength(JSON.stringify(batch));
+  const stateEvidenceBytes = Buffer.byteLength(state.evidence);
   const reported: DecisionBatchResult = {
     model: "fixture-v1",
     answers: { truth: { type: "boolean", probabilityTrue: 0.7 } },
@@ -442,10 +444,10 @@ async function benchmarkRegisteredV1(evaluations: number, fixture: string, mode:
   // Only the known fixture and its native-cloned result are inspected by reference.
   function observeClone<T>(...args: [T, StructuredSerializeOptions?]): T {
     clones.calls++;
-    if (args[0] === batch || args[0] === admittedBatch) {
+    if (args[0] === batch || (admittedBatch !== undefined && args[0] === admittedBatch)) {
       clones.stateBearingBatches++;
     }
-    if (args[0] === admittedQuestions) {
+    if (admittedQuestions !== undefined && args[0] === admittedQuestions) {
       clones.questions++;
     }
     if (args[0] === reported) {
@@ -518,6 +520,9 @@ async function benchmarkRegisteredV1(evaluations: number, fixture: string, mode:
     mode,
     evaluations,
     validatedOutputs: dispatched,
+    inputJsonBytes,
+    stateEvidenceBytes,
+    questionCount: Object.keys(batch.questions).length,
     ...(mode === "work" ? { clones } : {}),
     firstEvaluationMs: timingsMs[0],
     warmTimingsMs: timingsMs.slice(1),

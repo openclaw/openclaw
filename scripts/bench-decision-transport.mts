@@ -69,10 +69,17 @@ function parseProductionSample(
   );
   if (workload === "runtime-v1") {
     assert.equal(value.mode, mode);
+    assert.equal(value.stateEvidenceBytes, fixture === "small" ? 32 : 1_046_528);
+    assert.equal(value.questionCount, 1);
   }
   const clones = mode === "work" ? value.clones : undefined;
   if (mode === "work") {
     assert(isRecord(clones));
+    assert(nonNegative(clones.calls) > 0 && Number.isInteger(clones.calls));
+    assert(
+      nonNegative(clones.stateBearingBatches) > 0 && Number.isInteger(clones.stateBearingBatches),
+    );
+    assert(nonNegative(clones.results) > 0 && Number.isInteger(clones.results));
   } else {
     assert(!Object.hasOwn(value, "clones"), "Cost must use the unwrapped native clone");
   }
@@ -85,6 +92,13 @@ function parseProductionSample(
   assert.equal(value.warmTimingsMs.length, evaluations - 1);
   return {
     evaluations,
+    ...(workload === "runtime-v1"
+      ? {
+          inputJsonBytes: nonNegative(value.inputJsonBytes),
+          stateEvidenceBytes: nonNegative(value.stateEvidenceBytes),
+          questionCount: nonNegative(value.questionCount),
+        }
+      : {}),
     ...(isRecord(clones)
       ? {
           clones: {
