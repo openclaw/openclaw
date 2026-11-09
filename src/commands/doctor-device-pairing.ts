@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { loadDeviceAuthTokens } from "../infra/device-auth-store.js";
 import { loadDeviceIdentityIfPresentAsync } from "../infra/device-identity-async.js";
+import type { DeviceIdentity } from "../infra/device-identity-store.js";
 import {
   summarizeDeviceTokens,
   type DeviceAuthTokenSummary,
@@ -17,7 +18,8 @@ import {
   type DevicePairingPendingRequest,
   type PairedDevice,
 } from "../infra/device-pairing.js";
-import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeDeviceAuthScopes, type DeviceAuthEntry } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 
 const DEVICE_PAIRING_CHECK_ID = "core/doctor/device-pairing";
@@ -257,22 +259,42 @@ function collectPairedRecordFindings(snapshot: DoctorPairingSnapshot): HealthFin
   return findings;
 }
 
+/** An unreadable local store is a skipped check, not a clean device. */
+function describeLocalDeviceAuthReadFailure(subject: string, error: unknown): HealthFinding {
+  const inspectCommand = formatCliArgs(["openclaw", "devices", "list"]);
+  return {
+    checkId: DEVICE_PAIRING_CHECK_ID,
+    severity: "warning",
+    category: "fix-now",
+    docsUrl: "https://docs.openclaw.ai/cli/devices",
+    path: "identity.device-auth",
+    requirement: "local-device-auth-unreadable",
+    message: `Could not read ${subject}, so local device token scopes were not checked: ${sanitizeTerminalText(formatErrorMessage(error))}`,
+    fixHint: `Keep the client credential store and correct the reported access or corruption error, then rerun openclaw doctor and inspect the device with ${inspectCommand}.`,
+  };
+}
+
 async function collectLocalDeviceAuthFindings(
   snapshot: DoctorPairingSnapshot,
 ): Promise<HealthFinding[]> {
-  let identity;
+  let identity: DeviceIdentity | null;
   try {
     identity = await loadDeviceIdentityIfPresentAsync({ env: process.env });
-  } catch {
-    return [];
+  } catch (error) {
+    return [describeLocalDeviceAuthReadFailure("the local device identity", error)];
   }
   if (!identity) {
     return [];
   }
-  const localTokens = await loadDeviceAuthTokens({
-    deviceId: identity.deviceId,
-    env: process.env,
-  }).catch(() => []);
+  let localTokens: DeviceAuthEntry[];
+  try {
+    localTokens = await loadDeviceAuthTokens({
+      deviceId: identity.deviceId,
+      env: process.env,
+    });
+  } catch (error) {
+    return [describeLocalDeviceAuthReadFailure("the local device auth token inventory", error)];
+  }
   const paired = snapshot.paired.find((device) => device.deviceId === identity.deviceId);
   if (!paired) {
     return [];

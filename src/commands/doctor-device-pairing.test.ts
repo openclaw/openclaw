@@ -261,16 +261,46 @@ describe("collectDevicePairingHealthFindings", () => {
     });
   });
 
-  it("preserves pairing diagnostics when the token inventory read rejects", async () => {
-    await withApprovedOperatorPairing(async () => {
-      using inventory = vi
-        .spyOn(await import("../infra/device-auth-store.js"), "loadDeviceAuthTokens")
-        .mockRejectedValueOnce(new Error("synthetic inventory failure"));
+  it.each([
+    {
+      name: "device identity",
+      stub: async () =>
+        vi
+          .spyOn(
+            await import("../infra/device-identity-async.js"),
+            "loadDeviceIdentityIfPresentAsync",
+          )
+          .mockRejectedValueOnce(new Error("synthetic identity failure")),
+      message: "Could not read the local device identity",
+    },
+    {
+      name: "token inventory",
+      stub: async () =>
+        vi
+          .spyOn(await import("../infra/device-auth-store.js"), "loadDeviceAuthTokens")
+          .mockRejectedValueOnce(new Error("synthetic inventory failure")),
+      message: "Could not read the local device auth token inventory",
+    },
+  ] as const)(
+    "reports an unreadable local $name instead of a clean device check",
+    async ({ stub, message }) => {
+      await withApprovedOperatorPairing(async () => {
+        using rejected = await stub();
 
-      await expect(collect("local")).resolves.toEqual([]);
-      expect(inventory).toHaveBeenCalledOnce();
-    });
-  });
+        await expect(collect("local")).resolves.toEqual([
+          expect.objectContaining({
+            severity: "warning",
+            category: "fix-now",
+            path: "identity.device-auth",
+            requirement: "local-device-auth-unreadable",
+            message: expect.stringContaining(message),
+            fixHint: expect.stringContaining("openclaw devices list"),
+          }),
+        ]);
+        expect(rejected).toHaveBeenCalledOnce();
+      });
+    },
+  );
 
   it.each([
     { role: "node", tokenScopes: ["operator.read"], recoveryOption: " --no-scopes" },
