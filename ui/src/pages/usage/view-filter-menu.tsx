@@ -7,7 +7,13 @@ import {
   createMenuControls,
   type MenuEntry,
   type MenuItem,
+  type MenuHandle,
 } from "../../components/solid/menu.tsx";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { applySuggestionToQuery, removeQueryToken, setQueryTokensForKey } from "./query.ts";
@@ -151,14 +157,20 @@ type UsageFilterFields = ReturnType<typeof createUsageFilterFields>;
 export function UsageFilterMenu(props: { model: UsageFilterFields; loading: boolean }) {
   const controls = createMenuControls();
   const filters = () => props.model.ctx.props.callbacks.filters;
-  const pickers = Object.fromEntries(
-    FIELDS.map((key) => [
-      key,
-      createUsageValuePicker({ ...props.model.fields[key], id: `filter-${key}`, controls }),
-    ]),
-  ) as Record<FieldKey, ReturnType<typeof createUsageValuePicker>>;
+  let menu: MenuHandle | undefined;
+  const picker = (key: FieldKey) =>
+    createUsageValuePicker({ ...props.model.fields[key], id: `filter-${key}`, controls }, () =>
+      menu?.close(),
+    );
+  const pickers = {
+    creator: picker("creator"),
+    channel: picker("channel"),
+    provider: picker("provider"),
+    model: picker("model"),
+    tool: picker("tool"),
+  };
   const queryKeydown = nativeListener("keydown", (event) => {
-    if (event.key === "Enter" && !event.isComposing) {
+    if (event.key === "Enter" && !isComposingKeyboardEvent(event)) {
       event.preventDefault();
       event.stopPropagation();
       filters().onApplyQuery();
@@ -176,11 +188,14 @@ export function UsageFilterMenu(props: { model: UsageFilterFields; loading: bool
           data-form-control=""
           data-initial-focus=""
           autocomplete="off"
-          spellcheck={false}
+          spellcheck="false"
           aria-label={t("usage.query.placeholder")}
           title={t("usage.query.placeholder")}
           placeholder={t("usage.query.short")}
           value={props.model.ctx.props.filters.queryDraft}
+          onBlur={clearCompositionEnd}
+          onCompositionEnd={recordCompositionEnd}
+          onKeyUp={clearCompositionEnd}
           onInput={(event) => filters().onQueryDraftChange(event.currentTarget.value)}
           // Opening the menu continues the query where it ends.
           onFocus={(event) => {
@@ -238,6 +253,9 @@ export function UsageFilterMenu(props: { model: UsageFilterFields; loading: bool
   ]);
   return (
     <Menu
+      ref={(handle) => {
+        menu = handle;
+      }}
       id="usage-filter-menu"
       lazy
       label={t("usage.filters.title")}
