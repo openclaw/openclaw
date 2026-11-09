@@ -1,0 +1,2 @@
+72
+# Native-owned harness model windows: provider, static fallback past missing/synthetic donors, native row and default cases for resolveNativeOwnedRuntimeModel.
