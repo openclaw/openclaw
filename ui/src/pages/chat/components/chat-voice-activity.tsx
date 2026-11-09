@@ -182,7 +182,7 @@ export function ComposerDictationStatus(props: {
 }) {
   const content = createMemo(() => {
     const dictation = props.readDictation();
-    if (!dictation?.active) {
+    if (!dictation?.active && !dictation?.finalizing) {
       return null;
     }
     if (dictation.connecting) {
@@ -198,6 +198,10 @@ export function ComposerDictationStatus(props: {
             { "agent-chat__dictation-status--finalizing": dictation.finalizing },
           ]}
         >
+          <MicrophoneActivity
+            status={dictation.finalizing ? "thinking" : "listening"}
+            inputLevel={dictation.inputLevel}
+          />
           <span
             class={[
               "agent-chat__dictation-phase",

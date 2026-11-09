@@ -264,12 +264,13 @@ export function ComposerDictationSendAction(props: {
     if (dictation.finalizing) {
       return;
     }
-    await dictation.finishActive();
-    // Keep the initiating input action when asynchronous dictation finishes.
-    send(event);
+    if (await dictation.finishActive()) {
+      // Keep the initiating input action when asynchronous dictation finishes.
+      send(event);
+    }
   };
   return (
-    <Show when={props.readDictation().active}>
+    <Show when={props.readDictation().active || props.readDictation().finalizing}>
       {props.readDictation().connecting ? null : (
         <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
           {props.readDictation().finalizing
@@ -445,7 +446,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
   const VoiceButton = renderComposerVoiceButtonSolid;
   const PrimaryAction = (placement: { mobile?: boolean }) => (
     <>
-      {props.readDictation?.()?.active ? (
+      {props.readDictation?.()?.active || props.readDictation?.()?.finalizing ? (
         !props.submitDisabledReason || canSubmitBeforeChatHistory(props.draft) ? (
           <ComposerDictationSendAction
             readDictation={props.readDictation}

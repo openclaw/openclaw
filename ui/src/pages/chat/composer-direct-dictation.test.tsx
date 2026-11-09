@@ -216,23 +216,44 @@ describe("DirectDictationControl", () => {
     expect(container.querySelector(".agent-chat__dictation-status")?.textContent).toContain(
       "Listening",
     );
+    expect(
+      container
+        .querySelector(".agent-chat__dictation-status openclaw-microphone-activity")
+        ?.getAttribute("data-status"),
+    ).toBe("listening");
     expect(container.querySelector(".agent-chat__dictation-phase--listening")).not.toBeNull();
     container.querySelector<HTMLButtonElement>(".chat-send-btn--dictating")?.click();
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledWith("draft spoken task"));
     expect(onSubmit).not.toHaveBeenCalled();
 
-    controller.active = true;
+    controller.active = false;
     controller.finalizing = true;
     update();
+    expect(container.querySelector(".agent-chat__dictation-status")?.textContent).toContain(
+      "Finishing dictation",
+    );
+    expect(
+      container
+        .querySelector(".agent-chat__dictation-status openclaw-microphone-activity")
+        ?.getAttribute("data-status"),
+    ).toBe("thinking");
     expect(container.querySelector(".agent-chat__dictation-phase--listening")).toBeNull();
-    const stop = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictating");
-    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit");
-    expect(stop?.querySelector("rect")).not.toBeNull();
-    expect(send?.querySelector("path")?.getAttribute("d")).toBe("M12 19V5m-7 7 7-7 7 7");
+    const sendWhileFinalizing = container.querySelector<HTMLButtonElement>(
+      ".chat-send-btn--dictation-commit",
+    );
+    expect(sendWhileFinalizing?.getAttribute("aria-disabled")).toBe("true");
+
+    controller.active = true;
     controller.finalizing = false;
+    update();
+    controller.finishActive.mockResolvedValueOnce(false);
+    container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit")?.click();
+    await vi.waitFor(() => expect(controller.finishActive).toHaveBeenCalledTimes(2));
+    expect(onSubmit).not.toHaveBeenCalled();
+
     container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit")?.click();
     await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
-    expect(controller.finishActive).toHaveBeenCalledTimes(2);
+    expect(controller.finishActive).toHaveBeenCalledTimes(3);
   });
 
   it("does not submit a replacement route after finishing the previous draft's dictation", async () => {

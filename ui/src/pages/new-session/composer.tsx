@@ -100,6 +100,7 @@ export type NewSessionComposerOptions = {
   submitDisabledReason?: string;
   onBlockedSubmit?: () => void;
   dictationActive?: boolean;
+  dictationFinalizing?: boolean;
   dictationPreview?: string;
   dictationStatus?: JSX.Element;
   nativeTerminal?: boolean;
@@ -672,7 +673,7 @@ export function NewSessionComposer(props: {
               }}
             >
               {options().voiceControl}
-              <Show when={!options().dictationActive}>
+              <Show when={!options().dictationActive && !options().dictationFinalizing}>
                 <StartControl
                   options={options()}
                   onSubmit={() => submitNewSession(options(), textarea)}

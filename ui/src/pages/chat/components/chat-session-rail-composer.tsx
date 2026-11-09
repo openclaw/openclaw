@@ -109,6 +109,7 @@ export function SessionRailComposer(props: {
     };
   });
   const dictationActive = createMemo(() => dictation.read().active);
+  const dictationFinalizing = createMemo(() => dictation.read().finalizing);
   // Dictation admission reads these inputs synchronously; a changed input re-prepares it.
   const dictationRevision = createMemo(() => ({
     revision: dictation.revision(),
@@ -123,16 +124,16 @@ export function SessionRailComposer(props: {
   // The dictated preview reaches the draft only on commit, so submission finishes it first.
   const submit = () => {
     const active = dictationControl.dictation;
+    if (active?.finalizing) {
+      return;
+    }
     if (!active?.active) {
       props.submit();
       return;
     }
-    if (active.finalizing) {
-      return;
-    }
     const sessionKey = props.sessionKey;
-    void active.finishActive().then(() => {
-      if (props.sessionKey === sessionKey) {
+    void active.finishActive().then((committed) => {
+      if (committed && props.sessionKey === sessionKey) {
         props.submit();
       }
     });
@@ -300,7 +301,7 @@ export function SessionRailComposer(props: {
                 renderRevision={dictationRevision()}
               />
             </Show>
-            <Show when={!dictationActive()}>
+            <Show when={!dictationActive() && !dictationFinalizing()}>
               <button
                 class="chat-send-btn"
                 type="submit"

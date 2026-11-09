@@ -397,7 +397,7 @@ export class NewSessionPageOwner {
     const isCatalogTarget = catalog.isTarget(this.data);
     const capabilities = submission.capabilities;
     const preferences = context?.theme.settings;
-    const dictationLocked = dictation.active;
+    const dictationLocked = dictation.active || dictation.finalizing;
     return {
       agent: place.selectedAgent(),
       agentId: place.agentId,
@@ -408,6 +408,9 @@ export class NewSessionPageOwner {
       onBlockedSubmit: () => submission.noteBlockedSubmitAttempt(),
       get dictationActive() {
         return dictation.active;
+      },
+      get dictationFinalizing() {
+        return dictation.finalizing;
       },
       dictationPreview: dictation.previewDraft(),
 

@@ -236,9 +236,33 @@ suite.define(() => {
               .getByText("Review complete.", { exact: true })
               .waitFor();
             const composer = page.locator(".agent-chat__input--dictating");
+            const meter = composer.locator(
+              ".agent-chat__dictation-status openclaw-microphone-activity",
+            );
             const phase = composer.locator(".agent-chat__dictation-phase");
             const stop = composer.getByRole("button", { name: "Stop and keep text" });
             const send = composer.getByRole("button", { name: "Send", exact: true });
+            await page.evaluate(() => {
+              const state = (window as Window & { openclawTalkE2eState?: { meterLevel: number } })
+                .openclawTalkE2eState;
+              if (state) {
+                state.meterLevel = 0.25;
+              }
+            });
+            await expect.poll(() => meter.getAttribute("data-status")).toBe("listening");
+            await expect
+              .poll(() => meter.getAttribute("data-level").then((value) => Number(value ?? "0")))
+              .toBeGreaterThan(0);
+            await page.evaluate(
+              () =>
+                new Promise<void>((resolve) => {
+                  requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                      resolve();
+                    });
+                  });
+                }),
+            );
             await expect.poll(() => phase.isVisible()).toBe(true);
             await expect
               .poll(() => phase.textContent().then((text) => text?.trim()))
@@ -253,6 +277,7 @@ suite.define(() => {
             const layout = await composer.evaluate((element) => {
               const composerBox = element.getBoundingClientRect();
               const controls = [
+                ".agent-chat__dictation-status openclaw-microphone-activity",
                 ".agent-chat__dictation-phase",
                 ".chat-mobile-dictation-action .chat-send-btn--dictating",
                 ".chat-send-btn--dictation-commit",
@@ -271,7 +296,10 @@ suite.define(() => {
               });
               return { composerSized: composerBox.width > 0 && composerBox.height > 0, controls };
             });
-            expect(layout).toEqual({ composerSized: true, controls: [true, true, true] });
+            expect(layout).toEqual({
+              composerSized: true,
+              controls: [true, true, true, true],
+            });
             await button(page, "Stop and keep text", true).click();
             await gateway.waitForRequest("talk.session.close");
             await close();
@@ -288,6 +316,23 @@ suite.define(() => {
           await button(page, waitForCompletion ? "Send message" : "Send", true).click();
           if (!waitForCompletion) {
             await gateway.waitForRequest("talk.session.close");
+            const finalizing = page.locator(".agent-chat__dictation-status--finalizing");
+            await expect.poll(() => finalizing.isVisible()).toBe(true);
+            await expect
+              .poll(() =>
+                finalizing.locator("openclaw-microphone-activity").getAttribute("data-status"),
+              )
+              .toBe("thinking");
+            await expect
+              .poll(() => finalizing.locator(".agent-chat__dictation-phase").textContent())
+              .toBe("Finishing dictation…");
+            await expect
+              .poll(() =>
+                page.locator(".chat-send-btn--dictation-commit").getAttribute("aria-disabled"),
+              )
+              .toBe("true");
+            expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+            await captureComposer(page, "dictation-finalizing-progress.png");
             await close();
           }
           const request = await gateway.waitForRequest("chat.send");
@@ -480,5 +525,33 @@ suite.define(() => {
       await picker.locator('[data-chat-talk-capability="dictation"]').focus();
       await page.keyboard.press("Enter");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/talk");
+    }));
+
+  it("surfaces recovery and preserves the draft when Send finishes with an empty transcript", () =>
+    suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+      const { gateway, textarea, admit, close } = await openDictation(page, {
+        deferredMethods: ["talk.session.create", "talk.session.close"],
+      });
+      await textarea.fill("Keep this draft");
+      await button(page, "Start voice input").hover();
+      await page.mouse.down();
+      await admit();
+      await page.mouse.up();
+      await button(page, "Send", true).click();
+      await gateway.waitForRequest("talk.session.close");
+      await expect
+        .poll(() => page.locator(".agent-chat__dictation-status--finalizing").isVisible())
+        .toBe(true);
+      await close();
+      const alert = page.locator(".agent-chat__composer-status-band");
+      await expect.poll(() => alert.isVisible()).toBe(true);
+      await expect
+        .poll(() => alert.textContent())
+        .toContain(
+          "Couldn’t transcribe your voice. Check microphone access and transcription settings, then try again.",
+        );
+      await expectDraft(textarea, "Keep this draft");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await captureComposer(page, "dictation-empty-error-recovery.png");
     }));
 });

@@ -44,6 +44,16 @@ const microphone = (stop = vi.fn()) => ({
   getTracks: () => [Object.assign(new EventTarget(), { stop })],
 });
 class MockAudioContext extends MockDictationAudioContext {
+  override createAnalyser() {
+    return {
+      fftSize: 0,
+      smoothingTimeConstant: 0,
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0.25),
+    };
+  }
+
   override createScriptProcessor() {
     const processor = super.createScriptProcessor();
     processors.push(processor);
@@ -590,6 +600,7 @@ describe("ComposerDictationOwner", () => {
       brain: "none",
     });
     expect(order.slice(0, 2)).toEqual(["microphone", "talk.session.create"]);
+    expect(controller.inputLevel.value).toBeGreaterThan(0);
     captureAudio();
     await waitForFast(() => expectAppended());
     emit({ type: "partial", text: "hello wor" });
@@ -598,11 +609,13 @@ describe("ComposerDictationOwner", () => {
     emit({ type: "partial", text: "next wor" });
     await releaseLatched(target);
     const finished = controller.finishActive();
-    expect(controller).toMatchObject({ finalizing: false, locksComposer: false });
+    expect(controller).toMatchObject({ finalizing: true, locksComposer: false });
+    expect(controller.inputLevel.value).toBe(0);
     expect(onCommit).not.toHaveBeenCalled();
     transcript("next words");
     emit({ type: "close", reason: "completed" });
     await expect(finished).resolves.toBe(true);
+    expect(controller.finalizing).toBe(false);
     expect(onCommit).toHaveBeenCalledExactlyOnceWith("hello world next words", true);
     await waitForFast(() => expectClosed());
     expect(order.indexOf("talk.session.appendAudio")).toBeLessThan(
@@ -613,6 +626,8 @@ describe("ComposerDictationOwner", () => {
   it.each([
     ["", "error"],
     ["Keep the preview", "error"],
+    ["", "completed"],
+    ["Keep the preview", "completed"],
     ["", "timeout"],
     ["Keep the preview", "timeout"],
     ["Keep the preview", "disconnect"],
@@ -625,6 +640,7 @@ describe("ComposerDictationOwner", () => {
     await startDirect(controller);
     emit({ type: "partial", text: preview });
     const finished = controller.finishActive();
+    expect(controller.finalizing).toBe(true);
     if (outcome === "error") {
       transcript("failed result");
       emit({ type: "error", message: "Local transcription failed" });
@@ -632,6 +648,8 @@ describe("ComposerDictationOwner", () => {
         kind: "interrupted",
         preservesText: Boolean(preview),
       });
+    } else if (outcome === "completed") {
+      emit({ type: "close", reason: "completed" });
     } else {
       await vi.advanceTimersByTimeAsync(0);
       if (outcome === "disconnect") {
@@ -641,11 +659,20 @@ describe("ComposerDictationOwner", () => {
       }
     }
     await expect(finished).resolves.toBe(Boolean(preview));
+    expect(controller.finalizing).toBe(false);
     expectCommit(onCommit, preview);
     if (outcome === "error") {
       expect(controller.locksComposer).toBe(false);
       expect(listeners.size).toBe(0);
       expect(publishedErrors).toContain("Local transcription failed");
+    } else if (!preview) {
+      expect(onError).toHaveBeenCalledExactlyOnceWith("Couldn’t transcribe your voice.", {
+        kind: "interrupted",
+        preservesText: false,
+      });
+      expect(publishedErrors).toContain("Couldn’t transcribe your voice.");
+    } else {
+      expect(onError).not.toHaveBeenCalled();
     }
     unsubscribe();
   });

@@ -545,6 +545,14 @@ describe("ChatSessionRailElement", () => {
       expect(onSubmit).toHaveBeenCalledExactlyOnceWith("Summarize the spoken part"),
     );
     expect(finishActive).toHaveBeenCalledOnce();
+
+    onSubmit.mockClear();
+    finishActive.mockResolvedValueOnce(false);
+    element
+      .querySelector("textarea")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await vi.waitFor(() => expect(finishActive).toHaveBeenCalledTimes(2));
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(

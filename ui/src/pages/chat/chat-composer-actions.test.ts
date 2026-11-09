@@ -203,27 +203,43 @@ describe("renderChatComposer controls", () => {
     }
     const active = vi.spyOn(dictation, "active", "get").mockReturnValue(true);
     const locked = vi.spyOn(dictation, "locksComposer", "get").mockReturnValue(true);
-    vi.spyOn(dictation, "finalizing", "get").mockReturnValue(finalizing);
+    const finalizingSpy = vi.spyOn(dictation, "finalizing", "get").mockReturnValue(finalizing);
     const finishActive = vi.spyOn(dictation, "finishActive").mockResolvedValue(true);
     const update = vi.spyOn(dictation, "update");
     renderComposerInto(container, props);
     const commit = update.mock.lastCall?.[0].onCommit;
-    if (!commit) {
-      throw new Error("expected the composer transcript callback");
+    const reportError = update.mock.lastCall?.[0].onError;
+    if (!commit || !reportError) {
+      throw new Error("expected the composer transcript callbacks");
     }
-    return { container, active, locked, finishActive, onSend, commit };
+    return {
+      container,
+      dictation,
+      active,
+      locked,
+      finalizing: finalizingSpy,
+      finishActive,
+      onSend,
+      commit,
+      reportError,
+    };
   }
 
   it("finishes locked dictation before submitting the complete draft with history held", async () => {
-    const { container, active, locked, finishActive, onSend, commit } = renderDictatingComposer({
-      submitDisabledReason: "Loading conversation…",
-    });
+    const { container, dictation, active, locked, finalizing, finishActive, onSend, commit } =
+      renderDictatingComposer({
+        submitDisabledReason: "Loading conversation…",
+      });
     const finalTranscript = createDeferred<string>();
     finishActive.mockImplementation(async () => {
-      const transcript = await finalTranscript.promise;
       active.mockReturnValue(false);
       locked.mockReturnValue(false);
+      finalizing.mockReturnValue(true);
+      dictation.dispatchEvent(new Event("change"));
+      const transcript = await finalTranscript.promise;
+      finalizing.mockReturnValue(false);
       commit(transcript);
+      dictation.dispatchEvent(new Event("change"));
       return true;
     });
     const input = textarea(container);
@@ -239,10 +255,44 @@ describe("renderChatComposer controls", () => {
 
     expect(finishActive).toHaveBeenCalledOnce();
     expect(onSend).not.toHaveBeenCalled();
+    await waitForSolid(() => {
+      expect(
+        query(container, ".chat-send-btn--dictation-commit")?.getAttribute("aria-disabled"),
+      ).toBe("true");
+      expect(query(container, ".agent-chat__dictation-status--finalizing")?.textContent).toContain(
+        t("chat.composer.dictationFinalizing"),
+      );
+    });
+    pressComposerEnter(container);
+    expect(onSend).not.toHaveBeenCalled();
     finalTranscript.resolve("dictated ending");
     await vi.waitFor(() =>
       expect(onSend).toHaveBeenCalledExactlyOnceWith("Typed beginning dictated ending", action),
     );
+  });
+
+  it("does not submit the draft when dictation finalization completes empty", async () => {
+    const { container, dictation, active, locked, finalizing, finishActive, onSend, reportError } =
+      renderDictatingComposer();
+    finishActive.mockImplementation(async () => {
+      active.mockReturnValue(false);
+      locked.mockReturnValue(false);
+      finalizing.mockReturnValue(false);
+      reportError(t("chat.composer.dictationFailed"), {
+        kind: "interrupted",
+        preservesText: false,
+      });
+      dictation.dispatchEvent(new Event("change"));
+      return false;
+    });
+
+    primaryButton(container).click();
+    await waitForSolid(() => {
+      expect(finishActive).toHaveBeenCalledOnce();
+      expect(container.textContent).toContain(t("chat.composer.dictationFailed"));
+    });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(textarea(container).value).toBe("Typed beginning");
   });
 
   it("keeps Stop and Send mounted but aria-disabled while dictation finalizes", () => {

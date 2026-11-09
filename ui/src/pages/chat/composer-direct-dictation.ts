@@ -118,6 +118,10 @@ export class DirectDictationControl extends EventTarget {
     return this.session?.active === true;
   }
 
+  get finalizing(): boolean {
+    return this.session?.finalizing === true;
+  }
+
   previewDraft(): string | undefined {
     return this.session?.active
       ? this.options.textarea.previewTranscript(this.session.transcript)
