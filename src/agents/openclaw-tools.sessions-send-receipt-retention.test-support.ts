@@ -263,6 +263,7 @@ export function registerSessionsSendReceiptRetentionTests({
             requesterAgentId: "main",
             requesterDisplayKey: requesterSessionKey,
             task: "Existing child execution",
+            gatewayContextResolver: () => context,
             cleanup: "keep",
             spawnMode: "session",
             expectsCompletionMessage: true,

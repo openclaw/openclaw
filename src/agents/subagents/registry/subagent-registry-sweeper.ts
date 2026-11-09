@@ -1,5 +1,4 @@
 import type { callGateway } from "../../../gateway/call.js";
-import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import {
   getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
@@ -7,7 +6,6 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { runInDetachedAsyncContext } from "../../../shared/detached-async-context.js";
-import { mergeAcceptedSessionSpawnsForRun } from "../../accepted-session-spawn.js";
 import {
   blockSubagentCompletionDelivery,
   reconcileRetiredSubagentCancellation,
@@ -56,6 +54,7 @@ import type {
   ContextEngineSubagentEndedParams,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
+import { hasRequiredRequesterReceipt } from "./subagent-requester-turn-liveness.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded, isYieldedSubagentRun } from "./subagent-run-liveness.js";
 import {
@@ -108,24 +107,6 @@ export function createSubagentRegistrySweeper(params: {
   let rerunRequested = false;
   let lastWarnedSuspendedCount: number | undefined;
   const pendingWork = new Set<Promise<unknown>>();
-
-  /** A delivered row may still be the live producer's only complete-batch witness. */
-  function hasRequiredRequesterReceipt(entry: SubagentRunRecord): boolean {
-    const instance = subagentRuns.getRequesterRunInstance(entry);
-    return Boolean(
-      instance &&
-      isSameSubagentRunOwner(runs.get(entry.runId), entry) &&
-      entry.delivery?.status === "delivered" &&
-      entry.requesterTurnRunId === instance.runId &&
-      getActiveAgentRunDelegatedAuthority(instance)?.operationalRunInstance === instance &&
-      mergeAcceptedSessionSpawnsForRun(instance).some(
-        (receipt) =>
-          receipt.runId === (entry.taskRunId ?? entry.runId) &&
-          receipt.childSessionKey === entry.childSessionKey &&
-          receipt.expectsCompletionMessage === true,
-      ),
-    );
-  }
 
   function trackWork<T>(run: () => Promise<T>): Promise<T> {
     const pending = run();
@@ -441,7 +422,7 @@ export function createSubagentRegistrySweeper(params: {
               !current.archiveAtMs &&
               typeof current.cleanupCompletedAt === "number" &&
               now - current.cleanupCompletedAt > SUBAGENT_SESSION_RUN_TTL_MS &&
-              !hasRequiredRequesterReceipt(current),
+              !hasRequiredRequesterReceipt(current, runs),
             () => null,
           );
           if (deleted === null) {
