@@ -7,9 +7,11 @@ const EMAIL = "visitor@example.com";
 const LONE_HIGH_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u;
 
 function invitationTextFor(invitedByLabel: string): string {
-  const metadata = invitationMetadata(undefined, {
-    invitedBy: { profileId: "operator-1", label: invitedByLabel },
-  });
+  const metadata = invitationMetadata(
+    undefined,
+    { invitedBy: { profileId: "operator-1", label: invitedByLabel } },
+    0,
+  );
   const grant: ActiveVisitorInvitation = {
     email: EMAIL,
     grantId: "grant-1",
@@ -24,6 +26,7 @@ function invitationTextFor(invitedByLabel: string): string {
     gatewayAccess: "Access granted.",
     signInUrl: "https://team.example.com/",
     noteSupplied: false,
+    accountSeats: { status: "available", occupied: 0, remaining: 75 },
   }).details.invitationText;
 }
 
