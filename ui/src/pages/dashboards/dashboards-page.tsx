@@ -11,7 +11,7 @@ export function DashboardsPage(props: { routeData?: DashboardsRouteData }) {
   const context = useApplication();
   const [filters, setFilters] = createStore<DashboardGalleryFilters>({
     query: "",
-    ownerId: "",
+    ownerIds: [],
     sort: "updated",
   });
   // Loader data is an initial seed; session publications own subsequent updates.

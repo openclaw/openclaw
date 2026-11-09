@@ -286,6 +286,8 @@ it.each([false, true])("keeps pages across row events; retires late pages: %s", 
   flush();
   expect(cardTitles(element)).toEqual(["Updated", "Old"]);
   expect(requests).toHaveLength(2);
+  element.querySelector<HTMLButtonElement>('button[aria-label="Search dashboards"]')!.click();
+  flush();
   const search = element.querySelector<HTMLInputElement>('input[type="search"]')!;
   changeValue(search, "old");
   expect(cardTitles(element)).toEqual(["Old"]);
@@ -308,17 +310,27 @@ it("renders the route host and filters by search and author and sorts cards by t
   expect(cardTitles(element)).toEqual(["Zulu monitor", "Alpha signals"]);
   expect(element.querySelector(".dashboard-preview")?.hasAttribute("inert")).toBe(true);
 
+  element.querySelector<HTMLButtonElement>('button[aria-label="Search dashboards"]')!.click();
+  flush();
   const search = element.querySelector<HTMLInputElement>('input[type="search"]')!;
   changeValue(search, "signals");
   expect(cardTitles(element)).toEqual(["Alpha signals"]);
 
   changeValue(search, "");
-  const [authorSelect, sortSelect] = element.querySelectorAll<HTMLSelectElement>("select");
-  changeValue(authorSelect!, "mira");
+  element.querySelector<HTMLButtonElement>('button[aria-label="Filter by author"]')!.click();
+  await waitForSolid(() =>
+    expect(document.querySelector(".dashboards-authors__row")).not.toBeNull(),
+  );
+  const mira = [...document.querySelectorAll<HTMLLabelElement>(".dashboards-authors__row")].find(
+    (label) => label.textContent?.includes("Mira"),
+  )!;
+  mira.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
+  flush();
   expect(cardTitles(element)).toEqual(["Alpha signals"]);
   expect(element.querySelector(".dashboard-card__author")?.textContent).toContain("Mira");
 
-  changeValue(authorSelect!, "", false);
-  changeValue(sortSelect!, "title");
+  element.querySelector<HTMLButtonElement>('button[aria-label="Remove author filter"]')!.click();
+  flush();
+  changeValue(element.querySelector<HTMLSelectElement>("select")!, "title");
   expect(cardTitles(element)).toEqual(["Alpha signals", "Zulu monitor"]);
 });
