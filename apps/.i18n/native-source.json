@@ -1306,6 +1306,8 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarAttention.kt","kind":"ui-call","surface":"android","id":"native.android.d75376e8543f37db","source":"${count} approvals need review"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarAttention.kt","kind":"ui-call","surface":"android","id":"native.android.d35b6a5fd8957ff6","source":"${count} questions need answers"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarAttention.kt","kind":"ui-call","surface":"android","id":"native.android.cf7c2dbf6105e643","source":"+${count} more"},
+    {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarAttention.kt","kind":"ui-call","surface":"android","id":"native.android.9102441654ca6373","source":"Collapsed"},
+    {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarAttention.kt","kind":"ui-call","surface":"android","id":"native.android.b06b2e4506a628ac","source":"Expanded"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarAttention.kt","kind":"ui-call","surface":"android","id":"native.android.07b2cf19e264e64c","source":"Waiting for answer"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarAttention.kt","kind":"ui-call","surface":"android","id":"native.android.8d04947d53c2aed7","source":"Waiting for approval"},
     {"path":"apps/ios/Sources/Settings/DashboardPageScreen.swift","kind":"ui-call","surface":"apple","id":"native.apple.d800fa5d7ab06b98","source":"Done"},
