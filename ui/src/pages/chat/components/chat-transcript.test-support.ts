@@ -165,28 +165,28 @@ export function resetTranscriptTestDom(): void {
 
 export type TestContentRow = Extract<TranscriptRow, { kind: "content" }>;
 
-export function offsetOwner(
+export const offsetOwner = <
+  Overrides extends Partial<Parameters<typeof observeTranscriptOffset>[0]>,
+>(
   state: TranscriptOffsetState,
   element: HTMLDivElement,
-  overrides: Partial<Parameters<typeof observeTranscriptOffset>[0]>,
-) {
-  const defaults = {
-    state,
-    getScrollElement: () => element,
-    endAnchor: new TranscriptEndAnchor(() => {}),
-    prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
-    canFollowEnd: () => false,
-    isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
-    isMaintenanceScroll: () => isTranscriptMaintenanceScroll(state, element),
-    cancelScroll: vi.fn(),
-    onLayoutCorrection: vi.fn(),
-    invalidate: vi.fn(),
-    onOffset: vi.fn(),
-    onReaderScroll: vi.fn(),
-    onComposerLayout: vi.fn(),
-  };
-  return Object.assign(defaults, overrides);
-}
+  overrides: Overrides,
+) => ({
+  state,
+  getScrollElement: () => element,
+  endAnchor: new TranscriptEndAnchor(() => {}),
+  prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
+  canFollowEnd: () => false,
+  isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
+  isMaintenanceScroll: () => isTranscriptMaintenanceScroll(state, element),
+  cancelScroll: vi.fn(),
+  onLayoutCorrection: vi.fn(),
+  invalidate: vi.fn(),
+  onOffset: vi.fn(),
+  onReaderScroll: vi.fn(),
+  onComposerLayout: vi.fn(),
+  ...overrides,
+});
 
 export function clampedMeasurements() {
   installTranscriptDomMocks();
