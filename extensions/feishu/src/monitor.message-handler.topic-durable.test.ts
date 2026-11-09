@@ -112,9 +112,14 @@ describe("Feishu topic durable admission", () => {
     expect(handleMessage).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "orders the durable backlog before a fallback (fallback=%s)",
-    async (fallback) => {
+  it.each([
+    { fallback: false, holdMs: 0 },
+    { fallback: true, holdMs: 0 },
+    { fallback: false, holdMs: 900 },
+    { fallback: true, holdMs: 900 },
+  ])(
+    "orders durable backlog without expiring custody: $fallback, $holdMs",
+    async ({ fallback, holdMs }) => {
       await withOpenClawTestState({ label: "feishu-topic-backlog" }, async ({ stateDir }) => {
         type Queue = NonNullable<Parameters<typeof createFeishuDurableIngress>[0]["queue"]>;
         const queue = createChannelIngressQueueForTests<Parameters<Queue["enqueue"]>[1]>({
@@ -162,6 +167,7 @@ describe("Feishu topic durable admission", () => {
           dispatcher: { invoke: async (data: unknown) => handler(data) },
           runtime: { log: vi.fn(), error: vi.fn() },
           pollIntervalMs: 500,
+          ...(holdMs ? { adoptionStallTimeoutMs: 300 } : {}),
         };
         const ingress = createFeishuDurableIngress(ingressOptions);
         const receive = async (text: string, thread?: string) => {
@@ -190,6 +196,15 @@ describe("Feishu topic durable admission", () => {
             expect(started).toEqual(["a1"]);
           } else {
             await vi.waitFor(() => expect(started).toEqual(["a1", "b"]));
+          }
+          if (holdMs) {
+            await new Promise((resolve) => {
+              setTimeout(resolve, holdMs);
+            });
+            expect((await queue.listClaims()).map((claim) => claim.id)).toEqual(
+              expect.arrayContaining(["evt-backlog-a2", "evt-backlog-a3"]),
+            );
+            expect(await queue.listFailed?.()).toEqual([]);
           }
           active.resolve();
           await vi.waitFor(() =>

@@ -107,6 +107,7 @@ type FeishuMessageDebounceEntry = {
     ready?: Promise<void>;
     release: () => void;
     fallback: boolean;
+    stopDeferredHeartbeat?: () => void;
   };
 };
 
@@ -180,6 +181,7 @@ export function createFeishuMessageReceiveHandler({
     { event, messageDedupeKey, processingClaim, topicOrder }: FeishuMessageDebounceEntry,
     turnAdoptionLifecycle?: FeishuIngressLifecycle,
     preparedContent?: string,
+    onExecutionStart?: () => void,
   ) => {
     const sequentialKey = resolveSequentialKey({
       cfg: readConfig(),
@@ -191,6 +193,7 @@ export function createFeishuMessageReceiveHandler({
         channelRuntime.commands.isControlCommandMessage(text, readConfig()),
     });
     const task = async () => {
+      onExecutionStart?.();
       if (turnAdoptionLifecycle?.abortSignal.aborted) {
         await turnAdoptionLifecycle.onAbandoned();
         return;
@@ -305,6 +308,11 @@ export function createFeishuMessageReceiveHandler({
               error(`feishu[${accountId}]: failed to commit logical replay guard: ${String(err)}`),
           },
         );
+        const stopDeferredHeartbeats = () => {
+          for (const entry of activeEntries) {
+            entry.topicOrder?.stopDeferredHeartbeat?.();
+          }
+        };
         return createFlush({
           lifecycle,
           dispatch: async (admissionLifecycle) => {
@@ -321,7 +329,12 @@ export function createFeishuMessageReceiveHandler({
               }
               try {
                 if (activeEntries.length === 1) {
-                  await dispatchFeishuMessage(last, admissionLifecycle);
+                  await dispatchFeishuMessage(
+                    last,
+                    admissionLifecycle,
+                    undefined,
+                    stopDeferredHeartbeats,
+                  );
                   await settle();
                   return;
                 }
@@ -352,6 +365,7 @@ export function createFeishuMessageReceiveHandler({
                   },
                   admissionLifecycle,
                   combinedText,
+                  stopDeferredHeartbeats,
                 );
                 await settle();
               } catch (err) {
@@ -503,6 +517,7 @@ export function createFeishuMessageReceiveHandler({
         ready,
         fallback: isChatFallback,
         release: () => {
+          debounceEntry.topicOrder?.stopDeferredHeartbeat?.();
           if (released) {
             return;
           }
@@ -526,6 +541,7 @@ export function createFeishuMessageReceiveHandler({
       // the logical claim and queued entry to that earlier lifecycle.
       turnAdoptionLifecycle.onBeforeAbandon = () => {
         debounceEntry.abandoned = true;
+        debounceEntry.topicOrder?.stopDeferredHeartbeat?.();
         if (!debounceEntry.flushing) {
           debounceEntry.topicOrder?.release();
         }
@@ -534,11 +550,30 @@ export function createFeishuMessageReceiveHandler({
     }
     if (turnAdoptionLifecycle) {
       try {
+        if (debounceEntry.topicOrder) {
+          // Keep durable custody alive while debounce, barriers, or earlier runs wait.
+          // Execution takes over the watchdog when its queue slot starts.
+          turnAdoptionLifecycle.onDeferred();
+          const intervalMs = turnAdoptionLifecycle.deferredHeartbeatIntervalMs;
+          if (intervalMs !== undefined) {
+            const heartbeat = setInterval(
+              () => turnAdoptionLifecycle.onDeferredHeartbeat?.(),
+              intervalMs,
+            );
+            heartbeat.unref();
+            const stop = () => {
+              clearInterval(heartbeat);
+              turnAdoptionLifecycle.abortSignal.removeEventListener("abort", stop);
+            };
+            debounceEntry.topicOrder.stopDeferredHeartbeat = stop;
+            turnAdoptionLifecycle.abortSignal.addEventListener("abort", stop, { once: true });
+            if (turnAdoptionLifecycle.abortSignal.aborted) {
+              stop();
+            }
+          }
+        }
         const processing = inboundDebouncer.enqueue(debounceEntry);
         if (debounceEntry.topicOrder) {
-          // Receipt order is now owned by the registered topic reservation.
-          // Retain the durable claim, but release intake before agent adoption.
-          turnAdoptionLifecycle.onDeferred();
           const settled = processing.catch(async (err: unknown) => {
             debounceEntry.topicOrder?.release();
             if (claim.kind === "claimed") {
