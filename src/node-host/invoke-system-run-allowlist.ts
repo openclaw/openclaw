@@ -211,15 +211,15 @@ function replacePosixShellInlineCommand(params: {
   return rewritten;
 }
 
-/** Mark truncated output in stderr when possible, otherwise stdout. */
+/** Mark dropped earlier output before the retained tail, in stdout unless only stderr remains. */
 export function applyOutputTruncation(result: RunResult): void {
   if (!result.truncated) {
     return;
   }
-  const suffix = "... (truncated)";
-  if (result.stderr.trim().length > 0) {
-    result.stderr = `${result.stderr}\n${suffix}`;
+  const marker = "... (truncated)";
+  if (result.stdout.length === 0 && result.stderr.length > 0) {
+    result.stderr = `${marker}\n${result.stderr}`;
   } else {
-    result.stdout = `${result.stdout}\n${suffix}`;
+    result.stdout = `${marker}\n${result.stdout}`;
   }
 }
