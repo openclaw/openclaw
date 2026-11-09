@@ -32,6 +32,10 @@ const { values } = parseArgs({
 });
 assert(values.output && global.gc, "--output and --expose-gc are required");
 assert(process.platform === "darwin", "Native CPU receipts use macOS time -l");
+assert(
+  Number.isFinite(getHeapStatistics().total_allocated_bytes),
+  "Allocation proof requires Node 26+",
+);
 const samples = Number(values.samples);
 assert(Number.isSafeInteger(samples) && samples > 0);
 const shape = values.smoke
