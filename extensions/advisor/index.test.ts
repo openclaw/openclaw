@@ -174,3 +174,22 @@ it("registers nothing when both triggers are off", async () => {
   expect(run.service).toBeUndefined();
   expect(run.warn).toHaveBeenCalledOnce();
 });
+
+it("counts a Code Mode exec and its nested calls as one tool call", async () => {
+  const run = await startAdvisor(2);
+  await run.send("tool", "start", { toolCallId: "exec-1" });
+  await run.send("tool", "start", { toolCallId: "nested-1", parentToolCallId: "exec-1" });
+  await run.send("tool", "result", { toolCallId: "nested-1", parentToolCallId: "exec-1" });
+  await run.send("tool", "start", { toolCallId: "nested-2", parentToolCallId: "exec-1" });
+  await run.send("tool", "result", { toolCallId: "nested-2", parentToolCallId: "exec-1" });
+  await run.send("tool", "result", { toolCallId: "exec-1" }, 0);
+  await run.tool(1);
+});
+
+it("still waits for nested calls before a due review", async () => {
+  const run = await startAdvisor(1);
+  await run.send("tool", "start", { toolCallId: "exec-1" });
+  await run.send("tool", "start", { toolCallId: "nested-1", parentToolCallId: "exec-1" });
+  await run.send("tool", "result", { toolCallId: "exec-1" }, 0);
+  await run.send("tool", "result", { toolCallId: "nested-1", parentToolCallId: "exec-1" }, 1);
+});

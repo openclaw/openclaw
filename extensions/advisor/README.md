@@ -23,7 +23,8 @@ run already ended, the correction is dropped. Reviews run when a trigger is due:
 }
 ```
 
-- `everyToolCalls`: review after this many tool calls. `0` turns it off.
+- `everyToolCalls`: review after this many model tool calls. Calls made inside a
+  Code Mode `exec` count as part of that call. `0` turns this trigger off.
 - `everyMinutes`: review after this many minutes of work in a run, checked when a
   tool starts. `0` turns it off.
 - `reviewInstructions`: optional guidance that replaces the built-in definition
