@@ -545,6 +545,53 @@ describe("IMessageRpcClient child stream error handling", () => {
   });
 });
 
+describe("IMessageRpcClient Messages Automation diagnostics", () => {
+  it.each([
+    { remoteHost: undefined, code: -1712, guidance: ["one possible cause", process.execPath] },
+    { remoteHost: "messages-mac", code: -1743, guidance: ["was denied", "SSH/wrapper process"] },
+    {
+      remoteHost: "messages-mac",
+      code: -1712,
+      guidance: ["one possible cause", "SSH/wrapper process"],
+    },
+    { remoteHost: undefined, code: -1708, guidance: [] },
+  ])("explains AppleScript $code in its launch context", async ({ remoteHost, code, guidance }) => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("VITEST", "");
+    const child = createMockChild();
+    spawnMock.mockReset().mockReturnValue(child);
+    const client = new IMessageRpcClient({ remoteHost });
+    try {
+      await client.start();
+      const data = {
+        disposition: "may_have_completed",
+        retry_safe: false,
+        transport: "applescript",
+        detail: "Messages automation failed with AppleScript error " + code + ".",
+      };
+      const sending = client.request("send", {}, { timeoutMs: 0 }).catch((error: unknown) => error);
+      emitRpcError(child, { code: -32603, message: "Delivery failed", data });
+      const error = await sending;
+      expect(error).toBeInstanceOf(IMessageRpcRequestError);
+      if (!(error instanceof IMessageRpcRequestError)) {
+        throw new Error("expected RPC rejection");
+      }
+      expect(error).toMatchObject({ code: -32603, data });
+      expect(error.message.includes("Privacy & Security > Automation")).toBe(guidance.length > 0);
+      for (const text of guidance) {
+        expect(error.message).toContain(text);
+      }
+      if (remoteHost) {
+        expect(error.message).not.toContain(process.execPath);
+      }
+    } finally {
+      child.emit("close", 0, null);
+      await client.stop();
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 describe("IMessageRpcClient bridge-stall cache invalidation", () => {
   let child: MockChild;
 

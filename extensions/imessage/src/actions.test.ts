@@ -657,4 +657,48 @@ describe("imessage message actions", () => {
     ).rejects.toThrow(/must be valid base64/);
     expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
   });
+
+  it("retains account Automation status until a confirmed attachment send", async () => {
+    const { createPluginRuntimeMock } = await import("openclaw/plugin-sdk/channel-test-helpers");
+    const { getOptionalIMessageRuntime, setIMessageRuntime } = await import("./runtime.js");
+    const prior = getOptionalIMessageRuntime();
+    const runtime = createPluginRuntimeMock();
+    setIMessageRuntime(runtime);
+    let lastError: string | null | undefined;
+    const lease = runtime.channel.runtimeContexts.register({
+      channelId: "imessage",
+      accountId: "default",
+      capability: "imessage-send-status",
+      context: {
+        getStatus: () => ({ accountId: "default", lastError }),
+        setStatus: (next: { lastError?: string | null }) => {
+          lastError = next.lastError;
+        },
+      },
+    });
+    const error = new Error("Messages automation failed with AppleScript error -1743.");
+    const params = { chatGuid, filename: "photo.jpg", buffer: "YWJj" };
+    try {
+      runtimeMock.sendAttachment.mockRejectedValueOnce(error);
+      await expect(run("sendAttachment", params)).rejects.toBe(error);
+      expect(lastError).toContain("permission to control Messages");
+      expect(runtimeMock.sendAttachment).toHaveBeenCalledTimes(1);
+      const warning = lastError;
+      runtimeMock.sendAttachment.mockResolvedValueOnce({ messageId: "unknown" });
+      await run("upload-file", params);
+      expect(lastError).toBe(warning);
+      runtimeMock.sendAttachment.mockResolvedValueOnce({ messageId: "sent-guid" });
+      await run("sendAttachment", params);
+      expect(lastError).toBeNull();
+      lastError = "unrelated monitor error";
+      runtimeMock.sendAttachment.mockResolvedValueOnce({ messageId: "sent-guid" });
+      await run("upload-file", params);
+      expect(lastError).toBe("unrelated monitor error");
+    } finally {
+      lease.dispose();
+      if (prior) {
+        setIMessageRuntime(prior);
+      }
+    }
+  });
 });

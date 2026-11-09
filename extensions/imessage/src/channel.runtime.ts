@@ -14,6 +14,7 @@ import {
 import { monitorIMessageProvider } from "./monitor.js";
 import { IMESSAGE_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
 import { probeIMessage } from "./probe.js";
+import { normalizeIMessageAutomationError } from "./process-diagnostics.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
 import { sendMessageIMessage } from "./send.js";
 export { imessageSetupWizard } from "./setup-surface.js";
@@ -118,7 +119,17 @@ export async function startIMessageGatewayAccount(
   }
   const statusSink = createAccountStatusSink({
     accountId: account.accountId,
-    setStatus: ctx.setStatus,
+    setStatus: (next) => {
+      // Inbound readiness does not confirm an outbound send. Keep its Automation
+      // warning while allowing the monitor to clear unrelated connection errors.
+      if (
+        next.lastError === null &&
+        normalizeIMessageAutomationError(ctx.getStatus().lastError ?? "")
+      ) {
+        delete next.lastError;
+      }
+      ctx.setStatus(next);
+    },
   });
   statusSink({ lifecycle: "starting" });
   ctx.log?.info?.(

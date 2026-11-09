@@ -24,17 +24,16 @@ import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
 import { chatContextFromIMessageTarget } from "./chat-context.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { resolveAuthorizedIMessageActionReference } from "./message-action-reference.js";
-import { normalizeIMessageMessageId } from "./message-guid.js";
 import { describeIMessageMessageTool } from "./message-tool-api.js";
 import {
   findLatestIMessageEntryForChat,
   isIMessageCurrentMessageInChatAsync,
-  rememberIMessageReplyCache,
   type IMessageChatContext,
 } from "./monitor-reply-cache.js";
 import { imessageRpcSupportsMethod } from "./private-api-status.js";
 import { getCachedIMessagePrivateApiStatus, probeIMessagePrivateApi } from "./probe.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
+import { completeIMessageBridgeSend, withIMessageSendFailureStatus } from "./send-status.js";
 import { parseIMessageTarget, type IMessageService, type IMessageTarget } from "./targets.js";
 
 const loadIMessageActionsRuntime = createLazyRuntimeNamedExport(
@@ -467,24 +466,6 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       });
     };
 
-    const completeOutboundBridgeMessage = async (
-      result: { messageId: string },
-      targetChatGuid: string,
-      details?: Record<string, unknown>,
-    ) => {
-      const messageId = normalizeIMessageMessageId(result.messageId);
-      if (messageId) {
-        await rememberIMessageReplyCache({
-          accountId: account.accountId,
-          messageId,
-          chatGuid: targetChatGuid,
-          timestamp: Date.now(),
-          isFromMe: true,
-        });
-      }
-      return jsonResult({ ok: true, messageId: result.messageId, ...details });
-    };
-
     await assertPrivateApiEnabled();
 
     if (action === "react") {
@@ -585,7 +566,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         attachment: attachment?.spec ?? undefined,
         options: opts,
       });
-      return await completeOutboundBridgeMessage(result, reference.chatGuid, {
+      return await completeIMessageBridgeSend(account.accountId, result, reference.chatGuid, {
         repliedTo: reference.messageId,
       });
     }
@@ -605,7 +586,9 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         effectId,
         options: opts,
       });
-      return await completeOutboundBridgeMessage(result, resolvedChatGuid, { effect: effectId });
+      return await completeIMessageBridgeSend(account.accountId, result, resolvedChatGuid, {
+        effect: effectId,
+      });
     }
 
     if (action === "renameGroup") {
@@ -666,14 +649,16 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       const filename = readStringParam(params, "filename", { required: true });
       const asVoice = readBooleanParam(params, "asVoice");
       const resolvedChatGuid = await chatGuid();
-      const result = await runtime.sendAttachment({
-        chatGuid: resolvedChatGuid,
-        buffer: decodeBase64Buffer(params, action),
-        filename,
-        asVoice: asVoice ?? undefined,
-        options: opts,
-      });
-      return await completeOutboundBridgeMessage(result, resolvedChatGuid);
+      const result = await withIMessageSendFailureStatus(account.accountId, () =>
+        runtime.sendAttachment({
+          chatGuid: resolvedChatGuid,
+          buffer: decodeBase64Buffer(params, action),
+          filename,
+          asVoice: asVoice ?? undefined,
+          options: opts,
+        }),
+      );
+      return await completeIMessageBridgeSend(account.accountId, result, resolvedChatGuid);
     }
 
     if (action === "poll") {
@@ -695,7 +680,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         choices: poll.options,
         options: opts,
       });
-      return await completeOutboundBridgeMessage(result, resolvedChatGuid);
+      return await completeIMessageBridgeSend(account.accountId, result, resolvedChatGuid);
     }
 
     if (action === "poll-vote") {
@@ -754,7 +739,8 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         optionText: optionText ?? undefined,
         options: opts,
       });
-      return await completeOutboundBridgeMessage(
+      return await completeIMessageBridgeSend(
+        account.accountId,
         result,
         pollReference.chatGuid,
         result.optionText ? { pollVotedOption: result.optionText } : undefined,
@@ -764,4 +750,3 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
   },
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

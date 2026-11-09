@@ -66,6 +66,10 @@ function readSentPollOptions(result: Record<string, unknown>): IMessagePollSentO
 }
 
 function resolveMessageId(result: Record<string, unknown>): string {
+  // A resolved transport call without acknowledgment does not prove delivery.
+  if (result.ok === false || result.success === false) {
+    return "unknown";
+  }
   const raw =
     (typeof result.messageGuid === "string" && result.messageGuid.trim()) ||
     (typeof result.messageId === "string" && result.messageId.trim()) ||
@@ -74,7 +78,10 @@ function resolveMessageId(result: Record<string, unknown>): string {
     (typeof result.id === "string" && result.id.trim()) ||
     (typeof result.message_id === "number" ? String(result.message_id) : "") ||
     (typeof result.id === "number" ? String(result.id) : "");
-  return raw || "ok";
+  return (
+    raw ||
+    (result.ok === true || result.success === true || result.status === "sent" ? "ok" : "unknown")
+  );
 }
 
 async function withTempFile<T>(
