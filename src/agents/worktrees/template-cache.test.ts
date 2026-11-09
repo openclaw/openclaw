@@ -128,12 +128,14 @@ it.each([false, true])("settles refresh before publication (fail=%s)", async (fa
   const original = await idle();
   const { entered, finish, block } = preparationGate();
   const failure = new Error("refresh failed");
+  let attempts = 0;
   const next: Partial<typeof params> = {
     contentKey: "commit-2",
     sourceCommit: "b".repeat(40),
-    refresh: block(async (record: { path: string }) => {
+    refresh: block(async (existing: { path: string }, record: { path: string }) => {
+      await fs.cp(existing.path, record.path, { recursive: true });
       await fs.writeFile(path.join(record.path, "source"), "updated");
-      if (fail) {
+      if (fail && attempts++ === 0) {
         throw failure;
       }
       return true;
@@ -141,9 +143,9 @@ it.each([false, true])("settles refresh before publication (fail=%s)", async (fa
   };
   const refreshing = prepare(next);
   await entered;
-  expect((await list())[0]).toMatchObject({
+  expect(await templateRegistry.readTemplateAsync(env, params.cacheKey)).toMatchObject({
     id: original?.id,
-    status: "preparing",
+    status: "ready",
     contentKey: params.contentKey,
   });
   const concurrent = prepare(next);
@@ -151,12 +153,9 @@ it.each([false, true])("settles refresh before publication (fail=%s)", async (fa
   finish();
   const refreshed = fail ? (await rejected, undefined) : await refreshing;
   const reused = await concurrent;
-  if (fail) {
-    expect(reused?.id).not.toBe(original?.id);
-  } else {
-    expect(reused?.id).toBe(original?.id);
-  }
-  expect(await source(reused!)).toBe(fail ? "source" : "updated");
+  expect(reused?.id).not.toBe(original?.id);
+  expect(await source(original!)).toBe("source");
+  expect(await source(reused!)).toBe("updated");
   await refreshed?.release();
   expect(await templateRegistry.readTemplateAsync(env, params.cacheKey)).toMatchObject({
     status: "ready",
@@ -165,6 +164,37 @@ it.each([false, true])("settles refresh before publication (fail=%s)", async (fa
   });
   await reused?.release();
 });
+
+it.each(["validation", "replacement"])(
+  "keeps the last-good generation when %s is interrupted before a resumed burst",
+  async (phase) => {
+    const original = await idle();
+    const controller = new AbortController();
+    const { entered, finish, validate, prepare: build } = preparationGate();
+    const interrupted = prepare({
+      options: { ...options, signal: controller.signal },
+      ...(phase === "validation" ? { validate } : { backend: "replacement", prepare: build }),
+    });
+    await entered;
+    const rejection = expect(interrupted).rejects.toMatchObject({
+      code: "OPENCLAW_STATE_LEASE_ABORTED",
+    });
+    controller.abort();
+    finish();
+    await rejection;
+    expect(await templateRegistry.readTemplateAsync(env, params.cacheKey)).toMatchObject({
+      id: original?.id,
+      status: "ready",
+    });
+    const rebuild = vi.fn(params.prepare);
+    const resumed = await Promise.all(
+      Array.from({ length: 20 }, () => prepare({ prepare: rebuild })),
+    );
+    expect(resumed.map((record) => record?.id)).toEqual(Array(20).fill(original?.id));
+    expect(rebuild).not.toHaveBeenCalled();
+    await Promise.all(resumed.map(async (record) => await record?.release()));
+  },
+);
 
 it.each(["owner", "waiter"])("isolates preparation %s cancellation", async (canceled) => {
   const { entered, finish, prepare: build } = preparationGate();
@@ -218,6 +248,7 @@ it.each([
   { phase: "build", uncertain: false },
   { phase: "build", uncertain: true },
   { phase: "validate", uncertain: true },
+  { phase: "refresh", uncertain: true },
   { phase: "retire", uncertain: false },
   { phase: "retire", uncertain: true },
 ])("retains $phase custody ($uncertain)", async ({ phase, uncertain }) => {
@@ -234,9 +265,28 @@ it.each([
   } else {
     const fail = () => Promise.reject(failure);
     const build: typeof params.prepare = (...args) => params.prepare(...args).then(fail);
-    await expect(prepare(phase === "build" ? { prepare: build } : { validate: fail })).rejects.toBe(
-      failure,
-    );
+    await expect(
+      prepare(
+        phase === "build"
+          ? { prepare: build }
+          : phase === "refresh"
+            ? {
+                contentKey: "commit-2",
+                refresh: (_existing, record, guard) => build(record, guard).then(() => true),
+              }
+            : { validate: fail },
+      ),
+    ).rejects.toBe(failure);
+  }
+  if (phase === "refresh") {
+    await collect();
+    expect(await list()).toHaveLength(2);
+    expect(await templateRegistry.readTemplateAsync(env, params.cacheKey)).toMatchObject({
+      id: prepared?.id,
+      status: "ready",
+    });
+    expect(await source(prepared!)).toBe("source");
+    return;
   }
   const [record] = await list();
   expect(record?.status).toBe("preparing");
