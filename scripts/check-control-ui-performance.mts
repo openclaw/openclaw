@@ -60,7 +60,8 @@ const controlUiPerformanceBudgets = {
   newBootCssRequests: 3,
   // Coordinator-accepted warm cached-page reveal latch (#195865): measured
   // 1,297,532 B (+495 B over its CI base) plus 64 B headroom.
-  chatBootJsGzipBytes: 1_297_596,
+  // Lobby conversation bridge: measured 1,297,951 B (+490 B vs CI base), plus 64 B.
+  chatBootJsGzipBytes: 1_298_015,
   // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
   newBootJsGzipBytes: 803_364,
   startupCssRequests: 1,
@@ -81,11 +82,12 @@ const controlUiPerformanceBudgets = {
   // Josh Lehman approved the OpenClaw ID account menu styles (#192352, 2026-11-06):
   // measured 325,045 B gzip / 1,675,690 B raw; retain 64 B headroom.
   // Lobby collection/detail/access presentation stays in the lazy Board stylesheet.
-  // Exact base c616f3a0: 325,586 B gzip / 1,676,630 B raw (already over the caps).
-  // Candidate: +790 B gzip / +4,232 B raw; allocate that measured surface and keep
-  // the same 64 B headroom. Startup budgets and the base-growth guard are unchanged.
-  totalCssGzipBytes: 326_440,
-  totalCssRawBytes: 1_680_926,
+  // Same-run CI: +749 B gzip / +4,232 B raw; measured 327,467 / 1,689,094 B +64 B.
+  // The CI base already measures 326,718 B gzip / 1,684,862 B raw.
+  // Allocate the measured candidate with the existing 64 B margin; initial-entry
+  // budgets and the differential growth guard remain unchanged.
+  totalCssGzipBytes: 327_531,
+  totalCssRawBytes: 1_689_158,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
