@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { AsyncWorkScope, createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -53,6 +54,53 @@ it.each([
   );
   expect(mocks.writeJson).toHaveBeenCalledWith({ connected: true });
 });
+
+it.each([
+  ["status", true],
+  ["grants", true],
+  ["pair", false],
+  ["revoke", false],
+] as const)(
+  "settles %s interruption without losing an accepted receipt",
+  async (method, cancel) => {
+    const response = createDeferred<{ connected: boolean }>();
+    const called = createDeferred();
+    mocks.callGatewayFromCli.mockImplementation((_method, _opts, _params, extra) => {
+      if (extra?.signal?.aborted) {
+        response.reject(extra.signal.reason);
+      } else {
+        extra?.signal?.addEventListener("abort", () => response.reject(extra.signal.reason), {
+          once: true,
+        });
+      }
+      called.resolve();
+      return response.promise;
+    });
+    const scope = new AsyncWorkScope();
+    const args = method === "revoke" ? [method, "gr_fixture"] : [method];
+    const command = scope.run(() => runCli([...args, "--json"]));
+    let settled = false;
+    void command.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    scope.beginClose(new Error("interrupted"));
+    await called.promise;
+    for (let index = 0; index < 8; index += 1) {
+      await Promise.resolve();
+    }
+    const settledBeforeResponse = settled;
+    response.resolve({ connected: true });
+    await command.catch(() => undefined);
+
+    expect(settledBeforeResponse).toBe(cancel);
+    expect(mocks.writeJson).toHaveBeenCalledTimes(cancel ? 0 : 1);
+  },
+);
 
 it("prints pairing details and instructions", async () => {
   mocks.callGatewayFromCli.mockResolvedValue({
