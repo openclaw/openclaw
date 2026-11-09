@@ -10,7 +10,7 @@ import {
   taskProbe,
   installScheduledTask,
   resolveTaskScriptPath,
-  NODE_PROCESS_QUERY,
+  isProcessSnapshotQuery,
   makeNodeServiceEnv,
   makeSpawnSyncResult,
   expectNoGatewayTermination,
@@ -32,7 +32,17 @@ import {
   writeNodeScript,
 } from "./test-helpers/schtasks-fixtures.js";
 
-const { getWindowsPowerShellExePath } = await import("../infra/windows-install-roots.js");
+const { getWindowsCmdExePath, getWindowsPowerShellExePath } =
+  await import("../infra/windows-install-roots.js");
+
+function taskScriptAction(scriptPath: string) {
+  return {
+    type: 0,
+    path: getWindowsCmdExePath(),
+    arguments: `/d /s /c ""${scriptPath}""`,
+    workingDirectory: "",
+  };
+}
 
 describe("Windows activation ownership", () => {
   it("does not treat a pre-existing gateway listener as Scheduled Task launch evidence", async () => {
@@ -69,7 +79,7 @@ describe("Windows activation ownership", () => {
       spawnSync.mockImplementation((command, args) =>
         command === getWindowsPowerShellExePath() &&
         Array.isArray(args) &&
-        args.includes(NODE_PROCESS_QUERY)
+        isProcessSnapshotQuery(args)
           ? makeSpawnSyncResult({
               stdout: JSON.stringify([
                 { ProcessId: 4242, CommandLine: `cmd.exe /d /s /c "${taskScriptPath}"` },
@@ -109,7 +119,7 @@ describe("Windows activation ownership", () => {
         if (
           command === getWindowsPowerShellExePath() &&
           Array.isArray(args) &&
-          args.includes(NODE_PROCESS_QUERY)
+          isProcessSnapshotQuery(args)
         ) {
           return makeSpawnSyncResult({
             stdout: JSON.stringify(
@@ -147,7 +157,7 @@ describe("Windows activation ownership", () => {
       spawnSync.mockImplementation((command, args) =>
         command === getWindowsPowerShellExePath() &&
         Array.isArray(args) &&
-        args.includes(NODE_PROCESS_QUERY)
+        isProcessSnapshotQuery(args)
           ? makeSpawnSyncResult({
               stdout: JSON.stringify([
                 { ProcessId: 4242, CommandLine: installedGatewayCommandLine },
@@ -186,7 +196,7 @@ describe("Windows activation ownership", () => {
       spawnSync.mockImplementation((command, args) =>
         command === getWindowsPowerShellExePath() &&
         Array.isArray(args) &&
-        args.includes(NODE_PROCESS_QUERY)
+        isProcessSnapshotQuery(args)
           ? makeSpawnSyncResult({
               stdout: JSON.stringify([
                 { ProcessId: 4242, CommandLine: installedGatewayCommandLine },
@@ -233,7 +243,7 @@ describe("Windows activation ownership", () => {
       spawnSync.mockImplementation((command, args) =>
         command === getWindowsPowerShellExePath() &&
         Array.isArray(args) &&
-        args.includes(NODE_PROCESS_QUERY)
+        isProcessSnapshotQuery(args)
           ? makeSpawnSyncResult({
               stdout: JSON.stringify([
                 { ProcessId: 4242, CommandLine: installedGatewayCommandLine },
@@ -279,7 +289,7 @@ describe("Windows activation ownership", () => {
         if (
           command !== getWindowsPowerShellExePath() ||
           !Array.isArray(args) ||
-          !args.includes(NODE_PROCESS_QUERY)
+          !isProcessSnapshotQuery(args)
         ) {
           return makeSpawnSyncResult();
         }
@@ -324,7 +334,7 @@ describe("Windows activation ownership", () => {
       spawnSync.mockImplementation((command, args) =>
         command === getWindowsPowerShellExePath() &&
         Array.isArray(args) &&
-        args.includes(NODE_PROCESS_QUERY)
+        isProcessSnapshotQuery(args)
           ? makeSpawnSyncResult({
               stdout: JSON.stringify(
                 schtasksCalls.some((call) => call[0] === "/Run")
@@ -369,7 +379,7 @@ describe("Windows activation ownership", () => {
         if (
           command !== getWindowsPowerShellExePath() ||
           !Array.isArray(args) ||
-          !args.includes(NODE_PROCESS_QUERY)
+          !isProcessSnapshotQuery(args)
         ) {
           return makeSpawnSyncResult();
         }
@@ -565,7 +575,7 @@ describe("Scheduled Task activation provenance", () => {
       const scriptPath = resolveTaskScriptPath(env);
       const hasRun = () => schtasksCalls.some((call) => call[0] === "/Run");
       spawnSync.mockImplementation((command, args) => {
-        if (command !== getWindowsPowerShellExePath() || !args?.includes(NODE_PROCESS_QUERY)) {
+        if (command !== getWindowsPowerShellExePath() || !isProcessSnapshotQuery(args)) {
           return makeSpawnSyncResult();
         }
         if (scenario.cim === "failed") {
@@ -621,7 +631,14 @@ describe("Scheduled Task activation provenance", () => {
             return { status: 2, stdout: "", stderr: "fixture Scheduler unavailable" };
           }
         }
-        return { status: 0, stdout: JSON.stringify(snapshot) };
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            ...snapshot,
+            taskPath: `\\${env.OPENCLAW_WINDOWS_TASK_NAME ?? "OpenClaw Gateway"}`,
+            actions: [taskScriptAction(scriptPath)],
+          }),
+        };
       });
       const activation = runScheduledTaskOrThrow({
         taskName: env.OPENCLAW_WINDOWS_TASK_NAME ?? "OpenClaw Gateway",
@@ -691,7 +708,7 @@ describe("Scheduled Task activation provenance", () => {
         "utf8",
       );
       spawnSync.mockImplementation((command, args) =>
-        command === getWindowsPowerShellExePath() && args?.includes(NODE_PROCESS_QUERY)
+        command === getWindowsPowerShellExePath() && isProcessSnapshotQuery(args)
           ? makeSpawnSyncResult({
               stdout: JSON.stringify([
                 { ProcessId: 9999, CommandLine: "powershell.exe" },
@@ -702,7 +719,11 @@ describe("Scheduled Task activation provenance", () => {
       );
       taskProbe.mockReturnValue({
         status: 0,
-        stdout: JSON.stringify(running ? runningTaskSnapshot() : notYetRunTaskSnapshot()),
+        stdout: JSON.stringify({
+          ...(running ? runningTaskSnapshot() : notYetRunTaskSnapshot()),
+          taskPath: "\\OpenClaw Node",
+          actions: [taskScriptAction(scriptPath)],
+        }),
       });
       const activation = runScheduledTaskOrThrow({
         taskName: "OpenClaw Node",

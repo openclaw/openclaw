@@ -19,6 +19,7 @@ import {
   expectTaskkill,
   findVerifiedGatewayListenerPidsOnPortSync,
   mockWindowsTaskkillSuccess,
+  mockSettledSchedulerSupervision,
   mockLingeringGatewayListener,
   probeProcessState,
   pushSuccessfulSchtasksResponses,
@@ -523,6 +524,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
   taskTest("starts despite audit observer failure", async ({ env }) => {
     pushSuccessfulSchtasksResponses(3);
+    mockSettledSchedulerSupervision();
     spawnSync.mockReturnValueOnce(spawnSyncResult(JSON.stringify({ state: 4, enabled: true })));
     setTaskStateProbeResult(4);
     const write = vi.fn();
@@ -615,6 +617,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
   taskTest("preserves gateway listeners during node task restart", async ({ env, stdout }) => {
     pushSuccessfulSchtasksResponses(4);
+    mockSettledSchedulerSupervision();
     env.OPENCLAW_SERVICE_KIND = "node";
     env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Node";
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);

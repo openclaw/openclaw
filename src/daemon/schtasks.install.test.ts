@@ -110,8 +110,6 @@ vi.mock("./schtasks-exec.js", () => {
 });
 
 beforeEach(() => {
-  activationClock.now = 0;
-  vi.spyOn(Date, "now").mockImplementation(() => activationClock.now);
   schtasksCalls.length = 0;
   schtasksResponses.length = 0;
   registrationResponse = undefined;
@@ -123,10 +121,6 @@ beforeEach(() => {
     .mockReturnValue({ status: 0, stdout: '{"state":4,"enabled":true}', stderr: "" });
   resolveWindowsOemEncodingMock.mockReset();
   resolveWindowsOemEncodingMock.mockReturnValue(null);
-});
-
-afterEach(() => {
-  vi.restoreAllMocks();
 });
 
 describe("installScheduledTask", () => {

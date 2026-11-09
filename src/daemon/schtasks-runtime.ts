@@ -167,13 +167,19 @@ export async function waitForScheduledTaskRunningEvidence(
   options?: { settleAfterRun?: boolean; assertCurrent?: () => void },
 ): Promise<boolean> {
   const deadline = performance.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
+  const settlingDeadline =
+    deadline + (options?.settleAfterRun ? SCHEDULED_TASK_FALLBACK_TIMEOUT_MS : 0);
+  let runningSince: number | undefined;
+  let previousRunningSignature: string | undefined;
   while (true) {
-    const remaining = deadline - performance.now();
+    options?.assertCurrent?.();
+    const remaining = settlingDeadline - performance.now();
     if (remaining <= 0) {
       return false;
     }
     const probe = probeScheduledTaskState(resolveTaskName(env), remaining);
-    if (performance.now() >= deadline) {
+    const now = performance.now();
+    if (!options?.settleAfterRun && now >= deadline) {
       return false;
     }
     // Only Scheduler supervision, not an old Startup process, proves takeover.
@@ -182,6 +188,21 @@ export async function waitForScheduledTaskRunningEvidence(
     if (running && !options?.settleAfterRun) {
       return true;
     }
+    if (!running || signature !== previousRunningSignature) {
+      runningSince = undefined;
+    }
+    if (running && runningSince === undefined && now < deadline) {
+      runningSince = now;
+    }
+    // /Run is only an accepted request. A late start still needs one full,
+    // continuous settling interval, without extending the original start deadline.
+    if (runningSince !== undefined && now - runningSince >= SCHEDULED_TASK_FALLBACK_TIMEOUT_MS) {
+      return true;
+    }
+    if (now >= settlingDeadline || (now >= deadline && runningSince === undefined)) {
+      return false;
+    }
+    previousRunningSignature = signature;
     await sleep(SCHEDULED_TASK_FALLBACK_POLL_MS);
   }
 }

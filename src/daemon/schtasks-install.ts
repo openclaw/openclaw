@@ -323,6 +323,7 @@ export async function installScheduledTask(
           env: activationEnv,
           scriptPath,
           allowFallback: false,
+          acceptProcessLaunchEvidence: startupRuntime !== null,
         });
         writeFormattedLines(stdout, [
           { label: "Updated task script", value: scriptPath },
@@ -447,6 +448,7 @@ export async function installScheduledTask(
         scriptPath,
         assertCurrent: definitionTransaction?.assertCurrent,
         allowFallback: definitionTransaction ? false : undefined,
+        acceptProcessLaunchEvidence: startupRuntime !== null,
       });
       // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
       writeFormattedLines(stdout, [

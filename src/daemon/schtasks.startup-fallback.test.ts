@@ -392,6 +392,21 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+function holdQueuedTaskProbesUntilRunCount(runCount: number) {
+  sleepMock.mockImplementation(async (ms: number) => {
+    timeState.now += ms;
+    if (schtasksCalls.filter(([action]) => action === "/Run").length >= runCount) {
+      advanceTaskProbe();
+    }
+  });
+}
+
+function holdCurrentTaskProbe() {
+  sleepMock.mockImplementation(async (ms: number) => {
+    timeState.now += ms;
+  });
+}
+
 describe("Windows startup fallback", () => {
   it("probes missing tasks without locale or parent-env leakage", async ({ env }) => {
     vi.stubEnv("BOUNDARY_PARENT_ONLY", "synthetic");
@@ -507,6 +522,7 @@ describe("Windows startup fallback", () => {
     ]);
     const progress = notYetRunTaskSnapshot("2026-04-15T23:42:31.0000000Z");
     queueNativeResponses(notYetRunTaskSnapshot(), progress, runningTaskSnapshot());
+    holdQueuedTaskProbesUntilRunCount(2);
     await expect(installGateway(env)).resolves.toEqual({
       scriptPath: resolveTaskScriptPath(env),
     });
@@ -543,6 +559,7 @@ describe("Windows startup fallback", () => {
     mockTerminatingProcess(INSTALLED_GATEWAY_COMMAND, 4242, 128);
 
     addSuccessfulMigrationResponses();
+    holdQueuedTaskProbesUntilRunCount(2);
 
     await installGateway(env);
 
@@ -657,11 +674,8 @@ describe("Windows startup fallback", () => {
           state: 2,
         });
       }
-      await expect(installGateway(env)).rejects.toThrow(
-        failure === "not launched"
-          ? "refusing a direct fallback"
-          : "Replacement Windows Scheduled Task did not produce running evidence",
-      );
+      holdQueuedTaskProbesUntilRunCount(2);
+      await expect(installGateway(env)).rejects.toThrow("refusing a direct fallback");
       expect(spawn).not.toHaveBeenCalled();
       await fs.access(startupEntryPath);
     },
@@ -686,6 +700,7 @@ describe("Windows startup fallback", () => {
           );
     });
     addSuccessfulMigrationResponses();
+    holdQueuedTaskProbesUntilRunCount(2);
 
     await installGateway(env, new PassThrough(), "19433", {
       status: "running",
@@ -723,11 +738,12 @@ describe("Windows startup fallback", () => {
     await writeGatewayScript(env);
     queueNativeResponses(cleanExitTaskSnapshot(), cleanExitTaskSnapshot());
     addSuccessfulScheduledTaskRestartResponses([notYetRunTaskSnapshot(), runningTaskSnapshot()]);
+    holdCurrentTaskProbe();
 
     await restartScheduledTask({ env, stdout: new PassThrough(), preserveDefinition: true });
 
     expect(await snapshot()).toEqual(before);
-    expect(sleepMock).not.toHaveBeenCalled();
+    expect(sleepMock).toHaveBeenCalled();
     expect(schtasksCalls.filter(([action]) => action === "/Run")).toHaveLength(1);
   });
 
@@ -747,7 +763,9 @@ describe("Windows startup fallback", () => {
     queueNativeResponses(cleanExitTaskSnapshot(), cleanExitTaskSnapshot());
     addSuccessfulScheduledTaskRestartResponses([cleanExitTaskSnapshot()], cleanExitTaskSnapshot());
 
-    await restartScheduledTask({ env: hiddenEnv, stdout: new PassThrough() });
+    await expect(
+      restartScheduledTask({ env: hiddenEnv, stdout: new PassThrough() }),
+    ).rejects.toThrow("refusing a direct fallback");
 
     await fs.access(startupEntryPath);
   });
@@ -802,7 +820,7 @@ describe("Windows startup fallback", () => {
       cleanExitTaskSnapshot(),
     ]);
 
-    await installGateway(env);
+    await expect(installGateway(env)).rejects.toThrow("refusing a direct fallback");
 
     expect(spawn).not.toHaveBeenCalled();
   });
@@ -825,7 +843,7 @@ describe("Windows startup fallback", () => {
 
     addAcceptedRunNeverStartsResponses();
 
-    await installGateway(env);
+    await expect(installGateway(env)).rejects.toThrow("refusing a direct fallback");
 
     expect(spawn).not.toHaveBeenCalled();
   });

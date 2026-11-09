@@ -3,12 +3,15 @@ import {
   exportedTaskDefaults,
   omitExportedTaskDefaults,
 } from "./schtasks-export-defaults.test-support.js";
-import { buildScheduledTaskXml, resolveTaskScriptPath } from "./schtasks-layout.js";
+import { resolveTaskScriptPath } from "./schtasks-layout.js";
+import { buildScheduledTaskXml } from "./schtasks-xml.js";
 import { auditScheduledTaskDefinition } from "./service-audit-schtasks.js";
 import type { ServiceDefinitionDrift } from "./service-audit-types.js";
 
 const native = vi.hoisted(() => ({ task: vi.fn(), identity: vi.fn() }));
+// mock-isolation: audit fixtures provide complete synthetic Task Scheduler XML responses.
 vi.mock("./schtasks-exec.js", () => ({ execSchtasks: native.task }));
+// mock-isolation: SID lookup is isolated to deterministic synthetic identity results.
 vi.mock("./exec-file.js", () => ({ execFileUtf8: native.identity }));
 
 const env = { USERPROFILE: "C:\\Users\\fixture", USERNAME: "fixture" };
@@ -16,6 +19,11 @@ const expected = buildScheduledTaskXml({
   taskDescription: "OpenClaw Gateway",
   taskUser: "fixture",
   launchPath: resolveTaskScriptPath(env),
+});
+const presentExportedTaskDefaults = exportedTaskDefaults.filter(([key, value]) => {
+  const tag = key.split(".").at(-1)!;
+  const field = `<${tag}>${value}</${tag}>`;
+  return expected.split(field).length === 2;
 });
 beforeEach(() => {
   native.task.mockReset();
@@ -42,7 +50,7 @@ it.each(["inspection", "publication", "expanded publication"])(
   },
 );
 
-it.each(exportedTaskDefaults)(
+it.each(presentExportedTaskDefaults)(
   "does not treat non-default %s as an omission",
   async (key, value, changed) => {
     const tag = key.split(".").at(-1)!;

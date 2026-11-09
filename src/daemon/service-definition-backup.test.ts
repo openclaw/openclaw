@@ -55,6 +55,49 @@ async function nativeOmittedEnabledRefresh() {
 }
 
 describe("service definition backup receipts", () => {
+  it("restores a serialized native receipt after omitted Enabled becomes explicit false", async () => {
+    const f = await nativeOmittedEnabledRefresh();
+    expect(f.disabled).not.toBe(f.task());
+    f.setTask(f.disabled);
+    await restoreGatewayServiceDefinitionBackup({ ...f, receipt: f.receipt });
+    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+    expect(f.task()).toBe(
+      f.originalTask.replace(
+        /(<Settings>[\s\S]*?)<Enabled>true<\/Enabled>/u,
+        "$1<Enabled>false</Enabled>",
+      ),
+    );
+  });
+
+  it.each(["duplicate", "attribute", "nested", "priority", "identity", "unknown"])(
+    "refuses a %s change alongside native Enabled omission",
+    async (edit) => {
+      const f = await nativeOmittedEnabledRefresh();
+      const enabled = "<Enabled>false</Enabled>";
+      const changed =
+        edit === "duplicate"
+          ? f.disabled.replace(enabled, enabled + enabled)
+          : edit === "attribute"
+            ? f.disabled.replace(enabled, '<Enabled custom="true">false</Enabled>')
+            : edit === "nested"
+              ? f.task().replace("<IdleSettings>", `<IdleSettings>${enabled}`)
+              : edit === "priority"
+                ? f.disabled.replace("<Settings>", "<Settings><Priority>4</Priority>")
+                : edit === "identity"
+                  ? f.disabled.replace("<UserId>operator</UserId>", "<UserId>another</UserId>")
+                  : f.disabled.replace(
+                      "<Settings>",
+                      "<Settings><CustomSetting>true</CustomSetting>",
+                    );
+      f.setTask(changed);
+      await expect(
+        restoreGatewayServiceDefinitionBackup({ ...f, receipt: f.receipt }),
+      ).rejects.toThrow("Scheduled Task changed");
+      expect(f.task()).toBe(changed);
+      expect(native.task.mock.calls.filter(([args]) => args[0] === "/Create")).toHaveLength(1);
+    },
+  );
+
   it.each(["linux", "win32"] as const)(
     "accepts acknowledged original bytes without repeating the %s publication",
     async (platform) => {
