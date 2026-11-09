@@ -18,6 +18,8 @@ describe("registered ClawRouter web search over HTTP", () => {
   let format = "tavily.search";
   let responseFormat: string | undefined;
   let methods: string[] | undefined;
+  let titleOverride: string | undefined;
+  let contentOverride: string | undefined;
   const fixtures = [
     {
       id: "tavily",
@@ -91,8 +93,14 @@ describe("registered ClawRouter web search over HTTP", () => {
         body: body.length ? JSON.parse(body.toString()) : undefined,
       });
       const selected = fixture();
+      const firstTitle = titleOverride ?? "Synthetic result";
       const results = [
-        { title: "Synthetic result", url: "https://example.com/search", ...selected.row },
+        {
+          title: firstTitle,
+          url: "https://example.com/search",
+          ...selected.row,
+          ...(contentOverride === undefined ? {} : { content: contentOverride }),
+        },
         { title: "Unsafe link", url: "javascript:alert(1)", ...selected.row },
       ];
       response.setHeader("Content-Type", "application/json");
@@ -164,6 +172,8 @@ describe("registered ClawRouter web search over HTTP", () => {
     format = "tavily.search";
     responseFormat = undefined;
     methods = undefined;
+    titleOverride = undefined;
+    contentOverride = undefined;
     vi.spyOn(authRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "synthetic-router-key",
       source: "test",
@@ -252,6 +262,30 @@ describe("registered ClawRouter web search over HTTP", () => {
     expect(authRuntime.resolveApiKeyForProvider).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "clawrouter" }),
     );
+  });
+
+  it("keeps a result title and snippet well-formed when a UTF-16 cap splits a surrogate pair", async () => {
+    // 499 BMP code units + a two-unit surrogate pair = 501 code units, so the 500-unit (title)
+    // and 4000-unit (snippet) boundaries fall inside the pair; truncation must back off to a
+    // code-point boundary instead of leaving a lone surrogate behind.
+    const emoji = "🥐";
+    titleOverride = `${"a".repeat(499)}${emoji}`;
+    contentOverride = `${"b".repeat(3_999)}${emoji}`;
+    const result = await tool().execute({ query: "synthetic query", count: 2 });
+    const rows = Array.isArray(result.results) ? result.results : [];
+    const row = rows[0] as { title?: unknown; snippet?: unknown } | undefined;
+    // wrapWebContent prefixes untrusted-content markers and metadata before a "---"
+    // separator; assert each truncated body is well-formed and backs off to the code-point
+    // boundary (emoji dropped) rather than a lone surrogate.
+    for (const [text, expected] of [
+      [String(row?.title), "a".repeat(499)],
+      [String(row?.snippet), "b".repeat(3_999)],
+    ] as const) {
+      expect(text.isWellFormed()).toBe(true);
+      const body = text.match(/---\n([\s\S]*?)\n<<<END_EXTERNAL_UNTRUSTED_CONTENT/)![1]!;
+      expect(body.isWellFormed()).toBe(true);
+      expect(body).toBe(expected);
+    }
   });
 
   it("rejects mismatched native formats and methods before dispatch", async () => {

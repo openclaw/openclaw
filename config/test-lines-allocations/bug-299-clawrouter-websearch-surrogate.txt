@@ -1,0 +1,2 @@
+34
+# ClawRouter web search regression: keep result title and snippet well-formed when the 500/4000-code-unit caps split a surrogate pair.
