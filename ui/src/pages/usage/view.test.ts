@@ -6,7 +6,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRecordedCostUsage } from "./test-helpers/recorded-cost.test-support.ts";
 import type { UsageProps } from "./types.ts";
-import { texts } from "./view-render.test-support.ts";
+import { openUsageDisplay, openUsageFilter, texts } from "./view-render.test-support.ts";
 import {
   usageMessages,
   buildAggregatesFromSessions,
@@ -56,24 +56,8 @@ function textAt(container: ParentNode, selector: string) {
 }
 
 function openProviderFilter(container: HTMLElement) {
-  const trigger = container.querySelector<HTMLButtonElement>(
-    '[id="usage-filter-provider:trigger"]',
-  )!;
-  const dropdown = trigger.closest<HTMLElement>(".usage-filter-select")!;
-  const surface = dropdown.querySelector<HTMLElement>('[role="menu"]')!;
-  surface.addEventListener(
-    "overlay-show",
-    () => {
-      // JSDOM has no scrolling layout; keep the real Menu click and focus paths.
-      for (const item of surface.querySelectorAll<HTMLElement>('[role^="menuitem"]')) {
-        item.scrollIntoView = vi.fn();
-      }
-    },
-    { once: true },
-  );
-  trigger.click();
-  flush();
-  return { dropdown, surface, trigger };
+  const { menu, surface, trigger } = openUsageFilter(container, "Provider");
+  return { dropdown: surface, surface, trigger, menu };
 }
 
 function insightCard(container: ParentNode, title: string): Element | undefined {
@@ -101,17 +85,17 @@ describe("renderUsage", () => {
     props.callbacks.filters.onQueryDraftChange = (queryDraft) =>
       setFilters((current) => ({ ...current, queryDraft }));
     const buttons = () => [
-      ...container.querySelectorAll<HTMLButtonElement>(".usage-query-chip button"),
+      ...container.querySelectorAll<HTMLButtonElement>(".usage-filter-chip__remove"),
     ];
     expect(buttons().map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Remove filter: provider:openai",
+      "Remove filter: Provider",
       'Remove filter: "label:Team Planning"',
     ]);
     buttons()[1]!.click();
     flush();
     expect(filters().queryDraft.trim()).toBe("provider:openai");
     expect(buttons().map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Remove filter: provider:openai",
+      "Remove filter: Provider",
     ]);
   });
 
@@ -119,7 +103,10 @@ describe("renderUsage", () => {
     const props = createUsageProps();
     const onApplyQuery = (props.callbacks.filters.onApplyQuery = vi.fn());
     const container = mountUsage(props);
-    const input = container.querySelector<HTMLInputElement>(".usage-query-input")!;
+    document.body.appendChild(container);
+    onTestFinished(() => container.remove());
+    openUsageFilter(container);
+    const input = container.querySelector<HTMLInputElement>(".usage-filter-menu__query input")!;
     const enter = (init: KeyboardEventInit = {}) =>
       new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init });
     const deliberate = enter();
@@ -162,8 +149,10 @@ describe("renderUsage", () => {
           filterOptions: overview.filterOptions,
         },
       });
-      expect(container.querySelectorAll(".usage-filter-select")).toHaveLength(4);
-      expect(textAt(container, ".usage-query-suggestion")).toBe("provider:OpenAI");
+      document.body.appendChild(container);
+      onTestFinished(() => container.remove());
+      openUsageFilter(container);
+      expect(textAt(container, ".usage-filter-menu__suggestion")).toBe("provider:OpenAI");
       expect(parse).toHaveBeenCalledExactlyOnceWith("provider:OpenAI");
 
       setDisplay((current) => ({ ...current, chartMode: "cost" }));
@@ -172,7 +161,7 @@ describe("renderUsage", () => {
 
       setFilters((current) => ({ ...current, queryDraft: "channel:slack" }));
       flush();
-      expect(textAt(container, ".usage-query-suggestion")).toBe("channel:slack");
+      expect(textAt(container, ".usage-filter-menu__suggestion")).toBe("channel:slack");
       expect(parse).toHaveBeenCalledTimes(2);
       expect(parse).toHaveBeenLastCalledWith("channel:slack");
     } finally {
@@ -277,31 +266,33 @@ describe("renderUsage", () => {
     base.callbacks.filters.onQueryDraftChange = onQueryDraftChange;
     document.body.appendChild(container);
     try {
-      expect(container.querySelector(".usage-filter-option")).toBeNull();
+      expect(container.querySelector(".usage-filter-menu__query input")).toBeNull();
       const { dropdown, surface, trigger } = openProviderFilter(container);
-      const first = [...dropdown.querySelectorAll(".usage-filter-option")].find(
+      const first = [...dropdown.querySelectorAll('[role="menuitemcheckbox"]')].find(
         (item) => item.getAttribute("aria-label") === "clear",
       )!;
-      expect(trigger.getAttribute("aria-label")).toBe("Provider All");
+      expect(trigger.getAttribute("aria-label")).toBe("Provider");
       await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
       for (const provider of ["clear", "second"]) {
         const option = [
-          ...dropdown.querySelectorAll<HTMLButtonElement>(".usage-filter-option"),
+          ...dropdown.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]'),
         ].find((item) => item.getAttribute("aria-label") === provider)!;
         option.click();
         await waitForSolid(() => expect(option.getAttribute("aria-checked")).toBe("true"));
-        expect(trigger.getAttribute("aria-label")).toBe(`Provider ${provider === "clear" ? 1 : 2}`);
-        expect(first.closest(".usage-filter-select")).toBe(dropdown);
-        expect(dropdown.querySelector('[role="menu"]')).toBe(surface);
+        expect(trigger.textContent).toContain(provider === "clear" ? "clear" : "2");
+        expect(first.closest('[role="menu"]')).toBe(surface);
         expect(container.contains(dropdown)).toBe(true);
         expect(trigger.getAttribute("aria-expanded")).toBe("true");
         expect(surface.matches(":popover-open")).toBe(true);
       }
       expect(onQueryDraftChange.mock.lastCall?.[0]).toBe("provider:clear provider:second ");
-      trigger.click();
-      await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"));
+      const mainTrigger = container.querySelector<HTMLButtonElement>(
+        ".usage-filter-menu__trigger",
+      )!;
+      mainTrigger.click();
+      await waitForSolid(() => expect(mainTrigger.getAttribute("aria-expanded")).toBe("false"));
       expect(first.isConnected).toBe(true);
-      trigger.click();
+      openProviderFilter(container);
       await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
       expect(dropdown.querySelector('[aria-label="clear"]')).toBe(first);
       expect(first.getAttribute("aria-checked")).toBe("true");
@@ -346,45 +337,49 @@ describe("renderUsage", () => {
     const { container, data, display, setData, setDisplay } = mountReactiveUsage(props);
     document.body.appendChild(container);
     onTestFinished(() => container.remove());
+    openUsageDisplay(container);
+    container.querySelector<HTMLButtonElement>(".usage-display-menu__trigger")!.click();
+    flush();
     const { dropdown } = openProviderFilter(container);
-    const providerOptions = () => dropdown.querySelectorAll<HTMLElement>(".usage-filter-option");
+    const providerOptions = () =>
+      dropdown.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]');
     const values = () => [...providerOptions()].map((option) => option.getAttribute("aria-label"));
     const chartModeButton = (label: string) =>
-      [...container.querySelectorAll<HTMLButtonElement>(".usage-view-options button")].find(
+      [...container.querySelectorAll<HTMLButtonElement>(".usage-display-menu__metric button")].find(
         (button) => button.textContent?.trim() === label,
       );
 
     expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("true");
     expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("false");
-    expect(values()).toEqual(["first", "second"]);
+    expect(values()).toEqual(["second", "first"]);
     expect(
       [...providerOptions()]
         .find((option) => option.getAttribute("aria-checked") === "true")
         ?.getAttribute("aria-label"),
     ).toBe("second");
-    expect(textAt(container, ".usage-query-suggestion")).toBe("provider:second");
+    expect(textAt(container, ".usage-filter-menu__suggestion")).toBe("provider:second");
 
     setDisplay({ ...display(), chartMode: "cost" });
     flush();
     expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("false");
     expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("true");
-    expect(values()).toEqual(["first", "second"]);
+    expect(values()).toEqual(["second", "first"]);
     // The replacement report is already scoped by the Gateway.
     setData({
       ...data(),
       ...projectUsageData(data().sessions.filter((session) => session.agentId === "main")),
     });
     flush();
-    expect(values()).toEqual(["first"]);
-    expect(container.querySelector(".usage-query-suggestion")).toBeNull();
+    expect(values()).toEqual(["second", "first"]);
+    expect(container.querySelector(".usage-filter-menu__suggestion")).toBeNull();
 
     setData({
       ...data(),
       ...projectUsageData([usageSession("replacement", "main", "second-new")]),
     });
     flush();
-    expect(values()).toEqual(["second-new"]);
-    container.querySelector<HTMLButtonElement>(".usage-query-suggestion")?.click();
+    expect(values()).toEqual(["second", "second-new"]);
+    container.querySelector<HTMLButtonElement>(".usage-filter-menu__suggestion")?.click();
     expect(props.callbacks.filters.onQueryDraftChange).toHaveBeenCalledWith(
       'label:"Team  Planning" provider:second-new ',
     );

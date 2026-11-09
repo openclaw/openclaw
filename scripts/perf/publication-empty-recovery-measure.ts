@@ -14,6 +14,11 @@
  * for scheduling cost; 10000 pending results is a separate backlog-heavy case,
  * not a claim that a 10000-session Gateway has 10000 pending publications.
  * Fixture preparation, warmup and unchanged-state verification are outside timing.
+ * --runtime --pending 0 --iterations 1 --warmup 0 measures the real runtime's first
+ * empty reconciliation after its personal-publication startup gate. In this mode
+ * --owner selects a historical github-publication-runtime.ts with preserved imports.
+ * Use fresh processes and Node 26 for exact main/worker allocation counters. Worker
+ * heaps are endpoint observations, not continuous peaks; imports and ready are untimed.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -24,6 +29,8 @@ import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { getHeapStatistics } from "node:v8";
+import type { Worker } from "node:worker_threads";
 import type { DB as StateDatabase } from "../../src/state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -38,6 +45,7 @@ const { values } = parseArgs({
     warmup: { type: "string", default: "20" },
     allocations: { type: "boolean", default: false },
     owner: { type: "string" },
+    runtime: { type: "boolean", default: false },
   },
 });
 assert(values["state-dir"], "--state-dir must name a fresh synthetic directory");
@@ -51,10 +59,21 @@ const publications = integer("publications", 0);
 const delayMs = integer("delay-ms", 0);
 const iterations = integer("iterations", 1);
 const warmup = integer("warmup", 0);
+if (values.runtime) {
+  assert(
+    pending === 0 && publications === 0 && delayMs === 0 && iterations === 1 && warmup === 0,
+    "--runtime requires --pending 0 --iterations 1 --warmup 0 and no publications or delay",
+  );
+}
 const stateDir = path.resolve(values["state-dir"]);
 const ownerUrl = values.owner
   ? pathToFileURL(path.resolve(values.owner))
-  : new URL("../../src/gateway/github-publication-coordinator-methods.ts", import.meta.url);
+  : new URL(
+      values.runtime
+        ? "../../src/gateway/github-publication-runtime.ts"
+        : "../../src/gateway/github-publication-coordinator-methods.ts",
+      import.meta.url,
+    );
 const ownerSourceSha256 = createHash("sha256")
   .update(await readFile(ownerUrl))
   .digest("hex");
@@ -72,14 +91,54 @@ for (const key of Object.keys(process.env)) {
 }
 Object.assign(process.env, syntheticEnv);
 
+const workers = new Set<Worker>();
+if (values.runtime) {
+  process.on("worker", (worker) => {
+    workers.add(worker);
+    worker.once("exit", () => workers.delete(worker));
+  });
+}
+const workerMemory = async () => {
+  const samples = await Promise.all(
+    [...workers].map(async (worker) => {
+      const timeout = new AbortController();
+      try {
+        return await Promise.race([
+          worker.getHeapStatistics(),
+          delay(5_000, undefined, { signal: timeout.signal }).then(() => {
+            throw new Error("Worker heap observation timed out");
+          }),
+        ]);
+      } finally {
+        timeout.abort();
+      }
+    }),
+  );
+  return {
+    count: samples.length,
+    heapUsedBytes: samples.reduce((sum, heap) => sum + heap.used_heap_size, 0),
+    allocatedBytes: samples.reduce((sum, heap) => {
+      const allocated: unknown = Reflect.get(heap, "total_allocated_bytes");
+      assert(typeof allocated === "number", "Worker allocation counters require Node 26");
+      return sum + allocated;
+    }, 0),
+  };
+};
+const mainAllocatedBytes = () => {
+  const allocated: unknown = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
+  assert(typeof allocated === "number", "Exact allocation counters require Node 26");
+  return allocated;
+};
 const state = await import("../../src/state/openclaw-state-db.js");
 const inspector = new Session();
+let runtime:
+  | ReturnType<
+      typeof import("../../src/gateway/github-publication-runtime.js").createGitHubPublicationRuntime
+    >
+  | undefined;
 try {
   const { withEngineStoreAdmission } =
     await import("../../src/infra/database-engine/admission-scope.js");
-  const { createGitHubPublicationCoordinatorMethods } = (await import(
-    ownerUrl.href
-  )) as typeof import("../../src/gateway/github-publication-coordinator-methods.js");
   const { createWorkerSessionPlacementStore } =
     await import("../../src/gateway/worker-environments/placement-store.js");
   const { ensureLocal } =
@@ -136,38 +195,60 @@ try {
   let processed = 0;
   let active = 0;
   let maxActive = 0;
-  const coordinator = createGitHubPublicationCoordinatorMethods({
-    placements,
-    assertCurrent: () => context.admission.assertCurrent(),
-    requestForClaimV2: unexpected,
-    getCommittedRuntimeConfig: () => ({}),
-    signal: new AbortController().signal,
-    sameWorktree: unexpected,
-    processRow: async (row) => {
-      processed++;
-      maxActive = Math.max(maxActive, ++active);
-      if (delayMs) {
-        await delay(delayMs);
-      } else {
-        await Promise.resolve();
-      }
-      active--;
-      return {
-        requestId: row.request_id,
-        status: "published",
-        url: "https://github.com/synthetic/recovery/pull/1",
-        repository: "synthetic/recovery",
-        branch: row.branch,
-        headCommit: "a".repeat(40),
-      };
-    },
-    recordRequestingRun: unexpected,
-  });
-  const before = await readPending();
+  const createRecovery = async () => {
+    if (values.runtime) {
+      const { createGitHubPublicationRuntime } = (await import(
+        ownerUrl.href
+      )) as typeof import("../../src/gateway/github-publication-runtime.js");
+      runtime = createGitHubPublicationRuntime({
+        placements,
+        getCommittedRuntimeConfig: () => ({}),
+        loadSessionRuntime: async () => unexpected(),
+        warn: (message) => {
+          throw new Error(message);
+        },
+      });
+      await runtime.ready;
+      return runtime.reconcilePublications;
+    }
+    const { createGitHubPublicationCoordinatorMethods } = (await import(
+      ownerUrl.href
+    )) as typeof import("../../src/gateway/github-publication-coordinator-methods.js");
+    const coordinator = createGitHubPublicationCoordinatorMethods({
+      placements,
+      assertCurrent: () => context.admission.assertCurrent(),
+      requestForClaimV2: unexpected,
+      getCommittedRuntimeConfig: () => ({}),
+      signal: new AbortController().signal,
+      sameWorktree: unexpected,
+      processRow: async (row) => {
+        processed++;
+        maxActive = Math.max(maxActive, ++active);
+        if (delayMs) {
+          await delay(delayMs);
+        } else {
+          await Promise.resolve();
+        }
+        active--;
+        return {
+          requestId: row.request_id,
+          status: "published",
+          url: "https://github.com/synthetic/recovery/pull/1",
+          repository: "synthetic/recovery",
+          branch: row.branch,
+          headCommit: "a".repeat(40),
+        };
+      },
+      recordRequestingRun: unexpected,
+    });
+    return () => coordinator.resumeSessionRequests(undefined, () => publications === 0);
+  };
+  const recover = await createRecovery();
+  const before = values.runtime ? [] : await readPending();
   assert.equal(before.length, pending);
   const run = async (count: number) => {
     for (let index = 0; index < count; index++) {
-      await coordinator.resumeSessionRequests(undefined, () => publications === 0);
+      await recover();
     }
   };
   await run(warmup);
@@ -176,6 +257,7 @@ try {
   pendingReads = 0;
   processed = 0;
   maxActive = 0;
+  const workersBefore = values.runtime ? await workerMemory() : undefined;
   const loadBefore = loadavg();
   const memoryBefore = process.memoryUsage();
   if (values.allocations) {
@@ -186,6 +268,7 @@ try {
       includeObjectsCollectedByMinorGC: true,
     });
   }
+  const allocatedBefore = values.runtime ? mainAllocatedBytes() : undefined;
   const mainBefore = process.threadCpuUsage();
   const processBefore = process.cpuUsage();
   const started = performance.now();
@@ -194,6 +277,9 @@ try {
   const mainCpu = process.threadCpuUsage(mainBefore);
   const processCpu = process.cpuUsage(processBefore);
   const memoryAfter = process.memoryUsage();
+  const exactAllocatedBytes =
+    allocatedBefore === undefined ? undefined : mainAllocatedBytes() - allocatedBefore;
+  const workersAfter = values.runtime ? await workerMemory() : undefined;
   const measuredReads = pendingReads;
   const profile = values.allocations
     ? (await inspector.post("HeapProfiler.stopSampling")).profile
@@ -204,7 +290,9 @@ try {
   assert.equal(processed, publications * iterations);
   console.log(
     JSON.stringify({
-      workload: "publication recovery scheduler; real pending-workspace read worker",
+      workload: values.runtime
+        ? "first empty runtime reconciliation; real SQLite readers and writer"
+        : "publication recovery scheduler; real pending-workspace read worker",
       ownerSourceSha256,
       pending,
       publications,
@@ -226,10 +314,14 @@ try {
       loadAfter: loadavg(),
       memoryBefore,
       memoryAfter,
+      exactAllocatedBytes,
+      workersBefore,
+      workersAfter,
     }),
   );
 } finally {
   inspector.disconnect();
+  await runtime?.close();
   await state.closeOpenClawStateDatabaseAsync();
   await rm(stateDir, { recursive: true });
 }

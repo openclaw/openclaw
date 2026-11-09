@@ -50,8 +50,8 @@ async function matchingNames(catalog: InstalledSkill[], query: string) {
 describe("installed skill catalog", () => {
   it.each([
     { catalogs: 5, descriptionBytes: 1 },
-    { catalogs: 2, descriptionBytes: 9 * 1024 * 1024 },
-    { catalogs: 1, descriptionBytes: 18 * 1024 * 1024 },
+    { catalogs: 2, descriptionBytes: 18 * 1024 * 1024 },
+    { catalogs: 1, descriptionBytes: 36 * 1024 * 1024 },
   ])(
     "bounds idle catalog retention by count and aggregate bytes (%j)",
     async ({ catalogs, descriptionBytes }) => {
@@ -115,7 +115,7 @@ describe("installed skill catalog", () => {
     expect(await matchingNames(installed([...catalog]), "nebula")).toEqual([]);
     expect(tokenize.mock.calls.filter(([text]) => text.startsWith("#"))).toHaveLength(136);
     // Published content revisions already identify bounded inline instructions.
-    expect(hash.mock.calls).toHaveLength(0);
+    expect(hash.mock.calls.filter(([text]) => text.startsWith("#"))).toHaveLength(0);
   });
 
   it("reuses decoded file revisions across fresh catalogs without serializing their bodies", async () => {

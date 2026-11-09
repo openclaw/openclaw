@@ -180,11 +180,14 @@ validate_prep_baseline_transition() {
   # Replay once before observing live authority. The private facts stay in this
   # recovery invocation; retry must reconstruct them from the admitted journal.
   PREP_TRANSITION_FACTS=$(node "$helper" validate-transition \
-    "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID") || return 1
+    "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" "${PR_MAIN_SHA:-}") || return 1
   validate_review_transition_state "$pr" "$source" "$target" || return 1
   observation=$(cat .local/pr-meta.json) || return 1
   archive=$(printf '%s' "$PREP_TRANSITION_FACTS" | jq -er '.binding | @base64d | fromjson | .archive') || return 1
   revalidate_baseline_publication "$pr" "$observation" "$source" "$archive" || return 1
+  if printf '%s' "$PREP_TRANSITION_FACTS" | jq -e '.binding | @base64d | fromjson | .version == 2 and .purpose == "proof"' >/dev/null; then
+    require_proof_publication_custody "$pr" proof || return 1
+  fi
   if [ "$command" = install-transition ]; then
     PREP_TRANSITION_FACTS=$(printf '%s' "$PREP_TRANSITION_FACTS" | node "$helper" install-transition \
       "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID") || return 1
