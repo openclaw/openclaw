@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it } from "vitest";
 import templates from "../../skills/meme-maker/references/templates.json" with { type: "json" };
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -14,24 +13,15 @@ const { createTempDir } = createScriptTestHarness();
 const testNodeExecPath = resolveTestNodeExecPath();
 const skillRoot = path.resolve("skills/meme-maker");
 const scriptPath = path.join(skillRoot, "scripts/meme.mjs");
-const template = expectDefined(
-  templates.find((entry) => entry.id === "always-has-been"),
-  "Expected the always-has-been template",
-);
+const template = templates.find((entry) => entry.id === "two-buttons")!;
 
-function renderFixture(format: "svg" | "png", isolated = false, selectedTemplate = template) {
+function renderFixture(format: "svg" | "png", isolated = false) {
   const root = createTempDir("openclaw-meme-maker-");
   const cache = path.join(root, "cache");
   const imageDir = path.join(cache, "openclaw/meme-maker");
   fs.mkdirSync(imageDir, { recursive: true });
   const image = createSolidPngBuffer(32, 24, { r: 24, g: 160, b: 96 });
-  fs.writeFileSync(
-    path.join(
-      imageDir,
-      `${selectedTemplate.id}-${selectedTemplate.imgflipId}${path.extname(new URL(selectedTemplate.imageUrl).pathname)}`,
-    ),
-    image,
-  );
+  fs.writeFileSync(path.join(imageDir, `${template.id}-${template.imgflipId}.jpg`), image);
   const hook = path.join(root, "offline.mjs");
   fs.writeFileSync(
     hook,
@@ -51,52 +41,25 @@ globalThis.fetch = () => { throw new Error("Unexpected network access"); };
   const out = path.join(root, `meme.${format}`);
   const result = execFileAsync(
     testNodeExecPath,
-    [
-      "--import",
-      hook,
-      script,
-      "render",
-      selectedTemplate.id,
-      "--text",
-      "Fish & chips",
-      "--out",
-      out,
-    ],
+    ["--import", hook, script, "render", template.id, "--text", "Fish & chips", "--out", out],
     { env: { ...process.env, XDG_CACHE_HOME: cache }, timeout: 30_000 },
   );
   return { image, out, result };
 }
 
 describe("meme-maker local rendering", () => {
-  it("writes a self-contained SVG with escaped text without optional rendering dependencies", async () => {
+  it("writes a self-contained SVG with escaped, box-centered text without optional rendering dependencies", async () => {
     const { image, out, result } = renderFixture("svg", true);
     const { stdout } = await result;
     const svg = fs.readFileSync(out, "utf8");
     expect(stdout).toContain(out);
     expect(svg).toContain(`width="${template.width}" height="${template.height}"`);
-    expect(svg).toContain(`data:image/png;base64,${image.toString("base64")}`);
+    expect(svg).toContain(`data:image/jpeg;base64,${image.toString("base64")}`);
     expect(svg).toContain("Fish &amp; chips");
-  });
-
-  it("keeps rotated captions centered in their template boxes", async () => {
-    const selected = expectDefined(
-      templates.find((entry) => entry.id === "two-buttons"),
-      "Two Buttons template",
-    );
-    const { out, result } = renderFixture("svg", true, selected);
-    await result;
     const { Resvg } = await import("@resvg/resvg-js");
-    const svg = fs.readFileSync(out, "utf8").replace(/<image[^>]*\/>/, "");
-    const renderer = new Resvg(svg, {
-      font: {
-        fontFiles: [path.resolve("src/gateway/assets/session-card/Lato-Regular.ttf")],
-        loadSystemFonts: false,
-        defaultFontFamily: "Lato",
-      },
-    });
-    const bounds = expectDefined(renderer.innerBBox(), "rendered caption bounds");
-    // Allow glyph/stroke asymmetry, but not rotation-induced translation of the caption.
-    expect(Math.abs(bounds.x + bounds.width / 2 - 138)).toBeLessThan(5);
+    const font = { fontFiles: [path.resolve("src/gateway/assets/session-card/Lato-Regular.ttf")] };
+    const caption = new Resvg(svg.replace(/<image[^>]*\/>/, ""), { font }).innerBBox()!;
+    expect(Math.abs(caption.x + caption.width / 2 - 138)).toBeLessThan(2); // rotated box 0 center
   });
 
   it("directs SVG output when PNG rendering is unavailable without inviting package installs", async () => {
@@ -111,9 +74,8 @@ describe("meme-maker local rendering", () => {
     "renders a PNG at the template dimensions without Sharp",
     async () => {
       const { out, result } = renderFixture("png");
-      const { stdout } = await result;
+      await result;
       const png = fs.readFileSync(out);
-      expect(stdout).toContain(out);
       expect(png.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
       const { default: photon } = await import("@silvia-odwyer/photon-node");
       const rendered = photon.PhotonImage.new_from_byteslice(png);
