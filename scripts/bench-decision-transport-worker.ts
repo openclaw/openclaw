@@ -420,7 +420,9 @@ async function benchmarkRegisteredV1(evaluations: number, fixture: string, mode:
           assert.deepEqual(input.questions, { truth: { type: "boolean" } });
           // Mutating the submitted copy must not change caller data or result validation.
           input.state.evidence = "provider mutation";
-          input.questions.truth = { type: "choice", criteria: { other: "other" } };
+          assert(
+            Reflect.set(input.questions, "truth", { type: "choice", criteria: { other: "other" } }),
+          );
           dispatched++;
           return { status: "ok", result: reported };
         },
