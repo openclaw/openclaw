@@ -100,11 +100,11 @@ function readGeometry(page: Page) {
   }, SELECTORS);
 }
 
-const document = styleDocument(css, markup, 'data-theme-mode="dark"');
+const fixtureHtml = styleDocument(css, markup, 'data-theme-mode="dark"');
 
 fixture.describe("Settings rhythm", () => {
   it("keeps one control height, radius and left inset through the sidebar header stack", async () => {
-    const g = await fixture.withPage("sidebar", document, readGeometry);
+    const g = await fixture.withPage("sidebar", fixtureHtml, readGeometry);
     const stack = [g.back, g.agentTrigger, g.searchInput, g.item];
     expect(stack.map((control) => control.height)).toEqual([32, 32, 32, 32]);
     expect(new Set(stack.map((control) => control.radius)).size).toBe(1);
@@ -123,7 +123,7 @@ fixture.describe("Settings rhythm", () => {
   });
 
   it("gives the Agents toolbar one control height and radius, and nests the emoji trigger concentrically", async () => {
-    const g = await fixture.withPage("toolbar", document, readGeometry);
+    const g = await fixture.withPage("toolbar", fixtureHtml, readGeometry);
     const row = [g.refresh, g.create, g.menu];
     expect(row.map((control) => control.height)).toEqual([32, 32, 32]);
     expect(row.map((control) => control.width)).toEqual([32, g.create.width, 32]);
@@ -144,7 +144,7 @@ fixture.describe("Settings rhythm", () => {
   it("keeps the Agents menu trigger on the shared 38px phone control height", async () => {
     const page = await fixture.page({ viewport: { width: 390, height: 844 } });
     try {
-      await page.setContent(document);
+      await page.setContent(fixtureHtml);
       const g = await readGeometry(page);
       expect([g.menu.width, g.menu.height, g.create.height]).toEqual([38, 38, 38]);
     } finally {
