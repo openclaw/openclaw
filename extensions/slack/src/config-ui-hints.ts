@@ -74,6 +74,10 @@ export const slackChannelConfigUiHints = {
     label: "Slack Allow Bot Messages",
     help: 'Allow bot-authored messages to trigger Slack replies (default: true). Set false to disable bot-triggered turns, or "mentions" to require a mention. Channel access, mention, owner-presence, and loop-protection rules still apply; accessible bot-authored context remains available independently.',
   },
+  trustedUserTokenAppIds: {
+    label: "Slack Trusted User-Token App IDs",
+    help: "Slack app IDs (A...) whose user-token posts count as messages from the posting person instead of bot messages. Human sender, channel, and mention rules then apply; allowBots and owner presence do not. Bot-token posts from those apps and this app's own posts stay bot messages. Default: none.",
+  },
   botLoopProtection: {
     label: "Slack Bot Loop Protection",
     help: "Sliding-window guard for Slack bot-to-bot loops. Default is enabled whenever allowBots lets bot-authored messages reach dispatch.",

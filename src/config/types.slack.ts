@@ -140,6 +140,8 @@ export type SlackAccountConfig = Omit<
     userToken?: SecretInput;
     /** If true, restrict user token to read operations only. Default: true. */
     userTokenReadOnly?: boolean;
+    /** Slack app IDs whose user-token posts count as messages from the posting user, not bot messages. Default: none. */
+    trustedUserTokenAppIds?: string[];
     /** Default mention requirement for channel messages (default: true). */
     requireMention?: boolean;
     /** Override mention gating in threads started by this bot; omitted preserves implicit mention policy. */

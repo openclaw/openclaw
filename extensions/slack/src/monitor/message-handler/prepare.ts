@@ -83,6 +83,7 @@ import {
   resolveSlackPreflightAudioTranscript,
   sendSlackPreflightAudioTranscriptEcho,
 } from "./preflight-audio.js";
+import { resolveSlackAllowBotsMode, resolveSlackUserTokenAuthor } from "./prepare-bots.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { resolveSlackDmHistoryContext, resolveSlackDmHistoryLimit } from "./prepare-dm-history.js";
 import { resolveSlackRoomHistory } from "./prepare-room-history.js";
@@ -216,7 +217,8 @@ export async function prepareSlackMessage(params: {
     isRuntimePolicyCurrent?: () => boolean;
   };
 }): Promise<PreparedSlackMessage | null> {
-  const { ctx, account, message, opts } = params;
+  const { ctx, account, opts } = params;
+  const message = await resolveSlackUserTokenAuthor(params);
   const drop = (reason: SlackInboundDropReason, parentUserId?: string): null => {
     // Record this preparation attempt; a later message/app_mention twin can still dispatch.
     // Logical-message deduplication remains owned by the handler's dispatch claim.
@@ -272,10 +274,7 @@ export async function prepareSlackMessage(params: {
         allowNameMatching: ctx.allowNameMatching,
       })
     : null;
-  const allowBotsSetting =
-    channelConfig?.allowBots ?? account.config?.allowBots ?? cfg.channels?.slack?.allowBots ?? true;
-  const allowBotsMode: "off" | "all" | "mentions" =
-    allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting ? "all" : "off";
+  const allowBotsMode = resolveSlackAllowBotsMode(channelConfig, account, cfg);
 
   const isBotMessage = Boolean(message.bot_id);
   const messageText = message.text ?? "";

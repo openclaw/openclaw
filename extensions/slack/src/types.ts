@@ -37,6 +37,8 @@ export interface SlackMessageEvent extends SlackMessageBase {
   channel_type?: "im" | "mpim" | "channel" | "group";
   subtype?: string;
   username?: string;
+  /** Slack app that posted the message; present with bot_id for bot- and user-token app posts. */
+  app_id?: string;
   files?: SlackFile[];
   attachments?: SlackAttachment[];
   app_context?: SlackAppContext;

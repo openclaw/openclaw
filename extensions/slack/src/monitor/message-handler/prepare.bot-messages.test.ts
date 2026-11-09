@@ -102,6 +102,32 @@ it.each(["room override", "self", "unmentioned"] as const)(
     expect(test.members).not.toHaveBeenCalled();
   },
 );
+it.each([
+  ["human", false, true],
+  ["app bot user", true, false],
+  ["unlisted app", false, false],
+] as const)(
+  "classifies trusted user-token app posts by their Slack user: %s",
+  async (sender, senderIsBot, accepted) => {
+    const test = fixture({ allowBots: false, trustedUserTokenAppIds: ["A_USER_TOKEN"] });
+    test.ctx.resolveUserName = async () => ({ name: "Owner", isBot: senderIsBot });
+    Object.assign(test.message, {
+      user: "UOWNER",
+      app_id: sender === "unlisted app" ? "A_OTHER" : "A_USER_TOKEN",
+      subtype: undefined,
+      username: undefined,
+    });
+    const prepared = await test.prepare();
+    if (!accepted) {
+      expect(prepared).toBeNull();
+      return;
+    }
+    expect(prepared?.message.bot_id).toBeUndefined();
+    expect(prepared?.ctxPayload.SenderId).toBe("UOWNER");
+    expect(test.members).not.toHaveBeenCalled();
+  },
+);
+
 it.each(["missing-user", "dm-disabled", "dm-unauthorized", "channel-not-allowed"] as const)(
   "records only routing facts for %s",
   async (reason) => {

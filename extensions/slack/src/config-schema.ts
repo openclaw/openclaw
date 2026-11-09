@@ -98,6 +98,7 @@ const SlackAccountSchema = z
     appToken: SecretInputSchema.optional(),
     userToken: SecretInputSchema.optional(),
     userTokenReadOnly: z.boolean().optional(),
+    trustedUserTokenAppIds: z.array(z.string()).optional(),
     allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
     botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
