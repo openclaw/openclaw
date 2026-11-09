@@ -1,2 +1,2 @@
 # Native Bash redirection operands and descriptor/quoting compatibility.
-22
+30

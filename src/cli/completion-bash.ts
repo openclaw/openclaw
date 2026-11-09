@@ -58,7 +58,7 @@ ${optionCases}
   return `
 _${rootCmd}_completion() {
     local cur opts command_path candidate_path value_options word flag i j cword remaining_line word_prefix
-    local character next_character quote
+    local character next_character quote prefix_length word_length
     local choice_flag choice_prefix choice_completion_prefix short_group short_flag short_index
     local required_value_options options_ended=0 operand_flag="" literal_opts=""
     local redirection_target=0 redirection_re='(<|>|>>|<<-?|<<<|<>|<&|>&|>[|]|&>|&>>)'
@@ -75,6 +75,13 @@ _${rootCmd}_completion() {
     remaining_line="\${COMP_LINE}"
     # Readline can group adjacent wordbreaks, including a redirection and '=' or ':'.
     for word in "\${COMP_WORDS[@]:0:COMP_CWORD+1}"; do
+        word_length=\${#word}
+        remaining_line="\${remaining_line#*"\${word}"}"
+        # Trim the original span before splitting; COMP_WORDS can extend past the cursor.
+        prefix_length=$((\${#word} + COMP_POINT - \${#COMP_LINE} + \${#remaining_line}))
+        if ((prefix_length < \${#word})); then
+            word="\${word:0:prefix_length}"
+        fi
         if [[ \${word} =~ ^([=:]*)\${redirection_re}([=:]*)$ ]]; then
             [[ -n \${BASH_REMATCH[1]} ]] && shell_words+=("\${BASH_REMATCH[1]}")
             shell_words+=("\${BASH_REMATCH[2]}")
@@ -82,7 +89,9 @@ _${rootCmd}_completion() {
         else
             shell_words+=("\${word}")
         fi
+        ((prefix_length < word_length)) && break
     done
+    remaining_line="\${COMP_LINE}"
     # Rejoin '=' and ':' wordbreaks, preserving redirections and whitespace boundaries.
     # Bash versions split '=' differently; $2 remains the fragment Readline will replace.
     for ((i = 0; i < \${#shell_words[@]}; i++)); do
@@ -104,8 +113,6 @@ _${rootCmd}_completion() {
     done
     cword=$((\${#words[@]} - 1))
     cur="\${words[cword]}"
-    # COMP_WORDS includes text after the cursor; only the prefix participates in completion.
-    cur="\${cur:0:\${#cur} + COMP_POINT - \${#COMP_LINE} + \${#remaining_line}}"
     word_prefix="\${cur%"$2"}"
     # Normalize words and the replacement prefix together: Readline keeps quoting
     # in COMP_WORDS, while its replacement span can start inside that quoted word.

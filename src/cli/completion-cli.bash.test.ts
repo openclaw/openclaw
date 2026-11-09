@@ -96,6 +96,14 @@ describe("completion-cli native Bash words", () => {
       [">=completion gat", ">= completion gat", "gat", ["gateway"]],
       ["--profile=>completion gat", "--profile => completion gat", "gat", ["gateway"]],
       ["gateway --token=>status --j", "gateway --token => status --j", "--j", []],
+      [
+        "gateway --token==>/dev/null --force",
+        "gateway --token ==> /dev/null --force",
+        "",
+        [],
+        24,
+        3,
+      ],
       ["gateway > status --f", "gateway > status --f", "--f", ["--force"]],
       [
         "--profile 2>completion staging gateway status --j",
