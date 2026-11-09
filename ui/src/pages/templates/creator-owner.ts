@@ -1,7 +1,7 @@
 import { createLazyImportLoader } from "../../../../src/shared/lazy-promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { registerTemplateCreatorEnglish } from "../../i18n/locales/en-template-creator.ts";
+import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -12,7 +12,7 @@ import {
 } from "./creator-publication.ts";
 import { canCreateTemplateDraft, templateDraftUnavailableReason } from "./draft-navigation.ts";
 
-registerEnglishCatalog(registerTemplateCreatorEnglish);
+registerEnglishCatalog(registerAgentsHomeEnglish);
 
 const runtime = createLazyImportLoader(() => import("./creator-flow.ts"));
 
