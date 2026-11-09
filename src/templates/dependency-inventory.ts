@@ -1,17 +1,20 @@
-import type { TemplateManifest, TemplatePackage } from "./schema.js";
+import type { TemplateManifest, TemplateDependency } from "./schema.js";
 
-/** A collection determines dependency kind; referenced releases always come from ClawHub. */
-export function templateDependencyInventory(manifest: TemplateManifest): TemplatePackage[] {
-  return [
-    ...manifest.skills.map((entry) => ({
-      kind: "skill" as const,
-      source: "clawhub" as const,
-      ...entry,
-    })),
-    ...manifest.plugins.map((entry) => ({
-      kind: "plugin" as const,
-      source: "clawhub" as const,
-      ...entry,
-    })),
-  ];
+/** The collection owns kind; a local path and a pinned registry release are distinct sources. */
+export function templateDependencyInventory(
+  manifest: TemplateManifest,
+  bundledSources: ReadonlyArray<{ kind: "skill" | "plugin"; path: string; name?: string }> = [],
+): TemplateDependency[] {
+  return (["skills", "plugins"] as const).flatMap((collection) =>
+    manifest[collection].map((entry): TemplateDependency => {
+      const kind = collection === "skills" ? "skill" : "plugin";
+      if ("path" in entry) {
+        const name = bundledSources.find(
+          (source) => source.kind === kind && source.path === entry.path,
+        )?.name;
+        return { kind, source: "bundled", path: entry.path, ...(name ? { name } : {}) };
+      }
+      return { kind, source: "clawhub", ref: entry.ref, version: entry.version };
+    }),
+  );
 }

@@ -9,11 +9,11 @@ export type TemplatePluginInstallConsent = {
   confirmInstall?: (pluginId: string, warning?: string) => Promise<boolean>;
 };
 
-export type TemplateSkillInstallConsent = {
-  assertApproved: (
-    pkg: Pick<PlannedTemplatePackage, "ref" | "version" | "integrity"> & { riskWarning: string },
-  ) => void;
-};
+export type TemplateSkillWarning = (
+  | Pick<PlannedTemplatePackage, "ref" | "version" | "integrity">
+  | { source: "bundled"; path: string; name: string; digest: string }
+) & { riskWarning: string };
+export type TemplateSkillInstallConsent = { assertApproved: (pkg: TemplateSkillWarning) => void };
 
 export type InstallTemplatePackagesOptions = TemplatePluginRuntimeOptions &
   TemplateAddStateOptions & {
