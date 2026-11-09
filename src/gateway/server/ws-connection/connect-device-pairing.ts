@@ -634,6 +634,8 @@ export async function authorizeGatewayConnectDevice(
           scopes,
           hasApprovedDeviceBaseline: hasServerApprovedDeviceTokenBaseline,
           isIssuanceCurrent: isConnectAuthorizationCurrent,
+          requiredSharedGatewaySessionGeneration:
+            context.handler.getRequiredSharedGatewaySessionGeneration?.(),
         });
 
   // A token issued over the OpenClaw ID tunnel belongs to the device key that obtained it.
