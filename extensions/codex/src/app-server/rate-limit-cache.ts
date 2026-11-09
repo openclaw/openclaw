@@ -27,7 +27,7 @@ export function rememberCodexRateLimitsRead(
     const currentState = rateLimitsByClient.get(client);
     rateLimitsByClient.set(client, {
       value,
-      updatedAtMs: Date.now(),
+      updatedAtMs: performance.now(),
       revision: (currentState?.revision ?? 0) + Number(hasCodexRateLimit(value)),
     });
   }
@@ -48,7 +48,7 @@ export function mergeCodexRateLimitsUpdate(
   const limitId = readLimitId(update);
   rateLimitsByClient.set(client, {
     value: mergeRateLimitUpdate(current, update),
-    updatedAtMs: Date.now(),
+    updatedAtMs: performance.now(),
     revision: (currentState?.revision ?? 0) + Number(limitId === "codex"),
   });
 }
@@ -67,7 +67,9 @@ export function readRecentCodexRateLimits(
   if (!state) {
     return undefined;
   }
-  return maxAgeMs <= 0 || Date.now() - state.updatedAtMs >= maxAgeMs ? undefined : state.value;
+  return maxAgeMs <= 0 || performance.now() - state.updatedAtMs >= maxAgeMs
+    ? undefined
+    : state.value;
 }
 
 function mergeRateLimitUpdate(current: JsonValue | undefined, update: JsonObject): JsonObject {

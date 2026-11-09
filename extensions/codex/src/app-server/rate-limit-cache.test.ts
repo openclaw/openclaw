@@ -33,7 +33,7 @@ const snapshot = (limitId: string | null, usedPercent: number) => ({
 
 afterEach(() => vi.restoreAllMocks());
 it("shares snapshots across module copies while isolating clients and expiring old reads", async () => {
-  const now = vi.spyOn(Date, "now").mockReturnValue(100);
+  const now = vi.spyOn(performance, "now").mockReturnValue(100);
   const first = clientIdentity();
   const second = clientIdentity();
   expect(readCodexRateLimitsRevision(first)).toBe(0);
@@ -56,6 +56,18 @@ it("shares snapshots across module copies while isolating clients and expiring o
   expect(copy.readRecentCodexRateLimits(second)).toEqual({
     rateLimits: { limitId: "codex_other" },
   });
+});
+
+it("expires the cached read on elapsed time even when the wall clock steps back", async () => {
+  const wall = vi.spyOn(Date, "now").mockReturnValue(1_000_000_000_000);
+  const elapsed = vi.spyOn(performance, "now").mockReturnValue(0);
+  const client = clientIdentity();
+  rememberCodexRateLimitsRead(client, { rateLimits: { limitId: "codex" } });
+  // Real elapsed time passes the 10-minute max-age window…
+  elapsed.mockReturnValue(10 * 60_000);
+  // …while the wall clock steps backward, so a Date.now-keyed window would never lapse.
+  wall.mockReturnValue(1_000_000_000_000 - 60 * 60_000);
+  expect(readRecentCodexRateLimits(client)).toBeUndefined();
 });
 
 it("merges sparse rolling updates without clearing account metadata", () => {
