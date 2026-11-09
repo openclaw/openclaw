@@ -593,6 +593,17 @@ Opening a file collapses the file tree to make room for its preview. Use **Toggl
 file tree** to browse another file, or **Show in Files** to reveal the current file
 in its folder with the **All** filter.
 
+The **Session files** group lists files the agent produced outside the project
+tree together with the images and attachments in the loaded transcript. Use the
+control beside its heading to switch between **List** and **Grid** and to sort by
+**Default**, **Date**, **Name**, or **Type**. Default keeps the Gateway's file
+order followed by attachments in transcript order. Date puts the most recently
+modified files and most recently sent attachments first; entries without a
+recorded time, such as artifacts, follow in default order. The grid shows image
+previews once they load and large file icons for other files; untitled images
+show their picture without a caption. The choice is remembered in this browser
+for every session's Files panel. The project tree keeps its folder structure.
+
 The **Review** file menu offers **Edit file** when the file reader confirms editing
 is available. Readable files keep **Open file** and their supported Markdown and
 source views when editing is unavailable; downloads remain available from the preview.

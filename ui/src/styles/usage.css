@@ -288,13 +288,6 @@ select.usage-select {
   white-space: nowrap;
 }
 
-/* The refresh button keeps its shared size, which grows on touch. */
-.usage-header .btn--icon:not(.refresh-button) {
-  width: 32px;
-  height: 32px;
-  min-height: 32px;
-}
-
 .usage-pin-btn.active {
   color: var(--accent);
 }
@@ -575,10 +568,6 @@ select.usage-select {
   margin-inline-start: auto;
 }
 
-.usage-filter-menu__trigger[aria-expanded="true"] {
-  background: var(--bg-hover);
-}
-
 /* Applied filters: their own row under the toolbar, one chip per field. */
 .usage-applied-row {
   display: flex;
@@ -757,7 +746,8 @@ select.usage-select {
   color: var(--muted);
 }
 
-.usage-display-menu__trigger[aria-expanded="true"] {
+/* The phone sheet trigger is a button; the desktop icon button owns its own open state. */
+.btn.usage-display-menu__trigger[aria-expanded="true"] {
   background: var(--bg-hover);
 }
 

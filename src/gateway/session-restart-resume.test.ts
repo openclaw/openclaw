@@ -153,7 +153,7 @@ it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
             context.restartResumeWindows = { main: [{ startedAt: 100, endedAt: 200 }] };
           }
           const params = { context, signal: admission.signal, log: { warn: vi.fn() } };
-          const wait = admission.observation.waitForAgentPreparation.bind(admission.observation);
+          const wait = admission.observation.waitForAgentPreparation;
           const preparationWait = vi
             .spyOn(admission.observation, "waitForAgentPreparation")
             .mockImplementation((id, options) => {
