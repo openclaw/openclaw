@@ -320,7 +320,7 @@ export async function releaseCodexBoundLiveThread(
               options.onExitWaitCancelled?.();
               throw new CodexAppServerStartupError(
                 "timed_out",
-                "The previous Codex thread did not confirm shutdown before the handoff timed out.",
+                "The previous Codex thread did not confirm shutdown before the handoff timed out. Try sending your message again in a few seconds. If the conversation still cannot resume, start a new chat.",
               );
             },
             {
