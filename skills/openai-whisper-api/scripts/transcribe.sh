@@ -75,10 +75,10 @@ if [[ "$out" == "" ]]; then
   fi
 fi
 
-mkdir -p "$(dirname "$out")"
+mkdir -p -- "$(dirname -- "$out")"
 
 # Reject predictable output failures before making a paid request.
-if [[ -d "$out" || ( -e "$out" && ! -w "$out" ) || ( ! -e "$out" && ! -w "$(dirname "$out")" ) ]]; then
+if [[ -d "$out" || ( -e "$out" && ! -w "$out" ) || ( ! -e "$out" && ! -w "$(dirname -- "$out")" ) ]]; then
   echo "Cannot write output to $out. Choose a writable file with --out." >&2
   exit 1
 fi
@@ -163,4 +163,4 @@ else
   cat "$tmp" >"$out"
 fi
 
-echo "$out"
+printf '%s\n' "$out"
