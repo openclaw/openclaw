@@ -337,14 +337,18 @@ async function stop(restart: boolean) {
 async function create(id: string) {
   assert(client);
   const key = `agent:main:drain-fixture-${id}`;
-  await client.request("sessions.create", {
-    key,
-    agentId: "main",
-    cwd: repo,
-    worktree: true,
-    worktreeName: `drain-${id}`,
-    worktreeBaseRef: git("rev-parse", "HEAD"),
-  });
+  await client.request(
+    "sessions.create",
+    {
+      key,
+      agentId: "main",
+      cwd: repo,
+      worktree: true,
+      worktreeName: `drain-${id}`,
+      worktreeBaseRef: git("rev-parse", "HEAD"),
+    },
+    { timeoutMs: timeout },
+  );
 }
 async function send(id: string) {
   assert(client);
