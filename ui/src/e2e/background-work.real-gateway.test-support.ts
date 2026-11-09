@@ -305,6 +305,7 @@ export function observeBackgroundWorkRpc(page: Page, signal: AbortSignal) {
   const changed = new Set<() => void>();
   const methods = new Set([
     "chat.send",
+    "chat.steerNow",
     "chat.history",
     "chat.startup",
     "sessions.list",

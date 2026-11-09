@@ -873,6 +873,12 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
 /* On a phone both lanes share one column at the top: the center lane, then
  * arrivals. Each toast spans the screen between the gutters. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  /* Touch has no hover: keep dismissal visible, including the renderer fallback. */
+  .app-toast > .app-toast__dismiss {
+    opacity: 1;
+    scale: 1;
+  }
+
   .shell--session {
     --app-toast-shell-top: calc(
       var(--safe-area-top) + var(--shell-topbar-height) + var(--chat-mobile-pane-header-height) +
@@ -1177,7 +1183,7 @@ select.settings-select:not([multiple]) {
         margin: 0;
         padding: 0;
         background: var(--text-tertiary);
-        mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+        mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>")
           center / contain no-repeat;
         transition: none;
       }
@@ -2143,13 +2149,13 @@ openclaw-tooltip:last-child > .refresh-button {
   width: 16px;
   height: 16px;
   background: currentColor;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='14' height='14' x='8' y='8' rx='2'/%3E%3Cpath d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/%3E%3C/svg%3E")
+  mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect width='14' height='14' x='8' y='8' rx='2'/><path d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/></svg>")
     center / contain no-repeat;
 }
 
 .code-block-copy__done {
   background: currentColor;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m20 6-11 11-5-5'/%3E%3C/svg%3E")
+  mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m20 6-11 11-5-5'/></svg>")
     center / contain no-repeat;
 }
 

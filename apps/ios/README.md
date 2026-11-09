@@ -25,6 +25,28 @@ Onboarding names the device from its iOS device idiom, so an iPad keeps iPad wor
 - Hiding the persistent sidebar is remembered while the window narrows and widens. Entering a compact window closes the drawer; keyboard appearance does not change navigation mode.
 - The detail view stays mounted across navigation layout changes. In regular width and height, native Chat messages, composer, and progress content use a centered column capped at 760pt within the remaining detail space. Assistant answers, including streaming output, use this shared column instead of a nested 560pt cap. Detail-pane margins grow from 12pt to 24pt with available width. Compact space, including narrow iPad windows, uses compact chat spacing. User bubbles retain their 560pt maximum.
 
+## Talk microphone mute
+
+During Talk, use the microphone button in the Talk activity strip to mute or
+unmute input without ending the call, canceling submitted work, or stopping
+reply audio. The crossed-out microphone uses the composer's symbol size and
+weight, with a 44-point tap target: gray while input is on, orange while muted.
+While Talk is active, the composer's dictation/voice-note microphone is hidden;
+it returns when Talk ends. The mute button stays in the Talk activity strip.
+A muted label and VoiceOver state identify when input is off. An idle muted
+realtime session shows "Connected (Realtime)" instead of "Listening (Realtime)";
+working, speaking, connection, and error statuses remain visible.
+The choice survives Talk restarts until you unmute or restart the app;
+standalone push-to-talk remains available after ending Talk.
+
+Native Talk stops audio input immediately and lets already-captured speech finish
+transcription before submitting it. If recognition errors or does not finish within
+two seconds, it submits the latest partial transcript. A quick unmute takes effect
+when that pending native turn finishes. Ending Talk discards pending recognition.
+Realtime relay sends silence, and WebRTC disables only the outgoing audio
+track. Realtime capture stays open, so the iOS microphone indicator may remain
+visible while muted.
+
 ## Exact Xcode Manual Deploy Flow
 
 1. Prereqs:

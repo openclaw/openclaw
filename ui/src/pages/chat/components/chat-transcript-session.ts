@@ -32,6 +32,7 @@ export type TranscriptCallbacks = {
   getComposerFloat?: () => HTMLElement | null;
   getComposerActivityLayout?: () => ComposerActivityLayout | null;
   onViewportResize?: () => void;
+  /** Explicit keys report direction; undefined reconciles geometry or neutral contact. */
   onReaderScroll?: (towardEnd?: boolean) => void;
   onNativeScroll?: (event: Event) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */

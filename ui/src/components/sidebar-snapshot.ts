@@ -19,6 +19,7 @@ import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snaps
 
 export function createSidebarSnapshot(host: {
   sidebarSnapshot: SidebarSnapshotModel | null;
+  readonly sidebarAgentsMode: "chip" | "roster";
   readonly sessionDataContext?: {
     gateway: ApplicationGateway;
     agentSelection: { readonly state: { readonly scopeId: string | null } };
@@ -319,6 +320,7 @@ export function createSidebarSnapshot(host: {
 
   function matchesAgent(model: SidebarSnapshotModel): boolean {
     return (
+      model.mode === host.sidebarAgentsMode &&
       (model.mode !== "chip" || model.roster?.agentId === host.expandedAgentId()) &&
       (model.navigationView !== "pages" ||
         model.pageScopeId === host.sessionDataContext?.agentSelection.state.scopeId)

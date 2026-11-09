@@ -1,6 +1,7 @@
 import type { Readable } from "node:stream";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { stripGatewayAllocatorEnv } from "../../process/child-env.js";
 import { runOutsideCommandProcessScope, waitForCommandSpawn } from "../../process/exec-spawn.js";
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
 import { runWithSpawnBroker } from "../../process/spawn-broker/context.js";
@@ -470,6 +471,8 @@ export function createDockerPersistentExecCapability(params: {
               // Keep the final authority check and native launch together, without broker queueing.
               const started = runOutsideCommandProcessScope(() =>
                 runWithSpawnBroker(undefined, () => {
+                  const baseEnv = { ...(startEngine.baseEnv ?? process.env) };
+                  stripGatewayAllocatorEnv(baseEnv);
                   assertCurrent();
                   return spawnCommand(
                     [
@@ -480,7 +483,7 @@ export function createDockerPersistentExecCapability(params: {
                       containerId,
                     ],
                     {
-                      baseEnv: startEngine.baseEnv,
+                      baseEnv,
                       buffer: false,
                       cancelSignal: preparation.signal,
                       reject: false,
