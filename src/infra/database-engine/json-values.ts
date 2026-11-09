@@ -396,6 +396,33 @@ export function jsonFirstStringValue(
   >`CASE WHEN ${jsonNativeFieldsValid(db, value)} THEN CASE WHEN json_typeof(${token}) = 'string' THEN ${token} #>> '{}' END END`;
 }
 
+/** Last-member string lookup matching JSON.parse; exceptional input remains caller-owned. */
+export function jsonLastStringValue(
+  db: DatabaseSync | PostgresSqlConnection,
+  value: Expression<string>,
+  keys: readonly string[],
+): RawBuilder<string | null> {
+  let selected: RawBuilder<unknown>;
+  if (isPostgresSqlConnection(db)) {
+    const token = sql`(${value}::jsonb #> ARRAY[${sql.join(keys.map((key) => sql.lit(key)))}]::text[])`;
+    selected = sql`CASE WHEN jsonb_typeof(${token}) = 'string' THEN ${token} #>> '{}' END`;
+  } else {
+    let object: Expression<unknown> = value;
+    for (const [index, key] of keys.entries()) {
+      const last = index === keys.length - 1;
+      // json_each enumerates duplicates; descending IDs select JSON.parse's final member.
+      object = /* kysely-allow-raw: SQLite-only ordered object-member lookup. */ sql`(SELECT CASE
+        WHEN type = ${sql.lit(last ? "text" : "object")} THEN value
+        ELSE ${last ? sql`NULL` : sql.lit("{}")} END
+        FROM json_each(${object}) WHERE key = ${key} ORDER BY id DESC LIMIT 1)`;
+    }
+    selected = sql`${object}`;
+  }
+  return /* kysely-allow-raw: Fence native field access; callers hydrate exceptional input. */ sql<
+    string | null
+  >`CASE WHEN ${jsonNativeFieldsValid(db, value)} THEN ${selected} END`;
+}
+
 /** Enumerate every string-valued object member, including duplicate keys. */
 export function jsonObjectStringEntries(
   db: DatabaseSync | PostgresSqlConnection,

@@ -15,6 +15,7 @@ import {
   type ControlUiMockGatewayScenario,
   waitForControlUiRoute,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import type { NativeControlUiMockGatewayScenario } from "../../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import type { ProjectionFamily } from "../../ui/src/test-helpers/control-ui-projection-fixture-contract.ts";
 import { mcpResourceHtml } from "../../ui/src/test-helpers/control-ui-team-scale-widget-html.ts";
 import { cronListResponseFixture } from "../../ui/src/test-helpers/cron.ts";
@@ -39,8 +40,10 @@ import {
   prepareChat,
   scrollTranscriptToTop,
 } from "./control-ui-interaction-navigation.ts";
+import { logbookReadinessScenarios } from "./control-ui-logbook-readiness-scenarios.ts";
 import { runProjectionFixture } from "./control-ui-projection-fixtures.ts";
 import type { ControlUiResourceCounts } from "./control-ui-resource-counts.ts";
+import { skillsReadinessScenarios } from "./control-ui-skills-readiness-scenarios.ts";
 import {
   exerciseWorkboardResourceFixture,
   idleWorkboardResourceFixture,
@@ -84,7 +87,7 @@ export type InteractionEvidence = Record<string, number | boolean>;
 type InteractionSession = GatewaySessionRow &
   NonNullable<ControlUiMockGatewayScenario["sessions"]>[number];
 export type InteractionFixtureOverrides = Omit<
-  Partial<ControlUiMockGatewayScenario>,
+  Partial<NativeControlUiMockGatewayScenario>,
   "sessions"
 > & {
   sessions?: InteractionSession[];
@@ -153,7 +156,7 @@ export function createScenarioFixture(
   version: string,
   scenario: InteractionScenario,
   sandbox?: InteractionSandbox,
-): ControlUiMockGatewayScenario & { sessions: InteractionSession[] } {
+): NativeControlUiMockGatewayScenario & { sessions: InteractionSession[] } {
   const base = createInteractionFixture(buildId, version, scenario.fixture, sandbox);
   const overrides = scenario.fixtureOverrides?.(sandbox, base);
   return {
@@ -1869,11 +1872,13 @@ async function searchProviderModels(page: Page) {
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
+  ...skillsReadinessScenarios,
   ...dataActivityLiveScenarios,
   ...dataActivityScenarios,
   ...dataBoardScenarios,
   ...dataCatalogScenarios,
   ...dataLogScenarios,
+  ...logbookReadinessScenarios,
   ...dataUsageDetailScenarios,
   ...dataUsageScenarios,
   ...(

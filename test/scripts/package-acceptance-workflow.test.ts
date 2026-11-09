@@ -8764,7 +8764,29 @@ test "$package_manager" = "pnpm@12.1.0"
     },
   );
 
-  it("rejects partial or ambiguous prerelease registry tuples before child workflows", () => {
+  it("accepts a candidate artifact without an optional prerelease registry tuple", () => {
+    const normalized = runPackageAcceptanceRegistryInputValidation({
+      candidateArtifactJson: JSON.stringify({
+        packageArtifactName: "release-package-under-test-123-1",
+      }),
+    });
+    expect(normalized.result.status, normalized.result.stderr).toBe(0);
+    expect(normalized.output).toBe("json=\n");
+  });
+
+  it.each([
+    { candidateArtifactJson: "\n" },
+    { prepublishPluginRegistryJson: "\t" },
+    { candidateArtifactJson: "{} {}" },
+  ])("rejects a nonempty input without exactly one JSON document", (input) => {
+    const normalized = runPackageAcceptanceRegistryInputValidation(input);
+    expect(normalized.result.status).toBe(1);
+    expect(normalized.result.stderr).toContain(
+      "Prerelease plugin registry JSON must contain one complete immutable tuple.",
+    );
+  });
+
+  it("rejects partial, malformed, or ambiguous prerelease registry tuples before child workflows", () => {
     const tuple = packageAcceptanceRegistryTuple();
     const partial = runPackageAcceptanceRegistryInputValidation({
       prepublishPluginRegistryJson: JSON.stringify({
@@ -8773,6 +8795,17 @@ test "$package_manager" = "pnpm@12.1.0"
     });
     expect(partial.result.status).toBe(1);
     expect(partial.result.stderr).toContain(
+      "Prerelease plugin registry JSON must contain one complete immutable tuple.",
+    );
+
+    const malformed = runPackageAcceptanceRegistryInputValidation({
+      prepublishPluginRegistryJson: JSON.stringify({
+        ...tuple,
+        prepublishPluginRegistryArtifactName: "wrong-name",
+      }),
+    });
+    expect(malformed.result.status).toBe(1);
+    expect(malformed.result.stderr).toContain(
       "Prerelease plugin registry JSON must contain one complete immutable tuple.",
     );
 

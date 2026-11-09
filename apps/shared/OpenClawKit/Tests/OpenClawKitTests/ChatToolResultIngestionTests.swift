@@ -44,6 +44,79 @@ struct ChatToolResultIngestionTests {
         ChatTranscriptRow.mergeToolResults(in: messages).first?.content.filter(\.isToolResult).map(\.text) ?? []
     }
 
+    @Test func `embedded output survives unrelated malformed block metadata`() throws {
+        let raw = try Self.raw(#"""
+        {"role":"assistant","content":[
+          {"type":"tool_result","tool_use_id":"a","content":[
+            {"type":"text","text":"Alpha"},
+            {"type":"image","width":"unknown"},
+            {"type":"text","text":"Beta"}
+          ]},
+          {"type":"tool_result","tool_use_id":"b","content":"String output"}
+        ]}
+        """#)
+        let message = try #require(OpenClawChatViewModel.decodeMessages([raw]).first)
+        #expect(message.content.filter(\.isToolResult).map(\.text) == ["Alpha\nBeta", "String output"])
+    }
+
+    private static func embeddedResult() throws -> AnyCodable {
+        let url = try #require(Bundle.module.url(
+            forResource: "claude-cli-embedded-tool-result", withExtension: "json", subdirectory: "Fixtures"))
+        let payload = try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: Data(contentsOf: url))
+        return try #require(payload.messages?.first)
+    }
+
+    @Test func `wire activity with unknown outcome does not claim result absent`() throws {
+        let url = try #require(Bundle.module.url(
+            forResource: "claude-cli-embedded-tool-result", withExtension: "json", subdirectory: "Fixtures"))
+        let payload = try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: Data(contentsOf: url))
+        let messages = OpenClawChatViewModel.decodeMessages(payload.messages ?? [], activity: payload.activity)
+        let message = try #require(messages.first)
+        let items = ChatToolActivity.items(message: message)
+        let item = try #require(items.first)
+        #expect(items.count == 1)
+        #expect(item.resultText == "Recorded output")
+        #expect(String(localized: item.statusTitle) == "Outcome unknown")
+        #expect(item.displayState == .unavailable)
+        let absent = ChatToolActivityItem(
+            id: item.id, name: item.name, arguments: nil, details: nil,
+            resultText: nil, state: .unavailable, liveDiffStat: nil)
+        #expect(String(localized: absent.statusTitle) == "No result")
+    }
+
+    @Test func `recorded assistant result exposes nested output`() throws {
+        let raw = try Self.embeddedResult()
+        let messages = OpenClawChatViewModel.decodeMessages([raw])
+        let assistant = try #require(messages.first)
+        let results = assistant.content.filter(\.isToolResult)
+        let result = try #require(results.first)
+        #expect(result.text == "Recorded output")
+        let items = ChatToolActivity.items(message: assistant)
+        let item = try #require(items.first)
+        #expect(item.resultText == result.text)
+        #expect(item.resultText?.isEmpty == false)
+        #expect(result.id == "wire-call")
+        let vm = Self.model()
+        defer { vm.detachTransport() }
+        try Self.deliver(raw, to: vm)
+        #expect(vm.messages.first?.content.filter(\.isToolResult).first?.text == result.text)
+    }
+
+    @Test func `recorded assistant results do not create duplicate rows`() throws {
+        let raw = try Self.embeddedResult()
+        let messages = OpenClawChatViewModel.decodeMessages([raw, raw])
+        let merged = ChatTranscriptRow.mergeToolResults(in: messages)
+        #expect(merged.count == 1)
+        #expect(merged.first.map { ChatToolActivity.items(message: $0).count } == 1)
+        #expect(merged.first?.content.filter(\.isToolCall).count == 1)
+        #expect(merged.first?.content.filter(\.isToolResult).count == 1)
+        let vm = Self.model()
+        defer { vm.detachTransport() }
+        for _ in 0..<2 { try Self.deliver(raw, to: vm) }
+        #expect(vm.messages.count == 1)
+        #expect(vm.messages.first?.content.filter(\.isToolResult).count == 1)
+    }
+
     @Test func `parallel results`() throws {
         let messages = try OpenClawChatViewModel.decodeMessages([Self.raw(Self.parallel)])
         #expect(messages.map(\.role) == ["toolResult", "toolResult"])

@@ -86,10 +86,11 @@ export async function readTemplateAsync(
   env: NodeJS.ProcessEnv,
   cacheKey: string,
   commitGuard?: () => void,
+  contentKey?: string,
 ): Promise<WorktreeTemplateRecord | undefined> {
   const reply = await runTemplateReadCommand(
     env,
-    { type: "worktrees.templates.read", input: { cacheKey } },
+    { type: "worktrees.templates.read", input: { cacheKey, contentKey } },
     commitGuard,
   );
   return reply?.record;
@@ -136,11 +137,11 @@ export function markTemplateReadyAsync(
   id: string,
   now: number,
   commitGuard: () => void,
-  content?: Pick<WorktreeTemplateRecord, "sourceCommit" | "contentKey">,
+  publication?: OpenClawStateWorkerOperations["worktrees.templates.ready"]["input"]["publication"],
 ): Promise<boolean> {
   return runTemplateCommand(
     env,
-    { type: "worktrees.templates.ready", input: { id, now, content } },
+    { type: "worktrees.templates.ready", input: { id, now, publication } },
     commitGuard,
   );
 }

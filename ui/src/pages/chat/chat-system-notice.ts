@@ -142,7 +142,7 @@ export function projectChatSystemNotice(
         ]
       : [];
   const skillChanges = readSkillWorkshopChangeNotice(item.message);
-  const runError = readRunFailureNotice(item.message);
+  const runError = readRunFailureNotice(item.message, { audience: "desktop" });
   if (runError) {
     const message = normalized ?? safeNormalizeMessage(item.message);
     return [

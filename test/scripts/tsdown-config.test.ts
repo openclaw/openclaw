@@ -1452,6 +1452,7 @@ console.log("relocated session card renders with bundled fonts");
       "sdk",
       "retry",
       "normalization-core",
+      "model-catalog-core",
       "net-policy",
       "media-understanding-common",
       "media-generation-core",

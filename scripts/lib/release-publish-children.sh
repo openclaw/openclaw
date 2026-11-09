@@ -753,6 +753,7 @@ write_clawhub_runtime_state() {
     --repository "${GITHUB_REPOSITORY}" \
     --wait-for-clawhub "${WAIT_FOR_CLAWHUB}" \
     --force-skip-clawhub "${force_skip_clawhub}" \
+    --deferred "${DEFER_CLAWHUB:-false}" \
     --normal-run-id "${plugin_clawhub_run_id:-}" \
     --normal-publication-staged "${clawhub_authorized}" \
     --bootstrap-run-id "${plugin_clawhub_bootstrap_run_id:-}" \

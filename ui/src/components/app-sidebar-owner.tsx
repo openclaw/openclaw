@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, lazy, onSettled, Show } from "solid-js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { isSessionRouteId } from "../app-route-paths.ts";
+import { finishBootFrame } from "../app/boot-composer.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import {
@@ -70,6 +71,11 @@ const SidebarPages = lazy(() => import("./app-sidebar-pages.tsx"), {
 const SidebarOnline = lazy(() => import("./app-sidebar-online.tsx"), {
   export: "AppSidebarOnline",
 });
+
+function SidebarReady() {
+  onSettled(() => finishBootFrame("sidebar"));
+  return null;
+}
 
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
   private readonly emptyNarrationLines = new Map<string, string>();
@@ -469,27 +475,30 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       </Boundary>
     );
     const NativeList = () => (
-      <SessionList
-        host={host()}
-        empty={visibleSessions().length === 0}
-        sections={sections()}
-        nativeSessionsHaveMore={host().sessionData.sessionsResult?.hasMore === true}
-        nativeSessionsLoading={host().sessionData.sessionsLoading}
-        catalogRenderer={Catalog}
-        catalogs={{
-          catalogs: catalogs(),
-          basePath: host().basePath,
-          routeSessionKey: catalogRouteSessionKey(),
-          newSessionAgentId: expandedAgentId(),
-          mainKey: host().sessionMainKey(),
-          loadingMoreCatalogIds: host().sessionData.loadingMoreSessionCatalogIds,
-          projectGrouping: host().catalogProjectGrouping,
-          liveRows: host().catalogLiveRows(),
-          toSidebarSession: navigationState().toSidebarSession,
-          catalogOpenTarget: host().catalogOpenTarget,
-          terminalAvailable: host().terminalAvailable,
-        }}
-      />
+      <>
+        <SidebarReady />
+        <SessionList
+          host={host()}
+          empty={visibleSessions().length === 0}
+          sections={sections()}
+          nativeSessionsHaveMore={host().sessionData.sessionsResult?.hasMore === true}
+          nativeSessionsLoading={host().sessionData.sessionsLoading}
+          catalogRenderer={Catalog}
+          catalogs={{
+            catalogs: catalogs(),
+            basePath: host().basePath,
+            routeSessionKey: catalogRouteSessionKey(),
+            newSessionAgentId: expandedAgentId(),
+            mainKey: host().sessionMainKey(),
+            loadingMoreCatalogIds: host().sessionData.loadingMoreSessionCatalogIds,
+            projectGrouping: host().catalogProjectGrouping,
+            liveRows: host().catalogLiveRows(),
+            toSidebarSession: navigationState().toSidebarSession,
+            catalogOpenTarget: host().catalogOpenTarget,
+            terminalAvailable: host().terminalAvailable,
+          }}
+        />
+      </>
     );
     return (
       <>
@@ -502,6 +511,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         </Show>
         <Show when={host().sidebarAgentsMode === "roster"} fallback={<NativeList />}>
           <SidebarViewBoundary>
+            <SidebarReady />
             <SidebarAgentRoster
               host={host()}
               active={
@@ -527,6 +537,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       const rail = renderSidebarRail(this);
       const Pages = () => (
         <SidebarViewBoundary>
+          <SidebarReady />
           <SidebarPages host={this} />
         </SidebarViewBoundary>
       );
@@ -595,6 +606,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                         }
                       >
                         <SidebarViewBoundary>
+                          <SidebarReady />
                           <SidebarOnline host={this} />
                         </SidebarViewBoundary>
                       </Show>

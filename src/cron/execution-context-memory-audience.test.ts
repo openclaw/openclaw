@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, expect, it, vi } from "vitest";
-import type { MemoryAudience, MemoryProviderHandle } from "../plugins/memory-provider-types.js";
+import type { MemoryProviderHandle } from "../plugins/memory-provider-runtime-types.js";
+import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import type { CronStoredJob } from "./types.js";
 
