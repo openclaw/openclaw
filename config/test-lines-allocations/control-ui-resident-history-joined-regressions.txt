@@ -3,5 +3,5 @@
 # 4 LF for joined warm-boot and native-maintenance fixture contracts.
 # 14 retained own test LF previously used the older base's spare headroom;
 # these are not new cases. Fixed b59c593cb0b7ad88ba2118768840c010e3253d95 has none.
-# Existing 6461 + 7055 + this 53 = exactly 13569 own test LF at that cut.
-53
+# Existing 6461 + 7055 + this 49 = 13565 own LF after 4 LF canonical fixture consolidation.
+49

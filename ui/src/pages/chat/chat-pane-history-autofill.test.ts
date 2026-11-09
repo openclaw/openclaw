@@ -143,7 +143,7 @@ it("reopens a trimmed cache boundary before its single automatic fill", async ()
     { cursor: "older-2", limit: 80, maxBytes: 256 * 1024 },
   ]);
   expect(request).toHaveBeenCalledTimes(2);
-  expect(pane.stagedOlder).toMatchObject({ page: null, load: null });
+  expect(pane.stagedHistory).toMatchObject({ page: null, load: null });
 });
 
 it("reserves an overflowing first page for reader intent", async () => {

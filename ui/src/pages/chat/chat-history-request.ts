@@ -1,6 +1,7 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "@openclaw/retry";
+import { createLazyImportLoader } from "../../../../src/shared/lazy-promise.ts";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -46,7 +47,9 @@ export {
 
 type ChatHistoryPageRuntime = typeof import("./chat-pane-history-packets.runtime.ts");
 let chatHistoryPageRuntime: ChatHistoryPageRuntime | undefined;
-let chatHistoryPageRuntimeLoad: Promise<ChatHistoryPageRuntime> | undefined;
+const chatHistoryPageRuntimeLoader = createLazyImportLoader(
+  () => import("./chat-pane-history-packets.runtime.ts"),
+);
 
 export function readChatHistoryPageRuntime() {
   return chatHistoryPageRuntime;
@@ -54,19 +57,8 @@ export function readChatHistoryPageRuntime() {
 
 // Share only module functions, never pane/read closures. Each caller owns its
 // abort race; a failed download can be retried without retiring another caller.
-export function loadChatHistoryPageRuntime(): Promise<ChatHistoryPageRuntime> {
-  if (chatHistoryPageRuntimeLoad) {
-    return chatHistoryPageRuntimeLoad;
-  }
-  const pending = (async () => {
-    return (chatHistoryPageRuntime = await import("./chat-pane-history-packets.runtime.ts"));
-  })().finally(() => {
-    if (chatHistoryPageRuntimeLoad === pending) {
-      chatHistoryPageRuntimeLoad = undefined;
-    }
-  });
-  chatHistoryPageRuntimeLoad = pending;
-  return pending;
+export async function loadChatHistoryPageRuntime(): Promise<ChatHistoryPageRuntime> {
+  return (chatHistoryPageRuntime = await chatHistoryPageRuntimeLoader.load());
 }
 
 export function captureChatHistoryRun(
@@ -409,8 +401,10 @@ export function chatHistoryPageSelector(
       : pagination.needsNewerBoundary;
   const cursor =
     direction === "older" ? pagination.hasMore && pagination.olderCursor : pagination.newerCursor;
-  if (!needsBoundary && cursor) {
-    return { cursor };
+  // Only an admitted trimmed edge may reopen by source identity. Without that
+  // receipt, a missing cursor stays unavailable until an authoritative refresh.
+  if (!needsBoundary) {
+    return cursor ? { cursor } : null;
   }
   const messageId = nativeHistoryMessageSourceId(
     chatHistoryWindowBoundary(state.chatMessages, pagination, direction),

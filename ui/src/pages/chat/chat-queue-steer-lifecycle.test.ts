@@ -284,7 +284,7 @@ it.each([
             message: { role: "user", content: queued.text, timestamp: 10_000 },
             acceptedAt: 10_000,
             state: "queued",
-            ...(deferred || ackMode.startsWith("steer-now") ? { queued: true as const } : {}),
+            ...(deferred ? { queued: true as const } : {}),
             ...(ackMode.startsWith("steer-now")
               ? {
                   steerNow: {
@@ -296,7 +296,7 @@ it.each([
           },
         ],
         total: 1,
-        queuedCount: deferred || ackMode.startsWith("steer-now") ? 1 : 0,
+        queuedCount: deferred ? 1 : 0,
       };
     }
     const steeringInput = ackMode.startsWith("steer-now")

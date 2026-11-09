@@ -321,8 +321,10 @@ it("grows the native range before compensating fractional row growth above a rea
   const rows = numberedContentRows(12);
   const { container, renderRows } = await mount(rows);
   viewport(container, 600, () => transcriptSize(container) + 84);
+  const writeExtents: number[] = [];
   container.scrollTo = (options?: ScrollToOptions | number) => {
     if (typeof options === "object") {
+      writeExtents.push(container.scrollHeight);
       container.scrollTop = Math.min(
         options.top ?? container.scrollTop,
         container.scrollHeight - container.clientHeight,
@@ -343,64 +345,21 @@ it("grows the native range before compensating fractional row growth above a rea
   await vi.advanceTimersByTimeAsync(0);
   const row = measuredRowBeforeReader(container);
   const before = container.scrollTop;
+  writeExtents.length = 0;
   Object.defineProperty(row, "offsetHeight", { configurable: true, value: 160.375 });
   resize(row, 160.375);
-  // Row observer delivery defers its compensation to the next native frame.
-  expect(container.scrollTop).toBe(before);
+  // Native delivery grows the physical range before its first compensation write.
+  expect(writeExtents).toHaveLength(1);
+  expect(writeExtents[0]).toBeGreaterThanOrEqual(before + 40.375 + container.clientHeight);
+  expect(container.scrollTop).toBe(before + 40.375);
   flushFrames();
-  // Observe the first compensation, before a render or retry can conceal native clamping.
+  renderRows(rows);
+  expect(writeExtents).toHaveLength(1);
   expect(container.scrollTop).toBe(before + 40.375);
   container.dispatchEvent(new Event("scroll"));
-  expectReader(policy, true);
-});
-
-it("preserves reader policy when row measurement clamps a positive adjustment to the end", async () => {
-  const flushFrames = stubAnimationFrames();
-  transcriptDomState.measuredRowHeight = 120;
-  const { policy, transcript, mount } = createPolicyTranscript("measurement-reader");
-  const rows: TestContentRow[] = numberedContentRows(12);
-  const { container, renderRows } = await mount(rows);
-  const total = transcriptSize(container);
-  let maxScrollTop = total + 84 - 600;
-  viewport(container, 600, () => maxScrollTop + 600);
-  container.scrollTo = (options?: ScrollToOptions | number) => {
-    if (typeof options === "object") {
-      container.scrollTop = Math.min(options.top ?? container.scrollTop, maxScrollTop);
-    }
-  };
-  policy.chatScrollElement = () => container;
-  policy.chatIsProgrammaticScroll = () => transcript.isProgrammaticScroll;
-  policy.chatIsMaintenanceScroll = () => transcript.isMaintenanceScroll;
-  resize(container, 600);
   flushFrames();
-  nativeScroll(container, total + 84 - 600);
-  container.dispatchEvent(new WheelEvent("wheel", { deltaY: -24 }));
-  container.scrollTop -= 24;
-  container.dispatchEvent(new Event("scroll"));
-  expect(policy.chatReadingHistory).toBe(true);
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  container.dispatchEvent(new Event("scroll"));
-  vi.advanceTimersByTime(150);
-  renderRows(rows);
-  await vi.advanceTimersByTimeAsync(0);
-  const row = measuredRowBeforeReader(container);
-  Object.defineProperty(row, "offsetHeight", { configurable: true, value: 160 });
-  resize(row, 160);
-  flushFrames();
-  expect(container.scrollTop).toBe(total + 84 - 600);
-  container.dispatchEvent(new Event("scroll"));
+  expect(writeExtents).toHaveLength(1);
   expectReader(policy, true);
-  // A partial sizer commit lets TanStack retry the clamped adjustment as an absolute write.
-  maxScrollTop += 16;
-  renderRows(rows);
-  expect(container.scrollTop).toBe(maxScrollTop);
-  // The dock can keep shrinking the scroll range before the native read-back arrives.
-  maxScrollTop -= 8;
-  nativeScroll(container, maxScrollTop);
-  expectReader(policy, true);
-  container.dispatchEvent(new WheelEvent("wheel", { deltaY: 1 }));
-  expectReader(policy, false);
-  expect(transcript.isProgrammaticScroll).toBe(false);
 });
 
 it.each(["native return", "resize clamp"] as const)(

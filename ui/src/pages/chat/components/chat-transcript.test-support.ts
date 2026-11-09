@@ -1,8 +1,20 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { vi } from "vitest";
+import { Virtualizer } from "@tanstack/virtual-core";
+import { onTestFinished, vi } from "vitest";
 import { resetChatThreadState } from "../chat-thread.ts";
 import { resetThreadPresentation, type ChatThreadProps } from "./chat-thread-interactions.ts";
+import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
+import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import {
+  isTranscriptProgrammaticScroll,
+  isTranscriptMaintenanceScroll,
+  observeTranscriptOffset,
+  scrollTranscriptOffset,
+  TranscriptOffsetState,
+} from "./chat-transcript-offset-observer.ts";
+import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
+import { createTranscriptPresentation } from "./chat-transcript-session.ts";
 
 export const observedElements = new Set<Element>();
 export const resizeObservers = new Set<RecordingResizeObserver>();
@@ -152,3 +164,94 @@ export function resetTranscriptTestDom(): void {
 }
 
 export type TestContentRow = Extract<TranscriptRow, { kind: "content" }>;
+
+export function offsetOwner(
+  state: TranscriptOffsetState,
+  element: HTMLDivElement,
+  overrides: Partial<Parameters<typeof observeTranscriptOffset>[0]>,
+) {
+  const defaults = {
+    state,
+    getScrollElement: () => element,
+    endAnchor: new TranscriptEndAnchor(() => {}),
+    prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
+    canFollowEnd: () => false,
+    isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
+    isMaintenanceScroll: () => isTranscriptMaintenanceScroll(state, element),
+    cancelScroll: vi.fn(),
+    onLayoutCorrection: vi.fn(),
+    invalidate: vi.fn(),
+    onOffset: vi.fn(),
+    onReaderScroll: vi.fn(),
+    onComposerLayout: vi.fn(),
+  };
+  return Object.assign(defaults, overrides);
+}
+
+export function clampedMeasurements() {
+  installTranscriptDomMocks();
+  const element = document.body.appendChild(document.createElement("div"));
+  const range = { height: 400 };
+  let scrollTop = 300;
+  Object.defineProperties(element, {
+    clientHeight: { value: 100 },
+    scrollHeight: { get: () => range.height },
+    scrollTop: {
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = Math.max(0, Math.min(value, range.height - 100));
+      },
+    },
+    scrollTo: {
+      value: (options: ScrollToOptions) => {
+        element.scrollTop = options.top ?? element.scrollTop;
+      },
+    },
+  });
+  const heights = [100, 100, 100, 100];
+  const rows = Array.from({ length: 4 }, (_, index) => {
+    const row = element.appendChild(document.createElement("div"));
+    row.dataset.index = String(index);
+    Object.defineProperty(row, "offsetHeight", { get: () => heights[index]! });
+    return row;
+  });
+  const state = new TranscriptOffsetState();
+  const owner = offsetOwner(state, element, {});
+  const host = { layout: new TranscriptLayoutOwner(vi.fn()), contentElement: null };
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: rows.length,
+    initialOffset: 300,
+    overscan: 3,
+    getScrollElement: () => element,
+    estimateSize: () => 100,
+    scrollToFn: (offset, options, instance) =>
+      scrollTranscriptOffset(state, host, 0, offset, options, instance),
+    observeElementRect: (_, callback) => callback({ width: 800, height: 100 }),
+    observeElementOffset: (instance, callback) =>
+      observeTranscriptOffset(owner, instance, callback),
+    measureElement: (row, entry) => presentation.measureElement(row, entry),
+  });
+  const presentation = createTranscriptPresentation(
+    () => element,
+    virtualizer,
+    () => rows,
+    () => state.syncNativeOffset?.(),
+  );
+  const { _didMount: mount, _willUpdate: update } = virtualizer;
+  const dispose = mount();
+  onTestFinished(() => {
+    dispose();
+    resetTranscriptTestDom();
+  });
+  update();
+  for (const row of rows) {
+    virtualizer.measureElement(row);
+  }
+  const measure = (index: number, height: number) => {
+    heights[index] = height;
+    for (const observer of resizeObservers) {
+      observer.emitTarget(rows[index]!, 800, height);
+    }
+  };
+  return { element, range, state, virtualizer, update, owner, measure };
+}
