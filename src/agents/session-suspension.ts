@@ -131,10 +131,27 @@ async function suspendSessionQueued(params: SessionSuspensionParams) {
   // A committed diagnostic marker may survive a crossing restart; its TTL owns recovery.
   await patchSessionEntryCore(
     { storePath, sessionKey },
-    () => {
+    (entry) => {
       if (state.cleanupActive) {
         return null;
       }
+      // A run the Gateway resumed automatically that hits the same limit again
+      // keeps its attempt count, so agents.defaults.quotaResume.maxAttempts caps
+      // real provider failures instead of resetting on every re-suspension.
+      const previous = entry.quotaSuspension;
+      const autoResume =
+        previous?.autoResume &&
+        previous.state !== "suspended" &&
+        previous.reason === params.reason &&
+        previous.failedProvider === params.failedProvider &&
+        previous.failedModel === params.failedModel
+          ? {
+              attempts: previous.autoResume.attempts,
+              ...(previous.autoResume.lastAttemptAt !== undefined
+                ? { lastAttemptAt: previous.autoResume.lastAttemptAt }
+                : {}),
+            }
+          : undefined;
       return {
         quotaSuspension: {
           schemaVersion: 1,
@@ -145,6 +162,7 @@ async function suspendSessionQueued(params: SessionSuspensionParams) {
           summary: params.summary,
           expectedResumeBy,
           state: "suspended",
+          ...(autoResume ? { autoResume } : {}),
         } satisfies QuotaSuspension,
       };
     },

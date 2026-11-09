@@ -36,6 +36,7 @@ import {
   formatBillingErrorMessage,
   renderRateLimitRetryExhaustion,
 } from "../../failover/user-copy.js";
+import { resolveQuotaSuspensionTtlMsFromCooldownExpiry } from "../../quota-resume-policy.js";
 import { resolveSessionSuspensionReason } from "../../session-suspension.js";
 import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
 import { log } from "../logger.js";
@@ -355,6 +356,10 @@ export async function handleEmbeddedAssistantFailure(input: {
       error.status,
     );
     if (error.suspend) {
+      const ttlMs = resolveQuotaSuspensionTtlMsFromCooldownExpiry(
+        error.soonestCooldownExpiry,
+        Date.now(),
+      );
       runInput.suspendForFailure({
         cfg: runInput.runParams.config,
         agentDir: runInput.agentDir,
@@ -362,6 +367,7 @@ export async function handleEmbeddedAssistantFailure(input: {
         reason: resolveSessionSuspensionReason(error.reason),
         failedProvider: error.provider ?? provider,
         failedModel: error.model ?? modelId,
+        ...(ttlMs !== undefined ? { ttlMs } : {}),
       });
     }
     throw withAgentTerminalSnapshot(

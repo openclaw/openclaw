@@ -207,6 +207,15 @@ export const AgentDefaultsBaseSchema = z.strictObject({
       notifyUser: z.boolean().optional(),
     })
     .optional(),
+  /** Gateway service that resumes sessions parked by a provider usage limit. Default: enabled. */
+  quotaResume: z
+    .strictObject({
+      /** Resume quota-suspended sessions automatically once the limit resets. Default: true. */
+      enabled: z.boolean().optional(),
+      /** Maximum automatic continuation attempts per suspension. Default: 6. */
+      maxAttempts: z.number().int().positive().optional(),
+    })
+    .optional(),
   embeddedAgent: EmbeddedAgentConfigSchema.optional(),
   thinkingDefault: AgentThinkingLevelSchema.optional(),
   fastModeDefault: z.union([z.boolean(), z.literal("auto"), z.literal("ultrafast")]).optional(),

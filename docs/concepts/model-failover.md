@@ -657,6 +657,21 @@ That cooldown summary is model-aware:
 - unrelated model-scoped rate limits are ignored for the attempted provider/model chain
 - if the remaining block is a matching model-scoped rate limit, OpenClaw reports the last matching expiry that still blocks that model
 
+## Automatic resume after a usage limit
+
+When a run fails on a provider usage limit (`rate_limit`) or billing block and no fallback can take over, the embedded runner parks the session with a quota suspension on its session entry. The suspension records the failed provider and model, the time it was parked, and the earliest time it may resume. When the provider reported a reset time through its auth-profile cooldown, that time plus a short margin becomes the resume time; otherwise the default 30 minute TTL applies.
+
+The Gateway then owns the wake-up. A background service scans every agent's session store once a minute and arms a precise timer for the earliest pending resume. When a parked session comes due it:
+
+1. Re-checks the provider's auth-profile cooldown. A still-blocked usage window pushes the resume time out again instead of launching a turn that would fail.
+2. Confirms nothing else moved the session on: the operator did not stop the run, no newer human turn arrived, and no run is currently active for that session id.
+3. Marks the suspension `resuming` and dispatches one trusted `[System]` continuation turn bound to the existing session id. The next attempt injects the recovery briefing, and the model is told to check which tool actions already completed before repeating any.
+4. Delivers the continued reply to the session's recorded external route (for example a Telegram chat) when one exists; Control UI sessions receive it through the normal session stream.
+
+Only `quota_exhausted` suspensions are resumed. Billing (`manual`) and circuit-open suspensions still wait for a human because time alone does not clear them. Automatic attempts are capped per suspension (`agents.defaults.quotaResume.maxAttempts`, default six) with exponential backoff (30 minutes doubling, capped at six hours) when no reset time is known. A launch that never starts a run is retried after the backoff rather than immediately. A resumed run that hits the same limit again keeps its attempt count, so the cap bounds real provider failures. A suspension whose resume time passed more than 24 hours ago is treated as abandoned and left for the normal cleanup path; this also keeps historical markers from launching all at once after an upgrade.
+
+Set `agents.defaults.quotaResume.enabled: false` to disable the service; parked sessions then resume only when a new prompt arrives. `OPENCLAW_QUOTA_AUTO_RESUME=0` in the Gateway environment overrides the config for one host. See [`agents.defaults.quotaResume`](/gateway/config-agents/models#agentsdefaultsquotaresume).
+
 ## Related config
 
 See [Gateway configuration](/gateway/configuration) for:

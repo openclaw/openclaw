@@ -187,6 +187,31 @@ describe("server-runtime-services", () => {
     },
   );
 
+  it("starts quota resume with the Gateway context and stops it with delivery recovery", async () => {
+    vi.useFakeTimers();
+    const log = createLog();
+    const resolveGatewayContext = () => undefined;
+    const scheduler = createTestGatewayScheduler("fake-timers");
+    const { services } = activateScheduledServicesForTest({
+      log,
+      resolveGatewayContext,
+      scheduler,
+    });
+
+    expect(hoisted.startQuotaResumeRuntime).toHaveBeenCalledTimes(1);
+    const quotaResumeParams = hoisted.startQuotaResumeRuntime.mock.calls[0]?.[0];
+    expect(quotaResumeParams?.scheduler).toBe(scheduler);
+    expect(quotaResumeParams?.resolveGatewayContext).toBe(resolveGatewayContext);
+    // The service stays silent at startup so recovery log ordering is unchanged.
+    expect(log.child).not.toHaveBeenCalledWith("quota-resume");
+    quotaResumeParams?.log?.warn("resume warning");
+    expect(log.child).toHaveBeenCalledWith("quota-resume");
+
+    expect(hoisted.stopQuotaResumeRuntime).not.toHaveBeenCalled();
+    await services.stopDeliveryRecovery();
+    expect(hoisted.stopQuotaResumeRuntime).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["neither", "legacy", "recovery"] as const)(
     "joins upstream monitoring, legacy diagnostics and current recovery when %s fails",
     async (failing) => {

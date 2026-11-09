@@ -20,6 +20,7 @@ import {
 import { classifyFailoverReason } from "../../failover/classify.js";
 import { classifyRateLimitWindow, resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
+import { resolveQuotaSuspensionTtlMsFromCooldownExpiry } from "../../quota-resume-policy.js";
 import { resolveSessionSuspensionReason } from "../../session-suspension.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
@@ -138,6 +139,10 @@ export async function handleEmbeddedPromptFailure(input: {
     normalizedPromptFailover ?? terminal.promptError,
   );
   if (normalizedPromptFailover?.suspend) {
+    const ttlMs = resolveQuotaSuspensionTtlMsFromCooldownExpiry(
+      normalizedPromptFailover.soonestCooldownExpiry,
+      Date.now(),
+    );
     runInput.suspendForFailure({
       cfg: runInput.runParams.config,
       agentDir: runInput.agentDir,
@@ -145,6 +150,7 @@ export async function handleEmbeddedPromptFailure(input: {
       reason: resolveSessionSuspensionReason(normalizedPromptFailover.reason),
       failedProvider: normalizedPromptFailover.provider ?? preparedRuntime.provider,
       failedModel: normalizedPromptFailover.model ?? preparedRuntime.modelId,
+      ...(ttlMs !== undefined ? { ttlMs } : {}),
     });
   }
   const errorText = promptErrorDetails.message || formatErrorMessage(terminal.promptError);

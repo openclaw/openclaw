@@ -59,6 +59,7 @@ Per-channel config keys live in [Configuration - channels](/gateway/config-chann
 See [Configuration - agents](/gateway/config-agents) for:
 
 - `agents.defaults.*` (workspace, model, thinking, memory, media, skills, sandbox)
+  - `agents.defaults.quotaResume`: automatic resume of sessions parked by a provider usage limit (`enabled`, default `true`; `maxAttempts`, default `6`); `OPENCLAW_QUOTA_AUTO_RESUME` overrides `enabled`
 - `multiAgent.*` (multi-agent routing and bindings)
 - `session.*` (session lifecycle, compaction, pruning)
 - `messages.*` (message delivery, TTS, markdown rendering)

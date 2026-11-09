@@ -39,6 +39,11 @@ import {
   type GatewayMaintenanceHandles,
 } from "./server-maintenance-lifecycle.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
+import {
+  isQuotaAutoResumeEnabled,
+  startQuotaResumeRuntime,
+  type QuotaResumeRuntime,
+} from "./server-quota-resume-runtime.js";
 import type { GatewayRuntimeServiceLogger } from "./server-runtime-service-shared.js";
 import { measureStartup } from "./server-startup-trace.js";
 export { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
@@ -524,12 +529,32 @@ export function activateGatewayScheduledServices(params: {
     cfg: params.cfgAtStart,
     log: params.log,
   });
+  // Sessions parked by a provider usage limit resume from a Gateway timer, not
+  // from the next human prompt, so interrupted work finishes unattended.
+  let quotaResumeLog: ReturnType<GatewayRuntimeServiceLogger["child"]> | undefined;
+  const quotaResumeRuntime: QuotaResumeRuntime | undefined = isQuotaAutoResumeEnabled(
+    params.cfgAtStart,
+  )
+    ? startQuotaResumeRuntime({
+        scheduler,
+        readConfig: getRuntimeConfig,
+        // Resolve the child lazily; the service is silent until a session actually resumes.
+        log: {
+          info: (message) => (quotaResumeLog ??= params.log.child("quota-resume")).info(message),
+          warn: (message) => (quotaResumeLog ??= params.log.child("quota-resume")).warn(message),
+        },
+        ...(params.resolveGatewayContext
+          ? { resolveGatewayContext: params.resolveGatewayContext }
+          : {}),
+      })
+    : undefined;
   let deliveryRecoveryStopPromise: Promise<void> | undefined;
   const stopDeliveryRecovery = () => {
     // Both owners fence synchronously before the close prelude awaits either.
     deliveryRecoveryStopPromise ??= Promise.all([
       stopOutboundDeliveryRecovery(),
       stopSessionDeliveryRuntime(),
+      quotaResumeRuntime?.stop() ?? Promise.resolve(),
     ]).then(() => {});
     return deliveryRecoveryStopPromise;
   };
