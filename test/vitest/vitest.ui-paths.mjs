@@ -80,6 +80,7 @@ export const uiTimingTestFiles = ["ui/src/components/markdown.progress.node.test
 // These files launch Playwright from Node; all other .browser tests run in Chromium.
 export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/pages/chat/chat-responsive.browser.test.ts",
+  "ui/src/pages/chat/chat-rhythm-alignment.browser.test.ts",
   "ui/src/pages/chat/chat-search-layout.browser.test.ts",
   "ui/src/pages/chat/chat-footer-layout.browser.test.ts",
   "ui/src/pages/chat/chat-message-footer-actions.browser.test.ts",
@@ -88,6 +89,7 @@ export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/components/form-controls.browser.test.ts",
   "ui/src/components/sidebar-footer-layout.browser.test.ts",
   "ui/src/styles/corner-shape.browser.test.ts",
+  "ui/src/styles/page-toolbar-rhythm.browser.test.ts",
   "ui/src/styles/cursor-policy.browser.test.ts",
   "ui/src/styles/chat-file-link-presentation.browser.test.ts",
   "ui/src/styles/shimmer.browser.test.ts",
@@ -143,6 +145,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/slack-inline-identity.e2e.test.ts",
   "ui/src/e2e/gateway-fresh-visit.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
+  "ui/src/e2e/guest-typing.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-daybreak.real-gateway.e2e.test.ts",
   "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
   "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",

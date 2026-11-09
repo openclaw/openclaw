@@ -7,7 +7,7 @@ child, Service Worker client) live with their owners.
 
 ## Roles
 
-- **Client**: the browser Service Worker (Rust/WASM iroh, relay-only) or a native app.
+- **Client**: the browser Service Worker (Rust/WASM iroh, relay-only) a headless node host, or a native app.
 - **Server**: the claw's **tunnel child**, a Gateway-supervised child process that owns the
   iroh endpoint key K_srv and proxies to the Gateway over a trusted local hop.
 - The client dials **only** `binding.k_srv` from a ServerBinding it verified against its pin
@@ -123,10 +123,16 @@ Headers the child **sets** (proposal; final names belong to the Gateway ingress 
 | `X-Forwarded-Host`          | the client's `Host`                                                                    |
 
 The child sends **only the peer key**, not a user or scopes: the Gateway is the membership
-authority and maps W to a member, owner device and role itself. Device tokens are bound to W
+authority and maps W to a member, owner device or node principal itself. A node principal may connect
+only with `role: "node"`, never as an operator. Node keys are admitted from `AuthorityState.nodes`
+just like other current membership, without consulting Discovery. Device tokens are bound to W
 at the Gateway (spec section 5, step 6), so a token presented with another W is refused and
 logged. Relayed traffic must never count as direct loopback (no root ceremonies over the
 tunnel, spec section 4).
+
+Headless clients use the same tunnel framing for the node WebSocket, worker WebSocket and
+HTTP transfers. There is no wire change or TCP loopback proxy: transport stays in process or
+behind a private owner-only Unix socket. The existing admission and liveness rules apply.
 
 ## Changes from `openclaw/tunnel/0`
 
