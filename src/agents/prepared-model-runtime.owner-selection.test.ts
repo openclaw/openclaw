@@ -8,11 +8,12 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
-import * as runtimeSnapshot from "../config/runtime-snapshot.js";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
+import * as runtimeSnapshot from "../config/runtime-snapshot.js";
+import { readPreparedGatewayModelCatalogBatch } from "../gateway/server-model-catalog.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
 import {
@@ -32,10 +33,7 @@ import {
   refreshPreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimePublicationListener,
 } from "./prepared-model-runtime.js";
-import {
-  preparedModelRuntimeConfigsMatch,
-  withPreparedModelRuntimeReadBatch,
-} from "./prepared-model-runtime.owner.js";
+import { withPreparedModelRuntimeReadBatch } from "./prepared-model-runtime.owner.js";
 
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
   const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
@@ -113,29 +111,49 @@ function holdNextCatalogWrite() {
 }
 
 describe("prepared model runtime owner selection", () => {
-  it("hashes each config once per synchronous read batch", () => {
-    const previousConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
-    const currentConfig = structuredClone(previousConfig);
-    const hashRuntimeConfig = vi.spyOn(runtimeSnapshot, "hashRuntimeConfigValue");
-    const compareRepeatedly = () => {
-      for (let index = 0; index < 470; index += 1) {
-        expect(preparedModelRuntimeConfigsMatch(previousConfig, currentConfig)).toBe(true);
-      }
-    };
+  it("bounds config hashing for a Gateway fleet catalog read and refreshes between batches", async () => {
+    const agentIds = ["default", ...Array.from({ length: 127 }, (_, index) => `fleet-${index}`)];
+    const config = retainLegacyDefaultAgentId(
+      {
+        agents: {
+          defaults: { model: "openai/gpt-5.5" },
+          entries: Object.fromEntries(agentIds.map((agentId) => [agentId, {}])),
+        },
+      },
+      "default",
+    );
+    mocks.configuredAgentIds = agentIds;
+    for (const agentId of agentIds) {
+      mocks.configuredAgentDirs.set(agentId, fixture.state.agentDir(agentId));
+      mocks.configuredWorkspaces.set(agentId, `/tmp/${agentId}-workspace`);
+    }
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
 
+    const requestConfig = structuredClone(config);
+    const hashRuntimeConfig = vi.spyOn(runtimeSnapshot, "hashRuntimeConfigValue");
     try {
-      withPreparedModelRuntimeReadBatch(() => {
-        compareRepeatedly();
-        withPreparedModelRuntimeReadBatch(compareRepeatedly);
-        compareRepeatedly();
+      const read = await readPreparedGatewayModelCatalogBatch(agentIds, {
+        getConfig: () => requestConfig,
+        includeSessionRowPolicy: false,
       });
-      expect(hashRuntimeConfig).toHaveBeenCalledTimes(4);
+      expect(read).toHaveLength(agentIds.length);
+      expect(read.every((result) => result.status === "fulfilled" && result.value)).toBe(true);
+      expect(hashRuntimeConfig).toHaveBeenCalledTimes(2);
 
       hashRuntimeConfig.mockClear();
-      for (let index = 0; index < 3; index += 1) {
-        expect(preparedModelRuntimeConfigsMatch(previousConfig, currentConfig)).toBe(true);
-      }
-      expect(hashRuntimeConfig).toHaveBeenCalledTimes(6);
+      requestConfig.agents!.defaults!.model = "openai/gpt-5.4";
+      const afterMutation = await readPreparedGatewayModelCatalogBatch(agentIds, {
+        getConfig: () => requestConfig,
+        includeSessionRowPolicy: false,
+      });
+      expect(afterMutation).toHaveLength(agentIds.length);
+      expect(afterMutation.every((result) => result.status === "fulfilled" && !result.value)).toBe(
+        true,
+      );
+      expect(hashRuntimeConfig).toHaveBeenCalledTimes(2);
     } finally {
       hashRuntimeConfig.mockRestore();
     }
