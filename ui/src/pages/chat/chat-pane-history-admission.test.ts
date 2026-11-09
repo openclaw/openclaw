@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
-
 import { expect, it, onTestFinished, vi } from "vitest";
-import * as historyIdentity from "../../lib/chat/history-message-identity.ts";
+import * as historyIdentity from "../../lib/chat/history-message-merge.ts";
 import { chatOutboxDeliveryKey } from "../../lib/chat/outbox-store.ts";
+import { prepareChatHistoryPages } from "./chat-history-page-preparation.ts";
 import "./chat-pane.tsx";
-import { prepareChatHistoryPages, type ChatHistoryResult } from "./chat-history-snapshot.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import {
   admitChatHistoryPagePrefix,

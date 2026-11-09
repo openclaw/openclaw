@@ -25,7 +25,6 @@ import {
   historySessionId,
   reconcileHistoryTail,
   commitCurrentChatHistorySnapshot,
-  prepareChatHistoryPages,
 } from "./chat-history-snapshot.ts";
 import {
   beginHistoryRequest,
@@ -199,6 +198,7 @@ export async function hydrateChatHistory(
       | {
           scope: SessionProjectionScope;
           ownsReader: () => boolean;
+          preparePages: typeof import("./chat-history-page-preparation.ts").prepareChatHistoryPages;
         }
       | undefined;
     const beforeRead = readChatSessionPublication(state);
@@ -257,7 +257,11 @@ export async function hydrateChatHistory(
         return undefined;
       }
       response = recovered.result;
-      continuousRead = { scope: recovered.scope, ownsReader: recovered.ownsReader };
+      continuousRead = {
+        scope: recovered.scope,
+        ownsReader: recovered.ownsReader,
+        preparePages: recovered.preparePages,
+      };
     }
     const inFlightEvents =
       isHistoryCursor(response) && response.kind === "reset"
@@ -412,7 +416,7 @@ export async function hydrateChatHistory(
     if (continuousRead) {
       // Check current local replies at this synchronous publication, including
       // commands received while the continuity request was pending.
-      const prepared = prepareChatHistoryPages(
+      const prepared = continuousRead.preparePages(
         state,
         [res],
         "around",

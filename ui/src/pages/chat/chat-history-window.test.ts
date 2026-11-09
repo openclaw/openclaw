@@ -4,8 +4,9 @@ import { t } from "../../i18n/index.ts";
 import { nativeHistoryMessageSourceIdentity } from "../../lib/chat/history-message-identity.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
+import { prepareChatHistoryPages } from "./chat-history-page-preparation.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
-import { prepareChatHistoryPages, resolveChatHistoryPagination } from "./chat-history-snapshot.ts";
+import { resolveChatHistoryPagination } from "./chat-history-snapshot.ts";
 import {
   extendChatHistoryWindow,
   prepareChatHistorySegment,

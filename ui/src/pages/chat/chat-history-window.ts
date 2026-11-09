@@ -305,44 +305,6 @@ export function extendChatHistoryWindow(
       );
 }
 
-/** Only a real source ID can reopen an interior cut. A bounded original packet
- * keeps both opaque edges while its unkeyed reader still owns that packet. */
-export function chatHistoryReaderBridge(
-  messages: readonly unknown[],
-  pagination: ChatHistoryPagination,
-  reader: ChatTranscriptReaderSnapshot | null | undefined,
-  direction: "older" | "newer",
-): readonly string[] {
-  const segments = pagination.segments ?? [];
-  const covered = new Set(segments.flatMap((segment) => segment.sources));
-  const visible = reader?.visibleSources.filter((source) => covered.has(source)) ?? [];
-  const boundary = direction === "older" ? visible.at(-1) : visible[0];
-  const index = segments.findIndex((segment) => boundary && segment.sources.includes(boundary));
-  if (index < 0 || !boundary) {
-    return [];
-  }
-  const segment = segments[index]!;
-  const sourceIndex = segment.sources.indexOf(boundary);
-  const intact =
-    segment.boundedPacket &&
-    reader?.anchor != null &&
-    segment.sources.includes(reader.anchor) &&
-    !messages.some(
-      (message) =>
-        nativeHistoryMessageSourceIdentity(message) === reader?.anchor &&
-        nativeHistoryMessageSourceId(message),
-    );
-  return direction === "older"
-    ? [
-        ...segments.slice(0, index).flatMap((page) => page.sources),
-        ...segment.sources.slice(0, intact ? undefined : sourceIndex + 1),
-      ]
-    : [
-        ...segment.sources.slice(intact ? 0 : sourceIndex),
-        ...segments.slice(index + 1).flatMap((page) => page.sources),
-      ];
-}
-
 /** Bound the reloadable portion, then let the reducer preserve exact live pins. */
 export function selectChatHistoryResidency(
   messages: readonly unknown[],

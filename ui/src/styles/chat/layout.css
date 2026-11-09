@@ -733,7 +733,6 @@ openclaw-pending-session-create {
 .chat-history-boundary__action {
   display: inline-flex;
   min-width: min(160px, 100%);
-  max-width: 100%;
   overflow: hidden;
   height: 44px;
   flex-direction: column;

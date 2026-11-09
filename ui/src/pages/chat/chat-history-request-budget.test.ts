@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
+import { prepareChatHistoryPages } from "./chat-history-page-preparation.ts";
 import { readChatHistoryRequestBudget } from "./chat-history-request-budget.ts";
-import { prepareChatHistoryPages } from "./chat-history-snapshot.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitChatHistoryPages } from "./chat-pane-history-packets.runtime.ts";
 import {

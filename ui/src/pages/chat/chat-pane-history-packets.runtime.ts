@@ -10,6 +10,7 @@ import {
   nativeHistoryMessageSourceIdentity,
 } from "../../lib/chat/history-message-identity.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
+import { prepareChatHistoryPages } from "./chat-history-page-preparation.ts";
 import { hasVisibleOlderHistoryPage } from "./chat-history-page-visibility.ts";
 import {
   advanceChatHistoryNavigation,
@@ -32,7 +33,6 @@ import {
 import { retryChatHistoryRead } from "./chat-history-retry.ts";
 import {
   type ChatHistoryResult,
-  prepareChatHistoryPages,
   resolveChatHistoryPagination,
   commitCurrentChatHistorySnapshot,
 } from "./chat-history-snapshot.ts";

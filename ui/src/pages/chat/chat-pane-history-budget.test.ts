@@ -1,14 +1,10 @@
 /* @vitest-environment jsdom */
-
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { prepareChatHistoryPages } from "./chat-history-page-preparation.ts";
 import { readChatHistoryRequestBudget } from "./chat-history-request-budget.ts";
 import "./chat-pane.tsx";
-import {
-  prepareChatHistoryPages,
-  resolveChatHistoryPagination,
-  type ChatHistoryResult,
-} from "./chat-history-snapshot.ts";
+import { resolveChatHistoryPagination, type ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { prepareChatHistoryPacket } from "./chat-history-window.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { admitChatHistoryPages } from "./chat-pane-history-packets.runtime.ts";

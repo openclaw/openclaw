@@ -5,6 +5,7 @@ import {
   nativeHistoryMessageSourceIdentity,
 } from "../../lib/chat/history-message-identity.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
+import { prepareChatHistoryPages } from "./chat-history-page-preparation.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request-params.ts";
 import { requestOlderChatHistoryPage } from "./chat-history-request.ts";
@@ -12,7 +13,6 @@ import {
   type ChatHistoryResult,
   type ObservedChatHistoryResult,
   historySessionId,
-  prepareChatHistoryPages,
   resolveChatHistoryPagination,
 } from "./chat-history-snapshot.ts";
 import { MAX_RESIDENT_SEGMENTS, prepareChatHistoryPacket } from "./chat-history-window.ts";
@@ -105,6 +105,8 @@ export async function readContinuousHeldHistory(
     result: { ...page, observation },
     scope: predecessor.scope,
     ownsReader,
+    // Carry only the loaded function; hydration rechecks current custody at publication.
+    preparePages: prepareChatHistoryPages,
   };
 }
 

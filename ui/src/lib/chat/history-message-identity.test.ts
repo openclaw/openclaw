@@ -4,8 +4,8 @@ import {
   nativeHistoryMessageIdentity,
   nativeHistoryMessageSourceId,
   nativeHistoryMessageSourceIdentity,
-  prependUniqueNativeMessages,
 } from "./history-message-identity.ts";
+import { prependUniqueNativeMessages } from "./history-message-merge.ts";
 
 it("keeps roleless source boundaries and imported namespaces", () => {
   const marker = { type: "compaction", __openclaw: { id: "boundary", seq: 7 } };
