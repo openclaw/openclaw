@@ -68,10 +68,14 @@ export function materializeDeclarationPackages(root: string, unified: boolean) {
   );
   fs.mkdirSync(normalizationCore, { recursive: true });
   const normalizationEntries = ["error-coercion", "record-coerce", "stringified-error"];
-  for (const entry of normalizationEntries) {
-    const source = fs.readFileSync(path.join(normalizationSource, `src/${entry}.ts`), "utf8");
-    fs.writeFileSync(path.join(normalizationCore, `${entry}.ts`), source);
-    fs.writeFileSync(path.join(normalizationCore, `${entry}.js`), stripNodeTypeScriptTypes(source));
+  const sources = normalizationEntries.map((entry) =>
+    fs.readFileSync(path.join(normalizationSource, `src/${entry}.ts`), "utf8"),
+  );
+  // One selected Node process per fixture; each source remains an independent module.
+  const stripped = stripNodeTypeScriptTypes(sources);
+  for (const [index, entry] of normalizationEntries.entries()) {
+    fs.writeFileSync(path.join(normalizationCore, `${entry}.ts`), sources[index]!);
+    fs.writeFileSync(path.join(normalizationCore, `${entry}.js`), stripped[index]!);
   }
   fs.writeFileSync(
     path.join(normalizationCore, "package.json"),

@@ -23,15 +23,20 @@ export function requireNodeTool(command: "node" | "npm"): string {
 }
 
 /** Keep Node's strip-only parser while callers execute the JavaScript in their own runtime. */
-export function stripNodeTypeScriptTypes(source: string): string {
-  return execFileSync(
-    requireNodeTool("node"),
-    [
-      "--disable-warning=ExperimentalWarning",
-      "--input-type=module",
-      "--eval",
-      'import { readFileSync } from "node:fs"; import { stripTypeScriptTypes } from "node:module"; process.stdout.write(stripTypeScriptTypes(readFileSync(0, "utf8")));',
-    ],
-    { encoding: "utf8", input: source },
-  );
+export function stripNodeTypeScriptTypes(source: string): string;
+export function stripNodeTypeScriptTypes(source: readonly string[]): string[];
+export function stripNodeTypeScriptTypes(source: string | readonly string[]): string | string[] {
+  const stripped = JSON.parse(
+    execFileSync(
+      requireNodeTool("node"),
+      [
+        "--disable-warning=ExperimentalWarning",
+        "--input-type=module",
+        "--eval",
+        'import { readFileSync } from "node:fs"; import { stripTypeScriptTypes } from "node:module"; process.stdout.write(JSON.stringify(JSON.parse(readFileSync(0, "utf8")).map(source => stripTypeScriptTypes(source))));',
+      ],
+      { encoding: "utf8", input: JSON.stringify(typeof source === "string" ? [source] : source) },
+    ),
+  ) as string[];
+  return typeof source === "string" ? stripped[0]! : stripped;
 }
