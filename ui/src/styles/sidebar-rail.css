@@ -728,14 +728,19 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   max-width: 100%;
 }
 
+/* The Sessions title is a picker that keeps the panel title's 4px inset and
+   mirrors the session row beneath it: the 20px avatar is the row lead column
+   (--sidebar-lead) and the 8px gap (--sidebar-row-gap) puts the label on the
+   row text column. 28px and --radius-md match the toolbar buttons beside it;
+   literals keep the shipped CSS at its ceiling. */
 .sidebar-session-owner-filter .picker-select__trigger {
   justify-content: flex-start;
-  gap: 5px;
+  gap: 8px;
   width: auto;
-  min-height: 30px;
-  padding: 4px 6px 4px 5px;
+  min-height: 28px;
+  padding: 0 6px 0 4px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   corner-shape: superellipse(1.5);
   background: transparent;
   font-weight: 600;
@@ -757,8 +762,8 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 }
 
 .sidebar-session-owner-filter .picker-select__leading .viewer-avatar {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
 }
 
 .sidebar-session-owner-filter.picker-select--sheet .picker-select__trigger .picker-select__chevron {
@@ -818,6 +823,7 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 .sidebar--rail .sidebar-session-toolbar__button {
   width: 28px;
   height: 28px;
+  border-radius: var(--radius-md);
 }
 
 html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-panel-header {
