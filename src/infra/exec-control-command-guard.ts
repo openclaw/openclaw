@@ -321,7 +321,7 @@ export async function detectUnsafeExecControlShellCommand(
     return "parser-failure";
   }
   // A POSIX shell can execute the parsed prefix before a later syntax error.
-  if (explanation?.ok === false && !windows) {
+  if (explanation && !explanation.ok && !windows) {
     return "parser-failure";
   }
   const argvCandidates = (() => {
