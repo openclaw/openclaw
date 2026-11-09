@@ -37,14 +37,8 @@ export function parseNodeHostOpenClawIdTarget(value: unknown): NodeHostOpenClawI
   ) {
     throw new Error("invalid OpenClaw ID node target");
   }
-  const relay = URL.parse(value.relayUrl);
-  if (
-    !relay ||
-    !["https:", "http:"].includes(relay.protocol) ||
-    relay.username ||
-    relay.password ||
-    relay.hash
-  ) {
+  const relayUrl = parseNodeRelayUrl(value.relayUrl);
+  if (!relayUrl) {
     throw new Error("invalid OpenClaw ID relay URL");
   }
   if (value.discoveryUrl === undefined) {
@@ -103,10 +97,25 @@ export function parseNodeHostOpenClawIdTarget(value: unknown): NodeHostOpenClawI
       ...(value.pin.k_gw !== undefined ? { k_gw: value.pin.k_gw } : {}),
     },
     evidence: { root_pub: value.evidence.root_pub, binding: binding.statement },
-    relayUrl: relay.href,
+    relayUrl,
     discoveryUrl,
     ...(freshness ? { freshness } : {}),
   };
+}
+
+/** Unsigned routing hint: a dialable relay URL without credentials or fragments. */
+export function parseNodeRelayUrl(value: unknown): string | undefined {
+  const relay = typeof value === "string" ? URL.parse(value) : null;
+  if (
+    !relay ||
+    !["https:", "http:"].includes(relay.protocol) ||
+    relay.username ||
+    relay.password ||
+    relay.hash
+  ) {
+    return undefined;
+  }
+  return relay.href;
 }
 
 /** Discovery routing is deployment configuration, not an authority or a relay hint. */

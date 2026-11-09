@@ -522,6 +522,8 @@ and its own membership. Stronger verified facts are saved before dialing, includ
 facts that require refusal, so reconnects and restarts cannot roll back trust.
 A replacement server key closes the old connection. Missing, stale, invalid, or
 replayed evidence refuses the tunnel; a failed tunnel never falls back to a direct WebSocket.
+An invalid relay hint from Discovery also refuses the tunnel, but the signed facts in that
+response are still saved.
 IP transports remain enabled so iroh can establish a direct encrypted path.
 
 The public target requires `discoveryUrl`, the deployment-selected Discovery

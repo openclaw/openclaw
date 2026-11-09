@@ -301,3 +301,27 @@ unixTest(
     expect(saved.freshness?.snapshot?.binding_seq).toBe(2);
   },
 );
+
+unixTest.each(["ftp://relay.example/", "https://user:pass@relay.example/"])(
+  "retains newer signed authority when Discovery's unsigned relay %s is invalid",
+  async (relay) => {
+    const tunnel = await start();
+    const rotated = await signStatement(
+      "ServerBinding",
+      { ...world.binding.body, binding_seq: 2, k_srv: world.mallory.peer },
+      world.root,
+    );
+    served = await responseFor(rotated, { seq: 3 });
+    served.descriptor.relay_url = relay;
+    expect(await requestThrough(tunnel)).toBe(502);
+    expect(connect).not.toHaveBeenCalled();
+    expect(saved.pin.binding_seq).toBe(2);
+    expect(saved.freshness?.snapshot).toMatchObject({ seq: 3, binding_seq: 2 });
+    expect(saved.relayUrl).toBe("https://relay.example/");
+    // The older but still fresh evidence is refused after the routing failure.
+    served = await responseFor(world.binding, { seq: 2 });
+    expect(await requestThrough(tunnel)).toBe(502);
+    expect(connect).not.toHaveBeenCalled();
+    expect(signatureErrors).toEqual([]);
+  },
+);

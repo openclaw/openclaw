@@ -18,6 +18,7 @@ import { readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import {
   parseNodeHostOpenClawIdTarget,
+  parseNodeRelayUrl,
   type NodeHostOpenClawIdTarget,
 } from "./openclaw-id-target.js";
 
@@ -102,16 +103,34 @@ export async function assessNodeDescriptor(
     hostname: string;
     pin: ClawPin;
     discoveryUrl: string;
+    /** Saved routing for this claw; keeps signed trust when Discovery's unsigned routing is bad. */
+    relayUrl?: string;
     stored?: FreshnessState;
     peerKey: IrohEndpointKey;
     /** Joining refuses with fresh-link advice; a saved node reconnects or rejoins. */
     joining?: boolean;
   },
 ): Promise<{ target: NodeHostOpenClawIdTarget; error?: Error }> {
-  const parsed = isRecord(raw) ? parseClawDescriptor(raw.descriptor) : undefined;
-  if (!parsed?.ok || !isRecord(raw)) {
-    throw new Error(
-      "Discovery returned an invalid node descriptor. Check --discovery-url with the claw owner, then join with a new link.",
+  const invalid = new Error(
+    "Discovery returned an invalid node descriptor. Check --discovery-url with the claw owner, then join with a new link.",
+  );
+  const descriptor = isRecord(raw) && isRecord(raw.descriptor) ? raw.descriptor : undefined;
+  if (!descriptor || !isRecord(raw)) {
+    throw invalid;
+  }
+  let parsed = parseClawDescriptor(descriptor);
+  let routingError: Error | undefined;
+  if (!parsed.ok || !parseNodeRelayUrl(parsed.descriptor.relay_url)) {
+    // relay_url is unsigned routing. A bad hint must not discard signed authority that would
+    // refuse a later replay, but this response is never dialed.
+    parsed = context.relayUrl
+      ? parseClawDescriptor({ ...descriptor, relay_url: context.relayUrl })
+      : parsed;
+    if (!parsed.ok || !context.relayUrl) {
+      throw invalid;
+    }
+    routingError = new Error(
+      "Discovery returned an invalid relay URL for this claw; not connecting. Ask the claw owner to check their Gateway's OpenClaw ID relay.",
     );
   }
   const evidence = descriptorEvidence(parsed.descriptor);
@@ -156,5 +175,5 @@ export async function assessNodeDescriptor(
       error: new OpenClawIdNodeRemovedError(),
     };
   }
-  return { target };
+  return routingError ? { target, error: routingError } : { target };
 }

@@ -97,6 +97,7 @@ export async function startNodeTunnelTransport(options: {
           hostname: target.hostname,
           pin: target.pin,
           discoveryUrl: target.discoveryUrl,
+          relayUrl: target.relayUrl,
           stored: target.freshness,
           peerKey: `iroh:${endpoint.id()}`,
         });

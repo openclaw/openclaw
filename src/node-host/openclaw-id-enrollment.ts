@@ -115,6 +115,7 @@ export async function enrollNode(params: {
                 binding_seq: 0,
               },
           discoveryUrl: params.discoveryUrl,
+          relayUrl: sameClaw ? previous.target.relayUrl : undefined,
           stored: sameClaw ? previous.target.freshness : undefined,
           peerKey: peer_key,
           joining: true,
