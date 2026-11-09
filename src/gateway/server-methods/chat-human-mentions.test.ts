@@ -4,38 +4,17 @@ import { isHumanAddressedChatMessage } from "./chat-human-mentions.js";
 
 const cfg = { agents: { entries: { main: { identity: { name: "Robo" } } } } } as OpenClawConfig;
 
-it("treats a message that only selects people as addressed to them", () => {
-  const text = "@Bob some of the stickers are cool";
+it.each([
+  ["@Bob some of the stickers are cool", "bob", 4, true],
+  ["@Bob look at this. Robo, put them on one sheet.", "bob", 4, false],
+  ["@robo-bot nice work", "robo-bot", 9, true],
+] as const)("detects whether %j is addressed only to people", (text, profileId, end, expected) => {
   expect(
     isHumanAddressedChatMessage({
       cfg,
       agentId: "main",
       text,
-      mentions: [{ profileId: "bob", start: 0, end: 4 }],
+      mentions: [{ profileId, start: 0, end }],
     }),
-  ).toBe(true);
-});
-
-it("keeps the agent turn when the text names the agent beside the people", () => {
-  const text = "@Bob look at this. Robo, put them on one sheet.";
-  expect(
-    isHumanAddressedChatMessage({
-      cfg,
-      agentId: "main",
-      text,
-      mentions: [{ profileId: "bob", start: 0, end: 4 }],
-    }),
-  ).toBe(false);
-});
-
-it("ignores the agent name inside a selected person's token", () => {
-  const text = "@robo-bot nice work";
-  expect(
-    isHumanAddressedChatMessage({
-      cfg,
-      agentId: "main",
-      text,
-      mentions: [{ profileId: "robo-bot", start: 0, end: 9 }],
-    }),
-  ).toBe(true);
+  ).toBe(expected);
 });
