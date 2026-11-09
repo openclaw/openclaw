@@ -333,7 +333,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       const prompt = "Report the retained one-shot result.";
       const summary = "Retained one-shot completed.";
       const unfinishedPrompt = "Report the unfinished one-shot result.";
-      const accepted = createDeferred<void>();
+      const accepted = createDeferred();
       let holdUnfinished = true;
       const requests: string[] = [];
       const providerServer = createServer((request, response) => {
