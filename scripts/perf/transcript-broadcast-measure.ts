@@ -3829,7 +3829,7 @@ if (values["seed-history"]) {
   process.env = { ...env };
   const [
     { SessionManager },
-    { upsertSessionEntryCore, loadExactSessionEntry },
+    { replaceSessionEntrySync, loadExactSessionEntry },
     { resolveOpenClawAgentSqlitePath },
     agentDb,
     stateDb,
@@ -3856,7 +3856,7 @@ if (values["seed-history"]) {
     if (loadExactSessionEntry(parentTarget)) {
       throw new Error(`Synthetic ${historyNamespace} parent already exists`);
     }
-    await upsertSessionEntryCore(parentTarget, {
+    replaceSessionEntrySync(parentTarget, {
       sessionId: `${historyNamespace}-parent`,
       updatedAt: timestamp,
       createdAt: timestamp,
@@ -3879,7 +3879,7 @@ if (values["seed-history"]) {
       if (loadExactSessionEntry(target)) {
         throw new Error(`Synthetic ${historyNamespace} session already exists: ${sessionKey}`);
       }
-      await upsertSessionEntryCore(target, {
+      replaceSessionEntrySync(target, {
         sessionId,
         createdAt: timestamp,
         updatedAt: timestamp,

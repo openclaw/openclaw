@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Page } from "playwright";
+import type { JSHandle, Page } from "playwright";
+import type { ChatPaneRuntime } from "../../ui/src/pages/chat/chat-pane-render.ts";
 import { getControlUiContextHandle } from "../../ui/src/test-helpers/control-ui-e2e-context.ts";
 import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
@@ -130,6 +131,33 @@ const eventLoadReferenceFields =
 
 /** Observe native wire delivery; the external producer owns rows, history and subscriptions. */
 function installEventLoadProbe() {
+  // The bridge exposes completion, not domain state. Capture the same existing
+  // host→runtime registration as the cold-load probe, then retire interception.
+  const NativeWeakMap = window.WeakMap;
+  const paneOwners = new NativeWeakMap<HTMLElement, ChatPaneRuntime>();
+  class RegistrationWeakMap<K extends WeakKey, V> extends NativeWeakMap<K, V> {
+    override set(host: K, owner: V): this {
+      if (
+        host instanceof HTMLElement &&
+        host.localName === "openclaw-chat-pane" &&
+        typeof owner === "object" &&
+        owner !== null &&
+        "element" in owner &&
+        owner.element === host &&
+        "render" in owner &&
+        typeof owner.render === "function"
+      ) {
+        capturePane(host, owner);
+      }
+      return super.set(host, owner);
+    }
+  }
+  function capturePane(host: HTMLElement, owner: object) {
+    // SAFETY: capture checks the chat host, owner.element identity, and runtime
+    // render method at its existing host→runtime registration boundary.
+    paneOwners.set(host, owner as ChatPaneRuntime);
+  }
+  window.WeakMap = RegistrationWeakMap;
   let active = false;
   let started = 0;
   let loadDeadline = 0;
@@ -157,6 +185,37 @@ function installEventLoadProbe() {
   const inputs: number[] = [];
   const delays: number[] = [];
   const taskSpans: number[] = [];
+  const receiptAges: Array<{ offsetMs: number; ageMs: number; seq: number; foreground: boolean }> =
+    [];
+  const applicationAges: typeof receiptAges = [];
+  const emissionsBySequence = new Map<number, { emittedAt: number; foreground: boolean }>();
+  const dispatchSpans: Array<{ offsetMs: number; durationMs: number; seq: number }> = [];
+  const frameGaps: Array<{ offsetMs: number; durationMs: number }> = [];
+  const longTasks: Array<{ offsetMs: number; durationMs: number }> = [];
+  const longTasksSupported = PerformanceObserver.supportedEntryTypes.includes("longtask");
+  const collectLongTasks = (entries: PerformanceEntry[]) => {
+    if (active) {
+      for (const entry of entries) {
+        longTasks.push({ offsetMs: entry.startTime - started, durationMs: entry.duration });
+      }
+    }
+  };
+  const longTaskObserver = longTasksSupported
+    ? new PerformanceObserver((list) => collectLongTasks(list.getEntries()))
+    : undefined;
+  let turnFrame = 0;
+  let previousFrame = 0;
+  let foregroundFirstDeliveredAt = 0;
+  let foregroundLastDeliveredAt = 0;
+  let foregroundLastDispatchFinishedAt = 0;
+  let foregroundLastSequence = 0;
+  let applicationSettledAt = 0;
+  let applicationSettledFrameAt = 0;
+  let applicationCompletionPending = false;
+  let expectedTools = 0;
+  let stopResultObserver: (() => void) | undefined;
+  const appliedResults: Array<{ id: string; output: string | undefined; received: boolean }> = [];
+  let appliedResultsVerified = false;
   const byEvent: Record<string, number> = {};
   const channel = new MessageChannel();
   const pending: number[] = [];
@@ -318,12 +377,42 @@ function installEventLoadProbe() {
             settled?.();
           }
         } else if (currentSocket) {
+          const receivedAt = performance.now();
+          const seq = Number(/,"seq":(\d+)\}$/u.exec(event.data)?.[1]);
+          const emittedAt = Number(/"eventLoadEmittedAt":([\d.]+)/u.exec(event.data)?.[1]);
+          if (active && emittedAt && seq) {
+            const isForeground = event.data.includes('"sessionKey":"agent:main:interaction-a"');
+            emissionsBySequence.set(seq, { emittedAt, foreground: isForeground });
+            receiptAges.push({
+              offsetMs: receivedAt - started,
+              ageMs: performance.timeOrigin + receivedAt - emittedAt,
+              seq,
+              foreground: isForeground,
+            });
+            if (isForeground) {
+              foregroundFirstDeliveredAt ||= receivedAt;
+              foregroundLastDeliveredAt = receivedAt;
+              foregroundLastSequence = seq;
+            }
+          }
           // Native delivery already owns this task. The production client and receipt
           // probes use EventTarget listeners; avoid the mock probe's timer queue.
           EventTarget.prototype.dispatchEvent.call(
             currentSocket,
             new MessageEvent("message", { data: event.data }),
           );
+          if (active && emittedAt && seq) {
+            // Synchronous listeners only: Solid's later microtasks are deliberately
+            // excluded. Long Tasks and frame gaps include their blocking work.
+            dispatchSpans.push({
+              offsetMs: receivedAt - started,
+              durationMs: performance.now() - receivedAt,
+              seq,
+            });
+            if (seq === foregroundLastSequence) {
+              foregroundLastDispatchFinishedAt = performance.now();
+            }
+          }
         }
       });
       await new Promise<void>((resolve, reject) => {
@@ -333,10 +422,115 @@ function installEventLoadProbe() {
         });
       });
     },
-    start(options: { duration: number }) {
+    start(options: { duration: number; toolCount: number }) {
+      if (window.WeakMap === RegistrationWeakMap) {
+        window.WeakMap = NativeWeakMap;
+      }
+      Reflect.deleteProperty(RegistrationWeakMap.prototype, "set");
+      const host = document.querySelector<HTMLElement>(".chat-pane-cache__pane--active");
+      const owner = host ? paneOwners.get(host) : undefined;
+      if (!host || !owner) {
+        throw new Error("Event-load application runtime was not captured");
+      }
+      expectedTools = options.toolCount;
+      const finalIdentity = JSON.stringify([
+        "event-load-foreground",
+        `event-load-tool-${expectedTools}`,
+      ]);
+      const appliedFinalResult = () => {
+        const state = owner.state;
+        const result = state?.toolStreamById.get(finalIdentity);
+        return Boolean(
+          state &&
+          result?.resultReceived === true &&
+          result.output === `Tool ${expectedTools} complete.` &&
+          state.toolStreamSyncTimer == null &&
+          state.chatStreamRenderFrame == null,
+        );
+      };
+      const client = owner.context.gateway.snapshot.client;
+      if (!client) {
+        throw new Error("Event-load application client is unavailable");
+      }
+      // App-level and existing protocol subscribers run first. Observe the
+      // applied entry before the owner's bounded live-tool window evicts it.
+      stopResultObserver = client.addEventListener((event) => {
+        if (active && event.seq !== undefined) {
+          const emission = emissionsBySequence.get(event.seq);
+          if (emission) {
+            const appliedAt = performance.now();
+            // This subscriber follows application dispatch, including any socket
+            // queue; Solid's later DOM settlement has its separate drain metric.
+            applicationAges.push({
+              offsetMs: appliedAt - started,
+              ageMs: performance.timeOrigin + appliedAt - emission.emittedAt,
+              seq: event.seq,
+              foreground: emission.foreground,
+            });
+            emissionsBySequence.delete(event.seq);
+          }
+        }
+        if (event.event !== "agent" || !event.payload || typeof event.payload !== "object") {
+          return;
+        }
+        const payload = event.payload;
+        if (
+          !("runId" in payload) ||
+          payload.runId !== "event-load-foreground" ||
+          !("data" in payload)
+        ) {
+          return;
+        }
+        const data = payload.data;
+        if (
+          !data ||
+          typeof data !== "object" ||
+          !("phase" in data) ||
+          data.phase !== "result" ||
+          !("toolCallId" in data) ||
+          typeof data.toolCallId !== "string"
+        ) {
+          return;
+        }
+        const result = owner.state?.toolStreamById.get(
+          JSON.stringify([payload.runId, data.toolCallId]),
+        );
+        appliedResults.push({
+          id: data.toolCallId,
+          output: result?.output,
+          received: result?.resultReceived === true,
+        });
+      });
       active = true;
       started = performance.now();
       loadDeadline = started + options.duration;
+      longTaskObserver?.observe({ type: "longtask" });
+      previousFrame = started;
+      const sampleFrame = (at: number) => {
+        frameGaps.push({ offsetMs: previousFrame - started, durationMs: at - previousFrame });
+        previousFrame = at;
+        if (
+          !applicationSettledAt &&
+          !applicationCompletionPending &&
+          progress.completedTools === expectedTools &&
+          (expectedTools === 0 || appliedFinalResult())
+        ) {
+          applicationCompletionPending = true;
+          void (async () => {
+            await Reflect.get(host, "updateComplete");
+            const frameAt = await new Promise<number>((resolve) => {
+              requestAnimationFrame(resolve);
+            });
+            if (expectedTools === 0 || appliedFinalResult()) {
+              applicationSettledAt = performance.now();
+              applicationSettledFrameAt = frameAt;
+            }
+            applicationCompletionPending = false;
+          })();
+        }
+        turnFrame = requestAnimationFrame(sampleFrame);
+      };
+      turnFrame = requestAnimationFrame(sampleFrame);
       observer.observe(document.body, {
         childList: true,
         characterData: true,
@@ -413,7 +607,36 @@ function installEventLoadProbe() {
         connectedGeneration,
         lastSequence,
         socketCloses,
+        applicationDrained: applicationSettledAt !== 0,
       };
+    },
+    reader() {
+      const host = document.querySelector<HTMLElement>(".chat-pane-cache__pane--active");
+      const owner = host ? paneOwners.get(host) : undefined;
+      const state = owner?.state;
+      return {
+        followLocked: state?.chatFollowLocked,
+        readingHistory: state?.chatReadingHistory,
+        appliedResults: appliedResults.length,
+        pendingToolRender: Boolean(state?.toolStreamSyncTimer || state?.chatStreamRenderFrame),
+      };
+    },
+    verifyAppliedResults() {
+      if (
+        appliedResults.length !== expectedTools ||
+        appliedResults.some(
+          (result, index) =>
+            result.id !== `event-load-tool-${index + 1}` ||
+            !result.received ||
+            result.output !== `Tool ${index + 1} complete.`,
+        )
+      ) {
+        throw new Error(
+          `Event-load ordered application results failed (${appliedResults.length}/${expectedTools})`,
+        );
+      }
+      appliedResultsVerified = true;
+      return { count: appliedResults.length, ordered: true };
     },
     beginScroll() {
       admitScrollTools();
@@ -426,6 +649,23 @@ function installEventLoadProbe() {
     },
     finish() {
       const elapsed = performance.now() - started;
+      collectLongTasks(longTaskObserver?.takeRecords() ?? []);
+      longTaskObserver?.disconnect();
+      cancelAnimationFrame(turnFrame);
+      stopResultObserver?.();
+      const first = foregroundFirstDeliveredAt ? foregroundFirstDeliveredAt - started : 0;
+      const last = applicationSettledAt ? applicationSettledAt - started : 0;
+      const inTurn = (entry: { offsetMs: number; durationMs: number }) =>
+        foregroundFirstDeliveredAt !== 0 &&
+        entry.offsetMs < last &&
+        entry.offsetMs + entry.durationMs > first;
+      // The RAF timestamp bounds frame intervals; callback execution time could
+      // otherwise admit the following idle frame into the completed turn.
+      const turnGaps = frameGaps.filter(
+        (entry) => inTurn(entry) && entry.offsetMs < applicationSettledFrameAt - started,
+      );
+      const turnTasks = longTasks.filter(inTurn);
+      const gapCount = turnGaps.length;
       active = false;
       observer.disconnect();
       return {
@@ -447,6 +687,53 @@ function installEventLoadProbe() {
         inputs: distribution(inputs),
         delays: distribution(delays),
         delivery: distribution(taskSpans),
+        turn: {
+          foregroundFirstDeliveredAt: foregroundFirstDeliveredAt
+            ? performance.timeOrigin + foregroundFirstDeliveredAt
+            : null,
+          foregroundLastDeliveredAt: foregroundLastDeliveredAt
+            ? performance.timeOrigin + foregroundLastDeliveredAt
+            : null,
+          foregroundLastSequence,
+          foregroundLastDispatchFinishedAt: foregroundLastDispatchFinishedAt
+            ? performance.timeOrigin + foregroundLastDispatchFinishedAt
+            : null,
+          foregroundDeliveryDurationMs: foregroundLastDispatchFinishedAt
+            ? foregroundLastDispatchFinishedAt - foregroundFirstDeliveredAt
+            : null,
+          applicationSettledAt: applicationSettledAt
+            ? performance.timeOrigin + applicationSettledAt
+            : null,
+          applicationDrainMs:
+            applicationSettledAt && foregroundFirstDeliveredAt
+              ? applicationSettledAt - foregroundFirstDeliveredAt
+              : null,
+          appliedResultCount: appliedResults.length,
+          orderedAppliedResults: appliedResultsVerified,
+          frameCount: gapCount,
+          framesOver33Fraction: gapCount
+            ? turnGaps.filter((gap) => gap.durationMs > 33).length / gapCount
+            : null,
+          framesOver50Fraction: gapCount
+            ? turnGaps.filter((gap) => gap.durationMs > 50).length / gapCount
+            : null,
+          longTasksSupported,
+          longTaskThresholdMs: 50,
+          longestLongTaskMs: longTasksSupported
+            ? Math.max(0, ...turnTasks.map((task) => task.durationMs))
+            : null,
+          longTaskCount: longTasksSupported ? turnTasks.length : null,
+          receiptAge: distribution(receiptAges.map((sample) => sample.ageMs)),
+          applicationAge: distribution(applicationAges.map((sample) => sample.ageMs)),
+          applicationAgeSampleCount: applicationAges.length,
+          unobservedApplicationEvents: emissionsBySequence.size,
+          synchronousDispatch: distribution(dispatchSpans.map((sample) => sample.durationMs)),
+          receiptAges,
+          applicationAges,
+          dispatchSpans,
+          frameGaps: turnGaps,
+          longTasks: longTasksSupported ? turnTasks : null,
+        },
       };
     },
   });
@@ -468,14 +755,20 @@ export function createEngineEventLoadScenarios(
   inventory = 1_000,
   interactionsOnly = false,
 ): EngineScenario[] {
-  return [-1, 0, 5, 20, 100].map((count) => {
+  return ([-1, 0, 5, 20, 100, "pageup"] as const).map((entry) => {
+    const pageUpProof = entry === "pageup";
+    const count = entry === "pageup" ? 0 : entry;
     let wire: Awaited<ReturnType<typeof createEventLoadWire>>;
     let fixtureRows: Parameters<typeof createEventLoadWire>[0];
     let heldRows = 0;
     let toolPreparationMs = 0;
     let roster: ReturnType<typeof createTeamScaleSidebarListOwner>;
     return {
-      id: count === -1 ? "event-load-unloaded" : `event-load-${count}`,
+      id: pageUpProof
+        ? "event-load-pageup"
+        : count === -1
+          ? "event-load-unloaded"
+          : `event-load-${count}`,
       explicitOnly: true,
       route: controlUiSessionPath(foreground),
       expected: `${Math.max(0, count)} background sessions at one tool/s (two durable-message receipts/s and one status patch/2 s) plus ${count === -1 ? 0 : toolCount} foreground tools preserve typing, scroll, route/session switches and current history.`,
@@ -630,11 +923,19 @@ export function createEngineEventLoadScenarios(
         await page.locator(composer).focus();
       },
       run: async (page) => {
+        if (pageUpProof) {
+          try {
+            return await verifyEventLoadPageUp(page, toolCount);
+          } finally {
+            wire.finish();
+          }
+        }
         const requestsBefore = await page.evaluate(
           () => (window as MockGatewayWindow).openclawControlUiE2eGateway!.requests.length,
         );
         await page.evaluate((options) => Reflect.get(window, "__eventLoad").start(options), {
           duration,
+          toolCount: count === -1 ? 0 : toolCount,
         });
         wire.startBackground();
         const evidence: Record<string, number | boolean> = {};
@@ -833,10 +1134,18 @@ export function createEngineEventLoadScenarios(
                     (await page.evaluate(() => Reflect.get(window, "__eventLoad").ready().elapsed)),
                 );
           await page.waitForFunction(
-            (expected) => Reflect.get(window, "__eventLoad").ready().completedTools === expected,
+            (expected) => {
+              const state = Reflect.get(window, "__eventLoad").ready();
+              return state.completedTools === expected && state.applicationDrained;
+            },
             count === -1 ? 0 : toolCount,
             { timeout: drainTimeout },
           );
+          const appliedResults = await page.evaluate(() =>
+            Reflect.get(window, "__eventLoad").verifyAppliedResults(),
+          );
+          evidence.appliedResultCount = appliedResults.count;
+          evidence.orderedAppliedResults = appliedResults.ordered;
           // These are user-idle intervals under event load, not no-work CPU claims.
           const engine = page.context().browser()!.browserType().name();
           if (engine !== "chromium" && engine !== "webkit" && engine !== "firefox") {
@@ -1002,10 +1311,54 @@ export function createEngineEventLoadScenarios(
             inputToFrameP95Ms: result.inputs.p95,
             deliveryTaskMedianMs: result.delivery.median,
             deliveryTaskP95Ms: result.delivery.p95,
+            foregroundDeliveryDurationMs: result.turn.foregroundDeliveryDurationMs,
+            foregroundApplicationFrameCount: result.turn.frameCount,
+            foregroundApplicationFramesOver33Fraction: result.turn.framesOver33Fraction,
+            foregroundApplicationFramesOver50Fraction: result.turn.framesOver50Fraction,
+            longTasksSupported: result.turn.longTasksSupported,
+            longestForegroundLongTaskMs: result.turn.longestLongTaskMs,
+            longTaskThresholdMs: result.turn.longTaskThresholdMs,
+            foregroundLongTaskCount: result.turn.longTaskCount,
+            applicationDrainMs: result.turn.applicationDrainMs,
+            producerToApplicationDrainMs:
+              result.turn.applicationSettledAt === null
+                ? null
+                : result.turn.applicationSettledAt - offered.foregroundFirstEmittedAt,
+            appliedResultCount: result.turn.appliedResultCount,
+            orderedAppliedResults: result.turn.orderedAppliedResults,
+            applicationDrainLagMs:
+              result.turn.applicationSettledAt === null
+                ? null
+                : result.turn.applicationSettledAt - offered.foregroundLastEmittedAt,
+            eventReceiptAgeMedianMs: result.turn.receiptAge.median,
+            eventReceiptAgeP95Ms: result.turn.receiptAge.p95,
+            eventApplicationAgeMedianMs: result.turn.applicationAge.median,
+            eventApplicationAgeP95Ms: result.turn.applicationAge.p95,
+            eventApplicationAgeSampleCount: result.turn.applicationAgeSampleCount,
+            unobservedApplicationEvents: result.turn.unobservedApplicationEvents,
+            synchronousDispatchMedianMs: result.turn.synchronousDispatch.median,
+            synchronousDispatchP95Ms: result.turn.synchronousDispatch.p95,
+            foregroundLastSequenceMatches:
+              result.turn.foregroundLastSequence === offered.foregroundLastSequence,
+            foregroundDeliveryDrainLagMs:
+              result.turn.foregroundLastDeliveredAt === null
+                ? null
+                : result.turn.foregroundLastDeliveredAt - offered.foregroundLastEmittedAt,
           });
-          await page.evaluate((partial) => {
-            Reflect.set(window, "__eventLoadEvidence", partial);
-          }, evidence);
+          await page.evaluate(
+            (partial) => {
+              Reflect.set(window, "__eventLoadEvidence", partial);
+            },
+            {
+              ...evidence,
+              eventLoadSeries: {
+                ...result.turn,
+                producerForegroundFirstEmittedAt: offered.foregroundFirstEmittedAt,
+                producerForegroundLastEmittedAt: offered.foregroundLastEmittedAt,
+                producerForegroundLastSequence: offered.foregroundLastSequence,
+              },
+            },
+          );
         }
         const requests = await page.evaluate(
           (after) =>
@@ -1032,6 +1385,158 @@ export function createEngineEventLoadScenarios(
       },
     };
   });
+}
+
+/** Run on a fresh, prepared event-load-0 fixture instead of its timed run. */
+async function verifyEventLoadPageUp(page: Page, toolCount: number) {
+  if (toolCount < 4) {
+    throw new Error("PageUp overlap proof needs at least four foreground tools");
+  }
+  // This separate fixture does not contribute samples to the timing matrix.
+  await page.evaluate((expected) => {
+    const load = Reflect.get(window, "__eventLoad");
+    load.start({ duration: 120_000, toolCount: expected });
+    load.phase("typing", "");
+  }, toolCount);
+  let proofHandle:
+    | JSHandle<{
+        entryId: string;
+        text: string;
+        top: number;
+        appliedAtCapture: number;
+        maxDrift: number;
+        samples: number;
+        settledFrames: number;
+      }>
+    | undefined;
+  try {
+    // Native typing releases the first half through the same producer gate.
+    await page.locator(composer).press("x");
+    await page.waitForFunction(
+      (firstHalf) => {
+        const state = Reflect.get(window, "__eventLoad").reader();
+        return state.appliedResults === firstHalf && !state.pendingToolRender;
+      },
+      Math.ceil(toolCount / 2),
+    );
+    const threadLocator = page.locator(`${pane} .chat-thread`);
+    await threadLocator.press("End");
+    await page.waitForFunction(() => {
+      const thread = document.querySelector<HTMLElement>(
+        ".chat-pane-cache__pane--active .chat-thread",
+      );
+      return thread && Math.abs(thread.scrollHeight - thread.clientHeight - thread.scrollTop) <= 8;
+    });
+    await page.evaluate(() => Reflect.get(window, "__eventLoad").beginScroll());
+    await threadLocator.press("PageUp");
+    // Wait for the browser's native paging motion, not an assigned scrollTop.
+    await page.waitForFunction(
+      ({ expected, position }) => {
+        const thread = document.querySelector<HTMLElement>(
+          ".chat-pane-cache__pane--active .chat-thread",
+        );
+        const state = Reflect.get(window, "__eventLoad").reader();
+        if (!thread || !state.followLocked || !state.readingHistory) {
+          return false;
+        }
+        const away = thread.scrollHeight - thread.clientHeight - thread.scrollTop > 8;
+        position.stable = away && position.top === thread.scrollTop ? position.stable + 1 : 0;
+        position.top = thread.scrollTop;
+        if (position.stable < 3) {
+          return false;
+        }
+        if (state.appliedResults >= expected) {
+          throw new Error("Foreground output drained before native PageUp overlap was captured");
+        }
+        return true;
+      },
+      { expected: toolCount, position: { top: -1, stable: 0 } },
+      { polling: "raf" },
+    );
+    proofHandle = await threadLocator.evaluateHandle((thread) => {
+      const viewport = thread.getBoundingClientRect();
+      // Durable fixture messages survive the bounded live-tool window. Do not
+      // capture a transient tool-result body or rely on a retained DOM identity.
+      const anchor = [...thread.querySelectorAll<HTMLElement>(".chat-text")].find((element) => {
+        const entryId = element
+          .closest(".chat-bubble[data-entry-id]")
+          ?.getAttribute("data-entry-id");
+        const bounds = element.getBoundingClientRect();
+        return (
+          entryId &&
+          /^(?:interaction-0-|event-load-call-)\d+$/u.test(entryId) &&
+          !element.closest(".chat-tool-msg-body") &&
+          bounds.top >= viewport.top &&
+          bounds.bottom <= viewport.bottom &&
+          bounds.height > 0
+        );
+      });
+      const entryId = anchor?.closest(".chat-bubble[data-entry-id]")?.getAttribute("data-entry-id");
+      if (!anchor || !entryId) {
+        throw new Error("Native PageUp did not expose a complete durable text anchor");
+      }
+      return {
+        entryId,
+        text: anchor.textContent ?? "",
+        top: anchor.getBoundingClientRect().top,
+        appliedAtCapture: Reflect.get(window, "__eventLoad").reader().appliedResults,
+        maxDrift: 0,
+        samples: 0,
+        settledFrames: 0,
+      };
+    });
+    await page.waitForFunction(
+      ({ proof, expected }) => {
+        const thread = document.querySelector<HTMLElement>(
+          ".chat-pane-cache__pane--active .chat-thread",
+        );
+        const state = Reflect.get(window, "__eventLoad").reader();
+        const anchor = [...(thread?.querySelectorAll<HTMLElement>(".chat-text") ?? [])].find(
+          (element) =>
+            element.textContent === proof.text &&
+            element.closest(".chat-bubble[data-entry-id]")?.getAttribute("data-entry-id") ===
+              proof.entryId,
+        );
+        if (!thread || !anchor || !state.followLocked || !state.readingHistory) {
+          throw new Error("Incoming foreground output replaced native PageUp reader intent");
+        }
+        const drift = Math.abs(anchor.getBoundingClientRect().top - proof.top);
+        proof.maxDrift = Math.max(proof.maxDrift, drift);
+        proof.samples++;
+        if (drift > 2 || thread.scrollHeight - thread.clientHeight - thread.scrollTop <= 8) {
+          throw new Error(`Incoming foreground output moved the PageUp anchor by ${drift}px`);
+        }
+        proof.settledFrames =
+          state.appliedResults === expected && !state.pendingToolRender
+            ? proof.settledFrames + 1
+            : 0;
+        return proof.settledFrames >= 3;
+      },
+      { proof: proofHandle, expected: toolCount },
+      { polling: "raf", timeout: 120_000 },
+    );
+    const applied = await page.evaluate(() =>
+      Reflect.get(window, "__eventLoad").verifyAppliedResults(),
+    );
+    const readerEvidence = await proofHandle.evaluate((proof) => ({
+      nativePageUpPreserved: true,
+      pageUpAppliedAtCapture: proof.appliedAtCapture,
+      pageUpMaxAnchorDriftPx: proof.maxDrift,
+      pageUpSamples: proof.samples,
+    }));
+    if (readerEvidence.pageUpAppliedAtCapture >= toolCount) {
+      throw new Error("PageUp proof captured no remaining foreground results");
+    }
+    return {
+      correctnessOnly: true,
+      ...readerEvidence,
+      appliedResultCount: applied.count,
+      orderedAppliedResults: applied.ordered,
+    };
+  } finally {
+    await proofHandle?.dispose();
+    await page.evaluate(() => Reflect.get(window, "__eventLoad").finish());
+  }
 }
 
 /** Correctness runs after the profiler stops, so it cannot inflate event CPU. */
@@ -1140,7 +1645,45 @@ export async function verifyEngineEventLoad(page: Page, count: number, toolCount
       .locator(`${pane} .chat-text`)
       .getByText("Event load foreground completed.", { exact: true })
       .waitFor();
+    // Mounted final text can precede a completed Latest journey. Require both
+    // visible content and the physical end to remain stable across three frames.
+    await page.waitForFunction(
+      ({ position }) => {
+        const thread = document.querySelector<HTMLElement>(
+          ".chat-pane-cache__pane--active .chat-thread",
+        );
+        const final = [...(thread?.querySelectorAll<HTMLElement>(".chat-text") ?? [])].find(
+          (element) => element.textContent?.trim() === "Event load foreground completed.",
+        );
+        const viewport = thread?.getBoundingClientRect();
+        const bounds = final?.getBoundingClientRect();
+        const atEnd = Boolean(
+          thread &&
+          final?.checkVisibility({ checkOpacity: true, visibilityProperty: true }) &&
+          viewport &&
+          bounds &&
+          bounds.bottom > viewport.top &&
+          bounds.top < viewport.bottom &&
+          bounds.right > viewport.left &&
+          bounds.left < viewport.right &&
+          Math.abs(thread.scrollHeight - thread.clientHeight - thread.scrollTop) <= 8,
+        );
+        const geometry = JSON.stringify([
+          thread?.scrollTop,
+          thread?.scrollHeight,
+          thread?.clientHeight,
+          bounds?.top,
+          bounds?.bottom,
+        ]);
+        position.stable = atEnd && geometry === position.geometry ? position.stable + 1 : 0;
+        position.geometry = geometry;
+        return position.stable >= 3;
+      },
+      { position: { geometry: "", stable: 0 } },
+      { polling: "raf" },
+    );
     evidence.foregroundFinalVisible = true;
+    evidence.foregroundLatestAtEnd = true;
     const context = await getControlUiContextHandle(page);
     try {
       await page.waitForFunction(
