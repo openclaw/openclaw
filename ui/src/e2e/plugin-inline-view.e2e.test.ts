@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { PluginInlineViewBlock } from "../../../src/shared/plugin-inline-view.js";
+import { rethrowWithControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
@@ -12,6 +13,22 @@ import { prepareNativeControlUiPluginFixtures } from "../test-helpers/control-ui
 import { scrollChatThreadToTop } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { incidentPluginFixture } from "./incident-plugin.test-support.ts";
+
+type InlineViewIntersection = {
+  index: number;
+  time: number;
+  intersecting: boolean;
+  ratio: number;
+  target: number[];
+  intersection: number[];
+  root: number[] | null;
+};
+
+declare global {
+  interface Window {
+    __inlineViewIntersections?: { entries: InlineViewIntersection[]; dropped: number };
+  }
+}
 
 const suite = createControlUiE2eSuite({ name: "Native inline plugin views" });
 const sessionKey = "agent:main:incident-review";
@@ -241,11 +258,120 @@ suite.define(() => {
             "incident-tools.acknowledge": { ...incident, acknowledged: true },
           },
         });
+        // Keep native deliveries; inspect layout only if the existing reload wait fails.
+        await page.addInitScript(() => {
+          const NativeObserver = window.IntersectionObserver;
+          const capture: NonNullable<Window["__inlineViewIntersections"]> = {
+            entries: [],
+            dropped: 0,
+          };
+          window.__inlineViewIntersections = capture;
+          window.IntersectionObserver = class extends NativeObserver {
+            constructor(
+              callback: IntersectionObserverCallback,
+              options?: IntersectionObserverInit,
+            ) {
+              super((entries, observer) => {
+                const rect = (value: DOMRectReadOnly) => [
+                  value.x,
+                  value.y,
+                  value.width,
+                  value.height,
+                ];
+                for (const entry of entries) {
+                  const match = entry.target
+                    .getAttribute("data-plugin-inline-view")
+                    ?.match(/^history-(\d+)$/u);
+                  if (!match) {
+                    continue;
+                  }
+                  capture.entries.push({
+                    index: Number(match[1]),
+                    time: entry.time,
+                    intersecting: entry.isIntersecting,
+                    ratio: entry.intersectionRatio,
+                    target: rect(entry.boundingClientRect),
+                    intersection: rect(entry.intersectionRect),
+                    root: entry.rootBounds ? rect(entry.rootBounds) : null,
+                  });
+                  if (capture.entries.length > 240) {
+                    capture.entries.shift();
+                    capture.dropped++;
+                  }
+                }
+                callback.call(observer, entries, observer);
+              }, options);
+            }
+          };
+        });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "chat"));
         await page.locator('[data-plugin-inline-view="history-29"] .incident-tools-card').waitFor();
         await page.reload();
         const last = page.locator('[data-plugin-inline-view="history-29"]');
-        await last.getByRole("heading", { name: incident.title }).waitFor();
+        try {
+          await last.getByRole("heading", { name: incident.title }).waitFor();
+        } catch (error) {
+          await rethrowWithControlUiE2eFailureFacts(page, error, "inlineReloadFactsRead", () =>
+            page.evaluate(() => {
+              const roots = [
+                ...document.querySelectorAll<HTMLElement>("[data-plugin-inline-view]"),
+              ];
+              const target = roots.find((root) => root.dataset.pluginInlineView === "history-29");
+              const pane = target?.closest("openclaw-chat-pane");
+              const ancestors = [];
+              for (
+                let node: HTMLElement | null = target ?? null;
+                node && ancestors.length < 12;
+                node = node.parentElement
+              ) {
+                const box = node.getBoundingClientRect();
+                const style = getComputedStyle(node);
+                ancestors.push({
+                  row: node.classList.contains("chat-virtual-row"),
+                  block: node.classList.contains("chat-virtual-block"),
+                  activeRow:
+                    node.classList.contains("chat-virtual-row") &&
+                    !node.hasAttribute("data-prepared-row"),
+                  preparing: node.hasAttribute("data-preparing-row"),
+                  inert: node.inert,
+                  ariaHidden: node.getAttribute("aria-hidden") === "true",
+                  displayNone: style.display === "none",
+                  visibilityHidden: style.visibility === "hidden",
+                  contentHidden: style.contentVisibility === "hidden",
+                  clipsX: ["hidden", "clip", "auto", "scroll"].includes(style.overflowX),
+                  clipsY: ["hidden", "clip", "auto", "scroll"].includes(style.overflowY),
+                  paintContained: /(?:paint|content|strict)/u.test(style.contain),
+                  sizeContained: /(?:size|strict)/u.test(style.contain),
+                  box: [box.x, box.y, box.width, box.height],
+                  scroll: [node.scrollTop, node.scrollHeight, node.clientHeight],
+                });
+              }
+              return {
+                inlineReload: {
+                  documentVisible: document.visibilityState === "visible",
+                  intersections: window.__inlineViewIntersections?.entries ?? [],
+                  droppedIntersections: window.__inlineViewIntersections?.dropped ?? 0,
+                  rootsTruncated: roots.length > 30,
+                  roots: roots.slice(0, 30).map((root) => {
+                    const box = root.getBoundingClientRect();
+                    return {
+                      index: Number(root.dataset.pluginInlineView?.replace("history-", "")),
+                      card: root.querySelector(".incident-tools-card") !== null,
+                      box: [box.x, box.y, box.width, box.height],
+                    };
+                  }),
+                  targetPresent: Boolean(target),
+                  targetMounted: Boolean(target?.querySelector("openclaw-plugin-view")),
+                  paneActive: pane?.active ?? null,
+                  panePresented: pane?.presented ?? null,
+                  paneVisuallyPresented: pane?.visuallyPresented ?? null,
+                  conversationPresented: pane?.conversationPresented ?? null,
+                  ancestors,
+                },
+              };
+            }),
+          );
+        }
         const reads = (await gateway.getRequests("incident-tools.get")).length;
         expect(reads).toBeGreaterThan(0);
         expect(reads).toBeLessThan(15);
