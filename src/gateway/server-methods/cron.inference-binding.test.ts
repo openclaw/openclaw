@@ -75,6 +75,15 @@ function unboundJob(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
     ...overrides,
   };
 }
+/** Stores a canonical declared job as an older build left it: without a recorded account. */
+async function declareUnbound(fixture: Fixture, declaration: Record<string, unknown>) {
+  await fixture.invoke("cron.add", declaration);
+  const { inferenceBinding, ...canonical } = await fixture.reload();
+  expect(inferenceBinding).toBeDefined();
+  await saveCronJobsStore(fixture.storePath, { version: 1, jobs: [canonical] });
+  expect((await fixture.reload()).inferenceBinding).toBeUndefined();
+  return canonical;
+}
 function captureAuthority(
   client: ReturnType<typeof creatorClient>,
   authority?: CronRuntimeAuthority,
@@ -544,63 +553,86 @@ describe("cron handler inference binding persistence", () => {
     },
   );
 
-  it("refuses an edit that leaves a Codex session job without its stored account", async ({
+  it.for([
+    ["its own", "openai/gpt-4.1"],
+    ["an inherited", undefined],
+  ] as const)(
+    "refuses an edit that leaves a Codex session job with %s model without its stored account",
+    async ([, model], { fixture }) => {
+      // Incident shape: an agent turn in an existing session, auto-disabled after every run was
+      // refused because no account was recorded while Codex resolved a stored one.
+      fixture.setOpenAICodexRuntime();
+      const job = unboundJob({ enabled: false, state: { consecutiveErrors: 10 } });
+      job.payload = { kind: "agentTurn", message: "Check the workers.", model, toolsAllow: [] };
+      await saveCronJobsStore(fixture.storePath, { version: 1, jobs: [job] });
+      const stored = await fixture.reload();
+      const refusal = await fixture.invoke(
+        "cron.update",
+        { id: stored.id, patch: { enabled: true } },
+        null,
+        { expectedSuccess: false },
+      );
+      expect(refusal).toMatchObject({
+        message: expect.stringContaining(
+          `runtime codex would refuse every run with stored account ${platformId}. Select the account in the edit with model openai/gpt-4.1@${platformId},`,
+        ),
+      });
+      const unchanged = await fixture.reload();
+      expect(unchanged.enabled).toBe(false);
+      expect(unchanged.inferenceBinding).toBeUndefined();
+      await fixture.invoke("cron.update", {
+        id: stored.id,
+        patch: {
+          enabled: true,
+          payload: { kind: "agentTurn", model: "openai/gpt-4.1@" + platformId },
+        },
+      });
+      const recorded = await fixture.reload();
+      expect(recorded.enabled).toBe(true);
+      expect(recorded.inferenceBinding).toMatchObject({
+        ...binding(platformId, "user", "api-key"),
+        runtime: "codex",
+      });
+    },
+  );
+
+  it("records the resolved account when an unchanged declaration converges onto an unbound job", async ({
     fixture,
   }) => {
-    // Incident shape: an agent turn in an existing session, auto-disabled after every run was
-    // refused because no account was recorded while Codex resolved a stored one.
-    fixture.setOpenAICodexRuntime();
-    await saveCronJobsStore(fixture.storePath, {
-      version: 1,
-      jobs: [unboundJob({ enabled: false, state: { consecutiveErrors: 10 } })],
-    });
-    const stored = await fixture.reload();
-    const refusal = await fixture.invoke(
-      "cron.update",
-      { id: stored.id, patch: { enabled: true } },
-      null,
-      { expectedSuccess: false },
-    );
-    expect(refusal).toMatchObject({
-      message: expect.stringContaining(
-        `runtime codex would refuse every run with stored account ${platformId}. Select the account in the edit with model openai/gpt-4.1@${platformId}`,
-      ),
-    });
-    const unchanged = await fixture.reload();
-    expect(unchanged.enabled).toBe(false);
-    expect(unchanged.inferenceBinding).toBeUndefined();
-    await fixture.invoke("cron.update", {
-      id: stored.id,
-      patch: {
-        enabled: true,
-        payload: { kind: "agentTurn", model: "openai/gpt-4.1@" + platformId },
-      },
-    });
-    const recorded = await fixture.reload();
-    expect(recorded.enabled).toBe(true);
-    expect(recorded.inferenceBinding).toMatchObject({
-      ...binding(platformId, "user", "api-key"),
-      runtime: "codex",
+    const declaration = { ...createParams(), declarationKey: "supervisor" };
+    const canonical = await declareUnbound(fixture, declaration);
+    await fixture.invoke("cron.add", declaration);
+    // reload() reopens SQLite, so this is the committed row.
+    const declared = await fixture.reload();
+    expect(declared).toMatchObject({
+      id: canonical.id,
+      schedule: canonical.schedule,
+      payload: canonical.payload,
+      inferenceBinding: binding(platformId, "auto", "api-key"),
     });
   });
 
-  it("records the resolved account when a declaration converges onto an unbound job", async ({
+  it("records a declared account only with its current owner and authorization", async ({
     fixture,
   }) => {
-    const stored = unboundJob({ declarationKey: "supervisor" });
-    await saveCronJobsStore(fixture.storePath, { version: 1, jobs: [stored] });
+    const personal = await fixture.personalAccount();
+    const declaration = { ...createParams(), declarationKey: "supervisor" };
+    await declareUnbound(fixture, declaration);
+    const personalDeclaration = {
+      ...modelParams("openai/gpt-4.1@" + personal.profileId),
+      declarationKey: "supervisor",
+    };
+    for (const caller of [null, personal.other]) {
+      await fixture.invoke("cron.add", personalDeclaration, caller, { expectedSuccess: false });
+    }
     expect((await fixture.reload()).inferenceBinding).toBeUndefined();
-    const {
-      id: _id,
-      createdAtMs: _created,
-      updatedAtMs: _updated,
-      state: _state,
-      ...params
-    } = stored;
-    await fixture.invoke("cron.add", params);
-    const declared = await fixture.reload();
-    expect(declared.id).toBe("supervisor");
-    expect(declared.inferenceBinding).toMatchObject(binding(platformId, "auto", "api-key"));
+    const mutation = fixture.replaceAccountBeforeMutation("add");
+    try {
+      await expect(fixture.invoke("cron.add", declaration)).rejects.toThrow(/MCP authorization/);
+    } finally {
+      mutation.mockRestore();
+    }
+    expect((await fixture.reload()).inferenceBinding).toBeUndefined();
   });
 
   it("refuses an agent edit that would drop native authority without recording an account", async ({

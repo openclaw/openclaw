@@ -35,6 +35,8 @@ export function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
     toolsAllowProvenance: job.toolsAllowProvenance,
     toolsAllowExecTarget: job.toolsAllowExecTarget,
     runtimeAuthority: job.runtimeAuthority,
+    // Convergence onto a job with no recorded account can record one and nothing else.
+    inferenceBinding: job.inferenceBinding,
     operatorSource: job.operatorSource,
     runtimeAuthorityRecoveryRequired: job.runtimeAuthorityRecoveryRequired,
     delivery: job.delivery,

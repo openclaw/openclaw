@@ -28,6 +28,37 @@ import {
   resolveCronModelSelectionOwner,
 } from "./isolated-agent/model-selection.js";
 
+/** The model a scheduled run selects; capture and its callers share this resolution. */
+export async function resolveCronInferenceModel(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  model?: string;
+  isGmailHook?: boolean;
+  executionSessionEntry?: Pick<SessionEntry, "modelOverride" | "providerOverride">;
+}) {
+  const owner = await resolveCronModelSelectionOwner({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    requiredAgentId: params.agentId,
+  });
+  const model = await resolveCronModelSelection({
+    cfg: owner.config,
+    owner,
+    agentConfigOverride: resolveAgentConfig(owner.config, owner.agentId),
+    agentId: owner.agentId,
+    agentDir: owner.agentDir,
+    workspaceDir: owner.workspaceDir,
+    payloadModel: params.model,
+    // Only a persistent execution target supplies model overrides; creator auth stays separate.
+    sessionEntry: params.executionSessionEntry ?? {},
+    isGmailHook: params.isGmailHook === true,
+  });
+  if (!model.ok) {
+    throw new Error(model.error);
+  }
+  return { owner, model };
+}
+
 /** Capture a current owner; null means an explicit, validated native CLI account selection. */
 export async function captureCronInferenceBinding(params: {
   cfg: OpenClawConfig;
@@ -46,27 +77,8 @@ export async function captureCronInferenceBinding(params: {
   authorizeProfile?: (profileId: string, inherited: boolean) => Promise<(() => void) | undefined>;
   retainAuthorization?: (authority: AuthProfileAuthorization) => void;
 }): Promise<CronInferenceBinding | null | undefined> {
-  const owner = await resolveCronModelSelectionOwner({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    requiredAgentId: params.agentId,
-  });
-  const { config: cfg, agentId, agentDir, workspaceDir } = owner;
-  const model = await resolveCronModelSelection({
-    cfg,
-    owner,
-    agentConfigOverride: resolveAgentConfig(cfg, agentId),
-    agentId,
-    agentDir,
-    workspaceDir,
-    payloadModel: params.model,
-    // Only a persistent execution target supplies model overrides; creator auth stays separate.
-    sessionEntry: params.executionSessionEntry ?? {},
-    isGmailHook: params.isGmailHook === true,
-  });
-  if (!model.ok) {
-    throw new Error(model.error);
-  }
+  const { owner, model } = await resolveCronInferenceModel(params);
+  const { config: cfg, agentId, agentDir } = owner;
   // The account follows the config's runtime policy, so a job binds the account it always has.
   const cliExecutionProvider = resolveCliRuntimeExecutionProvider({
     cfg,

@@ -24,6 +24,7 @@ import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-targe
 import {
   acquireCronInferenceAuthorization,
   captureCronInferenceBinding,
+  resolveCronInferenceModel,
 } from "../../cron/inference-binding.runtime.js";
 import {
   requiresExternalCronDelivery,
@@ -494,16 +495,20 @@ async function assertCronEditKeepsRunnableInference(
   const executionEntry = executionKey
     ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId }))?.entry
     : undefined;
+  const selection = {
+    cfg,
+    agentId,
+    model: job.payload.model,
+    isGmailHook: job.payload.externalContentSource === "gmail",
+    executionSessionEntry: executionEntry,
+  };
   let unrecorded: Awaited<ReturnType<typeof captureCronInferenceBinding>>;
+  let modelRef: string;
   try {
     unrecorded = await captureCronInferenceBinding({
-      cfg,
-      agentId,
-      model: job.payload.model,
-      isGmailHook: job.payload.externalContentSource === "gmail",
+      ...selection,
       // A session-target run uses its target conversation's account selection.
       sessionEntry: executionEntry,
-      executionSessionEntry: executionEntry,
       runtimeSessionEntry: await loadCronRuntimeSessionEntry({
         cfg,
         job,
@@ -511,14 +516,15 @@ async function assertCronEditKeepsRunnableInference(
         executionEntry,
       }),
     });
+    if (!unrecorded) {
+      return;
+    }
+    const { model } = await resolveCronInferenceModel(selection);
+    modelRef = `${model.provider}/${model.model}`;
   } catch {
     // Not this guard's refusal: the run reports any other resolution failure itself.
     return;
   }
-  if (!unrecorded) {
-    return;
-  }
-  const modelRef = job.payload.model?.split("@")[0] ?? `${unrecorded.provider}/<model>`;
   throw new Error(
     `This edit would leave the automation without a recorded inference account, so runtime ${unrecorded.runtime} would refuse every run with stored account ${unrecorded.profileId}. ` +
       `Select the account in the edit with model ${modelRef}@${unrecorded.profileId}, or disable the automation.`,
