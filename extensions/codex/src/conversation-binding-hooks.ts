@@ -17,10 +17,12 @@ import { withCodexConversationThreadActivity } from "./app-server/thread-ownersh
 import { defineCodexBuildState } from "./build-state.js";
 import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
+import type { RunCodexConversationMediaUnderstandingFile } from "./conversation-audio.js";
 import {
   readCodexConversationBindingData,
   readCodexConversationBindingDataRecord,
 } from "./conversation-binding-data.js";
+import { listCodexConversationAudioAttachments } from "./conversation-turn-input.js";
 import type { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
 const loadSandboxGuard = createLazyRuntimeModule(() => import("./app-server/sandbox-guard.js"));
@@ -39,6 +41,7 @@ type CodexConversationRunOptions = {
   resumeCodexCliSessionOnNode?: (
     params: Omit<Parameters<typeof resumeCodexCliSessionOnNode>[0], "runtime">,
   ) => ReturnType<typeof resumeCodexCliSessionOnNode>;
+  runMediaUnderstandingFile?: RunCodexConversationMediaUnderstandingFile;
 };
 
 const getNodeConversationState = defineCodexBuildState(
@@ -73,7 +76,10 @@ export async function handleCodexConversationInboundClaim(
     return { handled: true };
   }
   const prompt = event.bodyForAgent?.trim() || event.content?.trim() || "";
-  if (!prompt) {
+  const hasAudio = listCodexConversationAudioAttachments(event).length > 0;
+  // Voice-only notes have no caption. A native bind still owns the turn, so an
+  // empty body must not drop the attachment before configured STT can run.
+  if (!prompt && (data.kind === "codex-cli-node-session" || !hasAudio)) {
     return { handled: true };
   }
   if (!canMutateCodexHost(event)) {
@@ -141,10 +147,26 @@ export async function handleCodexConversationInboundClaim(
           text: "This Codex conversation was detached or changed before its message could run.",
         };
       }
+      // Load the audio adapter only after the binding is reserved, and only
+      // when this turn has audio. Registration must not evaluate the media runtime.
+      const preparedAudio = hasAudio
+        ? await (
+            await import("./conversation-audio.js")
+          ).prepareCodexConversationAudioPrompt({
+            prompt,
+            event,
+            config: options.config,
+            agentId: data.source?.agentId ?? data.agentId,
+            agentDir: data.agentDir,
+            workspaceDir: data.workspaceDir,
+            sessionKey,
+            runMediaUnderstandingFile: options.runMediaUnderstandingFile,
+          })
+        : { prompt };
       return await runBoundTurnWithMissingThreadRecovery({
         bindingStore: options.bindingStore,
         data,
-        prompt,
+        prompt: preparedAudio.prompt,
         event,
         config: options.config,
         sessionKey,
