@@ -49,34 +49,59 @@ suite.define(() => {
       const initialLeft = await page
         .locator(".chat-footer textarea")
         .evaluate((element) => element.getBoundingClientRect().left);
-      const motion = page.evaluate(async () => {
+      const motion = await page.evaluateHandle(() => {
         const samples: number[] = [];
         const positions: number[] = [];
-        const deadline = performance.now() + 5000;
-        while (performance.now() < deadline) {
-          await new Promise(requestAnimationFrame);
-          const frame = document.querySelector(".chat-main__conversation-frame");
-          const width = frame
-            ? Number.parseFloat(getComputedStyle(frame).getPropertyValue("--chat-details-space")) ||
-              0
-            : 0;
+        const sample = () => {
+          const frame = document.querySelector(".chat-main__conversation-frame")!;
+          const width =
+            Number.parseFloat(getComputedStyle(frame).getPropertyValue("--chat-details-space")) ||
+            0;
           samples.push(width);
-          const composer = document.querySelector(".chat-footer textarea");
-          if (composer) {
-            positions.push(composer.getBoundingClientRect().left);
+          positions.push(
+            document.querySelector(".chat-footer textarea")!.getBoundingClientRect().left,
+          );
+          return width;
+        };
+        // Capture creation before a busy runner can miss the 280ms transition.
+        const observer = new MutationObserver(() => {
+          const transition = document
+            .querySelector(".chat-main__conversation-frame")
+            ?.getAnimations()
+            .find(
+              (animation) =>
+                animation instanceof CSSTransition &&
+                animation.transitionProperty === "--chat-details-space",
+            );
+          if (transition) {
+            observer.disconnect();
+            transition.pause();
+            transition.currentTime = Number(transition.effect!.getTiming().duration) / 2;
+            sample();
+            transition.finish();
           }
-          if (width >= 313) {
-            break;
-          }
-        }
-        return { samples, positions };
+        });
+        observer.observe(document.body, {
+          subtree: true,
+          childList: true,
+          attributes: true,
+          attributeFilter: ["style"],
+        });
+        return { samples, positions, sample, observer };
       });
       if (initialWidth < 1700) {
         await page.setViewportSize({ width: 1700, height: 1000 });
       } else {
         await gateway.resolveDeferred("sessions.create");
       }
-      const { samples, positions } = await motion;
+      await expect
+        .poll(() => motion.evaluate((probe) => probe.sample()), { timeout: 5000 })
+        .toBe(313);
+      const { samples, positions } = await motion.evaluate((probe) => {
+        probe.observer.disconnect();
+        return { samples: probe.samples, positions: probe.positions };
+      });
+      await motion.dispose();
       if (captureUiProofEnabled) {
         await page.screenshot({ path: path.join(suite.artifactDir, reducedMotion + "-after.png") });
       }
