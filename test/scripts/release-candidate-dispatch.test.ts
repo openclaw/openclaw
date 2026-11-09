@@ -26,13 +26,13 @@ const options = {
 
 describe("candidate checklist retained dispatch recovery", () => {
   it.each([
-    ["openclaw.full-release-dispatch/v2", "prepared", "intended", true],
-    ["openclaw.full-release-dispatch/v2", "prepared", "uncertain", false],
-    ["openclaw.full-release-dispatch/v2", "attempted", "created", false],
-    ["openclaw.full-release-dispatch/v1", "prepared", "intended", false],
+    ["openclaw.full-release-dispatch/v2", "prepared", "intended"],
+    ["openclaw.full-release-dispatch/v2", "prepared", "uncertain"],
+    ["openclaw.full-release-dispatch/v2", "attempted", "created"],
+    ["openclaw.full-release-dispatch/v1", "prepared", "intended"],
   ] as const)(
     "offers only the canonical recovery command for %s/%s/%s",
-    (kind, phase, workflow, resumable) => {
+    (kind, phase, workflow) => {
       const run = vi.fn<(command: string, args: string[]) => string>(() => "");
       const record = {
         kind,
@@ -54,13 +54,13 @@ describe("candidate checklist retained dispatch recovery", () => {
         readJson: () => record,
         isRecord,
       }) as (options: object, candidate: string, publisher: string) => string;
-      const flag = resumable ? "--resume-request" : "--reconcile-request";
       expect(() => dispatch(options, candidate, publisher)).toThrow(
         "Next: pnpm ci:full-release -- " +
-          flag +
+          "--reconcile-request" +
           " '/private/request with spaces/frv-request.json'",
       );
       expect(run).toHaveBeenCalledOnce();
+      expect(run).toHaveBeenCalledWith("/runtime/node", expect.any(Array));
       const [command, args] = run.mock.calls[0]!;
       expect(command).toBe("/runtime/node");
       expect(args[0]).toBe("/trusted/publisher/scripts/full-release-validation-at-sha.mjs");
