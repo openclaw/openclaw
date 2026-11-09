@@ -1,6 +1,8 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readAgentDatabaseReadAdmissionRefusal } from "../../state/agent-database-admission.js";
+import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { reportCommittedInlineAuthFailure } from "./constants.js";
 import { observeCachedCanonicalAuthProfileCredentials } from "./credential-observation.js";
@@ -24,6 +26,7 @@ import {
   type RuntimeAuthSharedOwner,
 } from "./runtime-snapshot-owner.js";
 import type { FreshSharedAuthStoreHandoff } from "./shared-store-bootstrap.js";
+import { resolveAuthProfileDatabaseOwnerId } from "./sqlite.js";
 import type {
   AuthProfileCredential,
   AuthProfileStore,
@@ -290,6 +293,17 @@ export function createRuntimeAuthProfileSnapshotSelection(
     }
     const inheritedKey = resolveRuntimeStoreKey(inheritedAuthDir, env);
     const requestedKey = resolveRuntimeStoreKey(agentDir, env);
+    if (agentDir) {
+      const refusal = readAgentDatabaseReadAdmissionRefusal(
+        resolveAuthProfileDatabaseOwnerId(agentDir),
+        { env },
+      );
+      if (
+        refusal?.paths.some((pathname) => isSameOpenClawAgentDatabasePath(pathname, requestedKey))
+      ) {
+        return undefined;
+      }
+    }
     const inherited = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(inheritedKey);
     if (requestedKey === inheritedKey) {
       return inherited;

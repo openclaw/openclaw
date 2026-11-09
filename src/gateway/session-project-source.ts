@@ -25,7 +25,6 @@ import {
   ProjectCheckoutError,
   resolveProjectCheckout,
   resolveProjectDirectory,
-  resolveProjectRegistry,
   resolveWorkspaceProject,
   selectStoredProjectRegistry,
 } from "../projects/project-registry.js";
@@ -33,6 +32,7 @@ import type { ProjectRegistryRecord } from "../projects/project-registry.types.j
 import type { ExecutionSkillWorkspace } from "../skills/loading/workspace-skill-roots.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
+import { type ProjectRequester, resolveRequesterProject } from "./project-access.js";
 import { prepareSessionCreateFilesystemRoot } from "./server-methods/session-create-root.js";
 import type { PreparedGatewaySessionLifecycle } from "./session-create-service.types.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
@@ -82,11 +82,12 @@ export async function resolveSessionProjectSkillRoot(params: {
   cfg: OpenClawConfig;
   projectId: string;
   targetAgentId: string;
+  requester: ProjectRequester;
   resolveSandboxRequired: () => boolean;
   assertCurrent: () => void;
 }): Promise<ExecutionSkillWorkspace | undefined> {
   params.assertCurrent();
-  const project = await resolveProjectRegistry(params.cfg, params.projectId);
+  const project = await resolveRequesterProject(params.cfg, params.projectId, params.requester);
   params.assertCurrent();
   if (!project) {
     return undefined;
@@ -120,13 +121,14 @@ export async function resolveSessionProjectCheckoutOptions(params: {
   cfg: OpenClawConfig;
   projectId: string;
   targetAgentId: string;
+  requester: ProjectRequester;
   resolveSandboxRequired: () => boolean;
   assertCurrent: () => void;
   signal?: AbortSignal;
   onRefresh?: () => void;
 }): Promise<{ current: boolean; worktree: boolean; refreshing?: boolean }> {
   params.assertCurrent();
-  const project = await resolveProjectRegistry(params.cfg, params.projectId);
+  const project = await resolveRequesterProject(params.cfg, params.projectId, params.requester);
   params.assertCurrent();
   if (!project) {
     return { current: false, worktree: false };
@@ -164,6 +166,8 @@ export async function resolveSessionProjectCheckoutOptions(params: {
 export type SpawnParentWorktreeSource = {
   kind: "worktree";
   workspace: string;
+  /** Registry project the parent was created from; absent for cwd-based worktrees. */
+  projectId?: string;
   source?: NonNullable<PreparedGatewaySessionLifecycle["pendingWorktree"]>["source"];
   withCurrent: WorktreeSourceStage;
   withRollback?: <T>(run: (assertCurrent: () => void) => Promise<T>) => Promise<T>;
@@ -289,6 +293,7 @@ async function prepareSpawnParentWorktreeSource(
       return {
         kind: "worktree",
         workspace: project.repoRoot,
+        projectId,
         source: { kind: "project", id: projectId },
         withRollback: selection.withRollback,
         withCurrent: async (run, acquisition) =>
@@ -313,6 +318,7 @@ async function prepareSpawnParentWorktreeSource(
     return {
       kind: "worktree",
       workspace: project.repoRoot,
+      projectId,
       source: { kind: "project", id: projectId },
       withCurrent: async (run) => await run({ assertCurrent, signal: options.signal }),
     };
@@ -342,9 +348,11 @@ async function prepareSpawnParentWorktreeSource(
     assertWorktreeCurrent();
   });
   assertCurrent();
+  const projectId = normalizeOptionalString(parent.entry.projectId);
   return {
     kind: "worktree",
     workspace: worktree.repoRoot,
+    ...(projectId ? { projectId } : {}),
     source: { kind: "worktree", id: worktree.id },
     withCurrent: async (run) =>
       await run({

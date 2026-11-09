@@ -15,6 +15,7 @@ import {
   ProjectCloneError,
   readProjectCheckoutRemoteHead,
   refreshProjectCheckout,
+  unshallowProjectCheckout,
 } from "./project-clone-runtime.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -221,11 +222,11 @@ it.each(["fetch", "repair", "inventory", "success", "auth failure", "cleanup fai
     const published: (string | Uint8Array | undefined)[] = [];
     mockGit().mockImplementation(async (argv, options): Promise<processExec.SpawnResult> => {
       const cwd = argv[argv.indexOf("-C") + 1];
+      if (argv.includes("--show-object-format")) {
+        return gitOutput(`sha1\n${path.join(target, ".git", "shallow")}`);
+      }
       if (argv.includes("--git-path")) {
         return gitOutput(objects);
-      }
-      if (argv.includes("--show-object-format")) {
-        return gitOutput("sha1");
       }
       if (argv.includes("config")) {
         return { ...successfulGit, code: 1 };
@@ -310,6 +311,82 @@ it.each(["uncertain", "present", "absent"] as const)(
       await expect(observed).rejects.toBeInstanceOf(CommandProcessCleanupError);
     } else {
       await expect(observed).resolves.toBe(outcome === "present" ? pinnedCommit : undefined);
+    }
+  },
+);
+
+it.each(["success", "revoked", "uncertain"] as const)(
+  "publishes repaired history only after admitted fetch completes (%s)",
+  async (outcome) => {
+    const target = dirs.make("openclaw-unshallow-");
+    const objects = path.join(target, ".git", "objects");
+    const shallow = path.join(target, ".git", "shallow");
+    await fs.mkdir(objects, { recursive: true });
+    await fs.writeFile(shallow, pinnedCommit);
+    vi.spyOn(os, "tmpdir").mockReturnValue(target);
+    let staging = "";
+    let fetched = false;
+    const revoked = new Error("synthetic lease revoked");
+    const token = "synthetic-admitted-token";
+    const admitted = vi.fn();
+    mockGit().mockImplementation(async (argv, options) => {
+      if (argv.includes("--show-object-format")) {
+        return gitOutput(`sha1\n${path.join(target, ".git", "shallow")}`);
+      }
+      if (argv.includes("--git-path")) {
+        return gitOutput(objects);
+      }
+      if (argv.includes("init")) {
+        staging = argv[argv.indexOf("-C") + 1]!;
+      }
+      if (argv.includes("fetch")) {
+        await expectFile(shallow, pinnedCommit);
+        await expectFile(`${shallow}.lock`, "");
+        expect(argv).not.toContain(token);
+        expect(typeof options === "number" ? undefined : options.env).toMatchObject({
+          GIT_CONFIG_KEY_0: "http.https://github.com/.extraHeader",
+          GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
+        });
+        await fs.unlink(path.join(staging, "shallow"));
+        fetched = true;
+        return gitOutput("", outcome === "uncertain");
+      }
+      return successfulGit;
+    });
+    const error = await capture(
+      unshallowProjectCheckout(
+        { target, url: projectUrl },
+        {
+          token,
+          async startRun<T>(run: () => T): Promise<Awaited<T>> {
+            admitted();
+            return await run();
+          },
+          assertCurrent() {
+            if (fetched && outcome === "revoked") {
+              throw revoked;
+            }
+          },
+        },
+      ),
+    );
+    expect(admitted).toHaveBeenCalled();
+    await expectMissing(`${shallow}.lock`);
+    if (outcome === "success") {
+      expect(error).toBeUndefined();
+      await expectMissing(shallow);
+    } else {
+      await expectFile(shallow, pinnedCommit);
+      if (outcome === "revoked") {
+        expect(error).toBe(revoked);
+      } else {
+        expect(hasCommandProcessCleanupError(error)).toBe(true);
+      }
+    }
+    if (outcome === "uncertain") {
+      expect((await fs.stat(staging)).isDirectory()).toBe(true);
+    } else {
+      await expectMissing(staging);
     }
   },
 );

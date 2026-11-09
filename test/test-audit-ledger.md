@@ -217,6 +217,78 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
+- X spend, pinned main `ee3ec605a59c`: remove one midnight reservation replay
+  already covered by the stronger limits table row. The keeper also checks
+  idempotent settlement, exhaustion and release; separate cases retain stored
+  receipt periods, reset and restart coverage. Spend and API-consumer suites pass
+  before/after on one Blacksmith Testbox (37→36 cases). Ten fewer test lines;
+  production unchanged. Format, lint, types and both unused-file scans pass.
+  Every dependency/export phase ran; unchanged Gateway, UI and changelog export
+  findings remain. Exact-head CI and security passed;
+  [194931](https://github.com/openclaw/openclaw/pull/194931) merged as `9a848bb13bfb`.
+
+- OC Path, pinned main `a606a90b4bf5`: remove one malformed-line append replay
+  and two newline counts implied by exact output equality. The unchanged JSONL
+  edit/emission keepers retain object rendering, malformed/blank bytes, ordering
+  and CRLF coverage. Four focused suites pass before/after (25→24 cases) on one
+  Blacksmith Testbox. Ten fewer test lines; production unchanged. Format, lint,
+  types and both unused-file scans pass. All dependency/export phases ran; the
+  unchanged UI export findings remain. Exact-head CI and security passed;
+  [194908](https://github.com/openclaw/openclaw/pull/194908) merged as `1a505759c0fe`.
+
+Cua, pinned main `058133da525b`: remove the scalar scroll-enum type assertion
+from the text/key dispatch case. The installed-SDK enum parity test, both
+platform scroll mappings and the SDK forwarding case remain unchanged. Both
+focused suites pass before/after (59→59 cases), with one fewer test line and no
+production changes. Format, typed lint, extension types and both unused-file
+scans pass. Both dependency phases and all three export phases ran with unchanged
+Gateway, UI and release-tool findings. Exact-head CI and landing remain pending.
+
+Batch115, pinned main `230f05c7ca37`, repairs the read-coalescing recorder
+on the actual socket returned by the mock constructor. The unchanged browser
+case passed; adding a positive assertion for its already-held `models.list`
+request failed on the original observer. The repaired observer records that same
+request and clears its exact ID on response. One final untraced full-file run
+passed (1/1, 16.88s Vitest; 61.647s routed), preserving all existing request
+counts, metadata/branch-read oracles and the global duplicate negative. A prior
+in-memory diagnostic correlated 11 unique sends and 11 responses with the actual
+Gateway fixture requests; no current overlap occurred. The historical overlapping
+`sessions.describe` signature remains an unattributed lead, not a production
+verdict or a repaired coalescing defect. The case inventory and source census are
+unchanged. The +20-line allocation covers actual-instance hooks and the paired
+held-request/response observer checks; production and shared fixtures are unchanged.
+Targeted typecheck, typed lint, formatting and the exact growth allocation passed.
+PR [194212](https://github.com/openclaw/openclaw/pull/194212) merged as
+`838f4bfc4d83` after exact-head CI and security passed.
+
+Diagnostics OTel, pinned main `b97bc15cd7af`: remove the retired NodeSDK
+comparison helper after production moved to a private `BasicTracerProvider`.
+Keep all 11 sampler rows, the case covering six span-limit variables, and the
+unchanged real-OTLP start/stop/restart suite. Both suites pass before and after
+(33→33 cases); 21 fewer test lines, production unchanged. Format, typed lint,
+extension types and both unused-file scans pass. Both dependency phases and all
+three export phases completed with unchanged Gateway, UI and release-tool
+export findings. Exact-head CI and landing remain pending.
+
+Core tool-result classification, pinned main `9b8aa392679f`: consolidate three
+duplicate cases into the existing table that checks both classification APIs.
+Carry all six distinct completed/failure/exit inputs into that table; preserve
+every existing row and network-error, authenticated-error and hostile-reflection
+case. The unchanged baseline passed all 28 cases in
+[CI job 128652430604](https://github.com/openclaw/openclaw/actions/runs/42455052153/job/128652430604)
+at `f4976c968539`; the owner, test, dependency and harness inputs match the pinned
+base. The containing workflow failed elsewhere. The candidate has 31 expanded
+cases, 11 rather than 14 declarations, and 20 fewer test lines; production is
+unchanged. At `32cb09b3f0ee`, all 31 cases passed on both Node and Bun in
+[CI job 128671390378](https://github.com/openclaw/openclaw/actions/runs/42461299705/job/128671390378);
+its separate broker-child exit-code assertion failed. Core types and lint passed.
+All seven removal-scan phases completed in
+[CI job 128671385713](https://github.com/openclaw/openclaw/actions/runs/42461299705/job/128671385713).
+Both unused-file scans were clean; export scans found only the unchanged UI
+`EventLoadProgress` export, removed by incoming main during conflict integration.
+The integration preserved the classification test and both production owners.
+PR: [195114](https://github.com/openclaw/openclaw/pull/195114).
+
 Batches113–118, pinned main `a07facd84480`, used one native checkout and
 separate scoped proofs. Unchanged baselines passed: destinations6, History1,
 read coalescing1, fallback8, dictation33 and annotation lifetime11.
@@ -334,11 +406,12 @@ permission to delete without root qualification.
 
 ## Pending qualification and proof repairs
 
-- Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: X midnight-spend replay; Cua enum and Twitch settled flag; OC Path malformed-line replay and repeated round-trip assertion. Each needs current-source and runtime keeper qualification.
-- Transfer rows before consolidating core failed-tool classification, CodeMode deadline duplication, Android loading/blank-auth, persisted outbox keys/epochs, terminal initial projection, and native PCM/decoder/reader cases. Keep typed host-error precedence and active-run settlement.
+- Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
+- Transfer rows before consolidating Android loading/blank-auth, persisted outbox keys/epochs, terminal initial projection, and native PCM/decoder/reader cases. Keep typed host-error precedence and active-run settlement.
+- Retain the CodeMode worker-leg deadline case: its real warmed worker and interruption path are distinct from the cancellation table's typed host-error precedence. Both suites keep their active-run settlement checks; this is a source-only retention decision.
 - Repair Android runtime/model fixture custody through existing guaranteed closers; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions. Qualify Android dropdown arithmetic, IPv6 URL, empty SMS defaults and component-state mapping against their stronger keepers.
 - Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer proofs, missing CLI fixture cleanup and aggregate-only tool-result fidelity. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.
-- Diagnostics OTel: obsolete NodeSDK replay only; preserve every private-provider sampler row and six span-limit probes. Content capture proof is a separate repair.
+- Diagnostics OTel: the NodeSDK replay removal is runtime-qualified above; content capture proof remains a separate repair.
 - SDK removal search was incomplete: public2,115/2,527 complete and bundled169/179 complete. No observed consumer is not proof of no external reliance. The retired target facade was private and excluded from packaging since `780bc791470`.
 - Retain duplicate Swift TLS fixtures in separate packages, renderer-discovered Blobster JSON (also production prompt inputs), process-entry helpers referenced extensionlessly, stable borrowed-reference assertions, and independent release/architecture/platform guards.
 - CI merge-preparation source/comment candidates remain pending Linux keeper proof; the independent Git-owner admission guard stays. Do not treat a stopped Testbox allocation as a product result.

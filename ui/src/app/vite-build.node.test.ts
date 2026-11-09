@@ -140,6 +140,35 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
+it("keeps inline recovery executable and its DOM intact after document compaction", async () => {
+  const source = `<style>/* fallback */ h1 { color: rgb(255, 0, 0); }</style>
+    <h1>Still loading</h1><button>Retry</button>
+    <p><span>Keep</span>
+      <span>spacing</span></p><pre>  code\n  next</pre><textarea>  draft\n  next</textarea>
+    <script data-cfasync="false">/* recovery */
+      document.querySelector("button").addEventListener("click", function () {
+        document.querySelector("h1").textContent = "Retrying";
+      });
+    </script>
+    <script nomodule>window.unsupported = function () { return "Update your browser"; };</script>`;
+  await writeRoot("index.html", source + '<script type="module" src="./main.js"></script>');
+  const { html: compact } = await buildOutput(createConfig());
+  const dom = new JSDOM(compact, { runScripts: "dangerously" });
+  const { document } = dom.window;
+  expect(document.querySelector("h1")?.outerHTML).toBe("<h1>Still loading</h1>");
+  expect(dom.window.getComputedStyle(document.querySelector("h1")!).color).toBe("rgb(255, 0, 0)");
+  document.querySelector("button")!.click();
+  expect(document.querySelector("h1")?.textContent).toBe("Retrying");
+  expect(document.querySelector("script[nomodule]")?.textContent).not.toMatch(
+    /[=]>|\b(?:let|const)\b/u,
+  );
+  expect(compact).not.toContain("/* recovery */");
+  expect(document.querySelector("p")?.textContent).toBe("Keep spacing");
+  expect(document.querySelector("pre")?.textContent).toBe("  code\n  next");
+  expect(document.querySelector("textarea")?.value).toBe("  draft\n  next");
+  dom.window.close();
+});
+
 it("omits already imported JavaScript from lazy preload tables, retaining lazy JS and CSS", async () => {
   const config = createConfig();
   await writeFiles({
@@ -262,43 +291,11 @@ it("fetches a locale's co-registered error catalogs in one lazy request", async 
   expect(html).not.toContain(errorsChunk.fileName);
 });
 
-it("preloads only the selected locale's late Chat catalogs before body parsing", async () => {
+it("preloads only the selected locale's Chat catalogs before body parsing", async () => {
   const config = createConfig();
-  const namespaces = [
-    "runtimeErrors",
-    "filePreview",
-    "mcpApp",
-    "worktrees",
-    "newSession",
-    "sessionsView",
-    "mcpServers",
-    "mcpPage",
-    "profilePage",
-    "connection",
-    "attention",
-    "chat",
-  ];
-  const filename = (locale: string, namespace: string) =>
-    namespace === "runtimeErrors"
-      ? `locale-errors-${locale}`
-      : `locale-namespace-${locale}-${namespace}`;
-  await writeRoot("lazy-catalog.js", "export const createCatalog = (value) => value;");
-  for (const locale of ["de", "ar"]) {
-    for (const namespace of namespaces) {
-      await writeRoot(
-        `${filename(locale, namespace)}.js`,
-        `export default "${locale}/${namespace}";`,
-      );
-    }
-    await writeRoot(
-      `${locale}.js`,
-      `import { createCatalog } from "./lazy-catalog.js";
-export default createCatalog({${namespaces.map((namespace) => `${namespace}: () => import("./${filename(locale, namespace)}.js")`).join(",")}});`,
-    );
-  }
   await writeRoot(
     "main.js",
-    'globalThis.locales = [() => import("./de.js"), () => import("./ar.js")];',
+    `globalThis.locales = [${["de", "ar"].map((locale) => `() => import(${JSON.stringify(fileURLToPath(new URL(`../i18n/locales/${locale}.ts`, import.meta.url)))})`).join(",")}];`,
   );
   await writeRoot(
     "index.html",
@@ -372,6 +369,7 @@ it("keeps page styles separate from measured JavaScript boot groups", async () =
     "main.js",
     'import "./initial.css"; globalThis.loadFirst = () => import("fixture:first"); globalThis.loadSecond = () => import("fixture:second"); globalThis.loadLazy = () => import("fixture:lazy");',
   );
+  await writeRoot("index.html", '<head></head><script type="module" src="./main.js"></script>');
   addModules(config, modules, {
     "fixture:first": first,
     "fixture:second": second,
@@ -403,11 +401,21 @@ it("keeps page styles separate from measured JavaScript boot groups", async () =
   expect(html).toContain(initial.name);
   expect(html).toMatch(/<link[^>]*rel="preload"[^>]*as="style"[^>]*>/u);
   expect(html).toMatch(/<link[^>]*id="openclaw-boot-styles"[^>]*media="print"[^>]*>/u);
-  expect(html).not.toContain(firstStyle.name);
-  expect(html).not.toContain(secondStyle.name);
+  const page = new JSDOM(html);
+  for (const style of [firstStyle, secondStyle]) {
+    expect(page.window.document.querySelector(`link[href$="${style.name}"]`)).toBeNull();
+  }
   const scripts = (await readAssets(names, ".js")).map(({ source }) => source).join("\n");
-  expect(scripts).toContain(firstStyle.name);
-  expect(scripts).toContain(secondStyle.name);
+  const importMap: { imports: Record<string, string> } = JSON.parse(
+    page.window.document.querySelector('script[type="importmap"]')!.textContent!,
+  );
+  page.window.close();
+  for (const style of [firstStyle, secondStyle]) {
+    const reference = Object.entries(importMap.imports).find(
+      ([, target]) => target === `./assets/${style.name}`,
+    )?.[0];
+    expect(scripts).toContain(reference ? path.posix.basename(reference) : style.name);
+  }
 });
 
 it("compresses small route boot modules while leaving deferred modules lazy", async () => {
@@ -686,7 +694,8 @@ it.each([
   }
   const cacheId = /data-openclaw-control-ui-build-id="([^"]+)"/u.exec(html)?.[1];
   expect(cacheId?.startsWith(`${buildInfo.buildId}-`)).toBe(true);
-  expect(cacheId?.slice(buildInfo.buildId.length + 1)).toMatch(/^[a-f0-9]{64}$/u);
+  const publicAssetVersion = cacheId?.slice(buildInfo.buildId.length + 1);
+  expect(publicAssetVersion).toMatch(/^[a-f0-9]{64}$/u);
   const fonts = await fs.readdir(path.join(outDir, "fonts"));
   for (const fontCss of fonts.filter((name) => name.endsWith(".css"))) {
     const source = await fs.readFile(path.join(outDir, "fonts", fontCss), "utf8");
@@ -695,9 +704,9 @@ it.each([
     for (const [, reference] of references) {
       const fontUrl = new URL(
         reference!,
-        `https://control.example/ui/fonts/${fontCss}?v=${cacheId}`,
+        `https://control.example/ui/fonts/${fontCss}?v=${publicAssetVersion}`,
       );
-      expect(fontUrl.searchParams.get("v")).toBe(cacheId);
+      expect(fontUrl.searchParams.get("v")).toBe(publicAssetVersion);
       expect(fontUrl.pathname).toMatch(/^\/ui\/fonts\/[^/]+\.woff2$/u);
       await expect(
         fs.stat(path.join(outDir, fontUrl.pathname.slice("/ui/".length))),
@@ -710,7 +719,7 @@ it.each([
   expect(webManifest.start_url).toBe("./");
   for (const icon of webManifest.icons) {
     const iconUrl = new URL(icon.src, "https://control.example/ui/manifest.webmanifest");
-    expect(iconUrl.searchParams.get("v")).toBe(cacheId);
+    expect(iconUrl.searchParams.get("v")).toBe(publicAssetVersion);
     await expect(
       fs.stat(path.join(outDir, iconUrl.pathname.slice("/ui/".length))),
     ).resolves.toBeDefined();
