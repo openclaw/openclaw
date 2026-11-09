@@ -8,7 +8,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { hasSubagentYieldWaitSource } from "./subagent-registry-read.js";
+import { resolveSubagentYieldWaitSource } from "./subagent-registry-read.js";
 import { resolveYieldedRunContinuation } from "./subagent-registry-run-pause.js";
 import type { createSubagentSweepReadScope } from "./subagent-registry-sweep-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -49,7 +49,7 @@ export async function settleUnreachableYieldedSubagentRun(params: {
     continuation?.state === "continuable" &&
     retired &&
     !entry.collect &&
-    !hasSubagentYieldWaitSource(entry)
+    !resolveSubagentYieldWaitSource(entry)
   ) {
     continuation = {
       state: "unreachable",

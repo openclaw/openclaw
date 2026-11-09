@@ -308,6 +308,7 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
         ["external", { modelSelectionLocked: true }, false],
         ["cron:job", {}, false],
         ["subagent:child", {}, false],
+        ["dashboard:spawned", { createdVia: "spawn" }, false],
         ["live", {}, false],
         ...(mode === "markers"
           ? [
@@ -322,7 +323,8 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
       for (const [name, patch] of cases) {
         const target = sessionTarget(name);
         const { sessionKey } = target;
-        replaceSessionEntrySync(target, { sessionId: name, updatedAt: 110 });
+        const initial = { sessionId: name, updatedAt: 110, createdVia: patch.createdVia };
+        replaceSessionEntrySync(target, initial);
         await persistGatewaySessionLifecycleEvent({
           sessionKey,
           event: {
@@ -532,6 +534,8 @@ it.for([
   "stale-requester",
   "current-completed",
   "retired-completed",
+  "stopped",
+  "interrupted",
 ] as const)("recovers a parked dashboard root from its recorded wake source (%s)", (source) =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
@@ -570,6 +574,7 @@ it.for([
     const childSessionKey = "agent:main:dashboard:parked-child";
     const childSessionId = "parked-child";
     const childRevision = "parked-child-revision";
+    const recovery = ["retired-completed", "stopped", "interrupted"].includes(source);
     const completed = source === "current-completed" || source === "retired-completed";
     const child = createSubagentRunRecord({
       runId: childRunId,
@@ -581,10 +586,11 @@ it.for([
       completionRequesterSessionId: target.sessionId,
       completionRequesterLifecycleRevision: lifecycleRevision,
       expectsCompletionMessage: true,
-      endedAt: 110,
+      endedAt: source === "interrupted" ? undefined : 110,
       outcome: completed ? { status: "ok" } : undefined,
-      endedReason: completed ? "subagent-complete" : undefined,
-      pauseReason: completed ? undefined : "sessions_yield",
+      endedReason:
+        source === "stopped" ? "subagent-killed" : completed ? "subagent-complete" : undefined,
+      pauseReason: completed || recovery ? undefined : "sessions_yield",
       waitForMessage: source === "message" || source === "stale-requester" ? true : undefined,
       requesterSettleWake: {
         status: "pending",
@@ -624,7 +630,12 @@ it.for([
         }),
       );
     }
-    const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost");
+    const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
+      accepted: Promise.resolve({ ok: true }),
+      id: "restart-input",
+      settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+      cancel: () => false,
+    });
     try {
       await persistRunningSessionsForRestart({ cfg });
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
@@ -643,13 +654,16 @@ it.for([
           expect(restored.lifecycleRunId).toBe(runId);
           expect(restored.status).toBeUndefined();
           expect(restored.endedAt).toBe(120);
+        } else if (recovery) {
+          expect(restored.lifecycleRunId).toBeUndefined();
+          expect(restored.status).toBe("killed");
         } else {
           expect(restored.lifecycleRunId).toBeUndefined();
           expect(restored.status).toBe("failed");
           expect(restored.lastRunError).toMatch(/wait|child|restart/i);
         }
       }
-      expect(resume).not.toHaveBeenCalled();
+      expect(resume).toHaveBeenCalledTimes(recovery ? 1 : 0);
     } finally {
       resume.mockRestore();
       subagentRuns.delete(childRunId);

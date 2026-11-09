@@ -1,6 +1,9 @@
 import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-error.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
+import { renderRuntimeCoordinationFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import type {
@@ -11,7 +14,10 @@ import { captureSubagentControllerInputRetirement } from "./subagent-controller-
 import type { SubagentLifecycleWakeContext } from "./subagent-registry-lifecycle-context.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
-import { sameRequesterSettleRunIdentity } from "./subagent-requester-settle-identity.js";
+import {
+  buildRequesterSettleWakeIdentity,
+  sameRequesterSettleRunIdentity,
+} from "./subagent-requester-settle-identity.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export type RequesterWakeMutationReceipt = { committed?: RequesterWakeCommittedWrite };
@@ -216,31 +222,54 @@ export function createRequesterWakeSettlement(params: {
         if (
           !admittedWake?.pauseNotice &&
           admittedWake?.requesterYieldBatch &&
-          admittedWake.requesterRunId &&
           requester?.completionRequesterSessionId &&
           outcome?.delivered !== true
         ) {
-          // The committed handoff failed without a successor. Never close a
-          // newer turn, a reset, or a requester already stopped by its user.
-          await persistGatewaySessionLifecycleEvent({
-            sessionKey: requester.requesterSessionKey,
-            agentId: requester.requesterAgentId,
-            expectedWriter: {
-              runId: admittedWake.requesterRunId,
-              sessionId: requester.completionRequesterSessionId,
-              lifecycleRevision: requester.completionRequesterLifecycleRevision,
-              requireYielded: true,
-            },
-            event: {
-              runId: admittedWake.requesterRunId,
-              sessionId: requester.completionRequesterSessionId,
-              ts: Date.now(),
-              data: {
-                phase: "error",
-                error: outcome?.error ?? "Child completion could not continue the yielded request.",
+          const error =
+            outcome?.error ?? "Child completion could not continue the yielded request.";
+          const notice = renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed");
+          const runId = admittedWake.requesterRunId;
+          if (runId) {
+            // A newer turn, reset, or Stop cannot inherit the failed batch's terminal.
+            await persistGatewaySessionLifecycleEvent({
+              sessionKey: requester.requesterSessionKey,
+              agentId: requester.requesterAgentId,
+              expectedWriter: {
+                runId,
+                sessionId: requester.completionRequesterSessionId,
+                lifecycleRevision: requester.completionRequesterLifecycleRevision,
+                requireYielded: true,
               },
-            },
-          });
+              event: {
+                runId,
+                sessionId: requester.completionRequesterSessionId,
+                ts: Date.now(),
+                data: { phase: "error", error, errorNotice: notice },
+              },
+            });
+          } else {
+            // Stable batches lost their original run id. Report the batch failure,
+            // never assign whichever writer now occupies this session to that batch.
+            const { batchKey } = buildRequesterSettleWakeIdentity({
+              requesterSessionKey: requester.requesterSessionKey,
+              requesterAgentId: requester.requesterAgentId,
+              batchRunIds: admittedWake.batchRunIds ?? batch.map((entry) => entry.runId),
+              rearmGeneration,
+            });
+            await recordGatewaySessionRunFailure({
+              target: {
+                sessionKey: requester.requesterSessionKey,
+                agentId: requester.requesterAgentId,
+                storePath: requester.requesterStorePath,
+                sessionId: requester.completionRequesterSessionId,
+                expectedLifecycleRevision: requester.completionRequesterLifecycleRevision,
+              },
+              runId: buildAnnounceIdempotencyKey(`${batchKey}:delivery-failure`),
+              error,
+              notice,
+              assertCommitAllowed: () => assertSubagentRegistryWriteSourceCurrent(stateContext),
+            });
+          }
         }
         for (const retire of retireInputs) {
           retire();

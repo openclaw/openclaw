@@ -51,11 +51,15 @@ import {
 } from "../sessions/session-controller.state.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
-import { withAgentInputRecovery } from "../state/agent-database-preparation-context.js";
+import {
+  waitForAgentInputAdmission,
+  withAgentInputRecovery,
+} from "../state/agent-database-preparation-context.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
+  acceptRestartResumeReceipt,
   recordRestartResumeFailure,
   recordRestartYieldFailure,
 } from "./session-restart-resume-failure.js";
@@ -535,9 +539,16 @@ async function resumeRestartStore(
       }
     }
     for (const { sessionKey, entry: snapshotEntry } of entries) {
+      const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId;
       let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
       let interrupted = false;
       try {
+        await waitForAgentInputAdmission(agentId, {
+          storePath: target.storePath,
+          env: target.env,
+          signal,
+          owner: context.agentDatabaseStartup,
+        });
         const resumed = await applySessionEntryReplacements<
           | {
               entry: InternalSessionEntry;
@@ -555,9 +566,9 @@ async function resumeRestartStore(
             if (!selected) {
               return { result: undefined };
             }
-            const parked = resolveSessionYieldWait(sessionKey, selected, target.agentId);
+            const parked = resolveSessionYieldWait(sessionKey, selected, agentId);
             const orphanedRun =
-              !parked &&
+              (!parked || parked === "resume") &&
               selected.lifecycleRunId &&
               selected.lifecycleRunId === snapshotEntry.lifecycleRunId &&
               selected.status === undefined &&
@@ -617,7 +628,6 @@ async function resumeRestartStore(
           continue;
         }
         const { entry, marker, parked } = resumed;
-        const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId;
         let admissionStage = "principal";
         const skip = restartResumeSkipReason(sessionKey, entry);
         if (skip && !(parked && skip === "subagent")) {
@@ -630,7 +640,7 @@ async function resumeRestartStore(
         if (parked === "unreachable") {
           await recordRestartYieldFailure({ sessionKey, agentId, entry, signal });
           summary.record(agentId, sessionKey, "yield-source-unavailable");
-        } else if (parked) {
+        } else if (parked === "waiting") {
           // The registry retains the wait; a new requester message owns fresh admission.
           summary.record(agentId, sessionKey, "parked");
         } else {
@@ -669,24 +679,9 @@ async function resumeRestartStore(
                   },
                 ),
             );
-            const retained = authority;
+            const accepted = acceptRestartResumeReceipt(receipt, sessionKey, authority, log);
             authority = undefined;
-            void receipt.settled
-              .then((outcome) => {
-                if (outcome.status === "failed") {
-                  log.warn(
-                    `Restart resume input failed for ${sessionKey}: ${outcome.error ?? "unknown error"}`,
-                  );
-                }
-              })
-              .finally(() => retained?.release())
-              .catch((error: unknown) => {
-                log.warn(`Restart resume input failed for ${sessionKey}: ${String(error)}`);
-              });
-            const accepted = await receipt.accepted;
-            if (!accepted.ok) {
-              throw accepted.cause ?? new Error(accepted.error);
-            }
+            await accepted;
             summary.record(agentId, sessionKey, "resumed");
           } catch (error) {
             if (signal.aborted) {

@@ -111,57 +111,68 @@ function isWaitingSubagentRun(entry: SubagentRunRecord): boolean {
   return !entry.collect && isYieldedSubagentRun(entry);
 }
 
-function hasYieldWaitingChild(
+type YieldWaitSource = "waiting" | "resume" | undefined;
+
+function resolveYieldWaitingChild(
   sessionKey: string,
   agentId: string,
   session: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision">,
   runId: string,
   visited: Set<string>,
-): boolean {
+): YieldWaitSource {
+  let source: YieldWaitSource;
   for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
     if (
-      resolveRecordedRequester(child) === agentId &&
-      child.completionRequesterSessionId === session.sessionId &&
-      child.completionRequesterLifecycleRevision === session.lifecycleRevision &&
-      child.requesterSettleWake?.requesterYieldBatch === true &&
-      (!child.requesterSettleWake.requesterRunId ||
-        child.requesterSettleWake.requesterRunId === runId) &&
-      owesRequesterCompletion(child) &&
-      (isSubagentRunLive(child) ||
-        (child.execution.status === "terminal" &&
-          !isYieldedSubagentRun(child) &&
-          !subagentRuns.isCompletionAuthorityRetired(child)) ||
-        hasSubagentYieldWaitSource(child, visited))
+      resolveRecordedRequester(child) !== agentId ||
+      child.completionRequesterSessionId !== session.sessionId ||
+      child.completionRequesterLifecycleRevision !== session.lifecycleRevision ||
+      child.requesterSettleWake?.requesterYieldBatch !== true ||
+      (child.requesterSettleWake.requesterRunId &&
+        child.requesterSettleWake.requesterRunId !== runId)
     ) {
-      return true;
+      continue;
     }
+    const childSource = isYieldedSubagentRun(child)
+      ? owesRequesterCompletion(child)
+        ? resolveSubagentYieldWaitSource(child, visited)
+        : undefined
+      : owesRequesterCompletion(child) &&
+          (isSubagentRunLive(child) ||
+            (child.execution.status === "terminal" &&
+              !subagentRuns.isCompletionAuthorityRetired(child)))
+        ? "waiting"
+        : "resume";
+    // Stopped descendants need root reconciliation, even beside a surviving wait.
+    if (childSource === "resume") {
+      return childSource;
+    }
+    source ??= childSource;
   }
-  return false;
+  return source;
 }
 
-/** Owned executions, current receipts, and message waits keep a dependency chain reachable. */
-export function hasSubagentYieldWaitSource(
+/** Distinguish a reachable wake from stopped descendants needing requester recovery. */
+export function resolveSubagentYieldWaitSource(
   entry: SubagentRunRecord,
   visited = new Set<string>(),
-): boolean {
+): YieldWaitSource {
   if (!isWaitingSubagentRun(entry) || visited.has(entry.runId)) {
-    return false;
+    return undefined;
   }
   visited.add(entry.runId);
   if (entry.waitForMessage) {
-    return true;
+    return "waiting";
   }
   const authority = getRecordedSubagentChildAuthority(entry);
-  return (
-    authority.status === "verified" &&
-    hasYieldWaitingChild(
-      entry.childSessionKey,
-      authority.childAgentId,
-      authority.sessionIdentity,
-      entry.runId,
-      visited,
-    )
-  );
+  return authority.status === "verified"
+    ? resolveYieldWaitingChild(
+        entry.childSessionKey,
+        authority.childAgentId,
+        authority.sessionIdentity,
+        entry.runId,
+        visited,
+      )
+    : undefined;
 }
 
 /** Yield owners retain their task across restart, without retaining an execution. */
@@ -202,7 +213,7 @@ export function resolveSessionYieldWait(
     | "pendingFinalDelivery"
   >,
   agentId: string,
-): "waiting" | "unreachable" | undefined {
+): YieldWaitSource | "unreachable" {
   if (session.archivedAt !== undefined || session.incognito) {
     return undefined;
   }
@@ -216,7 +227,8 @@ export function resolveSessionYieldWait(
     agentId,
   );
   if (ownWait) {
-    return hasSubagentYieldWaitSource(ownWait) ? "waiting" : "unreachable";
+    // Its requester owns reconciliation; paused children are never independently replayed.
+    return resolveSubagentYieldWaitSource(ownWait) ? "waiting" : "unreachable";
   }
   // The lifecycle owner records only a yield as an ended execution without a
   // terminal status. A running or replaced turn must not inherit an older wait.
@@ -229,9 +241,10 @@ export function resolveSessionYieldWait(
   ) {
     return undefined;
   }
-  return hasYieldWaitingChild(sessionKey, agentId, session, session.lifecycleRunId, new Set())
-    ? "waiting"
-    : "unreachable";
+  return (
+    resolveYieldWaitingChild(sessionKey, agentId, session, session.lifecycleRunId, new Set()) ??
+    "unreachable"
+  );
 }
 
 /** Resolve live owners through the existing aliases without scanning retained history. */

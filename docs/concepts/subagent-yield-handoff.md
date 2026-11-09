@@ -71,6 +71,9 @@ The yielded batch retains the original requester run ID after releasing its
 execution binding. If completion delivery permanently fails without admitting a
 successor, settlement closes that exact parked lifecycle with a recorded error.
 A newer turn, Stop, or reset rejects the stale terminal write.
+Older batches without that run ID record the same delivery-failure notice without
+changing the current lifecycle: a replacement turn may already own it. Their
+failure notice identifies the batch, rather than guessing its original writer.
 A leaf that an earlier version left paused without a recorded wait keeps its
 existing continuation behavior. A kill
 claim on a paused run is never settled over; cancellation stays with the kill path.

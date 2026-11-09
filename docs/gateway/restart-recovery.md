@@ -137,7 +137,8 @@ heartbeat observer works independently of the optional V8 flight recorder.
 | Accepted user input captured in that shutdown marker              | Runs after the resume input, in FIFO order, with its sender's current authority |
 | Running sub-agent                                                 | Stops quietly; its root requester receives the resume input                     |
 | Session parked in `sessions_yield` with a surviving wake source   | Keeps its recorded wait, including dashboard roots; no startup model request    |
-| Yielded session whose child completion can no longer arrive       | Closes with a recorded, visible failure                                         |
+| Yielded requester whose descendants were stopped                  | Receives the root resume input to reconcile their work                          |
+| Yielded session whose external continuation source is gone        | Closes with a recorded, visible failure                                         |
 | Background process                                                | Ends with the old process; its root session receives the resume input           |
 | Already-produced outbound messages and media                      | Keep the existing delivery queue and delivery reconciliation                    |
 | Scheduled jobs                                                    | Keep cron's own scheduling, catch-up, and interruption policy                   |
@@ -588,14 +589,19 @@ does not send a resume input or run the model for that wait. A fresh continuatio
 of the surviving child delivers its completion through the ordinary requester
 handoff.
 
-If shutdown stopped the remaining child executions, or the recorded dependency
-chain has no surviving continuation source, startup closes the yielded run with
-a visible failure explaining that its child completion can no longer arrive.
-Its transcript remains available for inspection and a new user message. A failed
-completion handoff likewise closes its original parked requester at the handoff
-owner; it cannot close a newer turn or undo Stop.
+A requester yielded for children that restart stopped keeps the ordinary root
+recovery path. Its single resume input reconciles the stopped children's work;
+it is not re-parked waiting for their old executions. A stopped child also needs
+reconciliation when other children still have reachable waits.
 
-A running parent's single resume input covers reconciliation of its children. It can
+When an external continuation source is gone, such as a requester that finished
+or was released without continuing its message-waiting child, the wait closes
+with a visible recorded failure. Its transcript remains available. A permanently
+failed completion handoff likewise closes its original parked requester with
+classified guidance to inspect saved child work and retry or resend. It cannot
+close a newer turn or undo Stop.
+
+A parent's single resume input covers reconciliation of its children. It can
 inspect their transcripts and results with the existing sub-agent tools, then
 send a new instruction or spawn replacements after checking what already happened.
 See [Sub-agent operations](/tools/subagents/operations).

@@ -36,7 +36,6 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
     let childKey: string | undefined;
     let childRunId: string | undefined;
     let childCalls = 0;
-    let rootCalls = 0;
     let rootResumes = 0;
     let sequence = 0;
     let sentContinuation = false;
@@ -81,7 +80,7 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
               return;
             }
             if (action === "root-source-stopped") {
-              // Shutdown interrupts this executing child, removing the root's wake source.
+              // Shutdown interrupts this executing child; its root must reconcile the work.
               return;
             }
             call("sessions_yield", {
@@ -91,7 +90,6 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
             return;
           }
           assert(text.includes(rootPrompt), "Unexpected synthetic requester input");
-          rootCalls++;
           const spawned = input.find(
             (item) => isRecord(item) && item.type === "function_call_output",
           );
@@ -113,6 +111,10 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
             rootResumes++;
           }
           if (parkedRoot) {
+            if (rootResumes > 0) {
+              reply("ROOT_RECONCILED_STOPPED_CHILD");
+              return;
+            }
             call("sessions_yield", {});
             return;
           }
@@ -206,7 +208,6 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
         expect(parked?.lifecycleRunId).toEqual(expect.any(String));
         expect(parked?.status).toBeUndefined();
         const callsBeforeRestart = childCalls;
-        const rootCallsBeforeRestart = rootCalls;
         phase = "restart";
         await instance.stopGateway();
         await client.stopAndWait();
@@ -227,35 +228,23 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
           { timeout: 20_000 },
         );
         if (action === "root-source-stopped") {
-          phase = "root wait lost its child execution";
+          phase = "root reconciles its stopped child execution";
           await vi.waitFor(
             async () => {
-              const closed = readRestartSession(instance.state.agentDir("main"), rootKey);
-              expect(closed?.status).toBe("failed");
-              expect(closed?.lifecycleRunId).toBeUndefined();
-              expect(closed?.lastRunError).toMatch(/wait|child|restart/i);
               const history = await client!.request<{ messages: unknown[] }>("chat.history", {
                 sessionKey: rootKey,
               });
-              const notices = history.messages.filter(
-                (message) => isRecord(message) && message.customType === "run-failed-before-reply",
-              );
-              expect(notices).toEqual(
+              expect(JSON.stringify(history.messages)).toContain("ROOT_RECONCILED_STOPPED_CHILD");
+              expect(history.messages).not.toEqual(
                 expect.arrayContaining([
-                  expect.objectContaining({
-                    display: true,
-                    content: expect.stringContaining(
-                      "the child completion this run was waiting for can no longer arrive",
-                    ),
-                    openclawRunError: expect.objectContaining({ runId: root.runId }),
-                  }),
+                  expect.objectContaining({ customType: "run-failed-before-reply" }),
                 ]),
               );
             },
             { timeout: 15_000 },
           );
-          expect(rootCalls).toBe(rootCallsBeforeRestart);
-          expect(rootResumes).toBe(0);
+          expect(rootResumes).toBe(1);
+          expect(childCalls).toBe(callsBeforeRestart);
           return;
         }
         phase = "restored parked child";
