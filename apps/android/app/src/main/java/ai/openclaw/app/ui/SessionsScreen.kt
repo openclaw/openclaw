@@ -83,6 +83,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
@@ -659,7 +661,9 @@ private fun SessionRow(
           modifier =
             Modifier
               .fillMaxWidth()
-              .combinedClickable(
+              .semantics {
+                if (session.unread == true) stateDescription = nativeString("Unread")
+              }.combinedClickable(
                 onClick = {
                   viewModel.switchChatSession(session.key, session.ownerAgentId)
                   onOpenChat()
