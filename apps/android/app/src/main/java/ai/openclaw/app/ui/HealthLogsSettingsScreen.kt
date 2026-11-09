@@ -54,7 +54,8 @@ internal fun HealthLogsSettingsScreen(
   val talkAwaitingAgent by viewModel.talkAwaitingAgent.collectAsState()
   val talkStatus by viewModel.talkModeStatusText.collectAsState()
   val logsState by viewModel.healthLogsState.collectAsState()
-  var selectedLogEntry by remember { mutableStateOf<GatewayLogEntry?>(null) }
+  val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
+  var selectedLogEntry by remember(activeGatewayStableId) { mutableStateOf<GatewayLogEntry?>(null) }
 
   SettingsRefreshOnConnect(isConnected) { viewModel.refreshHealthLogs() }
 
