@@ -84,17 +84,25 @@ function readSharedPrewarm(
 
 export function waitForPrewarmedChatSnapshot(cacheKey: string): Promise<void> | undefined {
   const entry = peekPrewarmedChatSnapshot();
-  if (entry?.cacheKey !== cacheKey || entry.cancelled || entry.prepared?.snapshot !== undefined) {
+  if (entry?.cacheKey !== cacheKey || entry.cancelled) {
     return undefined;
+  }
+  if (entry.prepared?.snapshot !== undefined) {
+    return entry.prepared.snapshot ? entry.detailsReady : undefined;
   }
   // Only this pane waits: an unavailable cache must never hold first mount indefinitely.
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
-    entry.ready,
-    new Promise<void>((resolve) => {
-      timeout = setTimeout(resolve, 100);
-    }),
-  ]).finally(() => clearTimeout(timeout));
+  return (
+    Promise.race([
+      entry.ready,
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, 100);
+      }),
+    ])
+      .finally(() => clearTimeout(timeout))
+      // Cached wide Details must join the first pane frame, even after the data read has settled.
+      .then(() => (entry.prepared?.snapshot ? entry.detailsReady : undefined))
+  );
 }
 
 async function readSnapshotRecord(

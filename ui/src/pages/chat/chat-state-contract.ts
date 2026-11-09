@@ -97,6 +97,8 @@ export type ChatState = StreamCausalBoundaryState & {
   lastError: string | null;
   chatError?: string | null;
   chatRunError?: ChatRunError | null;
+  /** Run whose failure the operator dismissed; reloads must not resurrect it. */
+  chatDismissedRunErrorId?: string | null;
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
   chatReplyTarget?: ChatReplyTarget | null;
   agentsError?: string | null;

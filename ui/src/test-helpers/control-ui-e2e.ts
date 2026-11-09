@@ -213,6 +213,8 @@ const DEFAULT_CONTROL_UI_E2E_BUILD_INFO: ControlUiBuildInfo = {
   buildId: "e2e",
 };
 
+// Transport transitions are awaited in real time; callers that pause the virtual
+// clock resume it first so backoff and opening deadlines track these waits.
 export async function reconnectMockGateway(
   page: Page,
   gateway: MockGatewayControls,

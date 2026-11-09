@@ -181,6 +181,13 @@ ${body}
   }
 }
 
+function heldEntry(f: ReturnType<typeof fixture>) {
+  const installation = entry(f.cache, "a".repeat(64));
+  const acquire = `withDependencyCacheLock(cache, (lock) => holdDependencyCache(lock, ${JSON.stringify(installation)}, anchor));`;
+  expect(child(f, acquire).status).toBe(0);
+  return installation;
+}
+
 function sweep(cache: string) {
   const retired = withDependencyCacheLock(cache, (lock) => collectUnusedDependencyCaches(lock));
   for (const path of retired) {
@@ -633,13 +640,7 @@ describePosix("PR cache anchor lifetime", () => {
 
   it("keeps holds while retirement joins a competing metadata transition", () => {
     const f = fixture();
-    const installation = entry(f.cache, "a".repeat(64));
-    expect(
-      child(
-        f,
-        `withDependencyCacheLock(cache, (lock) => holdDependencyCache(lock, ${JSON.stringify(installation)}, anchor));`,
-      ).status,
-    ).toBe(0);
+    const installation = heldEntry(f);
     for (let i = 0; i < 6; i++) {
       entry(f.cache, String(i).repeat(64));
     }
@@ -664,13 +665,7 @@ describePosix("PR cache anchor lifetime", () => {
 
   it("retains holds when metadata reentry refuses after successful anchor removal", () => {
     const f = fixture();
-    const installation = entry(f.cache, "a".repeat(64));
-    expect(
-      child(
-        f,
-        `withDependencyCacheLock(cache, (lock) => holdDependencyCache(lock, ${JSON.stringify(installation)}, anchor));`,
-      ).status,
-    ).toBe(0);
+    const installation = heldEntry(f);
     const result = child(
       f,
       `retireAnchorDependencies(anchor, () => {
@@ -851,13 +846,7 @@ describePosix("PR cache anchor lifetime", () => {
 
   it("settles retirement after another process releases metadata ownership", async ({ signal }) => {
     const f = fixture();
-    const installation = entry(f.cache, "a".repeat(64));
-    expect(
-      child(
-        f,
-        `withDependencyCacheLock(cache, (lock) => holdDependencyCache(lock, ${JSON.stringify(installation)}, anchor));`,
-      ).status,
-    ).toBe(0);
+    const installation = heldEntry(f);
     const retire = metadataWorker(
       f,
       `

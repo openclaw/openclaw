@@ -9,6 +9,7 @@ import {
   generateKitSecret,
   OWNER_CAPABILITIES,
   signStatement,
+  type PublishSnapshotRequest,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { createOpenClawIdAuthority } from "./authority.js";
 import { memoryStore, nowSeconds, TEST_K_SRV } from "./openclaw-id.test-support.js";
@@ -249,5 +250,51 @@ describe("service publication refresh scheduling", () => {
     await vi.advanceTimersByTimeAsync(PUBLICATION_REFRESH_MS / 2);
     expect(await service.publish()).toMatchObject({ state: "published" });
     await expectArmed();
+  });
+
+  it("keeps refreshing after a same-second restart publication is refused as stale", async () => {
+    vi.setSystemTime(1_700_000_000_000);
+    const snapshots: PublishSnapshotRequest["snapshot"][] = [];
+    const discovery = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const request = new Request(input, init);
+      if (!request.url.endsWith("/snapshot")) {
+        return discovery(input, init);
+      }
+      const { snapshot }: PublishSnapshotRequest = await request.json();
+      const previous = snapshots.at(-1);
+      // Discovery accepts a same-seq refresh only with a newer issued_at.
+      if (
+        previous &&
+        snapshot.body.seq === previous.body.seq &&
+        snapshot.body.issued_at <= previous.body.issued_at
+      ) {
+        return Response.json(
+          { error: { code: "stale_snapshot", message: "issued_at must be newer" } },
+          { status: 409 },
+        );
+      }
+      snapshots.push(snapshot);
+      return new Response(null, { status: 204 });
+    });
+    await commitLink();
+    const issuedAt = snapshots[0]!.body.issued_at;
+    await service.stop();
+    service = startService();
+    await service.reconcileRuntimePolicy();
+    await vi.waitFor(async () => {
+      expect((await service.linkStatus()).publication).toMatchObject({
+        state: "failed",
+        code: "stale_snapshot",
+        retryAt: undefined,
+      });
+    });
+    expect(snapshots).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(PUBLICATION_REFRESH_MS);
+    await vi.waitFor(async () => {
+      expect(snapshots).toHaveLength(2);
+      expect(snapshots[1]!.body.issued_at).toBeGreaterThan(issuedAt);
+      await expectArmed();
+    });
   });
 });

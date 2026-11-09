@@ -14,6 +14,15 @@ function afterTwoFrames(): Promise<void> {
   });
 }
 
+function refreshedTranscriptIsAtEnd(): boolean {
+  const thread = document.querySelector<HTMLElement>(".chat-thread");
+  return Boolean(
+    thread?.querySelector(
+      '.chat-virtual-row[data-virtual-row-key="group:assistant:msg:id:active-reload-fresh-result:0"]:not([data-prepared-row])',
+    ) && thread.scrollHeight - thread.clientHeight - thread.scrollTop <= 1,
+  );
+}
+
 const suite = createControlUiE2eSuite({ name: "Cached transcript text fidelity" });
 const markdown = Array.from(
   { length: 24 },
@@ -84,6 +93,10 @@ suite.define(() => {
           await page
             .locator('[data-position-marker-id="active-reload-fresh-result"]')
             .waitFor({ state: "attached" });
+          // End-follow waits for native row measurements after the rows attach.
+          if (anchor === "end" && appendedPairs === 1) {
+            await page.waitForFunction(refreshedTranscriptIsAtEnd);
+          }
           await page.evaluate(afterTwoFrames);
           if (twoRounds) {
             await gateway.setHistoryMessages(fixture.live);
@@ -98,6 +111,9 @@ suite.define(() => {
               );
               return pane?.state.chatMessages.length === count;
             }, fixture.live.length);
+            if (anchor === "end" && appendedPairs === 1) {
+              await page.waitForFunction(refreshedTranscriptIsAtEnd);
+            }
             await page.evaluate(afterTwoFrames);
           }
           if (appendedPairs > 1) {

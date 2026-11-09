@@ -1,8 +1,8 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { nativeHistoryMessageIdentity } from "../../../lib/chat/history-message-identity.ts";
+import { getMessageDerivations } from "../../../lib/chat/message-derivations.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import {
@@ -300,15 +300,17 @@ function estimateMessageGroupSize(group: MessageGroup): number | undefined {
   return Math.max(CHAT_TRANSCRIPT_ESTIMATED_ROW_PX, size);
 }
 
-// Message lifetime bounds fingerprint reuse across fresh frame wrappers. Snapshots
-// can replace content or blocks in the same envelope, so those identities invalidate it.
-const messageRevisions = createTranscriptMemo<string>();
+// Loaded history messages are immutable. Fingerprint each once, rather than
+// reserializing every loaded row whenever an older page rebuilds the index.
 function messageRevision(message: object): string {
-  const content = asNullableRecord(message)?.content;
-  return messageRevisions(message, [content, ...(Array.isArray(content) ? content : [])], () => {
+  const facts = getMessageDerivations(message);
+  let revision = facts.revision;
+  if (revision === undefined) {
     const identity = nativeHistoryMessageIdentity(message) ?? JSON.stringify(message);
-    return `${identity.length}:${fnv1aUtf16(identity)}`;
-  });
+    revision = `${identity.length}:${fnv1aUtf16(identity)}`;
+    facts.revision = revision;
+  }
+  return revision;
 }
 
 export function projectTranscriptIndex(
@@ -366,21 +368,15 @@ export function projectTranscriptIndex(
         return { kind: "item", key, item, streaming };
       }
       const sources = groups.flatMap((group) => group.messages.map(({ message }) => message));
-      // Weak item ownership bounds reuse to its lifetime. Snapshots are immutable except
-      // supported content/block replacement, which must invalidate the existing digest.
+      // Source envelopes are immutable; outcome and per-source reactions own row changes.
       const revisionInputs: unknown[] = [
         key,
         item.kind === "agent-run-frame" ? item.outcome.kind : undefined,
-      ];
-      for (const message of item.kind === "message" ? [item.message] : sources) {
-        const content = asNullableRecord(message)?.content;
-        revisionInputs.push(message, content, ...(Array.isArray(content) ? content : []));
-      }
-      revisionInputs.push(
+        ...(item.kind === "message" ? [item.message] : sources),
         ...sources.map((message) =>
           props.messageReactions?.get(persistedMessageEntryId(message) ?? ""),
         ),
-      );
+      ];
       const revision = rowRevisions(item, revisionInputs, () => {
         const messages = groups.flatMap((group) =>
           group.messages.map(({ message }) => [

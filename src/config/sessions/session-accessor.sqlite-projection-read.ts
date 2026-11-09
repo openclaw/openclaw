@@ -42,6 +42,7 @@ import { readTranscriptPayload, type TranscriptPayloadRecord } from "./transcrip
 type ActiveTranscriptDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   | "session_transcript_active_events"
+  | "session_transcript_active_event_facts"
   | "session_transcript_cold_archives"
   | "transcript_rewrite_watermarks"
   | "session_transcript_index_state"
@@ -154,6 +155,31 @@ export function selectActiveTranscriptEventRows(database: Pick<TranscriptReadDat
         .onRef("event.session_id", "=", "active.session_id")
         .onRef("event.seq", "=", "active.event_seq"),
     );
+}
+
+/** Missing upgrade-era facts retain native accounting without a reader backfill. */
+export function selectActiveTranscriptMetadataRows(database: Pick<TranscriptReadDatabase, "db">) {
+  return getActiveTranscriptKysely(database)
+    .selectFrom("session_transcript_active_events as active")
+    .leftJoin("session_transcript_active_event_facts as facts", (join) =>
+      join
+        .onRef("facts.session_id", "=", "active.session_id")
+        .onRef("facts.seq", "=", "active.event_seq"),
+    )
+    .select((eb) => [
+      "active.event_seq",
+      "active.active_position",
+      // An unconditional payload join would still visit overflow rows with known facts.
+      /* kysely-allow-raw: missing facts alone evaluate the exact native byte-accounting expression. */
+      sql<number>`CASE WHEN facts.seq IS NOT NULL THEN facts.serialized_bytes ELSE ${eb
+        .selectFrom("transcript_events as event")
+        .select(
+          /* kysely-allow-raw: legacy byte accounting includes exactly one JSONL separator. */
+          sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("bytes"),
+        )
+        .whereRef("event.session_id", "=", "active.session_id")
+        .whereRef("event.seq", "=", "active.event_seq")} END`.as("serialized_bytes"),
+    ]);
 }
 
 /** Materialize only physical events already selected in the caller's admitted snapshot. */

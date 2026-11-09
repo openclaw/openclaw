@@ -21,7 +21,11 @@ import type { ChatState } from "./chat-state-contract.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
 import { handleChatDraftChange } from "./input-history.ts";
-import { reconcileChatRunFromSessionRow, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
+import {
+  dismissChatRunError,
+  reconcileChatRunFromSessionRow,
+  reconcileChatRunLifecycle,
+} from "./run-lifecycle.ts";
 import {
   cacheChatSessionSnapshot,
   readChatMessagesFromCache,
@@ -448,6 +452,9 @@ describe("chat history run errors", () => {
     expect(state.chatRunError).toMatchObject({ runId: "run", summary: sessionInfo.lastRunError });
     await loadChatHistory(state);
     expect(state.chatRunError?.summary).toContain(sessionInfo.lastRunError);
+    dismissChatRunError(state);
+    await loadChatHistory(state);
+    expect(state.chatRunError).toBeNull();
     expect(getChatSessionProjection(state).runs.run).toMatchObject({
       status: "timeout",
       errorMessage: sessionInfo.lastRunError,

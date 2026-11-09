@@ -586,6 +586,13 @@ span.new-session-page__select {
   --oc-overlay-max-width: min(320px, calc(100vw - 24px));
 
   min-width: min(220px, var(--oc-overlay-available-width, 100%));
+  /* Like the composer pickers, refuse a cramped side so a trigger near the
+     bottom of a phone flips the list above instead of hiding its choices. */
+  max-height: min(
+    var(--oc-overlay-max-height, 420px),
+    max(200px, calc(100% - 16px)),
+    calc(100dvh - 16px)
+  );
 }
 
 .oc-popover.new-session-page__branch-popup {

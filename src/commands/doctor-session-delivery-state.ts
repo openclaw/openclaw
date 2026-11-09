@@ -21,6 +21,7 @@ import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../infra/sqlite-worker-identity.js";
+import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import {
   createLegacyStateMigrationStepReceipt,
@@ -177,6 +178,8 @@ async function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairPara
         (params.deferToMediaPreparation ||
           (params.deferSchemaRepair &&
             (error instanceof SqliteSchemaMismatchError ||
+              (error instanceof StartupMaintenanceRequiredError &&
+                error.kind === "state-migrations") ||
               error instanceof AgentDatabaseMaintenanceRequiredError ||
               error instanceof OpenClawAgentDatabaseMediaMigrationRequiredError)))
       ) {

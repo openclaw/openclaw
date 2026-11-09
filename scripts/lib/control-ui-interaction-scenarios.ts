@@ -15,6 +15,7 @@ import {
   type ControlUiMockGatewayScenario,
   waitForControlUiRoute,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import type { NativeControlUiMockGatewayScenario } from "../../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import type { ProjectionFamily } from "../../ui/src/test-helpers/control-ui-projection-fixture-contract.ts";
 import { mcpResourceHtml } from "../../ui/src/test-helpers/control-ui-team-scale-widget-html.ts";
 import { cronListResponseFixture } from "../../ui/src/test-helpers/cron.ts";
@@ -84,7 +85,7 @@ export type InteractionEvidence = Record<string, number | boolean>;
 type InteractionSession = GatewaySessionRow &
   NonNullable<ControlUiMockGatewayScenario["sessions"]>[number];
 export type InteractionFixtureOverrides = Omit<
-  Partial<ControlUiMockGatewayScenario>,
+  Partial<NativeControlUiMockGatewayScenario>,
   "sessions"
 > & {
   sessions?: InteractionSession[];
@@ -153,7 +154,7 @@ export function createScenarioFixture(
   version: string,
   scenario: InteractionScenario,
   sandbox?: InteractionSandbox,
-): ControlUiMockGatewayScenario & { sessions: InteractionSession[] } {
+): NativeControlUiMockGatewayScenario & { sessions: InteractionSession[] } {
   const base = createInteractionFixture(buildId, version, scenario.fixture, sandbox);
   const overrides = scenario.fixtureOverrides?.(sandbox, base);
   return {

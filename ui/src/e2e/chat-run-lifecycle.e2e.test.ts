@@ -217,8 +217,12 @@ suite.define(() => {
     const failedAlert = page.getByRole("alert").filter({ hasText: renderedDiagnostic });
     await failedAlert.waitFor();
     await failedAlert
-      .locator("summary strong")
-      .getByText("Couldn't finish this reply. Check the conversation before trying again.")
+      .locator(".app-toast__message")
+      .getByText("Couldn't finish this reply.", { exact: true })
+      .waitFor();
+    await failedAlert
+      .locator(".app-toast__description")
+      .getByText("Check the conversation before trying again.", { exact: true })
       .waitFor();
     expect(await failedAlert.locator("details").getAttribute("open")).toBeNull();
     await failedAlert.locator("summary").click();
