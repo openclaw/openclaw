@@ -394,7 +394,7 @@ function parseChannelsListRouteArgs(argv: string[]) {
 function parseChannelsStatusRouteArgs(argv: string[]) {
   const values = parseRoutedValueFlags(argv, {
     commandPath: ["channels", "status"],
-    booleanFlags: ["--json", "--probe"],
+    booleanFlags: ["--json", "--probe", "--fail-on-unhealthy", "--exit-code"],
     valueFlags: ["--timeout", "--channel"],
   });
   if (!values) {
@@ -404,6 +404,8 @@ function parseChannelsStatusRouteArgs(argv: string[]) {
     channel: values.get("--channel"),
     json: hasFlag(argv, "--json"),
     probe: hasFlag(argv, "--probe"),
+    failOnUnhealthy: hasFlag(argv, "--fail-on-unhealthy") || hasFlag(argv, "--exit-code"),
+    exitCode: hasFlag(argv, "--exit-code"),
     timeout: values.get("--timeout"),
   };
 }

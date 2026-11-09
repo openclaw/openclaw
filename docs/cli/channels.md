@@ -71,7 +71,7 @@ sequences. `--json` preserves the original values.
 values. Omit the option to keep each command's default or broader account scope;
 do not pass an empty shell variable to request that scope.
 
-- `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `60000`), `--json`
+- `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `60000`), `--json`, `--fail-on-unhealthy` (alias `--exit-code`)
 - `channels capabilities`: `--channel <name>`, `--agent <id>`, `--account <id>` (requires `--channel`), `--target <dest>` (requires `--channel`), `--timeout <ms>` (default `10000`, capped at `30000`), `--json`
 - `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--agent <id>`, `--kind <auto|user|group|channel>` (default `auto`), `--json`
 - `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--json`
@@ -99,6 +99,27 @@ instead of live check output.
 
 If the Gateway answers with an error, such as an unknown `--channel`, the command
 reports that error and exits nonzero instead of showing an unreachable fallback.
+
+For monitoring, add `--fail-on-unhealthy` (alias `--exit-code`) to exit `1` after
+printing status when a selected channel account is unhealthy. Health uses the
+Gateway's recorded snapshots and the shared channel-health policy, read-only:
+the flag does not run credential probes on its own (combine with `--probe` if
+you want live checks) and cannot prove a stopped runtime when older snapshots
+omit `running`. Transient states the policy already treats as healthy
+(reconnect grace, startup grace, busy) do not fail; terminal disconnects,
+blocked accounts, and other unhealthy states do. Example for cron alerting:
+
+```bash
+openclaw channels status --channel whatsapp --fail-on-unhealthy --json
+```
+
+With `--json`, the output gains `unhealthyAccounts` (`channel`, `accountId`,
+`reason`, `terminalDisconnect`), and each unhealthy account is also reported on
+stderr so a dead channel cannot hide inside stdout JSON. When the local
+Gateway is unreachable there are no recorded snapshots to judge, so the
+config-only fallback does not fail on health grounds; alert on transport
+failures separately (or on `GET /readyz`, which already lists unhealthy
+channels in `failing[]`).
 
 Before checking channels, the command waits for local Gateway startup using the shared readiness budget and reports its observed phase. Startup still in progress at the deadline is a non-failing result, not an unreachable Gateway. In that case `--json` returns `{ "status": "starting", "startupPhase": "…" }`; rerun after startup to collect channel results.
 

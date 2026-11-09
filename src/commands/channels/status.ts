@@ -13,7 +13,7 @@ import { withProgress } from "../../cli/progress.js";
 import { callGateway } from "../../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { defaultRuntime, ExitError, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { waitForGatewayDiagnostic } from "../gateway-diagnostic-readiness.js";
 
 export type ChannelsStatusOptions = {
@@ -21,6 +21,8 @@ export type ChannelsStatusOptions = {
   json?: boolean;
   probe?: boolean;
   timeout?: string;
+  failOnUnhealthy?: boolean;
+  exitCode?: boolean;
 };
 
 function redactGatewayUrlSecretsInText(text: string): string {
@@ -74,13 +76,35 @@ export async function channelsStatusCommand(
         });
       },
     );
+    const failOnUnhealthy = opts.failOnUnhealthy === true || opts.exitCode === true;
+    // Load the health evaluator only when the opt-in flag is set, keeping the
+    // plain status path cold (see channels-status-cold-imports).
+    const unhealthyHelpers = failOnUnhealthy ? await import("./status-unhealthy.js") : null;
+    const unhealthyAccounts = unhealthyHelpers?.collectUnhealthyChannelAccounts(payload) ?? [];
     if (opts.json) {
-      writeRuntimeJson(runtime, payload);
-      return;
+      if (failOnUnhealthy) {
+        const output =
+          payload && typeof payload === "object" && !Array.isArray(payload)
+            ? { ...(payload as Record<string, unknown>), unhealthyAccounts }
+            : payload;
+        writeRuntimeJson(runtime, output);
+      } else {
+        writeRuntimeJson(runtime, payload);
+      }
+    } else {
+      const { formatGatewayChannelsStatusLines } = await import("./status.runtime.js");
+      runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
     }
-    const { formatGatewayChannelsStatusLines } = await import("./status.runtime.js");
-    runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
+    if (unhealthyAccounts.length > 0) {
+      for (const account of unhealthyAccounts) {
+        runtime.error(unhealthyHelpers!.formatUnhealthyChannelAccount(account));
+      }
+      runtime.exit(1);
+    }
   } catch (err) {
+    if (err instanceof ExitError) {
+      throw err;
+    }
     if (isGatewayProtocolResponseError(err)) {
       throw err;
     }
