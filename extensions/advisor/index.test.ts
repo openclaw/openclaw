@@ -52,13 +52,15 @@ async function startAdvisor(
   } satisfies Awaited<ReturnType<Api["runtime"]["llm"]["complete"]>>;
   const llmComplete = vi.spyOn(runtime.llm, "complete").mockResolvedValue(llmResult);
   const forkSession = vi.spyOn(runtime.subagent, "forkSession").mockResolvedValue({ text: reply });
-  vi.spyOn(runtime.agent.session, "getSessionEntryAsync").mockImplementation(async ({ sessionKey }) => {
-    if (options.lookupThrows) {
-      throw new Error("session lookup unavailable");
-    }
-    const entry = options.entries?.[sessionKey];
-    return entry ? { sessionId: "session", updatedAt: 0, ...entry } : undefined;
-  });
+  vi.spyOn(runtime.agent.session, "getSessionEntryAsync").mockImplementation(
+    async ({ sessionKey }) => {
+      if (options.lookupThrows) {
+        throw new Error("session lookup unavailable");
+      }
+      const entry = options.entries?.[sessionKey];
+      return entry ? { sessionId: "session", updatedAt: 0, ...entry } : undefined;
+    },
+  );
   const getSessionMessages = vi.spyOn(runtime.subagent, "getSessionMessages").mockResolvedValue({
     messages: options.messages ?? [],
   });
@@ -120,7 +122,12 @@ async function startAdvisor(
     const beforeReply = on.mock.calls[0]?.[1] as Hook | undefined;
     await beforeReply?.(
       { cleanedBody: options.prompt ?? "Check the gateway" },
-      { agentId: options.agentId ?? "main", sessionKey: options.sessionKey ?? "agent:main:main", runId, trigger },
+      {
+        agentId: options.agentId ?? "main",
+        sessionKey: options.sessionKey ?? "agent:main:main",
+        runId,
+        trigger,
+      },
     );
     await send("lifecycle", "start", {}, undefined, runId);
     const beforePrompt = on.mock.calls.find(([name]) => name === "before_prompt_build")?.[1] as
@@ -135,7 +142,19 @@ async function startAdvisor(
   };
   await service?.start({ config: {}, stateDir: "/tmp/advisor-test", logger, scheduler });
   await startRun("run-1", runTrigger);
-  return { forkSession, llmComplete, llmResult, getSessionMessages, steer, warn, service, send, flush, startRun, tool };
+  return {
+    forkSession,
+    llmComplete,
+    llmResult,
+    getSessionMessages,
+    steer,
+    warn,
+    service,
+    send,
+    flush,
+    startRun,
+    tool,
+  };
 }
 
 it("reviews complete tools at the threshold, rechecking queued and native calls", async () => {
@@ -318,12 +337,16 @@ it("reviews on the configured model with the admitted agent and a bounded transc
   await run.tool();
   await run.flush();
   expect(run.forkSession).not.toHaveBeenCalled();
-  expect(run.llmComplete).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-    model: "example/reviewer",
-    agentId: "research",
-    reasoning: "low",
-    messages: [expect.objectContaining({ content: expect.stringContaining("USER: Check the gateway") })],
-  }));
+  expect(run.llmComplete).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      model: "example/reviewer",
+      agentId: "research",
+      reasoning: "low",
+      messages: [
+        expect.objectContaining({ content: expect.stringContaining("USER: Check the gateway") }),
+      ],
+    }),
+  );
 });
 
 it("logs and skips the review when the review model fails", async () => {
@@ -333,18 +356,27 @@ it("logs and skips the review when the review model fails", async () => {
   await run.flush();
   expect(run.forkSession).not.toHaveBeenCalled();
   expect(run.steer).not.toHaveBeenCalled();
-  expect(run.warn).toHaveBeenCalledWith(expect.stringContaining("review_model_failed (example/reviewer)"));
+  expect(run.warn).toHaveBeenCalledWith(
+    expect.stringContaining("review_model_failed (example/reviewer)"),
+  );
 });
 
-it.each(["error", "aborted"] as const)("does not steer partial %s completions", async (stopReason) => {
-  const run = await startAdvisor(1, "NO_CHANGE", "user", { config: { model: "example/reviewer" } });
-  run.llmComplete.mockResolvedValue({ ...run.llmResult, text: "CORRECTION\nStop.", stopReason });
-  await run.tool();
-  await run.flush();
-  expect(run.forkSession).not.toHaveBeenCalled();
-  expect(run.steer).not.toHaveBeenCalled();
-  expect(run.warn).toHaveBeenCalledWith(expect.stringContaining("review_model_failed (example/reviewer)"));
-});
+it.each(["error", "aborted"] as const)(
+  "does not steer partial %s completions",
+  async (stopReason) => {
+    const run = await startAdvisor(1, "NO_CHANGE", "user", {
+      config: { model: "example/reviewer" },
+    });
+    run.llmComplete.mockResolvedValue({ ...run.llmResult, text: "CORRECTION\nStop.", stopReason });
+    await run.tool();
+    await run.flush();
+    expect(run.forkSession).not.toHaveBeenCalled();
+    expect(run.steer).not.toHaveBeenCalled();
+    expect(run.warn).toHaveBeenCalledWith(
+      expect.stringContaining("review_model_failed (example/reviewer)"),
+    );
+  },
+);
 
 it("keeps the session-model fork when no model is configured", async () => {
   const run = await startAdvisor(1);
@@ -359,7 +391,11 @@ it("caps the transcript while retaining the first available user and current req
     messages: [
       { role: "user", content: "Old request" },
       { role: "user", content: "Changed request: inspect only" },
-      ...Array.from({ length: 300 }, () => ({ role: "toolResult", toolName: "exec", content: "x".repeat(1200) })),
+      ...Array.from({ length: 300 }, () => ({
+        role: "toolResult",
+        toolName: "exec",
+        content: "x".repeat(1200),
+      })),
     ],
   });
   await run.tool();

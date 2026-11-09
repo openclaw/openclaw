@@ -4,6 +4,7 @@ import {
   type OpenClawPluginApi,
   type PluginServiceSchedulerV1,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const REVIEW_TIMEOUT_MS = 120_000;
 const RUN_CONTEXT_NAMESPACE = "advisor:admitted-run";
@@ -98,11 +99,13 @@ async function resolveNonHumanRoot(
 /** True when the newest user message was routed from another session by sessions_send. */
 function isSessionsSendTurn(messages: unknown[]): boolean {
   for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index] as { role?: string; provenance?: Record<string, unknown> };
-    if (message?.role === "user") {
+    const message = messages[index];
+    if (isRecord(message) && message.role === "user") {
+      const provenance = message.provenance;
       return (
-        message.provenance?.kind === "inter_session" &&
-        message.provenance.sourceTool === "sessions_send"
+        isRecord(provenance) &&
+        provenance.kind === "inter_session" &&
+        provenance.sourceTool === "sessions_send"
       );
     }
   }
@@ -118,18 +121,18 @@ function clip(value: unknown, max: number): string {
   return text.slice(0, Math.max(0, max - suffix.length)) + suffix.slice(0, max);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function textOf(content: unknown): string {
   if (typeof content === "string") {
     return content;
   }
   return Array.isArray(content)
-    ? content.flatMap((block: unknown) =>
-        isRecord(block) && block.type === "text" && typeof block.text === "string" ? [block.text] : [],
-      ).join("\n")
+    ? content
+        .flatMap((block: unknown) =>
+          isRecord(block) && block.type === "text" && typeof block.text === "string"
+            ? [block.text]
+            : [],
+        )
+        .join("\n")
     : "";
 }
 
@@ -156,15 +159,24 @@ function formatTranscript(messages: unknown[], currentRequest: string): string {
     } else if (message.role === "toolResult") {
       const name = typeof message.toolName === "string" ? clip(message.toolName, 100) : "";
       lines.push(
-        "TOOL RESULT " + name + (message.isError ? " (error)" : "") + ": " + clip(textOf(message.content), 1200),
+        "TOOL RESULT " +
+          name +
+          (message.isError ? " (error)" : "") +
+          ": " +
+          clip(textOf(message.content), 1200),
       );
     } else if (message.customType === "openclaw.nested-tool.v1" && isRecord(message.details)) {
       const details = message.details;
       if (typeof details.toolName === "string") {
         const result = isRecord(details.result) ? details.result.content : undefined;
         lines.push(
-          "NESTED CALL " + clip(details.toolName, 100) + (details.isError ? " (error)" : "") + ": " +
-          clip(details.input, 300) + " -> " + clip(textOf(result), 600),
+          "NESTED CALL " +
+            clip(details.toolName, 100) +
+            (details.isError ? " (error)" : "") +
+            ": " +
+            clip(details.input, 300) +
+            " -> " +
+            clip(textOf(result), 600),
         );
       }
     }
@@ -190,7 +202,12 @@ function formatTranscript(messages: unknown[], currentRequest: string): string {
     used += lines[index].length + 1;
   }
   const omitted = lines.length - head.length - tail.length;
-  return [prefix, ...(omitted > 0 ? ["[... " + omitted + " earlier entries omitted ...]"] : []), ...tail, ">>>"].join("\n");
+  return [
+    prefix,
+    ...(omitted > 0 ? ["[... " + omitted + " earlier entries omitted ...]"] : []),
+    ...tail,
+    ">>>",
+  ].join("\n");
 }
 
 function readTrigger(config: Record<string, unknown> | undefined, key: string, fallback: number) {
@@ -201,8 +218,7 @@ function readTrigger(config: Record<string, unknown> | undefined, key: string, f
 export default definePluginEntry({
   id: "advisor",
   name: "Advisor",
-  description:
-    "Experimental: reviews ongoing agent work and offers one short correction.",
+  description: "Experimental: reviews ongoing agent work and offers one short correction.",
   register(api) {
     const everyToolCalls = readTrigger(api.pluginConfig, "everyToolCalls", 10);
     const everyMs = readTrigger(api.pluginConfig, "everyMinutes", 20) * 60_000;
@@ -228,7 +244,8 @@ export default definePluginEntry({
       const advisorConfig = api.runtime.config.current().plugins?.entries?.advisor?.config;
       const instructions = advisorConfig?.reviewInstructions;
       const guidance = typeof instructions === "string" ? instructions.trim() : "";
-      const reviewModel = typeof advisorConfig?.model === "string" ? advisorConfig.model.trim() : "";
+      const reviewModel =
+        typeof advisorConfig?.model === "string" ? advisorConfig.model.trim() : "";
       const thinking = api.runtime.agent.normalizeThinkingLevel(
         typeof advisorConfig?.thinking === "string" ? advisorConfig.thinking : undefined,
       );
@@ -252,7 +269,9 @@ export default definePluginEntry({
             agentId: run.agentId,
             ...(thinking ? { reasoning: thinking } : {}),
             systemPrompt: message,
-            messages: [{ role: "user", content: formatTranscript(recent.messages, run.currentRequest) }],
+            messages: [
+              { role: "user", content: formatTranscript(recent.messages, run.currentRequest) },
+            ],
             signal,
             purpose: "advisor review",
           });
