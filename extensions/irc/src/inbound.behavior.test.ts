@@ -214,14 +214,12 @@ describe("irc inbound behavior", () => {
         "",
         "Your IRC id: alice!ident@example.com",
         "Pairing code:",
-        "```",
+        "",
         "CODE",
-        "```",
         "",
         "Ask the bot owner to approve with:",
-        "```",
+        "",
         "openclaw pairing approve irc CODE",
-        "```",
       ].join("\n"),
       undefined,
     );
@@ -299,27 +297,29 @@ describe("irc inbound behavior", () => {
       reply: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
       expected: ["Done."],
     },
-  ])("sanitizes $name on the inbound reply path", async ({ reply, expected }) => {
+    {
+      name: "Markdown like outbound sends",
+      reply:
+        "**Done.** See [docs](https://example.org/a_b) for `npm i`.\n\n- one\n\n```sh\n**keep**\n```",
+      expected: ["Done. See docs (https://example.org/a_b) for npm i.\n\n\u2022 one\n\n**keep**"],
+    },
+    {
+      name: "tables per markdown.tables",
+      tables: "bullets" as const,
+      reply: "| Name | State |\n| --- | --- |\n| **docs** | ready |",
+      expected: ["docs\n\u2022 State: ready"],
+    },
+  ])("sanitizes $name on the inbound reply path", async ({ reply, expected, tables }) => {
     const coreRuntime = createPluginRuntimeMock();
-    const sendReply = vi.fn<(target: string, text: string, replyToId?: string) => Promise<void>>(
-      async () => {},
-    );
-    const dispatchReply = coreRuntime.channel.inbound.dispatchReply as unknown as ReturnType<
-      typeof vi.fn<
-        (params: {
-          delivery: { deliver: (payload: { text: string }) => Promise<void> };
-        }) => Promise<void>
-      >
-    >;
-    dispatchReply.mockImplementation(
-      async (params: { delivery: { deliver: (payload: { text: string }) => Promise<void> } }) => {
-        await params.delivery.deliver({ text: reply });
-      },
+    const sendReply = vi.fn(async (_target: string, _text: string) => {});
+    type Deliver = { delivery: { deliver: (payload: { text: string }) => Promise<void> } };
+    vi.mocked(coreRuntime.channel.inbound.dispatchReply).mockImplementation(
+      (async (p: Deliver) => await p.delivery.deliver({ text: reply })) as never,
     );
     setIrcRuntime(coreRuntime as never);
 
     await receive({
-      account: createAccount({ config: openConfig }),
+      account: createAccount({ config: { ...openConfig, markdown: { tables } } }),
       sendReply,
     });
 

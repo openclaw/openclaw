@@ -40,7 +40,7 @@ import {
   type IrcIngressMonitor,
 } from "./irc-ingress.js";
 import { normalizeIrcAllowEntry } from "./normalize.js";
-import { sanitizeIrcAssistantText } from "./outbound-base.js";
+import { renderIrcPlainText, sanitizeIrcAssistantText } from "./outbound-base.js";
 import { resolveIrcGroupMatch, resolveIrcGroupRequireMention } from "./policy.js";
 import { createIrcReconnectBackoff } from "./reconnect-backoff.js";
 import { getIrcRuntime } from "./runtime.js";
@@ -151,7 +151,13 @@ export async function monitorIrcProvider(
       }
       const deliverReply = async (target: string, payload: OutboundReplyPayload) => {
         await deliverFormattedTextWithAttachments({
-          payload: { ...payload, text: sanitizeIrcAssistantText(payload.text ?? "") },
+          payload: {
+            ...payload,
+            text: renderIrcPlainText(sanitizeIrcAssistantText(payload.text ?? ""), {
+              cfg,
+              accountId: account.accountId,
+            }),
+          },
           send: async ({ text }) => {
             const replyClient = client;
             if (!replyClient || !replyClient.isReady() || stopped || abortSignal.aborted) {
