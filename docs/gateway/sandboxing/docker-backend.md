@@ -12,6 +12,17 @@ The Docker backend runs tools locally through the `docker` CLI. Its selection an
 
 Defaults: `network: "none"` (no egress), `readOnlyRoot: true`, `capDrop: ["ALL"]`, image `openclaw-sandbox:trixie-slim`.
 
+Tmpfs mounts without an explicit `size=` option are capped at 1 GiB for `/tmp`,
+4 GiB for the managed dependency store at `/tmp/openclaw-deps`, and 256 MiB for
+other paths. Existing explicit sizes are preserved. These are capacity limits,
+not reserved memory; writes beyond a mount's limit fail with no space left.
+Keep durable output in the disk-backed workspace. Dependency builders stop after
+setup, releasing their temporary HOME, caches, and pnpm store; prepared
+`node_modules` remains in the workspace template. Runtime containers use the same
+pnpm store path so warm dependencies remain reusable without a reinstall.
+Podman's automatic writable `/tmp`, `/var/tmp`, and `/run` mounts receive these
+same caps, while its nested init mount remains available.
+
 This explicit configuration keeps the agent workspace read-only and preserves
 the default restricted runtime posture:
 
@@ -93,6 +104,18 @@ On Ubuntu/AppArmor hosts with Docker sandbox mode enabled, Codex app-server `wor
 
 These Codex bwrap checks run in standalone `openclaw doctor` and are omitted during `openclaw update`; run `openclaw doctor` after the update. Doctor checks the user namespace with `unshare`. When Docker sandbox egress is disabled and a local Codex runtime is configured, it also runs the configured Codex binary's own `workspace-write` sandbox with network access disabled, exercising Bubblewrap's loopback setup. Unrecognized check failures are reported as unverified rather than as a namespace diagnosis. If doctor reports a Codex bwrap namespace check failure, prefer an AppArmor profile that grants the required namespaces to the OpenClaw service process. `kernel.apparmor_restrict_unprivileged_userns=0` is a host-wide fallback with security tradeoffs; use it only when that host posture is acceptable. Do not grant broader Docker container privileges just to satisfy nested `bwrap`.
 </Warning>
+
+### Idle containers
+
+Docker and Podman tool containers stop after 15 minutes without a new sandbox
+admission, on the Gateway's five-minute housekeeping sweep. Active turns and
+retained persistent executions prevent idle stopping. A long turn can therefore
+stop on the first sweep after it finishes. Stopping frees tmpfs contents and ends
+untracked background processes; workspace bind mounts and the container's
+writable layer persist. The next turn starts the same container without rerunning
+one-time setup. Prepared dependency templates remain available for warm reuse.
+The existing `sandbox.prune` policy separately removes old containers; disabling
+removal does not disable idle stopping.
 
 ### Container user
 

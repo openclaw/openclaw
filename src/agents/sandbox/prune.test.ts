@@ -11,6 +11,11 @@ import { captureSandboxStateOwner } from "./state-owner.js";
 let maybePruneSandboxes: typeof import("./prune.js").maybePruneSandboxes;
 let BROWSER_BRIDGES: typeof import("./browser-bridges.js").BROWSER_BRIDGES;
 let management: typeof import("./manage.js");
+const processMocks = vi.hoisted(() => ({ listExecSessionsForCancellation: vi.fn() }));
+vi.mock("../bash-process-registry.js", async (original) => ({
+  ...(await original<typeof import("../bash-process-registry.js")>()),
+  ...processMocks,
+}));
 const roots = useAutoCleanupTempDirTracker(afterEach);
 
 const { configMocks, backendMocks, registryMocks, runtimeMocks, bridgeMocks, persistentExecMocks } =
@@ -19,17 +24,21 @@ const { configMocks, backendMocks, registryMocks, runtimeMocks, bridgeMocks, per
     backendMocks: {
       removeRuntime: vi.fn(),
       describeRuntime: vi.fn(),
+      stopRuntime: vi.fn(),
     },
     registryMocks: {
       assertSandboxBrowserRegistryEntryCurrent: vi.fn(),
       readBrowserRegistry: vi.fn(),
       readRegistry: vi.fn(),
+      readRegistryEntry: vi.fn(),
+      updateRegistry: vi.fn(),
       removeBrowserRegistryEntry: vi.fn(),
       removeRegistryEntry: vi.fn(),
     },
     runtimeMocks: { error: vi.fn() },
     bridgeMocks: { stopBrowserBridgeServer: vi.fn() },
     persistentExecMocks: {
+      hasSandboxPersistentExecCustody: vi.fn(),
       recoverSandboxPersistentExecOrphans:
         vi.fn<typeof import("./persistent-exec.js").recoverSandboxPersistentExecOrphans>(),
     },
@@ -124,6 +133,7 @@ beforeEach(async () => {
     Object.values(mock).forEach((fn) => fn.mockReset());
   }
   backendMocks.removeRuntime.mockReset().mockResolvedValue(undefined);
+  backendMocks.stopRuntime.mockReset().mockResolvedValue(undefined);
   backendMocks.describeRuntime.mockReset().mockResolvedValue({
     running: true,
     actualConfigLabel: "openclaw-sandbox-browser:trixie-slim",
@@ -131,6 +141,13 @@ beforeEach(async () => {
   });
   bridgeMocks.stopBrowserBridgeServer.mockResolvedValue(undefined);
   persistentExecMocks.recoverSandboxPersistentExecOrphans.mockReset().mockResolvedValue(undefined);
+  persistentExecMocks.hasSandboxPersistentExecCustody.mockReset().mockResolvedValue(false);
+  processMocks.listExecSessionsForCancellation.mockReset().mockReturnValue([]);
+  registryMocks.readRegistryEntry.mockImplementation(async (name: string) =>
+    (await registryMocks.readRegistry()).entries.find(
+      (candidate: SandboxRegistryEntry) => candidate.containerName === name,
+    ),
+  );
 
   configMocks.getRuntimeConfig.mockReturnValue({});
   registryMocks.readBrowserRegistry.mockResolvedValue({ entries: [] });
@@ -142,6 +159,64 @@ beforeEach(async () => {
 });
 
 describe("maybePruneSandboxes", () => {
+  it("stops idle containers once, retaining their workspace and active runtime custody", async () => {
+    const { acquireSandboxRuntimeUse } = await import("./registry-lifecycle.js");
+    const clock = vi.spyOn(Date, "now");
+    let now = Date.now();
+    clock.mockImplementation(() => now);
+    let runtime: SandboxRegistryEntry = entry("idle-runtime", "main", {
+      lastUsedAtMs: now - 14 * 60 * 1000,
+      workspaceDir: "/synthetic/persistent-workspace",
+    });
+    configMocks.getRuntimeConfig.mockReturnValue({
+      agents: { defaults: { sandbox: { prune: { idleHours: 0, maxAgeDays: 0 } } } },
+    });
+    registryMocks.readRegistry.mockImplementation(async () => ({ entries: [runtime] }));
+    registryMocks.updateRegistry.mockImplementation(async (updated: SandboxRegistryEntry) => {
+      runtime = updated;
+    });
+    await maybePruneSandboxes();
+    expect(backendMocks.stopRuntime).not.toHaveBeenCalled();
+    const held = await acquireSandboxRuntimeUse({ workspaceDir: runtime.workspaceDir! });
+    now += 6 * 60 * 1000;
+    await maybePruneSandboxes();
+    expect(backendMocks.stopRuntime).not.toHaveBeenCalled();
+    held[Symbol.dispose]();
+    processMocks.listExecSessionsForCancellation.mockReturnValue([
+      { sandboxContainerName: runtime.containerName, agentId: "main", exited: false },
+    ]);
+    now += 6 * 60 * 1000;
+    await maybePruneSandboxes();
+    expect(backendMocks.stopRuntime).not.toHaveBeenCalled();
+    processMocks.listExecSessionsForCancellation.mockReturnValue([
+      { sandboxContainerName: "another-runtime", agentId: "main", exited: false },
+    ]);
+    persistentExecMocks.hasSandboxPersistentExecCustody.mockResolvedValueOnce(true);
+    now += 6 * 60 * 1000;
+    await maybePruneSandboxes();
+    expect(backendMocks.stopRuntime).not.toHaveBeenCalled();
+    backendMocks.stopRuntime.mockRejectedValueOnce(new Error("stop timed out"));
+    now += 6 * 60 * 1000;
+    await maybePruneSandboxes();
+    expect(backendMocks.stopRuntime).toHaveBeenCalledOnce();
+    expect(runtime.runtimeState).toBeUndefined();
+    expect(runtimeMocks.error).toHaveBeenCalledWith(
+      "Sandbox maintenance failed for idle-runtime: stop timed out",
+    );
+    now += 6 * 60 * 1000;
+    await maybePruneSandboxes();
+    expect(backendMocks.stopRuntime).toHaveBeenCalledTimes(2);
+    expect(runtime).toMatchObject({
+      runtimeState: "stopped",
+      workspaceDir: "/synthetic/persistent-workspace",
+    });
+    now += 6 * 60 * 1000;
+    await maybePruneSandboxes();
+    expect(backendMocks.stopRuntime).toHaveBeenCalledTimes(2);
+    expect(backendMocks.removeRuntime).not.toHaveBeenCalled();
+    expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
+  });
+
   it.each([
     { idleHours: 1, maxAgeDays: 0 },
     { idleHours: 0, maxAgeDays: 1 },
@@ -300,7 +375,7 @@ describe("maybePruneSandboxes", () => {
       }
       const error =
         scenario === "runtime removal"
-          ? "Sandbox prune failed to remove sandbox-1: docker rm failed"
+          ? "Sandbox maintenance failed for sandbox-1: docker rm failed"
           : "Sandbox stream allocation cleanup failed: original Docker daemon unavailable";
       if (scenario !== "invalid timestamp") {
         expect(runtimeMocks.error).toHaveBeenCalledWith(error);
@@ -325,7 +400,7 @@ it.each(["prune", "management"] as const)(
     if (mode === "prune") {
       await remove();
       expect(runtimeMocks.error).toHaveBeenCalledWith(
-        "Sandbox prune failed to remove browser-1: bridge cleanup failed",
+        "Sandbox maintenance failed for browser-1: bridge cleanup failed",
       );
     } else {
       await expect(remove()).rejects.toThrow("bridge cleanup failed");
@@ -393,7 +468,7 @@ it.each(["prune", "management"] as const)(
     if (mode === "prune") {
       await maybePruneSandboxes(pruneConfig);
       expect(runtimeMocks.error).toHaveBeenCalledWith(
-        `Sandbox prune failed to remove openshell-1: ${message}`,
+        `Sandbox maintenance failed for openshell-1: ${message}`,
       );
     } else {
       await expect(management.removeSandboxContainer("openshell-1")).rejects.toThrow(message);

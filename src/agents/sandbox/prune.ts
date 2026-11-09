@@ -8,11 +8,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
+import { listExecSessionsForCancellation } from "../bash-process-registry.js";
 import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
 import { getSandboxBackendManager, usesSandboxRuntimeReservations } from "./backend.js";
 import { stopCachedBrowserBridgesForContainer } from "./browser-bridges.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
-import { dockerSandboxBackendManager } from "./docker-backend.js";
+import { withSandboxContainerLifecycle } from "./container-lifecycle.js";
+import { isSandboxContainerInUse } from "./container-usage.js";
+import { dockerSandboxBackendManager, podmanSandboxBackendManager } from "./docker-backend.js";
 import {
   maybeRunSandboxRegistryHousekeeping,
   startSandboxRegistryHousekeeping,
@@ -22,14 +25,42 @@ import {
   assertSandboxRegistryRetirementCurrent,
   readBrowserRegistry,
   readRegistry,
+  readRegistryEntry,
   removeSandboxRegistryGeneration,
   removeSandboxRegistryRuntime,
+  updateRegistry,
   withSandboxRegistryEntryLock,
   type SandboxRegistryEntry,
 } from "./registry.js";
 import { shouldPruneSandboxRegistryEntry, type SandboxRegistryPrune } from "./registry.kernel.js";
 import { resolveSandboxAgentId } from "./shared.js";
 import { captureSandboxStateOwner } from "./state-owner.js";
+
+const IDLE_STOP_MS = 15 * 60 * 1000;
+
+function shouldStopIdleContainer(entry: SandboxRegistryEntry, now: number): boolean {
+  return (
+    (entry.backendId === undefined ||
+      entry.backendId === "docker" ||
+      entry.backendId === "podman") &&
+    (entry.runtimeState === undefined || entry.runtimeState === "ready") &&
+    now - entry.lastUsedAtMs > IDLE_STOP_MS
+  );
+}
+
+function hasActiveContainerUsage(entry: SandboxRegistryEntry): boolean {
+  return (
+    isSandboxContainerInUse(entry.sessionKey) ||
+    listExecSessionsForCancellation().some(
+      (process) =>
+        process.sandboxContainerName === entry.containerName &&
+        (!process.exited ||
+          process.finalizing ||
+          process.cleanupUncertain ||
+          process.finalizationFailed),
+    )
+  );
+}
 
 /** Removes expired registry entries and their backing runtime resources. */
 async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(params: {
@@ -40,6 +71,11 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
     entry: TEntry,
     prune: SandboxRegistryPrune,
     assertPruneCurrent: () => void,
+  ) => Promise<void>;
+  stopIdle?: (
+    entry: TEntry,
+    prune: SandboxRegistryPrune,
+    assertCurrent: () => void,
   ) => Promise<void>;
 }) {
   using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.prune.registry_read");
@@ -53,13 +89,18 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
             .prune),
       now,
     };
-    if (!shouldPruneSandboxRegistryEntry(entry, prune)) {
+    const retire = shouldPruneSandboxRegistryEntry(entry, prune)
+      ? params.remove
+      : shouldStopIdleContainer(entry, now)
+        ? params.stopIdle
+        : undefined;
+    if (!retire) {
       continue;
     }
     try {
       phases.mark("attempt.setup.sandbox.prune.retire");
       await withSandboxRuntimePrune(entry, (assertPruneCurrent) =>
-        params.remove(entry, prune, assertPruneCurrent),
+        retire(entry, prune, assertPruneCurrent),
       );
       params.assertCurrent?.();
     } catch (error) {
@@ -71,7 +112,7 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
             ? error
             : JSON.stringify(error);
       defaultRuntime.error?.(
-        `Sandbox prune failed to remove ${entry.containerName}: ${message ?? "unknown error"}`,
+        `Sandbox maintenance failed for ${entry.containerName}: ${message ?? "unknown error"}`,
       );
     }
   }
@@ -88,6 +129,46 @@ async function pruneSandboxContainers(
     config,
     assertCurrent,
     entries,
+    stopIdle: (entry, prune, assertPruneCurrent) =>
+      withSandboxRegistryEntryLock(entry, () =>
+        withSandboxContainerLifecycle(entry.containerName, undefined, async () => {
+          const current = await readRegistryEntry(entry.containerName);
+          assertCurrent?.();
+          assertPruneCurrent();
+          if (
+            !current ||
+            !shouldStopIdleContainer(current, prune.now) ||
+            hasActiveContainerUsage(current)
+          ) {
+            return;
+          }
+          const assertStopCurrent = () => {
+            assertCurrent?.();
+            assertPruneCurrent();
+            assertSandboxRegistryRetirementCurrent("container", current);
+            if (hasActiveContainerUsage(current)) {
+              throw new Error("Sandbox runtime still owns an active command");
+            }
+          };
+          const { hasSandboxPersistentExecCustody } = await import("./persistent-exec.js");
+          if (await hasSandboxPersistentExecCustody({ containerName: current.containerName })) {
+            return;
+          }
+          assertStopCurrent();
+          const manager =
+            current.backendId === "podman"
+              ? podmanSandboxBackendManager
+              : dockerSandboxBackendManager;
+          await manager.stopRuntime(current, assertStopCurrent);
+          await updateRegistry(
+            { ...current, runtimeState: "stopped" },
+            {
+              ...guard,
+              beforeLegacyApply: assertStopCurrent,
+            },
+          );
+        }),
+      ),
     remove: (entry, prune, assertPruneCurrent) => {
       const assertRemovalCurrent = () => {
         assertCurrent?.();

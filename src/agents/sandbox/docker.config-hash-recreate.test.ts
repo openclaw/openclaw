@@ -136,11 +136,22 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
       expect(calls("create")).toHaveLength(1);
       expect(calls("start")).toHaveLength(1);
 
+      registryMocks.readRegistryEntry.mockResolvedValue({ ...published, runtimeState: "stopped" });
+      spawnState.inspectRunning = false;
+      const resumed = await createSandboxBackend(params);
+      expect(resumed.runtimeId).toBe(first.runtimeId);
+      expect(calls("create")).toHaveLength(1);
+      expect(calls("start")).toHaveLength(2);
+      expect(registryMocks.updateRegistry.mock.calls.at(-1)?.[0]).toMatchObject({
+        runtimeState: "ready",
+        workspaceDir,
+      });
+
       // An override of a built-in ID still relies on the generic publisher.
       using overrides = new DisposableStack();
       overrides.defer(registerSandboxBackend(backendId, async () => first));
       await createSandboxBackend(params);
-      expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(3);
+      expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(4);
     },
   );
 
@@ -337,27 +348,55 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
     expect(fs.existsSync(envFile!)).toBe(false);
   });
 
-  it("uses the shared lifecycle with rootless Podman workspace ownership", async () => {
-    cfg.docker.user = "1001:1002";
-    prepareCreation();
+  it.each(["default", "configured"] as const)(
+    "uses rootless Podman ownership with bounded %s tmpfs",
+    async (source) => {
+      cfg.docker.user = "1001:1002";
+      if (source === "configured") {
+        cfg.dockerTmpfsSource = source;
+        cfg.docker.tmpfs = [];
+      }
+      prepareCreation();
 
-    const createCall = await createPodman();
+      const createCall = await createPodman();
 
-    expect(createCall.command).toBe("podman");
-    expect(collectDockerFlagValues(createCall.args, "--userns")).toEqual([
-      "keep-id:uid=1001,gid=1002",
+      expect(createCall.command).toBe("podman");
+      expect(collectDockerFlagValues(createCall.args, "--userns")).toEqual([
+        "keep-id:uid=1001,gid=1002",
+      ]);
+      expect(collectDockerFlagValues(createCall.args, "--user")).toEqual(["1001:1002"]);
+      expect(createCall.args).toEqual(
+        expect.arrayContaining(["--http-proxy=false", "--init", "--read-only-tmpfs=true"]),
+      );
+      expect(collectDockerFlagValues(createCall.args, "--tmpfs")).toEqual([
+        "/tmp:size=1g",
+        "/var/tmp:size=256m",
+        "/run:size=256m",
+      ]);
+      expect(collectDockerFlagValues(createCall.args, "-v")).toContain(
+        `${workspaceDir}:/workspace:z`,
+      );
+      const update = registryMocks.updateRegistry.mock.calls.at(-1)?.[0];
+      expect(update?.backendId).toBe("podman");
+      expect(update?.backendTarget).toEqual({ key: "local", globalArgs: [] });
+    },
+  );
+
+  it("bounds unspecified tmpfs sizes while preserving explicit limits and mount options", async () => {
+    cfg.docker.tmpfs = [
+      "/tmp:mode=1777",
+      "/run",
+      "/tmp/openclaw-deps:mode=1777",
+      "/scratch:size=32m,mode=700",
+    ];
+    prepareCreation(true);
+    const created = await ensureSandboxCreateCallForTest(containerParams());
+    expect(collectDockerFlagValues(created.args, "--tmpfs")).toEqual([
+      "/tmp:mode=1777,size=1g",
+      "/run:size=256m",
+      "/tmp/openclaw-deps:mode=1777,size=4g",
+      "/scratch:size=32m,mode=700",
     ]);
-    expect(collectDockerFlagValues(createCall.args, "--user")).toEqual(["1001:1002"]);
-    expect(createCall.args).toEqual(
-      expect.arrayContaining(["--http-proxy=false", "--init", "--read-only-tmpfs=true"]),
-    );
-    expect(collectDockerFlagValues(createCall.args, "--tmpfs")).toEqual(["/tmp", "/var/tmp"]);
-    expect(collectDockerFlagValues(createCall.args, "-v")).toContain(
-      `${workspaceDir}:/workspace:z`,
-    );
-    const update = registryMocks.updateRegistry.mock.calls.at(-1)?.[0];
-    expect(update?.backendId).toBe("podman");
-    expect(update?.backendTarget).toEqual({ key: "local", globalArgs: [] });
   });
 
   it.each([
