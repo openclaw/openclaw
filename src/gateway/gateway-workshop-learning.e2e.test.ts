@@ -2,9 +2,14 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
+import { zstdDecompressSync } from "node:zlib";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { getAiTransportHost } from "../../packages/ai/src/host.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -79,15 +84,16 @@ async function runLoadedWorkshopReview(
 beforeAll(shareCoreWithWorkshopPluginForTest);
 
 describe("Gateway automatic Workshop learning", () => {
-  it(
-    "sends one bounded review request and stops on a provider TPM rate limit",
+  it.each(["openai-responses", "openai-chatgpt-responses"] as const)(
+    "sends one bounded %s review request despite foreground context usage",
     { timeout: 60_000 },
-    async () => {
+    async (api) => {
       const state = await createOpenClawTestState({
         prefix: "openclaw-workshop-review-rate-limit-",
         env: GATEWAY_ENV,
       });
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+      let restoreFetch: (() => void) | undefined;
       const requests: string[] = [];
       const oldHistory = "OLD_HISTORY_NOT_NEEDED_FOR_REVIEW ".repeat(20_000);
       const workspaceInstructions = "WORKSPACE_INSTRUCTIONS_NOT_NEEDED_FOR_REVIEW";
@@ -119,6 +125,25 @@ describe("Gateway automatic Workshop learning", () => {
               [
                 { role: "user", content: oldHistory, timestamp: 1 },
                 { role: "user", content: recentEvidence, timestamp: 2 },
+                makeAgentAssistantMessage({
+                  api,
+                  model: "gpt-workshop-rate-limit-test",
+                  content: [{ type: "text", text: "Verified the public generation." }],
+                  timestamp: 3,
+                  usage: {
+                    input: 147_386,
+                    output: 278,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    totalTokens: 147_664,
+                    contextUsage: {
+                      state: "available",
+                      promptTokens: 147_386,
+                      totalTokens: 147_664,
+                    },
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                  },
+                }),
               ],
               {
                 workspaceDir: state.workspaceDir,
@@ -127,7 +152,51 @@ describe("Gateway automatic Workshop learning", () => {
                 apiKey: "synthetic-workshop-provider-key",
               },
             );
-            candidate.config.models!.providers!.openai!.models[0]!.maxTokens = 128_000;
+            const provider = candidate.config.models!.providers!.openai!;
+            provider.api = api;
+            provider.models[0]!.api = api;
+            provider.models[0]!.maxTokens = 128_000;
+            if (api === "openai-chatgpt-responses") {
+              provider.baseUrl = "https://chatgpt.com/backend-api";
+              delete provider.apiKey;
+              const fetchSpy = vi
+                .spyOn(getAiTransportHost(), "buildModelFetch")
+                .mockReturnValue(async (input, init) => {
+                  const request = new Request(input, init);
+                  const bytes = Buffer.from(await request.arrayBuffer());
+                  const body =
+                    request.headers.get("content-encoding") === "zstd"
+                      ? zstdDecompressSync(bytes)
+                      : bytes;
+                  return fetch(`${baseUrl}/responses`, {
+                    method: "POST",
+                    body: body.toString("utf8"),
+                    signal: init?.signal,
+                  });
+                });
+              restoreFetch = () => fetchSpy.mockRestore();
+              saveAuthProfileStore(
+                {
+                  version: 1,
+                  profiles: {
+                    "openai:review-test": {
+                      type: "oauth",
+                      provider: "openai",
+                      access: [
+                        "eyJhbGciOiJub25lIn0",
+                        "eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF90ZXN0In19",
+                        "signature",
+                      ].join("."),
+                      refresh: "synthetic-refresh",
+                      expires: Date.now() + 3_600_000,
+                    },
+                  },
+                },
+                resolveAgentDir(candidate.config, "main"),
+                { syncExternalCli: false },
+              );
+            }
+            const sourceBefore = loadTranscriptEventsSync(candidate.source);
             candidate.config.agents!.defaults!.models![
               "openai/gpt-workshop-rate-limit-test"
             ]!.params = {
@@ -155,7 +224,10 @@ describe("Gateway automatic Workshop learning", () => {
             await startup.entered;
             startup.release();
             await kernel.startupMethodsReady;
-            await expect(runLoadedWorkshopReview(candidate)).rejects.toThrow(/rate limit/i);
+            await expect(runLoadedWorkshopReview(candidate)).rejects.toThrow(
+              /rate limit|try again in a few minutes/i,
+            );
+            expect(loadTranscriptEventsSync(candidate.source)).toEqual(sourceBefore);
 
             expect(providerErrors).toEqual([]);
             expect(requests).toHaveLength(1);
@@ -166,11 +238,14 @@ describe("Gateway automatic Workshop learning", () => {
               expect(serialized).not.toContain(excluded);
             }
             const payload = JSON.parse(serialized) as ProviderRequest;
-            expect(payload.max_output_tokens).toBe(2_048);
+            if (api === "openai-responses") {
+              expect(payload.max_output_tokens).toBe(2_048);
+            }
             expect(payload.tools?.map((tool) => tool.name)).toEqual(["skill_workshop"]);
           },
         );
       } finally {
+        restoreFetch?.();
         startup.release();
         if (gateway) {
           await disconnectGatewayClient(gateway.client);
