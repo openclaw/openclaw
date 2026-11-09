@@ -1,0 +1,2 @@
+# Home-relative load path uninstall matching regressions (issue #193529).
+49
