@@ -959,6 +959,72 @@ class TalkModeManagerTest {
     }.toString()
 
   @Test
+  fun nativeTalkBacksOffAfterRateLimitingThenResumesOrdinaryRecognition() =
+    runBlocking {
+      withNativeTalk { proof, sends ->
+        val recognizer = currentRecognizer()
+        val first = checkNotNull(recognizer.lastRecognizerIntent)
+        recognizer.triggerOnError(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS)
+        advanceRecognitionRetry(proof, 14_999)
+
+        assertSame("Rate-limited recognition must wait", first, recognizer.lastRecognizerIntent)
+        assertFalse(proof.manager.isListening.value)
+        assertTrue(proof.manager.isEnabled.value)
+        advanceRecognitionRetry(proof, 1)
+        val retried = checkNotNull(recognizer.lastRecognizerIntent)
+        assertTrue("Recognition must retry after the cooldown", retried !== first)
+        assertTrue(proof.manager.isListening.value)
+
+        recognizer.triggerOnError(SpeechRecognizer.ERROR_NO_MATCH)
+        advanceRecognitionRetry(proof, 600)
+        assertTrue(
+          "Ordinary no-match must keep its short retry",
+          retried !== recognizer.lastRecognizerIntent,
+        )
+        assertTrue(proof.manager.isListening.value)
+        recognizer.triggerOnResults(recognitionResults("Synthetic recovered speech"))
+        advanceTalkSilence(proof)
+        awaitTalkWork(proof) { sends.isNotEmpty() }
+        val sent = sends.single()
+        val message = sent.getValue("message").jsonPrimitive.content
+        assertEquals("Synthetic recovered speech", message)
+      }
+    }
+
+  @Test
+  fun pushToTalkBacksOffAfterRateLimitingAndStopCancelsTheRetry() =
+    runBlocking {
+      withNativeTalk { proof, sends ->
+        val beginning = proof.scope.async { proof.manager.beginPushToTalk(allowNewCapture = true) }
+        awaitTalkWork(proof) { beginning.isCompleted }
+        val capture = beginning.await()
+        val recognizer = currentRecognizer()
+        val first = checkNotNull(recognizer.lastRecognizerIntent)
+        recognizer.triggerOnError(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS)
+        advanceRecognitionRetry(proof, 14_999)
+
+        assertSame("PTT must share the quota cooldown", first, recognizer.lastRecognizerIntent)
+        assertFalse(proof.manager.isListening.value)
+        assertEquals(capture.captureId, proof.manager.activePushToTalkCaptureId)
+        advanceRecognitionRetry(proof, 1)
+        val retried = checkNotNull(recognizer.lastRecognizerIntent)
+        assertTrue("PTT must retry after the cooldown", retried !== first)
+        assertTrue(proof.manager.isListening.value)
+
+        recognizer.triggerOnError(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS)
+        advanceRecognitionRetry(proof, 600)
+        proof.manager.setEnabled(false)
+        advanceRecognitionRetry(proof, 15_000)
+        assertTrue(recognizer.isDestroyed)
+        assertSame("Stop must cancel the pending retry", retried, recognizer.lastRecognizerIntent)
+        assertNull(proof.manager.activePushToTalkCaptureId)
+        assertFalse(proof.manager.isListening.value)
+        assertFalse(proof.manager.isEnabled.value)
+        assertTrue(sends.isEmpty())
+      }
+    }
+
+  @Test
   fun nativeTalkSendsRecognizedPhraseAfterSilenceAndRestartsAfterReply() =
     runBlocking {
       withNativeTalk { proof, sends ->
@@ -1420,6 +1486,18 @@ class TalkModeManagerTest {
   }
 
   private fun recognitionResults(text: String) = Bundle().apply { putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, arrayListOf(text)) }
+
+  private fun advanceRecognitionRetry(
+    proof: RealtimePlaybackProof,
+    delayMs: Long,
+  ) {
+    shadowOf(Looper.getMainLooper()).idle()
+    proof.scheduler.runCurrent()
+    proof.scheduler.advanceTimeBy(delayMs)
+    proof.scheduler.runCurrent()
+    shadowOf(Looper.getMainLooper()).idle()
+    proof.scheduler.runCurrent()
+  }
 
   private fun advanceTalkSilence(proof: RealtimePlaybackProof) {
     repeat(12) {

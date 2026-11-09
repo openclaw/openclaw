@@ -2987,14 +2987,17 @@ class TalkModeManager internal constructor(
               else -> nativeText("Speech error (\$error)", error)
             },
           )
+          // Match Voice Wake's quota cooldown instead of retrying into the same service limit.
+          val retryDelayMs =
+            if (error == SpeechRecognizer.ERROR_TOO_MANY_REQUESTS) 15_000L else 600L
           if (pushToTalkActive) {
             schedulePushToTalkRestart(
-              delayMs = 600L,
+              delayMs = retryDelayMs,
               advanceRung = pttRecognitionRung !is PushToTalkRecognitionRung.RestartingSingleSession,
             )
             return@withCurrentRecognition
           }
-          scheduleRestart(delayMs = 600)
+          scheduleRestart(delayMs = retryDelayMs)
         }
 
       override fun onResults(results: Bundle?) =
