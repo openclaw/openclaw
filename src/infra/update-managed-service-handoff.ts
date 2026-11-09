@@ -19,7 +19,7 @@ import {
 import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { readActiveGatewayLockIdentity } from "./gateway-lock.js";
-import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
+import { readGatewayOwnerLeaseAsync } from "./gateway-owner-lease.js";
 import { resolveInstallationTarget } from "./installation-target-context.js";
 import { resolveNodeSqliteLocation } from "./node-sqlite.js";
 import { resolveOpenClawCliEntryPath } from "./openclaw-cli-invocation.js";
@@ -1505,11 +1505,11 @@ export async function assertForegroundUpdateOrigin(
   closed: boolean,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
-  const matchesOwner = () => {
+  const matchesOwner = async () => {
+    const owner = await readGatewayOwnerLeaseAsync({ env });
     if (!hasForegroundUpdatePaths(origin, env)) {
       return false;
     }
-    const owner = readGatewayOwnerLease({ env, current: true });
     return closed
       ? owner === undefined
       : owner?.mode === "foreground" &&
@@ -1520,7 +1520,7 @@ export async function assertForegroundUpdateOrigin(
           owner.startedAt === origin.startedAt &&
           owner.port === origin.port;
   };
-  if (!matchesOwner()) {
+  if (!(await matchesOwner())) {
     throw new Error("Foreground Gateway owner or paths changed");
   }
   const lock = await readActiveGatewayLockIdentity({ env, requireInspection: true });
@@ -1534,7 +1534,7 @@ export async function assertForegroundUpdateOrigin(
   if (closed && (await probePortUsage(origin.port)) !== "free") {
     throw new Error("Foreground Gateway port is not verified free");
   }
-  if (!matchesOwner()) {
+  if (!(await matchesOwner())) {
     throw new Error("Foreground Gateway owner or paths changed during inspection");
   }
 }
