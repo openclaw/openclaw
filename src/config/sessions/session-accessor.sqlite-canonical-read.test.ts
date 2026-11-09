@@ -30,6 +30,7 @@ import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
+import { readSessionEntryList } from "./session-entry-list.worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -157,6 +158,13 @@ describe("canonical SQLite metadata reads", () => {
           projection,
           sessionKeys: [sessionKey],
           includeParticipants: false,
+        }),
+      ).toThrow("non-canonical persisted row");
+      expect(() =>
+        readSessionEntryList({
+          kind: "session-entry-list",
+          database: { agentId: database.agentId, path: database.path },
+          scope: { ...scope, projection, sessionKeys: [sessionKey], includeParticipants: false },
         }),
       ).toThrow("non-canonical persisted row");
     }

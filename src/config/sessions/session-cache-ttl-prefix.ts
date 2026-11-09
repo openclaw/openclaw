@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import { engineIndexHint } from "../../infra/database-engine/index-hint.js";
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type {
   CacheTtlProjectionPrefix,
@@ -34,10 +35,19 @@ export function readCacheTtlProjectionPrefix(
           .onRef("event.session_id", "=", "active.session_id")
           .onRef("event.seq", "=", "active.event_seq"),
       )
-      .leftJoin("transcript_event_identities as identity", (join) =>
-        join
-          .onRef("identity.session_id", "=", "active.session_id")
-          .onRef("identity.seq", "=", "active.event_seq"),
+      .leftJoin(
+        getActiveTranscriptKysely(projection.database)
+          .selectFrom("transcript_event_identities")
+          .select(["session_id", "seq", "event_type"])
+          // A covering type index otherwise scans the session once per imported active row.
+          .modifyEnd(
+            engineIndexHint(projection.database.db, "idx_agent_transcript_event_identity_sequence"),
+          )
+          .as("identity"),
+        (join) =>
+          join
+            .onRef("identity.session_id", "=", "active.session_id")
+            .onRef("identity.seq", "=", "active.event_seq"),
       )
       .select((eb) =>
         eb
