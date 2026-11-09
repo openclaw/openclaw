@@ -7,6 +7,7 @@ import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { readHumanSenderTurn } from "../../plugins/memory-human-sender-turn.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { markExternalGatewayRequestFrame } from "../external-request-frame.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import type * as chatDispatch from "./chat-send-agent-dispatch.js";
@@ -49,17 +50,19 @@ function createClient(scopes: string[], authenticated: boolean): GatewayClient {
 }
 
 it.each([
-  ["owner typing through the external entry", "external", true, true, true],
-  ["non-owner typing through the external entry", "external", false, true, false],
-  ["unauthenticated connection", "external", true, false, undefined],
-  ["internal re-entry", "internal", true, true, undefined],
+  ["owner typing on the transport", "external", true, true, true, true],
+  ["non-owner typing on the transport", "external", false, true, true, false],
+  ["unauthenticated connection", "external", true, false, true, undefined],
+  // Plugin RPC and sessions.send re-entry keep the operator client but build their own frame.
+  ["in-process re-entry of the external entry", "external", true, true, false, undefined],
+  ["internal re-entry", "internal", true, true, true, undefined],
 ] as const)(
   "attests the human sender of a spawned session for an %s",
-  async (_name, entry, admin, authenticated, expectedOwner) => {
+  async (_name, entry, admin, authenticated, transportFrame, expectedOwner) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await loadOrCreateProcessDeviceIdentityAsync();
       setRuntimeConfigSnapshot({});
-      const runId = `typed-child-${entry}-${admin}-${authenticated}`;
+      const runId = `typed-child-${entry}-${admin}-${authenticated}-${transportFrame}`;
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: CHILD_KEY },
         {
@@ -87,12 +90,16 @@ it.each([
       const { entered, release, observe, hold } = holdProjectedChatDispatch();
       let owned: Parameters<typeof chatDispatch.startChatDispatch>[0] | undefined;
       try {
+        const req = { type: "req" as const, id: runId, method: "chat.send", params };
+        if (transportFrame) {
+          markExternalGatewayRequestFrame(req);
+        }
         const request = {
           params,
           client,
           context,
           respond: vi.fn(),
-          req: { type: "req" as const, id: runId, method: "chat.send", params },
+          req,
           sessionMutationAuthorization: authorization.authorization,
           isWebchatConnect: () => false,
         };

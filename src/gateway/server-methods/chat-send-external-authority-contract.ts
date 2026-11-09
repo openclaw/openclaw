@@ -16,6 +16,8 @@ type ChatSendExternalAdmissionParams = {
   isReconnectResume: boolean;
   isSystemGenerated: boolean;
   turnKind: "btw" | "main";
+  /** The request frame arrived on the operator's transport, not by in-process re-entry. */
+  isExternalRequestFrame: boolean;
 };
 
 export type ChatSendExternalAuthorityAdmission = {

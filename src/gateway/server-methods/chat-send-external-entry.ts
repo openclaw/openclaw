@@ -47,6 +47,7 @@ const externalAuthorityAdmission: ChatSendExternalAuthorityAdmission = {
   // Unlike the grants above, a spawned target session qualifies: the attested
   // sender replaces its spawn receipt instead of extending its lineage.
   issueHumanSenderTurn: (params) =>
+    params.isExternalRequestFrame &&
     params.client?.internal?.authenticatedOperator === true &&
     isDirectGatewayUserClient(params.client) &&
     params.inputProvenance === undefined &&
