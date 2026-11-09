@@ -91,6 +91,39 @@ public struct OpenClawIDNodeEnrollmentClient: Sendable {
         }
     }
 
+    /// Reconnect after restart without a new invite or redemption. The caller restores W from the
+    /// saved enrollment's dedicated Keychain item; neither the stored route nor evidence grants a dial.
+    public func refresh(hostname: String, enrollment: OpenClawIDNodeSavedEnrollment,
+                        identity: OpenClawIDNodeIdentity) async throws -> OpenClawIDNodeTrustTarget {
+        try Task.checkCancellation()
+        guard identity.peerKey == enrollment.peerKey else { throw OpenClawIDNodeEnrollmentError.invalidIdentity }
+        guard let previous = try await trustStore.load(hostname: hostname) else {
+            throw OpenClawIDNodeEnrollmentError.notAdmitted
+        }
+        let response = try await call(origin: enrollment.discoveryOrigin, clawID: previous.clawID,
+                                      identity: identity, mail: nil)
+        guard (200...299).contains(response.status) else {
+            throw OpenClawIDNodeEnrollmentError.discoveryRejected(response.status)
+        }
+        let assessment = try OpenClawIDNodeTrust.assessRefresh(response: response.body, hostname: hostname,
+            discoveryOrigin: enrollment.discoveryOrigin, peerKey: identity.peerKey, previous: previous, now: now())
+        return try await persist(assessment, hostname: hostname)
+    }
+
+    private func persist(_ assessment: OpenClawIDNodeTrustAssessment, hostname: String) async throws
+        -> OpenClawIDNodeTrustTarget {
+        try Task.checkCancellation()
+        // Refusal is not permission to forget verified revocation/rotation evidence.
+        if let observation = assessment.observation {
+            try await trustStore.observe(hostname: hostname, state: observation)
+            try Task.checkCancellation()
+        }
+        let target = try assessment.verdict.get()
+        try await trustStore.commit(target)
+        try Task.checkCancellation()
+        return target
+    }
+
     private func run(joinLink: String, origin: URL, identity: OpenClawIDNodeIdentity,
                      description: OpenClawIDNodeEnrollmentDescription,
                      onVerificationCode: @Sendable (String) async -> Void) async throws -> OpenClawIDNodeTrustTarget {
@@ -116,16 +149,7 @@ public struct OpenClawIDNodeEnrollmentClient: Sendable {
             if (200...299).contains(response.status) {
                 let assessment = try OpenClawIDNodeTrust.assess(response: response.body, link: link,
                     discoveryOrigin: origin, peerKey: identity.peerKey, previous: previous, now: now())
-                try Task.checkCancellation()
-                // Refusal is not permission to forget verified revocation/rotation evidence.
-                if let observation = assessment.observation {
-                    try await trustStore.observe(hostname: link.hostname, state: observation)
-                    try Task.checkCancellation()
-                }
-                let target = try assessment.verdict.get()
-                try await trustStore.commit(target)
-                try Task.checkCancellation()
-                return target
+                return try await persist(assessment, hostname: link.hostname)
             }
             guard [403, 404, 429, 503].contains(response.status) else {
                 throw OpenClawIDNodeEnrollmentError.discoveryRejected(response.status)

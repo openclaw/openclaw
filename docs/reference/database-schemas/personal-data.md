@@ -106,3 +106,50 @@ client state.
 
 The [accepted design](https://github.com/openclaw/openclaw/issues/136617) records
 the schema, migration, ownership, retention and validation boundaries.
+
+## Apple OpenClaw ID node enrollment
+
+The shared Apple node adapter owns an app-private database at
+`URL.applicationSupportDirectory/OpenClaw/node-enrollment.sqlite`. On macOS this
+is the app's Application Support directory (normally
+`~/Library/Application Support/OpenClaw/node-enrollment.sqlite`); on iOS it is
+inside the app's sandbox. Tests supply an isolated URL. This file uses
+`OpenClawNativeStateSQLite`, not the TypeScript-owned Gateway database or the
+separate client-credential format: node enrollment has its own app lifecycle and
+contains no client/operator credentials.
+
+The named migration `apple-node-targets-v1` creates the STRICT
+`openclaw_id_node_targets` table and sets `PRAGMA user_version = 1` atomically.
+Only an empty version-zero database is migrated. A nonempty unrecognized database,
+a different version, or an incompatible version-one schema is refused unchanged.
+The schema has these columns:
+
+- `hostname TEXT NOT NULL PRIMARY KEY`
+- `claw_id TEXT NOT NULL`, `root_fingerprint TEXT NOT NULL`
+- `binding_sequence INTEGER NOT NULL`
+- `snapshot_sequence INTEGER NOT NULL`, `snapshot_issued_at INTEGER NOT NULL`
+- `snapshot_binding_sequence INTEGER NOT NULL`
+- Nullable `TEXT`: `enrollment_id`, `discovery_origin`, `relay_url`, `server_key`,
+  `peer_key`, `evidence_json` (all absent for observations without a saved target,
+  or all present for a previously accepted enrollment).
+
+Binding pin, snapshot binding retirement, and newest membership `(sequence,
+issued_at)` are independent retained facts. Verified nonfuture observations merge
+inside an immediate transaction even when the refresh refuses a connection.
+Target commits validate against the current row, not a prior read. Cancellation,
+revoked attempt authority, and persistence failure never yield a dial target.
+`synchronous = FULL` retains the SQLite power-loss durability contract. There is
+no timed pruning of trust pins or high-water marks.
+
+`enrollment_id` selects a dedicated `ai.openclaw.node-enrollment` Keychain item.
+The node key W is generated separately per enrollment identity, including on iOS;
+it is never the phone's client/operator key. It stays in a non-synchronizing,
+`AfterFirstUnlockThisDeviceOnly` Keychain item, never in SQLite or config.
+
+Reopen restores refresh inputs, not dialing authority. With the retained W,
+`OpenClawIDNodeEnrollmentClient.refresh` sends a signed descriptor GET without a
+new invite or redemption POST. The shared verifier checks fresh signed descriptor
+and membership evidence against the retained pins/high-water marks and persists
+stronger evidence before returning a target. Saved evidence and routes cannot
+bypass that verification. These are library capabilities; app/controller wiring,
+device runtime, and the user-facing enrollment flow remain separate work.

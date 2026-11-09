@@ -74,7 +74,7 @@ jobs:
       - name: Build same-revision bindings and macOS XCFramework
         working-directory: crates/openclaw-iroh-ffi
         env:
-          # iOS native slices remain blocked by the upstream netdev/libc mismatch.
+          # iOS slices build in the FFI workflow; this adapter/runtime gate remains macOS-only.
           OPENCLAW_IROH_APPLE_PLATFORMS: macos
         run: |
           scripts/generate-bindings.sh

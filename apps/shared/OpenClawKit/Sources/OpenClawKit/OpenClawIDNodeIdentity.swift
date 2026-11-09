@@ -13,10 +13,11 @@ public actor OpenClawIDNodeIdentityKeychainStore: OpenClawIDNodeIdentityStore {
     private let account: String
     private let accessGroup: String?
 
-    /// Uses the application's existing Keychain namespace/access group; never enables sync.
-    public init(service: String, account: String, accessGroup: String? = nil) {
-        self.service = service
-        self.account = account
+    /// A dedicated per-enrollment node identity on every Apple platform, including iOS.
+    /// Never reuse the phone's operator/client-pairing key or its Keychain namespace.
+    public init(enrollmentID: UUID, accessGroup: String? = nil) {
+        self.service = "ai.openclaw.node-enrollment"
+        self.account = enrollmentID.uuidString
         self.accessGroup = accessGroup
     }
 
