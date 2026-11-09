@@ -53,6 +53,31 @@ class ChatCommandControlsTest {
   }
 
   @Test
+  fun slashCommandSuggestionsStopAtArgumentWhitespace() {
+    val command =
+      ChatCommandEntry(
+        name = "loop",
+        description = "Repeat a prompt",
+        textAliases = listOf("/loop"),
+        acceptsArgs = true,
+      )
+    val commands = listOf(command)
+    for (input in listOf("/loop ", "/loop 5m check the build", "/loop\tstatus", "/loop\nstatus")) {
+      assertEquals(
+        "Argument draft must close name suggestions: $input",
+        false,
+        shouldShowSlashCommandMenu(input),
+      )
+      assertEquals(emptyList<ChatCommandEntry>(), matchingSlashCommands(input, commands))
+    }
+    for (input in listOf("/", "/lo", "  /LO")) {
+      assertEquals(true, shouldShowSlashCommandMenu(input))
+      assertEquals(commands, matchingSlashCommands(input, commands))
+    }
+    assertEquals(false, shouldShowSlashCommandMenu("check the build"))
+  }
+
+  @Test
   fun matchingSlashCommandsKeepsGatewayAdvertisedAliases() {
     val commands =
       listOf(
