@@ -78,6 +78,7 @@ const timingTests = relativizeScopedPatterns(uiTimingTestFiles, "ui");
 const mockRegistryUnitTests = uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length));
 // These renderer mocks require their own module graph even when a native pane ran first.
 const mockRegistryBrowserTests = [
+  "src/lib/toast-host.loading.browser.test.ts",
   "src/pages/chat/chat-pane-frame-updates.browser.test.tsx",
   "src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx",
 ].map((file) => resolveUiTypeScriptPath(file, here));
@@ -95,6 +96,7 @@ const webkitTestFiles = [
   "src/pages/apps/apps-page.browser.test.tsx",
   "src/pages/config/view.config-read.browser.test.tsx",
   "src/pages/usage/view-details.browser.test.tsx",
+  "src/pages/sessions/view.invalidation.browser.test.tsx",
   "src/components/settings-ui.browser.test.tsx",
   "src/components/select-picker.behavior.browser.test.ts",
   "src/components/select-picker.browser.test.tsx",
@@ -147,6 +149,7 @@ const webkitTestFiles = [
   "src/components/image-lightbox.browser.test.ts",
   "src/components/markdown-mermaid-expansion.browser.test.ts",
   "src/components/modal-dialog.browser.test.ts",
+  "src/components/solid/popover.browser.test.tsx",
   "src/components/sessions-hub-header.browser.test.ts",
   "src/components/transient-container.browser.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file, here));
@@ -334,6 +337,7 @@ export default defineConfig({
   },
   test: {
     ...sharedUiTestConfig,
+    globalSetup: [path.join(repoRoot, "test/vitest/vitest.node-policy.global-setup.ts")],
     maxWorkers: sharedVitestConfig.test.maxWorkers,
     reporters: sharedVitestConfig.test.reporters,
     // These projects already own their complete plugins, aliases, and test config.

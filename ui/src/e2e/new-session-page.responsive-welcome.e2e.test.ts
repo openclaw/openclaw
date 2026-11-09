@@ -65,6 +65,7 @@ suite.define(() => {
     });
     await page.goto(`${suite.server.baseUrl}new`);
     const checkout = page.locator("#new-session-checkout-trigger");
+    const triggerRow = page.locator(".new-session-page__triggers");
     await checkout.waitFor();
     await page.mouse.move(0, 0);
 
@@ -106,26 +107,26 @@ suite.define(() => {
 
         await evaluateControlUiContext(page, (context) => context.theme.setMode("light"));
       }
-      const layout = await page
-        .locator(".new-session-page__triggers .new-session-page__trigger")
-        .evaluateAll((buttons) =>
-          buttons.map((button) => {
-            const box = button.getBoundingClientRect();
-            // Flex/grid aligns the wrapper; inline button baselines can differ within one row.
-            const item = button.closest(".new-session-page__select")!.getBoundingClientRect();
-            return {
-              row: Math.round(item.top + item.height / 2),
-              left: box.left,
-              right: box.right,
-              height: box.height,
-              width: box.width,
-            };
-          }),
-        );
+      const layout = await triggerRow.locator(".new-session-page__trigger").evaluateAll((buttons) =>
+        buttons.map((button) => {
+          const box = button.getBoundingClientRect();
+          // Flex/grid aligns the wrapper; inline button baselines can differ within one row.
+          const item = button.closest(".new-session-page__select")!.getBoundingClientRect();
+          return {
+            row: Math.round(item.top + item.height / 2),
+            left: box.left,
+            right: box.right,
+            height: box.height,
+            width: box.width,
+          };
+        }),
+      );
       expect(new Set(layout.map((box) => box.row)).size).toBeLessThanOrEqual(mobile ? 2 : 1);
       if (mobile) {
-        const local = page.locator("#new-session-where-trigger");
-        expect((await local.boundingBox())!.width).toBeLessThanOrEqual(100);
+        // #192044 renamed Local to This computer; keep the picker within half a row.
+        const device = page.locator("#new-session-where-trigger");
+        const rowWidth = (await triggerRow.boundingBox())!.width;
+        expect((await device.boundingBox())!.width).toBeLessThanOrEqual(rowWidth / 2);
       }
       for (const [index, box] of layout.entries()) {
         expect(box.left).toBeGreaterThanOrEqual(0);
@@ -164,7 +165,6 @@ suite.define(() => {
     await baseRef.fill("feature/mobile-layout-with-a-long-branch-name");
     await page.keyboard.press("Escape");
     await pollText(checkout).toContain("feature/mobile-layout-with-a-long-branch-name");
-    const triggerRow = page.locator(".new-session-page__triggers");
     expect(await triggerRow.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
       true,
     );

@@ -158,6 +158,7 @@ export function createUserTurnTranscriptRecorder(
     if (candidate.content !== replacementText) {
       delete metadata.humanMentions;
       delete metadata.workContext;
+      delete metadata.appContext;
     }
     const next = { ...candidate, content: replacementText };
     delete next["__openclaw"];
@@ -583,6 +584,7 @@ export function createUserTurnTranscriptRecorder(
           pendingInput = await stageUserTurnPendingInput(recorder, target, {
             ...options,
             requestFingerprint: params.pendingInputRequestFingerprint,
+            reclaimCancelledSourceTurn: params.reclaimCancelledSourceTurn,
             trackCompletion: params.trackInputCompletion,
             retryCancelled: options.retryCancelled || params.sessionTurnMutation?.kind === "goal",
             replaySourceSessionKeys: params.pendingInputReplaySourceSessionKeys,

@@ -87,6 +87,10 @@ starting an agent turn, enabling automations, or changing OpenClaw state.
 Requirements needing online preflight appear as blockers. `build` creates a
 deterministic `.tgz` and refuses to overwrite an existing file.
 
+`validate` and `build` accept a project-directory symlink and resolve the
+canonical project root. Manifest confinement and managed source-file checks
+remain unchanged.
+
 For `create`, omit `--name` and `--agent-id` to use default identities. Explicitly
 empty values are invalid and fail before project files are written.
 

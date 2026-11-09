@@ -1,7 +1,9 @@
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { JSX } from "@solidjs/web";
 import { createMemo, createUniqueId, For, Show } from "solid-js";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import { Menu, type MenuEntry } from "../../../components/solid/menu.tsx";
 import { RefreshButton } from "../../../components/solid/refresh-button.tsx";
@@ -18,8 +20,8 @@ import {
 } from "../../../components/solid/settings-ui.tsx";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../styles/dreams.css";
+import { t } from "../../../lib/reactive/i18n.ts";
 import type { DreamingEntry, DreamingReviewPanel, DreamingViewState } from "./dreaming.ts";
 import { DreamingScene } from "./view-scene.tsx";
 import { DiaryEmpty, DreamingRead, formatCompactDateTime } from "./view-shared.tsx";
@@ -267,24 +269,18 @@ function DiaryPager(props: {
           onChange={(event) => props.onSelect(Number(event.currentTarget.value))}
         />
         <span class="dreams-diary__steps">
-          <button
-            type="button"
-            class="btn btn--icon btn--ghost"
-            aria-label={t("dreaming.diary.older")}
+          <IconButton
+            icon="chevronLeft"
+            label={t("dreaming.diary.older")}
             disabled={props.selectedPage >= props.entries.length - 1}
             onClick={() => props.onSelect(props.selectedPage + 1)}
-          >
-            <Icon name="chevronLeft" />
-          </button>
-          <button
-            type="button"
-            class="btn btn--icon btn--ghost"
-            aria-label={t("dreaming.diary.newer")}
+          />
+          <IconButton
+            icon="chevronRight"
+            label={t("dreaming.diary.newer")}
             disabled={props.selectedPage <= 0}
             onClick={() => props.onSelect(props.selectedPage - 1)}
-          >
-            <Icon name="chevronRight" />
-          </button>
+          />
         </span>
       </Show>
     </div>
@@ -476,7 +472,7 @@ function MaintenanceMenu(props: DreamingProps) {
       label={t("browser.moreActions")}
       placement="bottom-end"
       pointerFocus="trigger"
-      triggerClass="btn btn--icon btn--ghost"
+      triggerClass="oc-icon-button"
       trigger={<Icon name="moreHorizontal" />}
       items={items()}
       onSelect={(item) => {
@@ -521,10 +517,7 @@ function DreamingReview(props: DreamingProps) {
       notice={
         <Show when={props.dreamDiaryActionMessage}>
           {(message) => (
-            <div
-              class={["callout", message().kind === "success" ? "success" : "danger"]}
-              role="status"
-            >
+            <InlineAlert tone={message().kind === "success" ? "success" : "danger"} role="status">
               <div class="row wrap items-center gap-2">
                 <span>{message().text}</span>
                 {props.dreamDiaryActionArchivePath ? (
@@ -537,7 +530,7 @@ function DreamingReview(props: DreamingProps) {
                   </button>
                 ) : undefined}
               </div>
-            </div>
+            </InlineAlert>
           )}
         </Show>
       }

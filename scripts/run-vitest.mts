@@ -33,13 +33,13 @@ import {
 } from "./lib/vitest-cli-mode.mts";
 import { parseVitestExecutionArgs } from "./lib/vitest-cli.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
+import { resolveVitestNodeArgs } from "./lib/vitest-node-args.mts";
 import {
   VITEST_INFRASTRUCTURE_EXIT_CODE,
   vitestInfrastructureExitCode,
 } from "./lib/vitest-outcome.mts";
 import {
   resolveVitestProcessEnv,
-  resolveVitestNodeArgs,
   resolveRunVitestSpawnEnv,
   resolveVitestNoOutputTimeoutMs,
   resolveVitestNoOutputHeartbeatMs,

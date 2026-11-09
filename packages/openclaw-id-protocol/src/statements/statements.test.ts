@@ -11,6 +11,7 @@ import { verifyBindingForPin } from "./pin.js";
 import {
   MAX_MEMBER_PEER_KEYS,
   MAX_MEMBERS,
+  MAX_NODES,
   MAX_OWNER_DEVICE_PEER_KEYS,
   MAX_OWNER_DEVICES,
   OWNER_CAPABILITIES,
@@ -20,8 +21,10 @@ import {
 import { parseStatement } from "./validate.js";
 import {
   verifyInviteRedemptionSignature,
+  verifyNodeRedemptionSignature,
   verifyMembershipSnapshot,
   verifyOwnerStatement,
+  verifyRootResetSignature,
   type TrustAnchor,
   type VerifyOptions,
 } from "./verify.js";
@@ -44,13 +47,20 @@ async function verify(
           statement as SignedStatement<"MembershipSnapshot">,
           binding.body,
         )
-      : verifier === "redemption"
-        ? await verifyInviteRedemptionSignature(statement as SignedStatement<"InviteRedemption">)
-        : await verifyOwnerStatement(
-            statement as SignedStatement<"OwnerDeviceCert">,
-            anchor,
-            options,
-          );
+      : verifier === "node_redemption"
+        ? await verifyNodeRedemptionSignature(statement as SignedStatement<"NodeRedemption">)
+        : verifier === "redemption"
+          ? await verifyInviteRedemptionSignature(statement as SignedStatement<"InviteRedemption">)
+          : verifier === "reset"
+            ? await verifyRootResetSignature(
+                statement as SignedStatement<"RootReset">,
+                binding.body,
+              )
+            : await verifyOwnerStatement(
+                statement as SignedStatement<"OwnerDeviceCert">,
+                anchor,
+                options,
+              );
   return result.ok ? "ok" : result.code;
 }
 
@@ -185,11 +195,13 @@ describe("membership snapshot at the caps", () => {
         caps: [...OWNER_CAPABILITIES],
       })),
       owner_peer_keys: Array.from({ length: MAX_OWNER_DEVICES * MAX_OWNER_DEVICE_PEER_KEYS }, iroh),
+      node_peer_keys: Array.from({ length: MAX_NODES }, iroh),
       members: Array.from({ length: members }, (_, index) => ({
         account_id: `acct-${index}-`.padEnd(256, "x"),
         role: "operator" as const,
         peer_keys: Array.from({ length: MAX_MEMBER_PEER_KEYS }, iroh),
       })),
+      protocols: { statement: [1], descriptor: [1] },
       issued_at: vectors.now,
     };
     return signStatement("MembershipSnapshot", body, await generateEd25519Signer());

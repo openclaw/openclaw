@@ -83,7 +83,13 @@ const release = (
   name = packageName,
 ) => ({
   package: { name, displayName: "Research Briefing", family: "template" },
-  version: { version: selectedVersion, createdAt: 2, changelog: "", templateManifestSummary },
+  version: {
+    version: selectedVersion,
+    createdAt: 2,
+    changelog: "",
+    templateManifestSummary,
+    artifact: artifact(selectedVersion, name).artifact,
+  },
 });
 const skillRequest = { slug: "citation-check", ownerHandle: "openclaw", version: "1.1.0" };
 const expectMissing = (file: string) =>
@@ -478,6 +484,72 @@ describe("public ClawHub Template catalog", () => {
     });
     await expectPreview("instruction", "SOUL.md", "# Travel planner\n");
   });
+
+  it("starts exact-release reads together and reuses their artifact metadata", async () => {
+    const gate = Promise.withResolvers<Awaited<ReturnType<typeof mocks.detail>>>();
+    mocks.detail.mockReturnValueOnce(gate.promise);
+    const pending = readClawHubTemplateDetail({ packageName, version });
+    await vi.waitFor(() => {
+      expect(mocks.version).toHaveBeenCalledOnce();
+      expect(mocks.download).toHaveBeenCalledOnce();
+    });
+    expect(mocks.extract).not.toHaveBeenCalled();
+    gate.resolve({ package: officialPackage(), owner: { handle: "openclaw", official: true } });
+    await pending;
+    expect(mocks.artifact).not.toHaveBeenCalled();
+    const download = await mocks.download.mock.results[0]!.value;
+    expect(download.cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("aborts an unfinished archive when parallel metadata fails", async () => {
+    const metadata = Promise.withResolvers<Awaited<ReturnType<typeof mocks.detail>>>();
+    const aborted = vi.fn();
+    mocks.detail.mockReturnValueOnce(metadata.promise);
+    mocks.download.mockImplementationOnce(
+      ({ signal }) =>
+        new Promise((_, reject) => {
+          signal!.addEventListener(
+            "abort",
+            () => {
+              aborted();
+              reject(new Error("download aborted"));
+            },
+            { once: true },
+          );
+        }),
+    );
+    const pending = readClawHubTemplateDetail({ packageName, version });
+    const rejected = expect(pending).rejects.toThrow("metadata unavailable");
+    await vi.waitFor(() => expect(mocks.download).toHaveBeenCalledOnce());
+    metadata.reject(new Error("metadata unavailable"));
+    await rejected;
+    expect(aborted).toHaveBeenCalledOnce();
+    expect(mocks.extract).not.toHaveBeenCalled();
+  });
+
+  it.each(["metadata", "artifact"])(
+    "cleans the parallel download when %s verification fails",
+    async (failure) => {
+      if (failure === "metadata") {
+        mocks.detail.mockRejectedValueOnce(new Error("metadata unavailable"));
+      } else {
+        const selected = release();
+        mocks.version.mockResolvedValueOnce({
+          ...selected,
+          version: {
+            ...selected.version,
+            artifact: { ...selected.version.artifact, sha256: "f".repeat(64) },
+          },
+        });
+      }
+      await expect(readClawHubTemplateDetail({ packageName, version })).rejects.toThrow(
+        failure === "metadata" ? "metadata unavailable" : /integrity|match/i,
+      );
+      const download = await mocks.download.mock.results[0]!.value;
+      expect(download.cleanup).toHaveBeenCalledOnce();
+      expect(mocks.extract).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not substitute the latest package summary for a missing exact-release summary", async () => {
     mocks.version.mockResolvedValue(release(version, null));

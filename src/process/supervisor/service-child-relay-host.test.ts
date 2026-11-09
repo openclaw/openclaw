@@ -77,30 +77,43 @@ function clock(now = 10_000) {
 }
 const rootResult = { code: 0, signal: null };
 
-it.each(["dispatch-revoked", "post-dispatch", "prepared-current", "prepared-revoked"] as const)(
-  "checks launch authority at its owning boundary: %s",
-  async (phase) => {
-    const stub = mockWritableRelay();
-    const prepared = phase.startsWith("prepared");
-    const revoked = phase.endsWith("revoked");
-    const writes = vi.spyOn(stub.control, "write");
-    const grantReached = createDeferredCore();
-    let current = true;
-    let released = false;
-    const assertAuthority = () => {
-      if (!current) {
-        throw new Error("launch authority revoked");
-      }
-    };
-    mocks.spawn.mockImplementation(() => {
-      if (phase === "dispatch-revoked") {
-        current = false;
-      }
-      return stub.child;
-    });
-    const starting = startRelay({
-      beforeSpawn: prepared ? undefined : assertAuthority,
-      initiateSpawn: prepared
+it.each([
+  "dispatch-revoked",
+  "post-dispatch",
+  "prepared-current",
+  "prepared-revoked",
+  "prepared-async-revoked",
+  "prepared-async-owned-revoked",
+] as const)("checks launch authority at its owning boundary: %s", async (phase) => {
+  const stub = mockWritableRelay();
+  const prepared = phase.startsWith("prepared");
+  const revoked = phase.endsWith("revoked");
+  const writes = vi.spyOn(stub.control, "write");
+  const grantReached = createDeferredCore();
+  let current = true;
+  let released = false;
+  const assertAuthority = () => {
+    if (!current) {
+      throw new Error("launch authority revoked");
+    }
+  };
+  mocks.spawn.mockImplementation(() => {
+    if (phase === "dispatch-revoked") {
+      current = false;
+    }
+    return stub.child;
+  });
+  const starting = startRelay({
+    beforeSpawn: prepared ? undefined : assertAuthority,
+    prepareTargetSpawn: phase.includes("-async-")
+      ? async () => {
+          await Promise.resolve();
+          grantReached.resolve();
+          assertAuthority();
+        }
+      : undefined,
+    initiateSpawn:
+      prepared && phase !== "prepared-async-owned-revoked"
         ? (launch, settlement) => {
             grantReached.resolve();
             assertAuthority();
@@ -110,75 +123,69 @@ it.each(["dispatch-revoked", "post-dispatch", "prepared-current", "prepared-revo
             return launch();
           }
         : undefined,
-    });
-    const rejected = revoked
-      ? expect(starting).rejects.toThrow("launch authority revoked")
-      : undefined;
-    if (phase === "dispatch-revoked") {
+  });
+  const rejected = revoked
+    ? expect(starting).rejects.toThrow("launch authority revoked")
+    : undefined;
+  if (phase === "dispatch-revoked") {
+    await rejected;
+    expect(stub.sendMock).not.toHaveBeenCalled();
+    return;
+  }
+  const { emit } = relayPeer(stub);
+  current = phase === "prepared-current";
+  if (prepared) {
+    emit({ type: "prepared" });
+    await grantReached.promise;
+    expect(released).toBe(false);
+    if (rejected) {
+      // A refusal before launch cancels the waiting anchor, which owns no command and
+      // retires through its pre-spawn startup-error receipt rather than losing identity.
+      await vi.waitFor(() =>
+        expect(writes.mock.calls.some(([chunk]) => String(chunk).includes('"type":"cancel"'))).toBe(
+          true,
+        ),
+      );
+      vi.spyOn(process, "kill").mockImplementation(failGroup("ESRCH"));
+      emit({
+        type: "startup-error",
+        anchorPid: 1235,
+        error: "command startup cancelled before spawn",
+      });
+      emit({ type: "closing", reason: "lineage-lost" });
+      stub.control.push(null);
+      stub.stdout.end();
+      stub.stderr.end();
+      stub.lineage.end();
+      stub.disconnectMock();
+      stub.emitExit(0);
       await rejected;
-      expect(stub.sendMock).not.toHaveBeenCalled();
+      await expect(starting).rejects.toThrow(/^launch authority revoked$/);
+    }
+    expect(writes.mock.calls.some(([chunk]) => String(chunk).includes('"type":"launch"'))).toBe(
+      !revoked,
+    );
+    if (revoked) {
       return;
     }
-    const { emit } = relayPeer(stub);
-    current = phase === "prepared-current";
-    if (prepared) {
-      emit({ type: "prepared" });
-      await grantReached.promise;
-      expect(released).toBe(false);
-      if (rejected) {
-        // A refusal before launch cancels the waiting anchor, which owns no command and
-        // retires through its pre-spawn startup-error receipt rather than losing identity.
-        await vi.waitFor(() =>
-          expect(
-            writes.mock.calls.some(([chunk]) => String(chunk).includes('"type":"cancel"')),
-          ).toBe(true),
-        );
-        vi.spyOn(process, "kill").mockImplementation(() => {
-          throw Object.assign(new Error("process group is gone"), { code: "ESRCH" });
-        });
-        emit({
-          type: "startup-error",
-          anchorPid: 1235,
-          error: "command startup cancelled before spawn",
-        });
-        emit({ type: "closing", reason: "lineage-lost" });
-        stub.control.push(null);
-        stub.stdout.end();
-        stub.stderr.end();
-        stub.lineage.end();
-        stub.disconnectMock();
-        stub.emitExit(0);
-        await rejected;
-        await expect(starting).rejects.toThrow(/^launch authority revoked$/);
-      }
-      expect(writes.mock.calls.some(([chunk]) => String(chunk).includes('"type":"launch"'))).toBe(
-        !revoked,
-      );
-      if (revoked) {
-        return;
-      }
-    }
-    emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
-    const adapter = await starting;
-    if (prepared) {
-      expect(released).toBe(true);
-    }
-    emit({ type: "root-result", ...rootResult });
-    stub.stdout.emit("end");
-    stub.stderr.emit("end");
-    expect((await adapter.wait()).code).toBe(0);
-    if (!prepared) {
-      expect(stub.killMock).not.toHaveBeenCalled();
-    }
-  },
-);
+  }
+  emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
+  const adapter = await starting;
+  if (prepared) {
+    expect(released).toBe(true);
+  }
+  emit({ type: "root-result", ...rootResult });
+  stub.stdout.emit("end");
+  stub.stderr.emit("end");
+  expect((await adapter.wait()).code).toBe(0);
+  if (!prepared) {
+    expect(stub.killMock).not.toHaveBeenCalled();
+  }
+});
 
 it("reports a Linux startup failure ahead of its unconfirmed cleanup", async () => {
   const stub = mockWritableRelay("linux");
-  const outcome = startRelay().then(
-    () => undefined,
-    (error: unknown) => error,
-  );
+  const outcome = startRelay().catch((error: unknown) => error);
   const { emit } = relayPeer(stub);
   emit({ type: "startup-error", anchorPid: 1235, error: "spawn synthetic-command ENOENT" });
   // A closing receipt without native extinction cannot certify cleanup.
@@ -205,10 +212,7 @@ it("bounds a refused launch when the waiting anchor never answers its cancel", a
     initiateSpawn: () => {
       throw new Error("launch authority revoked");
     },
-  }).then(
-    () => undefined,
-    (error: unknown) => error,
-  );
+  }).catch((error: unknown) => error);
   await nextTurn();
   relayPeer(stub).emit({ type: "prepared" });
   await nextTurn();
@@ -242,10 +246,7 @@ it("checks input authority after readiness before writing private stdin", async 
     input: "private prompt",
     prepareInput,
   });
-  const outcome = starting.then(
-    () => undefined,
-    (error: unknown) => error,
-  );
+  const outcome = starting.catch((error: unknown) => error);
   try {
     expect(prepareInput).not.toHaveBeenCalled();
     const { emit } = relayPeer(stub);
@@ -414,9 +415,7 @@ it("publishes a confirmed cancellation exit and retains it for late subscribers"
 
 it("keeps cleanup authority when a root-exit consumer ends already-closed stdin", async () => {
   const stub = mockWritableRelay();
-  vi.spyOn(process, "kill").mockImplementation(() => {
-    throw Object.assign(new Error("synthetic missing process group"), { code: "ESRCH" });
-  });
+  vi.spyOn(process, "kill").mockImplementation(failGroup("ESRCH"));
   const write = stub.control.write.bind(stub.control);
   vi.spyOn(stub.control, "write").mockImplementation((chunk, encoding, callback) => {
     const message: unknown = JSON.parse(chunk.toString());

@@ -31,6 +31,7 @@ final class DashboardBrowserTab {
     private(set) var failureView: DashboardBrowserFailureView?
     private var automaticReloads = 0
     private var requestAliasPhase: RequestAliasPhase = .awaitingNavigation
+    private var pendingNavigation: (navigation: WKNavigation, stop: Bool)?
 
     init(websiteDataStore: WKWebsiteDataStore, requestedURL: URL) {
         // Reading tabs share browser sessions, never the dashboard's privileged
@@ -54,7 +55,29 @@ final class DashboardBrowserTab {
         }
     }
 
+    func trackNavigation(_ navigation: WKNavigation?) {
+        guard let navigation else { return }
+        self.pendingNavigation = self.webView.isLoading ? (navigation, false) : nil
+    }
+
+    func stopLoading() {
+        // Stopping before WebKit starts the navigation can strand its loading state.
+        // Keep the request's identity and stop it at the provisional-start callback.
+        if self.pendingNavigation != nil {
+            self.pendingNavigation?.stop = true
+        } else {
+            self.webView.stopLoading()
+        }
+    }
+
+    private func retirePendingNavigation(_ navigation: AnyObject?) -> Bool {
+        guard let pending = self.pendingNavigation, pending.navigation === navigation else { return false }
+        self.pendingNavigation = nil
+        return pending.stop
+    }
+
     func startNavigation(_ navigation: AnyObject) {
+        if self.retirePendingNavigation(navigation) { self.webView.stopLoading() }
         switch self.requestAliasPhase {
         case .awaitingNavigation:
             self.requestAliasPhase = .loading(navigation)
@@ -77,6 +100,7 @@ final class DashboardBrowserTab {
     }
 
     func finishNavigation(_ navigation: AnyObject?, at url: URL?, title: String?) {
+        _ = self.retirePendingNavigation(navigation)
         self.updateRepresentedURL(url)
         self.title = title
         guard let navigation else { return }
@@ -92,7 +116,8 @@ final class DashboardBrowserTab {
         }
     }
 
-    func failNavigation() {
+    func failNavigation(_ navigation: AnyObject?) {
+        _ = self.retirePendingNavigation(navigation)
         // A failed initial chain has no reusable page. Retire its alias so
         // opening the original link again starts a fresh load.
         self.requestAliasPhase = .retired
@@ -129,7 +154,12 @@ final class DashboardBrowserTab {
     func observeNavigationState(onChange: @escaping @MainActor () -> Void) {
         // KVO catches late WebKit updates and same-document SPA navigation.
         self.observations = [\WKWebView.canGoBack, \.canGoForward, \.isLoading].map { keyPath in
-            self.webView.observe(keyPath, options: [.new]) { _, _ in
+            self.webView.observe(keyPath, options: [.new]) { [weak self] webView, _ in
+                // Same-document loads finish through KVO, without navigation delegates.
+                // WebKit notifies on the main thread; retire before another page action.
+                MainActor.assumeIsolated {
+                    if !webView.isLoading { self?.pendingNavigation = nil }
+                }
                 Task { @MainActor in onChange() }
             }
         } + [

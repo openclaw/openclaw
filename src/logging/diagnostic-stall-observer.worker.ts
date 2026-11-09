@@ -1,5 +1,6 @@
 import { writeSync } from "node:fs";
 import { open } from "node:fs/promises";
+import type { Runtime } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { performance } from "node:perf_hooks";
 import { workerData, type MessagePort } from "node:worker_threads";
@@ -7,12 +8,15 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import type { StallProfileSnapshot } from "./diagnostic-stall-profile.js";
 
 // SAFETY: createStallKernelRecorder is the sole launcher and owns this transferred payload.
-const { heartbeat, port, packageRoot } = workerData as {
+const { heartbeat, port, packageRoot, timeOrigin } = workerData as {
   heartbeat: SharedArrayBuffer;
   port: MessagePort;
   packageRoot: string | null;
+  timeOrigin: number;
 };
 const clock = new BigInt64Array(heartbeat);
+// Bun workers have their own origin; compare every sample in the main thread's clock domain.
+const now = () => performance.now() + (performance.timeOrigin - timeOrigin);
 // Linux's thread-group leader is the process PID, not worker_threads.threadId.
 const task = `/proc/self/task/${process.pid}/`;
 const buffer = Buffer.alloc(4096);
@@ -37,6 +41,54 @@ let nextKernelAt = 0;
 let nextReportAt = 0;
 let kernelPending = false;
 let reportPending = false;
+const interruptStacks = !process.versions.bun && Number(process.versions.node.split(".")[0]) < 26;
+let stackAttempts = 0;
+let stackPending = false;
+// Normal long stalls last tens of seconds; five minutes leaves ample recovery headroom.
+const RECOVERY_AFTER_MS = 5 * 60_000;
+let recoveryPending = false;
+let nextRecoveryAt = 0;
+let lastPollAt = Math.floor(now());
+
+async function recoverStall(beat: bigint, at: number) {
+  recoveryPending = true;
+  nextRecoveryAt = at + 60_000;
+  const session = process.versions.bun ? undefined : new Session();
+  let timeout: NodeJS.Timeout | undefined;
+  let inspecting = Atomics.load(clock, 1) !== 0n;
+  try {
+    // A debugger can attach after the last heartbeat, then pause before the next one.
+    session?.connectToMainThread();
+    const result = await Promise.race([
+      session?.post("Runtime.evaluate", {
+        expression: 'Boolean(process.getBuiltinModule("inspector").url())',
+        returnByValue: true,
+      }),
+      new Promise<undefined>((resolve) => {
+        timeout = setTimeout(() => resolve(undefined), 1_000);
+      }),
+    ]);
+    inspecting ||= result?.result.value === true;
+  } catch {
+    // Bun has no main-thread inspector session; the heartbeat carries its inspector state.
+  } finally {
+    clearTimeout(timeout);
+    session?.disconnect();
+    recoveryPending = false;
+  }
+  if (inspecting || Atomics.load(clock, 0) !== beat) {
+    return;
+  }
+  try {
+    writeSync(
+      2,
+      `[gateway/event-loop] main-thread stall recovery: pid=${process.pid} elapsedMs=${Math.round(now() - Number(beat))} thresholdMs=${RECOVERY_AFTER_MS} signal=SIGKILL\n`,
+    );
+  } finally {
+    // SIGTERM needs the wedged JS loop; SIGABRT can produce a process-sized core dump.
+    process.kill(process.pid, "SIGKILL");
+  }
+}
 
 async function sampleKernel(beat: bigint, at: number) {
   kernelPending = true;
@@ -88,11 +140,13 @@ async function sampleKernel(beat: bigint, at: number) {
 async function reportStall(beat: bigint, at: number) {
   reportPending = true;
   nextReportAt = at + 60_000;
-  const session = new Session();
+  const session = process.versions.bun ? undefined : new Session();
   try {
+    if (!session) {
+      throw new Error("capture unavailable");
+    }
     session.connectToMainThread();
-    // Starting a fresh Profiler during a spin can omit the already executing leaf.
-    // Interrupt only to rotate the existing bounded native recorder, then format here.
+    // Rotate the bounded native recorder or capture the interrupted Node 24 stack.
     const { result, exceptionDetails } = await session.post("Runtime.evaluate", {
       expression: 'globalThis[Symbol.for("openclaw.stallFlightRecorder.capture")]?.()',
       returnByValue: true,
@@ -102,11 +156,16 @@ async function reportStall(beat: bigint, at: number) {
     }
     // SAFETY: The private capture Symbol returns this owner-typed snapshot, serialized by value.
     const snapshot = result.value as StallProfileSnapshot;
+    if (interruptStacks && snapshot.endedAt - at > 100) {
+      throw new Error("capture dispatched after the stall");
+    }
     const { formatStallProfile } = await import("./diagnostic-stall-profile.js");
     const report = formatStallProfile(
       snapshot.windows,
       { startedAt: Number(beat), endedAt: snapshot.endedAt },
       packageRoot,
+      "",
+      snapshot.stacks,
     );
     // Worker stdout/stderr streams relay through the main event loop. The OS fd does not.
     writeSync(
@@ -119,19 +178,75 @@ async function reportStall(beat: bigint, at: number) {
       `[gateway/event-loop] main-thread stall in progress: elapsedMs=${Math.round(at - Number(beat))} profile=unavailable\n`,
     );
   } finally {
-    session.disconnect();
+    session?.disconnect();
     reportPending = false;
+  }
+}
+
+async function sampleStack(beat: bigint, at: number) {
+  stackPending = true;
+  stackAttempts++;
+  const session = new Session();
+  try {
+    session.connectToMainThread();
+    // Node's inspector typings omit the documented disableBreaks parameter.
+    const params: Runtime.EvaluateParameterType & { disableBreaks: boolean } = {
+      expression: 'globalThis[Symbol.for("openclaw.stallFlightRecorder.capture")]?.()',
+      returnByValue: true,
+      silent: true,
+      disableBreaks: true,
+    };
+    const { result } = await session.post("Runtime.evaluate", params);
+    // SAFETY: Only the recorder's private capture function supplies this snapshot.
+    const snapshot = result.value as StallProfileSnapshot | undefined;
+    const sample = snapshot?.stacks?.[0];
+    // Native calls can defer the interrupt until unrelated JS resumes. Its stack
+    // can still fall inside the heartbeat gap, so reject late dispatch as well.
+    if (
+      sample &&
+      sample.at - at <= 100 &&
+      Atomics.load(clock, 0) === beat &&
+      Atomics.load(clock, 2) > 0n
+    ) {
+      Atomics.sub(clock, 2, 1n);
+      port.postMessage(sample);
+    }
+  } catch {
+    // Kernel observations remain available when the isolate cannot be interrupted.
+  } finally {
+    session.disconnect();
+    stackPending = false;
   }
 }
 
 setInterval(() => {
   const beat = Atomics.load(clock, 0);
-  const at = performance.now();
+  const at = now();
   if (beat !== observed) {
     observed = beat;
     attempts = 0;
+    stackAttempts = 0;
     nextKernelAt = Number(beat) + 1000;
     nextReportAt = Number(beat) + 30_000;
+    nextRecoveryAt = Number(beat) + RECOVERY_AFTER_MS;
+  }
+  // macOS's monotonic clock includes sleep. Observe a fresh window after observer suspension.
+  if (at - lastPollAt >= 30_000) {
+    nextRecoveryAt = at + RECOVERY_AFTER_MS;
+  }
+  lastPollAt = Math.floor(at);
+  if (
+    interruptStacks &&
+    !stackPending &&
+    stackAttempts < 3 &&
+    at - Number(beat) >= 500 &&
+    Atomics.load(clock, 1) === 0n &&
+    Atomics.load(clock, 2) > 0n
+  ) {
+    void sampleStack(beat, at);
+  }
+  if (!recoveryPending && at >= nextRecoveryAt) {
+    void recoverStall(beat, at);
   }
   if (process.platform === "linux" && !kernelPending && attempts < 3 && at >= nextKernelAt) {
     void sampleKernel(beat, at);
