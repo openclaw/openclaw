@@ -1,0 +1,4 @@
+# Complete PR #193872 regression-test growth against its authenticated CI comparison base: 1,019 LF.
+# Existing own grants total 1,016 (629 + 230 + 153 + 4); allocate only the remaining 3 LF.
+# No inherited-main debt, duplicate credit, shared-scalar change, or extra test/runtime work.
+3
