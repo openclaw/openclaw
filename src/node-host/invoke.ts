@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -35,6 +34,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 import { extractShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
+import { isExecutableFile } from "../infra/executable-path.js";
 import { listHostDirectories } from "../infra/host-directory-listing.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import {
@@ -197,31 +197,39 @@ function requireExecApprovalsBaseHash(
 }
 
 async function handleSystemWhich(rawBins: unknown[], env?: Record<string, string>) {
-  const extensions =
-    process.platform === "win32"
-      ? (
-          env?.PATHEXT ??
-          env?.PathExt ??
-          env?.Pathext ??
-          process.env.PATHEXT ??
-          process.env.PathExt ??
-          ".EXE;.CMD;.BAT;.COM"
-        )
-          .split(";")
-          .map((ext) => normalizeLowercaseStringOrEmpty(ext))
-      : [""];
+  const windows = process.platform === "win32";
+  const extensions = windows
+    ? (
+        env?.PATHEXT ??
+        env?.PathExt ??
+        env?.Pathext ??
+        process.env.PATHEXT ??
+        process.env.PathExt ??
+        ".EXE;.CMD;.BAT;.COM"
+      )
+        .split(";")
+        .map((ext) => normalizeLowercaseStringOrEmpty(ext))
+    : [""];
   const envPath =
     env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? DEFAULT_NODE_PATH;
   const directories = envPath.split(path.delimiter).filter(Boolean);
   const found: Record<string, string> = {};
+  // Keep Windows node probing: dotted command names still try PATHEXT, while bare files
+  // are not probed unless PATHEXT explicitly includes an empty entry. Do not cache results.
   bins: for (const bin of normalizeStringEntries(rawBins)) {
     if (bin.includes("/") || bin.includes("\\")) {
       continue;
     }
+    // A name that already ends in a PATHEXT extension is tried as written first, as cmd.exe does.
+    const lowerBin = normalizeLowercaseStringOrEmpty(bin);
+    const suffixes =
+      windows && extensions.some((ext) => ext && lowerBin.endsWith(ext))
+        ? ["", ...extensions]
+        : extensions;
     for (const dir of directories) {
-      for (const ext of extensions) {
+      for (const ext of suffixes) {
         const candidate = path.join(dir, bin + ext);
-        if (fs.existsSync(candidate)) {
+        if (isExecutableFile(candidate, { env })) {
           found[bin] = candidate;
           continue bins;
         }
