@@ -53,8 +53,7 @@ async function mountReview(initialContext: ApplicationContext) {
     return <TemplateCreatorReview context={context()} />;
   });
   const name = () => page.getByLabelText<HTMLInputElement>("Name");
-  const publish = () =>
-    page.getByRole<HTMLButtonElement>("button", { name: "Publish", exact: true });
+  const publish = () => page.getByRole<HTMLButtonElement>("button", { name: /^Publish$/ });
   const status = () => page.getByRole("status").textContent;
   await vi.advanceTimersByTimeAsync(0);
   await waitForSolid(() => expect(name().value).toBe("Release Brief"));

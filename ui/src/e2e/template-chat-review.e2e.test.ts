@@ -43,7 +43,7 @@ it.skipIf(!chromiumAvailable)(
       const gateway = await installMockGateway(page, {
         assistantName: "Harbor",
         serverBuildId: prebuilt?.buildInfo.buildId,
-        serverVersion: prebuilt?.buildInfo.version,
+        serverVersion: prebuilt?.buildInfo.version ?? undefined,
         sessionKey,
         featureMethods: [
           "chat.send",

@@ -346,18 +346,18 @@ export class ShellGatewayOwner {
           this.host.context === context &&
           context.gateway.snapshot.client === reviewClient &&
           context.gateway.connectionRevision === revision;
-        void import("../pages/templates/creator-owner.ts").then(
-          ({ openTemplateCreator }) => {
+        void (async () => {
+          try {
+            const { openTemplateCreator } = await import("../pages/templates/creator-owner.ts");
             if (isCurrent()) {
               openTemplateCreator(context, { agentId, sessionKey, draftId: command.draftId });
             }
-          },
-          (error: unknown) => {
+          } catch (error) {
             if (isCurrent()) {
               showToast({ severity: "error", message: String(error) });
             }
-          },
-        );
+          }
+        })();
       }
       return;
     }

@@ -40,7 +40,7 @@ it("drops a deferred review handoff after its application context retires", asyn
       sessionKey: "agent:research:dashboard:source",
     },
   });
-  host.context = null;
+  Object.defineProperty(host, "context", { value: undefined });
   await vi.dynamicImportSettled();
   expect(openTemplateCreator).not.toHaveBeenCalled();
 });
