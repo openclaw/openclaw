@@ -654,8 +654,9 @@ every global and per-agent `extraPaths` object. Older strict configuration schem
 unknown property, including `evergreen: false`; removing it restores the older decay policy.
 
 `excludePaths` is opt-in; when omitted, all otherwise eligible files keep their current indexing
-behavior. Patterns use `/` separators and match paths relative to the workspace, including
-default memory files and overlapping `extraPaths`. Outside-workspace extra roots are unaffected.
+behavior. Patterns use `/` separators and the same glob rules as `extraPaths` patterns on Node
+and Bun, and match paths relative to the workspace, including default memory files and
+overlapping `extraPaths`. Outside-workspace extra roots are unaffected.
 Changing this list changes the index scope, so `openclaw memory status` reports a scope change and
 vector search pauses until you rebuild with `openclaw memory index --agent <id>`; the rebuild drops
 rows for excluded files. Exclusions apply to search indexing and file watching only: they do not

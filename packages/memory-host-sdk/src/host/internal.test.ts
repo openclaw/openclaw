@@ -244,6 +244,7 @@ describe("memory host SDK package internals", () => {
     await fs.mkdir(dreamingDir, { recursive: true });
     await fs.writeFile(path.join(memoryDir, "current.md"), "Current truth");
     await fs.writeFile(path.join(dreamingDir, "report.md"), "Generated report");
+    await fs.writeFile(path.join(dreamingDir, "pinned.keep.md"), "Kept report");
     expect(
       (await listMemoryFiles(workspaceDir)).map((file) => path.relative(workspaceDir, file)),
     ).toContain(path.join("memory", "dreaming", "light", "report.md"));
@@ -252,6 +253,14 @@ describe("memory host SDK package internals", () => {
     ]);
     expect(files.map((file) => path.relative(workspaceDir, file))).toEqual([
       path.join("memory", "current.md"),
+    ]);
+    // Same glob semantics on Node and Bun; Bun's path.matchesGlob has no extglobs.
+    const kept = await listMemoryFiles(workspaceDir, undefined, undefined, undefined, [
+      "memory/dreaming/**/!(*.keep).md",
+    ]);
+    expect(kept.map((file) => path.relative(workspaceDir, file)).toSorted()).toEqual([
+      path.join("memory", "current.md"),
+      path.join("memory", "dreaming", "light", "pinned.keep.md"),
     ]);
   });
 
