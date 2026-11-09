@@ -10,13 +10,26 @@ export const AGENT_GIT_CONFIG_PARAMETERS = AUTO_MAINTENANCE_CONFIG.map(
 export const gitMaintenanceEnvironment = (env: NodeJS.ProcessEnv = {}) =>
   appendGitConfig(env, AUTO_MAINTENANCE_CONFIG);
 
+/** Git parses GIT_CONFIG_COUNT as base-10 digits only; anything else makes every git command fail. */
+function resolveGitConfigStartIndex(raw: string | undefined): number {
+  if (raw === undefined) {
+    return 0;
+  }
+  const trimmed = raw.trim();
+  if (!/^\d+$/u.test(trimmed)) {
+    return 0;
+  }
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : 0;
+}
+
 /** Append entries without replacing configuration already owned by the caller. */
 export function appendGitConfig(
   env: NodeJS.ProcessEnv,
   entries: readonly (readonly [string, string])[],
 ): NodeJS.ProcessEnv {
   const result = { ...env };
-  let index = Number(env.GIT_CONFIG_COUNT ?? 0);
+  let index = resolveGitConfigStartIndex(env.GIT_CONFIG_COUNT);
   for (const [key, value] of entries) {
     result[`GIT_CONFIG_KEY_${index}`] = key;
     result[`GIT_CONFIG_VALUE_${index++}`] = value;
