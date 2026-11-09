@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { vi } from "vitest";
 import type { WebSocket } from "ws";
 import { Client } from "../internal/client.js";
@@ -36,7 +37,7 @@ export async function createDiscordReadinessFixture(
   } = {},
 ) {
   const gateway = new FixtureGateway({ url: "wss://gateway.example.test" });
-  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
   const gatewaySupervisor = createDiscordGatewaySupervisor({
     gateway,
     runtime,
