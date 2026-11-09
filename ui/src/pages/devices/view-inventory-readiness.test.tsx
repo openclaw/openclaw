@@ -20,7 +20,7 @@ it("keeps preloaded rows out of the temporary readiness fallback", async () => {
     return <DeviceInventory {...props} inventoryRead={read} />;
   });
   flush();
-  expect(container.querySelector(".device-entry__menu-trigger")).toBeNull();
+  expect(container.querySelector(".device-entry")).toBeNull();
   completion.resolve();
   await waitForSolid(() => expect(container.textContent).toContain("Office Mac"));
 });

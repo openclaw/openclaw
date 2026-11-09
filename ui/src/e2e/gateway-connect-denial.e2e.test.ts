@@ -44,28 +44,44 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl);
-        // Mock socket timers and WebCrypto must settle without a wall-time boot window.
+        const gate = page.locator(".login-gate");
+        const recovery = denied ? gate : page.locator(".gateway-connection-view");
+        // Request receipt precedes the queued response and recovery-surface rendering.
         await expect
           .poll(async () => {
             await page.clock.runFor(1);
-            return (await gateway.getRequests("connect")).length;
+            return {
+              attempts: (await gateway.getRequests("connect")).length,
+              visible: await recovery.isVisible(),
+            };
           })
-          .toBe(1);
-        const gate = page.locator(".login-gate");
-        await gate.waitFor();
+          .toEqual({ attempts: 1, visible: true });
         const initialAttempts = (await gateway.getRequests("connect")).length;
         for (let second = 0; second < 60; second++) {
           await page.clock.runFor(1_000);
           // WebCrypto and fetch use real threads; settle the handshake before advancing again.
           await expect
             .poll(async () => {
-              await page.clock.runFor(1);
-              const socketsClosed = await page.evaluate(() =>
-                (window as MockGatewayWindow)
-                  .openclawControlUiE2eGateway!.socketStates()
-                  .every((socket) => socket.readyState === WebSocket.CLOSED),
-              );
-              return socketsClosed;
+              const handshake = await page.evaluate(() => {
+                const mockGateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+                const sockets = mockGateway.socketStates();
+                const requests = mockGateway.requests.filter(
+                  (request) => request.method === "connect",
+                ).length;
+                return {
+                  preparing:
+                    requests < sockets.length &&
+                    sockets.some((socket) => socket.readyState === WebSocket.OPEN),
+                  settled:
+                    requests === sockets.length &&
+                    sockets.every((socket) => socket.readyState === WebSocket.CLOSED),
+                };
+              });
+              // Let real-thread signing finish before spending the socket's virtual deadline.
+              if (!handshake.preparing) {
+                await page.clock.runFor(1);
+              }
+              return handshake.settled;
             })
             .toBe(true);
         }

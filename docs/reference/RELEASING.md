@@ -147,6 +147,22 @@ approval-status read is reported as unknown, not as no pending approval, and doe
 not stop validation monitoring. Public release evidence can still use its existing
 anonymous rate-limit fallback; caller-specific approval reads cannot.
 
+### Resume activation while ClawHub recovery is independent
+
+For an already-published core, the hosted publisher accepts `defer_clawhub=true`
+with `openclaw_npm_resume_run_id=<original-successful-run>` and
+`wait_for_clawhub=false`. This recovery-only input requires direct core
+publication (`publish_openclaw_npm=true`, no `prepared_plugins`). The publisher
+still authenticates the original core's exact registry bytes and provenance,
+and retains all npm, source, artifact, approval, and finalization gates. It
+neither republishes core nor plans or dispatches new ClawHub work.
+
+The default remains normal ClawHub publication. A deferred run records
+`clawHubDeferred` in its authenticated dispatch receipt and explicit incomplete
+ClawHub proof. GitHub, Docker, and platform activation may continue, but the
+full release remains incomplete until independent ClawHub recovery verifies the
+original artifacts. Deferral does not authorize repacking or replacing them.
+
 ### Watch publication
 
 After the stable orchestrator has dispatched publication, keep its read-only
@@ -156,22 +172,34 @@ watcher running in a separate shell:
 pnpm release:stable YYYY.M.PATCH --watch
 ```
 
-The watcher uses the orchestrator's retained state to authenticate the publish
-parent and correlate its npm and ClawHub children. It exits as soon as an
-environment approval is pending or a publication parent/child fails, and it
-waits until the observed publication tree succeeds otherwise. It only performs
-GitHub reads; it never approves, reruns, cancels, dispatches, or publishes.
+For any publish parent, including beta and resumed runs, watch it by run ID:
+
+```bash
+pnpm release:watch --run <publish-parent-run-id>
+```
+
+`release:stable --watch` authenticates the parent against the orchestrator's
+retained state. `release:watch` derives the parent's protected tooling tag and
+SHA from the run itself. Both correlate the parent's npm and ClawHub children by
+the exact parent run and attempt each child records, plus tooling identity. They
+exit as soon as an environment approval is pending on the parent or a child, or
+a publication run or job fails. That includes `continue-on-error` jobs such as
+the core child's Windows notification. Otherwise they wait until the observed
+publication tree succeeds. They only perform GitHub reads; they never approve,
+rerun, cancel, dispatch, or publish. On a GitHub rate limit they back off
+beyond the poll interval instead of failing.
 
 The exit contract is:
 
 - `0`: the observed tree succeeded, or `--once` found no item needing attention.
-- `1`: a pending environment approval or failed publication run needs attention.
+- `1`: a pending environment approval, failed publication run, or failed job needs attention.
 - `2`: usage, identity, transport, truncation, timeout, or observation failed.
 
 Use `--once --json` for a single machine-readable snapshot. JSON has
 `contractVersion: 1` and a top-level `state` of `active`, `attention`, or
-`success`, plus exact parent, child, pending-approval, and failed-run records.
-`--poll-seconds` changes the default 60-second interval and
+`success`, plus exact parent, child, pending-approval, failed-run, and failed-job records.
+`--poll-seconds` changes the default interval (60 seconds for `release:stable`,
+120 for `release:watch`) and
 `--timeout-seconds` changes the default 12-hour observation deadline. These
 options do not create a daemon or persist watcher state.
 

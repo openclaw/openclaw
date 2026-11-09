@@ -136,6 +136,12 @@ Optional hello fields:
 | `snapshot.controlUiIdentityUrl`   | HTTPS dashboard sign-in URL for trusted-proxy/Tailscale Serve identity. Use normal HTTPS trust, not native TLS pins; never send native connection tokens/passwords. Refresh on reconnect and discard on disconnect. Serve-route removal/replacement closes affected connections with `1012`. |
 | `pluginSurfaceUrls`               | Map of surface names to scoped, potentially expiring URLs. Renew with `{ surface: "canvas" }` through `node.pluginSurface.refresh` (nodes) or `plugin.surface.refresh` (Control UI with `operator.read`, including write/admin). Stop automatic renewal on `FORBIDDEN` until reconnect.      |
 
+Clients with `operator.admin` also receive the running Gateway's `authMode`,
+`bindHost`, and `tailscaleMode`. These include startup flags such as `--bind`
+and `--tailscale`, which the config file can't show. Older Gateways omit
+`bindHost` and `tailscaleMode`, so clients must not infer exposure from their
+absence.
+
 ### Attachment limits
 
 `policy.attachments` is optional (older gateways omit it) and advertises
@@ -174,6 +180,9 @@ verification tests saved configuration without requiring a running Gateway.
 Retired APIs: use plugin surfaces instead of `canvasHostUrl`, `canvasCapability`,
 or `node.canvas.capability.refresh`; use `sessions.companion.ask` instead of
 `sessions.observer.ask`.
+
+For a complete client flow after a timeout or disconnect, see
+[config-write reconciliation](/gateway/protocol/rpc-talk-config-and-agents#reconcile-a-config-write-after-a-lost-response).
 
 While the Gateway is preparing authentication and request state, `connect` can return a
 retryable `UNAVAILABLE` error with `details.reason: "startup-sidecars"` and

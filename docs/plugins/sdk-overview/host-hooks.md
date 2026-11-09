@@ -329,7 +329,7 @@ The contracts intentionally split authority:
   are scoped to the registering plugin.
 - Reserved command ownership is bundled-only. External plugins should use their
   own command names or aliases.
-- `allowPromptInjection=false` disables prompt-mutating hooks including
+- `allowPromptModification=false` disables prompt-mutating hooks including
   `agent_turn_prepare`, `before_prompt_build`, `heartbeat_prompt_contribution`,
   and `enqueueNextTurnInjection`.
 

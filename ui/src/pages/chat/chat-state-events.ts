@@ -24,6 +24,7 @@ import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import { clearPendingQueueItemsForRun } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import { setSelectedChatSessionArchived } from "./chat-session-archive.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { applyChatModelCatalogSnapshot } from "./chat-state-refresh.ts";
@@ -44,7 +45,12 @@ import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
 
 const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
-const PENDING_INPUT_REASONS = new Set(["send", "agent.run.started", "agent.input.settled"]);
+const PENDING_INPUT_REASONS = new Set([
+  "send",
+  "agent.run.started",
+  "agent.input.steering",
+  "agent.input.settled",
+]);
 type ChatPanePresentation = () => boolean;
 
 function refreshChatEventHistory(
@@ -137,7 +143,7 @@ function handleSessionMessageEvent(
     });
   }
   if (matchesChat && event.archived !== null) {
-    state.selectedChatSessionArchived = event.archived;
+    setSelectedChatSessionArchived(state, event.archived);
   }
   const runIdBeforeApply = state.chatRunId;
   rememberAuthoritativeTerminal({ event, host: state, matchesChat, payload, runIdBeforeApply });
@@ -243,7 +249,7 @@ function handleSessionsChangedEvent(
     }
   }
   if (event && matchesChat && event.archived !== null) {
-    state.selectedChatSessionArchived = event.archived;
+    setSelectedChatSessionArchived(state, event.archived);
   }
   if (result.applied) {
     if (

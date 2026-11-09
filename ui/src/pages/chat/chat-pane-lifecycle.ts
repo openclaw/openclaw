@@ -48,7 +48,7 @@ import { ChatPaneSessionObservation } from "./chat-pane-session-observation.ts";
 import { createChatPaneSessionPanelToggles } from "./chat-pane-session-panel-toggle.ts";
 import { focusChatComposerFromKeydown } from "./chat-pane-shared.ts";
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
-import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
+import * as startupSubscriptions from "./chat-pane-startup-subscriptions.ts";
 import type { ChatPaneInputChanges } from "./chat-pane-state-owner.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { cancelChatModelRecovery } from "./chat-session.ts";
@@ -268,17 +268,15 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     super.start();
     const mountGatewayOwner = this.context.gateway.snapshot.client;
     this.stagedAttachmentGatewayOwner = mountGatewayOwner;
-    if (typeof ResizeObserver === "function") {
-      this.paneResizeObserver = new ResizeObserver((entries) => {
-        const width = entries.at(-1)?.contentRect.width;
-        // Hidden panes (narrow split view) report 0; keep the last real width.
-        if (typeof width === "number" && width > 0 && width !== this.paneWidth) {
-          this.transcript.syncViewportGeometry();
-          this.paneWidth = width;
-        }
-      });
-      this.paneResizeObserver.observe(this.element);
-    }
+    this.paneResizeObserver = new ResizeObserver((entries) => {
+      const width = entries.at(-1)?.contentRect.width;
+      // Hidden panes (narrow split view) report 0; keep the last real width.
+      if (typeof width === "number" && width > 0 && width !== this.paneWidth) {
+        this.transcript.syncViewportGeometry();
+        this.paneWidth = width;
+      }
+    });
+    this.paneResizeObserver.observe(this.element);
     const chatState = this.chatState;
     chatState.addCleanup(() => publishChatWorkContext(this.context, this));
     chatState.addCleanup(listen(this.element, "pointerdown", this.handlePaneFocus));
@@ -369,9 +367,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       }),
     );
     // Identity publications start scoped loads even when this retained pane is hidden.
-    chatState.addCleanup(
-      this.context.agentIdentity.subscribe(() => void pageState.loadAssistantIdentity()),
-    );
+    chatState.addCleanup(startupSubscriptions.subscribeChatPaneAgentFacts(this.context, pageState));
     const creationComposer = takeCreatedComposer(
       this.context,
       pageState.sessionKey,
@@ -536,7 +532,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       }),
     );
     chatState.addCleanup(
-      subscribeChatPaneSnapshotInvalidation(
+      startupSubscriptions.subscribeChatPaneSnapshotInvalidation(
         () => this.state,
         () => {
           const target = this.resolveChatReadTarget();

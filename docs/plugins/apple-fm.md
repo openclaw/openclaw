@@ -61,7 +61,7 @@ OpenClaw runtime even if your primary model uses a different agent runtime.
 On a fresh installation, onboarding opens the OpenClaw setup assistant. It can
 inspect configuration and help with channels and other setup. The interface keeps
 regular agent setup incomplete until you choose and verify a primary model in
-**Model Setup** or by rerunning `openclaw onboard`. Afterward, Apple remains the
+**Models** or by rerunning `openclaw onboard`. Afterward, Apple remains the
 utility model; the system assistant follows the primary model normally.
 
 On an existing installation, choosing Apple preserves your primary model,
@@ -113,7 +113,7 @@ If the reported context window is below 8,192 tokens, choose another local or
 cloud model. OpenClaw does not inflate the model's advertised limit.
 
 If the native helper is missing after an update, use **Recheck & repair** on the
-configured utility card in Model Setup, or rerun onboarding and select the
+configured utility card in Models, or rerun onboarding and select the
 detected Apple model. This compiles the helper matching the installed plugin and
 verifies the utility route again. Ordinary inference never compiles code or
 installs dependencies.

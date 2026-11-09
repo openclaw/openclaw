@@ -8,6 +8,7 @@ type PreparationPhase =
   | "allocate"
   | "allocationWait"
   | "mutationWait"
+  | "workspaceWait"
   | "capacityWait"
   | "repository"
   | "sources"
@@ -35,6 +36,7 @@ type PreparationPhase =
   | "provision"
   | "provisionInspect"
   | "provisionCopy"
+  | "provisionCopyWait"
   | "publication"
   | "indexRefresh"
   | "indexCopy"
@@ -56,6 +58,14 @@ type PreparationPhase =
 type TemplateState = "warm" | "cold" | "unavailable" | "reused";
 type TemplateDetails = {
   reason?: string;
+  missReason?:
+    | "no-generation"
+    | "commit-changed"
+    | "backend-changed"
+    | "content-changed"
+    | "invalid";
+  priorSourceCommit?: string;
+  requestedSourceCommit?: string;
   backend?: string;
   cloneBytes?: number;
   errorCode?: string;
@@ -93,6 +103,14 @@ export function setWorktreePreparationTemplate(
   }
 }
 
+export function recordWorktreePreparationFailure(phase: PreparationPhase, error: unknown) {
+  const current = preparation.getStore();
+  // Preserve the innermost failing phase as the error crosses enclosing waits.
+  if (current && (!current.failure || current.failure.error !== error)) {
+    current.failure = { error, phase };
+  }
+}
+
 /** Nested phases are inclusive; only total measures the complete preparation once. */
 export function startWorktreePreparationPhase(phase: PreparationPhase) {
   const current = preparation.getStore();
@@ -121,11 +139,7 @@ export async function timeWorktreePreparationPhase<T>(
   try {
     return await run();
   } catch (error) {
-    const current = preparation.getStore();
-    // Preserve the innermost failing phase as the error crosses enclosing waits.
-    if (current && (!current.failure || current.failure.error !== error)) {
-      current.failure = { error, phase };
-    }
+    recordWorktreePreparationFailure(phase, error);
     throw error;
   } finally {
     finish();

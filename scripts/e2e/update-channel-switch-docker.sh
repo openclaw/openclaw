@@ -149,6 +149,14 @@ openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing
 export OPENCLAW_GIT_DIR="$git_root"
 export OPENCLAW_UPDATE_DEV_TARGET_REF="$fixture_sha"
 
+echo "==> package refuses mixed-case main target"
+if main_json="$(openclaw update --tag MAIN --yes --json --no-restart)"; then
+  echo "Unsupported package target unexpectedly succeeded." >&2
+  exit 1
+fi
+UPDATE_JSON="$main_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-main-refusal
+node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel stable
+
 echo "==> package stable -> package beta channel"
 set +e
 beta_json="$(openclaw update --channel beta --yes --json --no-restart)"

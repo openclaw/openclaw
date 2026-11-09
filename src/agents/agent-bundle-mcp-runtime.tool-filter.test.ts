@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, expect, it, onTestFinished, vi } from "
 import { openFixtureReceiptChannel } from "../../test/helpers/fixture-receipts.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as logger from "../logger.js";
+import { startNodeHostMcpManager } from "../node-host/mcp.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import { writeListToolsMcpServer } from "./agent-bundle-mcp-stdio.test-support.js";
@@ -15,6 +16,53 @@ beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
 afterAll(() => receipts.close());
+
+it("admits the same model tools on a node and the Gateway", async () => {
+  const dir = tempDirs.make("mcp-model-visibility-");
+  const filePath = path.join(dir, "server.mjs");
+  const logPath = path.join(dir, "server.log");
+  const inputSchema = { type: "object" };
+  const tools = [
+    { name: "query", inputSchema },
+    { name: "raw_plain", inputSchema },
+    { name: "raw_mixed", inputSchema, _meta: { ui: { visibility: ["app", "model"] } } },
+    { name: "raw_app", inputSchema, _meta: { ui: { visibility: ["app"] } } },
+    { name: "raw_excluded", inputSchema },
+    { name: "resources_list-2", inputSchema },
+  ];
+  await writeListToolsMcpServer(
+    { filePath, logPath, tools, capabilities: { tools: {}, resources: {} } },
+    receipts.endpoint,
+  );
+  const server = {
+    command: process.execPath,
+    args: [filePath],
+    toolFilter: {
+      include: ["raw_*", "docs__query", "docs__resources_list-2"],
+      exclude: ["docs__raw_excluded"],
+    },
+  };
+  const runtime = createSessionMcpRuntime({
+    sessionId: "model-visibility",
+    workspaceDir: dir,
+    cfg: { plugins: { enabled: false }, mcp: { servers: { docs: server } } },
+  });
+  onTestFinished(() => runtime.dispose());
+  const node = await startNodeHostMcpManager({ docs: server });
+  onTestFinished(() => node.close());
+  const expected = new Set(["query", "raw_mixed", "raw_plain"]);
+  const { tools: modelTools } = await materializeBundleMcpToolsForRun({ runtime });
+  const gatewayNames = modelTools.map((tool) => getPluginToolMeta(tool)?.mcp?.toolName);
+  expect(new Set(gatewayNames)).toEqual(expected);
+  expect(new Set(node.descriptors.map((tool) => tool.mcp?.tool))).toEqual(expected);
+  for (const tool of ["raw_app", "raw_excluded", "resources_list-2"]) {
+    await expect(node.callMcpTool({ server: "docs", tool })).rejects.toMatchObject({
+      code: "MCP_TOOL_UNAVAILABLE",
+    });
+  }
+  await node.callMcpTool({ server: "docs", tool: "query" });
+  expect((await fs.readFile(logPath, "utf8")).match(/^call .*$/gm)).toEqual(["call query"]);
+});
 
 it.each([
   {

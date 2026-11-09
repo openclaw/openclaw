@@ -1,6 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -106,14 +106,14 @@ describe("stateless Template Add", () => {
     const sourceRoot = path.join(stateDir, "source");
     mkdirSync(sourceRoot);
     writeFileSync(path.join(sourceRoot, "SOUL.md"), "Workspace agent instructions.\n");
-    const manifestPath = path.join(sourceRoot, "template.json");
+    const manifestPath = path.join(sourceRoot, "CLAW.md");
     writeFileSync(
       manifestPath,
-      JSON.stringify({
+      `---\n${JSON.stringify({
         schemaVersion: 1,
         agent: { id: "workspace-agent", name: "Workspace Agent" },
         workspace: { bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } } },
-      }),
+      })}\n---\n`,
     );
     const result = await readTemplateManifestFile(manifestPath);
     if (!result.ok) {
@@ -216,8 +216,13 @@ describe("stateless Template Add", () => {
   });
 
   it.each(["workspace failure", "lost config acknowledgement"] as const)(
-    "rolls back the new agent and workspace after %s",
+    "rolls back the new agent and reseeds bootstrap on retry after %s",
     async (failure) => {
+      const bootstrap = "Run these first-time agent instructions.\n";
+      writeFileSync(path.join(stateDir, "source", "BOOTSTRAP.md"), bootstrap);
+      const reread = await readTemplateManifestFile(path.join(stateDir, "source", "CLAW.md"));
+      assert(reread.ok);
+      source = reread;
       const plan = await buildPlan();
       let writes = 0;
       const message =
@@ -251,6 +256,14 @@ describe("stateless Template Add", () => {
         failure === "workspace failure" ? [] : ["main"],
       );
       expect(existsSync(plan.agent.workspace)).toBe(false);
+
+      const retryPlan = await buildPlan();
+      expect(retryPlan.agent.workspace).toBe(plan.agent.workspace);
+      const retried = await apply(retryPlan);
+      expect(retried.status).toBe("complete");
+      expect(await readFile(path.join(retryPlan.agent.workspace, "BOOTSTRAP.md"), "utf8")).toBe(
+        bootstrap,
+      );
     },
   );
 
@@ -384,18 +397,18 @@ async function portableSource(fixture: OpenClawTestState) {
   const packageRoot = fixture.statePath("package");
   await mkdir(packageRoot, { recursive: true });
   await writeFile(
-    path.join(packageRoot, "template.json"),
-    JSON.stringify({
+    path.join(packageRoot, "CLAW.md"),
+    `---\n${JSON.stringify({
       schemaVersion: 1,
       agent: { id: "portable", name: "Portable" },
       workspace: { bootstrapFiles: { "HEARTBEAT.md": { source: "HEARTBEAT.md" } } },
-    }),
+    })}\n---\n`,
   );
   await writeFile(
     path.join(packageRoot, "HEARTBEAT.md"),
     `${checklist}tasks:\n- name: Summary\n  interval: 15m\n  prompt: Prepare a summary.\n`,
   );
-  const source = await readTemplateManifestFile(path.join(packageRoot, "template.json"));
+  const source = await readTemplateManifestFile(path.join(packageRoot, "CLAW.md"));
   assert(source.ok, JSON.stringify(source.diagnostics));
   return source;
 }

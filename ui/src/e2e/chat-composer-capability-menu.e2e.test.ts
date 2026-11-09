@@ -243,7 +243,7 @@ suite.define(() => {
             expect.stringContaining("Plugins"),
           ]),
         );
-      const clearOverrides = dropdown.getByRole("menuitem", { name: /4 changes in this chat/ });
+      const clearOverrides = dropdown.getByRole("menuitem", { name: /4 changes in this session/ });
       await expect.poll(() => clearOverrides.isVisible()).toBe(true);
       await expect.poll(() => webSearchItem(dropdown).isVisible()).toBe(true);
       const skillsRoot = dropdown.getByRole("menuitem", { name: /^Skills/ });
@@ -256,7 +256,7 @@ suite.define(() => {
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("root");
       await expect
         .poll(() => dropdown.locator(".oc-menu-item:focus").textContent())
-        .toContain("Camera");
+        .toContain("Skills");
       await page.evaluate(() => {
         const input = document.querySelector<HTMLInputElement>(".agent-chat__file-input");
         if (!input) {
@@ -707,7 +707,7 @@ suite.define(() => {
         expect(await menu.getByRole("menuitem", { name: "Browse connectors" }).count()).toBe(0);
         const addServer = menu.getByRole("menuitem", { name: /Add MCP server/ });
         await expect.poll(() => addServer.isDisabled()).toBe(true);
-        await expect.poll(() => tooltipTitleText(addServer)).toContain("Admin access");
+        await expect.poll(() => tooltipTitleText(addServer)).toContain("admin access");
       });
     },
   );
@@ -772,7 +772,7 @@ suite.define(() => {
           webSearchItem(menu).evaluate((node) => node.getAttribute("aria-checked") === "true"),
         )
         .toBe(false);
-      await expect.poll(() => tooltipTitleText(webSearchItem(menu))).toContain("remove");
+      await expect.poll(() => tooltipTitleText(webSearchItem(menu))).toContain("Remove");
       await gateway.setOnline(false);
       await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(true);
       await expect
@@ -782,7 +782,7 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       await gateway.setOnline(true);
       await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(false);
-      await expect.poll(() => tooltipTitleText(webSearchItem(menu))).toContain("remove");
+      await expect.poll(() => tooltipTitleText(webSearchItem(menu))).toContain("Remove");
       await webSearchItem(menu).click();
       await expect
         .poll(() => latestToolOverrides(gateway))
@@ -969,7 +969,7 @@ suite.define(() => {
       await everywhereDialog.getByRole("radio", { name: "Everywhere", exact: true }).check();
       await everywhereDialog.getByLabel("Name").fill("global-docs");
       await everywhereDialog.getByLabel("URL or command").fill("docs-mcp --stdio");
-      await everywhereDialog.getByLabel("Transport").selectOption("stdio");
+      await everywhereDialog.getByText("Stdio", { exact: true }).click();
       const sessionPatchCount = (await gateway.getRequests("sessions.patch")).length;
       // Pin past the session-scoped config.patch above so a slow runner can't
       // return it stale for the everywhere-scoped save.

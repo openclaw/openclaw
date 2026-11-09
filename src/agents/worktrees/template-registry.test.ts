@@ -169,15 +169,36 @@ it("admits readers only from retained ready generations and refuses retirement u
 
 it("rolls back ready publication when custody is revoked at worker commit", async () => {
   await reserve();
+  await ready(template.id, 20);
+  const staged = { ...template, id: "replacement", cacheKey: "preparing:replacement" };
+  await reserve(staged);
   await expect(
     worker(undefined, true).run((scope) =>
       scope.execute({
         type: "worktrees.templates.ready",
-        input: { id: template.id, now: 20 },
+        input: {
+          id: staged.id,
+          now: 30,
+          publication: { cacheKey: template.cacheKey, previousId: template.id },
+        },
       }),
     ),
   ).rejects.toThrow("allocation lease lost");
-  expect(await read()).toEqual(template);
+  expect(await read()).toEqual(published());
+  expect(await registry.readTemplateAsync(env, staged.cacheKey)).toEqual(staged);
+  expect(
+    await registry.markTemplateReadyAsync(env, staged.id, 30, guard, {
+      cacheKey: template.cacheKey,
+      previousId: template.id,
+    }),
+  ).toBe(true);
+  expect(await read()).toEqual({ ...published(staged, 30), cacheKey: template.cacheKey });
+  expect(await registry.readTemplateAsync(env, staged.cacheKey)).toBeUndefined();
+  expect(await registry.readTemplateAsync(env, `retired:${template.id}`)).toEqual({
+    ...template,
+    cacheKey: `retired:${template.id}`,
+    lastUsedAt: 20,
+  });
 });
 
 it("keeps template rows and reader custody in the worker's selected database", async () => {

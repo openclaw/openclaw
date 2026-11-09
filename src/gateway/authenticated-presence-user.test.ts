@@ -7,6 +7,7 @@ describe("authenticated presence user", () => {
     (displayName) => {
       expect(
         buildAuthenticatedPresenceUser({
+          authenticatedUserId: "private-login@example.test",
           authenticatedUserProfile: {
             profileId: "owner-profile",
             displayName,
@@ -21,4 +22,15 @@ describe("authenticated presence user", () => {
       });
     },
   );
+
+  it.each([
+    [{ authenticatedUserId: "private-login@example.test" }, undefined],
+    [{ authenticatedUserId: "public-handle" }, { id: "public-handle" }],
+    [
+      { authenticatedUserId: "public-handle@github", authenticatedUserIsTailscaleProvider: true },
+      { id: "public-handle@github" },
+    ],
+  ] as const)("keeps private principals out of unresolved presence: %j", (params, expected) => {
+    expect(buildAuthenticatedPresenceUser(params)).toEqual(expected);
+  });
 });
