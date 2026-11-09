@@ -123,7 +123,7 @@ export const usage: Usage = {
     total: 0.0033,
   },
 };
-export const logicalModel: Model = {
+export const logicalModel = {
   id: MODEL,
   name: "Approved model",
   api: "openai-chatgpt-responses",
@@ -135,7 +135,7 @@ export const logicalModel: Model = {
   cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
   contextWindow: 16_000,
   maxTokens: 1_024,
-};
+} satisfies Model<"openai-chatgpt-responses">;
 export function request(model = ALIAS): WorkerInferenceStartParams {
   return {
     runEpoch: 3,
