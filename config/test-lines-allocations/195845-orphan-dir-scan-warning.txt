@@ -1,0 +1,2 @@
+# Surface an orphan-directory scan warning when the agents dir cannot be read (EACCES/EPERM), with ENOENT staying silent; new it.each regression covers both directions for PR #195845.
+25
