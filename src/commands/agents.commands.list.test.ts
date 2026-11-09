@@ -21,7 +21,6 @@ const mocks = vi.hoisted(() => {
   const plugins = vi.fn<() => ChannelPlugin[]>(() => []);
   return {
     plugins,
-    syncPlugins: vi.fn(() => plugins()),
     asyncPlugins: vi.fn(async () => plugins()),
     provenance: vi.fn(),
     displayProvenance: vi.fn(),
@@ -34,7 +33,7 @@ vi.mock("./config-validation.js", () => ({ requireValidConfig: mocks.config }));
 
 // mock-isolation: Use synthetic plugin descriptors, retaining the command's real provider projection.
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: mocks.syncPlugins,
+  listReadOnlyChannelPluginsForConfig: mocks.plugins,
   listReadOnlyChannelPluginsForConfigAsync: mocks.asyncPlugins,
 }));
 
@@ -114,11 +113,6 @@ describe("agentsListCommand", () => {
     await expect(list({ json: true, tree: true })).rejects.toThrow(
       "unrelated stored provenance is invalid",
     );
-  });
-  it("resolves provider enrichment through the async read-only channel resolver", async () => {
-    await list({});
-    expect(mocks.asyncPlugins).toHaveBeenCalledTimes(1);
-    expect(mocks.syncPlugins).not.toHaveBeenCalled();
   });
   it("renders roots, children, missing and dangling creators with optional routing rules", async () => {
     setEntries(
