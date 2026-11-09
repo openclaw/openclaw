@@ -291,8 +291,15 @@ export function observeTranscriptOffset(
       const actualOffset = element?.scrollTop;
       owner.state.maintenanceScrollOffset = actualOffset === target ? actualOffset : null;
     }
-    // Prior native motion can arrive while Latest prepares its destination.
-    // New reader input cancels the command in interrupt(), before its movement.
+    // Preparation has issued no motion; only a resize receipt can own a native offset change.
+    if (
+      delta !== 0 &&
+      owner.state.scrollCommand?.target === "end" &&
+      owner.state.scrollCommand.offset === undefined &&
+      !isTranscriptMaintenanceScroll(owner.state, element)
+    ) {
+      owner.cancelScroll();
+    }
     const programmatic = owner.isProgrammaticScroll();
     // The follow threshold releases pane policy before a command's last pixels settle.
     const readerDelta = programmatic || owner.state.scrollCommand !== null ? 0 : delta;
@@ -512,16 +519,6 @@ export function observeTranscriptOffset(
     }
     if (!scrolling && owner.prependAnchor.hasPrepend) {
       owner.invalidate();
-    }
-    // Firefox can report residual smooth motion after a measured end clamp.
-    // Finish the issued Latest command at idle; fresh reader input already cancels it.
-    if (
-      !scrolling &&
-      owner.state.scrollCommand?.target === "end" &&
-      owner.state.scrollCommand.offset !== undefined &&
-      !hasReachedIssuedEnd(owner.state, element, 1)
-    ) {
-      instance.scrollToEnd({ behavior: "instant" });
     }
     // Retire a completed journey before delayed native idle can recapture a
     // reader who has since been resize-clamped to a different end. Completion

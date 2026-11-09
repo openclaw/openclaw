@@ -13,7 +13,6 @@ import {
   isTranscriptProgrammaticScroll,
   observeTranscriptOffset,
   scrollTranscriptOffset,
-  scrollTranscriptToEnd,
   TranscriptOffsetState,
 } from "./chat-transcript-offset-observer.ts";
 import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
@@ -62,7 +61,7 @@ it("keeps maintenance and active commands owned until the committed viewport set
 });
 
 it.each([undefined, 1000])(
-  "keeps latest through prior native motion and an end clamp (issued target: %s)",
+  "keeps latest through a temporary native end clamp (issued target: %s)",
   (offset) => {
     const element = document.createElement("div");
     let height = 1000;
@@ -110,12 +109,6 @@ it.each([undefined, 1000])(
     expect(state.scrollCommand).toBe(command);
     expect(cancelScroll).not.toHaveBeenCalled();
 
-    // A prior PageUp can still deliver native motion while Latest prepares its target.
-    element.scrollTop = 760;
-    element.dispatchEvent(new Event("scroll"));
-    expect(state.scrollCommand).toBe(command);
-    expect(cancelScroll).not.toHaveBeenCalled();
-
     command.offset = 1000;
     element.dispatchEvent(new Event("scroll"));
     element.dispatchEvent(new Event("scrollend"));
@@ -128,12 +121,6 @@ it.each([undefined, 1000])(
     element.scrollTop = 1000;
     element.dispatchEvent(new Event("scroll"));
     expect(cancelScroll).toHaveBeenCalledExactlyOnceWith(true);
-
-    cancelScroll.mockClear();
-    state.scrollCommand = { target: "end", behavior: "smooth" };
-    element.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
-    expect(state.scrollCommand).toBeNull();
-    expect(cancelScroll).toHaveBeenCalledExactlyOnceWith();
   },
 );
 
@@ -454,113 +441,3 @@ it.each([
     expect(element.scrollTop).toBe(expected);
   }
 });
-
-it.each([false, true])(
-  "finishes an idle Latest journey unless PageUp cancelled it (cancelled: %s)",
-  async (cancelled) => {
-    vi.useFakeTimers();
-    const element = document.body.appendChild(document.createElement("div"));
-    let nativeOffset = 0;
-    let dispose = () => {};
-    onTestFinished(() => {
-      dispose();
-      element.remove();
-      vi.clearAllTimers();
-      vi.useRealTimers();
-    });
-    Object.defineProperties(element, {
-      clientHeight: { value: 200 },
-      scrollHeight: { value: 1200 },
-      scrollTop: {
-        get: () => nativeOffset,
-        set: (value: number) => {
-          nativeOffset = Math.max(0, Math.min(value, 1000));
-        },
-      },
-      scrollTo: {
-        value: (options: ScrollToOptions) => {
-          // Smooth motion arrives as native receipts below. Instant writes
-          // move immediately and publish their normal asynchronous read-back.
-          if (options.behavior === "smooth") {
-            return;
-          }
-          const before = element.scrollTop;
-          element.scrollTop = options.top ?? before;
-          if (element.scrollTop !== before) {
-            setTimeout(() => element.dispatchEvent(new Event("scroll")), 0);
-          }
-        },
-      },
-    });
-    const state = new TranscriptOffsetState();
-    const endAnchor = new TranscriptEndAnchor(() => {});
-    const host = { layout: new TranscriptLayoutOwner(vi.fn()), contentElement: null };
-    let virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
-    const cancelScroll = (preserveEnd = false) => {
-      state.scrollCommand = null;
-      if (preserveEnd) {
-        endAnchor.capture(element);
-      } else {
-        endAnchor.clear();
-        virtualizer.cancelScroll();
-      }
-    };
-    virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-      count: 6,
-      estimateSize: () => 200,
-      initialOffset: 0,
-      isScrollingResetDelay: 20,
-      useScrollendEvent: false,
-      getScrollElement: () => element,
-      scrollToFn: (offset, options, instance) =>
-        scrollTranscriptOffset(state, host, 0, offset, options, instance),
-      observeElementRect: (_, callback) => callback({ width: 800, height: 200 }),
-      observeElementOffset: (instance, callback) =>
-        observeTranscriptOffset(
-          {
-            state,
-            getScrollElement: () => element,
-            endAnchor,
-            prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
-            canFollowEnd: () => true,
-            isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
-            cancelScroll,
-            onLayoutCorrection: (before, after) => endAnchor.recordLayoutCorrection(before, after),
-            invalidate: vi.fn(),
-            onOffset: vi.fn(),
-            onReaderScroll: vi.fn(),
-            onComposerLayout: vi.fn(),
-          },
-          instance,
-          callback,
-        ),
-    });
-    const { _didMount: mount, _willUpdate: update } = virtualizer;
-    dispose = mount();
-    update();
-    scrollTranscriptToEnd(
-      state,
-      virtualizer,
-      { source: "manual", behavior: "smooth" },
-      cancelScroll,
-      () => {},
-      endAnchor,
-      (ready) => ready(),
-    );
-
-    // Layout can synchronize arrival before the native scroll event. Give
-    // virtual-core its normal settling frames, then deliver the older motion.
-    element.scrollTop = 1000;
-    state.syncNativeOffset?.(true);
-    await vi.advanceTimersByTimeAsync(64);
-    if (cancelled) {
-      element.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
-    }
-    element.scrollTop = 947;
-    element.dispatchEvent(new Event("scroll"));
-    await vi.advanceTimersByTimeAsync(200);
-
-    const distanceFromEnd = element.scrollHeight - element.clientHeight - element.scrollTop;
-    expect(distanceFromEnd).toBe(cancelled ? 53 : 0);
-  },
-);
