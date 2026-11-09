@@ -1,7 +1,8 @@
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import type { readChatTranscriptAttachmentSource } from "../chat-history-state.ts";
 import { resolveCappedMessageId } from "../chat-message-recovery.ts";
-import { buildMessageItems } from "../chat-thread-items.ts";
+import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
 import { imageTitle } from "./chat-image-presentation.ts";
 import {
   createMessageMediaOptions,
@@ -29,6 +30,7 @@ export function projectTranscriptAttachments(
       normalized.content.some((item) => item.type === "omitted_media") ||
       Boolean(resolveCappedMessageId(row.message, normalized.role));
     const media = projectMessageMedia(row.message, normalized.content);
+    const timestamp = rawMessageTimestamp(row.message) ?? undefined;
     if (media.nextPairingQrExpiresAt !== undefined) {
       pairingQrExpirations.push({
         messageKey: row.key,
@@ -42,6 +44,13 @@ export function projectTranscriptAttachments(
         ...options,
         sessionKey: source.sessionKey,
         connectionEpoch: source.connectionEpoch,
+        onFindWorkspaceFile:
+          normalized.senderSession &&
+          (normalized.senderSession.sessionKey !== source.sessionKey ||
+            (normalized.senderSession.agentId &&
+              normalized.senderSession.agentId !== options.agentId))
+            ? undefined
+            : options.onFindWorkspaceFile,
       },
       media,
     );
@@ -61,6 +70,7 @@ export function projectTranscriptAttachments(
         ]),
         label: imageTitle(image),
         mimeType: image.mimeType,
+        timestamp,
       });
     }
     for (const [index, item] of media.attachments.entries()) {
@@ -78,6 +88,7 @@ export function projectTranscriptAttachments(
         ]),
         label: item.attachment.label,
         mimeType: item.attachment.mimeType,
+        timestamp,
       });
     }
   }
@@ -94,7 +105,9 @@ export function projectTranscriptAttachments(
 }
 
 export function transcriptAttachmentMatches(entry: TranscriptAttachmentEntry, query: string) {
-  return entry.label.toLowerCase().includes(query.trim().toLowerCase());
+  return foldSearchCase(entry.label)
+    .normalize("NFC")
+    .includes(foldSearchCase(query.trim()).normalize("NFC"));
 }
 
 export function hasTranscriptAttachments(source: TranscriptAttachments | undefined, query = "") {

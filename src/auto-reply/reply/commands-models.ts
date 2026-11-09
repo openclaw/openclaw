@@ -335,13 +335,14 @@ async function buildModelsCommandReply(
   const effectivePageSize = all ? total : pageSize;
   const pageCount = Math.ceil(total / effectivePageSize);
   const safePage = all ? 1 : Math.max(1, Math.min(page, pageCount));
+  const pageSizeSuffix = pageSize === PAGE_SIZE_DEFAULT ? "" : ` limit=${pageSize}`;
 
   if (!all && page !== safePage) {
     return {
       text: [
         `Page out of range: ${page} (valid: 1-${pageCount})`,
         "",
-        `Try: /models list ${provider} ${safePage}`,
+        `Try: /models list ${provider} ${safePage}${pageSizeSuffix}`,
         `All: /models list ${provider} all`,
       ].join("\n"),
     };
@@ -361,7 +362,7 @@ async function buildModelsCommandReply(
   }
   lines.push("", "Switch: /model <provider/model>");
   if (!all && safePage < pageCount) {
-    lines.push(`More: /models list ${provider} ${safePage + 1}`);
+    lines.push(`More: /models list ${provider} ${safePage + 1}${pageSizeSuffix}`);
   }
   if (!all) {
     lines.push(`All: /models list ${provider} all`);

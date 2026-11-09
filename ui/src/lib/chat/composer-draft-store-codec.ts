@@ -1,4 +1,5 @@
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isSessionPermissionMode } from "../protocol-validators.generated/session-input.js";
 import type {
   DurableComposerDraft,
   DurableComposerDraftAttachment,
@@ -88,6 +89,9 @@ export function parseStoredDraft(value: unknown): StoredDurableComposerDraft | n
         )))
   ) {
     return null;
+  }
+  if (record.permissionMode !== undefined && !isSessionPermissionMode(record.permissionMode)) {
+    record.permissionMode = undefined;
   }
   const selection = record.modelSelection;
   if (

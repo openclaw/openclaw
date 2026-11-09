@@ -109,7 +109,7 @@ function responses(installed = true) {
   };
   return {
     ...pluginMethodResponses(),
-    "plugins.list": inventory(installed ? [calendarPlugin] : []),
+    "plugins.list": inventory(installed ? [{ ...calendarPlugin, catalogId }] : []),
     "plugins.catalog.get": detail,
     "plugins.inspect": {
       ...calendarInspection,
@@ -140,7 +140,7 @@ describeControlUiE2e("Plugin skill bundle routes", () => {
       const session = await setup({ methodResponses: responses(installed) }, route);
       const { page, gateway, modal, file, open, read, content } = session;
       if (name === "installed settings") {
-        const descriptionSelector = ".plugin-skills-section .plugin-capability__copy > span";
+        const descriptionSelector = ".plugin-skills-section .settings-row__desc";
         const description = page.locator(descriptionSelector);
         for (const width of [1440, 390]) {
           await page.setViewportSize({ width, height: 1000 });
@@ -221,6 +221,7 @@ describeControlUiE2e("Plugin skill bundle routes", () => {
     });
     await open();
     await read();
+    await modal.waitFor();
     expect(await modal.locator("openclaw-panel-loading-skeleton").count()).toBe(2);
     expect(await modal.locator(".body[aria-busy]").textContent()).not.toMatch(
       /Loading|Try another file name or content search\./,

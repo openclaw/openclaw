@@ -1,12 +1,19 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
-import { jsonArrayElements } from "../../infra/database-engine/json-values.js";
+import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
+import {
+  jsonArrayElements,
+  jsonNativeFieldsValid,
+  jsonPathValue,
+} from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { currentSqliteOperationTiming } from "../../infra/sqlite-reader-lifecycle.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
   SessionTranscriptBoundedActiveContext,
@@ -16,8 +23,8 @@ import type {
 import { iterateUnindexedActiveTranscriptNavigation } from "./session-accessor.sqlite-history-navigation.js";
 import {
   getActiveTranscriptKysely,
-  selectActiveTranscriptEventRows,
   selectActiveTranscriptIdentityRows,
+  selectActiveTranscriptMetadataRows,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
@@ -26,6 +33,7 @@ import {
 } from "./session-accessor.sqlite-reset-window.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import { fitBackgroundResultDependencies } from "./session-background-result-dependencies.js";
 import {
   normalizeBoundedContextLimits,
   selectBoundedContextRows,
@@ -37,6 +45,7 @@ import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js"
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
   readTranscriptPayload,
+  transcriptEventDependencyNavigationSql,
   transcriptEventResetNavigationSql,
   transcriptPredicateSql,
 } from "./transcript-payload.js";
@@ -339,19 +348,14 @@ export function readSessionTranscriptBoundedActiveContextCore(
       window?.boundaryType === "compaction"
         ? (window.firstKeptActivePosition ?? window.boundaryActivePosition)
         : window?.boundaryActivePosition;
+    const activeMetadata = selectActiveTranscriptMetadataRows(projection.database);
     const metadata = covered
       ? covered.rows
           .filter((row) => !fence || row.event_seq < fence.beforeRawSeq)
           .slice(0, limits ? limits.maxEvents + 1 : undefined)
       : iterateSqliteQuerySync(
           projection.database.db,
-          selectActiveTranscriptEventRows(projection.database)
-            .select([
-              "active.event_seq",
-              "active.active_position",
-              /* kysely-allow-raw: active-context byte caps exclude rows before fetching or parsing. */
-              sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
-            ])
+          activeMetadata
             .where("active.session_id", "=", projection.resolved.sessionId)
             .$if(fence !== undefined, (query) =>
               query.where("active.event_seq", "<", fence!.beforeRawSeq),
@@ -379,6 +383,17 @@ export function readSessionTranscriptBoundedActiveContextCore(
         );
     const selection = selectBoundedContextRows(metadata, headerBytes, limits);
     const { selectedRows } = selection;
+    const timing = currentSqliteOperationTiming();
+    if (timing) {
+      timing.hydrationActiveEvents = projection.state.activeEventCount;
+      // Truncation consumed one rejected row; byte stops must not imply SQL exhaustion.
+      timing.hydrationMetadataRows = covered
+        ? undefined
+        : selectedRows.length + Number(selection.truncated);
+      timing.hydrationMetadataLimit = !covered && limits ? limits.maxEvents + 1 : undefined;
+      timing.hydrationExhausted = !covered && limits ? Number(!selection.truncated) : undefined;
+      timing.hydrationDependencyRows = undefined;
+    }
     let { serializedBytes, truncated } = selection;
     const contextSequences = selectedRows.map((row) => row.event_seq);
     let boundary = covered
@@ -441,10 +456,123 @@ export function readSessionTranscriptBoundedActiveContextCore(
       if (!limits || serializedBytes + boundary.serialized_bytes <= limits.maxBytes) {
         injectedBoundarySeq = boundary.seq;
         contextSequences.unshift(boundary.seq);
-        serializedBytes += boundary.serialized_bytes;
       } else {
         truncated = true;
       }
+    }
+    const dependencyNavigation =
+      /* kysely-allow-raw: fixed materialized navigation column shared by dependency predicates. */ sql.ref<string>(
+        "dependency.navigation_json",
+      );
+    // PostgreSQL rows JSONB cannot decode reach the JavaScript classifier below unfiltered;
+    // SQLite decodes these escapes natively and keeps its covered-fact plan.
+    const postgres = isPostgresSqlConnection(projection.database.db);
+    const dependencyNative = jsonNativeFieldsValid(projection.database.db, dependencyNavigation);
+    const dependencyField = <T = string | null>(path: string) => {
+      const value = jsonPathValue<T>(projection.database.db, dependencyNavigation, sql.val(path));
+      return postgres
+        ? /* kysely-allow-raw: CASE fences native decoding of escapes JSONB rejects. */ sql<T>`CASE WHEN ${dependencyNative} THEN ${value} END`
+        : value;
+    };
+    const dependencyCandidates = Array.from(
+      iterateSqliteQuerySync(
+        projection.database.db,
+        db
+          // Reuse each guarded navigation projection across the dependency predicates.
+          .with(
+            (cte) => cte("dependency").materialized(),
+            () =>
+              activeMetadata
+                .select((eb) => [
+                  "active.context_eligible",
+                  /* kysely-allow-raw: covered facts never read payload navigation; legacy rows retain the exact guarded projection. */
+                  sql<string>`CASE WHEN facts.seq IS NOT NULL THEN facts.dependency_navigation_json ELSE ${eb
+                    .selectFrom("transcript_events as event")
+                    .select(
+                      transcriptEventDependencyNavigationSql(
+                        projection.database.db,
+                        eb.ref("active.context_eligible"),
+                      ).as("navigation_json"),
+                    )
+                    .whereRef("event.session_id", "=", "active.session_id")
+                    .whereRef("event.seq", "=", "active.event_seq")} END`.as("navigation_json"),
+                ])
+                .where("active.session_id", "=", projection.resolved.sessionId)
+                // Exclude known ordinary identities as a set before reading payloads. Joining
+                // identities here can rescan the event-type index once per active event.
+                .where((eb) =>
+                  eb.or([
+                    eb("active.context_eligible", "=", 0),
+                    eb(
+                      "active.event_seq",
+                      "not in",
+                      db
+                        .selectFrom("transcript_event_identities")
+                        .select("seq")
+                        .where("session_id", "=", projection.resolved.sessionId)
+                        .where("event_type", "not in", ["custom", "reset", "branch_summary"]),
+                    ),
+                  ]),
+                )
+                .$if(fence !== undefined, (query) =>
+                  query.where("active.event_seq", "<", fence!.beforeRawSeq),
+                ),
+          )
+          .selectFrom("dependency")
+          .select(["event_seq", "navigation_json", "serialized_bytes"])
+          .where((eb) =>
+            eb.or([
+              ...(postgres ? [eb.not(dependencyNative)] : []),
+              eb.and([
+                eb("context_eligible", "=", 0),
+                eb(
+                  dependencyField<string | number>("$.message.excludeFromContext"),
+                  "=",
+                  jsonPathValue<string | number>(
+                    projection.database.db,
+                    sql.lit('{"value":true}'),
+                    sql.lit("$.value"),
+                  ),
+                ),
+                eb(dependencyField("$.type"), "=", "message"),
+                eb(dependencyField("$.message.role"), "=", "assistant"),
+                eb(dependencyField("$.message.provider"), "=", "openclaw"),
+                eb(dependencyField("$.message.model"), "=", "automation-result"),
+                eb(dependencyField("$.message.openclawModelPlacement"), "=", "pending"),
+              ]),
+              eb.and([
+                eb(dependencyField("$.type"), "=", "custom"),
+                eb(dependencyField("$.customType"), "=", BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE),
+              ]),
+              eb(dependencyField("$.type"), "in", ["reset", "branch_summary"]),
+            ]),
+          )
+          .orderBy("active_position", "asc"),
+      ),
+      (row) => ({
+        seq: row.event_seq,
+        serialized_bytes: row.serialized_bytes,
+        event: JSON.parse(row.navigation_json) as unknown,
+      }),
+    );
+    const selectedSizes = new Map(selectedRows.map((row) => [row.event_seq, row.serialized_bytes]));
+    if (timing) {
+      timing.hydrationDependencyRows = dependencyCandidates.length;
+    }
+    if (boundary) {
+      selectedSizes.set(boundary.seq, boundary.serialized_bytes);
+    }
+    const fitted = fitBackgroundResultDependencies(
+      contextSequences.map((seq) => ({ seq, serialized_bytes: selectedSizes.get(seq)! })),
+      dependencyCandidates,
+      headerBytes,
+      limits?.maxBytes,
+    );
+    contextSequences.splice(0, contextSequences.length, ...fitted.rows.map((row) => row.seq));
+    serializedBytes = fitted.serializedBytes;
+    truncated ||= fitted.truncated;
+    if (injectedBoundarySeq !== undefined && !contextSequences.includes(injectedBoundarySeq)) {
+      injectedBoundarySeq = undefined;
     }
     const payloadSequences = header ? [header.seq, ...contextSequences] : contextSequences;
     // One payload read follows all byte decisions; header-first ordering also supports migrated mirrors.
@@ -526,10 +654,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
     // outside the byte-counted events so excluded payloads cannot change either boundary.
     const firstKeptRanges = readBoundedRetentionRanges(projection, rows, header ? 1 : 0);
     const version = projection.version;
-    const sizes = new Map(selectedRows.map((row) => [row.event_seq, row.serialized_bytes]));
-    if (boundary) {
-      sizes.set(boundary.seq, boundary.serialized_bytes);
-    }
+    const sizes = new Map(fitted.rows.map((row) => [row.seq, row.serialized_bytes]));
     consume(
       [
         ...(header ? [{ rawSeq: header.seq, serializedBytes: headerBytes }] : []),

@@ -24,7 +24,10 @@ import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
-import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
+import {
+  waitForSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptProjection,
+} from "../../config/sessions/session-transcript-reconcile.js";
 import { buildSessionTranscriptTurnExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import {
   historyLane,
@@ -46,6 +49,7 @@ import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import * as terminalOpen from "../../state/openclaw-agent-db-terminal.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   getOpenClawAgentDatabaseIfOpen,
@@ -68,6 +72,7 @@ import {
 } from "./session-manager-fixtures.test-support.js";
 import { withSelectedTranscriptReader } from "./session-manager-reader.test-support.js";
 import { readCommittedSessionManagerReload } from "./session-manager-reload.js";
+import { sessionManagerReadTranscriptBranch } from "./session-manager-view-types.js";
 import { SessionManager } from "./session-manager.js";
 import { toolResult } from "./session-message-fixtures.test-support.js";
 
@@ -124,7 +129,9 @@ function toolCall(message: ReturnType<typeof assistantMessage>) {
   return call;
 }
 
-it("reuses resident transcript bytes for admitted reads outside the actor without growing residency", () =>
+it("reuses resident transcript bytes for admitted reads outside the actor without growing residency", ({
+  signal,
+}) =>
   withTranscriptState("resident-hydration", async ({ scope: target }) => {
     const source = await SessionManager.openAsync(target);
     const message = userMessage("synthetic transcript ".repeat(8192), 1);
@@ -136,13 +143,6 @@ it("reuses resident transcript bytes for admitted reads outside the actor withou
       const prepareHydration = () =>
         transcriptHydration.prepareSessionTranscriptHydration(target, limits);
       const cohort = { sessionKey: target.sessionKey, entryIds: [entryId] };
-      const expected = await prepareHydration().read();
-      await prepareHydration().readCohort!(cohort, () => {});
-      const hot = actor.snapshot({ assertCurrent() {}, authorize() {} });
-      assert(hot);
-      const retained = readSessionActorTranscriptReplica(hot);
-      assert(retained?.context);
-      const retainedBytes = serialize(retained).byteLength;
       const replies: number[] = [];
       const spies = [historyLane, targetDiscoveryLane].map(({ pool }) => {
         const run = pool.run.bind(pool);
@@ -160,19 +160,67 @@ it("reuses resident transcript bytes for admitted reads outside the actor withou
           });
         });
       });
+      const admitted = createDeferred();
+      const revalidate = terminalOpen.revalidateAgentDatabaseTerminalOpenAsync;
+      let admittedReaders = 0;
+      const admission = vi
+        .spyOn(terminalOpen, "revalidateAgentDatabaseTerminalOpenAsync")
+        .mockImplementation(async (...args) => {
+          await revalidate(...args);
+          if (++admittedReaders === 4) {
+            admitted.resolve();
+          }
+          await admitted.promise;
+        });
       try {
+        // Join the same pending worker read, before any receiver can seed the retained actor path.
+        const [expected, ...joined] = await withinTest(
+          runWithoutOwnedSessionTranscriptWrites(() =>
+            Promise.all(Array.from({ length: 4 }, () => prepareHydration().read())),
+          ),
+          signal,
+        );
+        expect(admittedReaders).toBe(4);
+        admission.mockRestore();
+        assert(expected);
+        expect(expected.snapshot.events).toEqual(source.getPersistedEntries());
+        expect(replies).toHaveLength(1);
+        for (const result of joined) {
+          expect(result).toBe(expected);
+          expect(() => {
+            result.snapshot.events.length = 0;
+          }).toThrow(TypeError);
+        }
+        let retainedEvents: readonly unknown[] = [];
+        await runWithoutOwnedSessionTranscriptWrites(() =>
+          prepareHydration().readCohort!(cohort, ({ snapshot }) => {
+            retainedEvents = snapshot.events;
+          }),
+        );
+        expect(retainedEvents).toHaveLength(expected.snapshot.events.length);
+        const hot = actor.snapshot({ assertCurrent() {}, authorize() {} });
+        assert(hot);
+        const retained = readSessionActorTranscriptReplica(hot);
+        assert(retained?.context);
+        const retainedBytes = serialize(retained).byteLength;
+        replies.length = 0;
         await runWithoutOwnedSessionTranscriptWrites(async () => {
           for (let index = 0; index < 10; index++) {
             const actual = await prepareHydration().read();
             expect(actual.snapshot).toEqual(expected.snapshot);
-            actual.snapshot.events.length = 0;
+            for (const [eventIndex, event] of actual.snapshot.events.entries()) {
+              expect(event).toBe(retainedEvents[eventIndex]);
+            }
+            expect(() => {
+              actual.snapshot.events.length = 0;
+            }).toThrow(TypeError);
             await prepareHydration().readCohort!(cohort, (prepared) => {
               assert(prepared.kind === "bounded");
               expect(prepared.snapshot).toEqual(expected.snapshot);
               const anchor = prepared.transcript?.anchors[0];
               assert(anchor);
               expect(anchor.entryId).toBe(entryId);
-              expect(Reflect.set(anchor, "entryId", "caller-owned-edit")).toBe(true);
+              expect(Reflect.set(anchor, "entryId", "caller-owned-edit")).toBe(false);
             });
           }
         });
@@ -209,6 +257,8 @@ it("reuses resident transcript bytes for admitted reads outside the actor withou
           expect(replies.reduce((sum, bytes) => sum + bytes, 0)).toBeGreaterThan(0);
         });
       } finally {
+        admitted.resolve();
+        admission.mockRestore();
         spies.forEach((spy) => spy.mockRestore());
       }
     });
@@ -485,7 +535,8 @@ it.each(["durable", "admitted", "incognito"] as const)(
               event.type === "worker.request" &&
               event.phase === "queued" &&
               (event.kind === "sessionTranscript" ||
-                (event.kind === "sqlite_writer" && event.requestClass === "sessions"))
+                (event.kind === "sqlite_writer" &&
+                  (event.requestClass === "sessions" || event.requestClass.startsWith("session."))))
             ) {
               requests.push({ kind: event.kind, requestClass: event.requestClass });
             }
@@ -522,20 +573,20 @@ it.each(["durable", "admitted", "incognito"] as const)(
       expect(JSON.stringify(context)).not.toMatch(
         /synthetic-private-native-payload|synthetic-private-tool-details/,
       );
-      expect(Reflect.set(projectedReply.content[0]!, "text", "changed")).toBe(true);
+      expect(Reflect.set(projectedReply.content[0]!, "text", "changed")).toBe(false);
       const residentCall = toolCall(reply.message);
       const projectedCall = toolCall(projectedReply);
       const projectedNested = asOptionalRecord(projectedCall.arguments.nested);
       assert(projectedNested);
-      expect(Reflect.set(projectedNested, "changed", "context edit")).toBe(true);
+      expect(Reflect.set(projectedNested, "changed", "context edit")).toBe(false);
       expect(reply.message.content[0]).toEqual({ type: "text", text: "answer" });
       expect(residentCall.arguments).toMatchObject({ nested: { changed: "original" } });
 
       freezeJsonSnapshot(reply.message.content);
       const rereadReply = assistantMessage((await readInitial()).messages[1]);
-      expect(Reflect.set(rereadReply.content[0]!, "text", "changed again")).toBe(true);
+      expect(Reflect.set(rereadReply.content[0]!, "text", "changed again")).toBe(false);
       const rereadCall = toolCall(rereadReply);
-      expect(Reflect.set(rereadCall.arguments, "path", "context edit after freeze")).toBe(true);
+      expect(Reflect.set(rereadCall.arguments, "path", "context edit after freeze")).toBe(false);
       expect(reply.message.content[0]).toEqual({ type: "text", text: "answer" });
       expect(residentCall.arguments.path).toBe("original.txt");
 
@@ -692,6 +743,41 @@ it.each([
           expect(JSON.stringify(context)).not.toMatch(/private-durable-context|unpersisted/);
           expect(context.messages).toMatchObject(expectedMessages);
           expect(readModel).toHaveBeenCalledTimes(expectedReads);
+          if (change === "unchanged") {
+            const branch = manager[sessionManagerReadTranscriptBranch]();
+            const question = branch.find((entry) => entry.id === questionId);
+            const reply = branch.find((entry) => entry.id === replyId);
+            assert(
+              question?.type === "message" &&
+                question.message.role === "user" &&
+                reply?.type === "message" &&
+                reply.message.role === "assistant",
+            );
+            const questionPayload = question.message;
+            const replyPayload = reply.message;
+            expect(context.messages[0]).toBe(questionPayload);
+            expect(assistantMessage(context.messages[1]).content).toBe(replyPayload.content);
+            expect(Object.isFrozen(questionPayload)).toBe(true);
+            const writable = manager.getEntry(questionId!);
+            assert(writable?.type === "message" && writable.message.role === "user");
+            expect(writable).toBe(question);
+            expect(writable.message).not.toBe(questionPayload);
+            writable.message.content = "SDK edit";
+            const getter = vi.fn(() => {
+              throw new Error("SDK accessor must not run while reading its entry");
+            });
+            Object.defineProperty(writable, "sdkAccessor", {
+              configurable: true,
+              enumerable: true,
+              get: getter,
+            });
+            expect(manager.getEntry(questionId!)).toBe(writable);
+            expect(getter).not.toHaveBeenCalled();
+            Reflect.deleteProperty(writable, "sdkAccessor");
+            expect(reply.message).toBe(replyPayload);
+            expect(Object.isFrozen(replyPayload)).toBe(true);
+            expect(context.messages[0]).toMatchObject({ content: "question" });
+          }
         });
         if (change === "local-reset" || change === "local-branch") {
           expect(await readMessages(target)).toMatchObject(questionAndAnswer);
@@ -767,28 +853,32 @@ it("rejects a removed user admission before the bounded reader captures its witn
   }));
 
 it.each(["append", "rewrite"] as const)(
-  "rejects a native %s before consuming bounded admitted model context",
+  "retries a native %s before consuming bounded admitted model context",
   (mutation) =>
     withSessionState("admitted-context", async ({ scope }) => {
       const { source } = await seedUser(scope);
+      const expectedMessages =
+        mutation === "rewrite"
+          ? [{ content: "changed" }]
+          : [{ content: "original" }, { content: "changed" }];
       await withSelectedTranscriptReader(scope, async () => {
         const options = { limits: contextLimits };
-        const spy = afterModelRead(() => {
+        const spy = afterModelRead(async () => {
           if (mutation === "rewrite") {
             expect(source.removeTrailingEntries((entry) => entry.type === "message")).toBe(1);
           }
-          source.appendMessage(userMessage("changed", 2));
+          await source.appendMessageAsync(userMessage("changed", 2));
+          // Finish the rewrite's derived writes before measuring its single retry.
+          await waitForSessionTranscriptIndexReconcile({
+            agentId: scope.agentId,
+            path: scope.storePath,
+          });
         });
         await withRestoredMocks([spy], async () => {
-          await expect(SessionManager.openModelContextAsync(scope, options)).rejects.toThrow(
-            "Session entry changed during read",
-          );
+          expect(await readMessages(scope, options)).toMatchObject(expectedMessages);
+          expect(spy).toHaveBeenCalledTimes(2);
         });
-        expect(await readMessages(scope, options)).toMatchObject(
-          mutation === "rewrite"
-            ? [{ content: "changed" }]
-            : [{ content: "original" }, { content: "changed" }],
-        );
+        expect(await readMessages(scope, options)).toMatchObject(expectedMessages);
       });
     }),
 );
@@ -832,7 +922,7 @@ it("allows a queued writer to finish during an unbounded admitted context read",
     });
   }));
 
-it("keeps one bounded context snapshot and observes a foreign rewrite on the next read", () =>
+it("retries a bounded context snapshot after a foreign rewrite before consuming it", () =>
   withSessionState("foreign-context", async ({ scope }) => {
     const { entryId: userId } = await seedUser(scope);
     const databaseOptions = { agentId: scope.agentId, path: scope.storePath };
@@ -870,7 +960,8 @@ it("keeps one bounded context snapshot and observes a foreign rewrite on the nex
         }
       });
       await withRestoredMocks([spy], async () => {
-        expect(await readMessages(scope, options)).toMatchObject([{ content: "original" }]);
+        expect(await readMessages(scope, options)).toMatchObject([{ content: "foreign rewrite" }]);
+        expect(spy).toHaveBeenCalledTimes(2);
       });
       expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
       expect(await readMessages(scope, options)).toMatchObject([{ content: "foreign rewrite" }]);

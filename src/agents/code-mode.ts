@@ -38,14 +38,16 @@ import {
   compactToolSearchCatalogEntry,
   isDirectVisibleCatalogTool,
 } from "./tool-search-catalog.js";
-import { formatToolSearchControlResult, type ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
-  type ToolSearchCatalogEntry,
-  type ToolSearchCatalogRef,
-  type ToolSearchToolContext,
+} from "./tool-search-protocol.js";
+import { formatToolSearchControlResult, type ToolSearchRuntime } from "./tool-search-runtime.js";
+import type {
+  ToolSearchCatalogEntry,
+  ToolSearchCatalogRef,
+  ToolSearchToolContext,
 } from "./tool-search-types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -62,6 +64,29 @@ export type { CodeModeFailureCode, CodeModeHeadlessResult } from "./code-mode-ru
 type CodeModeToolContext = ToolSearchToolContext & { modelContextWindowTokens?: number };
 
 const MAX_CODE_MODE_CATALOG_INDEX_CHARS = 8_000;
+
+const CODE_MODE_EXEC_PARAMETERS = Type.Object({
+  title: Type.Optional(executionTitleSchema({ required: true })),
+  // `command` stays runtime-only for hook compatibility. Requiring `code`
+  // prevents schema-valid empty calls from constrained models.
+  code: Type.String({
+    description:
+      "Required JavaScript; no TypeScript annotations, Python, shell, `require`, or `import`. Use `return value`; a trailing expression yields `null`.",
+  }),
+  awaitResults: Type.Optional(
+    Type.Boolean({
+      description:
+        "Required task results: keep this call owned through event-driven tool waits, without model polling. Explicit background services stay detached. Guest budget and run/tool deadlines still apply.",
+    }),
+  ),
+});
+
+const CODE_MODE_WAIT_PARAMETERS = Type.Object({
+  runId: Type.String({
+    description:
+      'Top-level runId from an exec result with status "waiting", never a nested tool sessionId.',
+  }),
+});
 
 const CODE_MODE_CATALOG_INDEX_HEADING = [
   "Enabled async tool globals (descriptions are intentionally deferred):",
@@ -159,7 +184,7 @@ export function buildCodeModeCatalogPrompt(
       ? " Installed skills: use `await skills.search(query, limit)` to find relevant skills. `await skills.list()` lists up to 20 entries; pass an offset for later pages."
       : "") +
     (hasSkillTool("skills_read")
-      ? " Use `await skills.read(name)` for complete installed skill instructions. A known exact name can be read directly."
+      ? " Use `await skills.read(name)` for complete installed skill instructions. A known exact name can be read directly. For local skill companions use `await skills.read(name, relativePath)`; restricted placements are instruction-only."
       : "");
   // The catalog already reserves built-in namespace globals without constructing their runtimes.
   const bindings = createCodeModeCatalogBindings(
@@ -221,21 +246,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     name: CODE_MODE_EXEC_TOOL_NAME,
     label: "exec",
     description: createCodeModeExecDescription(config),
-    parameters: Type.Object({
-      title: Type.Optional(executionTitleSchema({ required: true })),
-      // `command` stays runtime-only for hook compatibility. Requiring `code`
-      // prevents schema-valid empty calls from constrained models.
-      code: Type.String({
-        description:
-          "Required JavaScript; no TypeScript annotations, Python, shell, `require`, or `import`. Use `return value`; a trailing expression yields `null`.",
-      }),
-      awaitResults: Type.Optional(
-        Type.Boolean({
-          description:
-            "Required task results: keep this call owned through event-driven tool waits, without model polling. Explicit background services stay detached. Guest budget and run/tool deadlines still apply.",
-        }),
-      ),
-    }),
+    parameters: CODE_MODE_EXEC_PARAMETERS,
     execute: async (
       toolCallId: string,
       args: unknown,
@@ -271,12 +282,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     hideFromChannelProgress: true,
     description:
       'Resume only when the outer exec result has status "waiting", using its top-level runId. A completed exec may return a still-running tool operation inside value; manage that operation through its enabled tool in a new exec. Never pass a nested sessionId or process ID to wait.',
-    parameters: Type.Object({
-      runId: Type.String({
-        description:
-          'Top-level runId from an exec result with status "waiting", never a nested tool sessionId.',
-      }),
-    }),
+    parameters: CODE_MODE_WAIT_PARAMETERS,
     execute: async (
       toolCallId: string,
       args: unknown,

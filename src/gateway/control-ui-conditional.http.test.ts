@@ -59,6 +59,7 @@ describe.each([
   let server: Server | undefined;
   let assetUrl: string;
   let baseUrl: string;
+  let rootState: ControlUiRootState;
 
   beforeAll(async () => {
     const root = tempDirs.make("openclaw-ui-conditional-");
@@ -80,11 +81,13 @@ describe.each([
     for (const publicAsset of ["themes/absolutely.css", "sw.js"]) {
       await write(publicAsset, assetBody, modifiedAt);
     }
+    await write("sw.js.gz", gzipSync(assetBody));
+    await write("sw.js.br", brotliCompressSync(assetBody));
     await write(
       "index.html",
       `<html data-openclaw-control-ui-build-id="source-build"><head><script>const fragment = 'href="unfinished';</script><script src="./assets/app-fixture.js"></script><link href="./assets/app.css"><link rel="icon" href="./favicon.svg"><link rel="icon" href="${basePath}/favicon-32.png"></head></html>`,
     );
-    const rootState: ControlUiRootState = {
+    rootState = {
       kind,
       path: root,
       realPath: root,
@@ -109,6 +112,43 @@ describe.each([
   });
 
   if (kind === "bundled" && basePath === "") {
+    it("keeps public content immutable across builds and revalidates changed versions", async () => {
+      if (rootState.kind !== "bundled") {
+        throw new Error("Expected bundled test root");
+      }
+      const firstHash = "a".repeat(64);
+      const secondHash = "b".repeat(64);
+      const asset = `${baseUrl}/themes/absolutely.css`;
+      try {
+        for (const buildId of [
+          `build-a-${firstHash}`,
+          `build-b-${firstHash}`,
+          `build-c-${secondHash}`,
+        ]) {
+          rootState.publicAssetBuildId = buildId;
+          const version = buildId === `build-c-${secondHash}` ? secondHash : firstHash;
+          const document = await requestAsset(baseUrl, "GET");
+          expect(document.body.toString()).toContain(
+            `data-openclaw-control-ui-build-id="${buildId}"`,
+          );
+          expect(document.body.toString()).toContain(`href="/favicon.svg?v=${version}"`);
+          for (const currentVersion of [version, buildId]) {
+            const current = await requestAsset(`${asset}?v=${currentVersion}`, "GET");
+            expect(current.body).toEqual(assetBody);
+            expect(current.response.headers["cache-control"]).toBe(
+              "public, max-age=31536000, immutable",
+            );
+          }
+        }
+        for (const version of [firstHash, `build-a-${firstHash}`, `build-b-${firstHash}`]) {
+          const stale = await requestAsset(`${asset}?v=${version}`, "GET");
+          expect(stale.response.headers["cache-control"]).toBe("no-cache");
+        }
+      } finally {
+        rootState.publicAssetBuildId = "fixture-build";
+      }
+    });
+
     it("reads only negotiated bodies while alternating cold encoding preferences", async () => {
       const read = vi.spyOn(WorkerTaskPool.prototype, "run");
       for (const [accept, encoding, bodyReads] of [
@@ -182,6 +222,38 @@ describe.each([
   });
 
   describe.each(["GET", "HEAD"] as const)("%s", (method) => {
+    it.each(["gzip", "br"] as const)(
+      "negotiates bundled worker %s while retaining revalidation",
+      async (encoding) => {
+        const headers = { "Accept-Encoding": encoding };
+        const { response, body } = await requestAsset(
+          `${baseUrl}/sw.js?v=fixture-build`,
+          method,
+          headers,
+        );
+        const encoded = kind === "bundled";
+        expect(response.statusCode).toBe(200);
+        expect(response.headers).toMatchObject({
+          "cache-control": "no-cache",
+          "last-modified": lastModified,
+          vary: "Accept-Encoding",
+        });
+        expect(response.headers["content-encoding"]).toBe(encoded ? encoding : undefined);
+        const expected = encoded
+          ? (encoding === "br" ? brotliCompressSync : gzipSync)(assetBody)
+          : assetBody;
+        expect(response.headers["content-length"]).toBe(String(expected.byteLength));
+        expect(body).toEqual(method === "HEAD" ? Buffer.alloc(0) : expected);
+        const unchanged = await requestAsset(`${baseUrl}/sw.js?v=fixture-build`, method, {
+          ...headers,
+          "If-Modified-Since": lastModified,
+        });
+        expect(unchanged.response.statusCode).toBe(304);
+        expect(unchanged.response.headers["cache-control"]).toBe("no-cache");
+        expect(unchanged.body.byteLength).toBe(0);
+      },
+    );
+
     it.each(["gzip", "br", ""])(
       "serves the original without sidecars (Accept-Encoding: %s)",
       async (encoding) => {

@@ -21,10 +21,10 @@ export type ProviderFastModePolicyContext = {
 
 export type {
   ModelApi,
-  ModelCompatConfig,
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "../config/types.models.js";
+export type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 
 export type ProviderModelRouteSource = {
   api?: ModelApi | null;

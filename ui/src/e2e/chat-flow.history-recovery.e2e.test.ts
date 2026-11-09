@@ -287,6 +287,7 @@ suite.define(() => {
       {
         hasMore: true,
         nextOffset: 100,
+        olderCursor: "older-session-b",
         thinkingLevel: null,
         totalMessages: 140,
       },
@@ -297,7 +298,7 @@ suite.define(() => {
         "chat.history": {
           cases: [
             {
-              match: { offset: 100, sessionKey: "agent:main:session-b" },
+              match: { cursor: "older-session-b", sessionKey: "agent:main:session-b" },
               response: {
                 hasMore: false,
                 messages: olderMessages,

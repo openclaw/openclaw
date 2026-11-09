@@ -29,6 +29,7 @@ import {
   type SessionMessageProjectionState,
 } from "../session-transcript-message.js";
 import type { SubagentCoordinationDisplayResolver } from "../session-transcript-read.types.js";
+import type { ChatHistoryMessageProjector } from "./chat-history-pages.js";
 
 const CHAT_HISTORY_DELTA_MAX_EVENTS = 200;
 const CHAT_HISTORY_DELTA_MAX_BYTES = 1_000_000;
@@ -56,6 +57,7 @@ function chatHistoryDeltaLimits(params: ChatHistoryDeltaParams) {
 export async function readChatHistoryDelta(
   params: ChatHistoryDeltaParams & { incognito?: boolean },
   signal?: AbortSignal,
+  displayProjector?: ChatHistoryMessageProjector,
 ) {
   signal?.throwIfAborted();
   const memory = captureSessionActorTranscriptRead(params.scope, signal);
@@ -76,7 +78,12 @@ export async function readChatHistoryDelta(
         ),
       );
     }
-    const result = await projectChatHistoryDelta(params, delta, readers.subagentCoordination);
+    const result = await projectChatHistoryDelta(
+      params,
+      delta,
+      readers.subagentCoordination,
+      displayProjector,
+    );
     signal?.throwIfAborted();
     memory.assertCurrent();
     return result;
@@ -109,6 +116,7 @@ export async function readChatHistoryDelta(
       result.subagentCoordination,
       result.assertCurrent,
     ),
+    displayProjector,
   );
 }
 
@@ -116,12 +124,22 @@ async function projectChatHistoryDelta(
   params: ChatHistoryDeltaParams,
   result: SessionTranscriptDisplayDeltaResult,
   subagentCoordination: SubagentCoordinationDisplayResolver,
+  displayProjector?: ChatHistoryMessageProjector,
 ) {
   const maxBytes = Math.min(params.maxBytes ?? Infinity, CHAT_HISTORY_DELTA_MAX_BYTES);
   subagentCoordination.assertCurrent?.();
   if (!isAppendOnlySessionHistoryDelta(result)) {
     return { kind: "reset" as const };
   }
+  const entryMessages = result.events.map((row) =>
+    row.messageSeq === undefined
+      ? undefined
+      : projectTranscriptEntryMessage(row.event, row.messageSeq, row.displayPosition),
+  );
+  const displayed = displayProjector
+    ? await displayProjector.project(entryMessages)
+    : entryMessages;
+  subagentCoordination.assertCurrent?.();
   const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
     result.events.flatMap((row) =>
       row.messageSeq === undefined
@@ -145,15 +163,11 @@ async function projectChatHistoryDelta(
     result.events.length > 1
       ? createChatHistoryDeltaByteCounter(params.sessionSnapshot)
       : undefined;
-  for (const row of result.events) {
+  for (const [index, row] of result.events.entries()) {
     if (row.messageSeq === undefined) {
       continue;
     }
-    const entryMessage = projectTranscriptEntryMessage(
-      row.event,
-      row.messageSeq,
-      row.displayPosition,
-    );
+    const entryMessage = asOptionalRecord(displayed[index]);
     if (!entryMessage) {
       continue;
     }

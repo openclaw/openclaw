@@ -1,5 +1,6 @@
 import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -48,26 +49,41 @@ it("warns about synchronous runtime timestamps while preserving the shipped resu
 });
 
 describe("inbound dispatch", () => {
-  function createOwnedInboundFixture() {
+  function createOwnedInboundFixture(observerOnly = false) {
     const registry = createEmptyPluginRegistry();
     const record = createPluginRecord({ id: "owned-channel" });
     registry.plugins.push(record);
     const owner = new PluginInstance("owned-channel", { record, registry });
     const channel = createRuntimeChannel();
     const delivered = vi.fn();
+    const resolveTurn = (replyOptions?: GetReplyOptions) => ({
+      cfg: {},
+      channel: "owned-channel",
+      route: { agentId: "main", sessionKey: "agent:main:owned-channel:direct:test" },
+      ctxPayload: { Body: "test", CommandAuthorized: false },
+      delivery: { deliver: delivered },
+      replyOptions:
+        replyOptions ??
+        (observerOnly ? { onModelSelected: delivered } : { onQueuedFollowupReplyBatch: delivered }),
+    });
     return {
       owner,
+      channel,
       delivered,
-      dispatch: () =>
+      resolveTurn,
+      dispatch: (replyOptions?: GetReplyOptions) =>
         owner.run(() =>
-          channel.inbound.dispatch({
-            cfg: {},
-            channel: "owned-channel",
-            route: { agentId: "main", sessionKey: "agent:main:owned-channel:direct:test" },
-            ctxPayload: { Body: "test", CommandAuthorized: false },
-            delivery: { deliver: delivered },
-            replyOptions: { onQueuedFollowupReplyBatch: delivered },
-          }),
+          observerOnly
+            ? channel.inbound.run({
+                channel: "owned-channel",
+                raw: "test",
+                turnAdoptionLifecycle: { onAdopted() {} },
+                adapter: {
+                  ingest: (raw) => ({ id: "fixture", rawText: raw }),
+                  resolveTurn: () => resolveTurn(replyOptions),
+                },
+              })
+            : channel.inbound.dispatch(resolveTurn(replyOptions)),
         ),
     };
   }
@@ -113,11 +129,29 @@ describe("inbound dispatch", () => {
     }
   });
 
-  it("keeps queued source callbacks live until queue settlement, then revokes them", async () => {
-    const { owner, delivered, dispatch } = createOwnedInboundFixture();
+  it("does not add adoption ownership to plain source options", async () => {
+    const { owner, dispatch } = createOwnedInboundFixture();
+    const source = new AbortController();
+    try {
+      await dispatch({ abortSignal: source.signal });
+      const turn = dispatchRoutedChannelTurn.mock.calls.at(-1)?.[0];
+      expect(turn?.replyOptions?.abortSignal).toBe(source.signal);
+      // Plain user turns detach this source signal when queued; a lifecycle would attach it.
+      expect(
+        turn?.turnAdoptionLifecycle ?? turn?.replyOptions?.turnAdoptionLifecycle,
+      ).toBeUndefined();
+      expect(owner.hasRetainedConsumers).toBe(false);
+    } finally {
+      await owner.dispose();
+    }
+  });
+
+  it.each([false, true])("owns queued callback lifetime (observer=%s)", async (observerOnly) => {
+    const { owner, delivered, dispatch } = createOwnedInboundFixture(observerOnly);
     let settle: (() => void | Promise<void>) | undefined;
     dispatchRoutedChannelTurn.mockImplementationOnce(async (turn) => {
-      turn.replyOptions?.turnAdoptionLifecycle?.onDeferred?.();
+      const lifecycle = turn.turnAdoptionLifecycle ?? turn.replyOptions?.turnAdoptionLifecycle;
+      lifecycle?.onDeferred?.();
       return { status: "handled" };
     });
     try {
@@ -126,9 +160,8 @@ describe("inbound dispatch", () => {
       if (!queued) {
         throw new Error("Dispatch did not retain the queued source");
       }
-      settle = queued.replyOptions?.turnAdoptionLifecycle?.onSettled;
-      expect(owner.hasRetainedConsumers).toBe(true);
-      const deliver = queued.replyOptions?.onQueuedFollowupReplyBatch;
+      settle = (queued.turnAdoptionLifecycle ?? queued.replyOptions?.turnAdoptionLifecycle)
+        ?.onSettled;
       const batch = {
         kind: "queued-followup" as const,
         runId: "queued-run",
@@ -136,17 +169,71 @@ describe("inbound dispatch", () => {
         payloads: [{ text: "answer" }],
         completion: { kind: "completed" as const },
       };
-      await deliver?.(batch);
-      expect(delivered).toHaveBeenCalledExactlyOnceWith(batch);
+      const model = { provider: "openai", model: "qa", thinkLevel: undefined };
+      const callback = observerOnly
+        ? () => queued.replyOptions?.onModelSelected?.(model)
+        : () => queued.replyOptions?.onQueuedFollowupReplyBatch?.(batch);
+      await callback();
+      expect(owner.hasRetainedConsumers).toBe(true);
+      expect(delivered).toHaveBeenCalledExactlyOnceWith(observerOnly ? model : batch);
       await settle?.();
       expect(owner.hasRetainedConsumers).toBe(false);
-      expect(() => deliver?.(batch)).toThrow("consumer is closed");
+      expect(callback).toThrow("consumer is closed");
       settle = undefined;
     } finally {
       await settle?.();
       await owner.dispose();
     }
   });
+
+  it.each([false, true])(
+    "preserves prepared lifecycle identity (mismatch=%s)",
+    async (mismatch) => {
+      const { owner, channel, resolveTurn } = createOwnedInboundFixture();
+      const lifecycle = { onAdopted: vi.fn() };
+      const runDispatch = vi.fn(async () => {
+        lifecycle.onAdopted();
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      });
+      const onDispatchSkipped = vi.fn();
+      const turn = resolveTurn();
+      const run = () =>
+        owner.run(() =>
+          channel.inbound.run({
+            channel: turn.channel,
+            raw: "prepared",
+            turnAdoptionLifecycle: lifecycle,
+            adapter: {
+              ingest: (raw) => ({ id: "prepared", rawText: raw }),
+              resolveTurn: () => ({
+                cfg: turn.cfg,
+                channel: turn.channel,
+                route: turn.route,
+                ctxPayload: turn.ctxPayload,
+                runDispatch,
+                runDispatchLifecycle: {
+                  turnAdoptionLifecycle: mismatch ? { onAdopted() {} } : lifecycle,
+                  onDispatchSkipped,
+                },
+              }),
+            },
+          }),
+        );
+      try {
+        if (mismatch) {
+          await expect(run()).rejects.toThrow(
+            "runDispatchLifecycle must own the top-level turnAdoptionLifecycle",
+          );
+          expect(runDispatch).not.toHaveBeenCalled();
+        } else {
+          await expect(run()).resolves.toBeDefined();
+          expect(runDispatch).toHaveBeenCalledOnce();
+        }
+      } finally {
+        await owner.dispose();
+      }
+    },
+  );
 
   it.each([true, false])("inbound preserves dispatch precedence (bound=%s)", async (bound) => {
     const boundReplyDispatch = bound ? vi.fn() : undefined;

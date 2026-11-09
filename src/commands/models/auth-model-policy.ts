@@ -1,37 +1,23 @@
-import { isDeepStrictEqual } from "node:util";
 import { resolveMutableAgentEntry } from "../../agents/agent-scope-config.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
 import {
   LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH,
   resolveConfiguredModelPolicyAllow,
 } from "../../agents/model-selection-shared.js";
+import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { logConfigUpdated } from "../../config/logging.js";
-import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import { materializeModelPolicyAllowlist } from "../../config/model-policy-allowlist-migration.js";
-import { parseModelPolicyWildcardRef } from "../../config/model-policy-ref.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
-  type RuntimeConfigWriteApplicationStatus,
 } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyPrimaryModel } from "../../plugins/provider-model-primary.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import type { WizardPrompter, WizardSelectParams } from "../../wizard/prompts.js";
+import { ProviderAuthConfigApplyError } from "../../shared/provider-auth-result.js";
 import { resolveModelsTargetAgent, updateConfig } from "./shared.js";
-
-type ModelAccessChoice = "all" | "keep";
-
-type ProviderModelAccessOutcome =
-  | { kind: "unchanged" | "deferred"; message: string }
-  | { kind: "saved"; application: RuntimeConfigWriteApplicationStatus; message: string };
-
-export class ProviderModelPolicyChangedError extends Error {
-  constructor(readonly config: OpenClawConfig) {
-    super("Model restrictions changed during sign-in. Choose model access again.");
-  }
-}
 
 export function applyProviderLoginDefaultModel(
   config: OpenClawConfig,
@@ -49,7 +35,7 @@ export function applyProviderLoginDefaultModel(
   return next;
 }
 
-/** Provider setup defaults cannot supply consent to change model restrictions. */
+/** Provider setup defaults cannot change model restrictions; only saved credentials widen them. */
 export function withoutProviderModelPolicy<T extends Pick<Partial<OpenClawConfig>, "agents">>(
   patch: T,
   config: OpenClawConfig,
@@ -70,115 +56,122 @@ export function withoutProviderModelPolicy<T extends Pick<Partial<OpenClawConfig
   return connection;
 }
 
-function snapshotPolicy(config: OpenClawConfig, agentId: string) {
-  const policy = resolveConfiguredModelPolicyAllow({ cfg: config, agentId });
-  return {
-    // Legacy allowlist materialization retains the same logical defaults owner.
-    path: policy.configPath ? policy.repairConfigPath : null,
-    refs: [
-      ...new Set(
-        policy.refs.map(
-          (ref) => parseModelPolicyWildcardRef(ref)?.key ?? normalizeAgentModelRefForConfig(ref),
-        ),
-      ),
-    ].toSorted(),
-  };
+/** True when the allowlist names any model of the provider: the operator already chose those. */
+function policyNamesProvider(config: OpenClawConfig, agentId: string, provider: string): boolean {
+  // The policy owner resolves exact refs, aliases and bare legacy refs (from configured provider rows).
+  const { allowedKeys } = createModelVisibilityPolicy({
+    cfg: config,
+    catalog: [],
+    defaultProvider: DEFAULT_PROVIDER,
+    agentId,
+  });
+  return [...allowedKeys].some((key) => normalizeProviderId(key.split("/")[0] ?? "") === provider);
 }
 
-export function prepareProviderModelAccess(params: {
+/**
+ * Saving credentials for a provider is the request to use its models: when an
+ * allowlist hides every model of that provider, add `<provider>/*` to the
+ * allowlist that governs the agent. Without an allowlist, or when the allowlist
+ * already names some of the provider's models, nothing changes.
+ */
+export function allowProviderModelsInConfig(
+  config: OpenClawConfig,
+  agentId: string,
+  providerId: string,
+): string | undefined {
+  const provider = normalizeProviderId(providerId);
+  const wildcard = `${provider}/*`;
+  const policy = resolveConfiguredModelPolicyAllow({ cfg: config, agentId });
+  if (policy.refs.length === 0 || policyNamesProvider(config, agentId, provider)) {
+    return undefined;
+  }
+  const allow = [...policy.refs, wildcard];
+  if (policy.repairConfigPath === "agents.entries.*.modelPolicy.allow") {
+    const agent = resolveMutableAgentEntry(config, agentId);
+    if (!agent) {
+      throw new Error(`Agent "${agentId}" no longer exists.`);
+    }
+    agent.modelPolicy = { ...agent.modelPolicy, allow };
+  } else {
+    config.agents ??= {};
+    config.agents.defaults ??= {};
+    const defaults = config.agents.defaults;
+    if (
+      policy.configPath === LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH &&
+      materializeModelPolicyAllowlist(config).kind === "deferred"
+    ) {
+      // An unmigrated legacy map stays the allowlist; a partial explicit policy would hide its models.
+      defaults.models = { ...defaults.models, [wildcard]: {} };
+    } else {
+      defaults.modelPolicy = { ...defaults.modelPolicy, allow };
+    }
+  }
+  return `Added ${wildcard} to allowed models.`;
+}
+
+export type ProviderModelAccess = { message: string; applied: boolean };
+
+/** Applies {@link allowProviderModelsInConfig} after a sign-in saved provider credentials. */
+async function allowProviderModels(params: {
   config: OpenClawConfig;
   agentId: string;
   provider: string;
-  providerLabel: string;
-}) {
-  const provider = normalizeProviderId(params.provider);
-  const policy = snapshotPolicy(params.config, params.agentId);
-  if (policy.refs.length === 0 || policy.refs.includes(`${provider}/*`)) {
-    return undefined;
-  }
-  const prompt: WizardSelectParams<ModelAccessChoice> = {
-    message: `Your current model restrictions may hide ${params.providerLabel} models. Choose which models to show.`,
-    initialValue: "keep",
-    options: [
-      { value: "all", label: `Show all ${params.providerLabel} models` },
-      { value: "keep", label: "Keep current restrictions" },
-    ],
-  };
-  return { provider, providerLabel: params.providerLabel, agentId: params.agentId, policy, prompt };
-}
-
-export async function completeProviderModelAccess(params: {
-  prepared: ReturnType<typeof prepareProviderModelAccess>;
-  prompter: Pick<WizardPrompter, "select">;
   runtime: RuntimeEnv;
   assertCurrent?: (config?: OpenClawConfig) => void;
-  onRequested?: (request: PreparedProviderModelAccess) => void;
-  beforeCommit?: () => void;
-}): Promise<ProviderModelAccessOutcome> {
-  const prepared = params.prepared;
-  if (!prepared) {
-    return { kind: "unchanged", message: "" };
-  }
-  params.assertCurrent?.();
-  if (params.onRequested) {
-    params.onRequested(prepared);
-    return { kind: "deferred", message: "" };
-  }
-  const choice = await params.prompter.select(prepared.prompt);
-  params.assertCurrent?.();
-  if (choice !== "all") {
-    params.runtime.log("Current model restrictions kept.");
-    return { kind: "unchanged", message: "Current model restrictions kept." };
+}): Promise<ProviderModelAccess | undefined> {
+  if (
+    !allowProviderModelsInConfig(structuredClone(params.config), params.agentId, params.provider)
+  ) {
+    return undefined;
   }
   const application = createRuntimeConfigWriteApplication(
     captureGatewayRootWorkAdmissionContinuationScope()?.run,
   );
+  let notice: string | undefined;
   await updateConfig(
     (config) => {
       params.assertCurrent?.(config);
-      resolveModelsTargetAgent(config, prepared.agentId, { kind: "mutation" });
-      if (!isDeepStrictEqual(snapshotPolicy(config, prepared.agentId), prepared.policy)) {
-        throw new ProviderModelPolicyChangedError(config);
-      }
-      const policy = resolveConfiguredModelPolicyAllow({ cfg: config, agentId: prepared.agentId });
-      const allow = [...policy.refs, `${prepared.provider}/*`];
-      if (policy.repairConfigPath === "agents.entries.*.modelPolicy.allow") {
-        const agent = resolveMutableAgentEntry(config, prepared.agentId);
-        if (!agent) {
-          throw new Error(`Agent "${prepared.agentId}" no longer exists.`);
-        }
-        agent.modelPolicy = { ...agent.modelPolicy, allow };
-      } else {
-        config.agents ??= {};
-        config.agents.defaults ??= {};
-        const defaults = config.agents.defaults;
-        if (
-          policy.configPath === LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH &&
-          materializeModelPolicyAllowlist(config).kind === "deferred"
-        ) {
-          defaults.models = { ...defaults.models, [`${prepared.provider}/*`]: {} };
-        } else {
-          defaults.modelPolicy = { ...defaults.modelPolicy, allow };
-        }
-      }
+      resolveModelsTargetAgent(config, params.agentId, { kind: "mutation" });
+      notice = allowProviderModelsInConfig(config, params.agentId, params.provider);
       return config;
     },
     undefined,
-    params.beforeCommit,
+    undefined,
     attachRuntimeConfigWriteApplication({ assertCurrent: params.assertCurrent }, application),
   );
-  const status = application.claimed ? await application.result : "unclaimed";
+  if (!notice) {
+    return undefined;
+  }
+  const applied = application.claimed && (await application.result) === "applied";
+  const message = applied
+    ? notice
+    : `${notice} OpenClaw has not confirmed it is active. Open Settings and select Apply changes, then send /models.`;
   logConfigUpdated(params.runtime);
-  const message =
-    status === "applied"
-      ? `All ${prepared.providerLabel} models are now visible.`
-      : application.claimed
-        ? "Model access was saved, but OpenClaw has not confirmed it is active. Open Settings and select Apply changes, then send /models."
-        : "Model access saved. Application by the running Gateway is not confirmed. Run `openclaw gateway restart` to apply it.";
   params.runtime.log(message);
-  return { kind: "saved", application: status, message };
+  return { message, applied };
 }
 
-export type PreparedProviderModelAccess = NonNullable<
-  ReturnType<typeof prepareProviderModelAccess>
->;
+/** Sign-in variant: a failed policy write is reported as saved credentials with unapplied settings. */
+export function allowLoginProviderModels(
+  params: {
+    config: OpenClawConfig;
+    runtime: RuntimeEnv;
+    signal?: AbortSignal;
+    assertCurrent?: () => void;
+  },
+  agentId: string,
+  provider: string,
+): Promise<ProviderModelAccess | undefined> {
+  return allowProviderModels({
+    config: params.config,
+    agentId,
+    provider,
+    runtime: params.runtime,
+    assertCurrent: () => {
+      params.signal?.throwIfAborted();
+      params.assertCurrent?.();
+    },
+  }).catch((error: unknown) => {
+    throw new ProviderAuthConfigApplyError(error);
+  });
+}

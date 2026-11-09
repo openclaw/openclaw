@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -9,6 +9,9 @@ import type { CronStoredJob } from "../types.js";
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
+  acquirePreparedModelRuntimeMock,
+  resolveCronDeliveryPlanMock,
+  resolveDeliveryTargetMock,
   callGatewayMock,
   hasUsableWebSearchProviderMock,
   loadModelCatalogMock,
@@ -164,6 +167,58 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
       });
     },
   );
+
+  it("joins diagnostic reads before disposing a failed delivery preparation", options, async () => {
+    const diagnostics = Promise.withResolvers<boolean>();
+    const delivery = Promise.withResolvers<never>();
+    void delivery.promise.catch(() => {});
+    hasUsableWebSearchProviderMock.mockReturnValueOnce(diagnostics.promise);
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      mode: "announce",
+      requested: true,
+      channel: "messagechat",
+      to: "test-target",
+    });
+    resolveDeliveryTargetMock.mockReturnValueOnce(delivery.promise);
+    const acquire = acquirePreparedModelRuntimeMock.getMockImplementation()!;
+    const dispose = vi.fn<() => Promise<void>>();
+    acquirePreparedModelRuntimeMock.mockImplementationOnce(async (...args) => {
+      const lease = await acquire(...args);
+      dispose.mockImplementation(() => lease[Symbol.asyncDispose]());
+      return { ...lease, [Symbol.asyncDispose]: dispose };
+    });
+    let settled = false;
+    const running = runTurn(["web_search"]).then(
+      (result) => {
+        settled = true;
+        return result;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    const failure = new Error("delivery preparation failed");
+    try {
+      await vi.waitFor(() => expect(hasUsableWebSearchProviderMock).toHaveBeenCalled());
+      await vi.waitFor(() => expect(resolveDeliveryTargetMock).toHaveBeenCalled());
+      delivery.reject(failure);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+      expect(dispose).not.toHaveBeenCalled();
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      diagnostics.resolve(false);
+      expect(await running).toBe(failure);
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      diagnostics.resolve(false);
+      // The baseline reaches this reader only after diagnostics finish.
+      delivery.reject(failure);
+      await running;
+    }
+  });
 
   it("uses the prepared plugin-scoped web search provider", options, async () => {
     setActiveRuntimeWebToolsMetadata({

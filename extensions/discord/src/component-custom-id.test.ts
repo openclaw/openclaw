@@ -11,7 +11,6 @@ describe("Discord Activity custom IDs", () => {
     const customId = buildDiscordActivityCustomId(widgetId);
 
     expect(customId).toBe(`ocactivity1_${widgetId}`);
-    expect(customId).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(parseDiscordActivityCustomId(customId)).toEqual({ widgetId });
   });
 

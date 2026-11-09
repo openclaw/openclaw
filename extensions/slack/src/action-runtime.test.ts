@@ -104,13 +104,16 @@ afterEach(() => {
 });
 const scopedOptions = () => ({ cfg, teamId: "T123" });
 
-it("reads normalized pins from the trusted current workspace", async () => {
-  listSlackPins.mockResolvedValueOnce([{ message: { ts: "1712345678.123456", text: "pin" } }]);
-  const result = await act({ action: "listPins", channelId: "C123" }, trustedContext);
+it.each([undefined, 1])("reads normalized pins with limit %s", async (limit) => {
+  const pin = { message: { ts: "1712345678.123456", text: "pin" } };
+  listSlackPins.mockResolvedValueOnce(Array.from({ length: 101 }, () => pin));
+  const result = await act({ action: "listPins", channelId: "C123", limit }, trustedContext);
   expect(listSlackPins).toHaveBeenCalledWith("C123", scopedOptions());
   expect(result.details).toMatchObject({
     ok: true,
-    pins: [{ message: { ts: "1712345678.123456", text: "pin", timestampMs: 1712345678123 } }],
+    pins: Array.from({ length: limit ?? 101 }, () => ({
+      message: { ...pin.message, timestampMs: 1712345678123 },
+    })),
   });
 });
 

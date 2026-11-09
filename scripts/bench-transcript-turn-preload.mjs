@@ -16,6 +16,7 @@ if (output) {
     } finally {
       record({
         engine: "sqlite",
+        source: "native",
         threadId: workerThreads.threadId,
         sql,
       });
@@ -67,8 +68,6 @@ if (output) {
   };
   syncBuiltinESMExports();
   channel("openclaw.database.statement").subscribe((value) => {
-    if (value.engine !== "sqlite") {
-      record(value);
-    }
+    record({ ...value, source: "diagnostic" });
   });
 }

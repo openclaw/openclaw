@@ -1,0 +1,3 @@
+# Renderer regression preserves delivered images and tool-owned inspection media
+# for isolated calls and both batched call orders. Exact net growth for PR #195359.
+43

@@ -328,7 +328,6 @@ describe("feishu tool account routing", () => {
     });
     if (permitted && enabled) {
       expect(clientAppIdAt(0)).toBe("app-sales");
-      expect(clientAppIdAt(0)).not.toBe("app-root");
       expect(result.details).toEqual({
         members: [
           { member_type: "userid", member_id: "member-1", perm: "view", name: "Member One" },

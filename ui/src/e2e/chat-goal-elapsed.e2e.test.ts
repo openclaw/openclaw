@@ -70,10 +70,14 @@ suite.define(() => {
               goal.getByText("Goal paused", { exact: true }),
               goal.locator(".agent-chat__goal-objective"),
             ],
-            { animations: "disabled" },
+            { animations: "disabled", elements: [goal] },
           );
-          await writeFile(path.join(artifactDir, "paused-goal.png"), frame.png);
+          await writeFile(path.join(artifactDir, "paused-goal.png"), frame.elements[0]!.png);
         }
+        const desktopResume = goal.getByRole("button", { name: "Resume goal", exact: true });
+        expect(await desktopResume.locator(".agent-chat__goal-action-label").isVisible()).toBe(
+          false,
+        );
         expect(await goal.locator(".agent-chat__goal-elapsed").textContent()).toBe(
           "1wk 5d 17h 15m",
         );

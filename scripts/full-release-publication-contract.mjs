@@ -26,6 +26,7 @@ export {
 
 export const FULL_RELEASE_SOURCE_ADMISSION_CONTRACT = "1";
 export const FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT = "1";
+const PUBLICATION_OBSERVATION_WINDOW_MS = 300_000;
 const sha = /^[a-f0-9]{40}$/u;
 const digest = /^[a-f0-9]{64}$/u;
 const coverageInputs = {
@@ -654,7 +655,11 @@ function validatePublicationObservations(source, value) {
   const prerequisites = observationTime(value.prerequisitesCompletedAt);
   const start = observationTime(value.collectionStartedAt);
   const end = observationTime(value.collectionCompletedAt);
-  if (prerequisites > start || start > end || end - prerequisites > 300_000) {
+  if (
+    prerequisites > start ||
+    start > end ||
+    end - prerequisites > PUBLICATION_OBSERVATION_WINDOW_MS
+  ) {
     throw new Error("publication observation time ordering is invalid");
   }
   const required = (registry) =>
@@ -839,7 +844,21 @@ export function createPublicationObservations(source, observations) {
   });
 }
 
-export function createPublicationAdmission(source, observations, artifact, admittedAt) {
+export function createPublicationAdmission(
+  source,
+  observations,
+  artifact,
+  admittedAt,
+  { workflowPath = ".github/workflows/full-release-validation.yml" } = {},
+) {
+  if (
+    ![
+      ".github/workflows/full-release-validation.yml",
+      ".github/workflows/full-release-receipt-recovery.yml",
+    ].includes(workflowPath)
+  ) {
+    throw new Error("unsupported publication admission workflow");
+  }
   const admission = {
     observations,
     binding: {
@@ -849,7 +868,7 @@ export function createPublicationAdmission(source, observations, artifact, admit
       parentRunId: source.runId,
       parentRunAttempt: source.runAttempt,
       workflow: {
-        path: ".github/workflows/full-release-validation.yml",
+        path: workflowPath,
         event: "workflow_dispatch",
         ...source.workflow,
       },
@@ -860,12 +879,15 @@ export function createPublicationAdmission(source, observations, artifact, admit
       status: "admitted-for-validation",
     },
   };
-  return validatePublicationAdmissionBinding({
-    sourceAdmissionContract: FULL_RELEASE_SOURCE_ADMISSION_CONTRACT,
-    sourceAdmission: source,
-    publicationAdmissionContract: FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
-    publicationAdmission: admission,
-  });
+  return validatePublicationAdmissionBinding(
+    {
+      sourceAdmissionContract: FULL_RELEASE_SOURCE_ADMISSION_CONTRACT,
+      sourceAdmission: source,
+      publicationAdmissionContract: FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
+      publicationAdmission: admission,
+    },
+    { workflowPath },
+  );
 }
 
 export function validatePublicationAdmissionBinding(record, expected = {}) {
@@ -926,7 +948,8 @@ export function validatePublicationAdmissionBinding(record, expected = {}) {
     binding.repository !== source.repository ||
     binding.parentRunId !== source.runId ||
     binding.parentRunAttempt !== source.runAttempt ||
-    binding.workflow.path !== ".github/workflows/full-release-validation.yml" ||
+    binding.workflow.path !==
+      (expected.workflowPath ?? ".github/workflows/full-release-validation.yml") ||
     binding.workflow.event !== "workflow_dispatch" ||
     binding.workflow.ref !== source.workflow.ref ||
     binding.workflow.sha !== source.workflow.sha ||
@@ -953,11 +976,12 @@ export function validatePublicationAdmissionBinding(record, expected = {}) {
     throw new Error("invalid publication observation artifact descriptor");
   }
   const admitted = observationTime(binding.admittedAt);
+  const completed = observationTime(observations.collectionCompletedAt);
   if (
-    admitted < observationTime(observations.collectionCompletedAt) ||
-    admitted - observationTime(observations.prerequisitesCompletedAt) > 300_000 ||
+    admitted < completed ||
+    admitted - completed > PUBLICATION_OBSERVATION_WINDOW_MS ||
     [...observations.npm.filter((row) => row.required), ...observations.clawhub].some(
-      (row) => admitted - observationTime(row.observedAt) > 300_000,
+      (row) => completed - observationTime(row.observedAt) > PUBLICATION_OBSERVATION_WINDOW_MS,
     )
   ) {
     throw new Error("publication admission freshness window exceeded");

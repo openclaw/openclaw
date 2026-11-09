@@ -230,6 +230,22 @@ export default definePluginEntry({
             if (!runNonInteractive) {
               return null;
             }
+            const urlError = validateProxyBaseUrl(
+              normalizeOptionalSecretInput(ctx.opts.customBaseUrl) ?? "",
+            );
+            if (urlError) {
+              // Resolve the key as usual so setup parity holds, but never store it for a bad URL.
+              await runNonInteractive({
+                ...ctx,
+                resolveApiKey: async (params) => {
+                  await ctx.resolveApiKey(params);
+                  return null;
+                },
+              });
+              ctx.runtime.error(urlError);
+              ctx.runtime.exit(1);
+              return null;
+            }
             return await runNonInteractive({
               ...ctx,
               config: applyLitellmBaseUrl(ctx.config, ctx.opts.customBaseUrl),

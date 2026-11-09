@@ -13,7 +13,7 @@ import {
   createChannelHistoryWindow,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { BuzzBus } from "./buzz-bus.js";
 import type { BuzzConfigInput } from "./config-schema.js";
@@ -51,6 +51,10 @@ export async function handleBuzzInbound(params: {
     accountId: account.accountId,
     peer: { kind: "group", id: target },
   });
+  route.sessionKey = resolveThreadSessionKeys({
+    baseSessionKey: route.sessionKey,
+    threadId: message.threadId,
+  }).sessionKey;
   const supportsTextInterpretation = message.kind !== BUZZ_DIFF_MESSAGE_KIND;
   const textMention =
     supportsTextInterpretation &&
@@ -247,11 +251,7 @@ export async function handleBuzzInbound(params: {
     cfg,
     channel: "buzz",
     accountId: account.accountId,
-    route: {
-      agentId: route.agentId,
-      dmScope: route.dmScope,
-      sessionKey: route.sessionKey,
-    },
+    route,
     ctxPayload,
     botLoopProtection: bus.directory.isBotMember(channelId, message.senderPubkey)
       ? {

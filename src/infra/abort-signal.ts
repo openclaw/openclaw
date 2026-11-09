@@ -16,12 +16,23 @@ export function isAbortError(error: unknown): boolean {
   }
 }
 
-/** Resolves when the signal aborts, or immediately when no wait is needed. */
-export async function waitForAbortSignal(signal?: AbortSignal): Promise<void> {
-  if (!signal || signal.aborted) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    signal.addEventListener("abort", () => resolve(), { once: true });
+/** Resolves on abort or when `until` settles; passing the source releases abandoned listeners. */
+export async function waitForAbortSignal(
+  signal?: AbortSignal,
+  until?: Promise<unknown>,
+): Promise<void> {
+  let onAbort!: () => void;
+  const aborted = new Promise<void>((resolve) => {
+    onAbort = () => resolve();
+    if (!signal || signal.aborted) {
+      resolve();
+    } else {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
   });
+  try {
+    await (until ? Promise.race([until, aborted]) : aborted);
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+  }
 }

@@ -3,10 +3,30 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { shortenHomePath } from "../utils.js";
 import { createBackupArchive } from "./backup-create.js";
 import { probeSqliteDatabaseHeaders } from "./sqlite-header-probe.js";
+import { injectHeaderReadFailure } from "./sqlite-header-probe.test-support.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+it("refuses capture with the busy path and errno before publishing or changing the source", async () => {
+  await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+    const candidate = state.statePath("unreadable-candidate.db");
+    await fs.writeFile(candidate, "retained source bytes");
+    await injectHeaderReadFailure(state.root, candidate, "EBUSY", 100);
+    const output = state.path("backups");
+    await fs.mkdir(output);
+    await expect(createBackupArchive({ output, includeWorkspace: false })).rejects.toThrow(
+      new RegExp(`${shortenHomePath(candidate).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*EBUSY`),
+    );
+    expect(await fs.readdir(output)).toEqual([]);
+    expect(await fs.readFile(candidate, "utf8")).toBe("retained source bytes");
+  });
+});
 
 it("probes a batch through a declared worker using the current runtime without eval", async () => {
   await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
@@ -15,14 +35,13 @@ it("probes a batch through a declared worker using the current runtime without e
     await fs.writeFile(sqlitePath, "SQLite format 3\0");
     await fs.writeFile(plainPath, "plain bytes");
     const spawn = vi.spyOn(childProcess, "spawnSync");
-
-    expect(probeSqliteDatabaseHeaders([sqlitePath, plainPath, sqlitePath])).toEqual(
-      new Map([
-        [sqlitePath, true],
-        [plainPath, false],
-      ]),
-    );
-    expect(spawn).toHaveBeenCalledOnce();
+    const missing = Array.from({ length: 8192 }, (_, index) => state.path(String(index)));
+    const answers = probeSqliteDatabaseHeaders([...missing, sqlitePath, plainPath, sqlitePath]);
+    expect(answers.get(sqlitePath)).toBe(true);
+    expect(answers.get(plainPath)).toBe(false);
+    expect(answers.get(missing[0]!)).toBe(false);
+    expect(answers.size).toBe(missing.length + 2);
+    expect(spawn.mock.calls.length).toBeGreaterThan(1);
     const [executable, argv] = spawn.mock.calls[0]!;
     expect(executable).toBe(process.execPath);
     expect(argv).not.toContain("-e");

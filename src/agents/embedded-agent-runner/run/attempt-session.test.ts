@@ -1,7 +1,12 @@
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  captureAgent,
+  createTurnSequenceStream,
+  makeCall,
+} from "../../../../packages/agent-core/src/agent-loop.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import {
@@ -31,6 +36,13 @@ import {
   testing as safeguardTesting,
 } from "../../agent-hooks/compaction-safeguard.test-support.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
+import { applyCodeModeCatalog } from "../../code-mode.js";
+import {
+  createCodeModeHarness,
+  jsonTool,
+  mcpTool,
+  resetCodeModeTestState,
+} from "../../code-mode.test-support.js";
 import type { AgentTool } from "../../runtime/index.js";
 import {
   agentSessionQueuePromptContext,
@@ -38,6 +50,7 @@ import {
 } from "../../sessions/agent-session-prompting.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
+import { createWriteTool } from "../../sessions/tools/write.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import * as toolSearch from "../../tool-search.js";
 import { createWorkspaceCompactionConfig } from "../compaction-workspace-config.test-support.js";
@@ -134,7 +147,10 @@ const attempt = {
   workspaceDir: "/workspace",
 } as unknown as EmbeddedRunAttemptParams;
 
-function createInput(options?: { terminalHookError?: Error }) {
+function createInput(options?: {
+  terminalHookError?: Error;
+  codeModeCatalogRef?: toolSearch.ToolSearchCatalogRef;
+}) {
   const events: string[] = [];
   const settingsManager = SettingsManager.inMemory();
   const resourceLoader = {
@@ -223,6 +239,7 @@ function createInput(options?: { terminalHookError?: Error }) {
       clientToolPreparation: {
         codeModeControlsEnabledForRun: true,
         deferredDirectoryToolsCallable: false,
+        toolSearchCatalogRef: options?.codeModeCatalogRef,
       } as never,
       effectiveCwd: "/workspace",
       effectiveWorkspace: "/workspace",
@@ -362,6 +379,132 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     },
   );
 
+  it("recovers a native hidden write through exec without executing or exposing it directly", async () => {
+    const harness = createCodeModeHarness();
+    const fixture = createInput({ codeModeCatalogRef: harness.catalogRef });
+    const workspace = tempDirs.make("code-mode-hidden-write-");
+    hoisted.getGlobalHookRunner.mockReturnValue(undefined);
+    const { wrapToolDefinition } = await vi.importActual<
+      typeof import("../../sessions/tools/tool-definition-wrapper.js")
+    >("../../sessions/tools/tool-definition-wrapper.js");
+    hoisted.wrapToolDefinition.mockImplementation(wrapToolDefinition);
+    const write = createWriteTool(workspace);
+    const execute = vi.spyOn(write, "execute");
+    const direct = {
+      ...jsonTool("computer", { observed: true }),
+      catalogMode: "direct-only" as const,
+    };
+    onTestFinished(async () => {
+      toolSearch.clearToolSearchCatalog(harness.ctx);
+      await resetCodeModeTestState();
+    });
+    const surface = applyCodeModeCatalog({
+      ...harness.ctx,
+      tools: [...harness.tools, write, direct],
+    });
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+    const input = { path: "result.txt", content: "written through the bridge\n" };
+    const { agent } = captureAgent(surface.tools, {
+      resolveDeferredTool: hoisted.createAgentSession.mock.calls[0]![0].resolveDeferredTool,
+      streamFn: createTurnSequenceStream(
+        [
+          [{ ...makeCall("write"), arguments: input }, makeCall("computer")],
+          [
+            {
+              ...makeCall("exec"),
+              arguments: {
+                code: "return await write(" + JSON.stringify(input) + ");",
+                awaitResults: true,
+              },
+            },
+          ],
+          [{ type: "text", text: "done" }],
+        ],
+        [],
+        (context, turn) => {
+          expect(context.tools?.map((tool) => tool.name)).toEqual(["exec", "wait", "computer"]);
+          if (turn === 2) {
+            expect(execute).not.toHaveBeenCalled();
+          }
+        },
+      ),
+    });
+    await agent.prompt("write the result");
+    const results = agent.state.messages.filter((message) => message.role === "toolResult");
+    expect(results[0]).toMatchObject({
+      isError: true,
+      content: [{ type: "text", text: expect.stringContaining("Use exec with JavaScript") }],
+    });
+    expect(results[1]).toMatchObject({ toolName: "computer", isError: false });
+    expect(results[2], JSON.stringify(results[2])).toMatchObject({
+      toolName: "exec",
+      isError: false,
+      details: { status: "completed", value: { changed: true, created: true } },
+    });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(await readFile(join(workspace, "result.txt"), "utf8")).toBe(input.content);
+  });
+
+  it("limits Code Mode recovery hints to current catalog names, including collisions and MCP", async () => {
+    const harness = createCodeModeHarness();
+    const fixture = createInput({ codeModeCatalogRef: harness.catalogRef });
+    onTestFinished(() => toolSearch.clearToolSearchCatalog(harness.ctx));
+    const targets = [
+      jsonTool("llm-task", {}),
+      jsonTool("llm_task", {}),
+      mcpTool({ name: "mcp_remote_write", serverName: "remote", toolName: "write" }),
+      jsonTool("denied_write", {}),
+      jsonTool("policy_denied_write", {}),
+    ];
+    const surface = applyCodeModeCatalog({
+      ...harness.ctx,
+      config: {
+        tools: {
+          gatewayPolicy: { allow: ["llm-task", "llm_task", "mcp_remote_write", "denied_write"] },
+        },
+      },
+      tools: [...harness.tools, ...targets],
+    });
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+    // Permission refresh removes the previously registered tool, not just an invented unknown.
+    toolSearch.restrictToolSearchCatalog({
+      catalogRef: harness.catalogRef,
+      allowedToolNames: new Set(["llm-task", "llm_task", "mcp_remote_write"]),
+    });
+    const { agent } = captureAgent(
+      surface.tools,
+      {
+        resolveDeferredTool: hoisted.createAgentSession.mock.calls[0]![0].resolveDeferredTool,
+      },
+      [
+        [
+          "llm-task",
+          "llm_task",
+          "mcp_remote_write",
+          "denied_write",
+          "policy_denied_write",
+          "unknown_tool",
+        ].map((name) => makeCall(name)),
+        [{ type: "text", text: "done" }],
+      ],
+    );
+    await agent.prompt("inspect the available tools");
+    const results = agent.state.messages.filter((message) => message.role === "toolResult");
+    for (const result of results.slice(0, 3)) {
+      expect(result).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("catalog.search") }],
+      });
+    }
+    expect(results.slice(3).map((result) => result.content)).toEqual([
+      [{ type: "text", text: "Tool denied_write not found" }],
+      [{ type: "text", text: "Tool policy_denied_write not found" }],
+      [{ type: "text", text: "Tool unknown_tool not found" }],
+    ]);
+    for (const target of targets) {
+      expect(target.execute).not.toHaveBeenCalled();
+    }
+  });
   it("keeps effective workspace rules in automatic compaction when the process and sandbox cwd differ", async () => {
     const fixture = createInput();
     const workspaceDir = tempDirs.make("openclaw-attempt-compaction-workspace-");

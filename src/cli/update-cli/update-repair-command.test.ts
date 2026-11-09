@@ -377,59 +377,59 @@ describe("update repair ledger recovery", () => {
     },
   );
 
-  it.each([
-    "live",
-    "unobserved",
-    "unrelated inherited ID",
-    "unrecorded adopter",
-    "recent request",
-  ] as const)("preserves the %s and refuses maintenance", async (owner) => {
-    const young = owner === "recent request";
-    const unobserved = owner === "unobserved" || owner === "unrelated inherited ID";
-    const run = seedRun({
-      phase: young ? undefined : "validating",
-      driver: owner === "recent request" ? undefined : "live",
-      ageMs: young ? 60_000 : undefined,
-    });
-    if (unobserved) {
-      recordUpdateRunPhase(run.runId, "validating", {
-        origin: { driver: { ...run.origin.driver!, host: "other-host.invalid" } },
+  it.each(["live", "unrelated inherited ID", "unrecorded adopter", "recent request"] as const)(
+    "preserves the %s and refuses maintenance",
+    async (owner) => {
+      const young = owner === "recent request";
+      const unobserved = owner === "unrelated inherited ID";
+      const run = seedRun({
+        phase: young ? undefined : "validating",
+        driver: owner === "recent request" ? undefined : "live",
+        ageMs: young ? 60_000 : undefined,
       });
-    }
-    if (owner === "unrecorded adopter") {
-      recordUpdateRunStep(run.runId, { step: "driver:identity-unavailable", status: "completed" });
-    }
-    if (owner === "unrelated inherited ID" || owner === "unrecorded adopter") {
-      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
-    }
-    const current = getUpdateRun(run.runId)!;
-    const pending = updateRepairCommand({});
-    await expect(pending).rejects.toThrow(
-      `Update ${run.runId} remains recorded as running (${run.phase});`,
-    );
-    if (owner === "live" || owner === "unobserved") {
-      for (const detail of [
-        `PID ${run.origin.driver!.pid}`,
-        current.origin.driver!.host,
-        unobserved ? "liveness: not observed" : "liveness: alive",
-        `started ${new Date(run.createdAtMs).toISOString()}`,
-        "age 3600s",
-        `last activity ${new Date(current.updatedAtMs).toISOString()}`,
-        "stop it through its owning host",
-        "openclaw update repair",
-      ]) {
-        await expect(pending).rejects.toThrow(detail);
+      if (unobserved) {
+        recordUpdateRunPhase(run.runId, "validating", {
+          origin: { driver: { ...run.origin.driver!, host: "other-host.invalid" } },
+        });
       }
-    }
-    if (owner === "unrecorded adopter") {
-      await expect(pending).rejects.toThrow("unrecorded adopter");
-      expect(getUpdateRun(run.runId)?.steps).not.toContainEqual(
-        expect.objectContaining({ step: "finalize:repair-continuation" }),
+      if (owner === "unrecorded adopter") {
+        recordUpdateRunStep(run.runId, {
+          step: "driver:identity-unavailable",
+          status: "completed",
+        });
+      }
+      if (owner === "unrelated inherited ID" || owner === "unrecorded adopter") {
+        vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+      }
+      const current = getUpdateRun(run.runId)!;
+      const pending = updateRepairCommand({});
+      await expect(pending).rejects.toThrow(
+        `Update ${run.runId} remains recorded as running (${run.phase});`,
       );
-    }
-    expect(getUpdateRun(run.runId)).toEqual(current);
-    expect(mocks.finalize).not.toHaveBeenCalled();
-  });
+      if (owner === "live") {
+        for (const detail of [
+          `PID ${run.origin.driver!.pid}`,
+          current.origin.driver!.host,
+          unobserved ? "liveness: not observed" : "liveness: alive",
+          `started ${new Date(run.createdAtMs).toISOString()}`,
+          "age 3600s",
+          `last activity ${new Date(current.updatedAtMs).toISOString()}`,
+          "stop it through its owning host",
+          "openclaw update repair",
+        ]) {
+          await expect(pending).rejects.toThrow(detail);
+        }
+      }
+      if (owner === "unrecorded adopter") {
+        await expect(pending).rejects.toThrow("unrecorded adopter");
+        expect(getUpdateRun(run.runId)?.steps).not.toContainEqual(
+          expect.objectContaining({ step: "finalize:repair-continuation" }),
+        );
+      }
+      expect(getUpdateRun(run.runId)).toEqual(current);
+      expect(mocks.finalize).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([undefined, "staging"] as const)(
     "repairs an abandoned %s row through the public command without maintenance",
@@ -539,6 +539,7 @@ describe("update repair ledger recovery", () => {
     const root = fs.realpathSync(await mocks.resolveRoot());
     const handoff = createManagedHandoffRecoveryFixture(root);
     handoff.seedCancellation({ ageMs: 60_000 });
+    handoff.processCensus.unverifiedPids.push(81236);
     const family = handoff.rows();
 
     await expect(withCliProcessScope(() => updateRepairCommand({ json: true }))).rejects.toEqual(
@@ -559,7 +560,9 @@ describe("update repair ledger recovery", () => {
         owner: "original-owner",
         leaseVersion: 4,
         lastActivityAt: new Date(family[0]!.updated_at).toISOString(),
-        reason: expect.stringContaining("recovery grace ends at"),
+        reason: expect.stringContaining(
+          "Handoff descendants remain alive or unverified: PID 81236",
+        ),
       },
     });
     expect(handoff.rows()).toEqual(family);

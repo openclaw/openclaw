@@ -10,6 +10,7 @@
  * owner. Setup, hydration and durable readback are outside measurement.
  * --owner-module selects another source owner for --owner-file substitution.
  * --message-view exercises post-commit reload decisions for message appends.
+ * --stale-view forces the existing full reload after each message append.
  * requestBytesPerAppend measures V8 command serialization, excluding broker framing.
  * Acceptance: identical committed rows/projections, less CPU or allocation, no material
  * untraced latency/GC regression. Report host load and rounded actor phase diagnostics.
@@ -46,6 +47,7 @@ const { values } = parseArgs({
       default: "src/config/sessions/session-actor-transcript-window.worker.ts",
     },
     "message-view": { type: "boolean", default: false },
+    "stale-view": { type: "boolean", default: false },
   },
 });
 assert(values.output, "--output must name a new directory");
@@ -259,7 +261,11 @@ const commands: SqliteWorkerCommand<SessionActorOperations>[] = Array.from(
                 validateTurn: false,
               },
               options: {},
-              ...(values["message-view"] ? { view: {} } : {}),
+              ...(values["stale-view"]
+                ? { view: { loadedVersion: { generation: null, rawSeq: null, updatedAt: null } } }
+                : values["message-view"]
+                  ? { view: {} }
+                  : {}),
             },
           },
         },

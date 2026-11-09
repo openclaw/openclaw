@@ -12,6 +12,7 @@ import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { getModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { projectNestedToolActivityForHooks } from "../../../sessions/nested-tool-activity.js";
 import type { ReplyToolAuthorityPreparation } from "../../../sessions/session-controller.contracts.js";
+import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.start.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
@@ -46,6 +47,7 @@ import {
 import { readAttemptNestedToolActivity } from "./attempt-nested-tool-activity.js";
 import {
   claimEmbeddedPendingUserInputAnswer,
+  createPendingSteerToolControl,
   steerActiveSessionWithOptionalDeliveryWait,
 } from "./attempt-queue-message.js";
 import {
@@ -82,9 +84,8 @@ function prepareStream(
   input: PrepareEmbeddedAttemptStreamInput,
   admission: EmbeddedAttemptSteeringAdmission,
 ) {
-  const { attempt, agentSession } = input;
+  const { attempt, agentSession, recoverStalledModelCall } = input;
   const { activeSession, hookRunner } = agentSession;
-  const recoverStalledModelCall = input.recoverStalledModelCall;
   let stalledModelRecoveryAccepted = false;
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
@@ -395,7 +396,20 @@ function prepareStream(
     sameChannelThreadRequired: agentSession.sameChannelThreadRequired,
     agentId: input.hookAgentId,
   });
-  const unsubscribe = admission.bindStreamUnsubscribe(streamSubscription.unsubscribe);
+  const unsubscribeToolInterruption = activeSession.agent.subscribeToolInterruptionStatus(() => {
+    if (attempt.sessionKey && activeSession.agent.hasPendingSteeringMessage(() => true)) {
+      emitSessionLifecycleEvent({
+        sessionKey: attempt.sessionKey,
+        agentId: input.hookAgentId,
+        reason: "agent.input.steering",
+        scope: "runtime",
+      });
+    }
+  });
+  const unsubscribe = admission.bindStreamUnsubscribe(() => {
+    unsubscribeToolInterruption();
+    return streamSubscription.unsubscribe();
+  });
   const subscription = { ...streamSubscription, unsubscribe };
   toolMetasForTerminal = subscription.toolMetas;
 
@@ -548,6 +562,10 @@ function prepareStream(
   const messageInjection = {
     version: 2 as const,
     isAvailable: isSteeringAdmissionOpen,
+    steerNow: createPendingSteerToolControl(
+      activeSession,
+      () => isSteeringAdmissionOpen() && isCurrentRegistration(),
+    ),
     queueMessage,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,

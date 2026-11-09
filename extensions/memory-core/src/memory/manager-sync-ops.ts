@@ -226,7 +226,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         : null;
       const targetArchiveFiles = targetSessionSync?.targetArchiveFiles ?? null;
       hasTargetArchiveFiles = targetArchiveFiles !== null;
-      if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
+      if (
+        (params?.reason === "cli" || params?.reason === "cli-search") &&
+        !params.force &&
+        !hasTargetArchiveFiles
+      ) {
         await this.markSessionStartupCatchupDirtyFiles();
       }
       const syncProviderKey = this.syncProviderGeneration
@@ -315,7 +319,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         (!params?.force || params.reason === "embedding-bootstrap-recovery") &&
         // A semantic failure must still allow the distinct keyword-only publication.
         !(this.fullReindexRetryBackoff.failedWithEmbeddings && !syncProvider) &&
-        Date.now() < this.fullReindexRetryBackoff.retryAt;
+        performance.now() < this.fullReindexRetryBackoff.retryAt;
       const deferAutomaticFullReindex = retryFullReindexBackedOff && !needsExplicitIdentityReindex;
       if (deferAutomaticFullReindex && !hasTargetArchiveFiles) {
         // Automatic identity repair honors the failure cooldown. An explicit

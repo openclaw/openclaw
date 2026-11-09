@@ -3,7 +3,6 @@ import {
   createOAuthLoginCancelledError,
   createOAuthRefreshError,
   oauthErrorHtml,
-  oauthSuccessHtml,
   parseOAuthAuthorizationInput,
   resolveOpenAICodexAuthIdentity,
   throwIfOAuthLoginAborted,
@@ -94,7 +93,7 @@ export async function loginOpenAICodex(options: {
   onAuth: (info: { url: string; instructions?: string }) => Promise<void> | void;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
   // Manual entry races the browser callback; either can complete the login.
-  onManualCodeInput: () => Promise<string>;
+  onManualCodeInput: (callback: { listening: boolean }) => Promise<string>;
   originator?: string;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -115,10 +114,6 @@ export async function loginOpenAICodex(options: {
       expectedState: state,
       bindOnlyHostname: CALLBACK_HOST,
       signal: options.signal,
-      renderSuccess: () => ({
-        body: oauthSuccessHtml("OpenAI authentication completed. You can close this window."),
-        contentType: "text/html; charset=utf-8",
-      }),
       renderError: (message) => ({
         body: oauthErrorHtml(message),
         contentType: "text/html; charset=utf-8",
@@ -151,7 +146,7 @@ export async function loginOpenAICodex(options: {
     });
     // Closing the server after manual entry can reject the losing callback wait.
     void callbackPromise?.catch(() => undefined);
-    const manualPromise = options.onManualCodeInput().then(
+    const manualPromise = options.onManualCodeInput({ listening: server !== undefined }).then(
       (input) => parseAuthorizationCode(input, state),
       (err: unknown) => {
         throw err instanceof Error ? err : new Error(String(err));

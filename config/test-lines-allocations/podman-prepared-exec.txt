@@ -1,0 +1,2 @@
+6
+# Prepared Podman execution remains usable after discovery becomes unavailable; scope proof uses the production binder.

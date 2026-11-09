@@ -252,10 +252,17 @@ describe("captured model decisions", () => {
     vi.useRealTimers();
   });
 
-  it("preserves provider auth for an authenticated non-CLI harness", async () => {
+  it("offers an authenticated non-CLI harness alongside the configured host runtime", async () => {
     const copilotEntry = model("github-copilot", "fixture-model");
     const owner = decisions({
-      cfg: { plugins: { entries: { copilot: { enabled: true } } } },
+      cfg: {
+        plugins: { entries: { copilot: { enabled: true } } },
+        agents: {
+          defaults: {
+            models: { "github-copilot/fixture-model": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+      },
       agentDir: "/tmp/copilot-agent",
       workspaceDir: "/tmp/copilot-workspace",
       snapshot: catalogSnapshot([copilotEntry]),

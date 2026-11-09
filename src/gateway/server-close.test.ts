@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
-import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
@@ -25,7 +24,6 @@ import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { reserveSessionControllerSource } from "../sessions/session-controller.mailbox.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
-import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
@@ -37,7 +35,6 @@ import {
   type GatewayCloseParams,
   firstMockCall,
 } from "./server-close.test-support.js";
-import { isGatewayCleanupRetainedError } from "./server-shutdown.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 const { mocks } = await vi.hoisted(() => import("./server-close.mocks.test-support.js"));
@@ -154,131 +151,8 @@ describe("createGatewayCloseHandler", () => {
   registerGatewayResourceRetirementTests(createGatewayCloseHandler, {
     mocks,
     sharedStateLifecycle,
+    createHeldCloseSource: (runId) => createCloseSource(runId, {}, { holdProducer: true }),
   });
-
-  it.each(["shutdown", "pre-restart", "harness", "sdk"] as const)(
-    "retains shared SQLite through actual %s cleanup after grace",
-    async (owner) => {
-      const { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
-      const { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } =
-        await import("../state/openclaw-state-db.js");
-      const hooks = await vi.importActual<typeof import("../hooks/internal-hooks.js")>(
-        "../hooks/internal-hooks.js",
-      );
-      const state = await createOpenClawTestState({ label: "shutdown-actual-sqlite" });
-      const database = openOpenClawStateDatabase({ env: state.env });
-      const sdkDatabase = new DatabaseSync(":memory:");
-      const preparedDatabase = new DatabaseSync(":memory:");
-      const unregisterPrepared = registerPreparedModelRuntimeClose(async () => {
-        preparedDatabase.close();
-        unregisterPrepared();
-      });
-      const sdkHost = new LegacyPluginSdkResourceHost();
-      const inspection = new PluginRegistryInspectionResources(async () => {});
-      inspection.attach(createEmptyPluginRegistry());
-      const sdkDisposalReads: unknown[] = [];
-      inspection.register("sdk-provider", {
-        id: "native-sdk-borrow",
-        dispose: () => {
-          sdkDisposalReads.push(database.db.prepare("SELECT 42 AS value").get());
-          sdkDatabase.close();
-        },
-      });
-      sdkHost.adopt(inspection, inspection.retain());
-      await inspection.release();
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const finished = createDeferredCore();
-      const reads: unknown[] = [];
-      const failures: unknown[] = [];
-      const cleanup = vi.fn(async () => {
-        entered.resolve();
-        try {
-          await release.promise;
-          reads.push(database.db.prepare("SELECT 1 AS value").get());
-          expect(sdkDatabase.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
-          expect(preparedDatabase.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
-        } catch (error) {
-          failures.push(error);
-        } finally {
-          finished.resolve();
-        }
-      });
-      const eventKey = `gateway:${owner === "pre-restart" ? "pre-restart" : "shutdown"}`;
-      if (owner === "sdk") {
-        await expect(
-          sdkHost.track(async () => {
-            void trackAsyncWork(cleanup);
-            return "public SDK result";
-          }),
-        ).resolves.toBe("public SDK result");
-      } else if (owner === "harness") {
-        const harnesses = await vi.importActual<typeof import("../agents/harness/registry.js")>(
-          "../agents/harness/registry.js",
-        );
-        setActivePluginRegistry(createEmptyPluginRegistry());
-        harnesses.registerAgentHarness({
-          id: "cleanup-sqlite-fixture",
-          label: "Cleanup SQLite fixture",
-          supports: () => ({ supported: true }),
-          runAttempt: async () => {
-            throw new Error("The cleanup fixture does not run attempts");
-          },
-          dispose: cleanup,
-        });
-        mocks.disposeAgentHarnesses.mockImplementation(harnesses.disposeRegisteredAgentHarnesses);
-      } else {
-        hooks.registerInternalHook(eventKey, cleanup);
-        mocks.triggerInternalHook.mockImplementation(hooks.triggerInternalHook);
-      }
-      const httpClose = vi.fn((callback: (error?: Error | null) => void) => callback(null));
-      const close = createGatewayCloseHandler({
-        httpServer: createHttpServer(httpClose) as never,
-        closeSdkResources: () => sdkHost.close(),
-        drainSdkWork: () => sdkHost.drainWork(),
-      });
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const closing = close({
-        exitAfterClose: true,
-        ...(owner === "pre-restart" ? { restartExpectedMs: 1000 } : {}),
-      }).catch((error: unknown) => error);
-      try {
-        await entered.promise;
-        // Advance the owner's grace and both retained-work joins.
-        await vi.advanceTimersByTimeAsync(15_000);
-        expect(isGatewayCleanupRetainedError(await closing)).toBe(true);
-        expect(database.db.isOpen).toBe(true);
-        expect(sdkDatabase.isOpen).toBe(true);
-        expect(preparedDatabase.isOpen).toBe(true);
-        expect(sdkDisposalReads).toEqual([]);
-        expect(sharedStateLifecycle.has("open")).toBe(true);
-        release.resolve();
-        await finished.promise;
-        expect(failures).toEqual([]);
-        expect(reads).toEqual([{ value: 1 }]);
-      } finally {
-        release.resolve();
-        await finished.promise;
-        await closing;
-        await sdkHost.close().catch(() => undefined);
-        if (sdkDatabase.isOpen) {
-          sdkDatabase.close();
-        }
-        unregisterPrepared();
-        if (preparedDatabase.isOpen) {
-          preparedDatabase.close();
-        }
-        hooks.unregisterInternalHook(eventKey, cleanup);
-        vi.useRealTimers();
-        await closeOpenClawStateDatabaseAsync();
-        await state.cleanup();
-        sharedStateLifecycle.clear();
-      }
-      expect(cleanup).toHaveBeenCalledOnce();
-      expect(failures).toEqual([]);
-      expect(reads).toEqual([{ value: 1 }]);
-    },
-  );
 
   it.each([false, true])(
     "finishes shared state cleanup after actual SDK disposal rejects (global failure: %s)",
@@ -1069,4 +943,3 @@ describe("createGatewayCloseHandler", () => {
     },
   );
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

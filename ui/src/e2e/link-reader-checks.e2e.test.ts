@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
+import { openChatPanels } from "../test-helpers/chat-layout-menu.ts";
 import {
   readerUrl as url,
   readerFile,
@@ -85,6 +86,7 @@ it("keeps check navigation, refresh, and long content usable in a narrow native 
           .every((request) => (request.params as { refresh?: boolean }).refresh === true),
       ).toBe(true);
       await page.setViewportSize({ width: 390, height: 844 });
+      await openChatPanels(page, "mobile");
       await button("Files 1").click();
       expect(await content.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
       const mobileNav = await panel.locator(".lr-section-nav").evaluate((node) => ({

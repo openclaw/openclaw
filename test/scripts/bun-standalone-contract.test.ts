@@ -159,9 +159,13 @@ describe("standalone build interface", () => {
           "--no-compile-function-source",
           "--disallow-code-generation-from-strings=strict",
           "--aot-allow-code-from-disk",
+          "--trim-allow=interpreter,password,toml,yaml,json5,jsonc",
         ],
         aotCompileOptions: {
-          trim: { locales: ["en", "de"] },
+          trim: {
+            allow: ["interpreter", "password", "toml", "yaml", "json5", "jsonc"],
+            locales: ["en", "de"],
+          },
           aotExplain: ["text", "statistics", "trim"],
           functionSource: false,
           disallowCodeGenerationFromStrings: "strict",
@@ -171,7 +175,7 @@ describe("standalone build interface", () => {
     },
   );
 
-  it("preserves the non-strict string-code policy and plain trimming", () => {
+  it("retains disk-code capabilities when trimming with the non-strict string-code policy", () => {
     expect(
       parseStandaloneArguments([
         "out",
@@ -180,7 +184,10 @@ describe("standalone build interface", () => {
         "--disallow-code-generation-from-strings",
       ]),
     ).toMatchObject({
-      aotCompileOptions: { trim: true, disallowCodeGenerationFromStrings: true },
+      aotCompileOptions: {
+        trim: { allow: ["interpreter", "password", "toml", "yaml", "json5", "jsonc"] },
+        disallowCodeGenerationFromStrings: true,
+      },
     });
   });
 
@@ -212,16 +219,23 @@ describe("standalone build interface", () => {
       ]) {
         const parsed = parseStandaloneArguments(["out", mode, ...flags]);
         expect(parsed).toMatchObject({
-          aotCompileOptions: { trim: { allow: ["run", "jit"], locales: ["en", "de"] } },
+          aotCompileOptions: {
+            trim: {
+              allow: ["run", "jit", "interpreter", "password", "toml", "yaml", "json5", "jsonc"],
+              locales: ["en", "de"],
+            },
+          },
         });
         if (!parsed.help) {
           expect(parsed.compileFlags.filter((flag) => flag.startsWith("--trim-allow="))).toEqual([
-            "--trim-allow=run,jit",
+            "--trim-allow=run,jit,interpreter,password,toml,yaml,json5,jsonc",
           ]);
         }
       }
       expect(parseStandaloneArguments(["out", mode, "--trim-allow=run"])).toMatchObject({
-        aotCompileOptions: { trim: { allow: ["run"] } },
+        aotCompileOptions: {
+          trim: { allow: ["run", "interpreter", "password", "toml", "yaml", "json5", "jsonc"] },
+        },
       });
     },
   );

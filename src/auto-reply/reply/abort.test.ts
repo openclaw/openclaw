@@ -20,6 +20,11 @@ import {
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
@@ -285,6 +290,11 @@ describe("abort handling", () => {
     const hook = vi.fn();
     registerInternalHook("command:stop", hook);
     onTestFinished(() => unregisterInternalHook("command:stop", hook));
+    const runStopped = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "run_stopped", handler: runStopped }]),
+    );
+    onTestFinished(resetGlobalHookRunner);
     expect(await stop({ senderId: "123", commandSource: "text", body: "stop" })).toMatchObject({
       handled: true,
       stoppedSubagents: 1,
@@ -295,6 +305,12 @@ describe("abort handling", () => {
       killReconciliation: { suppressTaskDelivery: true },
     });
     expect(hook).toHaveBeenCalledOnce();
+    expect(runStopped.mock.calls).toEqual([
+      [
+        { source: "channel", sessions: [{ agentId: "main", sessionKey }], runIds: [] },
+        { agentId: "main", sessionKey },
+      ],
+    ]);
   });
 
   it.each([false, true])(

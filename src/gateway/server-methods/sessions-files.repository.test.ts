@@ -35,6 +35,7 @@ import {
   transport,
   workspaceTransfer,
 } from "../worker-environments/node-worker-tunnel.test-support.js";
+import { bindRepositoryDiskForTest } from "../worker-environments/repository-disk-authority.test-support.js";
 import { stageSessionRepositoryCheckpoint } from "../worker-environments/session-repository-checkpoints.js";
 import type { WorkerWorkspaceCommand } from "../worker-environments/tunnel-contract.js";
 import { captureWorkspaceManifest } from "../worker-environments/workspace-manifest-worker.js";
@@ -256,6 +257,18 @@ async function persistSessionEntry() {
   );
 }
 
+it("refuses stored file fallback when the repository belongs to a retained disk", async () => {
+  source = await bindRepositoryDiskForTest(source, sessionId, store.path);
+  active = false;
+  for (const operation of ["list", "get", "download"] as const) {
+    await expect(
+      files.request(operation, operation === "list" ? undefined : "changed.txt"),
+    ).rejects.toThrow("repository disk is unavailable");
+  }
+  expect(run).not.toHaveBeenCalled();
+  expect(mocks.workspace).not.toHaveBeenCalled();
+});
+
 it("keeps incognito repository downloads alive after their RPC planning borrow ends", async () => {
   using connection = createSessionFileDownloadClient();
   const baseCommit = source.baseCommit!;
@@ -319,8 +332,14 @@ it("downloads original live repository bytes in bounded windows and rejects stal
   expect(Buffer.concat(chunks).equals(bytes)).toBe(true);
   const windows = await Promise.all(run.mock.results.map((call) => call.value));
   expect(windows.every((result) => Buffer.byteLength(result.stdout) < 2 * 1024 * 1024)).toBe(true);
-  for (const filePath of ["../outside", "/etc/passwd"]) {
-    await files.error("download", filePath, undefined, connection);
+  for (const filePath of [
+    "../outside",
+    "/etc/passwd",
+    path.join(nodeRoot, ".openclaw/tmp/report.txt"),
+  ]) {
+    expect(await files.error("download", filePath, undefined, connection)).toMatchObject({
+      details: { type: "session_file_not_found", reason: "outside_session_boundary" },
+    });
   }
   onResult = () => {
     generation++;
@@ -416,6 +435,24 @@ it.each(["reset", "archive", "lifecycle revision"])(
     expect(readFile("changed.txt")).toBe("before\n");
   },
 );
+
+it("searches stopped repository artifacts using equivalent sigma forms", async () => {
+  const base = await capture();
+  const retainedPath = "ΕΛΕΓΧΟΣ/README.md";
+  fs.mkdirSync(workspaceFile("ΕΛΕΓΧΟΣ"));
+  writeFile(retainedPath, "retained Greek report\n");
+  await publishCheckpoint(base, await capture());
+  active = false;
+  for (const search of ["Σ", "σ", "ς"]) {
+    const found = await files.ok("list", { search });
+    expect(found.browser.entries.map((entry: { path: string }) => entry.path)).toEqual([
+      retainedPath,
+    ]);
+    expect(found.browser).not.toHaveProperty("truncated");
+  }
+  expect((await files.ok("get", retainedPath)).file.content).toBe("retained Greek report\n");
+  expect(run).not.toHaveBeenCalled();
+});
 
 it.each(["second-München.txt", "second-Mu\u0308nchen.txt"])(
   "keeps stopped inspection limited to verified changed artifacts (%s)",

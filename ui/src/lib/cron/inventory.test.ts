@@ -1,6 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type { CronCompactJob, CronJobsListResult } from "../../api/types.ts";
+import { page as cronRoute } from "../../pages/cron/route.tsx";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../../test-helpers/application-context-fixtures.ts";
 import {
   createCronJob,
   compactCronJobFixture,
@@ -77,6 +82,94 @@ afterEach(() => {
   clients.splice(0).forEach(clearCronInventory);
   vi.useRealTimers();
 });
+
+function routeLoad(
+  client: GatewayBrowserClient,
+  options: {
+    advertised?: boolean;
+    search?: string;
+    cause?: "navigation" | "preload";
+    signal?: AbortSignal;
+  } = {},
+) {
+  const gateway = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client,
+      phase: "connected",
+      hello: options.advertised === false ? { ...hello, features: { events: [] } } : hello,
+    }),
+  ).gateway;
+  return cronRoute.loader!(
+    { gateway, agentSelection: { state: { selectedId: "ops", scopeId: "ops" } } },
+    {
+      deps: options.search ?? "",
+      location: { pathname: "/automations", search: options.search ?? "", hash: "" },
+      cause: options.cause ?? "navigation",
+      signal: options.signal ?? new AbortController().signal,
+      shouldRun: () => true,
+      revalidating: false,
+    },
+  );
+}
+
+it("starts the default Cron inventory during navigation and shares it with the page", async () => {
+  const response = Promise.withResolvers<CronJobsListResult>();
+  const { client, request } = fixture(createGatewayRequestMock(async () => response.promise));
+  const controller = new AbortController();
+  expect(routeLoad(client, { signal: controller.signal })).toBe("");
+  expect(request).toHaveBeenCalledTimes(1);
+  const state = createInitialCronState({ client, connected: true });
+  state.cronAgentId = "ops";
+  const loaded = loadCronJobsPage(state, { tableFilters: true });
+  controller.abort();
+  response.resolve(cronJobsListResponse([fullJob]));
+  await loaded;
+  expect(state.cronJobs).toEqual([fullJob]);
+  expect(request).toHaveBeenCalledTimes(1);
+});
+
+it("keeps one page-owned read on Gateways without shared inventory support", async () => {
+  const { client, request } = fixture(
+    createGatewayRequestMock(async () => cronJobsListResponse([fullJob])),
+    false,
+  );
+  expect(routeLoad(client, { advertised: false })).toBe("");
+  expect(request).not.toHaveBeenCalled();
+  const state = createInitialCronState({ client, connected: true });
+  state.cronAgentId = "ops";
+  await loadCronJobsPage(state, { tableFilters: true });
+  expect(state.cronJobs).toEqual([fullJob]);
+  expect(request).toHaveBeenCalledTimes(1);
+});
+
+it("does not continue an abandoned Cron navigation after inventory invalidation", async () => {
+  vi.useFakeTimers();
+  const { client, request } = fixture(
+    createGatewayRequestMock(async () => cronJobsListResponse([fullJob])),
+  );
+  receiveCronInventoryEvent(client, changed);
+  const controller = new AbortController();
+  expect(routeLoad(client, { signal: controller.signal })).toBe("");
+  expect(request).not.toHaveBeenCalled();
+  controller.abort();
+  await vi.advanceTimersByTimeAsync(50);
+  expect(request).not.toHaveBeenCalled();
+
+  const state = createInitialCronState({ client, connected: true });
+  state.cronAgentId = "ops";
+  await loadCronJobsPage(state, { tableFilters: true });
+  expect(state.cronJobs).toEqual([fullJob]);
+  expect(request).toHaveBeenCalledTimes(1);
+});
+
+it.each([{ cause: "preload" as const }, { search: "?job=held" }, { signal: AbortSignal.abort() }])(
+  "does not warm an optional or retired Cron route: %j",
+  (options) => {
+    const { client, request } = fixture();
+    expect(routeLoad(client, options)).toBe(options.search ?? "");
+    expect(request).not.toHaveBeenCalled();
+  },
+);
 
 it("stops paging when every inventory reader becomes hidden", async () => {
   const response = Promise.withResolvers<CronJobsListResult<CronCompactJob>>();
