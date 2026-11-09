@@ -24,6 +24,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -80,7 +81,10 @@ internal fun ChatMessageTimestamp(
             .sizeIn(minWidth = ClawTheme.spacing.touchTarget, minHeight = ClawTheme.spacing.touchTarget)
             .clickable(role = Role.Button, onClickLabel = nativeString("Message information")) { expanded = !expanded }
             .padding(vertical = 8.dp)
-            .semantics { contentDescription = nativeString("Message information for \$timestamp", absolute) }
+            .semantics {
+              contentDescription = nativeString("Message information for \$timestamp", absolute)
+              stateDescription = if (expanded) nativeString("Expanded") else nativeString("Collapsed")
+            }
         },
     )
     DropdownMenu(expanded = expanded && metadata.isNotEmpty(), onDismissRequest = { expanded = false }) {

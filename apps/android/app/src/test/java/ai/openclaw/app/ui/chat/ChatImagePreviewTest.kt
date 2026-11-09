@@ -20,8 +20,12 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
@@ -74,6 +78,57 @@ class ChatImagePreviewTest {
 
   @After fun restoreFontScale() {
     RuntimeEnvironment.setFontScale(previousFontScale)
+  }
+
+  @Test
+  @Config(sdk = [34], qualifiers = "w1000dp-h1000dp-mdpi")
+  fun zoomControlAnnouncesItsCurrentValueThroughZoomAndReset() {
+    openManagedImage()
+    val reset = composeRule.onNodeWithContentDescription("Reset zoom")
+    val zoomIn = composeRule.onNodeWithContentDescription("Zoom in")
+    val zoomOut = composeRule.onNodeWithContentDescription("Zoom out")
+    reset.assertIsNotEnabled()
+    reset.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "100%"))
+    zoomIn.assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.StateDescription))
+    zoomOut.assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.StateDescription))
+
+    zoomIn.performClick()
+    composeRule.waitForIdle()
+    reset.assertIsEnabled()
+    reset.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "150%"))
+    composeRule.onNodeWithText("150%").assertIsDisplayed()
+
+    repeat(3) { zoomIn.performClick() }
+    composeRule.waitForIdle()
+    zoomIn.assertIsNotEnabled()
+    reset.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "400%"))
+    zoomOut.performClick()
+    composeRule.waitForIdle()
+    reset.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "267%"))
+    reset.performClick()
+    composeRule.waitForIdle()
+    reset.assertIsNotEnabled()
+    reset.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "100%"))
+  }
+
+  @Test
+  @Config(sdk = [34], qualifiers = "w1000dp-h1000dp-mdpi")
+  fun zoomControlTracksGestureChangesAndRefitsOnReopening() {
+    openManagedImage()
+    composeRule.onNode(isDialog()).performTouchInput { doubleClick(center) }
+    composeRule.waitForIdle()
+    composeRule.onNodeWithText("250%").assertIsDisplayed()
+    val reset = composeRule.onNodeWithContentDescription("Reset zoom")
+    reset.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "250%"))
+
+    composeRule.onNodeWithContentDescription("Close image preview").performClick()
+    composeRule.waitForIdle()
+    composeRule.onNode(isDialog()).assertDoesNotExist()
+    val image = composeRule.onNodeWithContentDescription("Sample image", useUnmergedTree = true)
+    image.performTouchInput { click(center) }
+    composeRule.waitForIdle()
+    reset.assertIsNotEnabled()
+    reset.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "100%"))
   }
 
   @Test

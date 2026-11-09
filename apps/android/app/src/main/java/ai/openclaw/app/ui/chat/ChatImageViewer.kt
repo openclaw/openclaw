@@ -45,6 +45,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -152,7 +153,12 @@ internal fun ChatImageViewer(
           verticalAlignment = Alignment.CenterVertically,
         ) {
           ImageZoomControl("−", nativeString("Zoom out"), transform.scale > 1f) { transform.change(1f / 1.5f) }
-          ImageZoomControl("${(transform.scale * 100).roundToInt()}%", nativeString("Reset zoom"), transform.scale > 1f) { transform.reset() }
+          ImageZoomControl(
+            "${(transform.scale * 100).roundToInt()}%",
+            nativeString("Reset zoom"),
+            transform.scale > 1f,
+            Modifier.semantics { stateDescription = "${(transform.scale * 100).roundToInt()}%" },
+          ) { transform.reset() }
           ImageZoomControl("+", nativeString("Zoom in"), transform.scale < 4f) { transform.change(1.5f) }
         }
       }
@@ -165,12 +171,16 @@ private fun ImageZoomControl(
   text: String,
   label: String,
   enabled: Boolean,
+  modifier: Modifier = Modifier,
   onClick: () -> Unit,
 ) {
   Surface(
     onClick = onClick,
     enabled = enabled,
-    modifier = Modifier.sizeIn(minWidth = if (text.length > 1) 64.dp else 48.dp, minHeight = 48.dp).semantics { contentDescription = label },
+    modifier =
+      modifier
+        .sizeIn(minWidth = if (text.length > 1) 64.dp else 48.dp, minHeight = 48.dp)
+        .semantics { contentDescription = label },
     shape = RoundedCornerShape(ClawTheme.radii.control),
     color = Color.White.copy(alpha = 0.16f),
     contentColor = Color.White.copy(alpha = if (enabled) 1f else 0.8f),

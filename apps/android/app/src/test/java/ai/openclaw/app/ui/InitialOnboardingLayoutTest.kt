@@ -50,6 +50,7 @@ import androidx.compose.ui.test.DeviceConfigurationOverride
 import androidx.compose.ui.test.FontScale
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -249,6 +250,44 @@ class InitialOnboardingLayoutTest {
         assertFalse(model.cameraEnabled.value)
         assertEquals(ai.openclaw.app.LocationMode.Off, model.locationMode.value)
       }
+    }
+  }
+
+  @Test
+  @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h720dp-mdpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun additionalFeaturesAnnounceStateAcrossToggleAndRestoration() {
+    fun assertDisclosure(
+      label: String,
+      state: String,
+    ) {
+      val control = composeRule.onNodeWithText(label)
+      control.performScrollTo()
+      control.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, state))
+      control.assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button))
+      control.assertHasClickAction()
+    }
+
+    withOnboarding(
+      permissionsStep = true,
+      afterRestoration = {
+        assertDisclosure("Hide additional features", "Expanded")
+        composeRule.onNode(hasScrollAction()).performScrollToNode(hasText("Contacts"))
+        composeRule.onNodeWithText("Contacts").assertIsDisplayed()
+        composeRule.onNodeWithText("Hide additional features").performScrollTo().performClick()
+        assertDisclosure("Additional features", "Collapsed")
+        composeRule.onNodeWithText("Contacts").assertDoesNotExist()
+      },
+    ) { _, _ ->
+      assertDisclosure("Additional features", "Collapsed")
+      composeRule.onNodeWithText("Contacts").assertDoesNotExist()
+      composeRule.onNodeWithText("Additional features").performClick()
+      assertDisclosure("Hide additional features", "Expanded")
+      composeRule.onNode(hasScrollAction()).performScrollToNode(hasText("Contacts"))
+      composeRule.onNodeWithText("Contacts").assertIsDisplayed()
+      composeRule.onNode(hasScrollAction()).performScrollToNode(hasText("Special access"))
+      composeRule.onNodeWithText("Special access").assertIsDisplayed()
+      composeRule.onNodeWithText("Continue").assertIsEnabled()
     }
   }
 
@@ -595,6 +634,7 @@ class InitialOnboardingLayoutTest {
     fontScale: Float = 1f,
     viewportWidth: Dp = 360.dp,
     permissionsStep: Boolean = false,
+    afterRestoration: (() -> Unit)? = null,
     verify: (MainViewModel, ComponentActivity) -> Unit,
   ) {
     val app = ApplicationProvider.getApplicationContext<NodeApp>()
@@ -635,6 +675,15 @@ class InitialOnboardingLayoutTest {
         }
       }
       verify(viewModel, checkNotNull(activity))
+      if (afterRestoration != null) {
+        val saved = composeRule.runOnIdle { registry.value.performSave() }
+        composeRule.runOnIdle { mounted.value = false }
+        composeRule.runOnIdle {
+          registry.value = SaveableStateRegistry(saved) { true }
+          mounted.value = true
+        }
+        afterRestoration()
+      }
     } finally {
       try {
         composeRule.runOnIdle { mounted.value = false }
