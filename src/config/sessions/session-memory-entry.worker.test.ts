@@ -70,7 +70,7 @@ it("batches export metadata while observing committed appends, rewrites and cold
         message: { role: "assistant", content: "The committed answer." },
       }),
     ).toMatchObject({ ok: true });
-    replace(scopes[1]!, [userEvent("replacement", "Rewritten. ".repeat(450_000))]);
+    replace(scopes[1]!, [userEvent("replacement", "The rewritten preference.")]);
     // This owner consumes the cold marker; archive restoration is covered by its own tests.
     runOpenClawAgentWriteTransaction(
       (database) => {
@@ -88,7 +88,7 @@ it("batches export metadata while observing committed appends, rewrites and cold
 
     expect(await readBatch()).toMatchObject([
       contentEntry("User: Preference 0.\nAssistant: The committed answer."),
-      contentEntry(expect.stringMatching(/^(?:User: Rewritten\.(?: Rewritten\.)*\n?){6250}$/)),
+      contentEntry("User: The rewritten preference."),
       { cold: true },
       ...scopes.slice(3).map((_, index) => contentEntry(`User: Preference ${index + 3}.`)),
     ]);
@@ -140,10 +140,7 @@ it("keeps repeated sessions isolated by their admitted input bounds", async () =
 it("waits for delivery before reading later export batches and retries a failed delivery", async () => {
   await withOpenClawTestState({ label: "session-memory-entry-delivery" }, async (state) => {
     const requests = Array.from({ length: 3 }, (_, index) => {
-      const options = scopeFor(
-        path.join(state.sessionsDir(), "sessions.json"),
-        `delivery-${index}`,
-      );
+      const options = scopeFor(path.join(state.sessionsDir(), "sessions.json"), `d-${index}`);
       return { absPath: options.sessionKey, options };
     });
     const body = "bounded fixture ".repeat(150_000);
@@ -178,16 +175,19 @@ it("waits for delivery before reading later export batches and retries a failed 
       await observed;
       observer.restore();
     }
-    replace(requests[2]!.options, [userEvent("newer", "Committed after failure.")]);
+    // Above snapshot retention, each request renders and consumes its own export snapshot.
+    replace(requests[2]!.options, [userEvent("newer", "Later. ".repeat(684_000))]);
     const delivered: number[] = [];
     expect(
-      await collectSessionMemoryEntries(requests, async (index, value) => {
+      await collectSessionMemoryEntries([...requests, requests[2]!], async (index, value) => {
         delivered.push(index);
-        if (index === 2) {
-          expect(value).toMatchObject(contentEntry("User: Committed after failure."));
+        if (index >= 2) {
+          expect(value).toMatchObject(
+            contentEntry(expect.stringMatching(/^(User: Later\.( Later\.)*\n?){6000}$/)),
+          );
         }
       }),
-    ).toHaveLength(3);
-    expect(delivered).toEqual([0, 1, 2]);
+    ).toHaveLength(4);
+    expect(delivered).toEqual([0, 1, 2, 3]);
   });
 });
