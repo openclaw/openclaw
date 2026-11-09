@@ -156,22 +156,33 @@ async function interruptAcceptedUpdate() {
 }
 
 describe("GitHub publication index update", () => {
-  it.each([false, true])(
-    "fetches only an absent publication commit without negotiating session tips (shallow=%s)",
-    async (shallow) => {
+  it.each(["full", "shallow", "uncached", "unregistered"])(
+    "reuses commits and isolates cached-base fetches (%s)",
+    async (mode) => {
+      const shallow = mode === "shallow";
       await f.git("config", "uploadpack.allowFilter", "true");
       const clone = await makeDirectory("partial");
       const url = pathToFileURL(f.cwd).href;
       await git(clone, [
         "clone",
-        "--filter=blob:none",
+        ...(mode === "unregistered" ? [] : ["--filter=blob:none"]),
         "--no-checkout",
         ...(shallow ? ["--depth=1"] : []),
         url,
         ".",
       ]);
-      if (shallow) {
+      if (mode !== "unregistered") {
+        await git(clone, ["config", `remote.${url}.promisor`, "true"]);
+      }
+      if (mode !== "full") {
         await git(clone, ["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"]);
+      }
+      if (mode === "uncached") {
+        await git(clone, ["update-ref", "-d", "refs/remotes/origin/main"]);
+      }
+      const workspace = mode === "full" ? await makeDirectory("linked") : clone;
+      if (workspace !== clone) {
+        await git(clone, ["worktree", "add", "--detach", "--no-checkout", workspace, "HEAD"]);
       }
       const tree = await f.git("rev-parse", "HEAD^{tree}");
       const local = await git(clone, ["commit-tree", tree, "-p", f.previousHead], "local\n", {
@@ -182,6 +193,13 @@ describe("GitHub publication index update", () => {
         GIT_COMMITTER_EMAIL: "publication@example.test",
       });
       await git(clone, ["update-ref", "refs/heads/unrelated-session", local]);
+      const unrelatedPack = await git(
+        clone,
+        ["pack-objects", path.join(clone, ".git/objects/pack/pack")],
+        `${local}\n`,
+      );
+      await fs.unlink(path.join(clone, ".git/objects", local.slice(0, 2), local.slice(2)));
+      const accesses = testState.path("fetch.pack-access");
       const packets = testState.path("fetch.packet");
       let fetches = 0;
       let allowFetch = false;
@@ -190,13 +208,14 @@ describe("GitHub publication index update", () => {
           fetches++;
         }
         return await runPublicationCommand(
-          argv.map((arg) => (arg === "https://github.com/example/project.git" ? url : arg)),
+          argv.map((arg) => arg.replace("https://github.com/example/project.git", url)),
           {
             ...options,
             env: {
               ...options?.env,
               GIT_ALLOW_PROTOCOL: allowFetch ? "file" : "",
               GIT_TRACE_PACKET: packets,
+              GIT_TRACE_PACK_ACCESS: accesses,
             },
           },
         );
@@ -207,27 +226,41 @@ describe("GitHub publication index update", () => {
           "example/project",
           sha,
           "github.com",
-          clone,
+          workspace,
           process.env,
           "Publication commit unavailable",
           { baseBranch: "main" },
         );
       const missing = await git(clone, ["rev-list", "--objects", "--missing=print", local]);
-      expect(missing).toContain("?");
+      if (mode !== "unregistered") {
+        expect(missing).toContain("?");
+      }
       await prepare(local);
       expect(fetches).toBe(0);
       expect(await git(clone, ["rev-list", "--objects", "--missing=print", local])).toBe(missing);
 
       // The source already owns this unadvertised commit, but the clone does not.
       await f.git("update-ref", "refs/heads/publication", f.headCommit);
+      await fs.writeFile(accesses, "");
       allowFetch = true;
       await prepare(f.headCommit);
       expect(fetches).toBe(1);
       const trace = await fs.readFile(packets, "utf8");
       expect(trace).toContain(`fetch> have ${f.previousHead}`);
-      expect(trace).not.toContain(`fetch> have ${local}`);
+      if (mode !== "uncached" && mode !== "unregistered") {
+        expect(trace).not.toContain(`fetch> have ${local}`);
+        expect(await fs.readFile(accesses, "utf8")).not.toContain(`pack-${unrelatedPack}.pack`);
+      }
       expect(await git(clone, ["cat-file", "-t", f.headCommit])).toBe("commit");
+      if (mode === "unregistered") {
+        expect(await git(clone, ["show", `${f.headCommit}:artifact.txt`])).toBe("accepted");
+      }
       expect(await git(clone, ["rev-parse", "HEAD"])).toBe(f.previousHead);
+      if (shallow) {
+        expect(await fs.readFile(path.join(clone, ".git/shallow"), "utf8")).toBe(
+          `${f.previousHead}\n`,
+        );
+      }
       await expect(fs.access(path.join(clone, ".git", "FETCH_HEAD"))).rejects.toThrow();
     },
   );
