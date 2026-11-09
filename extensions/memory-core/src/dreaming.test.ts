@@ -173,7 +173,31 @@ function getDreamingService(api: DreamingPluginApiTestDouble) {
   )[0];
 }
 
-async function triggerDreamingServiceStart(
+function getCronReconciledHandler(onMock: ReturnType<typeof vi.fn>) {
+  const call = expectDefined(
+    onMock.mock.calls.find(([eventName]) => eventName === "cron_reconciled"),
+    "cron_reconciled hook was not registered",
+  );
+  return call[1] as (
+    event: { reason: "startup" | "reload"; enabled: boolean },
+    ctx: OpenClawPluginServiceContext & { abortSignal: AbortSignal },
+  ) => Promise<void>;
+}
+
+async function triggerCronReconciled(
+  api: DreamingPluginApiTestDouble,
+  ctx: { config: OpenClawConfig; workspaceDir?: string; getCron?: () => unknown },
+): Promise<void> {
+  await getCronReconciledHandler(api.on)({ reason: "startup", enabled: true }, {
+    ...ctx,
+    stateDir: ".",
+    logger: api.logger,
+    scheduler: api.scheduler,
+    abortSignal: new AbortController().signal,
+  } as OpenClawPluginServiceContext & { abortSignal: AbortSignal });
+}
+
+async function startDreamingServiceOnly(
   api: DreamingPluginApiTestDouble,
   ctx: { config: OpenClawConfig; workspaceDir?: string; getCron?: () => unknown },
 ): Promise<void> {
@@ -183,6 +207,17 @@ async function triggerDreamingServiceStart(
     logger: api.logger,
   } as OpenClawPluginServiceContext;
   await getDreamingService(api).start({ ...context, scheduler: api.scheduler });
+}
+
+async function triggerDreamingServiceStart(
+  api: DreamingPluginApiTestDouble,
+  ctx: { config: OpenClawConfig; workspaceDir?: string; getCron?: () => unknown },
+): Promise<void> {
+  await startDreamingServiceOnly(api, ctx);
+  const cron = ctx.getCron?.();
+  if (cron) {
+    await triggerCronReconciled(api, { ...ctx, getCron: () => cron });
+  }
 }
 
 async function triggerDreamingServiceStop(api: DreamingPluginApiTestDouble): Promise<void> {
@@ -205,11 +240,11 @@ function registerShortTermPromotionDreamingForTest(api: DreamingPluginApiTestDou
 }
 
 describe("dreaming service reconciliation", () => {
-  it("drains pending reconciliation on service stop without arming runtime recovery", async () => {
+  it("returns from plugin service startup before cron is ready and reconciles afterward", async () => {
     vi.useFakeTimers();
-    let rejectStartupList: (reason?: unknown) => void = () => undefined;
-    const startupListPromise = new Promise<CronJobLike[]>((_resolve, reject) => {
-      rejectStartupList = reject;
+    let resolveStartupList: (jobs: CronJobLike[]) => void = () => undefined;
+    const startupListPromise = new Promise<CronJobLike[]>((resolve) => {
+      resolveStartupList = resolve;
     });
     let listCalls = 0;
     const addCalls: CronAddInput[] = [];
@@ -232,30 +267,39 @@ describe("dreaming service reconciliation", () => {
         return { removed: false };
       },
     };
-    const { api, logger } = createDreamingTestContext();
+    const { api } = createDreamingTestContext();
 
     try {
       registerShortTermPromotionDreamingForTest(api);
-      const startup = triggerDreamingServiceStart(api, {
+      let startupSettled = false;
+      const startup = startDreamingServiceOnly(api, {
         config: api.config,
         getCron: () => cron,
-      });
-
-      let stopped = false;
-      const stopping = triggerDreamingServiceStop(api).then(() => {
-        stopped = true;
+      }).then(() => {
+        startupSettled = true;
       });
       await vi.advanceTimersByTimeAsync(0);
-      expect(stopped).toBe(false);
-      rejectStartupList(new Error("startup list failed"));
-      await Promise.all([startup, stopping]);
-      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
 
+      expect(startupSettled).toBe(true);
+      expect(listCalls).toBe(0);
+
+      let reconciliationSettled = false;
+      const reconciliation = triggerCronReconciled(api, {
+        config: api.config,
+        getCron: () => cron,
+      }).then(() => {
+        reconciliationSettled = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(reconciliationSettled).toBe(false);
       expect(listCalls).toBe(1);
-      expect(addCalls).toHaveLength(0);
-      expectLogContains(logger.error, "dreaming startup reconciliation failed");
+      resolveStartupList([]);
+      await Promise.all([startup, reconciliation]);
+      expect(reconciliationSettled).toBe(true);
+      expect(addCalls).toHaveLength(1);
     } finally {
-      rejectStartupList(new Error("test cleanup"));
+      resolveStartupList([]);
       await triggerDreamingServiceStop(api).catch(() => undefined);
       vi.useRealTimers();
     }
@@ -578,7 +622,7 @@ describe("dreaming service reconciliation", () => {
       });
 
       expect(harness.addCalls).toHaveLength(0);
-      expectLogContains(logger.debug, "cron service not yet available at service start");
+      expect(logger.debug).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
       expect(harness.addCalls).toHaveLength(0);

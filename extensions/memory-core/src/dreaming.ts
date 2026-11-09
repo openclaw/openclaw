@@ -392,23 +392,17 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     resolveServiceCron = null;
   };
 
-  const reconcileManagedDreamingCron = async (params: {
-    reason: "startup" | "runtime";
-    startupConfig?: OpenClawConfig;
-  }): Promise<void> => {
-    const startupCfg =
-      params.reason === "startup" ? (params.startupConfig ?? api.config) : resolveCurrentConfig();
-    const pluginConfig =
-      params.reason === "startup"
-        ? (resolveMemoryDreamingPluginConfig(startupCfg) ??
-          resolveMemoryDreamingPluginConfig(api.config) ??
-          api.pluginConfig)
-        : resolveMemoryDreamingPluginConfig(startupCfg);
+  const reconcileManagedDreamingCron = async (
+    params: {
+      cron?: CronServiceLike | null;
+    } = {},
+  ): Promise<void> => {
+    const cfg = resolveCurrentConfig();
     const config = resolveMemoryDeepDreamingConfig({
-      pluginConfig,
-      cfg: startupCfg,
+      pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
+      cfg,
     });
-    const cron = resolveServiceCron?.() ?? null;
+    const cron = params.cron === undefined ? (resolveServiceCron?.() ?? null) : params.cron;
     // Pausing automatic scheduling preserves jobs; explicitly disabling dreaming
     // still reconciles their removal, and startup artifact cleanup stays independent.
     if (config.enabled && cron?.isEnabled && !(await cron.isEnabled())) {
@@ -417,16 +411,10 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     if (!cron && config.enabled && !unavailableCronWarningEmitted) {
       // A non-Gateway host may attach its scheduler later; report persistent
       // unavailability from the regular reconciliation interval.
-      if (params.reason === "startup") {
-        api.logger.debug?.(
-          "memory-core: cron service not yet available at service start; deferring to runtime reconciliation.",
-        );
-      } else {
-        api.logger.warn(
-          "memory-core: managed dreaming cron could not be reconciled (cron service unavailable).",
-        );
-        unavailableCronWarningEmitted = true;
-      }
+      api.logger.warn(
+        "memory-core: managed dreaming cron could not be reconciled (cron service unavailable).",
+      );
+      unavailableCronWarningEmitted = true;
     }
     if (cron) {
       unavailableCronWarningEmitted = false;
@@ -443,13 +431,9 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       return;
     }
     runtimeCronReconcileTimer = setInterval(() => {
-      void trackDreamingTask(() => reconcileManagedDreamingCron({ reason: "runtime" })).catch(
-        (err: unknown) => {
-          api.logger.error(
-            `memory-core: dreaming cron reconcile failed: ${formatErrorMessage(err)}`,
-          );
-        },
-      );
+      void trackDreamingTask(() => reconcileManagedDreamingCron()).catch((err: unknown) => {
+        api.logger.error(`memory-core: dreaming cron reconcile failed: ${formatErrorMessage(err)}`);
+      });
     }, RUNTIME_CRON_RECONCILE_INTERVAL_MS);
     runtimeCronReconcileTimer.unref?.();
   };
@@ -535,27 +519,16 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
 
   api.registerService({
     id: "memory-core-dreaming",
-    async start(ctx) {
+    start(ctx) {
       if (!ctx.getCron) {
         return;
       }
       serviceStartedAtMs = Date.now();
       disposed = false;
       resolveServiceCron = () => resolveCronServiceFromGatewayContext(ctx);
-      await trackDreamingTask(async () => {
-        try {
-          await reconcileManagedDreamingCron({
-            reason: "startup",
-            startupConfig: ctx.config,
-          });
-        } catch (err) {
-          api.logger.error(
-            `memory-core: dreaming startup reconciliation failed: ${formatErrorMessage(err)}`,
-          );
-        } finally {
-          startRuntimeCronReconcileTimer();
-        }
-      });
+      // Cron starts after plugin services. Waiting on its store here deadlocks the
+      // startup phases; the cron_reconciled hook performs the first exact reconcile.
+      startRuntimeCronReconcileTimer();
     },
     async stop() {
       // Plugin replacement stops services, not Gateway hooks. Fence timers and
@@ -563,6 +536,21 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       disposeDreaming();
       await Promise.allSettled(dreamingTasks);
     },
+  });
+
+  api.on("cron_reconciled", async (_event, ctx) => {
+    if (disposed) {
+      return;
+    }
+    try {
+      await trackDreamingTask(() =>
+        reconcileManagedDreamingCron({
+          cron: resolveCronServiceFromGatewayContext(ctx),
+        }),
+      );
+    } catch (err) {
+      api.logger.error(`memory-core: dreaming cron reconcile failed: ${formatErrorMessage(err)}`);
+    }
   });
 
   api.on("gateway_start", (_event, ctx) => {
