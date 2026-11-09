@@ -1,2 +1,3 @@
-187
-# Delayed /stop and /status replay admission, plus controls that ordinary commands and newer user messages still supersede.
+539
+# 187 lines for delayed /stop and /status replay admission.
+# Plus 352 lines of inherited ceiling debt already present on upstream main, so this merge adds no extra slack.
