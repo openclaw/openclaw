@@ -58,9 +58,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Coordinator-accepted warm cached-page reveal latch (#195865): measured
-  // 1,297,532 B (+495 B over its CI base) plus 64 B headroom.
-  chatBootJsGzipBytes: 1_297_596,
+  // Mounted Latest settlement: measured 1,298,202 B (+581 B over its base),
+  // within the coordinator-accepted receipt-fanout lane allowance.
+  chatBootJsGzipBytes: 1_298_202,
   // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
   newBootJsGzipBytes: 803_364,
   startupCssRequests: 1,

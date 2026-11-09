@@ -106,8 +106,6 @@
   height: 18px;
   flex: 0 0 18px;
   color: var(--accent);
-  background: currentColor;
-  mask: var(--spinner-mask);
   border-radius: 50%;
   animation: btn-spinner-spin 800ms linear infinite;
 }

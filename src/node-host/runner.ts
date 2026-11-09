@@ -26,7 +26,12 @@ import { redactRegisteredSecretValues } from "../logging/secret-redaction-regist
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
-import { configureNodeHost, loadNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
+import {
+  configureNodeHost,
+  loadNodeHostConfig,
+  refreshNodeHostOpenClawIdTarget,
+  type NodeHostGatewayConfig,
+} from "./config.js";
 import { startNodeHostConnection } from "./connection.js";
 import { canReuseNodeHostDeviceToken } from "./gateway-auth.js";
 import { createNodeHostGatewayCandidateConnection } from "./gateway-candidate-connection.js";
@@ -46,6 +51,10 @@ import {
   setNodeHostLauncherRestartArguments,
   watchNodeHostParentStdin,
 } from "./launcher-client.js";
+import {
+  dialableNodeHostOpenClawIdTarget,
+  sameNodeHostOpenClawIdScope,
+} from "./openclaw-id-target.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 import { ensureNodeHostStateReady } from "./startup-state-readiness.js";
 
@@ -340,7 +349,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<{ connected
   let autoUpdateStart: Promise<void> | undefined;
   let autoUpdater: { stop: () => Promise<void> } | undefined;
   const persistWinningGateway = (winningGateway: NodeHostGatewayConfig) => {
-    if (resumeConfig) {
+    if (resumeConfig || gateway.kind === "openclaw-id") {
       return;
     }
     void configureNodeHost({
@@ -358,11 +367,31 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<{ connected
     gateway.kind === "openclaw-id" && gateway.openclawId
       ? await import("./openclaw-id-transport.js").then(({ startNodeTunnelTransport }) =>
           startNodeTunnelTransport({
-            target: gateway.openclawId!,
+            target: dialableNodeHostOpenClawIdTarget(gateway.openclawId!),
+            readTarget: async () => {
+              const current = await loadNodeHostConfig();
+              if (
+                current?.nodeId !== nodeId ||
+                current.gateway?.kind !== "openclaw-id" ||
+                !current.gateway.openclawId
+              ) {
+                throw new Error("OpenClaw ID node target changed; restart the node host");
+              }
+              const target = current.gateway.openclawId;
+              const initial = gateway.openclawId!;
+              if (!sameNodeHostOpenClawIdScope(target, initial)) {
+                throw new Error("OpenClaw ID node target changed; restart the node host");
+              }
+              return dialableNodeHostOpenClawIdTarget(target);
+            },
+            persistTarget: (target, expected) =>
+              refreshNodeHostOpenClawIdTarget({ nodeId, expected, target }),
             onTerminal: (error) => {
               writeStderrLine(error.message);
               void finish(1);
             },
+            onRefusal: (error) =>
+              writeStderrLine(`OpenClaw ID connection refused: ${error.message}`),
           }),
         )
       : undefined;

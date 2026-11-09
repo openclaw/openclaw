@@ -141,6 +141,9 @@ function TranscriptRows(props: {
               });
               const active = createMemo(() => props.snapshot.activeRowKeys.has(row()?.key ?? ""));
               const preparing = createMemo(() => row()?.key === props.snapshot.preparingRowKey);
+              const preparingPredecessor = createMemo(
+                () => preparing() && virtualRow().index + 1 === activeRows()[0]?.index,
+              );
               const streaming = createMemo(() => row()?.streaming === true);
               const gap = () => gaps().get(virtualRow().key) ?? 0;
               return (
@@ -158,8 +161,18 @@ function TranscriptRows(props: {
                       "min-height": `${props.snapshot.layout.rowMinimum(index())}px`,
                       display: active() ? undefined : preparing() ? "flow-root" : "none",
                       position: active() ? undefined : "absolute",
-                      top: active() ? undefined : "0",
-                      opacity: active() ? undefined : "0",
+                      top: active()
+                        ? undefined
+                        : preparingPredecessor()
+                          ? `${virtualRow().start - blockStart()}px`
+                          : "0",
+                      opacity: active() || preparingPredecessor() ? undefined : "0",
+                      // Keep speculative preparation hidden; the incoming predecessor
+                      // paints inside its estimated slot before entering normal flow.
+                      clip:
+                        !active() && preparingPredecessor()
+                          ? `rect(0, auto, ${virtualRow().size}px, auto)`
+                          : undefined,
                       "content-visibility":
                         preparing() || streaming() ? "visible" : active() ? undefined : "hidden",
                     }}
