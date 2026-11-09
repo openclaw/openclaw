@@ -22,3 +22,21 @@ export function formatSignalMediaText(media: readonly MediaPlaceholderTextFact[]
   );
   return `[${parts.join(" + ")} attached]`;
 }
+
+const SIGNAL_LONG_TEXT_CONTENT_TYPE = "text/x-signal-plain";
+
+/**
+ * Signal sends a body over about 2 KB as a truncated body plus a text/x-signal-plain attachment.
+ * Once signal-cli has downloaded that attachment it puts the full text in `message`, so the
+ * attachment then only repeats the body and isn't media.
+ */
+export function withoutDuplicateLongText<
+  T extends { contentType?: string | null; size?: number | null } | null | undefined,
+>(attachments: readonly T[] | null | undefined, message: string): T[] {
+  return (attachments ?? []).filter(
+    (attachment) =>
+      attachment?.contentType?.toLowerCase() !== SIGNAL_LONG_TEXT_CONTENT_TYPE ||
+      typeof attachment.size !== "number" ||
+      Buffer.byteLength(message, "utf8") < attachment.size,
+  );
+}

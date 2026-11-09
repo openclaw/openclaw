@@ -1,0 +1,2 @@
+20
+# Signal long-text attachment: dedupe the text/x-signal-plain carrier once signal-cli has merged it into the body.
