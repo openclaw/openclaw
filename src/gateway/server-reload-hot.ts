@@ -1,5 +1,4 @@
 import { reloadSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
-import { listAgentIds } from "../agents/agent-roster.js";
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { refreshContextWindowCache } from "../agents/context.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
@@ -12,7 +11,7 @@ import {
 } from "../agents/prepared-model-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
-import { getRuntimeConfig } from "../config/io.js";
+import { getRuntimeConfig, getRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -30,7 +29,7 @@ import type { GatewayCronExitWatcherHandoff } from "./server-cron-contract.js";
 import { reconcileOrphanedMemoryDreamingJobs } from "./server-cron-memory-dreaming-jobs.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
-import { reviveAgentDatabasesAfterConfigCommit } from "./server-reload-agent-databases.js";
+import { reconcileAgentDatabasesAfterConfigCommit } from "./server-reload-agent-databases.js";
 import { restartGatewayChannels } from "./server-reload-channel-restart.js";
 import {
   assertReloadPublicationCurrent,
@@ -95,7 +94,10 @@ export function createGatewayReloadHandlers(
     const state = params.getState();
     const nextState = { ...state };
     const candidateEnv = publication?.runtimeEnv ?? process.env;
-    const modelRuntime = modelRuntimeReload.prepare(plan, getRuntimeConfig(), nextConfig);
+    // Entry always has a snapshot: getRuntimeConfig throws when it is missing.
+    // A later clear must not pretend the published candidate was the old roster.
+    const rosterAtEntry = getRuntimeConfig();
+    const modelRuntime = modelRuntimeReload.prepare(plan, rosterAtEntry, nextConfig);
     const refreshModelRuntimeSnapshots = (
       config: OpenClawConfig,
       isPublicationCurrent?: () => boolean,
@@ -303,6 +305,7 @@ export function createGatewayReloadHandlers(
         }
         setGatewayRestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
       };
+      const rosterBeforeCommit = getRuntimeConfigSnapshot() ?? rosterAtEntry;
       try {
         await (publication ? publication.publish(commit, () => runtimeCommitted) : commit());
       } catch (error) {
@@ -340,9 +343,11 @@ export function createGatewayReloadHandlers(
         });
       }
       await runAfterPluginLifecycleCommit(async () => {
-        await reviveAgentDatabasesAfterConfigCommit(listAgentIds(nextConfig), (message) =>
-          params.logReload.warn(message),
-        );
+        await reconcileAgentDatabasesAfterConfigCommit({
+          previousConfig: rosterBeforeCommit,
+          nextConfig,
+          warn: (message) => params.logReload.warn(message),
+        });
         if (!ownsCron()) {
           return;
         }

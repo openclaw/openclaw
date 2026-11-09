@@ -1,0 +1,2 @@
+# Config reload closes a removed agent's open database without deleting its files. Covers re-admission, a rejected publish, an unchanged roster, an overlapping later commit, the read-only admission descriptor, and session-write admission.
+234

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
 import { threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners } from "../shared/listeners.js";
@@ -39,10 +38,16 @@ import {
 } from "./sqlite-database-admission-seal.js";
 import { withSqliteDatabaseAdmissionSettlement } from "./sqlite-database-admission-wait.js";
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
+import {
+  isDepartedAgentSqliteAdmission,
+  resolveSqliteDatabaseFilePath,
+} from "./sqlite-departed-agent-admission.js";
 import { getSqliteNativeAdmissionFacts } from "./sqlite-native-admission.js";
 import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
 import { sqliteSchemaOwners } from "./sqlite-schema-scope.js";
 import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
+
+export { resolveSqliteDatabaseFilePath };
 
 export {
   readSqliteDatabaseAdmissions,
@@ -198,6 +203,9 @@ export function retainSqliteDatabaseAdmissionLocation(
   location: string,
   expectedIdentity?: DatabaseFileIdentity,
 ): void {
+  if (isDepartedAgentSqliteAdmission(location)) {
+    return;
+  }
   const retained = state.registry.forLocation(location);
   if (
     retained &&
@@ -260,15 +268,6 @@ function pathAdmission(location: string): Admission | undefined {
     }
     throw error;
   }
-}
-
-/** Resolve SQLite's absolute URLs and encoded filename form at filesystem boundaries. */
-export function resolveSqliteDatabaseFilePath(location: string): string {
-  if (!location.startsWith("file:")) {
-    return location;
-  }
-  const [uriFilename = ""] = location.slice("file:".length).split(/[?#]/u, 1);
-  return uriFilename.startsWith("/") ? fileURLToPath(location) : decodeURIComponent(uriFilename);
 }
 
 /** Bracket native open so a pathname swap cannot lend the replacement file's admission. */
