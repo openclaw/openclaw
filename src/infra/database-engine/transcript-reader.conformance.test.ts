@@ -9,6 +9,7 @@ import {
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
   projectModelContextEventSql,
+  projectModelContextJson,
   projectModelContextNavigationSql,
   projectResetBoundaryNavigationSql,
 } from "../../config/sessions/session-model-context-projection.js";
@@ -23,6 +24,7 @@ import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
+import { jsonNativeFieldsValid } from "./json-values.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -71,6 +73,25 @@ const fixtures = [
   { type: "compaction", summary: "private summary", firstKeptEntryId: "kept" },
   { type: "branch_summary", summary: "private branch summary", fromId: "from" },
 ].map((event, index) => Object.assign({ id: `entry-${index}`, parentId: "old-parent" }, event));
+const exceptional = [
+  messageEvent({
+    role: "toolResult",
+    toolCallId: "deep",
+    toolName: "probe",
+    content: [{ type: "text", text: "complete" }],
+    details: JSON.parse("[".repeat(1100) + "1" + "]".repeat(1100)),
+    __openclaw: { upstreamUserText: "private" },
+  }),
+  messageEvent({
+    role: "user",
+    content: "before" + String.fromCharCode(0, 0xd800, 0xdc00, 0xdc00) + "after",
+  }),
+  messageEvent({
+    role: "assistant",
+    content: [{ type: "text", text: String.fromCharCode(0xd800) }],
+    providerReplay: { type: "fixture" },
+  }),
+].map((event, index) => Object.assign({ id: `exceptional-${index}`, parentId: null }, event));
 const passthrough = ["{ malformed", "null", "true", "17", '"text"', "[]"];
 const schema = `CREATE TABLE transcript_events (
   session_id TEXT NOT NULL, seq INTEGER PRIMARY KEY, event_json TEXT, event_zstd BYTEA,
@@ -101,9 +122,11 @@ it.skipIf(typeof connection !== "string")(
             admitSqliteSchema(db);
           }
           const insert = createTranscriptEventInserter(db, "conformance");
-          [...fixtures.map((event) => JSON.stringify(event)), ...passthrough].forEach(
-            (eventJson, seq) => insert({ seq, eventJson, createdAt: 1 }),
-          );
+          [
+            ...fixtures.map((event) => JSON.stringify(event)),
+            ...exceptional.map((event) => JSON.stringify(event)),
+            ...passthrough,
+          ].forEach((eventJson, seq) => insert({ seq, eventJson, createdAt: 1 }));
         }
         const event =
           /* kysely-allow-raw: The fixture table owns this fixed JSON column. */ sql.ref<string>(
@@ -145,16 +168,57 @@ it.skipIf(typeof connection !== "string")(
           }
         }
         for (const db of databases) {
+          const canonical = exceptional.map((entry) => JSON.stringify(entry));
+          for (const omit of [0, 1]) {
+            const rows = executeSqliteQuerySync(
+              db,
+              table(db)
+                .select([
+                  "event_json",
+                  jsonNativeFieldsValid(db, event).as("native"),
+                  projectModelContextEventSql(db, event, sql.lit(omit)).as("model"),
+                  projectModelContextNavigationSql(db, event).as("navigation"),
+                  projectResetBoundaryNavigationSql(db, event).as("reset"),
+                  projectTranscriptRetainedDataSql(db, event, ["retained"]).as("retained"),
+                ])
+                .where("seq", ">=", fixtures.length)
+                .where("seq", "<", fixtures.length + exceptional.length)
+                .orderBy("seq"),
+            ).rows;
+            expect(rows.map((row) => row.event_json)).toEqual(canonical);
+            for (const [index, row] of rows.entries()) {
+              // PostgreSQL returns exceptional canonical text to the existing reader's JS decoder.
+              const model =
+                db === postgres && !row.native
+                  ? projectModelContextJson(row.model, false, omit === 1)
+                  : row.model;
+              const navigation =
+                db === postgres && !row.native
+                  ? projectModelContextJson(row.navigation, true)
+                  : row.navigation;
+              expect(JSON.parse(model)).toEqual(
+                JSON.parse(projectModelContextJson(canonical[index]!, false, omit === 1)),
+              );
+              expect(JSON.parse(navigation)).toEqual(
+                JSON.parse(projectModelContextJson(canonical[index]!, true)),
+              );
+              expect(row.retained).toBe(canonical[index]);
+              if (!row.native) {
+                expect(row.reset).toBe(canonical[index]);
+              }
+            }
+          }
+        }
+        for (const db of databases) {
           const rows = executeSqliteQuerySync(
             db,
             table(db)
               .select(projectResetBoundaryNavigationSql(db, event).as("reset"))
-              .where("seq", ">=", fixtures.length)
+              .where("seq", ">=", fixtures.length + exceptional.length)
               .orderBy("seq"),
           ).rows;
           expect(rows.map((row) => row.reset)).toEqual(passthrough);
         }
-        const source = fixtures.findIndex((row) => row.id === "retained");
         const unused = (): never => {
           throw new Error("Copy must not access unrelated WAL maintenance");
         };
@@ -164,28 +228,34 @@ it.skipIf(typeof connection !== "string")(
           stop: unused,
           close: unused,
         };
-        for (const parentId of [null, "repaired-parent"]) {
-          const copies = databases.map((db) => {
-            const destination = parentId === null ? 1000 : 1001;
-            const owner = { db, agentId: "conformance", path: ":memory:", walMaintenance };
-            copyRetainedTranscriptPayload(owner, "conformance", source, destination, parentId);
-            const row = executeSqliteQuerySync(
-              db,
-              table(db)
-                .select(["event_json", "event_utf8_bytes"])
-                .select((eb) =>
-                  eb.fn<number>("octet_length", [eb.ref("event_json")]).as("actual_bytes"),
-                )
-                .where("seq", "=", destination),
-            ).rows[0]!;
-            if (db === postgres) {
-              expect(row.event_utf8_bytes).toBe(row.actual_bytes);
-              expect(row.event_utf8_bytes).toBe(Buffer.byteLength(row.event_json!, "utf8"));
-            }
-            return JSON.parse(row.event_json!);
-          });
-          expect(copies[1]).toEqual(copies[0]);
-          expect(copies[1]).toEqual({ ...fixtures[source], parentId });
+        for (const source of [
+          fixtures.findIndex((row) => row.id === "retained"),
+          fixtures.length,
+          fixtures.length + 1,
+        ]) {
+          for (const parentId of [null, "repaired-parent"]) {
+            const copies = databases.map((db) => {
+              const destination = 1000 + source * 2 + (parentId === null ? 0 : 1);
+              const owner = { db, agentId: "conformance", path: ":memory:", walMaintenance };
+              copyRetainedTranscriptPayload(owner, "conformance", source, destination, parentId);
+              const row = executeSqliteQuerySync(
+                db,
+                table(db)
+                  .select(["event_json", "event_utf8_bytes"])
+                  .select((eb) =>
+                    eb.fn<number>("octet_length", [eb.ref("event_json")]).as("actual_bytes"),
+                  )
+                  .where("seq", "=", destination),
+              ).rows[0]!;
+              if (db === postgres) {
+                expect(row.event_utf8_bytes).toBe(row.actual_bytes);
+                expect(row.event_utf8_bytes).toBe(Buffer.byteLength(row.event_json!, "utf8"));
+              }
+              return JSON.parse(row.event_json!);
+            });
+            expect(copies[1]).toEqual(copies[0]);
+            expect(copies[1]).toEqual({ ...[...fixtures, ...exceptional][source], parentId });
+          }
         }
       } finally {
         try {

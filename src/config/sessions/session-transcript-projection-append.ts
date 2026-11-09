@@ -74,7 +74,8 @@ export function extractTranscriptIndexEntry(
   if (!id || (role !== "user" && role !== "assistant")) {
     return undefined;
   }
-  const text = readMessageText(message);
+  // Search is derived text; canonical transcript code units remain untouched.
+  const text = readMessageText(message)?.replaceAll("\0", " ");
   if (!text) {
     return undefined;
   }
