@@ -11,6 +11,7 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.bindNodeRuntimeTestFixture
+import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.nativeString
@@ -28,14 +29,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasTestTag
@@ -49,6 +54,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Density
@@ -57,6 +63,7 @@ import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import com.google.mlkit.common.sdkinternal.MlKitContext
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -69,6 +76,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.util.ReflectionHelpers
 import java.io.File
 import java.util.UUID
 
@@ -384,6 +392,94 @@ class ScreenTypographyLayoutTest {
     assertTextStyle(composeRule.onAllNodesWithText("OpenClaw thread", useUnmergedTree = true)[0], type.caption)
     composeRule.onNodeWithContentDescription("Toggle thread layout").performScrollTo().performClick()
     composeRule.onNodeWithText("Layout: Compact").assertIsDisplayed()
+  }
+
+  @Test
+  @Config(sdk = [34], qualifiers = "w1000dp-h1000dp-mdpi")
+  fun threadsExposeOnlyTheActiveFilterAsSelected() {
+    show { SessionsScreen(model, showSidebarButton = false, onOpenSidebar = {}, onOpenChat = {}) }
+    val filters = listOf("Recent", "Current", "Snoozed", "Archived", "Automations")
+
+    fun filterPill(label: String) =
+      composeRule.onNode(
+        SemanticsMatcher.expectValue(SemanticsProperties.Text, listOf(AnnotatedString(label))),
+      )
+
+    fun assertSelectedFilter(selected: String) {
+      for (label in filters) {
+        val pill = filterPill(label)
+        pill.assertIsDisplayed()
+        if (label == selected) {
+          pill.assertIsSelected()
+        } else {
+          pill.assertIsNotSelected()
+        }
+      }
+    }
+
+    assertSelectedFilter("Recent")
+    for (label in filters.drop(1) + "Recent") {
+      filterPill(label).performClick()
+      composeRule.waitForIdle()
+      assertSelectedFilter(label)
+    }
+  }
+
+  @Test
+  @Config(sdk = [34], qualifiers = "w1000dp-h1000dp-mdpi")
+  fun threadsAnnounceUnreadStateInBothLayoutsAndRetireItWhenRead() {
+    show { SessionsScreen(model, showSidebarButton = false, onOpenSidebar = {}, onOpenChat = {}) }
+    composeRule.waitUntil(timeoutMillis = 5_000) { model.chatSessions.value.isNotEmpty() }
+
+    // Feed the real screen through the same presented roster that MainViewModel exposes.
+    val sessions =
+      ReflectionHelpers.getField<MutableStateFlow<List<ChatSessionEntry>>>(
+        runtime.chat,
+        "presentedSessions",
+      )
+    val unread =
+      ChatSessionEntry(
+        key = "agent:main:unread-proof",
+        updatedAtMs = 2L,
+        displayName = "New reply thread",
+        unread = true,
+      )
+    val read =
+      ChatSessionEntry(
+        key = "agent:main:read-proof",
+        updatedAtMs = 1L,
+        displayName = "Read control thread",
+        unread = false,
+      )
+    val unreadRow = composeRule.onNode(hasText("New reply thread") and hasClickAction())
+    val readRow = composeRule.onNode(hasText("Read control thread") and hasClickAction())
+    val unreadState = SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Unread")
+    val noUnreadState = SemanticsMatcher.keyNotDefined(SemanticsProperties.StateDescription)
+
+    for (compact in listOf(false, true)) {
+      if (compact) {
+        val toggle = composeRule.onNodeWithContentDescription("Toggle thread layout")
+        toggle.performScrollTo()
+        toggle.performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Layout: Compact").assertIsDisplayed()
+      }
+      composeRule.runOnIdle { sessions.value = listOf(unread, read) }
+      unreadRow.performScrollTo()
+      unreadRow.assertIsDisplayed()
+      unreadRow.assert(unreadState)
+      readRow.performScrollTo()
+      readRow.assert(noUnreadState)
+
+      for (readValue in listOf(false, null)) {
+        composeRule.runOnIdle {
+          sessions.value = listOf(unread.copy(unread = readValue), read)
+        }
+        unreadRow.assert(noUnreadState)
+      }
+      composeRule.runOnIdle { sessions.value = listOf(unread, read) }
+      unreadRow.assert(unreadState)
+    }
   }
 
   @Test
