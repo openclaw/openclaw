@@ -5,6 +5,7 @@ import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { resolveScheduledPrincipal } from "../cron/execution-context.js";
 import { resolveCronJobSessionBindings } from "../cron/job-session-bindings.js";
 import type { CronStoredJob } from "../cron/types.js";
+import { getChildLogger } from "../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 
@@ -18,6 +19,7 @@ let source: SessionAutomationSource | null = null;
 // Set once this process creates a cron service that will load jobs; cleared when it registers.
 // A failed load leaves it set, so automatic archiving waits instead of pausing jobs.
 let awaitingSource = false;
+let loadFailureReported = false;
 
 let memo: {
   jobs: readonly CronStoredJob[] | undefined;
@@ -43,6 +45,22 @@ export function expectSessionAutomationSource(): void {
   if (!source) {
     awaitingSource = true;
   }
+}
+
+/**
+ * A failed cron load keeps archiving deferred for the whole process, so the
+ * session store can grow past its limits. Warns once per process; true when it warned.
+ */
+export function reportSessionAutomationSourceLoadFailed(error: unknown): boolean {
+  if (source || !awaitingSource || loadFailureReported) {
+    return false;
+  }
+  loadFailureReported = true;
+  getChildLogger({ subsystem: "session-maintenance" }).warn(
+    "automatic session archiving is paused: automations failed to load; archiving resumes after cron starts successfully",
+    { error: String(error) },
+  );
+  return true;
 }
 
 /**

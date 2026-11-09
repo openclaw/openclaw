@@ -7,6 +7,7 @@ import type { CronStoredJob } from "../cron/types.js";
 import {
   expectSessionAutomationSource,
   registerSessionAutomationSource,
+  reportSessionAutomationSourceLoadFailed,
 } from "./session-automation-index.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -126,4 +127,13 @@ describe.each(phases)("%s maintenance before cron loads", (_phase, overrides, ar
     const store = await maintain("not-loaded", overrides);
     expect(store[chatKey]).toMatchObject({ archiveReason });
   });
+});
+
+it("keeps archiving paused after a failed cron load and warns once per process", async () => {
+  expectSessionAutomationSource();
+  expect(reportSessionAutomationSourceLoadFailed(new Error("store unavailable"))).toBe(true);
+  expect(reportSessionAutomationSourceLoadFailed(new Error("store unavailable"))).toBe(false);
+  const store = await maintain("not-loaded", { archiveDashboardAfterMs: 7 * DAY_MS });
+  expect(store[chatKey]?.archivedAt).toBeUndefined();
+  expect(store[otherKey]?.archivedAt).toBeUndefined();
 });
