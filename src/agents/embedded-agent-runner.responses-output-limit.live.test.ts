@@ -215,12 +215,6 @@ describeLive("embedded Responses output-limit recovery live", () => {
           },
         });
 
-        const receipts = (await fs.readFile(receiptPath, "utf8")).trim().split("\n");
-        expect(receipts).toHaveLength(1);
-        const receipt = receipts[0];
-        expect(receipt).toMatch(/^RECEIPT_[0-9a-f-]{36}$/);
-        await expect(fs.stat(unfinishedPath)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(requests).toHaveLength(3);
         const terminalFacts = responses.map((response) => ({
           status: response.status,
           incompleteReason: response.incomplete_details?.reason,
@@ -230,6 +224,13 @@ describeLive("embedded Responses output-limit recovery live", () => {
           })),
         }));
         logLiveProgress(`Responses terminal facts: ${JSON.stringify(terminalFacts)}`);
+
+        const receipts = (await fs.readFile(receiptPath, "utf8")).trim().split("\n");
+        expect(receipts).toHaveLength(1);
+        const receipt = receipts[0];
+        expect(receipt).toMatch(/^RECEIPT_[0-9a-f-]{36}$/);
+        await expect(fs.stat(unfinishedPath)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(requests).toHaveLength(3);
         expect(terminalFacts).toHaveLength(3);
         expect(terminalFacts[1]).toMatchObject({
           status: "incomplete",
