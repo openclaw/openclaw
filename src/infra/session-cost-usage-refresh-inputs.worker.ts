@@ -1,9 +1,7 @@
-import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { sql } from "kysely";
-import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { listTranscriptArchivesFromDatabase } from "../config/sessions/session-accessor.sqlite-archive-read.js";
+import { listTranscriptArchiveIdentitiesFromDatabase } from "../config/sessions/session-accessor.sqlite-archive-read.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readTranscriptStatsBatchFromDatabase } from "../config/sessions/session-accessor.sqlite-transcript-stats.js";
@@ -13,6 +11,7 @@ import {
 } from "../config/sessions/session-canonical-key.js";
 import { transcriptEventReadBytesSql } from "../config/sessions/session-transcript-read-bytes.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import type { OpenClawAgentDatabaseReadOnlyResult } from "../state/openclaw-agent-db-readonly-open.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 import { chunkItems } from "../utils/chunk-items.js";
@@ -128,14 +127,23 @@ export function usageRefreshInputs(databasePath: string) {
 
 export function createUsageCostCollectionAccess(params: {
   input: UsageCostWorkerInput;
-  control: WorkerTaskControl;
   target: (agentId: string, storePath: string) => UsageCostWorkerDatabase;
   readStore: <T>(agentId: string, storePath: string, read: () => T) => Promise<T>;
   readCheckpoint?: (marker: SqliteSessionFileMarker) => UsageCostSqliteCheckpoint | undefined;
 }) {
-  const { input, control, target, readStore } = params;
+  const { input, target, readStore } = params;
   const { location, operation } = input;
   const { env } = location;
+  const sourceRows = <T>(read: OpenClawAgentDatabaseReadOnlyResult<T[]>): T[] => {
+    if (read.found) {
+      return read.value;
+    }
+    // Refresh prunes absent identities; an unavailable schema cannot certify absence.
+    if (operation.kind === "refresh" && read.reason === "schema-missing") {
+      throw new SessionMetadataUnavailableError(read.reason);
+    }
+    return [];
+  };
   const transcriptFacts = new Map<string, { generation: string | null; cold: boolean }>();
   const transcriptKey = (marker: SqliteSessionFileMarker) => {
     const database = target(marker.agentId, marker.storePath);
@@ -143,18 +151,16 @@ export function createUsageCostCollectionAccess(params: {
   };
   const access: UsageCostCollectionAccess = {
     env,
-    materializeArchive: (sourcePath) =>
-      control.runNativeSection(() => materializeSessionArchiveForRead(sourcePath)),
     listSqliteMetadataStores: () => input.archiveStorePaths,
     resolveSqliteStorePath: (agentId, storePath) => target(agentId, storePath).path,
     readSqliteArchives: (agentId, storePath, archiveNames) => {
       const database = target(agentId, storePath);
       return readStore(agentId, storePath, () => {
         const result = withOpenClawAgentDatabaseReadOnly(
-          (opened) => listTranscriptArchivesFromDatabase(opened, undefined, [], archiveNames),
+          (opened) => listTranscriptArchiveIdentitiesFromDatabase(opened, archiveNames),
           { ...database, env },
         );
-        return result.found ? result.value : [];
+        return sourceRows(result);
       });
     },
     listSqliteInstances: async (agentId, storePath) => {
@@ -185,7 +191,7 @@ export function createUsageCostCollectionAccess(params: {
             }),
           { ...database, env },
         );
-        return result.found ? result.value : [];
+        return sourceRows(result);
       });
     },
     readSqliteStats: async (markers) => {
@@ -267,7 +273,7 @@ export function createUsageCostCollectionAccess(params: {
               { ...database, env },
             );
             if (!read.found) {
-              return [];
+              return sourceRows<TranscriptStats>(read);
             }
             for (const [index, item] of group.entries()) {
               const facts = read.value[index]!;
@@ -278,7 +284,10 @@ export function createUsageCostCollectionAccess(params: {
             }
             return read.value;
           } catch (error) {
-            if (!(error instanceof SessionMetadataUnavailableError)) {
+            if (
+              operation.kind === "refresh" ||
+              !(error instanceof SessionMetadataUnavailableError)
+            ) {
               throw error;
             }
             return [];
@@ -349,7 +358,7 @@ export function createUsageCostCollectionAccess(params: {
           },
           { ...database, env },
         );
-        return read.found ? read.value : [];
+        return sourceRows(read);
       });
       const bySession = new Map(rows.map((row) => [row.session_id, row]));
       for (const { marker: item, index } of group) {

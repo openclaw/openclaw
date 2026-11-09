@@ -415,7 +415,27 @@ type CompileMemoryWikiOptions = {
   signal?: AbortSignal;
 };
 
+function scanPageSummary(params: Parameters<typeof scanWikiPageSummary>[0]) {
+  const scan = scanWikiPageSummary(params);
+  if (scan.status !== "valid") {
+    return { scan, importInsight: null, overviewItem: null };
+  }
+  const { parsed, ...summaryScan } = scan;
+  return {
+    scan: summaryScan,
+    importInsight: projectMemoryWikiImportInsight(scan.page, parsed),
+    overviewItem: projectMemoryWikiOverviewItem(scan.page, parsed.body),
+  };
+}
+
+// Keep at most 16 MiB of projections from each of the four most recent vaults.
+// Disk reads and source hashing still run on every pass, including cache hits.
+const pageSummaryCaches = new Map<string, Map<string, { digest: Buffer; summary: string }>>();
+
 async function readPageSummaries(rootDir: string, signal?: AbortSignal) {
+  const previous = pageSummaryCaches.get(rootDir);
+  const next: NonNullable<typeof previous> = new Map();
+  let cachedBytes = 0;
   const filePaths = (
     await Promise.all(
       WIKI_PAGE_GROUPS.map(async (group) =>
@@ -437,21 +457,25 @@ async function readPageSummaries(rootDir: string, signal?: AbortSignal) {
         `read wiki page ${absolutePath}`,
       );
       signal?.throwIfAborted();
-      sourceDigests.push([relativePath, createHash("sha256").update(bytes).digest()]);
+      const digest = createHash("sha256").update(bytes).digest();
+      sourceDigests.push([relativePath, digest]);
       // Large imported pages are parsed off the request path, but the compiler
       // still yields between pages so background recovery cannot starve Gateway ticks.
       await yieldToEventLoop();
       signal?.throwIfAborted();
-      const scan = scanWikiPageSummary({ absolutePath, relativePath, raw: bytes.toString("utf8") });
-      if (scan.status !== "valid") {
-        return { scan, importInsight: null, overviewItem: null };
+      const candidate = previous?.get(relativePath);
+      const cached = candidate?.digest.equals(digest) ? candidate : undefined;
+      const result: ReturnType<typeof scanPageSummary> = cached
+        ? JSON.parse(cached.summary)
+        : scanPageSummary({ absolutePath, relativePath, raw: bytes.toString("utf8") });
+      // Serialization detaches substrings from large source pages and keeps
+      // mutable compile results separate from the retained cache.
+      const summary = cached?.summary ?? JSON.stringify(result);
+      cachedBytes += Buffer.byteLength(summary);
+      if (cachedBytes <= 16 * 1024 * 1024) {
+        next.set(relativePath, { digest, summary });
       }
-      const { parsed, ...summaryScan } = scan;
-      return {
-        scan: summaryScan,
-        importInsight: projectMemoryWikiImportInsight(scan.page, parsed),
-        overviewItem: projectMemoryWikiOverviewItem(scan.page, parsed.body),
-      };
+      return result;
     }),
     limit: READ_PAGE_SUMMARIES_CONCURRENCY,
     errorMode: "stop",
@@ -460,6 +484,11 @@ async function readPageSummaries(rootDir: string, signal?: AbortSignal) {
     throw readResult.firstError;
   }
   signal?.throwIfAborted();
+  pageSummaryCaches.delete(rootDir);
+  pageSummaryCaches.set(rootDir, next);
+  if (pageSummaryCaches.size > 4) {
+    pageSummaryCaches.delete(pageSummaryCaches.keys().next().value!);
+  }
 
   return {
     sourceGeneration: hashMemoryWikiVaultSources(sourceDigests),

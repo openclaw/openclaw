@@ -22,7 +22,8 @@ export type AgentDatabaseStartupActivation = {
   migrateAgent: (
     input: AgentDatabaseStartupPreparationInput,
   ) => Promise<void | { maintain?: () => Promise<void>; recoverInputs?: () => Promise<void> }>;
-  publishAgent: (input: AgentDatabaseStartupPreparationInput) => Promise<void>;
+  /** Admission may fail after publication; its publisher owns withdrawal of retained inputs. */
+  publishAgent: (input: AgentDatabaseStartupPreparationInput) => Promise<void | (() => void)>;
   captureReadAdmission?: (input: AgentDatabaseStartupPreparationInput) => () => void;
   /** The Gateway owns full verification after bounded current-schema admission. */
   verifyIntegrity?: AgentDatabaseStartupVerifier;

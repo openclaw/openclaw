@@ -16,6 +16,8 @@ export type CreateVerifiedSqliteSnapshotOptions = {
     stagingRoot: string;
     preserveSourceArtifacts?: boolean;
     preparedSource?: PreparedSqliteSnapshotSource;
+    /** Candidate updates keep cleanup warnings separate from backup validation failures. */
+    cleanupFailure?: "warn";
   };
   onProgress?: (progress: BackupProgressInfo) => void;
   /** Final caller checks around publication; failures remove only this helper's target. */

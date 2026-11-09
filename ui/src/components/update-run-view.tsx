@@ -204,13 +204,7 @@ export function UpdateRunView(props: {
               </ul>
             </Show>
             <Show when={current().terminal}>
-              <section
-                class={[
-                  "update-run-view__report",
-                  { [`update-run-view__report--${props.run?.status}`]: !current().reconciled },
-                ]}
-                aria-label={t("updates.run.report")}
-              >
+              <section class="update-run-view__report" aria-label={t("updates.run.report")}>
                 <h4>
                   <ReportHeadline headline={current().report.headline} />
                 </h4>

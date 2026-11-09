@@ -182,6 +182,25 @@ it.each([
   expect(onBoundary).toHaveBeenCalledTimes(calls);
 });
 
+it("bounds a worker that never acknowledges input and admits a healthy successor", async () => {
+  const resolver = vi
+    .spyOn(runtimeProcess, "resolveRuntimeProcessEntrypointUrl")
+    .mockReturnValue(new URL("./code-mode-node.stalled.test-support.ts", import.meta.url));
+  const started = performance.now();
+  try {
+    expect(await execute("return 1;", { config: { ...config, timeoutMs: 250 } })).toMatchObject({
+      status: "failed",
+      code: "timeout",
+      failurePhase: "host",
+      bridgeDispatchStarted: false,
+    });
+    expect(performance.now() - started).toBeLessThan(2_000);
+  } finally {
+    resolver.mockRestore();
+  }
+  expectComplete(await execute("return 42;"), "42");
+});
+
 it("reuses healthy workers after rejected cells without retaining guest state", async () => {
   const before = workerStarts();
   for (const source of [

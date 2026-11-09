@@ -115,8 +115,8 @@ Quick start follows this path:
 
 1. Choose **Quick start** after the one-line security pointer.
 2. Detect configured models, API-key environment variables, supported local AI
-   CLIs, and already installed tool-capable models from reachable Ollama or LM
-   Studio servers on the Gateway host. This read-only pass never downloads a
+   CLIs, and tool-capable models already loaded in reachable Ollama or LM Studio
+   servers on the Gateway host. This read-only pass never downloads a
    model. Pi and OpenCode installs may also be reported for context when they
    cannot serve as the reusable inference route. Gemini CLI and Antigravity are
    not offered as detected setup routes.
@@ -139,9 +139,11 @@ Quick start follows this path:
    installs the background service, so the Gateway keeps running after the
    terminal closes. No starts the Gateway in the foreground instead:
    **Ctrl+C** stops it, config persists, and `openclaw gateway install` enables
-   background operation later. A temporary run such as `npx`, or a host where
-   OpenClaw can't manage the service, skips the question. If the service fails
-   to start, setup reports why and continues in setup chat.
+   background operation later. A host where OpenClaw can't manage the service
+   skips the question. From `npx`, `pnpm dlx`, or another temporary copy, Yes
+   first installs the same OpenClaw version into the state directory, because
+   the temporary copy can be deleted; this needs npm and network access. If the
+   service fails to start, setup reports why and continues in setup chat.
 6. Save the verified route, prepare the agent workspace, and persist Gateway
    settings.
 7. Open the browser dashboard. Use `openclaw` for the TUI or

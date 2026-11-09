@@ -246,6 +246,7 @@ describe("direct CLI command continuity", () => {
       mintMcpLoopbackClientGrant: createTestMcpLoopbackClientGrant,
       bindMcpLoopbackClientGrantAdmission: () => true,
       revokeMcpLoopbackClientGrant: () => true,
+      revokeMintedMcpLoopbackClientGrant: () => true,
       resolveMcpLoopbackScopedTools,
     });
     const cliSessionBindingFacts = {

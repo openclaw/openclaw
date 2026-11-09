@@ -1,4 +1,6 @@
+import type { AdmissionDiagnostics } from "../infra/diagnostics-timeline.js";
 import { getBackgroundWorkSnapshot, isBackgroundWorkLane } from "./background-work.js";
+import { getLaneGroup } from "./command-queue.capacity-groups.js";
 // Static lanes get full snapshots; per-session (dynamic) lanes collapse into
 // one aggregate so a saturation snapshot can never become an unbounded payload.
 import {
@@ -93,4 +95,46 @@ export function getCommandLaneDiagnostics(): {
     }
   }
   return { lanes, dynamic: dynamic.laneCount > 0 ? dynamic : null };
+}
+
+/** Read holder identities only when reporting a live wait, never during queue admission. */
+export function formatAdmissionDiagnostics(state: AdmissionDiagnostics): string {
+  const { phase, phaseStartedAt, laneMs, writerMs, placementMs, queueWait: wait } = state;
+  const lane = wait?.queued ? getCommandLaneSnapshot(wait.lane) : undefined;
+  const holders = [];
+  let count = 0;
+  if (lane) {
+    const members =
+      lane.blockedBy === "lane" ? [lane.lane] : (getLaneGroup(lane.lane)?.members ?? [lane.lane]);
+    for (const member of members) {
+      const active = getQueueState().lanes.get(member)?.activeTasks;
+      count += active?.size ?? 0;
+      for (const [taskId, entry] of active ?? []) {
+        if (holders.length === 64) {
+          break;
+        }
+        holders.push({
+          lane: member,
+          taskId,
+          taskIdentity: entry.taskIdentity,
+          sessionTarget: entry.sessionTarget,
+          startedAt: entry.startedAt,
+        });
+      }
+    }
+  }
+  return `admission=${JSON.stringify({
+    phase,
+    phaseElapsedMs: phase ? Math.round(performance.now() - phaseStartedAt!) : undefined,
+    laneMs,
+    writerMs,
+    placementMs,
+    queue: wait && {
+      lane: wait.lane,
+      queueAheadAtEnqueue: wait.queuedAheadAtEnqueue,
+      activeAheadAtEnqueue: wait.activeAheadAtEnqueue,
+      ...lane,
+      ...(lane ? { holdersNow: holders, holdersOmitted: count - holders.length } : {}),
+    },
+  })}`;
 }

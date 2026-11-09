@@ -30,6 +30,7 @@ import {
   StateDatabaseAdmissionPendingError,
   StateDatabaseMaintenanceScopeError,
 } from "./gateway-state-owner-record.js";
+import { normalizeWindowsPathForComparison } from "./path-guards.js";
 import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
 
@@ -500,18 +501,24 @@ export function hasActiveGatewayStateOwner(databasePath: string): boolean {
 
 /** Capture registered process custody; a PID or copied lock payload grants no authority. */
 export function captureGatewayStateOwner(databasePath: string) {
-  const key = resolveStateOwnerIdentity(databasePath).key;
+  const identity = resolveStateOwnerIdentity(databasePath);
+  const { key } = identity;
   const owner = owners.get(key);
   if (!owner || owner.kind !== "process") {
     return undefined;
   }
-  const assertCurrent = () => {
+  // A caller's current locator must still name this retained owner, never a successor.
+  const assertCurrent = (selectedPath = databasePath) => {
     owner.lost.signal.throwIfAborted();
-    const identity = resolveStateOwnerIdentity(databasePath);
+    const canonicalPath = resolveIdentityPathViaExistingAncestorSync(selectedPath);
+    const currentKey =
+      process.platform === "win32"
+        ? normalizeWindowsPathForComparison(canonicalPath)
+        : canonicalPath;
     if (
       owners.get(key) !== owner ||
       !owner.accepting ||
-      identity.key !== key ||
+      currentKey !== key ||
       (owner.getProjection && !owner.getProjection()?.verifyStillHeld())
     ) {
       throw new GatewayStateOwnerContentionError(databasePath);

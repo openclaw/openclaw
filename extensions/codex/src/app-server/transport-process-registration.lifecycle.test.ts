@@ -24,9 +24,9 @@ const state = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/plugin-state-store-runtime", () => ({
   createPluginStateKeyedStore: () => state,
 }));
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: state.spawn,
+// mock-isolation: explicit child events exercise durable registration settlement.
+vi.mock("./stdio-worker.js", () => ({
+  spawnCodexStdio: state.spawn,
 }));
 vi.mock("./transport-process-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./transport-process-snapshot.js")>()),

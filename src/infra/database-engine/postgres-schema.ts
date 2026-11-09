@@ -174,24 +174,33 @@ export function postgresSchemaSql(
   return [schema.postgres ?? "", ...ordered.values(), ...searchSql].join("\n");
 }
 
+export function postgresSchemaHash(
+  schema: StoreSchema,
+  catalog: readonly PostgresCatalogFact[],
+): string {
+  return hash(postgresSchemaSql(schema, canonicalNamespace, catalog));
+}
+
 export function recordPostgresSchema(
   db: PostgresSqlConnection,
   namespace: string,
   schema: StoreSchema,
   snapshot?: ReturnType<typeof readPostgresSchema>,
-) {
+): string {
   if (!db.isTransaction) {
     throw new Error("PostgreSQL schema publication requires the owner's writer transaction");
   }
   const captured = snapshot ?? readPostgresSchema(db, namespace, schema.id);
+  const schemaHash = postgresSchemaHash(schema, captured.catalog);
   db.prepare(
     "UPDATE openclaw_schema_meta SET fingerprint = ?, ddl_hash = ?, server_major = ? WHERE store = ?",
   ).run(
     postgresSchemaFingerprint(captured.catalog),
-    hash(postgresSchemaSql(schema, canonicalNamespace, captured.catalog)),
+    schemaHash,
     admitPostgresCapabilities(db).serverMajor,
     schema.id,
   );
+  return schemaHash;
 }
 
 /** Rare upgrade/unsealed-pilot path: PostgreSQL deparses both sides on this server. */
@@ -201,9 +210,10 @@ export function verifyPostgresSchema(
   schema: StoreSchema,
   snapshot: ReturnType<typeof readPostgresSchema>,
   preserveSeal = false,
-): void {
+  requireSeal = false,
+): string | undefined {
   const fingerprint = postgresSchemaFingerprint(snapshot.catalog);
-  const ddl = postgresSchemaSql(schema, canonicalNamespace, snapshot.catalog);
+  const schemaHash = postgresSchemaHash(schema, snapshot.catalog);
   const { metadata } = snapshot;
   const major = admitPostgresCapabilities(db).serverMajor;
   if (
@@ -213,16 +223,20 @@ export function verifyPostgresSchema(
   ) {
     throw new Error(`PostgreSQL schema drift detected. ${recovery}`);
   }
-  if (metadata.server_major === major && metadata.fingerprint && metadata.ddl_hash === hash(ddl)) {
-    return;
+  if (metadata.server_major === major && metadata.fingerprint && metadata.ddl_hash === schemaHash) {
+    return schemaHash;
+  }
+  if (requireSeal) {
+    throw new Error(`Read-only PostgreSQL admission requires a matching schema seal. ${recovery}`);
   }
   // Inspection may compare reconstructed source DDL without rewriting the installed seal.
   if (preserveSeal) {
     db.runTransaction(() => verifyPostgresSchemaDefinition(db, namespace, schema, snapshot));
-  } else {
-    // Fragment regrouping can change DDL bytes without changing the canonical catalog.
-    verifyAndRecordPostgresSchema(db, namespace, schema, snapshot);
+    return undefined;
   }
+  // Fragment regrouping can change DDL bytes without changing the canonical catalog.
+  verifyAndRecordPostgresSchema(db, namespace, schema, snapshot);
+  return schemaHash;
 }
 
 function verifyPostgresSchemaDefinition(

@@ -1260,7 +1260,7 @@ src/agents/tools-effective-inventory.ts	4
 src/agents/tools/agents-wait-tool.ts	1
 src/agents/tools/ask-user-tool.ts	2
 src/agents/tools/chat-history-text.ts	1
-src/agents/tools/common.ts	2
+src/agents/tools/common.ts	1
 src/agents/tools/computer-tool-node.ts	1
 src/agents/tools/computer-tool-request.ts	3
 src/agents/tools/computer-tool.ts	2
@@ -1357,7 +1357,7 @@ src/boards/sqlite-board-codec.ts	7
 src/bootstrap/node-startup-env.ts	1
 src/canvas/documents.ts	1
 src/canvas/serve.runtime.ts	1
-src/canvas/widget-tool.ts	2
+src/canvas/widget-tool.ts	1
 src/channels/account-snapshot-fields.ts	1
 src/channels/allowlist-match.ts	1
 src/channels/allowlists/resolve-utils.ts	3
@@ -1432,14 +1432,14 @@ src/cli/cron-cli/register.cron-edit.ts	1
 src/cli/cron-cli/register.cron-scratch.ts	2
 src/cli/cron-cli/register.cron-simple.ts	2
 src/cli/cron-cli/shared.ts	7
-src/cli/devices-cli.runtime.ts	9
+src/cli/devices-cli.runtime.ts	8
 src/cli/directory-cli.ts	2
 src/cli/dns-cli.ts	3
 src/cli/exec-approvals-cli.ts	9
 src/cli/exec-policy-cli.ts	1
 src/cli/gateway-cli/dev.ts	1
 src/cli/gateway-cli/register.ts	4
-src/cli/gateway-cli/run.ts	5
+src/cli/gateway-cli/run.ts	4
 src/cli/gateway-cli/suspend-cli.ts	2
 src/cli/logs-cli.ts	1
 src/cli/mcp-cli.ts	1
@@ -1689,7 +1689,7 @@ src/gateway/desktop/node-source-context.ts	1
 src/gateway/gateway-cli-backend.live-helpers.ts	2
 src/gateway/gateway-cli-backend.live-probe-helpers.ts	4
 src/gateway/health/collector.ts	1
-src/gateway/hooks-mapping.ts	2
+src/gateway/hooks-mapping.ts	1
 src/gateway/hooks.ts	1
 src/gateway/live-agent-probes.ts	1
 src/gateway/local-request-context.ts	2
@@ -1784,7 +1784,6 @@ src/gateway/session-history-state.ts	2
 src/gateway/session-transcript-derived-readers.ts	1
 src/gateway/sessions-history-http.ts	1
 src/gateway/stale-install.ts	1
-src/gateway/talk/handlers/index.ts	3
 src/gateway/talk/relay/session-create.ts	1
 src/gateway/test-http-response.ts	4
 src/gateway/test-temp-config.ts	1
@@ -1859,7 +1858,6 @@ src/infra/net/undici-dispatcher-options.ts	3
 src/infra/net/undici-global-dispatcher.ts	2
 src/infra/node-commands.ts	1
 src/infra/npm-managed-root.ts	3
-src/infra/openclaw-cli-shim.ts	1
 src/infra/openclaw-root.ts	1
 src/infra/outbound/agent-delivery.ts	2
 src/infra/outbound/deliver-channel.ts	3
@@ -1886,7 +1884,6 @@ src/infra/push-apns-http2.ts	1
 src/infra/push-apns.ts	3
 src/infra/question-gateway-resolver.ts	3
 src/infra/question-reaction-runtime.ts	3
-src/infra/restart-coordinator.ts	1
 src/infra/restart-handoff.ts	1
 src/infra/restart-sentinel.ts	1
 src/infra/restart-stale-pids.ts	2
@@ -2328,7 +2325,6 @@ ui/src/components/mcp-app-theme.ts	1
 ui/src/components/session-data.ts	1
 ui/src/components/session-organizer.ts	5
 ui/src/components/terminal/terminal-connection.ts	2
-ui/src/components/terminal/terminal-controller-lifecycle.ts	1
 ui/src/components/terminal/terminal-panel-upload.ts	2
 ui/src/components/terminal/terminal-pending-actions.ts	1
 ui/src/i18n/lib/translate.ts	1

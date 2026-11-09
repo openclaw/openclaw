@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, isPending, Loading, Show } from "solid-js";
 import type { ChannelAccountSnapshot, ChannelsStatusSnapshot } from "../../api/types.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
@@ -16,7 +17,6 @@ import {
   type ChannelRead,
 } from "../../lib/channels/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { renderAgentContextSection } from "./panels-overview.tsx";
@@ -115,11 +115,6 @@ export function AgentChannels(
   },
 ) {
   const entries = createMemo(() => resolveChannelEntries(params.readState().channelsSnapshot));
-  const lastSuccessLabel = createMemo(() =>
-    params.readState().channelsLastSuccess
-      ? formatRelativeTimestamp(params.readState().channelsLastSuccess)
-      : t("common.never"),
-  );
   return (
     <>
       {renderAgentContextSection(
@@ -131,19 +126,16 @@ export function AgentChannels(
         read={params.readState().channelsRead}
         retainedError={params.readState().channelsError}
       >
-        {(_pending, error) => (error ? <div class="callout danger">{error}</div> : undefined)}
+        {(_pending, error) =>
+          error ? <InlineAlert tone="danger">{error}</InlineAlert> : undefined
+        }
       </ChannelReadBoundary>
       {!params.readState().channelsSnapshot ? (
-        <div class="callout info">{t("agents.channels.loadHint")}</div>
+        <InlineAlert tone="info">{t("agents.channels.loadHint")}</InlineAlert>
       ) : undefined}
       <SettingsSection
         title={t("agents.channels.title")}
-        description={
-          <>
-            {t("agents.channels.subtitle")}{" "}
-            {t("agents.channels.lastRefresh", { time: lastSuccessLabel() })}
-          </>
-        }
+        description={t("agents.channels.subtitle")}
         actions={
           <ChannelReadBoundary
             read={params.readState().channelsRead}

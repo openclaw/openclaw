@@ -66,13 +66,13 @@ export function AccountLimits(props: { scope: AccountUsageScope; profileId: stri
           {(snapshot) => (
             <>
               <Show when={snapshot().plan}>
-                <strong>{snapshot().plan}</strong>
+                <span class="model-providers__account-plan">{snapshot().plan}</span>
               </Show>
               <Show
                 when={hasProviderUsageDetails(snapshot())}
                 fallback={<span>{t("modelProviders.noStats")}</span>}
               >
-                <ProviderUsagePanel usage={snapshot()} />
+                <ProviderUsagePanel compact usage={snapshot()} />
               </Show>
             </>
           )}

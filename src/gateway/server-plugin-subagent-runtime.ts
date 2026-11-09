@@ -24,8 +24,8 @@ import {
   getPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { nativeSubagentRuntime } from "../plugins/runtime/native-subagent-context.js";
+import type { LlmCompleteUsage } from "../plugins/runtime/runtime-llm.types.js";
 import { resolvePluginSubagentCompletionRequester } from "../plugins/runtime/subagent-requester-context.js";
-import type { LlmCompleteUsage } from "../plugins/runtime/types-core.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";

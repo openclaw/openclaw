@@ -16,10 +16,15 @@ import {
   type BrokerOutputOption,
 } from "./execa-protocol.js";
 import { holdPipeForTransfer } from "./pipe.js";
+import { fitsBrokerSocketPath } from "./socket-directory.js";
 
 /** Execa retains its reader; the Gateway receives a separate native output socket. */
 async function createExecaOutput(): Promise<{ receiver: Socket; transform: Transform }> {
-  const directory = await mkdtemp(path.join(tmpdir(), "oc-spawn-"));
+  let directory = await mkdtemp(path.join(tmpdir(), "oc-spawn-"));
+  if (!fitsBrokerSocketPath(directory, "out")) {
+    await rm(directory, { recursive: true, force: true });
+    directory = await mkdtemp("/tmp/oc-spawn-");
+  }
   const server = createServer({ pauseOnConnect: true });
   let writer: Socket | undefined;
   let receiver: Socket | undefined;

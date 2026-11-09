@@ -100,6 +100,13 @@ replayed history; enabled thinking preserves the reasoning needed for follow-up 
 Both paths also omit unsupported controls for MiniMax models with fixed reasoning
 and remove Kimi K2 reasoning replay fields.
 
+## Endpoint outages
+
+A 403 response containing `Upstream request failed: Endpoint is unavailable.` is
+treated as a service failure, so configured fallbacks can run and the shared API
+key stays available to other models. Genuine authentication refusals still follow
+the normal sign-in and credential-cooldown behavior.
+
 ## Privacy
 
 Retention and training policies vary by model. Review the current

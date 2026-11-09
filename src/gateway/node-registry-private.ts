@@ -21,7 +21,7 @@ import {
 } from "../infra/node-runner-inventory.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
-import { buildNodeInvokeRequest, serializeNodeEvent } from "./node-invoke-request.js";
+import { prepareNodeInvokeRequest, serializeNodeEvent } from "./node-invoke-request.js";
 import type { NodeInvokeParams, NodeInvokeResult } from "./node-invoke.types.js";
 import type { NodePairingLeaseResolution } from "./node-registry-pairing.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
@@ -33,6 +33,7 @@ import {
 } from "./node-registry.system-run.js";
 import {
   createNodeRunnerStatePublisher,
+  createNodeRunnerInventoryRecord,
   waitForNodeRunnerAvailability,
   collectNodeRunnerCatalogState,
   isNodeWorkerHostClientId,
@@ -101,6 +102,7 @@ type NodeRegistryPrivateContext = {
   pendingInvokes: Map<string, PendingInvoke>;
   invokeStreams: NodeInvokeStreamController;
   sendEventToSession: (node: NodeRunnerRegistrySession, event: string, payload: unknown) => boolean;
+  setLocalMcpAvailable: (node: NodeRunnerRegistrySession, available: boolean) => void;
   rememberAuthorizedSystemRunEvent: NodeSystemRunEvents["remember"];
   publishActiveNodeContext: () => void;
   closeHostStats: () => Promise<void>;
@@ -209,7 +211,7 @@ async function invokeNodeRegistryCore(
     command: params.command,
     params: params.params,
   });
-  const payload = buildNodeInvokeRequest({
+  const { payload, workTimeoutLimit } = prepareNodeInvokeRequest({
     id: requestId,
     nodeId: params.nodeId,
     command: params.command,
@@ -300,7 +302,7 @@ async function invokeNodeRegistryCore(
           }
           // Keep the precise monotonic budget for Gateway timers, but satisfy the integer
           // node-event contract without turning a sub-millisecond budget into "unbounded".
-          payload.timeoutMs = Math.ceil(timeoutMs);
+          payload.timeoutMs = Math.min(Math.ceil(timeoutMs), workTimeoutLimit);
         }
         const result = new Promise<NodeInvokeResult>((resolve, reject) => {
           const pending: PendingInvoke = {
@@ -622,6 +624,7 @@ export function updateNodeRunnerInventory(params: {
   }
   const previous = state.runnerInventoryByConn.get(node.connId);
   if (!publishesRunnerDialect) {
+    state.context.setLocalMcpAvailable(node, false);
     const inventoryChanged = state.runnerInventoryByConn.delete(node.connId);
     const statusChanged = state.bundleStatusByConn.delete(node.connId);
     const changed = inventoryChanged || statusChanged;
@@ -632,17 +635,7 @@ export function updateNodeRunnerInventory(params: {
     }
     return { changed };
   }
-  const workerHost = "workerHost" in params.declaration ? params.declaration.workerHost : undefined;
-  const next: NodeRunnerInventoryRecord = {
-    nodeId: node.nodeId,
-    connId: node.connId,
-    pairingIdentity: node.pairingIdentity,
-    ...(node.pairingGeneration ? { pairingGeneration: node.pairingGeneration } : {}),
-    clientId: node.clientId,
-    clientMode: "node",
-    protocolFeatures: [...params.declaration.protocolFeatures],
-    ...(workerHost ? { workerHost: structuredClone(workerHost) } : {}),
-  };
+  const next = createNodeRunnerInventoryRecord(node, node.clientId, params.declaration);
   const statusCleared =
     next.workerHost?.enabled !== true ||
     next.workerHost.bundleRetention === undefined ||
@@ -658,6 +651,10 @@ export function updateNodeRunnerInventory(params: {
   if (changed) {
     state.catalogRevision++;
     state.runnerInventoryByConn.set(node.connId, next);
+    state.context.setLocalMcpAvailable(
+      node,
+      Boolean(node.pairingGeneration && next.workerHost?.enabled && next.workerHost.localMcp),
+    );
     state.context.publishActiveNodeContext();
     state.runnerState.reconcile(node.nodeId, true);
   }
