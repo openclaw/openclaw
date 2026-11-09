@@ -1,0 +1,2 @@
+20
+# block streaming keeps decimals and versions whole at a streamed delta boundary (#195849).

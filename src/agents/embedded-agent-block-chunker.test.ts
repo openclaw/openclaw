@@ -384,6 +384,26 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunker.consumedLength).toBe(snapshot.length);
   });
 
+  it.each([
+    [
+      "| Item | Value |\n| --- | --- |\n| Memory | 11.65 GiB |\n| Disk | 42.1 GB |\n",
+      ["| Item | Value |\n| --- | --- |\n| Memory | 11.65 GiB |\n| Disk | 42.1 GB |\n"],
+    ],
+    [
+      "Upgrade to v2.4.1 now. Memory is 11.65 GiB.",
+      ["Upgrade to v2.4.1 now.", " Memory is 11.65 GiB."],
+    ],
+  ])("does not split a decimal or version at a streamed delta boundary: %j", (source, expected) => {
+    const chunker = paragraphChunker(1, 1200);
+    const chunks: string[] = [];
+    for (const char of source) {
+      chunker.append(char);
+      chunks.push(...drainChunks(chunker));
+    }
+    chunks.push(...drainChunks(chunker, true));
+    expect(chunks).toEqual(expected);
+  });
+
   it("respects paragraph boundaries and minimum paragraph length", () => {
     const chunker = paragraphChunker(30, 200, { flushOnParagraph: true });
     chunker.append("First paragraph.\n\nSecond paragraph.\n\nThird paragraph.");
