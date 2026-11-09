@@ -828,4 +828,13 @@ describe("modelsStatusCommand auth overview", () => {
     expect(localRuntime.log).not.toHaveBeenCalled();
     expect(localRuntime.exit).toHaveBeenCalledWith(1);
   });
+
+  it("rejects --probe with --plain output as an ExpectedCliError", async () => {
+    await expect(
+      modelsStatusCommand({ plain: true, probe: true }, createTestRuntime()),
+    ).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: "--probe cannot be used with --plain output.",
+    });
+  });
 });
