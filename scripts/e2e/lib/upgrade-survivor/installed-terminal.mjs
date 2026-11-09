@@ -483,7 +483,7 @@ async function main() {
       journal,
       historical,
       fault,
-      agentVersion: 40,
+      agentVersion: 41,
       escrow: path.join(directory, "launcher-original"),
       hashWorker: {
         path: path.join(root, "dist/infra/package-update-integrity-hasher.worker.js"),
