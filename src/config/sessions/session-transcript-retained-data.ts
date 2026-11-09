@@ -14,7 +14,6 @@ import {
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
-import { scanJsonObjectFields } from "../../state/json-predicate-fields.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { SqliteTranscriptStorageRow } from "./session-accessor.sqlite-read.js";
@@ -46,7 +45,7 @@ export function transcriptRetainedDataBytesSql(
 
 /**
  * Custom data is opaque to topology and indexing; cleanup keeps it in SQLite.
- * Rows native fields cannot decode keep their data here; withoutRetainedCustomData drops it.
+ * Rows native fields cannot decode keep their data and stay on the exact-byte path.
  */
 export function projectTranscriptRetainedDataSql(
   database: EngineConnection,
@@ -60,31 +59,6 @@ export function projectTranscriptRetainedDataSql(
           AND ${jsonPathValue(database, event, sql.lit("$.id"))} IN (${sql.join(retainedIds)})
         THEN ${jsonRemovePaths(database, event, [sql.lit("$.data")])} ELSE ${event} END
       ELSE ${event} END`;
-}
-
-/** JavaScript half of projectTranscriptRetainedDataSql for rows native fields cannot decode. */
-export function withoutRetainedCustomData(
-  eventJson: string,
-  retainedIds: readonly string[],
-): string {
-  if (retainedIds.length === 0) {
-    return eventJson;
-  }
-  const fields = scanJsonObjectFields(eventJson, ["data"]);
-  if (!fields.valid || !fields.first.has("data")) {
-    return eventJson;
-  }
-  const event: unknown = JSON.parse(eventJson);
-  if (
-    !isRecord(event) ||
-    event.type !== "custom" ||
-    typeof event.id !== "string" ||
-    !retainedIds.includes(event.id)
-  ) {
-    return eventJson;
-  }
-  const { data: _data, ...projected } = event;
-  return JSON.stringify(projected);
 }
 
 /** Stage opaque payloads inside the same transaction before their old suffix rows are removed. */
