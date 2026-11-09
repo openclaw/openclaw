@@ -562,6 +562,24 @@ describe("runNodeHost", () => {
     );
   });
 
+  it.each([true, false])(
+    "reports first-connection success only after hello (hello=%s)",
+    async (hello) => {
+      await withReadyNodeHost(
+        async ({ running, options, stop }) => {
+          if (hello) {
+            receiveHello(options);
+            await expect(running).resolves.toEqual({ connected: true });
+          } else {
+            stop();
+            await expect(running).resolves.toBeUndefined();
+          }
+        },
+        { stopAfterFirstConnect: true },
+      );
+    },
+  );
+
   it("keeps private socket paths out of connection-error stderr", async () => {
     await expectStartupTimeout();
     const socketPath = "/tmp/oc-node-diagnostic/gateway.sock";

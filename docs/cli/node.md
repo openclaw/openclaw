@@ -69,11 +69,53 @@ Disable it on the node if needed:
 }
 ```
 
+## Join with OpenClaw ID
+
+Use an `openclaw-node://` invitation from the Gateway owner's browser to enroll
+without an account on the node or a Gateway token:
+
+```bash
+openclaw node join "openclaw-node://join#<invitation>" \
+  --discovery-url https://discovery.example --display-name "Build Node"
+```
+
+Keep the full link quoted: its fragment contains a single-use secret. The node
+generates its own private key locally, submits a signed description of its name,
+platform, commands, and capabilities, and waits for approval. Compare **all six
+digits** shown in the terminal with the owner's approval dialog. The owner must
+review the advertised surface and explicitly click **Approve**. Deny the request
+if the codes differ; opening the dialog alone does not approve anything.
+
+After approval, the node verifies and saves the OpenClaw ID target and runs in
+the foreground. Add `--service` to install and run it as a user service instead.
+The invitation is not a reconnect credential: use `openclaw node run` or the
+installed service for later connections. `node join` refuses a node that is
+still admitted and leaves the new invitation unused; to change its commands,
+the owner removes the node on the Access page and sends a new link.
+
+Options:
+
+- `--service`: Install and run the node host as an OS service after approval.
+- `--discovery-url <url>`: Discovery API origin, separate from the invitation.
+  An explicit value overrides the saved target's Discovery origin. There is no
+  default origin; provide this flag when none is saved. Use HTTPS (HTTP is
+  permitted only for localhost testbeds), without credentials, path, query, or
+  fragment. OpenClaw never infers Discovery from the claw hostname or relay URL.
+- `--display-name <name>`: Set the self-reported node name shown during approval.
+- `--commands <ids>`: Select exact comma-separated command IDs (repeatable), with
+  the same restrictions as `node run`. Omitting it preserves the saved allowlist.
+- `--all-commands`: Forget the saved command allowlist and advertise the full
+  default surface. Cannot be combined with `--commands`.
+
+[`openclaw connect <openclaw-node-link>`](/cli/connect#openclaw-id-invitations)
+uses the same enrollment flow. Neither flow supports `--ephemeral` or
+`--session-host` for OpenClaw ID invitations.
+
 ## Run (foreground)
 
-For one-paste onboarding, use [`openclaw connect`](/cli/connect). It accepts a
-single-use join URL or the same setup code forms as `--pair`, then runs this
-node-host runtime.
+For one-paste onboarding, use [`openclaw connect`](/cli/connect). It accepts an
+OpenClaw ID invitation, a single-use Gateway join URL, or the same setup code
+forms as `--pair`, then runs this node-host runtime.
 
 ```bash
 openclaw node run --host <gateway-host> --port 18789
@@ -461,8 +503,8 @@ created are rejected instead of changing what the node executes.
 ## Labs: OpenClaw ID tunnel targets
 
 An OpenClaw ID node target connects through `openclaw/tunnel/1` over iroh instead
-of a LAN address, Tailscale, or SSH. This is a Labs transport; enrollment with
-`openclaw node join` is a separate workstream, not part of this transport preview.
+of a LAN address, Tailscale, or SSH. This is a Labs transport; enroll with
+[`openclaw node join`](#join-with-openclaw-id).
 After enrollment has saved an OpenClaw ID target, `openclaw node run` without
 Gateway endpoint flags resumes that target. Explicit `--host` / `--port` options
 continue to select the existing WebSocket transport.
@@ -474,9 +516,9 @@ IP transports remain enabled so iroh can establish a direct encrypted path.
 
 The public target can also retain `discoveryUrl`, the deployment-selected Discovery
 API origin for future enrollment and descriptor refresh. It is never inferred from
-the claw hostname or relay URL. This transport-only preview does not select a
-Discovery default or implement `node join`; enrollment will resolve the configured
-origin and `--discovery-url` override. The origin must use HTTPS (HTTP is allowed
+the claw hostname or relay URL. Enrollment saves the selected origin; an explicit
+`--discovery-url` overrides a saved origin. There is no default Discovery origin.
+The origin must use HTTPS (HTTP is allowed
 only for localhost testbeds), without credentials, a path, query, or fragment.
 
 The node's iroh secret key is generated locally and stored separately at
