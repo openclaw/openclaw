@@ -472,6 +472,45 @@ it("admits explicit piped input without enabling a PTY", async () => {
   await finalize(backend, spec.finalizeToken);
 });
 
+it.skipIf(process.platform === "win32").each([undefined, "/requested/tools"])(
+  "prepends the mounted Git shim after shell startup (requested PATH=%s)",
+  async (requestedPath) => {
+    provision();
+    const backend = await createDockerSandboxBackend(
+      backendParams({
+        readOnlyResourceMounts: [
+          { hostPath: "/host/git-tools", containerPath: "/openclaw/git-tools" },
+        ],
+      }),
+    );
+    const spec = await backend.buildExecSpec({
+      command: 'printf "%s" "$PATH"',
+      env: requestedPath ? { PATH: requestedPath } : {},
+      usePty: false,
+    });
+    try {
+      const staged = Object.fromEntries(
+        fs
+          .readFileSync(envFile(spec), "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => line.split("=")),
+      );
+      const child = spawnSync("/bin/sh", ["-c", spec.argv.at(-1)!], {
+        env: { PATH: "/usr/bin:/bin", ...staged },
+        encoding: "utf8",
+      });
+      expect(child.status).toBe(0);
+      expect(child.stdout).toBe(
+        `/openclaw/git-tools:${requestedPath ? `${requestedPath}:` : ""}/usr/bin:/bin`,
+      );
+      expect(child.stderr).toBe("");
+    } finally {
+      await finalize(backend, spec.finalizeToken);
+    }
+  },
+);
+
 it.skipIf(process.platform === "win32").each([
   { engine: "docker", host: "github.com" },
   { engine: "podman", host: "ghe.example.test" },
@@ -486,6 +525,8 @@ it.skipIf(process.platform === "win32").each([
     vi.stubEnv("INVOCATION_ID", "gateway-invocation");
     vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus");
     vi.stubEnv("OPENCLAW_TEST_USER_SCOPE", undefined);
+    vi.stubEnv("LD_PRELOAD", "/synthetic/libjemalloc.so.2");
+    vi.stubEnv("MALLOC_CONF", "background_thread:true");
     const requestedPath = "$(touch /tmp/openclaw-path-injection)";
     const root = tempDirs.make("github-sandbox-launch-");
     writeFakeSystemdScope(root);
@@ -506,6 +547,8 @@ process.stdout.write(JSON.stringify({
   scoped: process.env.OPENCLAW_TEST_USER_SCOPE === "true",
   invocation: process.env.INVOCATION_ID,
   userBus: process.env.DBUS_SESSION_BUS_ADDRESS,
+  preload: process.env.LD_PRELOAD ?? null,
+  allocator: process.env.MALLOC_CONF ?? null,
   selected: process.env[${JSON.stringify(host === "ghe.example.test" ? "GH_ENTERPRISE_TOKEN" : "GH_TOKEN")}] === "synthetic-after-preparation",
   cleared: !process.env.GITHUB_TOKEN && !process.env.GITHUB_ENTERPRISE_TOKEN && !process.env[${JSON.stringify(host === "ghe.example.test" ? "GH_TOKEN" : "GH_ENTERPRISE_TOKEN")}],
   staged: fs.readFileSync(args[args.indexOf("--env-file") + 1], "utf8"),
@@ -561,6 +604,8 @@ process.stdout.write(JSON.stringify({
         scoped: engine === "podman" && process.getuid?.() !== 0,
         invocation: "gateway-invocation",
         userBus: "unix:path=/run/user/1000/bus",
+        preload: null,
+        allocator: null,
       });
       expect(process.env.INVOCATION_ID).toBe("gateway-invocation");
       expect(spec.stdinMode).toBe("pipe-open");

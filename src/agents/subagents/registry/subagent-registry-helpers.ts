@@ -216,6 +216,10 @@ export async function persistSubagentSessionTiming(
     }
 
     next.status = status;
+    if (status && next.lifecycleRunId === entry.runId) {
+      next.lifecycleRunId = undefined;
+      next.lastRunId = entry.runId;
+    }
     if (lastRunError) {
       next.lastRunError = lastRunError;
     } else if (status === "done") {
@@ -379,7 +383,8 @@ export function updateSubagentArchiveAtMs(entry: SubagentRunRecord, cfg?: OpenCl
         ? entry.completion.capturedAt
         : endedAt
     : entry.cleanup === "delete" &&
-        (entry.pauseReason !== "sessions_yield" || subagentRuns.isCompletionRetired(entry))
+        (entry.pauseReason !== "sessions_yield" ||
+          (!entry.waitForMessage && subagentRuns.isCompletionRetired(entry)))
       ? entry.delivery?.discardReason === "task-missing"
         ? (entry.delivery.discardedAt ?? endedAt)
         : endedAt

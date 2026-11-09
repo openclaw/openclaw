@@ -573,6 +573,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
             directOrigin,
             sourceSessionKey: batchSessionKeys[0],
             settleWakeSourceSessionKeys: batchSessionKeys,
+            settleWakeSourceRunIds: settledBatch.map((entry) => entry.runId),
             sourceTool: "subagent_settle",
             targetRequesterSessionKey: requesterSessionKey,
             requesterIsSubagent: requesterDepth >= 1,

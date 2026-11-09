@@ -15,7 +15,12 @@ import {
   retireSessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
+import { assertOperatorModelAllowed } from "../../admitted-run-context.js";
+import { prepareOperatorModelPolicy } from "../../operator-model-policy.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../tools/gateway-caller-context.js";
 import { runAnnounceAgentCall } from "./subagent-announce-completion-delivery.js";
 
 const startTurn = vi.hoisted(() => vi.fn<ReturnType<typeof createAgentTurnService>["startTurn"]>());
@@ -130,3 +135,73 @@ it.each([true, false])(
     });
   },
 );
+
+it("preserves live ordinary requester authority and its independent model ceiling", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const context = createContext();
+    const resolveGatewayContext = () => context;
+    context.resolveGatewayContext = resolveGatewayContext;
+    const client = createOperatorClient({
+      profileName: "ordinary-requester",
+      scopes: ["operator.write"],
+    });
+    const source = await captureGatewayOperatorRunAuthority({ client, context });
+    if (!source) {
+      throw new Error("Operator authority was not captured");
+    }
+    const modelPolicy = prepareOperatorModelPolicy({
+      cfg: { agents: { defaults: { model: "custom/allowed" } } },
+      policy: { allow: ["custom/allowed"] },
+      manifestPlugins: [],
+    });
+    client.internal = { ...client.internal, operatorRunAuthority: source.authority };
+    startTurn.mockImplementation(async (request) => {
+      request.assertAdmissionCurrent?.();
+      expect(getGatewayToolCallerIdentity()?.operatorAuthority === source.authority).toBe(true);
+      expect(getGatewayToolCallerIdentity()?.modelPolicy).toBe(modelPolicy);
+      expect(() =>
+        assertOperatorModelAllowed(
+          undefined,
+          { provider: "custom", model: "forbidden" },
+          getGatewayToolCallerIdentity()?.modelPolicy,
+        ),
+      ).toThrow("cannot use this model");
+      request.io.emitAcceptance([
+        true,
+        { runId: "ordinary-requester", status: "accepted" },
+        undefined,
+      ]);
+      request.io.emitFinal([true, { runId: "ordinary-requester", status: "ok" }, undefined]);
+    });
+    try {
+      const result = await withPluginRuntimeGatewayRequestScope(
+        { context, resolveGatewayContext, client, isWebchatConnect: () => false },
+        () =>
+          withGatewayToolCallerIdentity(
+            {
+              agentId: "main",
+              sessionKey: "agent:main:ordinary-requester",
+              operatorAuthority: source.authority,
+              modelPolicy,
+            },
+            () =>
+              runAnnounceAgentCall({
+                agentParams: {
+                  sessionKey: "agent:main:ordinary-requester",
+                  message: "One-way reply",
+                  idempotencyKey: "ordinary-requester",
+                  inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+                },
+                privateCompletion: true,
+                expectFinal: true,
+                isExecutionAllowed: () => true,
+                resolveGatewayContext,
+              }),
+          ),
+      );
+      expect(result).toMatchObject({ status: "ok" });
+    } finally {
+      source.release();
+    }
+  });
+});

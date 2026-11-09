@@ -176,17 +176,19 @@ export async function runAnnounceAgentCall(params: {
       );
     };
     const continuationCaller = params.controllerInput?.continuationCaller;
-    // The recorded controller owns result intake after the requester turn finishes.
-    // Keep its Gateway binding, not the completed turn's client or tool authority.
-    const dispatched = withoutGatewayToolCallerIdentity(() =>
-      runOutsideOperatorToolGatewayAuthority(() =>
-        withPluginRuntimeGatewayContextResolver(
-          params.resolveGatewayContext,
-          () => (continuationCaller ? continuationCaller.run(dispatch) : dispatch()),
-          { inheritRequestScope: false },
-        ),
-      ),
-    );
+    const resume = () => (continuationCaller ? continuationCaller.run(dispatch) : dispatch());
+    // Registry/controller settlement outlives its original invocation. Ordinary one-way
+    // replies keep their separately retained, live-checked requester custody.
+    const dispatched =
+      params.controllerInput || params.delegatedToolPolicyHandoff
+        ? withoutGatewayToolCallerIdentity(() =>
+            runOutsideOperatorToolGatewayAuthority(() =>
+              withPluginRuntimeGatewayContextResolver(params.resolveGatewayContext, resume, {
+                inheritRequestScope: false,
+              }),
+            ),
+          )
+        : runOutsideOperatorToolGatewayAuthority(resume);
     return params.privateCompletion
       ? await waitForGatewayDispatch("agent", dispatched, undefined, signal)
       : await dispatched;

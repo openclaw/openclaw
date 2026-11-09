@@ -1,8 +1,7 @@
 import { AsyncResource } from "node:async_hooks";
-import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { loadPluginRegistryHandle } from "./loader.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
@@ -58,8 +57,12 @@ afterEach(() => runtime.resetPluginRuntimeStateForTest());
 afterEach(resetPluginLoaderTestStateForTest);
 
 it("releases retired siblings while an unchanged decision provider survives registry transfer", async () => {
+  const references: WeakRef<object>[] = [];
   class RetiredService {
     id = "retired-sibling";
+    constructor() {
+      references.push(new WeakRef(this));
+    }
     start() {}
   }
   const decisionProvider = {
@@ -103,8 +106,7 @@ it("releases retired siblings while an unchanged decision provider survives regi
   }
   const current = await transfer();
   try {
-    await setImmediate();
-    expect(queryObjects(RetiredService)).toBe(0);
+    await expectCollected(...references);
     expect(current.decisionProviders[0]?.host.inspect({})).toMatchObject({
       pluginId: "decision-owner",
       activeRequests: 0,
@@ -118,8 +120,12 @@ it("releases retired siblings while an unchanged decision provider survives regi
 it.each(["return", "throw", "resolve", "reject"] as const)(
   "releases preparation authority and its registry after %s",
   async (outcome) => {
+    const references: WeakRef<object>[] = [];
     class RetainedService {
       id = "preparation-retention";
+      constructor() {
+        references.push(new WeakRef(this));
+      }
       start() {}
     }
     const failure = new Error("preparation fixture failure");
@@ -164,8 +170,7 @@ it.each(["return", "throw", "resolve", "reject"] as const)(
     }
     const resource = await prepare();
     try {
-      await setImmediate();
-      expect(queryObjects(RetainedService)).toBe(0);
+      await expectCollected(...references);
     } finally {
       resource.emitDestroy();
     }

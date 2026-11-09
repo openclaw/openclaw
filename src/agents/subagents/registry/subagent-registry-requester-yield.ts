@@ -576,6 +576,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
             attemptCount: 0,
             batchRunIds,
             requesterYieldBatch: true,
+            requesterRunId: requesterTurnRunId,
             // Written only by builds that let a yielded requester answer; released
             // markerless private batches keep their admitted private policy.
             yieldedFinalDeliverable: true,

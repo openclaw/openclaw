@@ -39,6 +39,7 @@ const repositoryScriptEntries = [
   "scripts/finalize-installed-runtime.mjs!",
   // Performance drivers and their preloads are invoked directly from documented commands.
   "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
+  "scripts/perf/decision-tool-catalog-measure.ts!",
   // Spawned directly by native-allocation-profile.test.ts.
   "test/scripts/fixtures/native-profile-census.mjs!",
   // Spawned directly by mantis-telegram-failure.test.ts.
@@ -58,14 +59,20 @@ const repositoryScriptEntries = [
   "scripts/perf/auth-file-watch-events-measure.ts!",
   "scripts/perf/gateway-crash-record-measure.mts!",
   "scripts/perf/native-pr-bootstrap-measure.mjs!",
+  "scripts/perf/native-image-replay-measure.ts!",
   "scripts/perf/backup-verify-fixture.mjs!",
   "scripts/perf/backup-verify-measure.mjs!",
   "scripts/perf/board-read-admission-measure.ts!",
+  "scripts/perf/browser-protocol-retention.ts!",
+  "scripts/perf/browser-protocol-comparison.ts!",
+  "scripts/perf/browser-protocol-retention-preload.ts!",
+  "scripts/perf/fswatcher-retention-preload.mjs!",
   "scripts/perf/podman-exec-measure.ts!",
   "scripts/perf/responses-policy-fingerprint-measure.ts!",
   "scripts/perf/cron-own-receipts-measure.mjs!",
   "scripts/perf/spawn-broker-shutdown-measure.ts!",
   "scripts/perf/workspace-inventory-spawn-measure.ts!",
+  "scripts/perf/sandbox-projection-fetch-measure.ts!",
   // catalog-compare-released.mts copies and spawns this sandboxed reader by path.
   "scripts/lib/catalog-compare-released-worker.mts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
@@ -142,9 +149,13 @@ const repositoryScriptEntries = [
   "scripts/lib/usage-bench-observer.mjs!",
   // scripts/README.md invokes the Chromium/WebKit companion with shared scenarios.
   "scripts/bench-control-ui-engines.ts!",
+  // The event-load guide invokes the isolated Gateway wire fixture directly.
+  "scripts/bench-control-ui-event-load-wire.ts!",
   // Its companion guide invokes the same-document aged-tab census by path.
   "scripts/bench-control-ui-aged-tab.ts!",
   "scripts/bench-control-ui-aged-tab-compare.ts!",
+  "scripts/bench-control-ui-tab-return.ts!",
+  "scripts/bench-control-ui-tab-return-native.ts!",
   // The opt-in projection benchmark builds its browser fixture through this CLI.
   "scripts/build-control-ui-projection-fixture.mts!",
   // The reactive graph guide invokes this isolated diagnostic build by path.
@@ -156,6 +167,9 @@ const repositoryScriptEntries = [
   "scripts/bench-plugin-registration.mts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-cold-load.ts!",
+  "scripts/analyze-control-ui-coverage.mts!",
+  // scripts/README.md invokes the adjacent-build cache inventory comparison.
+  "scripts/compare-control-ui-update-cache.ts!",
   // The history-depth benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-history-depth.ts!",
   // The hosted Doctor benchmark guide invokes this opt-in CLI by path.
@@ -205,6 +219,8 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-state-polling.mts!",
   "scripts/bench-codex-validators.mts!",
   "scripts/bench-control-ui-navigation.ts!",
+  // Per-method delay census and cross-engine readiness comparison.
+  "scripts/bench-control-ui-rpc-hostage.ts!",
   "scripts/bench-gateway-validators.mts!",
   "scripts/bench-ingress-polling.mts!",
   "scripts/bench-lobster-validators.mts!",
@@ -222,6 +238,7 @@ const repositoryScriptEntries = [
   "scripts/perf/sandbox-paths-measure.ts!",
   "scripts/perf/github-publication-snapshot-measure.ts!",
   "scripts/perf/workspace-reconciliation-measure.ts!",
+  "scripts/perf/reply-directives-stream-measure.ts!",
   // Maintained source headers invoke these standalone commands and external preload by exact path.
   "scripts/bench-control-ui-talk.ts!",
   // Maintained source headers invoke these standalone analysis commands by exact path.
@@ -359,6 +376,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-access.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-fault.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/installed-terminal-dependencies.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/installed-terminal-reference.mts!",
   "scripts/e2e/lib/upgrade-survivor/older-runtime-recovery-observer.mjs!",
   "scripts/e2e/lib/upgrade-survivor/older-runtime-recovery.mjs!",
   "scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs!",
@@ -470,6 +489,7 @@ const repositoryScriptEntries = [
   // worktree.sh invokes explicit, supervised checkout-file salvage by path.
   "scripts/pr-lib/review-transition-recovery.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
+  "scripts/pr-lib/dependency-hold-release.mjs!",
   // worktree.sh launches the locked cold-worktree adapter by path.
   "scripts/pr-lib/worktree-provision.mts!",
   "scripts/pre-commit/filter-staged-files.mjs!",
@@ -855,6 +875,12 @@ const rootBundledPluginRuntimeDependencies = [
 // owning workspace, or invoke their package binaries/loaders without a static module import.
 const rootToolingAndWorkspaceDependencies = [
   "@copilotkit/aimock",
+  // installed-terminal-dependencies.mjs loads these from the pinned npm CLI's own
+  // dependency tree via createRequire(npmCli), never from the root workspace.
+  "@npmcli/arborist",
+  "@npmcli/config",
+  "cacache",
+  "pacote",
   // scripts/ui.mts anchors these lookups at ui/package.json before invoking the UI workspace.
   "@vitest/browser-playwright",
   "dompurify",
@@ -1258,6 +1284,8 @@ const config = {
         "ffmpeg",
         // sqlite-snapshot-retirement.mts inspects its btrfs fixture with this host tool.
         "filefrag",
+        // shutdown-loaded-measure.ts uses the host fio utility for disk pressure.
+        "fio",
         "lsattr",
         "mint",
         // Muse E2E setup installs this CLI outside npm (scripts/e2e/lib/muse-runtime/setup.sh).

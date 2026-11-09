@@ -107,8 +107,17 @@ async function restoreGatewayOperatorSnapshot(params: {
     signal.signal.throwIfAborted();
   };
   const subscriptions: Array<() => void> = [];
+  // The claimed target's lifecycle ends this restored run, not work it already
+  // handed to another session; that continuation keeps the policy signal only.
+  const claim = new AbortController();
   if (params.subscribeToClaim) {
-    subscriptions.push(params.subscribeToClaim(revoke));
+    subscriptions.push(
+      params.subscribeToClaim(() =>
+        claim.abort(
+          new Error("Restart recovery operator authority changed; start a new user turn."),
+        ),
+      ),
+    );
   }
   let identity: Awaited<ReturnType<typeof prepareUserProfileIdentity>> | undefined;
   const releaseHold = () => {
@@ -232,6 +241,7 @@ async function restoreGatewayOperatorSnapshot(params: {
     };
     let assertPolicy = assertSourcePolicy;
     const assertRecoveryCurrent = () => {
+      claim.signal.throwIfAborted();
       assertCurrent();
       return assertPolicy();
     };
@@ -378,8 +388,10 @@ async function restoreGatewayOperatorSnapshot(params: {
     });
     const authority = createAdmittedRunOperatorAuthority({
       ...policyAuthority,
+      signal: AbortSignal.any([signal.signal, claim.signal]),
       assertCurrent: assertRecoveryCurrent,
       retain: () => {
+        claim.signal.throwIfAborted();
         assertCurrent();
         return retainPolicy();
       },

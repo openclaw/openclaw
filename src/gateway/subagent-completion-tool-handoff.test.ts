@@ -1,4 +1,12 @@
 import { expect, it, vi } from "vitest";
+import { assertOperatorModelAllowed } from "../agents/admitted-run-context.js";
+import {
+  captureRequesterModelPolicySnapshot,
+  prepareOperatorModelPolicy,
+  restoreRequesterModelPolicySnapshot,
+} from "../agents/operator-model-policy.js";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
   cancelSubagentCompletionToolHandoff,
   consumeSubagentCompletionToolHandoff,
@@ -121,3 +129,65 @@ it("requires the completion batch's current relation to qualify a System continu
   expect(isCurrentSubagentCompletionRequester(target)).toBe(false);
   cancelSubagentCompletionToolHandoff(handoffId);
 });
+
+it.each([false, true])(
+  "keeps the completed result's ceiling after a new followup (batch=%s)",
+  (batch) => {
+    const ceiling = captureRequesterModelPolicySnapshot(
+      prepareOperatorModelPolicy({
+        cfg: {
+          agents: {
+            defaults: {
+              model: "custom/allowed",
+              models: { "custom/allowed": {}, "custom/forbidden": {} },
+            },
+          },
+        },
+        policy: { allow: ["custom/allowed"] },
+        manifestPlugins: [],
+      }),
+    );
+    const completed = createSubagentRunRecord({
+      runId: "policy-completed-result",
+      childSessionKey: identity.sourceSessionKey,
+      requesterSessionKey: identity.targetSessionKey,
+      completionRequesterSessionId: identity.targetSessionId,
+      requesterModelPolicySnapshot: ceiling,
+      generation: 1,
+      createdAt: 1,
+      endedAt: 2,
+      outcome: { status: "ok" },
+    });
+    const followup = createSubagentRunRecord({
+      ...completed,
+      runId: "policy-new-followup",
+      requesterModelPolicySnapshot: { kind: "unbounded" },
+      generation: 2,
+      createdAt: 3,
+    });
+    subagentRuns.set(completed.runId, completed);
+    subagentRuns.set(followup.runId, followup);
+    const handoffId = registerSubagentCompletionToolHandoff({
+      ...registration,
+      sourceRunIds: [completed.runId],
+      ...(batch
+        ? { settleBatch: { sourceSessionKeys: [identity.sourceSessionKey], isCurrent: () => true } }
+        : {}),
+    });
+    try {
+      const policy = restoreRequesterModelPolicySnapshot(
+        readSubagentCompletionRequesterModelPolicy({ ...registration, handoffId }),
+      );
+      expect(() =>
+        assertOperatorModelAllowed(undefined, { provider: "custom", model: "allowed" }, policy),
+      ).not.toThrow();
+      expect(() =>
+        assertOperatorModelAllowed(undefined, { provider: "custom", model: "forbidden" }, policy),
+      ).toThrow("cannot use this model");
+    } finally {
+      cancelSubagentCompletionToolHandoff(handoffId);
+      subagentRuns.delete(completed.runId);
+      subagentRuns.delete(followup.runId);
+    }
+  },
+);

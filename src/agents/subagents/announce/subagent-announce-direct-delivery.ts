@@ -470,6 +470,11 @@ async function sendSubagentAnnounceDirectlyBound(
           params.isSourceSessionEffectsAllowed?.() !== false
             ? {
                 sourceSessionKey: params.sourceSessionKey,
+                ...(params.settleWakeSourceRunIds
+                  ? { sourceRunIds: params.settleWakeSourceRunIds }
+                  : params.sourceRunId
+                    ? { sourceRunIds: [params.sourceRunId] }
+                    : {}),
                 ...(trustedCompletionEvent?.childSessionId
                   ? { sourceSessionId: trustedCompletionEvent.childSessionId }
                   : {}),

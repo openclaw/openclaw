@@ -145,24 +145,46 @@ async function ready(page: Page) {
 }
 
 async function openFilters(page: Page) {
-  if (await page.locator(".usage-query-input").isVisible()) {
-    return false;
+  const menu = await page.locator(".usage-filter-menu__trigger").isVisible();
+  // Comparison runs can still exercise a baseline with its query directly in the toolbar.
+  const inline = !menu && (await page.locator(".usage-query-input").isVisible());
+  const trigger = page.locator(
+    menu ? ".usage-filter-menu__trigger" : '[aria-controls="usage-filter-sheet"]',
+  );
+  if (!inline) {
+    await trigger.click();
   }
-  await page.locator(".usage-filter-sheet__trigger").click();
-  await page.locator(".usage-query-input").waitFor();
-  return true;
-}
-
-async function closeFilters(page: Page, opened: boolean) {
-  if (opened) {
-    await page.locator("#usage-filter-sheet .oc-sheet__close").click();
-    await page.locator("#usage-filter-sheet").waitFor({ state: "hidden" });
-  }
+  const input = page.locator(menu ? ".usage-filter-menu__query input" : ".usage-query-input");
+  await input.waitFor();
+  return {
+    input,
+    count: page.locator(menu ? ".usage-applied-row__count" : ".usage-query-count"),
+    async selectModel(value: string) {
+      const model = menu
+        ? page.getByRole("menuitem", { name: "Model", exact: true })
+        : page.locator('[id="usage-filter-model:trigger"]');
+      await model.click();
+      await page.getByRole("menuitemcheckbox", { name: value, exact: true }).click();
+      if (!menu) {
+        await model.click();
+      }
+    },
+    async close() {
+      if (menu) {
+        await trigger.click();
+      } else if (!inline) {
+        await page.locator("#usage-filter-sheet .oc-sheet__close").click();
+        await page.locator("#usage-filter-sheet").waitFor({ state: "hidden" });
+      }
+    },
+  };
 }
 
 async function months(page: Page) {
   await ready(page);
-  const opened = await openFilters(page);
+  const filters = (await page.locator(".usage-date-input").first().isVisible())
+    ? undefined
+    : await openFilters(page);
   const now = Date.now();
   const start = new Date(now - (dayCount - 1) * dayMs).toISOString().slice(0, 10);
   const end = new Date(now).toISOString().slice(0, 10);
@@ -173,7 +195,7 @@ async function months(page: Page) {
   await endInput.press("Tab");
   await startInput.fill(start);
   await startInput.press("Tab");
-  await closeFilters(page, opened);
+  await filters?.close();
   const formattedSessionCount = await page.evaluate(
     (count) => count.toLocaleString(),
     sessionCount,
@@ -228,16 +250,12 @@ const usageScenarios: readonly InteractionScenario[] = [
     expected: "The model filter selects one of 96 models and shows its 125 matching sessions.",
     prepare: months,
     run: async (page, gateway) => {
-      const opened = await openFilters(page);
+      const filters = await openFilters(page);
       const after = (await gateway.getRequests("sessions.usage")).length;
-      await page.locator('[id="usage-filter-model:trigger"]').click();
-      await page
-        .locator('[id="usage-filter-model:content"] [data-value="option:data-model-0"]')
-        .click();
+      await filters.selectModel("data-model-0");
       await gateway.waitForRequest("sessions.usage", { after });
-      await page.locator('[id="usage-filter-model:trigger"]').click();
-      await closeFilters(page, opened);
-      await page.locator(".usage-query-count").getByText(/125/).waitFor();
+      await filters.close();
+      await filters.count.getByText(/^125(?:\s|$)/).waitFor();
       return { models: modelCount, matchingSessions: sessionCount / modelCount };
     },
   },
@@ -248,12 +266,12 @@ const usageScenarios: readonly InteractionScenario[] = [
     expected: "Applying a query returns the one matching session from 12,000 rows.",
     prepare: months,
     run: async (page, gateway) => {
-      const opened = await openFilters(page);
+      const filters = await openFilters(page);
       const after = (await gateway.getRequests("sessions.usage", { query })).length;
-      await page.locator(".usage-query-input").fill(query);
-      await page.locator(".usage-query-input").press("Enter");
+      await filters.input.fill(query);
+      await filters.input.press("Enter");
       await gateway.waitForRequest("sessions.usage", { after, match: { query } });
-      await closeFilters(page, opened);
+      await filters.close();
       await page.locator(".session-bar-title").getByText(query, { exact: true }).waitFor();
       return { populationSessions: sessionCount, matchingSessions: 1 };
     },

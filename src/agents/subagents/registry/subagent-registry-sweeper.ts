@@ -272,6 +272,7 @@ export function createSubagentRegistrySweeper(params: {
         if (
           (selected.delivery?.status === "pending" ||
             selected.delivery?.status === "in_progress") &&
+          !isYieldedSubagentRun(selected) &&
           subagentRuns.isCompletionRetired(selected)
         ) {
           await blockSubagentCompletionDelivery({
@@ -296,7 +297,6 @@ export function createSubagentRegistrySweeper(params: {
         // A yielded run no continuation can reach settles instead of parking forever.
         const executionRetired = subagentRuns.isCompletionRetired(entry);
         if (
-          !executionRetired &&
           isYieldedSubagentRun(entry) &&
           (await settleUnreachableYieldedSubagentRun({
             runId,

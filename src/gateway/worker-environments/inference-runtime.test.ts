@@ -5,6 +5,7 @@ import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway
 import { validateWorkerInferenceTerminalOutcome } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
+import * as extraParamsRuntime from "../../agents/embedded-agent-runner/extra-params.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
@@ -129,9 +130,7 @@ describe("worker inference provider runtime", () => {
       if (!explicitKey) {
         Object.assign(inferenceRequest.options, { promptCacheKey: "worker-chosen-key" });
       }
-      await expect(run(runtime, inferenceRequest)).resolves.toMatchObject({
-        type: "done",
-      });
+      await expect(run(runtime, inferenceRequest)).resolves.toMatchObject({ type: "done" });
     }
     expect(runtime.stream.mock.calls.map((call) => call[2]?.promptCacheKey)).toEqual(keys);
     expect(runtime.stream.mock.calls.map((call) => call[2]?.sessionId)).toEqual(
@@ -328,9 +327,7 @@ describe("worker inference provider runtime", () => {
     });
 
     try {
-      await expect(run(runtime)).resolves.toMatchObject({
-        type: "done",
-      });
+      await expect(run(runtime)).resolves.toMatchObject({ type: "done" });
     } finally {
       resetPluginRuntimeStateForTest();
     }
@@ -371,9 +368,7 @@ describe("worker inference provider runtime", () => {
         routeRequirement,
       });
 
-      await expect(run(runtime)).resolves.toMatchObject({
-        type: "done",
-      });
+      await expect(run(runtime)).resolves.toMatchObject({ type: "done" });
       expect(runtime.prepareModel.mock.calls[0]?.[0].cfg?.models?.providers?.openai).toMatchObject({
         auth,
         api,
@@ -879,7 +874,9 @@ describe("worker inference provider runtime", () => {
   });
 
   it("passes the admitted search capability to the provider and revokes it after prompt policy", async () => {
+    const applyStreamPolicy = extraParamsRuntime.applyExtraParamsToAgent;
     const runtime = setup();
+    runtime.applyStreamPolicy.mockImplementation(applyStreamPolicy);
     const searchTool = {
       name: "web_search",
       label: "Search",
@@ -904,12 +901,17 @@ describe("worker inference provider runtime", () => {
       }),
     });
     vi.spyOn(workerTurnOwners, "getWorkerTurnToolSurface").mockReturnValue(toolRuntime);
+    const execution = params(request(), vi.fn());
+    execution.sessionTarget = {
+      ...execution.sessionTarget,
+      sessionKey: "agent:runtime-agent:dashboard:1",
+    };
     try {
       for (const enabled of [true, false]) {
         if (!enabled) {
           toolRuntime.applyPromptToolsAllow([]);
         }
-        expect(await run(runtime)).toMatchObject({ type: "done" });
+        expect(await runtime.executor(execution)).toMatchObject({ type: "done" });
         expect(
           runtime.applyStreamPolicy.mock.lastCall?.[11]?.nativeWebSearchPolicyContext
             ?.webSearchEnabled,
@@ -926,9 +928,7 @@ describe("worker inference session admission", () => {
     const changedConfig = { ...config, session: { store: "replacement-sessions.json" } };
     const runtime = setup(sessionEntry, { config: changedConfig });
 
-    await expect(run(runtime)).resolves.toMatchObject({
-      type: "done",
-    });
+    await expect(run(runtime)).resolves.toMatchObject({ type: "done" });
     expect(runtime.scope.authProfile).toBe(PROFILE);
     expect(runtime.stream).toHaveBeenCalledOnce();
   });

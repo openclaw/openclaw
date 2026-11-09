@@ -1,11 +1,18 @@
+import { isTerminalSessionStatus } from "../../../config/sessions/types.js";
+import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
+import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
 } from "./subagent-lifecycle-events.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { resolveSubagentYieldWaitSource } from "./subagent-registry-read.js";
 import { resolveYieldedRunContinuation } from "./subagent-registry-run-pause.js";
 import type { createSubagentSweepReadScope } from "./subagent-registry-sweep-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { isYieldedSubagentRun } from "./subagent-run-liveness.js";
 
 type CompleteRun = ReturnType<
@@ -20,13 +27,35 @@ type SweepReadScope = ReturnType<typeof createSubagentSweepReadScope>;
 export async function settleUnreachableYieldedSubagentRun(params: {
   runId: string;
   entry: SubagentRunRecord;
-  readScope: Pick<SweepReadScope, "completionCurrent">;
+  readScope?: Pick<SweepReadScope, "completionCurrent">;
   complete: CompleteRun;
+  requesterEnded?: boolean;
 }): Promise<boolean> {
   const { runId, entry, readScope, complete } = params;
-  const continuation = isYieldedSubagentRun(entry)
-    ? resolveYieldedRunContinuation(entry)
+  let requesterEnded = params.requesterEnded;
+  if (isYieldedSubagentRun(entry) && entry.waitForMessage && requesterEnded === undefined) {
+    const requester = await loadSessionEntryByKey(
+      entry.requesterSessionKey,
+      entry.requesterAgentId,
+    );
+    requesterEnded =
+      !requester || requester.archivedAt !== undefined || isTerminalSessionStatus(requester.status);
+  }
+  const retired = subagentRuns.isCompletionRetired(entry);
+  let continuation = isYieldedSubagentRun(entry)
+    ? resolveYieldedRunContinuation(entry, requesterEnded)
     : undefined;
+  if (
+    continuation?.state === "continuable" &&
+    retired &&
+    !entry.collect &&
+    !resolveSubagentYieldWaitSource(entry)
+  ) {
+    continuation = {
+      state: "unreachable",
+      error: "Descendant completion can no longer continue this yielded requester.",
+    };
+  }
   if (continuation?.state !== "unreachable") {
     return false;
   }
@@ -40,7 +69,7 @@ export async function settleUnreachableYieldedSubagentRun(params: {
     {
       runId,
       expectedEntry: entry,
-      recoveryCurrent: readScope.completionCurrent,
+      recoveryCurrent: readScope?.completionCurrent,
       // The run ended when it yielded; settling now must not rewrite that time.
       endedAt: entry.execution.endedAt,
       outcome,
@@ -53,5 +82,28 @@ export async function settleUnreachableYieldedSubagentRun(params: {
     },
     "sweeper-unreachable-yield",
   );
+  // A restored task has no old delivery authority. Close only its exact parked
+  // lifecycle through the system projection; never revive its execution or tools.
+  if (retired) {
+    const authority = resolveSubagentChildAuthority(entry);
+    const settled = subagentRuns.get(runId);
+    if (
+      authority.status === "verified" &&
+      isSameSubagentRunOwner(settled, entry) &&
+      settled?.endedReason === SUBAGENT_ENDED_REASON_ERROR
+    ) {
+      await persistGatewaySessionLifecycleEvent({
+        sessionKey: entry.childSessionKey,
+        agentId: authority.childAgentId,
+        expectedWriter: { ...authority.sessionIdentity, runId, requireYielded: true },
+        event: {
+          runId,
+          sessionId: authority.sessionIdentity.sessionId,
+          ts: Date.now(),
+          data: { phase: "error", error: outcome.status === "error" ? outcome.error : undefined },
+        },
+      });
+    }
+  }
   return true;
 }

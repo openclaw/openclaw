@@ -15,7 +15,7 @@ import type {
   SubagentCompletionToolHandoffRegistration,
   TrustedSubagentCompletionHandoff,
 } from "../agents/subagents/announce/subagent-announce-handoff.js";
-import { getLatestLiveSubagentRunByChildSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 const SUBAGENT_COMPLETION_TOOL_HANDOFF_TTL_MS = 5 * 60 * 1000;
@@ -52,6 +52,7 @@ function normalizeRegistration(
   }
   return {
     sourceSessionKey,
+    ...(params.sourceRunIds ? { sourceRunIds: [...params.sourceRunIds] } : {}),
     ...(sourceSessionId ? { sourceSessionId } : {}),
     targetSessionKey,
     targetSessionId,
@@ -90,19 +91,25 @@ export function registerSubagentCompletionToolHandoff(
   let requesterPolicy: PreparedOperatorModelPolicy | undefined;
   let requesterModelPolicySnapshot: RequesterModelPolicySnapshot;
   try {
-    for (const sourceKey of normalized.settleBatch?.sourceSessionKeys ?? [
+    if (!normalized.sourceRunIds?.length) {
+      throw new Error("Completion model restrictions require their recorded source runs.");
+    }
+    const sourceSessionKeys = normalized.settleBatch?.sourceSessionKeys ?? [
       normalized.sourceSessionKey,
-    ]) {
-      const source = getLatestLiveSubagentRunByChildSessionKey(
-        sourceKey,
-        (entry) =>
-          entry.requesterSessionKey === normalized.targetSessionKey &&
-          (!entry.completionRequesterSessionId ||
-            entry.completionRequesterSessionId === normalized.targetSessionId),
-      );
+    ];
+    for (const runId of normalized.sourceRunIds) {
+      const source = subagentRuns.get(runId);
+      const matches =
+        source &&
+        sourceSessionKeys.includes(source.childSessionKey) &&
+        source.requesterSessionKey === normalized.targetSessionKey &&
+        (!source.completionRequesterSessionId ||
+          source.completionRequesterSessionId === normalized.targetSessionId);
       requesterPolicy = intersectOperatorModelPolicies(
         requesterPolicy,
-        restoreRequesterModelPolicySnapshot(source?.requesterModelPolicySnapshot),
+        restoreRequesterModelPolicySnapshot(
+          matches ? source.requesterModelPolicySnapshot : undefined,
+        ),
       );
     }
     requesterModelPolicySnapshot = captureRequesterModelPolicySnapshot(requesterPolicy);

@@ -5,11 +5,13 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { assertOperatorModelAllowed } from "../agents/admitted-run-context.js";
 import { prepareEmbeddedSessionState } from "../agents/command/session-preparation.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import type { EmbeddedAgentRunResult } from "../agents/embedded-agent.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
+import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { resolveAgentRunErrorLifecycleFields } from "../agents/run-termination.js";
 import { runAnnounceAgentCall } from "../agents/subagents/announce/subagent-announce-completion-delivery.js";
 import { listRunsForControllerFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
@@ -380,8 +382,41 @@ describe("private subagent completion processing receipts", () => {
     expect(followupDelivery).toEqual([false, undefined]);
   });
 
+  it("keeps an ordinary requester's independent model ceiling through private admission", async () => {
+    const modelPolicy = prepareOperatorModelPolicy({
+      cfg: { agents: { defaults: { model: "custom/allowed" } } },
+      policy: { allow: ["custom/allowed"] },
+      manifestPlugins: [],
+    });
+    agentCommandMock.mockImplementationOnce(async (input) => {
+      const command = input as AgentCommandOpts;
+      expect(command.modelPolicy === modelPolicy).toBe(true);
+      expect(() =>
+        assertOperatorModelAllowed(
+          undefined,
+          { provider: "custom", model: "forbidden" },
+          command.modelPolicy,
+        ),
+      ).toThrow("cannot use this model");
+      return processPrivateInput(input);
+    });
+    await withGatewayToolCallerIdentity({ agentId: "main", sessionKey, modelPolicy }, () =>
+      expectProcessed(),
+    );
+  });
+
   it("binds a settle handoff to the accepted source in its live batch", async () => {
     const sourceSessionKeys = ["agent:main:subagent:first", "agent:main:subagent:second"] as const;
+    const sourceRunIds = sourceSessionKeys.map((_, index) => `${runId}:source-${index}`);
+    for (const [index, childSessionKey] of sourceSessionKeys.entries()) {
+      await addSubagentRunForTests({
+        runId: sourceRunIds[index]!,
+        childSessionKey,
+        requesterSessionKey: sessionKey,
+        completionRequesterSessionId: sessionId,
+        requesterModelPolicySnapshot: { kind: "unbounded" },
+      });
+    }
     const stage = pendingInputs.stageSessionPendingInput;
     const seed = vi
       .spyOn(pendingInputs, "stageSessionPendingInput")
@@ -420,6 +455,7 @@ describe("private subagent completion processing receipts", () => {
         settleWakeSourceSessionKeys: sourceSessionKeys,
         delegatedToolPolicyHandoff: {
           sourceSessionKey: sourceSessionKeys[0],
+          sourceRunIds,
           targetSessionKey: sessionKey,
           targetSessionId: sessionId,
           idempotencyKey: runId,
@@ -430,6 +466,9 @@ describe("private subagent completion processing receipts", () => {
       expect(agentCommandMock).toHaveBeenCalledOnce();
     } finally {
       seed.mockRestore();
+      for (const sourceRunId of sourceRunIds) {
+        await releaseSubagentRun(sourceRunId);
+      }
     }
   });
 

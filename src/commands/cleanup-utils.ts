@@ -21,6 +21,7 @@ import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-pa
 import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
 import { movePathToTrash } from "../infra/fs-safe.js";
 import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
+import { realpathViaExistingPrefix } from "../infra/path-containment.js";
 import { pathEntryExists as pathExists } from "../infra/path-existence.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { prepareOpenClawStateDatabaseRemoval } from "../state/openclaw-state-db-cache.js";
@@ -390,6 +391,29 @@ async function removeLinkedCleanupPaths(
   }
 }
 
+/**
+ * Spells preserved paths as the entries a removal walk of the canonical state dir reaches:
+ * canonical parent, final name kept (removal deletes a link entry, not its target). Comparing
+ * any other spelling would silently drop a preserved workspace reached through an alias.
+ */
+async function preservedRemovalEntries(
+  targets: readonly string[],
+  stateDir: string,
+): Promise<string[]> {
+  const entries = await Promise.all(
+    targets.map(async (target) => {
+      const parent = await realpathViaExistingPrefix(path.dirname(target));
+      if (!parent) {
+        throw new Error(
+          `Cannot verify preserved path ${shortenHomeInString(target)}. Fix the path or its parent folder and retry.`,
+        );
+      }
+      return path.join(parent, path.basename(target));
+    }),
+  );
+  return entries.filter((entry) => isPathInside(stateDir, entry));
+}
+
 /** Remove state plus config/OAuth paths, preserving selected paths nested inside state. */
 export async function removeStateAndLinkedPaths(
   cleanup: CleanupResolvedPaths,
@@ -401,19 +425,13 @@ export async function removeStateAndLinkedPaths(
     ? (opts.preservePaths ?? []).map((target) => path.resolve(target))
     : await existingPaths(opts?.preservePaths ?? []);
   if (opts?.dryRun) {
-    const preservePaths = requestedPreservePaths.filter((target) =>
-      isPathInside(requestedStateDir, target),
-    );
+    const stateDir = resolveIdentityPathViaExistingAncestorSync(requestedStateDir);
+    const preservePaths = await preservedRemovalEntries(requestedPreservePaths, stateDir);
     if (opts.removeCompletionHooks) {
-      const stateDir = resolveIdentityPathViaExistingAncestorSync(requestedStateDir);
       for (const profilePath of await removeCompletionRegistrations({
         stateDirs: [...new Set([requestedStateDir, stateDir])],
-        preservePaths: [
-          ...preservePaths,
-          ...preservePaths.map((target) =>
-            path.join(stateDir, path.relative(requestedStateDir, target)),
-          ),
-        ],
+        // Registrations may spell preserved paths either way; keep both.
+        preservePaths: [...new Set([...preservePaths, ...requestedPreservePaths])],
         dryRun: true,
       })) {
         runtime.log(
@@ -422,7 +440,7 @@ export async function removeStateAndLinkedPaths(
       }
     }
     const stateRemoval = await removePathPreserving(
-      preservePaths.length > 0 ? requestedStateDir : cleanup.stateDir,
+      preservePaths.length > 0 ? stateDir : cleanup.stateDir,
       preservePaths,
       runtime,
       { dryRun: true, label: cleanup.stateDir },
@@ -491,13 +509,7 @@ export async function removeStateAndLinkedPaths(
       prepareOpenClawStateDatabaseRemoval(databasePath, lock.assertCurrent),
     );
     removalAdmission = admission;
-    const preservePaths = requestedPreservePaths
-      .map((target) =>
-        isPathInside(requestedStateDir, target)
-          ? path.join(stateDir, path.relative(requestedStateDir, target))
-          : target,
-      )
-      .filter((target) => isPathInside(stateDir, target));
+    const preservePaths = await preservedRemovalEntries(requestedPreservePaths, stateDir);
     const overlappingPreservePath = preservePaths.find((target) =>
       lockDirs.some((lockDir) => isPathInside(lockDir, target) || isPathInside(target, lockDir)),
     );

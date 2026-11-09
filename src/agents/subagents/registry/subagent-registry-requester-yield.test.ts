@@ -731,6 +731,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           attemptCount: 0,
           batchRunIds,
           requesterYieldBatch: true,
+          requesterRunId: REQUESTER_TURN,
           yieldedFinalDeliverable: true,
           rearmGeneration: 1,
           ...(kind === "running" ? {} : { afterRequesterYield: true }),

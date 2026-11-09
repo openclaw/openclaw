@@ -558,7 +558,6 @@ export async function prepareAgentRunDispatch(
       lifecycleStorePath,
       assertInputCurrent: assertInputOwnerCurrent,
       systemTurn,
-      spawnedBy: params.sessionEntry?.spawnedBy,
       entry: activeRunAbort.entry,
       abortSession: params.resolvedSessionKey
         ? {
