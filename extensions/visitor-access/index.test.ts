@@ -398,6 +398,34 @@ describe("visitor-access plugin lifecycle", () => {
     ).toEqual(await second.store.lookup("visitor@example.test"));
   });
 
+  it("returns a well-formed greeting for a boundary display name through the registered tool", async () => {
+    const publicOrigin = "https://team.example.com";
+    const registered = registerWithPolicy(
+      [],
+      {},
+      { gateway: { ...gatewayConfig.gateway, publicOrigin } },
+    );
+    await registered.start();
+    await registered.settle();
+    const readDirectory = registered.gatewayRequest.getMockImplementation()!;
+    // 199 units then an astral rune: a raw slice(0, 200) keeps the lone high surrogate.
+    const displayName = `${"x".repeat(199)}🙂`;
+    registered.gatewayRequest.mockImplementation(async (method, params) =>
+      method === "users.self"
+        ? { profile: { id: "inviter", displayName } }
+        : readDirectory(method, params),
+    );
+
+    const invite = await registered.invite({ email: "visitor@example.test" });
+
+    expect(invite.details.invitationText).toContain(`${"x".repeat(199)} invited you to OpenClaw.`);
+    expect(invite.details.invitationText).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    expect(await registered.store.lookup("visitor@example.test")).toMatchObject({
+      invitedBy: { profileId: "inviter", label: "x".repeat(199) },
+    });
+    await registered.stop();
+  });
+
   it("upgrades a grant recorded by v2026.10.6 without onboarding metadata", async () => {
     // Value recorded by the v2026.10.6 plugin through its registered visitor_invite tool.
     const stableGrant = {
