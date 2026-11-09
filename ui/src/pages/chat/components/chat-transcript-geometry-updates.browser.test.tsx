@@ -878,7 +878,7 @@ it("holds deferred reader compensation without interrupting native scrolling", a
 
     await settleLayout();
     expect(retained.getBoundingClientRect().top).toBe(top);
-    await expect.poll(() => virtualizer.isScrolling).toBe(false);
+    await expect.poll(() => [virtualizer.isScrolling, viewport.scrollTop]).toEqual([false, 510]);
     flush();
     expect(viewport.scrollTop).toBe(510);
     expect(retained.getBoundingClientRect().top).toBe(top);
