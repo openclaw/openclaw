@@ -90,6 +90,27 @@ final class ScreenSnapshotService {
         }
     }
 
+    // CGImage is immutable; this value owns its retained image and immutable metadata.
+    // No mutable AppKit bitmap or capture session crosses the executor boundary.
+    nonisolated struct CapturedFrame: @unchecked Sendable {
+        let image: CGImage
+        let displayFrameId: String
+    }
+
+    typealias Capture = @MainActor (Int?, Int) async throws -> CapturedFrame
+    typealias Encode = @Sendable (CapturedFrame, OpenClawScreenSnapshotFormat, Double) throws -> ScreenSnapshotResult
+
+    private let capture: Capture
+    private let encode: Encode
+
+    init(
+        capture: Capture? = nil,
+        encode: Encode? = nil)
+    {
+        self.capture = capture ?? Self.captureFrame
+        self.encode = encode ?? Self.encodeFrame
+    }
+
     func snapshot(
         screenIndex: Int?,
         maxWidth: Int?,
@@ -97,11 +118,18 @@ final class ScreenSnapshotService {
         format: OpenClawScreenSnapshotFormat?) async throws
         -> ScreenSnapshotResult
     {
-        try await ScreenCaptureSupport.requirePermission()
         let format = format ?? .jpeg
         let maxWidth = maxWidth.flatMap { $0 > 0 ? $0 : nil } ?? (format == .png ? 900 : 1600)
         let quality = min(1.0, max(0.05, quality ?? 0.72))
+        let frame = try await self.capture(screenIndex, maxWidth)
+        let encode = self.encode
+        return try await Task.detached {
+            try encode(frame, format, quality)
+        }.value
+    }
 
+    private static func captureFrame(screenIndex: Int?, maxWidth: Int) async throws -> CapturedFrame {
+        try await ScreenCaptureSupport.requirePermission()
         let display = try await ScreenCaptureSupport.display(
             at: screenIndex,
             noDisplays: ScreenSnapshotError.noDisplays,
@@ -149,7 +177,15 @@ final class ScreenSnapshotService {
             throw ScreenSnapshotError.captureFailed("display changed during screen capture")
         }
 
-        let bitmap = NSBitmapImageRep(cgImage: cgImage)
+        return CapturedFrame(image: cgImage, displayFrameId: displayFrameId)
+    }
+
+    nonisolated static func encodeFrame(
+        _ frame: CapturedFrame,
+        _ format: OpenClawScreenSnapshotFormat,
+        _ quality: Double) throws -> ScreenSnapshotResult
+    {
+        let bitmap = NSBitmapImageRep(cgImage: frame.image)
         let encoding: (NSBitmapImageRep.FileType, [NSBitmapImageRep.PropertyKey: Any]) = switch format {
         case .png: (.png, [:])
         case .jpeg: (.jpeg, [.compressionFactor: quality])
@@ -164,9 +200,9 @@ final class ScreenSnapshotService {
         return ScreenSnapshotResult(
             data: data,
             format: format,
-            width: cgImage.width,
-            height: cgImage.height,
-            displayFrameId: displayFrameId)
+            width: frame.image.width,
+            height: frame.image.height,
+            displayFrameId: frame.displayFrameId)
     }
 
     private static func displayFrameId(
