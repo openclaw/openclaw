@@ -105,6 +105,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -2076,7 +2078,10 @@ private fun AppearanceSettingsScreen(
         optionLabel = { "${it.percent}%" },
       )
     }
-    ClawPanel(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    ClawPanel(
+      modifier = Modifier.selectableGroup(),
+      verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
       Text(text = nativeString("App language"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       AppLanguage.entries.forEachIndexed { index, language ->
         if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
@@ -2190,10 +2195,15 @@ private fun AppLanguageRow(
 ) {
   ClawListItem(
     title = appLanguageTitle(language),
+    modifier = Modifier.selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
     subtitle = appLanguageRowSubtitle(language = language, systemLanguageTag = systemLanguageTag),
     leading = { ClawIconBadge(Icons.Default.Language) },
-    trailing = if (selected) ({ SettingsSelectionCheck() }) else null,
-    onClick = onClick,
+    trailing =
+      if (selected) {
+        { Box(Modifier.clearAndSetSemantics {}) { SettingsSelectionCheck() } }
+      } else {
+        null
+      },
   )
 }
 
