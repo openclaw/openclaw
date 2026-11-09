@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { removePathWithinRoot } from "./fs-safe-remove.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
+import { createPrivateSqliteTempDirectorySync } from "./sqlite-private-directory.js";
 
 /** Keep recovery scratch attached to its original journal/control authority.
  * The callback must recheck the supplied guard after awaited transport, before
@@ -13,7 +14,7 @@ export async function withSqliteRecoverySnapshot<T>(
 ): Promise<T> {
   const assertOwner = retainMutationAuthority(assertCurrent);
   assertOwner();
-  const directory = fs.mkdtempSync(path.join(control, ".recovery-snapshot-"));
+  const directory = createPrivateSqliteTempDirectorySync(control, ".recovery-snapshot-");
   const original = fs.lstatSync(directory, { bigint: true });
   const assertSnapshot = (allowMissing = false) => {
     assertOwner();
@@ -23,7 +24,7 @@ export async function withSqliteRecoverySnapshot<T>(
       (current &&
         (!current.isDirectory() ||
           current.isSymbolicLink() ||
-          (current.mode & 0o077n) !== 0n ||
+          (process.platform !== "win32" && (current.mode & 0o077n) !== 0n) ||
           current.dev !== original.dev ||
           current.ino !== original.ino))
     ) {

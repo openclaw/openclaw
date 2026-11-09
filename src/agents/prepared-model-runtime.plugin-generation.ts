@@ -1,10 +1,7 @@
 import { captureRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { registryContainsRuntimePluginIds } from "../plugins/active-runtime-registry.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
-import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import { resolveAgentRuntimePluginSelectionOwners } from "./harness/runtime-plugin-load-plan.js";
-import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import { ownPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
   PreparedModelRuntimeCatalogMode,
@@ -35,20 +32,13 @@ export function acquirePreparedMediaCapabilityProviders(
   // Execute through the composed view so nested lookups retain adopted donor registrations.
   const invocations = source.resources.createInvocationScope(registry);
   const claim = source.resources.retain();
+  const wrapProvider = <T>(provider: T) => invocations.wrap(provider);
   return {
     providers: {
-      mediaUnderstandingProviders: providers.mediaUnderstandingProviders?.map((provider) =>
-        invocations.wrap(provider),
-      ),
-      imageGenerationProviders: providers.imageGenerationProviders?.map((provider) =>
-        invocations.wrap(provider),
-      ),
-      videoGenerationProviders: providers.videoGenerationProviders?.map((provider) =>
-        invocations.wrap(provider),
-      ),
-      musicGenerationProviders: providers.musicGenerationProviders?.map((provider) =>
-        invocations.wrap(provider),
-      ),
+      mediaUnderstandingProviders: providers.mediaUnderstandingProviders?.map(wrapProvider),
+      imageGenerationProviders: providers.imageGenerationProviders?.map(wrapProvider),
+      videoGenerationProviders: providers.videoGenerationProviders?.map(wrapProvider),
+      musicGenerationProviders: providers.musicGenerationProviders?.map(wrapProvider),
     },
     assertOpen,
     release: () => {
@@ -62,6 +52,10 @@ export function acquirePreparedMediaCapabilityProviders(
 // Lineage is cache identity only. Derived generations still require the exact open
 // parent lease at admission; they never become configured publication authority.
 const derivedGenerationBases = new WeakMap<
+  PreparedModelRuntimePluginGeneration,
+  PreparedModelRuntimePluginGeneration
+>();
+const configuredGenerationBases = new WeakMap<
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimePluginGeneration
 >();
@@ -105,6 +99,33 @@ export function preparedPluginGenerationReusesBase(
     generation === base ||
     (generation !== undefined && derivedGenerationBases.get(generation) === base)
   );
+}
+
+/** Configured publication remains required for this generation and every derived view. */
+export function markPreparedPluginGenerationConfigured(
+  generation: PreparedModelRuntimePluginGeneration,
+): void {
+  configuredGenerationBases.set(generation, generation);
+}
+
+export function bindPreparedPluginGenerationConfiguredBase(
+  generation: PreparedModelRuntimePluginGeneration,
+  base: PreparedModelRuntimePluginGeneration,
+): void {
+  const configuredBase = configuredGenerationBases.get(base);
+  if (
+    configuredBase &&
+    preparedPluginGenerationReusesBase(generation, base) &&
+    !configuredGenerationBases.has(generation)
+  ) {
+    configuredGenerationBases.set(generation, configuredBase);
+  }
+}
+
+export function getPreparedPluginGenerationConfiguredBase(
+  generation: PreparedModelRuntimePluginGeneration,
+): PreparedModelRuntimePluginGeneration | undefined {
+  return configuredGenerationBases.get(generation);
 }
 
 export function createPreparedPluginGeneration(params: {
@@ -171,42 +192,4 @@ export function createPreparedPluginGeneration(params: {
   });
   ownPreparedPluginGeneration(generation);
   return generation;
-}
-
-export async function buildPreparedPluginModelCatalog(params: {
-  includeNative?: boolean;
-  providerIds?: readonly string[];
-  agentFacts: {
-    credentials: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["authCredentials"];
-    input: PreparedModelRuntimeInput;
-  };
-  catalogMode: PreparedModelRuntimeCatalogMode;
-  modelRegistry: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["modelRegistry"];
-  providerOutcomes?: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["providerOutcomes"];
-  pluginGeneration: PreparedModelRuntimePluginGeneration;
-}) {
-  const { credentials, input } = params.agentFacts;
-  const { pluginMetadataSnapshot: metadataSnapshot, pluginRegistry } = params.pluginGeneration;
-  return await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, async () => {
-    const snapshot = await buildPreparedModelCatalogSnapshot({
-      agentDir: input.agentDir,
-      authCredentials: credentials,
-      config: input.config,
-      modelRegistry: params.modelRegistry,
-      metadataSnapshot,
-      providerOutcomes: params.providerOutcomes,
-      includeProviderPluginAugmentation: params.catalogMode === "live",
-      providerIds: params.providerIds,
-      ...(input.env ? { env: input.env } : {}),
-      ...(input.readOnly ? { readOnly: true } : {}),
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    });
-    return params.catalogMode === "live" && params.includeNative !== false
-      ? await augmentPreparedModelCatalogWithAgentHarness({
-          input,
-          snapshot,
-          pluginRegistry,
-        })
-      : snapshot;
-  });
 }

@@ -216,8 +216,6 @@ external state matters. The results store holds at most 64 values with a total e
 JSON allowance of `min(memoryLimitBytes, maxSnapshotBytes)` (10 MiB by default),
 separate from the cell inbox. New saves fail when full; existing references are
 never evicted automatically. No functions, tool handles, or permissions are saved.
-Result operations are unavailable in `restartSafe` cells because references are
-transient and deletion cannot be replayed safely.
 Automatic preservation is also disabled in headless execution. If capacity,
 the data allowance, or the output budget prevents delivering a reference, the
 original call remains completed and returns an ordinary truncation marker
@@ -226,8 +224,9 @@ unchanged; no partially saved value is advertised.
 
 ## Recover from tool errors
 
-Nested tool failures are ordinary JavaScript errors. Guest code can catch them
-and inspect diagnostic fields: `code` identifies `input_contract`,
+Thrown tool errors are catchable. Returned values may instead report failure.
+Follow the tool's result contract, and inspect possible effects before retrying.
+Guest code can inspect diagnostic fields on thrown errors: `code` identifies `input_contract`,
 `output_contract`, `invalid_contract`, `invalid_input`, or `tool_error`;
 `location` contains the original guest call-site frames when available.
 `effectStatus` remains `"unknown"`: classification is not a dispatch-owner
@@ -262,6 +261,8 @@ failures become failed `exec` or `wait` results. The model can read the error,
 correct its code, inspect the current state, and continue with the normal tool
 surface. A failed cell does not impose a separate recovery mode or mutation budget.
 
+Source syntax errors are detected before guest execution. Their parser-message text is bounded to 240 UTF-16 units and clipped at a Unicode code-point boundary.
+
 OpenClaw does not automatically replay a failed program. Earlier calls may have
 changed state, and a failed call may have partially applied. Inspect authoritative
 state before deciding what remains, and do not repeat completed actions. This
@@ -286,8 +287,8 @@ openclaw gateway
 ```
 
 With code mode active, the logged model-facing tool names should be `exec` and
-`wait`. For the full redacted provider payload, add
-`OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted` for a short debugging session.
+`wait`. `OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted` also reports request shape
+and the complete tool-name list; it never logs prompt, message, or tool content.
 
 ## Use Swarm for agent fan-out
 

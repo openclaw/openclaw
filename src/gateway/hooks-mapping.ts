@@ -1,5 +1,7 @@
-import fs from "node:fs";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -7,7 +9,11 @@ import {
 import { resolveConfigPathCandidate } from "../config/paths.js";
 import type { HookMappingConfig, HooksConfig, HookSessionMode } from "../config/types.hooks.js";
 import { resolveGmailHookMaxBytes } from "../hooks/gmail.js";
-import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
+import { resolveFunctionModuleExport } from "../hooks/module-loader.js";
+import {
+  canonicalizeContainmentRootSync,
+  realpathViaExistingPrefixSync,
+} from "../infra/path-containment.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { HookMessageChannel } from "./hooks.types.js";
@@ -168,10 +174,7 @@ type HookTransformFn = (
 ) => HookTransformResult | Promise<HookTransformResult>;
 
 /** Resolve configured hook mappings plus preset mappings into normalized matcher entries. */
-export function resolveHookMappings(
-  hooks?: HooksConfig,
-  opts?: { configDir?: string },
-): HookMappingResolved[] {
+export function resolveHookMappings(hooks?: HooksConfig): HookMappingResolved[] {
   const presets = hooks?.presets ?? [];
   const gmailAllowUnsafe = hooks?.gmail?.allowUnsafeExternalContent;
   const mappings: HookMappingConfig[] = [];
@@ -198,7 +201,7 @@ export function resolveHookMappings(
     return [];
   }
 
-  const configDir = path.resolve(opts?.configDir ?? path.dirname(resolveConfigPathCandidate()));
+  const configDir = path.resolve(path.dirname(resolveConfigPathCandidate()));
   const transformsRootDir = path.join(configDir, "hooks", "transforms");
   const transformsDir = resolveOptionalContainedPath(
     transformsRootDir,
@@ -409,7 +412,10 @@ function mergeAction(base: HookAction, override: HookTransformResult): HookMappi
   if (kind === "wake") {
     const baseWake = base.kind === "wake" ? base : undefined;
     const text = typeof override.text === "string" ? override.text : (baseWake?.text ?? "");
-    const mode = override.mode === "next-heartbeat" ? "next-heartbeat" : (baseWake?.mode ?? "now");
+    const mode =
+      override.mode === "now" || override.mode === "next-heartbeat"
+        ? override.mode
+        : (baseWake?.mode ?? "now");
     return validateAction({
       kind: "wake",
       mappingId: base.mappingId,
@@ -424,7 +430,9 @@ function mergeAction(base: HookAction, override: HookTransformResult): HookMappi
   const message =
     typeof override.message === "string" ? override.message : (baseAgent?.message ?? "");
   const wakeMode =
-    override.wakeMode === "next-heartbeat" ? "next-heartbeat" : (baseAgent?.wakeMode ?? "now");
+    override.wakeMode === "now" || override.wakeMode === "next-heartbeat"
+      ? override.wakeMode
+      : (baseAgent?.wakeMode ?? "now");
   return validateAction({
     kind: "agent",
     mappingId: base.mappingId,
@@ -510,11 +518,13 @@ async function loadTransform(transform: HookMappingTransformResolved): Promise<H
     return cached;
   }
   const generation = transformCacheBustVersion;
-  const mod = await importFileModule({
-    modulePath: transform.modulePath,
-    cacheBust: true,
-    nowMs: generation,
-  });
+  // Native ESM jobs never unload; unchanged code must retain its module identity across reloads.
+  const revision = createHash("sha256")
+    .update(await readFile(transform.modulePath))
+    .digest("hex");
+  const mod: Record<string, unknown> = await import(
+    `${pathToFileURL(transform.modulePath).href}?v=${revision}`
+  );
   const fn = resolveFunctionModuleExport<HookTransformFn>({
     mod,
     exportName: transform.exportName,
@@ -529,31 +539,6 @@ async function loadTransform(transform: HookMappingTransformResolved): Promise<H
   return fn;
 }
 
-function safeRealpathSync(candidate: string): string | null {
-  try {
-    // Hook containment prefers native canonicalization when Node exposes it.
-    // Keep the plain fallback only for runtimes without the native entrypoint.
-    const nativeRealpath = fs.realpathSync.native as ((path: string) => string) | undefined;
-    return nativeRealpath ? nativeRealpath(candidate) : fs.realpathSync(candidate);
-  } catch {
-    return null;
-  }
-}
-
-function resolveExistingAncestor(candidate: string): string | null {
-  let current = path.resolve(candidate);
-  while (true) {
-    if (fs.existsSync(current)) {
-      return current;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      return null;
-    }
-    current = parent;
-  }
-}
-
 function resolveContainedPath(baseDir: string, target: string, label: string): string {
   const base = path.resolve(baseDir);
   const trimmed = target?.trim();
@@ -562,23 +547,16 @@ function resolveContainedPath(baseDir: string, target: string, label: string): s
   }
   // Drive-less rooted Windows paths resolve on the process drive, not the hook root's drive.
   const resolved = path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(base, trimmed);
-  if (!isPathInside(base, resolved)) {
+  // Compare where the path really lands, in the containment owner's spelling: an aliased
+  // absolute path to an in-root module is allowed, and an in-root link (dangling or not) that
+  // points outside is refused before the module is ever created or imported.
+  const canonical = realpathViaExistingPrefixSync(resolved);
+  if (!canonical || !isPathInside(canonicalizeContainmentRootSync(base), canonical)) {
     throw new Error(`${label} module path must be within ${base}: ${target}`);
   }
-
-  // Block symlink escapes for existing path segments while preserving current
-  // behavior for not-yet-created files.
-  const baseRealpath = safeRealpathSync(base);
-  const existingAncestor = resolveExistingAncestor(resolved);
-  const existingAncestorRealpath = existingAncestor ? safeRealpathSync(existingAncestor) : null;
-  if (
-    baseRealpath &&
-    existingAncestorRealpath &&
-    !isPathInside(baseRealpath, existingAncestorRealpath)
-  ) {
-    throw new Error(`${label} module path must be within ${base}: ${target}`);
-  }
-  return resolved;
+  // Load the location that was checked: an alias spelling could be retargeted outside before
+  // the first matching hook imports it.
+  return canonical;
 }
 
 function resolveOptionalContainedPath(

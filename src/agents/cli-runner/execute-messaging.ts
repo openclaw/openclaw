@@ -1,4 +1,6 @@
+import type { McpLoopbackToolCallStart } from "../../gateway/mcp-http.loopback-runtime.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
 import { extractMessagingToolSend } from "../embedded-agent-messaging-extraction.js";
 import { isMessagingToolTargetEvidenceAction } from "../embedded-agent-messaging.js";
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
@@ -6,7 +8,7 @@ import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
 } from "../embedded-agent-tool-media.js";
-import { stripOpenClawMcpToolPrefix } from "./tool-policy.js";
+import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 export const CLI_MESSAGING_EVIDENCE_MAX_CALLS = 64;
@@ -70,21 +72,49 @@ export function extractCliMessagingContent(
 }
 
 export function appendUniqueCliMessagingEvidence(
-  values: string[],
-  valueKeys: Set<string>,
+  values: Set<string>,
   additions: readonly string[],
 ): void {
   for (const addition of additions) {
-    if (!addition || valueKeys.has(addition)) {
+    if (!addition || values.has(addition)) {
       continue;
     }
-    if (values.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
-      const removed = values.shift();
-      if (removed) {
-        valueKeys.delete(removed);
+    if (values.size >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
+      for (const oldest of values) {
+        values.delete(oldest);
+        break;
       }
     }
-    values.push(addition);
-    valueKeys.add(addition);
+    values.add(addition);
   }
+}
+
+export async function isPreparedCliInternalSourceReply(
+  context: PreparedCliRunContext,
+  call: McpLoopbackToolCallStart,
+): Promise<boolean> {
+  if (
+    context.params.sourceReplyDeliveryMode !== "message_tool_only" ||
+    stripOpenClawMcpToolPrefix(call.toolName) !== "message" ||
+    call.args.action !== "send" ||
+    !context.params.config
+  ) {
+    return false;
+  }
+  return await shouldUseInternalSourceReplySink(
+    {
+      cfg: context.params.config,
+      action: "send",
+      sessionKey: context.params.sessionKey,
+      sourceReplyDeliveryMode: context.params.sourceReplyDeliveryMode,
+      toolContext: {
+        currentChannelProvider: context.params.messageChannel ?? context.params.messageProvider,
+        currentChannelId: context.params.currentChannelId,
+        currentThreadTs: context.params.currentThreadTs,
+        currentMessageId: context.params.currentMessageId,
+        replyToMode: context.params.replyToMode,
+      },
+    },
+    call.args,
+  );
 }

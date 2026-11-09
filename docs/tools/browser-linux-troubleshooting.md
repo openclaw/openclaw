@@ -25,14 +25,26 @@ the browser process.
 
 Other common Linux launch failures:
 
+- `GPU process isn't usable. Goodbye.`: Chromium exhausted its GPU fallback
+  options. Check the preceding Chrome stderr for the first GPU-process failure.
+  Inherited jemalloc `LD_PRELOAD` with `MALLOC_CONF=background_thread:true`
+  can make the zygote multi-threaded before fork, causing GPU subprocess launch
+  failures (`error_code=1002`). Managed Chrome launches strip `MALLOC_CONF` and
+  jemalloc entries from `LD_PRELOAD`, preserving other preload libraries and the
+  Gateway's own allocator settings. Wrappers that re-add these variables must
+  remove them before executing Chrome.
+  Managed headless launches already use `--headless=new --disable-gpu`; try
+  removing custom GPU flags from `browser.extraArgs` and verify the configured
+  browser executable works on the host. Adding `--enable-unsafe-swiftshader`
+  lowers WebGL security guarantees and is not a general fix for this fatal error.
 - `The profile appears to be in use by another Chromium process`: stale
   `Singleton*` lock files in the managed profile directory. OpenClaw removes
   these locks and retries once when the lock points at a dead process on the
   current host. Locks naming another hostname are preserved until you verify
   that the profile is no longer in use, including after a machine rename.
 - `Missing X server or $DISPLAY`: a visible browser was explicitly requested
-  on a host without a desktop session. Local managed profiles fall back to
-  headless mode on Linux when both `DISPLAY` and `WAYLAND_DISPLAY` are unset.
+  on a host without a desktop session. Local managed profiles use headless
+  mode by default, including when a desktop session is available.
   If you set `OPENCLAW_BROWSER_HEADLESS=0`, `browser.headless: false`, or
   `browser.profiles.<name>.headless: false`, remove that headed override, set
   `OPENCLAW_BROWSER_HEADLESS=1`, start `Xvfb`, run
@@ -108,6 +120,13 @@ systemctl --user enable --now openclaw-browser.service
 
 ### Verify the browser works
 
+OpenClaw logs a managed browser as started only after HTTP discovery and a CDP
+command succeed. A child that exits during startup returns its exit code or
+signal and captured stderr to the browser tool, and logs the failure. Abnormal
+exits after readiness are also logged with bounded stderr. After correcting the
+executable or launch arguments, retry; if the browser remains unavailable, use
+another configured profile or an alternative tool.
+
 These calls go to the OpenClaw browser control service, not to the Chrome CDP
 port used above. Its port is derived from `gateway.port` (default `18791` =
 gateway port + 2), so adjust the number if you moved the Gateway port. `jq` only
@@ -125,7 +144,7 @@ curl -s http://127.0.0.1:18791/tabs
 | --------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | `browser.enabled`           | Enable browser control                                               | `true`                                                             |
 | `browser.executablePath`    | Path to a Chromium-based browser binary (Chrome/Brave/Edge/Chromium) | auto-detected (prefers the OS default browser when Chromium-based) |
-| `browser.headless`          | Run without GUI                                                      | `false`                                                            |
+| `browser.headless`          | Run without GUI                                                      | `true`                                                             |
 | `OPENCLAW_BROWSER_HEADLESS` | Per-process override for local managed browser headless mode         | unset                                                              |
 | `browser.noSandbox`         | Add `--no-sandbox` flag (needed for some Linux setups)               | `false`                                                            |
 | `browser.attachOnly`        | Do not launch a browser; only attach to an existing one              | `false`                                                            |

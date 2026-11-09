@@ -92,9 +92,6 @@ func splitFrontMatter(content string) (string, string) {
 		return "", content
 	}
 	lines := strings.Split(content, "\n")
-	if len(lines) < 2 {
-		return "", content
-	}
 	endIndex := -1
 	for i := 1; i < len(lines); i++ {
 		if strings.TrimSpace(lines[i]) == "---" {
@@ -168,9 +165,6 @@ func translateFrontMatter(ctx context.Context, translator docsTranslator, tm *Tr
 
 func docsI18nVerboseLogs() bool {
 	value := strings.TrimSpace(os.Getenv("OPENCLAW_DOCS_I18N_VERBOSE_LOGS"))
-	if value == "" {
-		return false
-	}
 	switch strings.ToLower(value) {
 	case "1", "true", "yes", "on", "debug", "verbose":
 		return true
@@ -198,10 +192,7 @@ func translateSnippet(ctx context.Context, translator docsTranslator, tm *Transl
 		log.Printf("docs-i18n: frontmatter fallback %s reason=%v", segmentID, validationErr)
 		return textValue
 	}
-	sourcePath := segmentID
-	if path, _, ok := strings.Cut(segmentID, ":frontmatter:"); ok {
-		sourcePath = path
-	}
+	sourcePath, _, _ := strings.Cut(segmentID, ":frontmatter:")
 	entry := TMEntry{
 		CacheKey:   ck,
 		SegmentID:  segmentID,

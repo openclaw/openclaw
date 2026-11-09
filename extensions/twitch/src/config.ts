@@ -5,7 +5,7 @@ import {
   resolveNormalizedAccountEntry,
 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveTwitchToken, type TwitchTokenResolution } from "./token.js";
+import { resolveTwitchToken } from "./token.js";
 import type { TwitchAccountConfig } from "./types.js";
 import { isAccountConfigured } from "./utils/twitch.js";
 
@@ -28,14 +28,6 @@ const { listAccountIds, resolveDefaultAccountId: resolveDefaultTwitchAccountId }
   });
 
 export { resolveDefaultTwitchAccountId };
-
-type ResolvedTwitchAccountContext = {
-  accountId: string;
-  account: TwitchAccountConfig | null;
-  tokenResolution: TwitchTokenResolution;
-  configured: boolean;
-  availableAccountIds: string[];
-};
 
 /**
  * Root credentials take precedence for the implicit default account; named
@@ -98,19 +90,15 @@ export function getAccountConfig(
   return resolveNormalizedAccountEntry(accounts, normalizedAccountId, normalizeAccountId) || null;
 }
 
-export function resolveTwitchAccountContext(
-  cfg: OpenClawConfig,
-  accountId?: string | null,
-): ResolvedTwitchAccountContext {
+export function resolveTwitchAccountContext(cfg: OpenClawConfig, accountId?: string | null) {
   const resolvedAccountId = accountId?.trim()
     ? normalizeAccountId(accountId)
     : resolveDefaultTwitchAccountId(cfg);
   const account = getAccountConfig(cfg, resolvedAccountId);
-  const tokenResolution = resolveTwitchToken(cfg, { accountId: resolvedAccountId });
+  const tokenResolution = resolveTwitchToken(cfg, resolvedAccountId);
   return {
     accountId: resolvedAccountId,
     account,
-    tokenResolution,
     configured: account ? isAccountConfigured(account, tokenResolution.token) : false,
     availableAccountIds: listAccountIds(cfg),
   };

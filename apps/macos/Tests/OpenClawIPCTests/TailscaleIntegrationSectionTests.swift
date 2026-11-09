@@ -109,7 +109,7 @@ struct TailscaleIntegrationSectionTests {
     func `concurrent status checks share one request despite waiter cancellation`(cancelledWaiter: String) async {
         let loader = TailscaleStatusLoader()
         let completion = TailscaleStatusCompletion()
-        let joinBarrier = TailscaleStatusJoinBarrier()
+        let joinBarrier = AsyncTestGate()
         let service = TailscaleService(
             isInstalled: true,
             isRunning: true,
@@ -117,12 +117,13 @@ struct TailscaleIntegrationSectionTests {
             tailscaleIP: "100.66.5.88",
             appInstallationProbe: { true },
             cliInstallationProbe: { false },
-            statusDataLoader: loader.load,
-            statusCheckJoinHandler: { await joinBarrier.signal() })
+            statusDataLoader: loader.load)
 
         let first = Task { await service.checkTailscaleStatus() }
         await loader.waitForRequestStart()
-        let second = Task {
+        let second = Task { @MainActor in
+            // The test cannot resume on MainActor until this waiter suspends in the status check.
+            joinBarrier.open()
             await service.checkTailscaleStatus()
             await completion.markFinished()
         }
@@ -167,6 +168,39 @@ struct TailscaleIntegrationSectionTests {
         }
         #expect(outcome == .unchanged)
         #expect(saveCount == 0)
+    }
+
+    @Test(arguments: [
+        ["mode": "token", "token": "existing-token"], // pragma: allowlist secret
+        ["mode": "password", "password": "existing-password"], // pragma: allowlist secret
+    ])
+    func `turning tailscale off keeps gateway authentication`(credentials: [String: String]) async {
+        let saved = SavedConfigRoot()
+        let outcome = await TestIsolation.withIsolatedState(defaults: [connectionModeKey: "local"]) {
+            let state = AppStateStore.shared
+            let previousMode = state.connectionMode
+            state.connectionMode = .local
+            // A loaded document with no local-only save goes through the connected config.set path.
+            await ConfigStore._testSetOverrides(.init(
+                isRemoteMode: { false },
+                loadLocal: {
+                    var auth: [String: Any] = credentials
+                    auth["allowTailscale"] = true
+                    return ["gateway": ["mode": "local", "tailscale": ["mode": "serve"], "auth": auth]]
+                },
+                saveGateway: { saved.root = $0 }))
+            let outcome = await TailscaleIntegrationSection.saveTailscaleSettings(
+                settings: GatewayTailscaleSettingsSnapshot(mode: .off, requireCredentialsForServe: false, password: ""),
+                connectionMode: .local)
+            await ConfigStore._testClearOverrides()
+            state.connectionMode = previousMode
+            return outcome
+        }
+        let gateway = saved.root?["gateway"] as? [String: Any]
+
+        #expect(outcome == .saved)
+        #expect((gateway?["tailscale"] as? [String: Any])?["mode"] as? String == "off")
+        #expect(gateway?["auth"] as? [String: String] == credentials)
     }
 
     @Test func `tailscale apply validates changed passwords before saving`() async {
@@ -241,20 +275,7 @@ private actor TailscaleStatusCompletion {
     }
 }
 
-private actor TailscaleStatusJoinBarrier {
-    private var joined = false
-    private var continuation: CheckedContinuation<Void, Never>?
-
-    func signal() {
-        self.joined = true
-        self.continuation?.resume()
-        self.continuation = nil
-    }
-
-    func wait() async {
-        guard !self.joined else { return }
-        await withCheckedContinuation { continuation in
-            self.continuation = continuation
-        }
-    }
+@MainActor
+private final class SavedConfigRoot {
+    var root: [String: Any]?
 }

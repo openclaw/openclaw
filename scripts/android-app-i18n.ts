@@ -204,14 +204,7 @@ export function renderAndroidResourceValue(source: string, translated: string): 
   }
   const sourceTokens = sourceInterpolations.map((interpolation) => interpolation.value);
   const translatedTokens = translatedInterpolations.map((interpolation) => interpolation.value);
-  const tokenCounts = (tokens: readonly string[]) => {
-    const counts = new Map<string, number>();
-    for (const token of tokens) {
-      counts.set(token, (counts.get(token) ?? 0) + 1);
-    }
-    return [...counts].toSorted(([left], [right]) => compareText(left, right));
-  };
-  if (JSON.stringify(tokenCounts(sourceTokens)) !== JSON.stringify(tokenCounts(translatedTokens))) {
+  if (JSON.stringify(sourceTokens.toSorted()) !== JSON.stringify(translatedTokens.toSorted())) {
     throw new Error(
       `Android translation changed interpolation placeholders: ${JSON.stringify(source)} -> ${JSON.stringify(translated)}`,
     );
@@ -494,10 +487,6 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
     ]),
   ],
   ["apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt", new Set(["Off"])],
-  [
-    "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillWorkshopSettingsScreen.kt",
-    new Set(["all", "applied", "held", "pending", "rejected"]),
-  ],
   [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayDiagnostics.kt",
     new Set(["$versionName-dev"]),
@@ -1181,24 +1170,22 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
   for (const source of sources) {
     sourceToKey.set(source, manualSourceToKey.get(source) ?? resourceKey(source));
   }
+  const renderGeneratedStrings = (translations?: ReadonlyMap<string, string>) => {
+    const generated = new Map<string, { source: string; value: string }>();
+    for (const [source, key] of sourceToKey) {
+      if (key.startsWith(MANAGED_PREFIX)) {
+        generated.set(key, { source, value: translations?.get(source) || source });
+      }
+    }
+    return renderStringsXml([], generated);
+  };
   const resources = new Map<string, string>();
   for (const locale of NATIVE_I18N_LOCALES) {
     const localeTranslations = artifacts.get(locale) ?? {};
     const artifactTranslationsBySource = translationsBySource(inventory, localeTranslations);
-    const generated = new Map<string, { source: string; value: string }>();
-    for (const source of sources) {
-      const key = sourceToKey.get(source);
-      if (!key || !key.startsWith(MANAGED_PREFIX)) {
-        continue;
-      }
-      generated.set(key, {
-        source,
-        value: artifactTranslationsBySource.get(source) || source,
-      });
-    }
     resources.set(
       path.join(GENERATED_RESOURCE_ROOT, localeDirectory(locale), "native_strings.xml"),
-      renderStringsXml([], generated),
+      renderGeneratedStrings(artifactTranslationsBySource),
     );
     const wearManual = localizeManualStrings(
       wearBaseStrings,
@@ -1225,19 +1212,9 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
       renderStringsXml(thirdPartyManual, new Map()),
     );
   }
-  const generatedBase = new Map<string, { source: string; value: string }>();
-  for (const [source, key] of sourceToKey) {
-    if (!key.startsWith(MANAGED_PREFIX)) {
-      continue;
-    }
-    generatedBase.set(key, {
-      source,
-      value: source,
-    });
-  }
   resources.set(
     path.join(GENERATED_RESOURCE_ROOT, "values", "native_strings.xml"),
-    renderStringsXml([], generatedBase),
+    renderGeneratedStrings(),
   );
 
   const assistantSource = await readFile(
@@ -1338,30 +1315,25 @@ export async function verifyAndroidAppI18n(catalog?: GeneratedCatalog) {
     readStrings("values", WEAR_RESOURCE_ROOT),
     readAndroidResourceReferences(ANDROID_WEAR_MAIN_ROOT),
   ]);
-  const baseKeys = new Set(base.keys());
-  const thirdPartyBaseKeys = new Set(thirdPartyBase.keys());
-  const wearBaseKeys = new Set(wearBase.keys());
-  const problems: Array<readonly [string, string[]]> = [
-    ["App English syntax", findInvalidResourceSyntax(base)],
-    ["Third-party English syntax", findInvalidResourceSyntax(thirdPartyBase)],
-    ["Wear English syntax", findInvalidResourceSyntax(wearBase)],
+  const surfaces = [
+    {
+      label: "App",
+      strings: base,
+      references: [...referenceSource, { path: GENERATED_KOTLIN_PATH, source: generated.kotlin }],
+    },
+    { label: "Third-party", strings: thirdPartyBase, references: thirdPartyReferenceSource },
+    { label: "Wear", strings: wearBase, references: wearReferenceSource },
   ];
-  const manualBaseKeys = [...baseKeys].filter((key) => !key.startsWith(MANAGED_PREFIX));
-  problems.push([
-    "App English unused",
-    findUnusedAndroidResourceKeys(manualBaseKeys, [
-      ...referenceSource,
-      { path: GENERATED_KOTLIN_PATH, source: generated.kotlin },
-    ]),
+  const problems: Array<readonly [string, string[]]> = surfaces.map(({ label, strings }) => [
+    `${label} English syntax`,
+    findInvalidResourceSyntax(strings),
   ]);
-  problems.push([
-    "Third-party English unused",
-    findUnusedAndroidResourceKeys(thirdPartyBaseKeys, thirdPartyReferenceSource),
-  ]);
-  problems.push([
-    "Wear English unused",
-    findUnusedAndroidResourceKeys(wearBaseKeys, wearReferenceSource),
-  ]);
+  for (const { label, strings, references } of surfaces) {
+    const keys = [...strings.keys()].filter(
+      (key) => label !== "App" || !key.startsWith(MANAGED_PREFIX),
+    );
+    problems.push([`${label} English unused`, findUnusedAndroidResourceKeys(keys, references)]);
+  }
   const uiFindings = sourceFiles.flatMap((file) =>
     findUnlocalizedAndroidUiLiterals(file.source, file.path),
   );
@@ -1373,7 +1345,7 @@ export async function verifyAndroidAppI18n(catalog?: GeneratedCatalog) {
     throw new Error(formatProblems(problems));
   }
   process.stdout.write(
-    `android-app-i18n: appSourceKeys=${baseKeys.size} thirdPartySourceKeys=${thirdPartyBaseKeys.size} wearSourceKeys=${wearBaseKeys.size}\n`,
+    `android-app-i18n: appSourceKeys=${base.size} thirdPartySourceKeys=${thirdPartyBase.size} wearSourceKeys=${wearBase.size}\n`,
   );
 }
 
@@ -1436,18 +1408,14 @@ export async function checkAndroidAppI18n(options: { tolerateManagedPending?: bo
     });
   };
   const problems = localeProblems("App", base, localeStrings.slice(1));
-  if (thirdPartyLocaleStrings.length > 0) {
-    const thirdPartyBase = expectDefined(
-      thirdPartyLocaleStrings[0],
-      "English Android third-party string resources",
-    );
-    problems.push(
-      ...localeProblems("Third-party", thirdPartyBase, thirdPartyLocaleStrings.slice(1)),
-    );
-  }
-  if (wearLocaleStrings.length > 0) {
-    const wearBase = expectDefined(wearLocaleStrings[0], "English Wear string resources");
-    problems.push(...localeProblems("Wear", wearBase, wearLocaleStrings.slice(1)));
+  for (const [surface, strings, description] of [
+    ["Third-party", thirdPartyLocaleStrings, "English Android third-party string resources"],
+    ["Wear", wearLocaleStrings, "English Wear string resources"],
+  ] as const) {
+    if (strings.length > 0) {
+      const surfaceBase = expectDefined(strings[0], description);
+      problems.push(...localeProblems(surface, surfaceBase, strings.slice(1)));
+    }
   }
   if (problems.some(([, keys]) => keys.length)) {
     throw new Error(formatProblems(problems));

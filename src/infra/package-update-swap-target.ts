@@ -1,8 +1,8 @@
 import path from "node:path";
 import type { StagedPackageSwapParams } from "./package-update-swap-contract.js";
-import { createFreeBsdPkgOwnershipInspection } from "./update-freebsd-pkg-ownership.js";
 import { resolveNpmGlobalPrefixLayoutFromGlobalRoot } from "./update-npm-prefix.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
+import { createSystemPackageOwnershipInspection } from "./update-system-package-ownership.js";
 
 export async function assertSwapTargetUnowned(
   root: string,
@@ -10,7 +10,7 @@ export async function assertSwapTargetUnowned(
   timeoutMs?: number,
 ): Promise<void> {
   // A fresh observation, not an atomic lock against an external pkg writer.
-  const inspection = createFreeBsdPkgOwnershipInspection(timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS);
+  const inspection = createSystemPackageOwnershipInspection(timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS);
   await inspection.assertUnowned(root);
   for (const launcher of launchers) {
     await inspection.assertEntryUnowned(launcher.destination);

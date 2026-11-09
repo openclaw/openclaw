@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import {
   isCronSessionDisplayKey,
   isSystemCreatedSessionRow,
@@ -37,15 +38,6 @@ type SessionNavigationInput = {
   showSystem?: boolean;
   archivedFilter?: SessionArchivedFilter;
   compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
-};
-
-type SessionNavigation = {
-  currentSessionKey: string;
-  selectedAgentId: string;
-  defaultAgentId: string;
-  selectedSession?: GatewaySessionRow;
-  visibleSessions: GatewaySessionRow[];
-  activeRowKey: string | null;
 };
 
 export type SessionScopeHost = {
@@ -140,10 +132,16 @@ export function visibleSessionMatches(
 
 export function filterSessionRows(
   result: SessionsListResult,
-  options: { archivedFilter: SessionArchivedFilter },
+  options: {
+    archivedFilter: SessionArchivedFilter;
+    isHidden?: (row: GatewaySessionRow) => boolean;
+  },
 ): SessionsListResult {
   const sessions = result.sessions.filter(
-    (row) => row.key && sessionMatchesArchivedFilter(row, options.archivedFilter),
+    (row) =>
+      row.key &&
+      sessionMatchesArchivedFilter(row, options.archivedFilter) &&
+      !options.isHidden?.(row),
   );
   return {
     ...result,
@@ -180,6 +178,7 @@ export function sessionMatchesVisibleSessionScope(
     sessionMatchesArchivedFilter(row, options.archivedFilter) &&
     row.kind !== "global" &&
     row.kind !== "unknown" &&
+    row.isDock !== true &&
     (options.showCron === true || !isCronSessionDisplayKey(row.key)) &&
     (options.showSystem === true || !isSystemCreatedSessionRow(row)) &&
     (!options.filterByAgent ||
@@ -194,21 +193,21 @@ export function filterVisibleSessionRows(
   return rows.filter((row) => {
     if (
       row.key === options.currentSessionKey &&
+      row.isDock !== true &&
       ((options.archivedFilter ?? "active") === "active" ||
         sessionMatchesArchivedFilter(row, options.archivedFilter))
     ) {
       return true;
     }
-    return (
-      sessionMatchesVisibleSessionScope(row, options) &&
-      !isSubagentSessionKey(row.key) &&
-      // Explicit groups keep persistent spawned conversations in shared navigation.
-      (!row.spawnedBy || normalizeOptionalString(row.category) != null)
-    );
+    return sessionMatchesVisibleSessionScope(row, options) && !isSubagentSessionKey(row.key);
   });
 }
 
-export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
+function compareSessionRowsByTimestamp(
+  a: GatewaySessionRow,
+  b: GatewaySessionRow,
+  timestamp: (row: GatewaySessionRow) => number,
+): number {
   const pinnedStateDiff = Number(b.pinned === true) - Number(a.pinned === true);
   if (pinnedStateDiff !== 0) {
     return pinnedStateDiff;
@@ -217,13 +216,26 @@ export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySe
   if (pinnedDiff !== 0) {
     return pinnedDiff;
   }
-  const updatedDiff = (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+  const timeDiff = timestamp(b) - timestamp(a);
   // Stable key tie-break mirrors the gateway comparator (session-list-order.ts)
   // so tied rows don't swap when the canonical refresh replaces an event merge.
-  return updatedDiff !== 0 ? updatedDiff : a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+  return timeDiff !== 0 ? timeDiff : a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
 }
 
-export function resolveSessionNavigation(input: SessionNavigationInput): SessionNavigation {
+/** Gateway list order: metadata writes (rename, pin, settings) also advance updatedAt. */
+export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
+  return compareSessionRowsByTimestamp(a, b, (row) => row.updatedAt ?? 0);
+}
+
+/**
+ * Sidebar "Last updated": conversation activity (messages and run results), falling back to
+ * updatedAt for sessions recorded before the activity clocks existed.
+ */
+export function compareSessionRowsByActivity(a: GatewaySessionRow, b: GatewaySessionRow): number {
+  return compareSessionRowsByTimestamp(a, b, sessionActivityTimestamp);
+}
+
+export function resolveSessionNavigation(input: SessionNavigationInput) {
   const currentSessionKey = resolveSessionKey(input.sessionKey, input.hello);
   const defaultAgentId = resolveUiSelectedGlobalAgentId({
     assistantAgentId: input.assistantAgentId,
@@ -265,7 +277,12 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
   // hides another one behind a separate route.
   let visibleSessions = sortedSessions;
   let activeRow = visibleSessions.find(matchesCurrentSession);
-  if (!activeRow && activeSession && input.archivedFilter !== "archived") {
+  if (
+    !activeRow &&
+    activeSession &&
+    activeSession.isDock !== true &&
+    input.archivedFilter !== "archived"
+  ) {
     // Deep-linked and archived sessions still need a visible selected row.
     activeRow = activeSession;
     visibleSessions = [activeRow, ...visibleSessions];

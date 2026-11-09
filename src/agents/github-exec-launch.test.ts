@@ -1,9 +1,10 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { buildGitHubExecLaunchArgv } from "./github-exec-launch.js";
 import { getShellConfig } from "./shell-utils.js";
@@ -13,9 +14,63 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
+const literalArgs = [
+  "a b",
+  "'quoted'",
+  "‘quoted’",
+  "‚quoted‛",
+  "$HOME",
+  "$(false)",
+  "line\nbreak",
+  "--literal",
+];
+async function tempRoot(parent = os.tmpdir()) {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(parent, "github-launch-")));
+  roots.push(root);
+  return root;
+}
+async function profileAt(root: string, host: string, token?: string) {
+  const profile = path.join(root, "profile 'with ‘spaces’'");
+  await fs.mkdir(profile, { mode: 0o700 });
+  if (token) {
+    await fs.writeFile(path.join(profile, "hosts.yml"), `${host}:\n  oauth_token: ${token}\n`, {
+      mode: 0o600,
+    });
+  }
+  return profile;
+}
+async function run(argv: string[], home: string, options: SpawnOptions = {}) {
+  const child = spawn(argv[0]!, argv.slice(1), {
+    cwd: home,
+    stdio: ["ignore", "pipe", "pipe"],
+    ...options,
+    env: { PATH: process.env.PATH, HOME: home, GH_TOKEN: "", GITHUB_TOKEN: "", ...options.env },
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout!.on("data", (chunk) => {
+    stdout += String(chunk);
+  });
+  child.stderr!.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
+  try {
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", resolve);
+    });
+    return { code, stdout, stderr };
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+  }
+}
+
+const psArgs = ["-NoProfile", "-NonInteractive", "-Command"];
 const powershell = process.platform === "win32" ? getShellConfig().shell : "pwsh";
 const hasPowerShell =
-  spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", "exit 0"], {
+  spawnSync(powershell, [...psArgs, "exit 0"], {
     env: {
       PATH: process.env.PATH,
       HOME: os.tmpdir(),
@@ -29,87 +84,54 @@ describe.skipIf(!hasPowerShell)("GitHub launch PowerShell boundary", () => {
     { credentialState: "available", externalCommand: false },
     { credentialState: "missing", externalCommand: false },
     { credentialState: "available", externalCommand: true },
-    { credentialState: "missing", externalCommand: true },
+    { credentialState: "available", externalCommand: true, host: "ghe.example.test" },
   ])(
     "keeps the PowerShell owner for $credentialState credentials (external: $externalCommand)",
-    async ({ credentialState, externalCommand }) => {
-      const root = await fs.realpath(
-        await fs.mkdtemp(path.join(os.tmpdir(), "github-powershell-")),
+    async ({ credentialState, externalCommand, host = "github.com" }) => {
+      const root = await tempRoot();
+      const profile = await profileAt(
+        root,
+        host,
+        credentialState === "available" ? "synthetic-powershell-token" : undefined,
       );
-      roots.push(root);
-      const profile = path.join(root, "profile 'with spaces'");
-      await fs.mkdir(profile, { mode: 0o700 });
-      if (credentialState === "available") {
-        await fs.writeFile(
-          path.join(profile, "hosts.yml"),
-          "github.com:\n  oauth_token: synthetic-powershell-token\n",
-          { mode: 0o600 },
-        );
-      }
-      const target = path.join(root, "target 'with spaces'.cjs");
+      const target = path.join(root, "target 'with ‘spaces’'.cjs");
       await fs.writeFile(
         target,
         `
         process.stdout.write(JSON.stringify({
-          cwd: process.cwd(), selected: process.env.GH_TOKEN === "synthetic-powershell-token",
-          cleared: !process.env.GITHUB_TOKEN,
+          cwd: process.cwd(), selected: process.env[${JSON.stringify(host === "github.com" ? "GH_TOKEN" : "GH_ENTERPRISE_TOKEN")}] === "synthetic-powershell-token",
+          host: process.env.GH_HOST,
+          cleared: !process.env.GITHUB_TOKEN && !process.env.GITHUB_ENTERPRISE_TOKEN && !process.env[${JSON.stringify(host === "github.com" ? "GH_ENTERPRISE_TOKEN" : "GH_TOKEN")}],
           args: process.argv.slice(2),
         }));
         process.exitCode = 7;
       `,
       );
-      const quotePowerShell = (value: string) => `'${value.replaceAll("'", "''")}'`;
-      const args = ["a b", "'quoted'", "$HOME", "$(false)", "line\nbreak", "--literal"];
+      const args = literalArgs;
       const targetArgv = [process.execPath, target, ...args];
-      const command = `& ${targetArgv.map(quotePowerShell).join(" ")}; exit $LASTEXITCODE`;
+      const command = `& ${targetArgv.map(quotePowerShellArg).join(" ")}; exit $LASTEXITCODE`;
+      const argv = externalCommand ? targetArgv : [powershell, ...psArgs, command];
+      const shell = { shell: powershell, args: psArgs };
+      const options = {
+        githubHost: host,
+        ...(externalCommand ? { externalCommandShell: shell } : {}),
+      };
       const launchArgv = withMockedWindowsPlatform(() =>
-        buildGitHubExecLaunchArgv(
-          externalCommand
-            ? targetArgv
-            : [powershell, "-NoProfile", "-NonInteractive", "-Command", command],
-          profile,
-          externalCommand
-            ? {
-                externalCommandShell: {
-                  shell: powershell,
-                  args: ["-NoProfile", "-NonInteractive", "-Command"],
-                },
-              }
-            : undefined,
-        ),
+        buildGitHubExecLaunchArgv(argv, profile, options),
       );
       expect(JSON.stringify(launchArgv)).not.toContain("synthetic-powershell-token");
-      const child = spawn(launchArgv[0]!, launchArgv.slice(1), {
-        cwd: root,
+      const { code, stdout, stderr } = await run(launchArgv, root, {
         env: {
-          PATH: process.env.PATH,
-          HOME: root,
           SystemRoot: process.env.SystemRoot,
-          GH_TOKEN: "",
-          GITHUB_TOKEN: "",
           POWERSHELL_TELEMETRY_OPTOUT: "1",
         },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (chunk) => {
-        stdout += String(chunk);
-      });
-      child.stderr.on("data", (chunk) => {
-        stderr += String(chunk);
-      });
-      const code = await new Promise<number | null>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("close", resolve);
       });
       if (credentialState === "available") {
-        expect(code).toBe(7);
-        expect(JSON.parse(stdout)).toEqual({ cwd: root, selected: true, cleared: true, args });
-        expect(stderr).toBe("");
+        expect({ code, stderr }).toEqual({ code: 7, stderr: "" });
+        const expected = { cwd: root, host, selected: true, cleared: true, args };
+        expect(JSON.parse(stdout)).toEqual(expected);
       } else {
-        expect(code).toBe(1);
-        expect(stdout).toBe("");
+        expect({ code, stdout }).toEqual({ code: 1, stdout: "" });
         expect(stderr).toContain("GitHub Identity credential is unavailable or insecure");
       }
       expect(path.basename(launchArgv[0]!)).toBe(path.basename(powershell));
@@ -125,19 +147,9 @@ describe.skipIf(process.platform === "win32")("GitHub launch source runtimes", (
       async () => {
         const artifacts = path.join(process.cwd(), ".artifacts");
         await fs.mkdir(artifacts, { recursive: true });
-        const root = await fs.realpath(await fs.mkdtemp(path.join(artifacts, "github-launch-")));
-        roots.push(root);
-        const commandCwd = await fs.realpath(
-          await fs.mkdtemp(path.join(os.tmpdir(), "github-command-cwd-")),
-        );
-        roots.push(commandCwd);
-        const profile = path.join(root, "profile 'with spaces'");
-        await fs.mkdir(profile, { mode: 0o700 });
-        await fs.writeFile(
-          path.join(profile, "hosts.yml"),
-          "github.com:\n  oauth_token: synthetic-source-token\n",
-          { mode: 0o600 },
-        );
+        const root = await tempRoot(artifacts);
+        const commandCwd = await tempRoot();
+        const profile = await profileAt(root, "github.com", "synthetic-source-token");
         const target = path.join(root, "target.cjs");
         await fs.writeFile(
           target,
@@ -147,7 +159,7 @@ describe.skipIf(process.platform === "win32")("GitHub launch source runtimes", (
           process.stdout.write(JSON.stringify({
             args: process.argv.slice(2), cwd: process.cwd(),
             selected: process.env.GH_TOKEN === "synthetic-source-token",
-            cleared: process.env.GITHUB_TOKEN === "",
+            cleared: process.env.GITHUB_TOKEN === "" && !process.env.GH_ENTERPRISE_TOKEN && !process.env.GITHUB_ENTERPRISE_TOKEN,
             lineage: lineage.isSocket() || lineage.isFIFO(),
           }));
         `,
@@ -166,7 +178,7 @@ describe.skipIf(process.platform === "win32")("GitHub launch source runtimes", (
           child.on("close", (code) => { process.exitCode = code ?? 1; });
         `,
         );
-        const args = ["a b", "'quoted'", "$HOME", "$(false)", "line\nbreak", "--literal"];
+        const args = literalArgs;
         const argv = [
           ...(runtime === "bun" ? [] : ["--import", createRequire(import.meta.url).resolve("tsx")]),
           driver,
@@ -174,44 +186,14 @@ describe.skipIf(process.platform === "win32")("GitHub launch source runtimes", (
           target,
           ...args,
         ];
-        const child = spawn(runtime, argv, {
+        const { code, stdout, stderr } = await run([runtime, ...argv], root, {
           cwd: commandCwd,
-          env: {
-            PATH: process.env.PATH,
-            HOME: root,
-            ZDOTDIR: root,
-            GH_TOKEN: "",
-            GITHUB_TOKEN: "",
-          },
+          env: { ZDOTDIR: root },
           stdio: ["ignore", "pipe", "pipe", "pipe"],
         });
-        let stdout = "";
-        let stderr = "";
-        child.stdout!.on("data", (chunk) => {
-          stdout += String(chunk);
-        });
-        child.stderr!.on("data", (chunk) => {
-          stderr += String(chunk);
-        });
-        try {
-          const code = await new Promise<number | null>((resolve, reject) => {
-            child.once("error", reject);
-            child.once("close", resolve);
-          });
-          expect(stderr).toBe("");
-          expect(code).toBe(0);
-          expect(JSON.parse(stdout)).toEqual({
-            args,
-            cwd: commandCwd,
-            selected: true,
-            cleared: true,
-            lineage: true,
-          });
-        } finally {
-          if (child.exitCode === null && child.signalCode === null) {
-            child.kill("SIGKILL");
-          }
-        }
+        expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+        const expected = { args, cwd: commandCwd, selected: true, cleared: true, lineage: true };
+        expect(JSON.parse(stdout)).toEqual(expected);
       },
     );
   }

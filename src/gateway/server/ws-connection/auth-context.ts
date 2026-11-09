@@ -53,23 +53,6 @@ type ResolveConnectAuthDecisionParams = {
   verifyDeviceToken: typeof verifyDeviceToken;
 };
 
-function mapDeviceTokenAuthFailureReason(params: {
-  tokenCheckReason?: string;
-  candidateSource?: DeviceTokenCandidateSource;
-  fallbackReason?: string;
-}): string {
-  if (
-    params.tokenCheckReason === "scope-mismatch" ||
-    params.tokenCheckReason === "scope_mismatch"
-  ) {
-    return "scope_mismatch";
-  }
-  if (params.candidateSource === "explicit-device-token") {
-    return "device_token_mismatch";
-  }
-  return params.fallbackReason ?? "device_token_mismatch";
-}
-
 export async function resolveConnectAuthState(params: {
   resolvedAuth: ResolvedGatewayAuth;
   connectAuth: ConnectParams["auth"] | null;
@@ -191,9 +174,11 @@ async function resolveConnectAuthDecisionCore(
     };
   }
 
-  // Invalid ingress or a redacted configured credential cannot be repaired by
-  // trying another device/bootstrap credential during this handshake.
+  // Tunnel membership is terminal: credentials cannot replace its role or repair
+  // denied admission. Invalid ingress/config also forbids credential fallbacks.
   if (
+    authResult.openclawId ||
+    authResult.reason === "openclaw_id_not_admitted" ||
     authResult.reason === PROXY_ATTRIBUTION_REQUIRED_REASON ||
     authResult.reason === "token_redacted_config" ||
     authResult.reason === "password_redacted_config"
@@ -285,11 +270,12 @@ async function resolveConnectAuthDecisionCore(
   } else {
     authResult = {
       ok: false,
-      reason: mapDeviceTokenAuthFailureReason({
-        tokenCheckReason: tokenCheck.reason,
-        candidateSource: params.state.deviceTokenCandidateSource,
-        fallbackReason: authResult.reason,
-      }),
+      reason:
+        tokenCheck.reason === "scope-mismatch" || tokenCheck.reason === "scope_mismatch"
+          ? "scope_mismatch"
+          : params.state.deviceTokenCandidateSource === "explicit-device-token"
+            ? "device_token_mismatch"
+            : (authResult.reason ?? "device_token_mismatch"),
     };
     params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
   }

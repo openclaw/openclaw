@@ -1,6 +1,4 @@
-import { inspectAgentModels } from "acpx/runtime";
 import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionCommitFinalizer } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi, OpenClawPluginServiceContext } from "../runtime-api.js";
 import { resolveAcpxPluginConfig } from "./config.js";
@@ -11,6 +9,29 @@ const LOCAL_TOOL_REQUIREMENTS = ["ls", "read", "write", "edit", "exec"] as const
 // Native settings can enable these tools outside OpenClaw's control. Admission
 // must cover the reachable tool set, including provider-conditional tools.
 const NATIVE_TOOL_REQUIREMENTS = {
+  // Audited xai-org/grok-build@2bdd1d6a: crates/codegen/xai-grok-agent/src/{config,builder}.rs.
+  // Include alternate presets and conditional tools, not only the default model's tools.
+  "grok-build": [
+    ...LOCAL_TOOL_REQUIREMENTS,
+    "apply_patch",
+    "process",
+    "web_fetch",
+    "web_search",
+    "x_search",
+    "sessions_spawn",
+    "sessions_send",
+    "subagents",
+    "memory_search",
+    "memory_get",
+    "skills_read",
+    "view_image",
+    "pdf",
+    "ask_user",
+    "automations",
+    "update_goal",
+    "image_generate",
+    "video_generate",
+  ],
   opencode: [
     ...LOCAL_TOOL_REQUIREMENTS,
     "apply_patch",
@@ -66,6 +87,23 @@ const NATIVE_TOOL_REQUIREMENTS = {
     "memory_get",
     "view_image",
     "ask_user",
+  ],
+  // Qoder CLI 1.1.81: createToolRegistry and the qoder-tools built-in plugin,
+  // https://unpkg.com/@qoder-ai/qodercli@1.1.81/bundle/qodercli.js
+  qoder: [
+    ...LOCAL_TOOL_REQUIREMENTS,
+    "process",
+    "sessions_spawn",
+    "sessions_send",
+    "sessions_list",
+    "subagents",
+    "web_fetch",
+    "web_search",
+    "view_image",
+    "ask_user",
+    "automations",
+    "image_generate",
+    "video_generate",
   ],
 } as const;
 
@@ -156,19 +194,20 @@ export function createAcpAgentHarness(params: {
         workspaceDir: input.workspaceDir,
       });
       try {
+        const { inspectAgentModels } = await import("acpx/runtime");
         const models = await inspectAgentModels({
           agentCommand: inspection.launch.argv,
           cwd: input.workspaceDir ?? config.cwd,
           signal: generation.signal,
+          agentProcessEnvAllow: config.agentProcessEnvAllow,
+          agentProcessEnvBlock: config.agentProcessEnvBlock,
           timeoutMs:
             config.timeoutSeconds === undefined
               ? undefined
               : (finiteSecondsToTimerSafeMilliseconds(config.timeoutSeconds) ?? 1),
         });
         generation.signal.throwIfAborted();
-        if (!params.isEnabled()) {
-          return { entries: [] };
-        }
+        // A settings change takes effect on the next catalog request.
         return {
           entries: (models?.availableModels ?? []).map((model) => ({
             provider: id,
@@ -180,9 +219,6 @@ export function createAcpAgentHarness(params: {
         };
       } catch (error) {
         generation.signal.throwIfAborted();
-        if (!params.isEnabled()) {
-          return { entries: [] };
-        }
         // ACP SDK RequestError.authRequired reserves this code/message pair;
         // a generic JSON-RPC server error with the same code is not an auth rejection.
         const authRequired =
@@ -237,6 +273,8 @@ export function createAcpAgentHarness(params: {
       }
     },
     async withSessionDeletion(input, run) {
+      const { createNativeSessionCommitFinalizer } =
+        await import("openclaw/plugin-sdk/agent-harness-session-runtime");
       let committed = false;
       try {
         const mutation = {

@@ -1,8 +1,8 @@
-// Resolves config and metadata before publishing prepared plugin runtime load facts.
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../../config/io.plugin-metadata.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureEnvironmentKey } from "../../shared/environment-key.js";
 import { resolvePluginActivationSourceConfig } from "../activation-source-config.js";
 import { resolvePluginControlPlaneWorkspace } from "../control-plane-workspace.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../installed-plugin-index-install-records.js";
@@ -13,9 +13,8 @@ import {
 } from "../plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
 import type { PluginLogger } from "../types.js";
-import { createPluginRuntimeLoaderLogger, type PluginRuntimeLoadContext } from "./load-context.js";
+import { pluginRuntimeLoaderLogger, type PluginRuntimeLoadContext } from "./load-context.js";
 
-/** Options accepted while resolving plugin runtime load context. */
 type PluginRuntimeLoadContextOptions = {
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -29,11 +28,11 @@ type PluginRuntimeLoadContextOptions = {
   expectedSourceDigests?: PluginRuntimeLoadContext["expectedSourceDigests"];
 };
 
-/** Resolves config, manifests, install records, and auto-enable state for runtime loads. */
 export function resolvePluginRuntimeLoadContext(
   options?: PluginRuntimeLoadContextOptions,
 ): PluginRuntimeLoadContext {
   const env = options?.env ?? process.env;
+  const environmentKey = captureEnvironmentKey(options?.env);
   const rawConfig = options?.config ?? getRuntimeConfig();
   const rawWorkspaceDir = resolvePluginControlPlaneWorkspace({
     config: rawConfig,
@@ -83,7 +82,8 @@ export function resolvePluginRuntimeLoadContext(
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir,
     env,
-    logger: options?.logger ?? createPluginRuntimeLoaderLogger(),
+    environmentKey,
+    logger: options?.logger ?? pluginRuntimeLoaderLogger,
     ...(manifestRegistry ? { manifestRegistry } : {}),
     ...(metadataSnapshot ? { metadataSnapshot } : {}),
     installRecords,

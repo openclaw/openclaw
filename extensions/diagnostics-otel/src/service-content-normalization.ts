@@ -25,7 +25,30 @@ export function hasPreloadedOtelSdk(): boolean {
   return process.env[PRELOADED_OTEL_SDK_ENV] === "1";
 }
 
-export function normalizeOtelContentValue(value: unknown): string | undefined {
+export type OtelContentRedactor = (value: string) => string;
+
+// Redaction is the dominant cost of content capture, and a string's redaction does
+// not depend on which attribute or truncation budget it lands in. One redactor per
+// export redacts each captured string once instead of once per budget attempt and
+// per attribute that carries the same message. A memo rather than a pre-redacted
+// tree, because each attribute walks a different shape built from the same strings.
+// Scope it to one export: it holds the redacted copies until it is dropped.
+export function createOtelContentRedactor(): OtelContentRedactor {
+  const redacted = new Map<string, string>();
+  return (value) => {
+    let result = redacted.get(value);
+    if (result === undefined) {
+      result = redactSensitiveText(value);
+      redacted.set(value, result);
+    }
+    return result;
+  };
+}
+
+export function normalizeOtelContentValue(
+  value: unknown,
+  redact?: OtelContentRedactor,
+): string | undefined {
   if (typeof value === "string") {
     return normalizeOtelLogString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
   }
@@ -37,11 +60,19 @@ export function normalizeOtelContentValue(value: unknown): string | undefined {
       return normalizeOtelLogString(items.join("\n"), MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
     }
   }
-  const json = safeJsonString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
-  if (json) {
-    return json;
+  return safeJsonString(value, redact);
+}
+
+export function assignOtelContentAttr(
+  attributes: Record<string, string | number | boolean>,
+  key: string,
+  value: unknown,
+  redact?: OtelContentRedactor,
+): void {
+  const normalized = normalizeOtelContentValue(value, redact);
+  if (normalized) {
+    attributes[key] = normalized;
   }
-  return undefined;
 }
 
 const TRUNCATED_JSON_TEXT_SUFFIX = "...(truncated)";
@@ -57,131 +88,117 @@ const JSON_TRUNCATION_ARRAY_ITEM_BUDGETS = [
 ] as const;
 const JSON_TRUNCATION_MAX_OBJECT_FIELDS = 64;
 const JSON_TRUNCATION_MAX_DEPTH = 8;
+// Masking can shorten a value, so JSON a little over the attribute budget may still
+// fit once redacted. Far past it, redacting the whole serialization only to learn it
+// is too large dominated content capture (#158116); such a value moves on to the next
+// truncation candidate instead, whose strings are each redacted before truncation.
+const MAX_OTEL_REDACTED_JSON_CANDIDATE_CHARS = 4 * MAX_OTEL_CONTENT_ATTRIBUTE_CHARS;
 
-type JsonTruncationOptions = {
-  maxArrayItems: number;
-  maxDepth: number;
-  maxObjectFields: number;
-  maxStringChars: number;
-  seen: WeakSet<object>;
-};
-
-export function safeJsonString(value: unknown, maxChars: number): string | undefined {
+export function safeJsonString(
+  value: unknown,
+  redact: OtelContentRedactor = createOtelContentRedactor(),
+): string | undefined {
   if (value === undefined || typeof value === "function" || typeof value === "symbol") {
     return undefined;
   }
-  const exact = stringifyJsonForOtelAttribute(value);
-  if (exact && exact.length <= maxChars) {
+  const json = serializeJsonForOtelAttribute(value);
+  const exact = redactJsonWithinAttributeBudget(json);
+  if (exact) {
     return exact;
   }
   for (const maxArrayItems of JSON_TRUNCATION_ARRAY_ITEM_BUDGETS) {
     for (const maxStringChars of JSON_TRUNCATION_STRING_BUDGETS) {
-      const candidate = truncateJsonValueForOtelAttribute(value, {
+      const candidate = truncateJsonValueForOtelAttribute(
+        value,
         maxArrayItems,
-        maxDepth: JSON_TRUNCATION_MAX_DEPTH,
-        maxObjectFields: JSON_TRUNCATION_MAX_OBJECT_FIELDS,
         maxStringChars,
-        seen: new WeakSet<object>(),
-      });
-      const json = stringifyJsonForOtelAttribute(candidate);
-      if (json && json.length <= maxChars) {
-        return json;
+        redact,
+      );
+      const truncated = redactJsonWithinAttributeBudget(serializeJsonForOtelAttribute(candidate));
+      if (truncated) {
+        return truncated;
       }
     }
   }
-  const summary = stringifyJsonForOtelAttribute({
-    truncated: true,
-    reason: exact ? "max_attribute_size" : "unserializable_value",
-    type: describeJsonValue(value),
-  });
-  return summary && summary.length <= maxChars ? summary : undefined;
+  return redactJsonWithinAttributeBudget(
+    serializeJsonForOtelAttribute({
+      truncated: true,
+      reason: json ? "max_attribute_size" : "unserializable_value",
+      type: describeJsonValue(value),
+    }),
+  );
 }
 
-function stringifyJsonForOtelAttribute(value: unknown): string | undefined {
+function serializeJsonForOtelAttribute(value: unknown): string | undefined {
   try {
-    const json = JSON.stringify(value);
-    if (!json) {
-      return undefined;
-    }
-    return redactSensitiveText(json);
+    return JSON.stringify(value) || undefined;
   } catch {
     return undefined;
   }
 }
 
-function truncateJsonValueForOtelAttribute(
-  value: unknown,
-  options: JsonTruncationOptions,
-): unknown {
-  if (typeof value === "string") {
-    return truncateJsonTextForOtelAttribute(value, options.maxStringChars);
-  }
-  if (typeof value === "number" || typeof value === "boolean" || value === null) {
-    return value;
-  }
-  if (typeof value === "bigint") {
-    return truncateJsonTextForOtelAttribute(String(value), options.maxStringChars);
-  }
-  if (value === undefined || typeof value === "function" || typeof value === "symbol") {
+function redactJsonWithinAttributeBudget(json: string | undefined): string | undefined {
+  if (!json || json.length > MAX_OTEL_REDACTED_JSON_CANDIDATE_CHARS) {
     return undefined;
   }
-  if (options.maxDepth <= 0) {
-    return { truncated: true, reason: "max_depth" };
-  }
-  if (Array.isArray(value)) {
-    return truncateJsonArrayForOtelAttribute(value, options);
-  }
-  if (typeof value === "object") {
-    return truncateJsonObjectForOtelAttribute(value as Record<string, unknown>, options);
-  }
-  return undefined;
+  const redacted = redactSensitiveText(json);
+  return redacted.length <= MAX_OTEL_CONTENT_ATTRIBUTE_CHARS ? redacted : undefined;
 }
 
-function truncateJsonArrayForOtelAttribute(
-  value: readonly unknown[],
-  options: JsonTruncationOptions,
-): unknown[] {
-  if (options.seen.has(value)) {
-    return [{ truncated: true, reason: "circular_reference" }];
+function truncateJsonValueForOtelAttribute(
+  input: unknown,
+  maxArrayItems: number,
+  maxStringChars: number,
+  redact: OtelContentRedactor,
+): unknown {
+  const seen = new WeakSet<object>();
+  function visit(value: unknown, depth: number): unknown {
+    if (typeof value === "string" || typeof value === "bigint") {
+      return truncateJsonTextForOtelAttribute(redact(String(value)), maxStringChars);
+    }
+    if (typeof value === "number" || typeof value === "boolean" || value === null) {
+      return value;
+    }
+    if (typeof value !== "object") {
+      return undefined;
+    }
+    if (depth <= 0) {
+      return { truncated: true, reason: "max_depth" };
+    }
+    if (seen.has(value)) {
+      const marker = { truncated: true, reason: "circular_reference" };
+      return Array.isArray(value) ? [marker] : marker;
+    }
+    seen.add(value);
+    let result: unknown;
+    if (Array.isArray(value)) {
+      const items = value.slice(0, maxArrayItems).map((item) => visit(item, depth - 1));
+      if (value.length > items.length) {
+        items.push({ truncated: true, omittedItems: value.length - items.length });
+      }
+      result = items;
+    } else {
+      const object: Record<string, unknown> = {};
+      const entries = Object.entries(value).filter(
+        ([, field]) =>
+          field !== undefined && typeof field !== "function" && typeof field !== "symbol",
+      );
+      for (const [key, field] of entries.slice(0, JSON_TRUNCATION_MAX_OBJECT_FIELDS)) {
+        object[key] = visit(field, depth - 1);
+      }
+      if (entries.length > JSON_TRUNCATION_MAX_OBJECT_FIELDS) {
+        object.truncated = true;
+        object.omittedFields = entries.length - JSON_TRUNCATION_MAX_OBJECT_FIELDS;
+      }
+      result = object;
+    }
+    seen.delete(value);
+    return result;
   }
-  options.seen.add(value);
-  const nextOptions = { ...options, maxDepth: options.maxDepth - 1 };
-  const items = value
-    .slice(0, options.maxArrayItems)
-    .map((item) => truncateJsonValueForOtelAttribute(item, nextOptions));
-  if (value.length > items.length) {
-    items.push({ truncated: true, omittedItems: value.length - items.length });
-  }
-  options.seen.delete(value);
-  return items;
+  return visit(input, JSON_TRUNCATION_MAX_DEPTH);
 }
 
-function truncateJsonObjectForOtelAttribute(
-  value: Record<string, unknown>,
-  options: JsonTruncationOptions,
-): Record<string, unknown> {
-  if (options.seen.has(value)) {
-    return { truncated: true, reason: "circular_reference" };
-  }
-  options.seen.add(value);
-  const nextOptions = { ...options, maxDepth: options.maxDepth - 1 };
-  const result: Record<string, unknown> = {};
-  const entries = Object.entries(value).filter(
-    ([, field]) => field !== undefined && typeof field !== "function" && typeof field !== "symbol",
-  );
-  for (const [key, field] of entries.slice(0, options.maxObjectFields)) {
-    result[key] = truncateJsonValueForOtelAttribute(field, nextOptions);
-  }
-  if (entries.length > options.maxObjectFields) {
-    result.truncated = true;
-    result.omittedFields = entries.length - options.maxObjectFields;
-  }
-  options.seen.delete(value);
-  return result;
-}
-
-function truncateJsonTextForOtelAttribute(value: string, maxChars: number): string {
-  const redacted = redactSensitiveText(value);
+function truncateJsonTextForOtelAttribute(redacted: string, maxChars: number): string {
   if (redacted.length <= maxChars) {
     return redacted;
   }

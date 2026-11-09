@@ -1,7 +1,6 @@
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-
-export type MatrixQaFetchLike = typeof fetch;
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const MATRIX_QA_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
@@ -27,7 +26,6 @@ export async function requestMatrixJson<T>(params: {
   baseUrl: string;
   body?: unknown;
   endpoint: string;
-  fetchImpl: MatrixQaFetchLike;
   method: "DELETE" | "GET" | "POST" | "PUT";
   okStatuses?: number[];
   query?: Record<string, string | number | undefined>;
@@ -40,29 +38,38 @@ export async function requestMatrixJson<T>(params: {
       url.searchParams.set(key, String(value));
     }
   }
-  const response = await params.fetchImpl(url, {
-    method: params.method,
-    headers: {
-      accept: "application/json",
-      ...(params.body !== undefined ? { "content-type": "application/json" } : {}),
-      ...(params.accessToken ? { authorization: `Bearer ${params.accessToken}` } : {}),
+  const { response, release } = await fetchWithSsrFGuard({
+    url: url.href,
+    policy: { allowPrivateNetwork: true },
+    auditContext: "qa-lab-matrix-request",
+    init: {
+      method: params.method,
+      headers: {
+        accept: "application/json",
+        ...(params.body !== undefined ? { "content-type": "application/json" } : {}),
+        ...(params.accessToken ? { authorization: `Bearer ${params.accessToken}` } : {}),
+      },
+      ...(params.body !== undefined ? { body: JSON.stringify(params.body) } : {}),
+      signal: params.signal ?? AbortSignal.timeout(resolveTimerTimeoutMs(params.timeoutMs, 20_000)),
     },
-    ...(params.body !== undefined ? { body: JSON.stringify(params.body) } : {}),
-    signal: params.signal ?? AbortSignal.timeout(resolveTimerTimeoutMs(params.timeoutMs, 20_000)),
   });
-  const body = await readMatrixQaJsonResponse(response);
-  const okStatuses = params.okStatuses ?? [200];
-  if (!okStatuses.includes(response.status)) {
-    const details =
-      typeof body === "object" &&
-      body !== null &&
-      typeof (body as { error?: unknown }).error === "string"
-        ? (body as { error: string }).error
-        : `${params.method} ${params.endpoint} failed with status ${response.status}`;
-    throw new Error(details);
+  try {
+    const body = await readMatrixQaJsonResponse(response);
+    const okStatuses = params.okStatuses ?? [200];
+    if (!okStatuses.includes(response.status)) {
+      const details =
+        typeof body === "object" &&
+        body !== null &&
+        typeof (body as { error?: unknown }).error === "string"
+          ? (body as { error: string }).error
+          : `${params.method} ${params.endpoint} failed with status ${response.status}`;
+      throw new Error(details);
+    }
+    return {
+      status: response.status,
+      body: body as T,
+    };
+  } finally {
+    await release();
   }
-  return {
-    status: response.status,
-    body: body as T,
-  };
 }

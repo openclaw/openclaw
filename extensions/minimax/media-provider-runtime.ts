@@ -3,10 +3,11 @@ import {
   assertOkOrThrowHttpError,
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
+  resolveProviderApiKeyHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
   type postJsonRequest,
   type ProviderOperationRetryStage,
   type ProviderOperationTimeoutMs,
-  type TransientProviderRetryConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   asOptionalRecord,
@@ -14,7 +15,7 @@ import {
   readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const DEFAULT_MINIMAX_MEDIA_BASE_URL = "https://api.minimax.io";
+const DEFAULT_MINIMAX_MEDIA_BASE_URL = "https://api.minimax.io";
 
 export type MinimaxBaseResp = {
   status_code?: number;
@@ -26,12 +27,34 @@ export type MinimaxRequestPolicy = Pick<
   "allowPrivateNetwork" | "dispatcherPolicy"
 >;
 
-export function resolveMinimaxMediaBaseUrl(
+function resolveMinimaxMediaBaseUrl(
   cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
   providerId: string,
 ): string {
   const configured = normalizeOptionalString(cfg?.models?.providers?.[providerId]?.baseUrl);
-  return URL.parse(configured ?? "")?.origin ?? DEFAULT_MINIMAX_MEDIA_BASE_URL;
+  return new URL(configured ?? DEFAULT_MINIMAX_MEDIA_BASE_URL).origin;
+}
+
+export async function resolveMinimaxMediaRequestConfig(params: {
+  cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"];
+  providerId: string;
+  agentDir?: string;
+  authStore?: Parameters<typeof resolveApiKeyForProvider>[0]["store"];
+  capability: "image" | "audio" | "video";
+  baseUrl?: string;
+}) {
+  return resolveProviderApiKeyHttpRequestConfig({
+    req: params,
+    missingApiKeyMessage: "MiniMax API key missing",
+    jsonContentType: params.capability !== "audio",
+    baseUrl: params.baseUrl ?? resolveMinimaxMediaBaseUrl(params.cfg, params.providerId),
+    defaultBaseUrl: DEFAULT_MINIMAX_MEDIA_BASE_URL,
+    provider: params.providerId,
+    capability: params.capability,
+    request: sanitizeConfiguredModelProviderRequest(
+      params.cfg?.models?.providers?.[params.providerId]?.request,
+    ),
+  });
 }
 
 export function assertMinimaxBaseResp(value: unknown, context: string): void {
@@ -53,7 +76,7 @@ export function normalizeMinimaxHexAudio(data: string, label: string): string {
 
 function resolveMinimaxGuardedRequestOptions(
   policy: MinimaxRequestPolicy,
-): Parameters<typeof fetchWithTimeoutGuarded>[4] | undefined {
+): Parameters<typeof fetchWithTimeoutGuarded>[4] {
   return policy.allowPrivateNetwork || policy.dispatcherPolicy
     ? {
         ...(policy.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
@@ -67,15 +90,12 @@ export async function fetchMinimaxResponse(params: {
   url: string;
   init?: RequestInit;
   timeoutMs?: ProviderOperationTimeoutMs;
-  fetchFn: typeof fetch;
   requestFailedMessage: string;
   policy: MinimaxRequestPolicy;
-  retry?: TransientProviderRetryConfig;
 }) {
   return await executeProviderOperationWithRetry({
     provider: "minimax",
     stage: params.stage,
-    retry: params.retry,
     operation: async () => {
       const timeoutMs =
         typeof params.timeoutMs === "function" ? params.timeoutMs() : params.timeoutMs;
@@ -85,7 +105,7 @@ export async function fetchMinimaxResponse(params: {
         typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
           ? timeoutMs
           : undefined,
-        params.fetchFn,
+        fetch,
         resolveMinimaxGuardedRequestOptions(params.policy),
       );
       try {

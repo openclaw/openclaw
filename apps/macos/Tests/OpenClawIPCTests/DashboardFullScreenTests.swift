@@ -78,7 +78,7 @@ struct DashboardFullScreenTests {
     private static func makeController(reusing window: NSWindow? = nil) throws -> DashboardWindowController {
         try DashboardWindowController(
             url: #require(URL(string: "about:blank")),
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             reusingWindow: window,

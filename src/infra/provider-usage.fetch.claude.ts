@@ -1,5 +1,4 @@
-// Fetches Claude provider usage windows.
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { parseFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
@@ -19,7 +18,7 @@ function readClaudeWindow(
   includeReset = false,
 ): UsageWindow | undefined {
   const window = isRecord(value) ? value : undefined;
-  const utilization = asFiniteNumber(window?.utilization);
+  const utilization = parseFiniteNumber(window?.utilization);
   if (utilization === undefined) {
     return undefined;
   }
@@ -46,7 +45,7 @@ function parseClaudeUsage(value: unknown) {
     if (!isRecord(limit)) {
       continue;
     }
-    const percent = asFiniteNumber(limit.percent);
+    const percent = parseFiniteNumber(limit.percent);
     if (limit.is_active === false || percent === undefined) {
       continue;
     }
@@ -71,9 +70,9 @@ function parseClaudeUsage(value: unknown) {
     extra_usage: extra
       ? {
           is_enabled: extra.is_enabled === true,
-          monthly_limit: asFiniteNumber(extra.monthly_limit),
-          used_credits: asFiniteNumber(extra.used_credits),
-          utilization: asFiniteNumber(extra.utilization),
+          monthly_limit: parseFiniteNumber(extra.monthly_limit),
+          used_credits: parseFiniteNumber(extra.used_credits),
+          utilization: parseFiniteNumber(extra.utilization),
           currency: normalizeOptionalString(extra.currency),
         }
       : undefined,
@@ -128,13 +127,16 @@ async function fetchClaudeWebUsage(
     Accept: "application/json",
   };
 
-  const parsedOrgs = await fetchUsageJson({
-    provider: "anthropic",
-    url: "https://claude.ai/api/organizations",
-    init: { headers },
-    timeoutMs,
-    fetchFn,
-  });
+  const fetchWebUsage = (url: string) =>
+    fetchUsageJson({
+      provider: "anthropic",
+      url,
+      init: { headers },
+      timeoutMs,
+      fetchFn,
+    });
+
+  const parsedOrgs = await fetchWebUsage("https://claude.ai/api/organizations");
   if (!parsedOrgs.ok) {
     return null;
   }
@@ -144,13 +146,7 @@ async function fetchClaudeWebUsage(
     return null;
   }
 
-  const parsedUsage = await fetchUsageJson({
-    provider: "anthropic",
-    url: `https://claude.ai/api/organizations/${orgId}/usage`,
-    init: { headers },
-    timeoutMs,
-    fetchFn,
-  });
+  const parsedUsage = await fetchWebUsage(`https://claude.ai/api/organizations/${orgId}/usage`);
   if (!parsedUsage.ok) {
     return null;
   }
@@ -197,9 +193,7 @@ export async function fetchClaudeUsage(
       if (typeof raw === "string" && raw.trim()) {
         message = raw.trim();
       }
-    } catch {
-      // ignore parse errors
-    }
+    } catch {}
 
     // Claude Code CLI setup-token yields tokens that can be used for inference, but may not
     // include user:profile scope required by the OAuth usage endpoint. When a claude.ai

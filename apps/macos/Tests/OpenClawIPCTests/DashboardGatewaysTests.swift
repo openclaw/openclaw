@@ -172,7 +172,7 @@ struct DashboardGatewayCatalogTests {
             primaryHealth: .ok)
 
         #expect(entries.map(\.id) == ["primary", "profile:studio"])
-        #expect(entries[0].name == "Local Gateway")
+        #expect(entries[0].name == "This Mac")
     }
 }
 
@@ -217,7 +217,7 @@ struct DashboardGatewaysBridgeTests {
             storeKey: "profile:studio")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             tlsParams: params,
             windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
@@ -334,7 +334,7 @@ struct DashboardManagerGatewayTargetTests {
         let url = server.url("/#token=current")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "current",
                 password: nil),
@@ -379,7 +379,7 @@ struct DashboardManagerGatewayTargetTests {
             let url = server.url("/#token=current")
             let controller = DashboardWindowController(
                 url: url,
-                auth: DashboardWindowAuth(
+                auth: DashboardWindowAuth.nativeDevice(
                     gatewayUrl: server.websocketURL("/").absoluteString,
                     token: "current",
                     password: nil),
@@ -488,7 +488,7 @@ struct DashboardManagerGatewayTargetTests {
         let sourceURL = server.url("/#token=current")
         let controller = DashboardWindowController(
             url: sourceURL,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "current",
                 password: nil),
@@ -862,8 +862,7 @@ struct DashboardManagerGatewayTargetTests {
             await manager._testOpenWindow(for: .profile("secondary"))
             let secondary = try #require(manager._testAuxiliaryWindows().first?.controller)
             for controller in [primary, secondary] {
-                // Profile preparation can precede WebKit's loading flag. Install
-                // listeners only after the fixture document replaces the blank page.
+                // Profile preparation can precede WebKit's loading flag; native readiness is asynchronous.
                 try await DashboardTestWait.document(controller, "gateway command document") {
                     controller.webView.url?.port == Int(server.port)
                 }
@@ -877,6 +876,7 @@ struct DashboardManagerGatewayTargetTests {
                   event.preventDefault(); window.commandEvents.push('palette');
                 });
                 """)
+                try await controller.waitForDocumentLoad()
             }
             secondary.show()
             #expect(manager.frontmostDashboardTarget == .profile("secondary"))
@@ -1027,7 +1027,7 @@ struct DashboardManagerGatewayTargetTests {
         let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: store.dataStore,
             browserSessionLease: store.lease(for: session),
             windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",

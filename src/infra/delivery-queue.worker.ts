@@ -20,6 +20,8 @@ import {
 } from "./delivery-queue-sqlite-namespace.kernel.js";
 import {
   countFailedDeliveryQueueEntriesInDatabase,
+  countPendingDeliveryQueueEntriesInDatabase,
+  inspectDeliveryQueueReceiptInDatabase,
   deleteDeliveryQueueEntryInDatabase,
   pruneExpiredDeliveryQueueTombstonesInDatabase,
   prepareDeliveryQueueTerminalEntry,
@@ -28,8 +30,10 @@ import {
   updateDeliveryQueueEntryInDatabase,
   upsertDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite.kernel.js";
-import { retireUnsentDeliveryInDatabase } from "./outbound/delivery-queue-ack.kernel.js";
-import { executeDeliveryQueueAck } from "./outbound/delivery-queue-ack.worker.js";
+import {
+  ackDeliveryInDatabase,
+  retireUnsentDeliveryInDatabase,
+} from "./outbound/delivery-queue-ack.kernel.js";
 import { executeDeliveryQueueEnqueue } from "./outbound/delivery-queue-enqueue.worker.js";
 import {
   createDeliveryQueueMediaRetentionInDatabase,
@@ -38,6 +42,7 @@ import {
 import {
   DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
   OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
+  OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
   OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -54,6 +59,7 @@ import {
   encodeOutboundDeliverySnapshot,
   projectOutboundDelivery,
 } from "./outbound/delivery-queue-projection.js";
+import type { AckDeliveryOptions } from "./outbound/delivery-queue-settlement.types.js";
 import {
   loadOutboundDeliveryInDatabase,
   restoreDeliveryAttemptBeforeDispatchInDatabase,
@@ -63,6 +69,7 @@ import type {
   OutboundDeliverySnapshot,
 } from "./outbound/delivery-queue-storage.types.js";
 import {
+  FINAL_TEXT_RECOVERY_MAX_ATTEMPTS,
   hasActiveDeliveryOwner,
   type QueuedDelivery,
   type DeliveryFailureSettlement,
@@ -72,7 +79,11 @@ type OutboundDeliveryMutation = {
   id: string;
   expectedPlatformSendAttemptId?: string | null;
 } & (
-  | { kind: "fail" | "fail-before-send" | "fail-after-send"; error: string }
+  | {
+      kind: "fail" | "fail-before-send" | "fail-after-send";
+      error: string;
+      ambiguousTransportError?: true;
+    }
   | { kind: "start" | "dispatch"; route?: { replyToId?: string | null } }
   | { kind: "unknown" }
 );
@@ -153,6 +164,11 @@ function mutateOutbound(database: OpenClawStateDatabase, input: OutboundDelivery
           retryCount: entry.retryCount + 1,
           lastAttemptAt: now,
           lastError: input.error,
+          ambiguousTransportError: input.ambiguousTransportError,
+          maxRetries:
+            entry.retryAmbiguousFinalText === true && input.ambiguousTransportError === true
+              ? FINAL_TEXT_RECOVERY_MAX_ATTEMPTS
+              : entry.maxRetries,
           availableAt: undefined,
           producerClaimId: undefined,
           ...(input.kind === "fail-before-send"
@@ -281,6 +297,12 @@ function writeOperation<Input, Output>(
       { database: open(), ...stateOptions() },
       { operationLabel },
     );
+}
+
+function readOperation<Input, Output>(
+  operation: (database: OpenClawStateDatabase, input: Input) => Output,
+) {
+  return (input: Input, { open }: WorkerOperationContext): Output => operation(open(), input);
 }
 
 export const deliveryQueueOperations = {
@@ -435,10 +457,11 @@ export const deliveryQueueOperations = {
         queueName: resolveOutboundDeliveryQueueNameInDatabase(database, input.id),
       }),
   ),
-  "deliveryQueue.ack": (
-    input: Parameters<typeof executeDeliveryQueueAck>[0],
-    { open, stateOptions },
-  ) => executeDeliveryQueueAck(input, { database: open(), ...stateOptions() }),
+  "deliveryQueue.ack": writeOperation(
+    `mutate owned ${OUTBOUND_DELIVERY_QUEUE_NAME} delivery platform send`,
+    (database, input: { id: string; stateDir: string; options?: AckDeliveryOptions }) =>
+      ackDeliveryInDatabase(database, input.id, input.stateDir, input.options),
+  ),
   "deliveryQueue.enqueue": (
     input: Parameters<typeof executeDeliveryQueueEnqueue>[0],
     { open, stateOptions },
@@ -447,12 +470,12 @@ export const deliveryQueueOperations = {
     input: Parameters<typeof executePendingDeliveryFailure>[0],
     { open, stateOptions },
   ) => executePendingDeliveryFailure(input, { database: open(), ...stateOptions() }),
-  "deliveryQueue.findIntentOwners": (
-    input: Parameters<typeof findDeliveryIntentOwnersInDatabase>[1],
-    { open },
-  ) => findDeliveryIntentOwnersInDatabase(open(), input),
+  "deliveryQueue.findIntentOwners": readOperation(findDeliveryIntentOwnersInDatabase),
+  "deliveryQueue.inspectReceipt": readOperation(inspectDeliveryQueueReceiptInDatabase),
   "deliveryQueue.countFailed": (_input: undefined, { open }) =>
     countFailedDeliveryQueueEntriesInDatabase(open()),
+  "deliveryQueue.countPending": (input: { queueNames: string[] }, { open }) =>
+    countPendingDeliveryQueueEntriesInDatabase(open(), input.queueNames),
   "deliveryQueue.pruneTombstones": (_input: undefined, { open }) =>
     pruneExpiredDeliveryQueueTombstonesInDatabase(open()),
   "deliveryQueue.createMediaRetention": writeOperation(
@@ -481,8 +504,7 @@ export const deliveryQueueOperations = {
         input.id,
       ),
   ),
-  "deliveryQueue.mediaRetentionSnapshot": (
-    input: Parameters<typeof loadDeliveryQueueMediaRetentionSnapshotInDatabase>[1],
-    { open },
-  ) => loadDeliveryQueueMediaRetentionSnapshotInDatabase(open(), input),
+  "deliveryQueue.mediaRetentionSnapshot": readOperation(
+    loadDeliveryQueueMediaRetentionSnapshotInDatabase,
+  ),
 } satisfies WorkerOperationHandlers;

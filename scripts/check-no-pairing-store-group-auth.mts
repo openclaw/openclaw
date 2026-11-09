@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Prevents direct pairing-store group auth reads outside resolver helpers.
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { createPairingGuardContext } from "./lib/pairing-guard-context.mts";
 import {
   collectFileViolations,

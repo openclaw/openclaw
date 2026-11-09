@@ -6,6 +6,7 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import type { UpdateRuns } from "../state/openclaw-state-db.generated.js";
+import { parseDoctorRetirementWideningLine } from "./doctor-progress.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
@@ -14,6 +15,8 @@ import type { UpdateRunRecord } from "./update-run-record.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
 const JSON_BYTES = 16 * 1024;
+/** Plugin rollback kept a later writer's value; users review it through Doctor. */
+export const PLUGIN_COHORT_KEPT_WARNING_STEP = "warning:plugin-cohort:later-changes-kept";
 const RETAINED_STEP_NAMES = [
   ...UPDATE_RUN_PHASES,
   "candidate-admission",
@@ -24,7 +27,37 @@ const RETAINED_STEP_NAMES = [
   "warning:finalize:plugins:deadline",
   "global update",
   "global update (omit optional)",
+  // Phase timing that explains long validating and activation windows.
+  "candidate-state-snapshot",
+  "candidate-doctor",
   "candidate-doctor-lint",
+  "updater-runtime-retention",
+  "diagnostic:updater-runtime-retention",
+  "candidate-gateway-startup",
+  "candidate-state-cleanup",
+  "post-stop-checks",
+  "warning:post-stop-checks",
+  "git-checkout",
+  "git-runtime-activation",
+  "openclaw doctor",
+  "pre-plugin doctor",
+  "post-plugin doctor",
+  // Doctor sections lead each Doctor's diagnostics; compaction may still drop their detail.
+  "diagnostic:candidate-doctor",
+  "diagnostic:openclaw doctor",
+  "diagnostic:pre-plugin doctor",
+  "diagnostic:post-plugin doctor",
+  // A later warning flood must not hide that post-update repair never ran.
+  "warning:post-plugin doctor",
+  "managed-service-executor-check",
+  "managed-service-install",
+  "managed-service-restart",
+  "managed-service update handoff",
+  "service-stop",
+  "service-start",
+  "service-running",
+  "update-driver-handoff",
+  "diagnostic:update-driver-handoff",
   "notice:ack",
   "notice:activating",
   "notice:verifying",
@@ -32,6 +65,7 @@ const RETAINED_STEP_NAMES = [
   "post-update verification",
   "diagnostic:database snapshot",
   "diagnostic:database migration writes",
+  "warning:database migration writes",
   "diagnostic:database rollback",
   "task-delivery-recovery",
   "driver:adopted",
@@ -40,9 +74,16 @@ const RETAINED_STEP_NAMES = [
   "reconcile:superseded",
   "reconcile:acknowledged",
   "reconcile:settle",
+  "warning:reconcile:driver-lost-after-verification",
+  "recovery-artifact-cleanup",
+  "warning:recovery-artifact-cleanup",
+  "diagnostic:recovery-artifact-cleanup",
+  PLUGIN_COHORT_KEPT_WARNING_STEP,
 ];
 export type UpdateRunLedgerOptions = OpenClawStateDatabaseOptions & {
   busyTimeoutMs?: number;
+  /** One-shot bookkeeping under the candidate Doctor capture, before native migration. */
+  attributeUpdateWrite?: true;
   redactPaths?: readonly string[];
 };
 
@@ -92,14 +133,47 @@ function mapJsonText(
   return value;
 }
 
-export function isRetainedStep(item: unknown): boolean {
+function compactConfigWriteRefusal(value: unknown): unknown {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.keys) ||
+    !value.keys.some((key) => typeof key === "string" && key.length > 0)
+  ) {
+    return undefined;
+  }
+  return mapJsonText(value, (text, key) =>
+    key === "keys" ? truncateUtf16Safe(text, Math.floor(text.length / 2)) : text,
+  );
+}
+
+function isRetainedStep(item: unknown): boolean {
   return (
     isRecord(item) &&
     typeof item.step === "string" &&
     (item.termination === "signal" ||
       item.step.startsWith("finalize:") ||
-      RETAINED_STEP_NAMES.some((name) => name === item.step))
+      RETAINED_STEP_NAMES.some((name) => name === item.step) ||
+      (item.step.startsWith("diagnostic:") &&
+        typeof item.detail === "string" &&
+        parseDoctorRetirementWideningLine(item.detail) !== undefined))
   );
+}
+
+/** The summary counts warning rows and reports failed ones, so plain steps yield first. */
+export function findDisposableStep(steps: readonly unknown[]): number {
+  // Repair history shares this bound; its attempts stay chronological.
+  const stepName = (item: unknown) =>
+    isRecord(item) && typeof item.step === "string" ? item.step : undefined;
+  const failed = (item: unknown) =>
+    stepName(item) !== undefined && isRecord(item) && item.status === "failed";
+  const warning = (item: unknown) => stepName(item)?.startsWith("warning:") === true;
+  for (const tier of [(item: unknown) => !warning(item) && !failed(item), warning, () => true]) {
+    const index = steps.findIndex((item) => !isRetainedStep(item) && tier(item));
+    if (index >= 0) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 /** Phase history, notice custody, and restoration proof survive diagnostic eviction. */
@@ -112,7 +186,7 @@ function boundedJson(
   let json = JSON.stringify(value);
   while (Buffer.byteLength(json) > maxBytes) {
     if (Array.isArray(value)) {
-      const disposable = value.findIndex((item) => !isRetainedStep(item));
+      const disposable = findDisposableStep(value);
       if (disposable >= 0) {
         value = value.toSpliced(disposable, 1);
       } else {
@@ -123,9 +197,20 @@ function boundedJson(
           item.step !== "task-delivery-recovery" &&
           item.step !== "diagnostic:database snapshot" &&
           item.step !== "diagnostic:database migration writes" &&
+          item.step !== "warning:database migration writes" &&
+          item.step !== "warning:post-plugin doctor" &&
+          item.step !== "warning:post-stop-checks" &&
+          item.step !== "warning:reconcile:driver-lost-after-verification" &&
           item.step !== "diagnostic:database rollback" &&
+          item.step !== "finalize:data-at-risk" &&
+          !(typeof item.detail === "string" && parseDoctorRetirementWideningLine(item.detail)) &&
           !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
-            ? { ...item, detail: undefined, failureFacts: undefined }
+            ? {
+                ...item,
+                detail: undefined,
+                failureFacts: undefined,
+                configWriteRefusal: compactConfigWriteRefusal(item.configWriteRefusal),
+              }
             : item,
         );
         if (JSON.stringify(compacted) === json) {
@@ -179,6 +264,9 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     driver,
     previousDrivers,
     updateRecoveryCapture,
+    managedHandoff,
+    packageStage,
+    windowsUserSid,
     requester,
     sessionKey,
     deliveryContext,
@@ -187,7 +275,14 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
   } = origin;
   // Operational receipts are not expendable diagnostics. Keep them exact inside
   // the existing database byte budget; oversized sets fail before replacing a row.
-  const retained = JSON.stringify({ driver, previousDrivers, updateRecoveryCapture });
+  const retained = JSON.stringify({
+    driver,
+    previousDrivers,
+    updateRecoveryCapture,
+    managedHandoff,
+    packageStage,
+    windowsUserSid,
+  });
   if (Buffer.byteLength(retained) > JSON_BYTES) {
     throw new Error("Update run recovery receipts exceed the origin byte limit");
   }
@@ -195,7 +290,15 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
   const hasAdmission = origin.admission !== undefined || origin.candidateAdmission !== undefined;
   // Admission diagnostics cannot shorten routing; both yield to recovery receipts.
   const identities = hasAdmission
-    ? JSON.stringify({ driver, previousDrivers, updateRecoveryCapture, ...routing })
+    ? JSON.stringify({
+        driver,
+        previousDrivers,
+        updateRecoveryCapture,
+        managedHandoff,
+        packageStage,
+        windowsUserSid,
+        ...routing,
+      })
     : retained;
   const diagnostics = hasAdmission ? admissionDiagnostics : { ...admissionDiagnostics, ...routing };
   // Merging removes the diagnostic braces and needs a comma only when identities exist.
@@ -263,7 +366,15 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
       : [];
   });
   // Process identities and recovery receipts are operational facts, not diagnostics.
-  const { driver, previousDrivers, updateRecoveryCapture, ...originDiagnostics } = input.origin;
+  const {
+    driver,
+    previousDrivers,
+    updateRecoveryCapture,
+    managedHandoff,
+    packageStage,
+    windowsUserSid,
+    ...originDiagnostics
+  } = input.origin;
   const record = UpdateRunRecordSchema.parse(
     mapJsonText(
       {
@@ -290,7 +401,14 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     driver,
     previousDrivers,
     updateRecoveryCapture,
+    managedHandoff,
+    packageStage,
+    windowsUserSid,
   });
+  // Shipped readers parse recovery strictly. Its named risk lives in a retained step fact.
+  if (record.verification.recovery?.serviceRestartSafe === false) {
+    delete record.verification.recovery.dataAtRisk;
+  }
   return {
     run_id: record.runId,
     created_at_ms: record.createdAtMs,

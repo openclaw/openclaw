@@ -2,11 +2,15 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { MemorySearchRequest } from "../../plugins/memory-provider-types.js";
 import { getActiveMemoryProviderCore } from "../../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { hasMultipleResidentSessionSharingIdentities } from "../../state/user-profile-list.js";
+import { resolveOperatorRoleAgents } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
@@ -108,7 +112,7 @@ async function captureMemoryReadAuthority(
   assertRequestCurrent: () => void,
 ): Promise<{ scopes: readonly string[]; assertCurrent: () => void; release: () => void }> {
   const { client, context, signal, hasCurrentClientAuthority } = options;
-  if (isSyntheticGatewayCaller(client)) {
+  if (isSyntheticGatewayCaller(client) || client?.internal?.remoteIngressPrincipal) {
     const captured = await captureGatewayOperatorRunAuthority({
       client,
       context,
@@ -116,7 +120,7 @@ async function captureMemoryReadAuthority(
       invocationAuthority: { assertCurrent: assertRequestCurrent, signal },
     });
     if (!captured) {
-      throw new Error("Memory provider reads from an agent run require its operator authority");
+      throw new Error("Memory provider reads require current operator authority");
     }
     return {
       scopes: captured.authority.scopes,
@@ -135,6 +139,34 @@ async function captureMemoryReadAuthority(
     assertCurrent: assertRequestCurrent,
     release: () => {},
   };
+}
+
+/**
+ * Operator reads release an agent's private memory, which session turns reach
+ * only with the owner audience. A role's agent ceiling bounds every read; on a
+ * shared Gateway, content reads also need an administrator, matching the owner
+ * status that grants that audience to a turn.
+ */
+function assertOperatorMemoryAccess(params: {
+  client: GatewayRequestHandlerOptions["client"];
+  cfg: OpenClawConfig;
+  agentId: string;
+  operation: ReturnType<typeof parseOperation>;
+  scopes: readonly string[];
+}): void {
+  const roleAgents = resolveOperatorRoleAgents(params.client, params.cfg);
+  if (roleAgents && !roleAgents.includes(params.agentId)) {
+    throw new Error(`Your operator role does not include agent "${params.agentId}".`);
+  }
+  if (
+    params.operation.kind !== "health" &&
+    !params.scopes.includes(ADMIN_SCOPE) &&
+    hasMultipleResidentSessionSharingIdentities()
+  ) {
+    throw new Error(
+      "On a shared Gateway, reading an agent's private memory requires an administrator.",
+    );
+  }
 }
 
 /** Neutral reads deliberately do not use workspace RPCs or Memory Core artifacts. */
@@ -178,7 +210,19 @@ async function handleMemoryProviderRequest(options: GatewayRequestHandlerOptions
   try {
     assertRequestCurrent();
     captured = await captureMemoryReadAuthority(options, assertRequestCurrent);
-    const { assertCurrent } = captured;
+    const { scopes, assertCurrent: assertCapturedCurrent } = captured;
+    // The provider calls this right before each effect, so a role or roster
+    // change during open or search still refuses a read the policy now forbids.
+    const assertCurrent = () => {
+      assertCapturedCurrent();
+      assertOperatorMemoryAccess({
+        client,
+        cfg: context.getRuntimeConfig(),
+        agentId,
+        operation,
+        scopes,
+      });
+    };
     assertCurrent();
     const acquired = await getActiveMemoryProviderCore({
       cfg,

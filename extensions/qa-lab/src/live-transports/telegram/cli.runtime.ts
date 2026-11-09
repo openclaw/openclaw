@@ -8,7 +8,6 @@ import type { QaGatewayChildCommand } from "../../gateway-child.js";
 import { runQaFlowSuiteFromRuntime } from "../../suite-launch.runtime.js";
 import type { QaSuiteRoundTripProbe } from "../../suite-round-trip.js";
 import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "../../suite-summary.js";
-import { printLiveTransportQaArtifacts } from "../shared/live-artifacts.js";
 import { createTelegramQaTransportAdapter } from "./adapter.runtime.js";
 import { resolveTelegramQaRunOptions } from "./run-options.runtime.js";
 import { listTelegramQaScenarios, resolveTelegramQaScenarioIds } from "./scenario-selection.js";
@@ -198,10 +197,8 @@ export async function runQaTelegramSuite(opts: TelegramQaSuiteOptions) {
     sutOpenClawCommand: opts.sutOpenClawCommand,
     mutateConfig: opts.mutateConfig,
   });
-  printLiveTransportQaArtifacts("Telegram QA", {
-    report: result.reportPath,
-    summary: result.summaryPath,
-  });
+  process.stdout.write(`Telegram QA report: ${result.reportPath}\n`);
+  process.stdout.write(`Telegram QA summary: ${result.summaryPath}\n`);
   const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
     result.summaryPath,
     { requireExecutedScenario: runOptions.allowFailures === true },

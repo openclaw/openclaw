@@ -2,9 +2,16 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
+import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatGuardianNotice, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
+import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import type { CompactionStatus, RunOutputUsage } from "./tool-stream-contract.ts";
+
+registerChatMessageMetadataEnglish();
+
+registerChatComposerEnglish();
 
 type WorkingProgress = {
   key: string;
@@ -30,7 +37,10 @@ export function matchesCompactionOperation(message: unknown, status: CompactionS
   );
 }
 
+// Retain presentation timing only within the transcript cache's session window.
+// Evicted sessions reconstruct timing from available activity and observe idle anew.
 const workingProgressBySession = new Map<string, WorkingProgress>();
+const idleObservedAtBySession = new Map<string, number>();
 let anonymousWorkingProgressId = 0;
 
 export function buildGuardianNoticeItem(
@@ -43,6 +53,9 @@ export function buildGuardianNoticeItem(
     icon: "shieldCheck" as const,
     timestamp: notice.timestamp,
   };
+  if (notice.permissionMissing) {
+    return { ...item, text: "", permissionMissing: notice.permissionMissing };
+  }
   if (notice.source === "system") {
     return {
       ...item,
@@ -154,7 +167,6 @@ export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
     queuedSendStarted(item) &&
     !item.localCommandName &&
     (item.sendState === "failed" ||
-      item.sendState === "unconfirmed" ||
       item.sendState === "held" ||
       item.sendState === "waiting-reconnect" ||
       (item.sendState === "waiting-idle" && Boolean(item.sendError)))
@@ -186,12 +198,20 @@ export function resolveWorkingProgress(
     pendingSends.find((item) => item.sendState === "submitting" || item.sendState === "sending") ??
     pendingSends[0];
   const queuedRunId = queuedProgress?.sendRunId ?? queuedProgress?.pendingRunId;
-  const segmentRunId = streamSegments
+  const idleObservedAt = runId
+    ? undefined
+    : getSessionCacheValue(idleObservedAtBySession, sessionKey);
+  const observedSinceIdle = (at: unknown) =>
+    idleObservedAt === undefined || (typeof at === "number" && at > idleObservedAt);
+  const currentSegments = streamSegments.filter((segment) => observedSinceIdle(segment.ts));
+  const toolProgress = toolMessages
+    .map(asRecord)
+    .filter((message) => observedSinceIdle(message?.["__openclawToolStreamReceivedAt"]));
+  const segmentRunId = currentSegments
     .map((segment) => segment.runId)
     .findLast(
       (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
     );
-  const toolProgress = toolMessages.map(asRecord);
   const toolRunId = toolProgress
     .map((message) => message?.runId)
     .findLast(
@@ -219,7 +239,7 @@ export function resolveWorkingProgress(
       )
       // Send performance fields use performance.now(); the elapsed timer renders against Date.now().
       .map((item) => item.createdAt),
-    ...streamSegments
+    ...currentSegments
       .filter((segment) => !explicitRunId || segment.runId === explicitRunId)
       .map((segment) => segment.ts),
     ...toolProgress
@@ -233,7 +253,7 @@ export function resolveWorkingProgress(
       sessionKey,
       explicitRunId ?? `anonymous-${++anonymousWorkingProgressId}`,
     ])}`;
-  workingProgressBySession.set(sessionKey, {
+  setSessionCacheValue(workingProgressBySession, sessionKey, {
     key,
     runId: explicitRunId ?? compatibleCached?.runId ?? null,
     startedAt,
@@ -243,24 +263,46 @@ export function resolveWorkingProgress(
 
 export function clearWorkingProgress(sessionKey: string): void {
   workingProgressBySession.delete(sessionKey);
+  setSessionCacheValue(idleObservedAtBySession, sessionKey, Date.now());
 }
 
 export function resetWorkingProgress(): void {
   workingProgressBySession.clear();
+  idleObservedAtBySession.clear();
   anonymousWorkingProgressId = 0;
 }
 
 export type TurnRecap = { runtimeMs: number; outputTokens: number | null };
 
-// The pane owns one watched run. Session-wide usage is a different fact and
+// The pane owns one observed or history-matched run. Session-wide usage is a different fact and
 // may still describe the previous response when the terminal row arrives.
 export type TurnRecapWatch = {
   sessionKey: string;
   agentId: string | null;
   gatewayClient: GatewayBrowserClient | null;
-  runId: string;
+  runId: string | null;
+  /** For a run that resumed a handoff: when its request was asked and the runs before it. */
+  request: TurnRequest | null;
   recap: TurnRecap | null;
 };
+
+type TurnRequest = { askedAt: number; runIds: readonly string[] };
+
+/** Output tokens across the runs of one answer; null unless every run has reported. */
+export function sumRunOutputTokens(
+  usageByRun: ReadonlyMap<string, RunOutputUsage> | undefined,
+  runIds: readonly string[],
+): number | null {
+  let total = 0;
+  for (const runId of runIds) {
+    const usage = usageByRun?.get(runId);
+    if (!usage || usage.outputTokens === null) {
+      return null;
+    }
+    total += usage.outputTokens;
+  }
+  return runIds.length > 0 ? total : null;
+}
 
 export function resolveTurnRecap(
   host: { turnRecapWatch: TurnRecapWatch | null },
@@ -268,40 +310,88 @@ export function resolveTurnRecap(
     sessionKey: string;
     agentId?: string | null;
     gatewayClient?: GatewayBrowserClient | null;
-    indicator?: { runId?: string };
-    row?: Pick<GatewaySessionRow, "lastRunId" | "status" | "runtimeMs">;
+    indicator?: { runId?: string; request?: TurnRequest };
+    startingNewTurn?: boolean;
+    activeRunId?: string | null;
+    completedRunId?: string;
+    row?: Pick<GatewaySessionRow, "lastRunId" | "status" | "runtimeMs" | "endedAt">;
     usageByRun?: ReadonlyMap<string, RunOutputUsage>;
   },
 ): (TurnRecap & { runId: string }) | null {
-  const { sessionKey, agentId = null, gatewayClient = null, indicator, row, usageByRun } = params;
+  const {
+    sessionKey,
+    agentId = null,
+    gatewayClient = null,
+    indicator,
+    startingNewTurn,
+    activeRunId,
+    completedRunId,
+    row,
+    usageByRun,
+  } = params;
   let watch = host.turnRecapWatch;
   if (
-    watch?.sessionKey !== sessionKey ||
-    watch.agentId !== agentId ||
-    watch.gatewayClient !== gatewayClient
+    watch &&
+    (watch.sessionKey !== sessionKey ||
+      watch.agentId !== agentId ||
+      watch.gatewayClient !== gatewayClient)
   ) {
-    watch = null;
+    // A switched pane can still hold the previous owner's history. Keep its
+    // watch unidentified until activity establishes ownership again.
+    watch = { sessionKey, agentId, gatewayClient, runId: null, request: null, recap: null };
   }
-  if (indicator) {
-    const runId = indicator.runId;
-    if (!runId) {
-      host.turnRecapWatch = null;
-      return null;
+  if (indicator || activeRunId) {
+    const runId = indicator?.runId ?? activeRunId ?? null;
+    // A stale running row can outlive local completion. Anonymous activity
+    // hides the recap without revoking its observed run; a new input does.
+    if (runId || startingNewTurn || indicator?.request || !watch) {
+      if (watch?.runId !== runId) {
+        // An answer can identify a resumed run after its working indicator has vanished.
+        const request = watch?.runId === null ? watch.request : null;
+        watch = { sessionKey, agentId, gatewayClient, runId, request, recap: null };
+      }
+      if (indicator) {
+        watch.request = indicator.request ?? null;
+      }
     }
-    if (watch?.runId !== runId) {
-      watch = { sessionKey, agentId, gatewayClient, runId, recap: null };
-    }
+  }
+  // A fresh pane can restore timing only for the completed reply actually loaded
+  // at its tail. A session row alone cannot identify the visible conversation.
+  if (
+    !watch &&
+    !indicator &&
+    !activeRunId &&
+    !startingNewTurn &&
+    completedRunId &&
+    row?.lastRunId === completedRunId &&
+    row.status === "done"
+  ) {
+    watch = {
+      sessionKey,
+      agentId,
+      gatewayClient,
+      runId: completedRunId,
+      request: null,
+      recap: null,
+    };
   }
   host.turnRecapWatch = watch;
-  if (!watch) {
+  if (!watch?.runId) {
     return null;
   }
-  const outputTokens =
-    usageByRun?.get(watch.runId)?.outputTokens ?? watch.recap?.outputTokens ?? null;
+  const runIds = [...(watch.request?.runIds ?? []), watch.runId];
+  const unavailable = runIds.some((runId) => usageByRun?.get(runId)?.outputTokens === null);
+  const outputTokens = unavailable
+    ? null
+    : (sumRunOutputTokens(usageByRun, runIds) ?? watch.recap?.outputTokens ?? null);
   if (row?.lastRunId === watch.runId) {
     const runtimeMs = row.runtimeMs;
     if (row.status === "done" && typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
-      watch.recap = { runtimeMs, outputTokens };
+      // A resumed answer reports the whole request, the wait included. Both
+      // ends are on the Gateway's clock; it never reports less than its last run.
+      const sinceRequest =
+        watch.request && typeof row.endedAt === "number" ? row.endedAt - watch.request.askedAt : 0;
+      watch.recap = { runtimeMs: Math.max(runtimeMs, sinceRequest), outputTokens };
     } else if (row.status && row.status !== "done") {
       watch.recap = null;
     }

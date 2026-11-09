@@ -2,7 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient, GatewayRequestError } from "../api/gateway.ts";
-import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import { createGatewayHarness } from "../app/overlays-access.test-support.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
   installDialogPolyfill,
@@ -30,49 +31,33 @@ function createRecoveryHarness() {
         source: { generation: 5, environmentId: "device-environment", ownerEpoch: 70 },
       },
     });
-  const error = recoveryError();
   const move = createDeferred();
-  let current = true;
   const abort = new AbortController();
-  const snapshot: ApplicationGatewaySnapshot = {
-    client,
-    phase: "connected",
-    offlineStable: false,
-    hello: {
-      type: "hello-ok",
-      protocol: 4,
-      features: { methods: ["sessions.move"] },
-      auth: { role: "operator", scopes: ["operator.write", "operator.admin"] },
-      snapshot: {},
-    },
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
+  const snapshot = {
+    ...createGatewayHarness(client).gateway.snapshot,
     sessionKey: session.key,
-    lastError: null,
-    lastErrorCode: null,
+    hello: gatewayHelloForMethods(["sessions.move"], ["operator.write", "operator.admin"]),
   };
   const remove = vi
     .fn<() => Promise<unknown>>()
-    .mockRejectedValueOnce(error)
+    .mockRejectedValueOnce(recoveryError())
     .mockResolvedValue(true);
   const request = vi.spyOn(client, "request").mockImplementation(async () => await move.promise);
   const operations: Promise<unknown>[] = [];
+  const retire = () => abort.abort();
   return {
     recoveryError,
     remove,
     move,
     request,
     snapshot,
-    retire() {
-      current = false;
-      abort.abort();
-    },
+    retire,
     run() {
       const operation = withSessionWorkspaceRecovery({
         action: "delete",
         session,
         scope: { client, gateway: { snapshot }, signal: abort.signal },
-        isCurrent: () => current,
+        isCurrent: () => !abort.signal.aborted,
         request: remove,
       });
       operations.push(operation);
@@ -80,8 +65,7 @@ function createRecoveryHarness() {
       return operation;
     },
     async dispose() {
-      current = false;
-      abort.abort();
+      retire();
       move.resolve();
       await Promise.allSettled(operations);
       request.mockRestore();
@@ -134,40 +118,34 @@ describe("session workspace recovery controls", () => {
   it("rechecks access after confirmation", async () => {
     const operation = h.run();
     const actions = await waitForConfirmDialogActions();
-    h.snapshot.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      features: { methods: ["sessions.move"] },
-      auth: { role: "operator", scopes: ["operator.read"] },
-      snapshot: {},
-    };
+    h.snapshot.hello = gatewayHelloForMethods(["sessions.move"], ["operator.read"]);
     answerConfirmDialog(actions, "confirm");
     await expect(operation).rejects.toThrow();
     expect(h.remove).toHaveBeenCalledOnce();
     expect(h.request).not.toHaveBeenCalledWith("sessions.move", expect.anything());
   });
 
-  it("reports a move failure without retrying removal", async () => {
-    const error = new Error("Device ownership changed");
-    const operation = h.run();
-    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
-    await vi.waitFor(() =>
-      expect(h.request).toHaveBeenCalledWith("sessions.move", expect.anything()),
-    );
-    h.move.reject(error);
-    await expect(operation).rejects.toBe(error);
-    expect(h.remove).toHaveBeenCalledOnce();
-  });
-
-  it("reports a second removal rejection without another recovery prompt", async () => {
-    const secondError = h.recoveryError();
-    h.remove.mockRejectedValueOnce(secondError);
-    const operation = h.run();
-    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
-    h.move.resolve();
-    await expect(operation).rejects.toBe(secondError);
-    expect(h.remove).toHaveBeenCalledTimes(2);
-    expect(h.request.mock.calls.filter(([method]) => method === "sessions.move")).toHaveLength(1);
-    expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-  });
+  it.each(["move", "removal"] as const)(
+    "reports a %s failure without another recovery",
+    async (stage) => {
+      const error = stage === "move" ? new Error("Device ownership changed") : h.recoveryError();
+      if (stage === "removal") {
+        h.remove.mockRejectedValueOnce(error);
+      }
+      const operation = h.run();
+      answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+      if (stage === "move") {
+        await vi.waitFor(() =>
+          expect(h.request).toHaveBeenCalledWith("sessions.move", expect.anything()),
+        );
+        h.move.reject(error);
+      } else {
+        h.move.resolve();
+      }
+      await expect(operation).rejects.toBe(error);
+      expect(h.remove).toHaveBeenCalledTimes(stage === "move" ? 1 : 2);
+      expect(h.request.mock.calls.filter(([method]) => method === "sessions.move")).toHaveLength(1);
+      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+    },
+  );
 });

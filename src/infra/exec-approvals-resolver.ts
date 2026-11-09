@@ -13,31 +13,8 @@ import type {
   ExecApprovalsDefaults,
   ExecApprovalsFile,
   ExecApprovalsResolved,
-  ExecAsk,
-  ExecSecurity,
 } from "./exec-approvals-core.js";
 import { expandHomePrefix } from "./home-dir.js";
-
-function isExecSecurity(value: unknown): value is ExecSecurity {
-  return value === "allowlist" || value === "full" || value === "deny";
-}
-
-function isExecAsk(value: unknown): value is ExecAsk {
-  return value === "always" || value === "off" || value === "on-miss";
-}
-
-function normalizeSecurity(value: unknown, fallback: ExecSecurity): ExecSecurity {
-  return isExecSecurity(value) ? value : fallback;
-}
-
-function normalizeAsk(value: unknown, fallback: ExecAsk): ExecAsk {
-  return isExecAsk(value) ? value : fallback;
-}
-
-type ResolvedExecPolicyField<TValue extends ExecSecurity | ExecAsk> = {
-  value: TValue;
-  source: string | null;
-};
 
 export function resolveExecApprovalsFromFileInternal(params: {
   file: ExecApprovalsFile;
@@ -60,40 +37,33 @@ export function resolveExecApprovalsFromFileInternal(params: {
   const fallbackAskFallback = params.overrides?.askFallback ?? DEFAULT_EXEC_APPROVAL_ASK_FALLBACK;
   const fallbackAutoAllowSkills = params.overrides?.autoAllowSkills ?? DEFAULT_AUTO_ALLOW_SKILLS;
   const resolvedDefaults: Required<ExecApprovalsDefaults> = {
-    security: normalizeSecurity(defaults.security, fallbackSecurity),
-    ask: normalizeAsk(defaults.ask, fallbackAsk),
-    askFallback: normalizeSecurity(
-      defaults.askFallback ?? fallbackAskFallback,
-      fallbackAskFallback,
-    ),
+    security: defaults.security ?? fallbackSecurity,
+    ask: defaults.ask ?? fallbackAsk,
+    askFallback: defaults.askFallback ?? fallbackAskFallback,
     autoAllowSkills: defaults.autoAllowSkills ?? fallbackAutoAllowSkills,
   };
-  const resolveField = <TValue extends ExecSecurity | ExecAsk>(
-    field: "security" | "ask" | "askFallback",
-    fallback: TValue,
-    isValid: (value: unknown) => value is TValue,
-  ): ResolvedExecPolicyField<TValue> => {
+  const resolveField = <TField extends "security" | "ask" | "askFallback">(
+    field: TField,
+  ): { value: Required<ExecApprovalsDefaults>[TField]; source: string | null } => {
     const defaultValue = defaults[field];
-    const fallbackField = isValid(defaultValue)
-      ? { value: defaultValue, source: `defaults.${field}` }
-      : { value: fallback, source: null };
-    if (rawAgent[field] != null) {
-      const value = agent[field];
-      return isValid(value) ? { value, source: `agents.${agentKey}.${field}` } : fallbackField;
-    }
-    if (rawWildcard[field] != null) {
-      const value = wildcard[field];
-      return isValid(value) ? { value, source: `agents.*.${field}` } : fallbackField;
-    }
-    return fallbackField;
+    const fallbackField =
+      defaultValue !== undefined
+        ? { value: defaultValue, source: `defaults.${field}` }
+        : { value: resolvedDefaults[field], source: null };
+    const agentOverrides = rawAgent[field] != null;
+    const policy: ExecApprovalsDefaults | undefined = agentOverrides
+      ? agent
+      : rawWildcard[field] != null
+        ? wildcard
+        : undefined;
+    const value = policy?.[field];
+    return value !== undefined
+      ? { value, source: `agents.${agentOverrides ? agentKey : "*"}.${field}` }
+      : fallbackField;
   };
-  const resolvedAgentSecurity = resolveField("security", resolvedDefaults.security, isExecSecurity);
-  const resolvedAgentAsk = resolveField("ask", resolvedDefaults.ask, isExecAsk);
-  const resolvedAgentAskFallback = resolveField(
-    "askFallback",
-    resolvedDefaults.askFallback,
-    isExecSecurity,
-  );
+  const resolvedAgentSecurity = resolveField("security");
+  const resolvedAgentAsk = resolveField("ask");
+  const resolvedAgentAskFallback = resolveField("askFallback");
   const resolvedAgent: Required<ExecApprovalsDefaults> = {
     security: resolvedAgentSecurity.value,
     ask: resolvedAgentAsk.value,
@@ -101,10 +71,7 @@ export function resolveExecApprovalsFromFileInternal(params: {
     autoAllowSkills:
       agent.autoAllowSkills ?? wildcard.autoAllowSkills ?? resolvedDefaults.autoAllowSkills,
   };
-  const allowlist = [
-    ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
-    ...(Array.isArray(agent.allowlist) ? agent.allowlist : []),
-  ];
+  const allowlist = [...(wildcard.allowlist ?? []), ...(agent.allowlist ?? [])];
   return {
     path: params.path ?? resolveExecApprovalsDisplayPath(),
     socketPath: expandHomePrefix(

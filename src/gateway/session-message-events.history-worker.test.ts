@@ -4,19 +4,15 @@ import { persistSessionTranscriptTurn } from "../config/sessions/session-accesso
 import * as historyWorker from "../config/sessions/session-history-worker-runtime.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { onceMessage, rpcReq, writeSessionStore } from "./test-helpers.server.js";
+import { waitForSessionEvent } from "./session-message-event.test-support.js";
+import { rpcReq, writeSessionStore } from "./test-helpers.server.js";
 import { setupGatewaySessionsTestHarness } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-test.each([
-  { read: "by-id", overloaded: false },
-  { read: "count", overloaded: false },
-  { read: "by-id", overloaded: true },
-  { read: "count", overloaded: true },
-] as const)(
-  "delivers selected-session $read updates with overloaded=$overloaded",
-  async ({ read, overloaded }) => {
+test.each(["by-id", "count"] as const)(
+  "delivers selected-session %s updates after worker overload",
+  async (read) => {
     const { storePath } = await createSessionStoreDir();
     const target = {
       agentId: "main",
@@ -37,71 +33,57 @@ test.each([
       messages: [{ eventId: "msg-selected", message: transcriptMessage }],
       updateMode: "none",
     });
-    expect(persisted.appendedCount).toBe(1);
+    expect(persisted.messages.filter((m) => m.appended)).toHaveLength(1);
 
     const { ws } = await openClient({ scopes: ["operator.read"] });
-    try {
-      const subscribeRes = await rpcReq(ws, "sessions.messages.subscribe", { key: "main" });
-      expect(subscribeRes.ok).toBe(true);
-      expect(subscribeRes.payload?.key).toBe(target.sessionKey);
-      const waitForEvent = (event: string) =>
-        onceMessage(
-          ws,
-          (message) =>
-            message.type === "event" &&
-            message.event === event &&
-            (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-              target.sessionKey,
-        );
-      const update = {
-        target,
-        message: {
-          ...transcriptMessage,
-          ...(read === "by-id" ? { content: [{ type: "text", text: "stale queued prompt" }] } : {}),
-        },
-        ...(read === "by-id" ? { messageId: "msg-selected" } : {}),
-      };
-      if (overloaded) {
-        const readFailure = vi
-          .spyOn(historyWorker, "readSessionHistoryPageInWorker")
-          .mockRejectedValueOnce(new WorkerTaskError("worker task capacity reached", "overloaded"));
-        try {
-          const changed = waitForEvent("sessions.changed");
-          emitSessionTranscriptUpdate(update);
-          const invalidation = await changed;
-          expect(invalidation.payload).toMatchObject({
-            sessionKey: target.sessionKey,
-            phase: "message",
-          });
-          expect(invalidation.payload).not.toHaveProperty("message");
-          expect(invalidation.payload).not.toHaveProperty("messageSeq");
-        } finally {
-          readFailure.mockRestore();
-        }
-      }
-
-      const nextMessage = waitForEvent("session.message");
+    await using cleanup = { [Symbol.asyncDispose]: () => closeGatewayTestWebSocket(ws) };
+    void cleanup;
+    const subscribeRes = await rpcReq(ws, "sessions.messages.subscribe", { key: "main" });
+    expect(subscribeRes).toMatchObject({ ok: true, payload: { key: target.sessionKey } });
+    const waitForEvent = (event: string) =>
+      waitForSessionEvent(ws, event, { sessionKey: target.sessionKey });
+    const update = {
+      target,
+      message: {
+        ...transcriptMessage,
+        ...(read === "by-id" ? { content: [{ type: "text", text: "stale queued prompt" }] } : {}),
+      },
+      ...(read === "by-id" ? { messageId: "msg-selected" } : {}),
+    };
+    {
+      using _ = vi
+        .spyOn(historyWorker, "readSessionHistoryPageInWorker")
+        .mockRejectedValueOnce(new WorkerTaskError("worker task capacity reached", "overloaded"));
+      const changed = waitForEvent("sessions.changed");
       emitSessionTranscriptUpdate(update);
-      const messageEvent = await nextMessage;
-      expect(messageEvent.payload).toMatchObject({
+      const invalidation = await changed;
+      expect(invalidation.payload).toMatchObject({
         sessionKey: target.sessionKey,
-        ...(read === "by-id" ? { messageId: "msg-selected" } : {}),
-        messageSeq: 1,
+        phase: "message",
+      });
+      expect(invalidation.payload).not.toHaveProperty("message");
+      expect(invalidation.payload).not.toHaveProperty("messageSeq");
+    }
+
+    const nextMessage = waitForEvent("session.message");
+    emitSessionTranscriptUpdate(update);
+    const messageEvent = await nextMessage;
+    expect(messageEvent.payload).toMatchObject({
+      sessionKey: target.sessionKey,
+      messageSeq: 1,
+      message: transcriptMessage,
+    });
+    if (read === "by-id") {
+      expect(messageEvent.payload).toMatchObject({
+        messageId: "msg-selected",
         message: {
-          ...transcriptMessage,
-          ...(read === "by-id"
-            ? {
-                __openclaw: {
-                  id: "msg-selected",
-                  seq: 1,
-                  transcriptPosition: { source: expect.any(String), rawSeq: expect.any(Number) },
-                },
-              }
-            : {}),
+          __openclaw: {
+            id: "msg-selected",
+            seq: 1,
+            transcriptPosition: { source: expect.any(String), rawSeq: expect.any(Number) },
+          },
         },
       });
-    } finally {
-      await closeGatewayTestWebSocket(ws);
     }
   },
 );

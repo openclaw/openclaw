@@ -112,26 +112,18 @@ function mergeSelectedToolMedia(
         )
       : mediaUrls;
   const appendOwnedMedia = (nextPayloads: EmbeddedRunPayload[]): EmbeddedRunPayload[] => {
-    const withHostOwnedMedia = !shouldSplitHostOwnedMedia
-      ? nextPayloads
-      : [
-          ...nextPayloads,
-          markReplyPayloadForSourceSuppressionDelivery(
-            buildMediaPayload(hostOwnedMediaUrls, false),
-          ),
-        ];
-    if (!shouldSplitAutoDeliveryMedia) {
-      return withHostOwnedMedia;
-    }
-    // Contract-owned media remains separate from private assistant text and
-    // generic tool media so only its explicit provenance bypasses suppression.
-    return [
-      ...withHostOwnedMedia,
-      markReplyPayloadForSourceSuppressionDelivery({
-        ...buildMediaPayload(autoDeliveryOnlyMediaUrls, true),
-        trustedLocalMedia: true,
-      }),
-    ];
+    const owned = [
+      shouldSplitHostOwnedMedia &&
+        markReplyPayloadForSourceSuppressionDelivery(buildMediaPayload(hostOwnedMediaUrls, false)),
+      // Contract-owned media remains separate from private assistant text and
+      // generic tool media so only its explicit provenance bypasses suppression.
+      shouldSplitAutoDeliveryMedia &&
+        markReplyPayloadForSourceSuppressionDelivery({
+          ...buildMediaPayload(autoDeliveryOnlyMediaUrls, true),
+          trustedLocalMedia: true,
+        }),
+    ].filter((payload) => payload !== false);
+    return owned.length ? [...nextPayloads, ...owned] : nextPayloads;
   };
 
   // A transcript mirror is already delivered; every batch observes the same
@@ -179,12 +171,8 @@ export function createPendingToolMediaCarry() {
       }
       batches.push(
         copyCoreTtsAttemptResultProvenance(attempt, {
-          toolMediaUrls: attempt.toolMediaUrls
-            ? Object.freeze([...attempt.toolMediaUrls])
-            : undefined,
-          hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls
-            ? Object.freeze([...attempt.hostOwnedToolMediaUrls])
-            : undefined,
+          toolMediaUrls: attempt.toolMediaUrls,
+          hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls,
           toolAudioAsVoice: attempt.toolAudioAsVoice,
           toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
         }),

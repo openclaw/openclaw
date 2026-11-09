@@ -8,7 +8,6 @@ import ai.openclaw.app.requiresSetup
 import ai.openclaw.app.ui.FoldAwarePrompt
 import ai.openclaw.app.ui.design.ClawTheme
 import android.Manifest
-import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -42,7 +41,7 @@ internal fun resolveChatRealtimeTalkLaunch(
 internal fun rememberChatRealtimeTalkLauncher(viewModel: MainViewModel): () -> Unit {
   val context = LocalContext.current
   val talkSetupReadiness by viewModel.talkSetupReadiness.collectAsState()
-  val currentTalkSetup by rememberUpdatedState(talkSetupReadiness.realtimeTalk)
+  val currentTalkSetup by rememberUpdatedState(talkSetupReadiness.launch)
   val failureNotice by viewModel.talkFailureNotice.collectAsState()
   val setupMessage by viewModel.pendingTalkSetupMessage.collectAsState()
   val showSetupMessage = {
@@ -80,8 +79,8 @@ internal fun rememberChatRealtimeTalkLauncher(viewModel: MainViewModel): () -> U
   return {
     when (
       resolveChatRealtimeTalkLaunch(
-        hasMicPermission = context.hasRecordAudioPermission(),
-        requiresSetup = talkSetupReadiness.realtimeTalk.requiresSetup,
+        hasMicPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
+        requiresSetup = talkSetupReadiness.launch.requiresSetup,
       )
     ) {
       ChatRealtimeTalkLaunch.RequestPermission -> requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
@@ -90,5 +89,3 @@ internal fun rememberChatRealtimeTalkLauncher(viewModel: MainViewModel): () -> U
     }
   }
 }
-
-private fun Context.hasRecordAudioPermission(): Boolean = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED

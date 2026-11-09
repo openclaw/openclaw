@@ -1,12 +1,16 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
 // Valid v1 stores can carry optional writer metadata, such as the normalized 2026.7.1 stamp.
 // That app_version does not establish that the store ever had a deletion journal.
-export function hasPreJournalStateSchema(database: DatabaseSync): boolean {
+export function hasPreJournalStateSchema(database: EngineConnection): boolean {
+  if (isPostgresSqlConnection(database)) {
+    return false;
+  }
   if (
     readStateSchemaContentVersion(database) !== 1 ||
     tableExists(database, "config_machine_state") ||

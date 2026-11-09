@@ -5,6 +5,7 @@ import {
   DmPolicySchema,
   GroupPolicySchema,
   ReplyToModeSchema,
+  TtsConfigSchema,
   buildChannelConfigSchema,
   buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
@@ -70,11 +71,11 @@ const FeishuWebhookPathSchema = z
   .string()
   .refine((value) => normalizeFeishuWebhookPath(value) === value, {
     message:
-      'webhookPath must be a canonical HTTP request path; run "openclaw doctor --fix" to repair it',
+      'webhookPath must be a normalized HTTP request path; run "openclaw doctor --fix" to repair it',
   });
 const TtsOverrideSchema = z
   .object({
-    auto: z.enum(["off", "always", "inbound", "tagged"]).optional(),
+    auto: TtsConfigSchema.unwrap().shape.auto,
     enabled: z.boolean().optional(),
     mode: z.enum(["final", "all"]).optional(),
     provider: z.string().optional(),
@@ -153,9 +154,6 @@ export const DynamicAgentCreationSchema = z
   .optional();
 
 /**
- * Feishu tools configuration.
- * Controls which tool categories are enabled.
- *
  * Dependencies:
  * - wiki requires doc (wiki content is edited via doc tools)
  * - perm can work independently but is typically used with drive
@@ -270,7 +268,7 @@ const FeishuSharedConfigShape = {
 export const FeishuAccountConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
-    name: z.string().optional(), // Display name for this account
+    name: z.string().optional(),
     appId: z.string().optional(),
     appSecret: buildSecretInputSchema().optional(),
     encryptKey: buildSecretInputSchema().optional(),

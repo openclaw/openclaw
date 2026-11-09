@@ -3,8 +3,8 @@ import {
   GATEWAY_CLIENT_MODES,
   type GatewayClientInfo,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import type { MediaFact } from "../../media/media-facts.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
+import type { PreparedChatSendAttachments } from "./chat-send-attachments.js";
 
 export function createUserTurnInputController(text = "raw message") {
   const baseInput: UserTurnInput = {
@@ -35,29 +35,8 @@ export function createClientInfo(overrides: Partial<GatewayClientInfo> = {}): Ga
 }
 
 export function createAttachments(
-  overrides: Partial<{
-    explicitOriginTargetsPlugin: boolean;
-    mediaPathOffloads: MediaFact[];
-    imageOrder: Array<"inline" | "offloaded">;
-    parsedImages: Array<{
-      type: "image";
-      data: string;
-      mimeType: string;
-      sourceIndex: number;
-    }>;
-    offloadedRefs: Array<{
-      mediaRef: string;
-      id: string;
-      path: string;
-      sourceIndex: number;
-      kind: "image" | "audio" | "video" | "document" | "sticker" | "unknown";
-      mimeType: string;
-      label: string;
-      sizeBytes: number;
-    }>;
-    parsedMessage: string;
-  }> = {},
-) {
+  overrides: Partial<PreparedChatSendAttachments> = {},
+): PreparedChatSendAttachments {
   return {
     explicitOriginTargetsPlugin: false,
     imageOrder: [],

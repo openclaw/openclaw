@@ -50,7 +50,7 @@ extension OpenClawChatComposer {
                 self.branchMenu
             }
             self.verbosityPicker
-                .disabled(!self.viewModel.composerEffortMutationAvailable)
+                .disabled(!self.viewModel.composerVerboseMutationAvailable)
             self.cleanComposerCapabilityItems
         } label: {
             CompactChatAttachmentLabel()
@@ -68,9 +68,12 @@ extension OpenClawChatComposer {
     #if os(iOS)
     var cleanDraftRow: some View {
         self.editorOverlay
-            .frame(maxWidth: .infinity, minHeight: self.textMinHeight, alignment: .topLeading)
+            .frame(maxWidth: .infinity, minHeight: self.textMinHeight, maxHeight: .infinity, alignment: .topLeading)
             .padding(.horizontal, CleanChatComposerMetrics.editorInlineInset)
-            .padding(.top, CleanChatComposerMetrics.editorBlockInset)
+            .padding(.top, self.draftTopInset)
+            // The room under a short draft belongs to the draft: a tap there starts typing.
+            .contentShape(Rectangle())
+            .onTapGesture { self.focusDraft() }
     }
     #endif
 
@@ -89,7 +92,7 @@ extension OpenClawChatComposer {
                 self.branchMenu
             }
             self.verbosityPicker
-                .disabled(!self.viewModel.composerEffortMutationAvailable)
+                .disabled(!self.viewModel.composerVerboseMutationAvailable)
         } label: {
             CompactChatAttachmentLabel(controlSize: self.cleanControlHeight)
         }
@@ -144,55 +147,60 @@ extension OpenClawChatComposer {
     }
 
     private func cleanInlineModelPicker(compact: Bool) -> some View {
-        let sections = self.viewModel.modelPickerSections
-        return Menu {
-            if let target = self.viewModel.modelSelectionTargetDescription {
-                Text(target)
-                    .font(OpenClawChatTypography.caption)
-                    .accessibilityIdentifier("chat-composer-model-selection-target")
-                Divider()
-            }
-            Group {
-                if self.viewModel.canSelectDefaultModel {
-                    self.modelMenuOption(
-                        self.viewModel.defaultModelLabel,
-                        selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+        Menu {
+            // ViewThatFits constructs both footer variants while typing. Keep catalog
+            // grouping and menu actions inside the menu's own evaluation boundary.
+            ChatDeferredContent {
+                let sections = self.viewModel.modelPickerSections
+                if let target = self.viewModel.modelSelectionTargetDescription {
+                    Text(target)
+                        .font(OpenClawChatTypography.caption)
+                        .accessibilityIdentifier("chat-composer-model-selection-target")
+                    Divider()
                 }
-                if !sections.pinned.isEmpty {
-                    Section("Pinned") {
-                        self.modelOptions(sections.pinned, showsDefaultBadge: false)
+                Group {
+                    if self.viewModel.canSelectDefaultModel {
+                        self.modelMenuOption(
+                            self.viewModel.defaultModelLabel,
+                            selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+                    }
+                    if !sections.pinned.isEmpty {
+                        Section("Pinned") {
+                            self.modelOptions(sections.pinned, showsDefaultBadge: false)
+                        }
+                    }
+                    if !sections.recent.isEmpty {
+                        Section("Recent") {
+                            self.modelOptions(sections.recent, showsDefaultBadge: false)
+                        }
+                    }
+                    ForEach(sections.providers) { provider in
+                        Section(provider.displayName) {
+                            self.modelOptions(provider.models, showsDefaultBadge: false)
+                        }
                     }
                 }
-                if !sections.recent.isEmpty {
-                    Section("Recent") {
-                        self.modelOptions(sections.recent, showsDefaultBadge: false)
+                .disabled(self.cleanModelChoicesDisabled)
+                #if os(macOS)
+                if self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID {
+                    Divider()
+                    Button {
+                        self.viewModel.toggleSelectedModelPinned()
+                    } label: {
+                        Label(
+                            self.viewModel.isSelectedModelPinned ? "Unpin model" : "Pin model",
+                            systemImage: self.viewModel.isSelectedModelPinned ? "star.slash" : "star")
                     }
                 }
-                ForEach(sections.providers) { provider in
-                    Section(provider.displayName) {
-                        self.modelOptions(provider.models, showsDefaultBadge: false)
-                    }
+                if self.usesDesktopModelMenu {
+                    Divider()
+                    self.modelSignInButton
                 }
-            }
-            .disabled(
-                !self.viewModel.composerModelMutationAvailable ||
-                    self.viewModel.isUpdatingSessionSettings)
-            #if os(macOS)
-            if self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID {
-                Divider()
-                Button {
-                    self.viewModel.toggleSelectedModelPinned()
-                } label: {
-                    Label(
-                        self.viewModel.isSelectedModelPinned ? "Unpin model" : "Pin model",
-                        systemImage: self.viewModel.isSelectedModelPinned ? "star.slash" : "star")
-                }
-            }
-            if self.usesDesktopModelMenu {
+                #elseif os(iOS)
                 Divider()
                 self.modelSignInButton
+                #endif
             }
-            #endif
         } label: {
             self.cleanInlineModelLabel(compact: compact)
         }
@@ -202,13 +210,14 @@ extension OpenClawChatComposer {
         // Mac session settings remain editable during a response; pinning is
         // local and stays available while a Gateway settings save is pending.
         .fixedSize()
-        #else
+        #elseif !os(iOS)
         .disabled(
             !self.viewModel.showsModelPicker ||
                 !self.viewModel.composerModelMutationAvailable ||
                 self.viewModel.isUpdatingSessionSettings ||
                 self.viewModel.hasActiveRunForComposerSettings)
         #endif
+        // Sign-in stays reachable even when choosing a model is unavailable.
         .help(self.cleanInlineModelDisabledHint ?? self.viewModel.composerInlineModelLabel)
         .accessibilityLabel("Model")
         .accessibilityValue(self.viewModel.composerInlineModelLabel)
@@ -234,9 +243,9 @@ extension OpenClawChatComposer {
         .frame(width: compact ? 104 : 160, height: self.cleanControlHeight)
         .contentShape(Rectangle())
         #else
-        if compact {
+        if compact || self.dynamicTypeSize.isAccessibilitySize {
             Image(systemName: "cpu")
-                .font(OpenClawChatTypography.display(size: 16, weight: .semibold, relativeTo: .body))
+                .font(.system(size: OpenClawChatTypography.scaled(16), weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(
                     width: CleanChatComposerMetrics.compactModelWidth,
@@ -328,10 +337,31 @@ extension OpenClawChatComposer {
         #endif
     }
 
+    /// Keep recovery visible when authentication blocks send or capture UI replaces the model menu.
+    var showsModelSignInRow: Bool {
+        #if os(iOS)
+        guard self.composerChrome == .clean else { return true }
+        return self.viewModel.composerModelAvailabilityMessage != nil || self.cleanShowsCameraFlip ||
+            self.voiceNoteControl?.recorder.isRecording == true
+        #else
+        !self.usesDesktopModelMenu
+        #endif
+    }
+
+    private var cleanModelChoicesDisabled: Bool {
+        let unavailable = !self.viewModel.composerModelMutationAvailable ||
+            self.viewModel.isUpdatingSessionSettings
+        #if os(iOS)
+        return unavailable || !self.viewModel.showsModelPicker || self.viewModel.hasActiveRunForComposerSettings
+        #else
+        return unavailable
+        #endif
+    }
+
     private var cleanInlineModelDisabledHint: String? {
         #if os(iOS)
         if self.viewModel.hasActiveRunForComposerSettings {
-            return String(localized: "Available after the current response finishes.")
+            return String(localized: "Model changes are available after the current response finishes.")
         }
         #endif
         if !self.viewModel.composerModelMutationAvailable {
@@ -350,7 +380,7 @@ extension OpenClawChatComposer {
         }
         #endif
         if !self.viewModel.composerEffortMutationAvailable {
-            return String(localized: "Thinking and Fast controls require operator.admin access.")
+            return String(localized: "Thinking and Fast controls require operator.write or operator.admin access.")
         }
         if self.viewModel.isUpdatingSessionSettings {
             return String(localized: "Saving session settings.")

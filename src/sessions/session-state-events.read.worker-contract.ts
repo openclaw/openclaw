@@ -1,6 +1,13 @@
-import type { SessionStateEventRecord } from "./session-state-events.types.js";
+import type {
+  SessionStateEventRecord,
+  SessionStateSweepAddress,
+} from "./session-state-events.types.js";
 
 export type SessionStateReadOperations = {
+  "sessionState.pendingNotices": {
+    input: undefined;
+    output: { type: "sessionState.pendingNotices"; cursors: SessionStateSweepAddress[] };
+  };
   "sessionState.ambientTargets": {
     input: { watcherSessionKey: string };
     output: { type: "sessionState.ambientTargets"; targets: string[] };

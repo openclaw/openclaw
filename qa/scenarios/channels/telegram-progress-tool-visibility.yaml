@@ -6,11 +6,11 @@ scenario:
   coverage:
     primary:
       - channels.streaming-final-reply
-  objective: Keep authored commentary visible while hiding ordinary tool rows by default and showing them when toolProgress is explicitly enabled.
+  objective: Keep authored commentary and bounded work status visible while hiding detailed tool rows by default and showing them when toolProgress is explicitly enabled.
   successCriteria:
     - The Telegram Test Server user observes authored commentary before a separate final reply in both cases.
     - Once the full commentary appears, every subsequent progress revision retains it.
-    - No observed message or edit in the default case contains an exec row or its command marker.
+    - Default progress permits only bounded Exec work status, never detailed tool rows or command markers.
     - The detailed case includes an exec row on the same progress message as commentary.
     - Each case crosses the mock provider boundary twice with one correlated exec result and delivers its final marker exactly once.
   docsRefs:
@@ -90,7 +90,7 @@ flow:
                   expr: "`SLACK-QA-COMMENTARY-DONE-${suffix}`"
               - set: execCommand
                 value:
-                  expr: "`grep '${toolMarker}' /dev/null || sleep 5`"
+                  expr: "`printf '%s' '${toolMarker}' >/dev/null; sleep 5; printf '%s\\\\n' 'SLACK-QA-OUTPUT-${suffix}'`"
               - set: requestCursor
                 value:
                   expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
@@ -141,9 +141,13 @@ flow:
               - assert:
                   expr: firstCommentaryIndex >= 0 && progressEvents.slice(firstCommentaryIndex).every((event) => event.message.text.includes(commentaryMarker))
                   message: authored commentary must remain visible from its first complete preview through final delivery
+              - set: toolLines
+                value:
+                  expr: |-
+                    turnEvents.map((event) => event.message.text.split("\n").map((line) => line.trim()).filter((line) => /🛠️|\b(?:Exec|Bash)\b/u.test(line) || line.includes(toolMarker)))
               - set: toolEvents
                 value:
-                  expr: "turnEvents.filter((event) => /🛠️|\\b(?:Exec|Bash)\\b/u.test(event.message.text) || event.message.text.includes(toolMarker))"
+                  expr: turnEvents.filter((event, index) => toolLines[index].length > 0)
               - if:
                   expr: fixture.toolProgress === true
                   then:
@@ -152,8 +156,8 @@ flow:
                         message: explicitly enabled tool progress must show an exec row on the commentary draft
                   else:
                     - assert:
-                        expr: toolEvents.length === 0
-                        message: omitted toolProgress must hide exec rows and command markers throughout every observed message and edit
+                        expr: toolLines.every((lines) => lines.length <= 1 && lines.every((line) => ["🛠️ Exec running", "🛠️ Exec"].includes(line)))
+                        message: omitted toolProgress must show only one bounded Exec status row, never tool details or command markers, in every observed message and edit
               - set: proofs
                 value:
                   expr: "proofs.concat([{ case: fixture.name, toolProgress: fixture.toolProgress === true ? true : 'omitted', providerRequests: requests.length, correlatedExecResult: true, finalMarkerCount: finalEvents.length, observedEvents: turnEvents.map((event) => ({ kind: event.kind, message: event.message.id === finalEvents[0].message.id ? 'final' : 'progress', text: event.message.text })), toolRowEvents: toolEvents.length, noProgressAfterFinal: true }])"

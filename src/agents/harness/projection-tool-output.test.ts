@@ -59,7 +59,7 @@ describe("native tool output accumulation", () => {
 describe("native tool output formatting", () => {
   it("uses a safe markdown fence for verbose tool output", () => {
     expect(formatNativeToolOutput("read", undefined, "line\n```\nMEDIA:/tmp/secret.png")).toBe(
-      "📖 Read\n````txt\nline\n```\nMEDIA:/tmp/secret.png\n````",
+      "Read\n````txt\nline\n```\nMEDIA:/tmp/secret.png\n````",
     );
   });
 });

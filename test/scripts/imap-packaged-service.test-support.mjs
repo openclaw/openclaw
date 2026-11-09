@@ -10,10 +10,13 @@ const { default: plugin } = await import(
 const { createPluginStateSyncKeyedStore } = await import(
   pathToFileURL(path.join(root, "dist/plugin-sdk/plugin-state-store-runtime.js"))
 );
-const { createTestPluginServiceScheduler } = await import(
-  pathToFileURL(path.join(root, "dist/plugin-sdk/plugin-test-api.js"))
-);
-const scheduler = createTestPluginServiceScheduler();
+const {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+  createTestPluginServiceScheduler,
+} = await import(pathToFileURL(path.join(root, "dist/plugin-sdk/plugin-test-api.js")));
+const clock = createGatewaySchedulerClock();
+const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
 const stores = new Map();
 const openKeyedStore = (options) => {
   if (!stores.has(options.namespace)) {
@@ -119,15 +122,11 @@ await new Promise((resolve) => {
 });
 const dispatched = [];
 const logs = [];
-let completed = Promise.withResolvers();
 const logger = Object.fromEntries(
   ["info", "warn", "error", "debug"].map((level) => [
     level,
     (text) => {
       logs.push(text);
-      if (text.includes("sweep failed=") || text.includes("lastSweep=")) {
-        completed.resolve();
-      }
     },
   ]),
 );
@@ -163,17 +162,23 @@ plugin.register({
     service = registered;
   },
 });
+const deadline = Promise.withResolvers();
 const timer = setTimeout(
-  () => completed.reject(new Error(`service deadline: ${JSON.stringify({ commands, logs })}`)),
+  () => deadline.reject(new Error(`service deadline: ${JSON.stringify({ commands, logs })}`)),
   15000,
 );
+const settleDueServiceWork = async () => {
+  while (clock.armedAtMs !== null && clock.armedAtMs <= clock.clock.now()) {
+    await Promise.race([clock.wake(), deadline.promise]);
+  }
+};
 try {
   await service.start({
     scheduler,
     logger,
-    serviceHealth: { clearFailure() {}, reportFailure: completed.reject },
+    serviceHealth: { clearFailure() {}, reportFailure: deadline.reject },
   });
-  await completed.promise;
+  await settleDueServiceWork();
   const cursor = cursors.lookup("fixture");
   const subjects = dispatched.map((turn) => turn.sessionKey);
   console.log(
@@ -195,7 +200,7 @@ try {
     (expected === "red" ? [1, 2] : [1, 2, 4, 5]).map((uid) => `hook:imap:fixture:7:${uid}`),
   );
   assert.equal(cursor.lastSeenUid, expected === "red" ? 3 : 5);
-  assert.equal(stores.get("skip-count").lookup("fixture:sender-not-allowed").count, 1);
+  assert(logs.includes("imap: account=fixture uid=3 domain=example.test gate=sender-not-allowed"));
   assert(dispatched[0].message.includes("Plain control."));
   assert(dispatched[1].message.includes("Multipart control."));
   if (expected === "red") {
@@ -204,14 +209,15 @@ try {
     assert(dispatched[2].message.includes("Sheena's expert advice."));
     assert(dispatched[3].message.includes("Later mail."));
     assert(!logs.some((text) => text.includes("sweep failed=")));
+    const restartCommandOffset = commands.length;
     await service.stop();
-    completed = Promise.withResolvers();
     await service.start({
       scheduler,
       logger,
-      serviceHealth: { clearFailure() {}, reportFailure: completed.reject },
+      serviceHealth: { clearFailure() {}, reportFailure: deadline.reject },
     });
-    await completed.promise;
+    await settleDueServiceWork();
+    assert(commands.slice(restartCommandOffset).includes("UID"));
     assert.equal(dispatched.length, 4);
     assert.equal(cursors.lookup("fixture").lastSeenUid, 5);
     assert.equal(stores.get("dispatch-claim").entries().length, 5);

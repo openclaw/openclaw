@@ -40,7 +40,9 @@ function hasCatalogQualifiedValue(catalog: ModelCatalogEntry[], value: string): 
   if (!normalized) {
     return false;
   }
-  return catalog.some((entry) => createQualifiedCatalogKey(entry) === normalized);
+  return catalog.some(
+    (entry) => buildQualifiedChatModelValue(entry.id, entry.provider).toLowerCase() === normalized,
+  );
 }
 
 function resolveUniqueCatalogValueById(model: string, catalog: ModelCatalogEntry[]): string {
@@ -49,22 +51,11 @@ function resolveUniqueCatalogValueById(model: string, catalog: ModelCatalogEntry
     return "";
   }
 
-  let matchedValue = "";
-  for (const entry of catalog) {
-    if (entry.id.trim().toLowerCase() !== normalizedModel) {
-      continue;
-    }
-    const candidate = buildQualifiedChatModelValue(entry.id, entry.provider);
-    if (!matchedValue) {
-      matchedValue = candidate;
-      continue;
-    }
-    if (matchedValue.toLowerCase() !== candidate.toLowerCase()) {
-      return "";
-    }
-  }
-
-  return matchedValue;
+  const values = catalog
+    .filter((entry) => entry.id.trim().toLowerCase() === normalizedModel)
+    .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider));
+  const first = values[0] ?? "";
+  return values.every((value) => value.toLowerCase() === first.toLowerCase()) ? first : "";
 }
 
 export function resolvePreferredServerChatModelValue(
@@ -145,8 +136,13 @@ function formatRawCatalogLabel(entry: ModelCatalogEntry): string {
 }
 
 function resolveCatalogDisplayName(entry: ModelCatalogEntry): string {
-  const name = entry.name.trim();
-  const alias = entry.alias?.trim();
+  let name = entry.name.trim();
+  let alias = entry.alias?.trim();
+  if (normalizeChatModelProviderId(entry.provider) === "clawrouter") {
+    // The provider group already identifies the route; keep model labels model-only.
+    name = name.replace(/\s+via\s+clawrouter$/iu, "");
+    alias = alias?.replace(/\s+via\s+clawrouter$/iu, "");
+  }
   if (!name || !alias) {
     return name || alias || "";
   }
@@ -156,14 +152,6 @@ function resolveCatalogDisplayName(entry: ModelCatalogEntry): string {
   // Aliases are selectable metadata, not a replacement for model identity.
   // Preserve richer custom labels only when they already contain the full name.
   return alias.toLowerCase().includes(name.toLowerCase()) ? alias : `${name} · ${alias}`;
-}
-
-function createQualifiedCatalogKey(entry: ModelCatalogEntry): string {
-  return buildQualifiedChatModelValue(entry.id, entry.provider).trim().toLowerCase();
-}
-
-function createNameProviderKey(name: string, provider?: string | null): string {
-  return `${name.toLowerCase()}\u0000${provider?.trim().toLowerCase() ?? ""}`;
 }
 
 type ChatModelDisplayLookup = ReadonlyMap<string, string>;
@@ -180,7 +168,7 @@ export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<str
         buildQualifiedChatModelValue(entry.id, entry.provider),
       ),
       nameKey: name.toLowerCase(),
-      providerKey: createNameProviderKey(name, entry.provider),
+      providerKey: `${name.toLowerCase()}\u0000${entry.provider?.trim().toLowerCase() ?? ""}`,
     };
   });
 

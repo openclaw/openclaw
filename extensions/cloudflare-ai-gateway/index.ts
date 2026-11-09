@@ -2,7 +2,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   listProfilesForProvider,
   normalizeOptionalSecretInput,
   type ProviderAuthContext,
@@ -11,6 +11,8 @@ import {
   captureProviderApiKey,
   persistProviderApiKey,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { createAnthropicThinkingPrefillPayloadWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildCloudflareAiGatewayCatalogProvider } from "./catalog-provider.js";
 import { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "./models.js";
@@ -18,7 +20,8 @@ import {
   applyCloudflareAiGatewayConnectionConfig,
   applyCloudflareAiGatewayProviderConnectionConfig,
 } from "./onboard.js";
-import { wrapCloudflareAiGatewayProviderStream } from "./stream-wrappers.js";
+
+const log = createSubsystemLogger("cloudflare-ai-gateway-stream");
 
 const PROVIDER_ID = "cloudflare-ai-gateway";
 const PROVIDER_ENV_VAR = "CLOUDFLARE_AI_GATEWAY_API_KEY";
@@ -102,7 +105,7 @@ export default definePluginEntry({
             };
           },
           runNonInteractive: async (ctx) => {
-            const authStore = ensureAuthProfileStore(ctx.agentDir, {
+            const authStore = await ensureAuthProfileStoreAsync(ctx.agentDir, {
               allowKeychainPrompt: false,
             });
             const credential = authStore.profiles[PROFILE_ID];
@@ -120,11 +123,9 @@ export default definePluginEntry({
               normalizeOptionalSecretInput(ctx.opts.cloudflareAiGatewayGatewayId) ??
               storedMetadata.gatewayId;
             if (!accountId || !gatewayId) {
-              ctx.runtime.error(
+              throw new Error(
                 "Cloudflare AI Gateway setup requires --cloudflare-ai-gateway-account-id and --cloudflare-ai-gateway-gateway-id.",
               );
-              ctx.runtime.exit(1);
-              return null;
             }
             const resolved = await ctx.resolveApiKey({
               provider: PROVIDER_ID,
@@ -156,7 +157,7 @@ export default definePluginEntry({
       catalog: {
         order: "late",
         run: async (ctx) => {
-          const authStore = ensureAuthProfileStore(ctx.agentDir, {
+          const authStore = await ensureAuthProfileStoreAsync(ctx.agentDir, {
             allowKeychainPrompt: false,
           });
           const envManagedApiKey = normalizeOptionalString(ctx.env[PROVIDER_ENV_VAR])
@@ -179,7 +180,16 @@ export default definePluginEntry({
       },
       classifyFailoverReason: ({ errorMessage }) =>
         /\bworkers?_ai\b.*\b(?:rate|limit|quota)\b/i.test(errorMessage) ? "rate_limit" : undefined,
-      wrapStreamFn: wrapCloudflareAiGatewayProviderStream,
+      wrapStreamFn: (ctx) => {
+        if (ctx.model?.api !== undefined && ctx.model.api !== "anthropic-messages") {
+          return ctx.streamFn;
+        }
+        return createAnthropicThinkingPrefillPayloadWrapper(ctx.streamFn, (stripped) => {
+          log.warn(
+            `removed ${stripped} trailing assistant prefill message${stripped === 1 ? "" : "s"} because Anthropic extended thinking requires conversations to end with a user turn`,
+          );
+        });
+      },
     });
   },
 });

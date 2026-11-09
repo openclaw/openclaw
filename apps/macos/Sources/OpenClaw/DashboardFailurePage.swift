@@ -54,8 +54,13 @@ enum DashboardFailurePage {
     }
 
     static func html(
-        title: String, message: String, detail: String?, url: URL?, primaryButton: String = "") -> String
+        title: String, message: String, detail: String?, url: URL?, primaryButton: String? = nil) -> String
     {
+        let primaryButton = primaryButton ?? """
+        <button type="button" class="primary"
+          onclick="window.webkit.messageHandlers.openclawGateways
+            .postMessage({type:'reload'})">\(self.htmlEscape(String(localized: "Reload")))</button>
+        """
         let connectionTitle = self.htmlEscape(String(localized: "Connection Settings…"))
         let detailHTML = detail.map { "<p class=\"detail\">\(self.htmlEscape($0))</p>" } ?? ""
         let urlHTML = url

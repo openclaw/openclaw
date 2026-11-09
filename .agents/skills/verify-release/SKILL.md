@@ -1,6 +1,6 @@
 ---
 name: verify-release
-description: "Verify regular or extended-stable OpenClaw releases against the exact publication surfaces, workflow identities, package provenance, smoke tests, and live Gateway behavior expected for that release track."
+description: "Verify regular or extended-stable OpenClaw releases against the exact publication surfaces, workflow identities, package provenance, and published CLI smoke tests expected for that release track."
 ---
 
 # Verify Release
@@ -22,7 +22,7 @@ publish skill; use `$release-openclaw-maintainer` before changing release state.
 - If the checkout is dirty or divergent, use it only for scripts/reference.
   For version metadata, fetch from GitHub release/tag or unpack the tag tarball
   under `/tmp`.
-- Never print secrets. Use inherited live keys only for scoped smoke commands.
+- Never print secrets.
 - Keep the final terse: `yes/no`, evidence bullets, caveats, cleanup.
 
 ## Regular beta/stable checks
@@ -61,8 +61,9 @@ Use these checks only for the regular orchestrated release track.
      immutable publication plans, registry readback, and workflow jobs. A selected
      recovery subset must not narrow the full expected release set:
      `gh api repos/openclaw/openclaw/actions/runs/<RUN>/jobs --paginate`.
-   - Each expected npm plugin must have version `<VERSION>` and
-     `dist-tags.latest === <VERSION>`.
+   - For each expected npm plugin, verify the planned version and npm selector
+     from that immutable publication plan. A regular beta publishes to `beta`;
+     do not require it to move `latest`. Verify any planned mirror tags separately.
 4. ClawHub:
    - Check the Plugin ClawHub Release workflow conclusion and publish job count.
    - Use OpenClaw itself for live registry proof:
@@ -82,6 +83,20 @@ Use these checks only for the regular orchestrated release track.
      soak, and blocking performance evidence.
    - Summarize only relevant successful/failed jobs; ignore routine skipped
      optional lanes unless the release body promised them.
+6. Container registries:
+   - Resolve `VERCEL_VCR_IMAGE` from the repository variable and use the
+     trusted tooling checkout to run `scripts/container-registry-readback.mjs`
+     with the exact version, both `ghcr.io/openclaw/openclaw` and
+     `docker.io/openclaw/openclaw`, and the Vercel image. Pass
+     `--include-browser` when the release Dockerfile includes that variant.
+   - Require every default, slim, browser, amd64, and arm64 immutable tag in all
+     three registries, matching cross-registry platform descriptors, and every
+     policy-owned moving alias at the immutable digest and descriptor set.
+     Beta intentionally has zero moving aliases; do not require a `beta`
+     container alias.
+   - Use existing Docker credential state for private Vercel reads. If it is
+     unavailable, report Vercel live readback as a gap rather than treating the
+     workflow conclusion as equivalent proof.
 
 ## Extended-stable checks
 
@@ -111,13 +126,15 @@ the live tag, workflow, registry, provenance, and image state.
    `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <VERSION>`.
    Require signatures, canonical-branch provenance, and publish/preflight
    digest binding to the release SHA. Preserve output and workflow URLs.
-5. **Docker:** verify exact default, slim, browser, and architecture images and
-   attestations in both registries. Only the three `extended-stable*` aliases may
-   resolve to those digests. Require the successful `OpenClaw Release Publish`
-   parent run and its completed Docker verification. The normal route finalizes
-   afterward; an explicitly requested fast path may activate GitHub first. Repair
-   aliases through current-main `Docker Channel Promotion` for the exact tag,
-   without rebuilding.
+5. **Docker:** run `scripts/container-registry-readback.mjs` against
+   GHCR, Docker Hub, and the repository's `VERCEL_VCR_IMAGE`. Require exact
+   default, slim, browser, and architecture images, matching platform descriptor
+   sets, and only the three `extended-stable*` aliases at those immutable
+   digests. Separately verify attestations in GHCR and Docker Hub. Require the
+   successful `OpenClaw Release Publish` parent run and its completed Docker
+   verification. The normal route finalizes afterward; an explicitly requested
+   fast path may activate GitHub first. Repair aliases through current-main
+   `Docker Channel Promotion` for the exact tag, without rebuilding.
 6. **Recovery:** never republish. Use `promote_extended_stable` in the
    `openclaw/releases` dist-tag workflow for the root selector (an unsuffixed
    final patch `33+`) and approved credential-isolated tooling for others, then repeat
@@ -125,31 +142,19 @@ the live tag, workflow, registry, provenance, and image state.
    private dist-tags, or regular `latest`. Require shared release evidence, but
    do not require regular native or ClawHub assets.
 
-## Shared live smoke
+## Published package smoke
 
-After the track-specific publication checks pass:
+After the track-specific publication checks pass, use a disposable
+installation/cache with isolated OpenClaw state:
 
-1. Published package smoke:
-   - In `/tmp`, isolated HOME:
-     `npm exec --yes --package openclaw@<VERSION> -- openclaw --version`.
-   - Run at least one harmless command that touches the published CLI surface,
-     for example `plugins --help` or `gateway --help`.
-2. Dev Gateway live model smoke:
-   - Use temp HOME/workspace, not the user's normal state:
-     `HOME=/tmp/openclaw-release-smoke/home OPENCLAW_WORKSPACE=/tmp/openclaw-release-smoke/work pnpm openclaw --dev gateway run --auth none --force --verbose`.
-   - Resolve the launched Gateway's bound port from its startup output or log.
-   - For `--auth none`, require unauthenticated
-     `GET http://127.0.0.1:<PORT>/healthz` to return HTTP 200 with the exact JSON
-     object `{"ok":true,"status":"live"}`.
-   - Reserve `gateway health --json` for intentionally credentialed or
-     device-paired smoke, passing the explicit credential required by that
-     Gateway.
-   - Run one Gateway-backed agent turn with inherited `OPENAI_API_KEY`, short
-     prompt, explicit session key, JSON output, and a known-available model.
-   - If the configured default model fails as unavailable, record that caveat
-     and retry with the newest known-good OpenAI model instead of declaring the
-     release failed.
-   - Stop the gateway and verify the port is not listening.
+- `npm exec --yes --package openclaw@<VERSION> -- openclaw --version`.
+- Run at least one harmless command that touches the published CLI surface,
+  for example `plugins --help` or `gateway --help`.
+
+Do not start an extra local Gateway or run an ad hoc live model turn as a
+preliminary release check. Use the canonical release-validation workflows and
+publication evidence above; this does not remove any of their required lanes.
+Run additional manual live checks only when explicitly requested.
 
 ## Caveats To Report
 
@@ -160,6 +165,3 @@ After the track-specific publication checks pass:
   missing regular-release artifacts an extended-stable failure.
 - Divergent checkout caveat: say when local source SHA differs from release tag
   or origin and which live sources were used instead.
-- Smoke caveat: distinguish Gateway-backed agent success from local embedded
-  fallback. A valid auth-none live smoke has the exact `/healthz` result plus a
-  successful Gateway-backed agent turn and the Gateway log/run id for that call.

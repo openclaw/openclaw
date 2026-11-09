@@ -13,13 +13,13 @@ import {
 import { normalizeRecallQuery, projectMemorySearchResult } from "./memory-policy.js";
 import type { MemoryStatsSource } from "./memory-stats.js";
 
-function parsePositiveIntegerOption(value: string | undefined, flag: string): number | undefined {
+function parseLimit(value: string | undefined): number | undefined {
   if (value === undefined) {
     return undefined;
   }
   const parsed = parseStrictPositiveInteger(value);
   if (parsed === undefined) {
-    throw new Error(`${flag} must be a positive integer`);
+    throw new Error("--limit must be a positive integer");
   }
   return parsed;
 }
@@ -115,7 +115,30 @@ export function registerMemoryCli(
 ): void {
   api.registerCli(
     ({ program }) => {
-      const memory = program.command("ltm").description("LanceDB memory plugin commands");
+      const memory = program
+        .command("ltm")
+        .description("LanceDB memory plugin commands")
+        .hook("postAction", async () => {
+          await db.close();
+        });
+
+      memory
+        .command("optimize")
+        .description("Compact the local shared table offline, preserving rows and version history")
+        .action(async () => {
+          const { runWithLocalStateOwner } = await import("openclaw/plugin-sdk/cli-state-owner");
+          await runWithLocalStateOwner({
+            method: "memory-lancedb.optimize",
+            params: {},
+            target: "LanceDB memory table",
+            onForeignOwner: "refuse",
+            runLocal: async ({ assertCurrent }) => {
+              const result = await db.optimize(assertCurrent);
+              console.log(`Fragments: ${result.before.fragments} -> ${result.after.fragments}`);
+              console.log(`Rows: ${result.before.rows} -> ${result.after.rows}`);
+            },
+          });
+        });
 
       memory
         .command("list")
@@ -125,7 +148,7 @@ export function registerMemoryCli(
         .option("--order-by-created-at", "Order memories by createdAt descending", false)
         .action(async (opts) => {
           const agentId = resolveCliAgentId(opts.agent);
-          const limit = parsePositiveIntegerOption(opts.limit, "--limit");
+          const limit = parseLimit(opts.limit);
           const entries = await db.list(agentId, limit, {
             orderByCreatedAt: Boolean(opts.orderByCreatedAt),
           });
@@ -142,7 +165,7 @@ export function registerMemoryCli(
           let failure: { error: unknown } | undefined;
           try {
             const agentId = resolveCliAgentId(opts.agent);
-            const limit = parsePositiveIntegerOption(opts.limit, "--limit");
+            const limit = parseLimit(opts.limit);
             const config = resolveConfig();
             const vector = await embeddings.embed(
               agentId,
@@ -180,7 +203,7 @@ export function registerMemoryCli(
           if (order && !selectedColumns.includes(order.column)) {
             selectedColumns.push(order.column);
           }
-          const limit = parsePositiveIntegerOption(opts.limit, "--limit") ?? 10;
+          const limit = parseLimit(opts.limit) ?? 10;
           let rows = await db.query(agentId, {
             columns: selectedColumns,
             filter: parseMemoryCliFilter(opts.filter),

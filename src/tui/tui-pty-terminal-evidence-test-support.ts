@@ -80,6 +80,18 @@ function assertAllowedOsc(body: string) {
   return target;
 }
 
+// Zero-width Program Status Protocol (OSC 7501) support query and run lifecycle reports.
+const programStatusPrefix = "\x1b]7501;";
+const programStatusBody = /^(?:\?|state=clear|state=(?:idle|working|done|error):app=openclaw)$/u;
+
+function isProgramStatusOsc(value: string) {
+  return (
+    value.startsWith(programStatusPrefix) &&
+    value.endsWith("\x1b\\") &&
+    programStatusBody.test(value.slice(programStatusPrefix.length, -2))
+  );
+}
+
 function terminalOutputIsComplete(raw: string) {
   const oscStart = Math.max(raw.lastIndexOf("\x1b]"), raw.lastIndexOf("\u009d"));
   if (oscStart >= 0 && !scanOsc(raw, oscStart + (raw[oscStart] === "\x1b" ? 2 : 1))) {
@@ -136,6 +148,8 @@ function replayTerminalState(
       synchronized = false;
       completedFrame = true;
       matchedFrame ||= framePredicate?.(screen) ?? false;
+    } else if (isProgramStatusOsc(segment.value)) {
+      continue;
     } else if (segment.value.startsWith("\x1b]")) {
       const target = assertAllowedOsc(
         segment.value.slice(2, segment.value.endsWith("\x1b\\") ? -2 : -1),

@@ -2,6 +2,7 @@ name: Website Installer Sync
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - scripts/install.sh
       - scripts/install-cli.sh
@@ -9,6 +10,7 @@ on:
       - scripts/build-installers.mjs
       - scripts/lib/standalone-installers.mjs
       - scripts/install.ps1
+      - test/scripts/install-ps1-entrypoint.ps1
       - .github/workflows/website-installer-sync.yml
   push:
     branches: [main]
@@ -19,6 +21,7 @@ on:
       - scripts/build-installers.mjs
       - scripts/lib/standalone-installers.mjs
       - scripts/install.ps1
+      - test/scripts/install-ps1-entrypoint.ps1
       - .github/workflows/website-installer-sync.yml
   workflow_dispatch:
     inputs:
@@ -32,37 +35,117 @@ permissions:
   contents: read
 
 concurrency:
-  group: website-installer-sync-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  # Passive draft events must not cancel useful validation; conversion intentionally does.
+  group: >-
+    ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
+      && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || format('website-installer-sync-{0}', github.event_name == 'workflow_dispatch' && github.run_id || github.ref) }}
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  scope:
+    name: Select installer platforms
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: &linux_runner_ubuntu ubuntu-24.04
+    outputs:
+      unix: ${{ steps.scope.outputs.unix }}
+      windows: ${{ steps.scope.outputs.windows }}
+    steps:
+      - name: Checkout event merge
+        id: checkout
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Select changed installer platforms
+        id: scope
+        env:
+          INSTALLER_CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const selected = { unix: true, windows: true };
+            if (context.eventName === "pull_request") {
+              try {
+                if (process.env.INSTALLER_CHECKOUT_OUTCOME !== "success") {
+                  throw new Error("event checkout unavailable");
+                }
+                const paths = {
+                  unix: [
+                    "scripts/install.sh",
+                    "scripts/install-cli.sh",
+                    "scripts/install-policy.sh",
+                    "scripts/build-installers.mjs",
+                    "scripts/lib/standalone-installers.mjs",
+                    ".github/workflows/website-installer-sync.yml",
+                  ],
+                  windows: [
+                    "scripts/install.ps1",
+                    "test/scripts/install-ps1-entrypoint.ps1",
+                    ".github/workflows/website-installer-sync.yml",
+                  ],
+                };
+                // Compare the tested merge tree to its exact base; disabling rename
+                // detection keeps both sides of moved installer inputs in scope.
+                for (const [platform, inputs] of Object.entries(paths)) {
+                  const result = await exec.getExecOutput("git", [
+                    "diff", "--quiet", "--no-renames", "HEAD^1", "HEAD", "--", ...inputs,
+                  ], { ignoreReturnCode: true, silent: true });
+                  if (result.exitCode !== 0 && result.exitCode !== 1) {
+                    throw new Error("event diff unavailable");
+                  }
+                  selected[platform] = result.exitCode === 1;
+                }
+              } catch {
+                selected.unix = selected.windows = true;
+                core.warning("Installer path selection unavailable; validating every platform.");
+              }
+            }
+            for (const [platform, enabled] of Object.entries(selected)) {
+              core.setOutput(platform, String(enabled));
+              core.info(`${platform} installer validation: ${enabled ? "enabled" : "skipped (no changed inputs)"}`);
+            }
+
   static:
-    runs-on: ubuntu-24.04
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' }}
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Assemble standalone installers
+        if: needs.scope.outputs.unix == 'true'
         run: node scripts/build-installers.mjs
 
       - name: Shell syntax
+        if: needs.scope.outputs.unix == 'true'
         run: |
           for installer in dist/installers/install.sh dist/installers/install-cli.sh; do
             bash -n "$installer"
           done
 
       - name: ShellCheck
+        if: needs.scope.outputs.unix == 'true'
         run: shellcheck -e SC1091 dist/installers/install.sh dist/installers/install-cli.sh
 
       - name: Installer help and dry-runs
+        if: needs.scope.outputs.unix == 'true'
         run: |
           bash dist/installers/install.sh --help >/tmp/install-help.txt
           bash dist/installers/install.sh --dry-run --no-onboard --no-prompt
           bash dist/installers/install-cli.sh --help >/tmp/install-cli-help.txt
 
       - name: PowerShell syntax
+        if: needs.scope.outputs.windows == 'true'
         shell: pwsh
         run: |
           $errors = $null
@@ -76,7 +159,14 @@ jobs:
           }
 
   linux-docker:
-    runs-on: ubuntu-24.04
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
+    name: Docker installers (${{ matrix.debian }})
+    strategy: &debian_strategy
+      fail-fast: false
+      matrix:
+        debian: [bookworm, trixie]
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -87,7 +177,7 @@ jobs:
         run: |
           timeout --kill-after=30s 20m docker run --rm \
             -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
-            node:24-bookworm-slim \
+            node:24.22.1-${{ matrix.debian }}-slim \
             bash -lc 'bash /tmp/install.sh --version latest && openclaw --version'
 
       - name: install-cli.sh in Docker
@@ -96,11 +186,15 @@ jobs:
             -e OPENCLAW_NO_ONBOARD=1 \
             -e OPENCLAW_NO_PROMPT=1 \
             -v "$PWD/dist/installers/install-cli.sh:/tmp/install-cli.sh:ro" \
-            node:24-bookworm-slim \
+            node:24.22.1-${{ matrix.debian }}-slim \
             bash -lc 'apt-get update -y && apt-get install -y curl && bash /tmp/install-cli.sh --prefix /tmp/openclaw --no-onboard --version latest && /tmp/openclaw/bin/openclaw --version'
 
   debian-installer:
-    runs-on: ubuntu-24.04
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
+    name: Debian installer (${{ matrix.debian }})
+    strategy: *debian_strategy
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -111,7 +205,7 @@ jobs:
         run: |
           timeout --kill-after=30s 20m docker run --rm -i \
             -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
-            debian:bookworm-slim \
+            debian:${{ matrix.debian }}-slim \
             bash -s <<'CONTAINER'
           set -euo pipefail
           apt-get update -qq
@@ -128,7 +222,11 @@ jobs:
           CONTAINER
 
   linux-build-tools-failure:
-    runs-on: ubuntu-24.04
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
+    name: Build tools failure (${{ matrix.debian }})
+    strategy: *debian_strategy
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -139,7 +237,7 @@ jobs:
         run: |
           timeout --kill-after=10s 5m docker run --rm -i \
             -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
-            debian:bookworm \
+            debian:${{ matrix.debian }} \
             bash -s <<'CONTAINER'
           set -euo pipefail
           export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -193,7 +291,11 @@ jobs:
           CONTAINER
 
   linux-non-root:
-    runs-on: ubuntu-24.04
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
+    name: Non-root installer (${{ matrix.debian }})
+    strategy: *debian_strategy
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -204,7 +306,7 @@ jobs:
         run: |
           timeout --kill-after=30s 20m docker run --rm -i \
             -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
-            node:24-bookworm-slim \
+            node:24.22.1-${{ matrix.debian }}-slim \
             bash -s <<'CONTAINER'
           set -euo pipefail
           apt-get update -qq
@@ -231,12 +333,14 @@ jobs:
           CONTAINER
 
   fedora-installer:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
     name: Fedora installer (${{ matrix.user }})
     strategy:
       fail-fast: false
       matrix:
         user: [root, non-root]
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -250,6 +354,7 @@ jobs:
           if [[ "$INSTALL_USER" == "root" ]]; then
             timeout --kill-after=30s 20m docker run --rm -i \
               -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
+              -v "$RUNNER_TEMP/fedora-dnf:/var/log" \
               fedora:44 \
               bash -s <<'CONTAINER'
           set -euo pipefail
@@ -259,10 +364,11 @@ jobs:
           else
             timeout --kill-after=30s 20m docker run --rm -i \
               -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
+              -v "$RUNNER_TEMP/fedora-dnf:/var/log" \
               fedora:44 \
               bash -s <<'CONTAINER'
           set -euo pipefail
-          dnf install -y -q sudo shadow-utils
+          rpm -q sudo shadow-utils >/dev/null 2>&1 || dnf install -y -q sudo shadow-utils
           useradd --create-home --shell /bin/bash installer
           printf '%s\n' 'installer ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/installer
           chmod 0440 /etc/sudoers.d/installer
@@ -280,15 +386,24 @@ jobs:
           CONTAINER
           fi
 
+      - name: Fedora package-manager diagnostics
+        if: failure()
+        run: |
+          if sudo test -f "$RUNNER_TEMP/fedora-dnf/dnf5.log"; then
+            sudo tail -n 200 "$RUNNER_TEMP/fedora-dnf/dnf5.log"
+          fi
+
   macos-installer:
-    runs-on: macos-15
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
+    runs-on: xcode-27
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 24.22.1
 
       - name: Assemble standalone installers
         run: node scripts/build-installers.mjs
@@ -305,14 +420,16 @@ jobs:
           openclaw --version
 
   windows-installer:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.windows == 'true' }}
     runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 24.22.1
 
       - name: install.ps1 strict option binding
         shell: pwsh
@@ -335,6 +452,9 @@ jobs:
             if (-not (Get-Command $hostCommand -ErrorAction SilentlyContinue)) {
               throw "Required PowerShell host is unavailable: $hostCommand"
             }
+
+            & $hostCommand -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test/scripts/install-ps1-entrypoint.ps1 -InstallerPath $scriptPath
+            if ($LASTEXITCODE -ne 0) { throw "$hostCommand failed the piped installer regression." }
 
             $invalidCases = @(
               @{ Label = "unknown option"; Args = @("-DryRnu") },
@@ -385,7 +505,7 @@ jobs:
     if: >
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && inputs.sync_website)
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     env:
       OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}
     steps:
@@ -437,9 +557,9 @@ jobs:
 
       - name: Setup Node.js
         if: steps.changes.outputs.changed == 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: "24.22.1"
 
       - name: Verify website with synced installers
         if: steps.changes.outputs.changed == 'true'

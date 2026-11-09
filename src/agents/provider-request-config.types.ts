@@ -1,3 +1,5 @@
+import type { ModelRequestHeaders } from "../llm/types.js";
+
 /** Auth override accepted from sanitized provider/model request config. */
 export type ProviderRequestAuthOverride =
   | {
@@ -36,15 +38,13 @@ export type ProviderRequestProxyOverride =
       tls?: ProviderRequestTlsOverride;
     };
 
-/** Transport override block shared by provider and model request config. */
 export type ProviderRequestTransportOverrides = {
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   auth?: ProviderRequestAuthOverride;
   proxy?: ProviderRequestProxyOverride;
   tls?: ProviderRequestTlsOverride;
 };
 
-/** Model-scoped transport overrides, including private-network policy. */
 export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOverrides & {
   allowPrivateNetwork?: boolean;
 };

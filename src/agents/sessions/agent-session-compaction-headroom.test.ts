@@ -240,7 +240,9 @@ it.each([
     model,
     settingsManager,
     sessionManager,
-    resourceLoader: createResourceLoader(new Map([["session_before_compact", [hook]]])),
+    resourceLoader: await createResourceLoader((api) => {
+      api.on("session_before_compact", hook);
+    }),
     ...(fixedOnly ? { systemPrompt: "Required operating instructions. ".repeat(340) } : {}),
   });
   const before = structuredClone(sessionManager.getBranch());

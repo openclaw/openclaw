@@ -1,5 +1,4 @@
 #!/usr/bin/env -S node --import tsx
-// Plugin Npm Release Check script supports OpenClaw repository automation.
 
 import { pathToFileURL } from "node:url";
 import {

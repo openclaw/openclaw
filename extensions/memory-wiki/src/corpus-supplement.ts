@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../api.js";
+import type { OpenClawConfig, OpenClawPluginApi } from "../api.js";
 import type { MemoryWikiConfigResolver } from "./config.js";
 import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 
@@ -7,13 +7,7 @@ export function createWikiCorpusSupplement(params: {
   getAppConfig: () => OpenClawConfig | undefined;
 }) {
   return {
-    search: async (input: {
-      query: string;
-      maxResults?: number;
-      agentId?: string;
-      agentSessionKey?: string;
-      sandboxed?: boolean;
-    }) => {
+    search: async (input) => {
       const appConfig = params.getAppConfig();
       const config = params.resolveConfig(input.agentId, appConfig);
       const results = await searchMemoryWiki({
@@ -29,14 +23,7 @@ export function createWikiCorpusSupplement(params: {
       });
       return results.filter((result) => result.corpus === "wiki");
     },
-    get: async (input: {
-      lookup: string;
-      fromLine?: number;
-      lineCount?: number;
-      agentId?: string;
-      agentSessionKey?: string;
-      sandboxed?: boolean;
-    }) => {
+    get: async (input) => {
       const appConfig = params.getAppConfig();
       const config = params.resolveConfig(input.agentId, appConfig);
       const result = await getMemoryWikiPage({
@@ -53,5 +40,5 @@ export function createWikiCorpusSupplement(params: {
       });
       return result?.corpus === "wiki" ? result : null;
     },
-  };
+  } satisfies Parameters<OpenClawPluginApi["registerMemoryCorpusSupplement"]>[0];
 }

@@ -1,32 +1,7 @@
-import type { Server } from "node:http";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { PluginHookToolRequesterContext } from "../../plugins/hook-types.js";
-import type {
-  BeforeToolCallFailureDisposition,
-  DeferredPluginToolApproval,
-  HookContext,
-} from "../agent-tools.before-tool-call.js";
-import type { CodexMcpServersConfig } from "../codex-mcp-config.types.js";
-import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
-import type { retainBeforeToolCallForNativeHookRelay } from "./host-private-capabilities.js";
+import type { PluginJsonValue as JsonValue } from "../../plugins/host-hook-json.js";
+import type { BeforeToolCallFailureDisposition } from "../agent-tools.before-tool-call.js";
 
-type NativeHookRelayApprovalContext = Pick<
-  HookContext,
-  | "approvalReviewerDeviceId"
-  | "trigger"
-  | "turnSourceAccountId"
-  | "turnSourceChannel"
-  | "turnSourceThreadId"
-  | "turnSourceTo"
->;
-
-export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+export type { JsonValue };
 
 export const NATIVE_HOOK_RELAY_EVENTS = [
   "pre_tool_use",
@@ -67,86 +42,6 @@ export type NativeHookRelayProcessResponse = {
   failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
 };
 
-export type NativeHookRelayRegistration = {
-  relayId: string;
-  provider: NativeHookRelayProvider;
-  generationMismatchGraceExpiresAtMs?: number;
-  generationMismatchGraceAcceptedGeneration?: string;
-  agentId?: string;
-  sessionId: string;
-  sessionKey?: string;
-  config?: OpenClawConfig;
-  deferMcpToolApprovals?: boolean;
-  runId: string;
-  channelId?: string;
-  requester?: PluginHookToolRequesterContext;
-  approvalContext?: NativeHookRelayApprovalContext;
-  allowedEvents: readonly NativeHookRelayEvent[];
-  expiresAtMs: number;
-  signal?: AbortSignal;
-  /** Exact host policy capability for authority-bearing native callbacks. */
-  runBeforeToolCall?: AgentHarnessHostCapabilities["runBeforeToolCall"];
-  /** Foreground-only approval authority supplied by the admitted bundled host. */
-  approvalHost?: Pick<AgentHarnessHostCapabilities, "requestApproval" | "waitForApproval">;
-  /** Revalidates the exact admitted owner after authority-bearing awaits. */
-  assertActive?: AgentHarnessHostCapabilities["assertActive"];
-  onPreToolUseFailure?: (failure: {
-    toolName: string;
-    toolCallId: string;
-    disposition: Exclude<BeforeToolCallFailureDisposition, "blocked">;
-    durationMs: number;
-  }) => void | Promise<void>;
-};
-
-export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
-  generation?: string;
-  shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
-  toolMatcherForEvent: (event: NativeHookRelayEvent) => readonly string[] | undefined;
-  commandForEvent: (
-    event: NativeHookRelayEvent,
-    options?: NativeHookRelayCommandForEventOptions,
-  ) => string;
-  renew: (ttlMs?: number) => void;
-  unregister: () => void;
-};
-
-export type RegisterNativeHookRelayParams = {
-  provider: NativeHookRelayProvider;
-  relayId?: string;
-  generation?: string;
-  generationMismatchGraceMs?: number;
-  agentId?: string;
-  sessionId: string;
-  sessionKey?: string;
-  config?: OpenClawConfig;
-  autoApproveMcpTools?: boolean;
-  projectedMcpServers?: CodexMcpServersConfig;
-  runId: string;
-  channelId?: string;
-  requester?: PluginHookToolRequesterContext;
-  approvalContext?: NativeHookRelayApprovalContext;
-  allowedEvents?: readonly NativeHookRelayEvent[];
-  /** Whether this relay should run OpenClaw loop detection from native PreToolUse hooks. */
-  preToolUseLoopDetection?: boolean;
-  ttlMs?: number;
-  command?: NativeHookRelayCommandOptions;
-  signal?: AbortSignal;
-  runBeforeToolCall?: NativeHookRelayRegistration["runBeforeToolCall"];
-  assertActive?: NativeHookRelayRegistration["assertActive"];
-  onPreToolUseFailure?: NativeHookRelayRegistration["onPreToolUseFailure"];
-};
-
-type NativeHookRelayCommandOptions = {
-  executable?: string;
-  nice?: number | false;
-  nodeExecutable?: string;
-  timeoutMs?: number;
-};
-
-type NativeHookRelayCommandForEventOptions = {
-  timeoutMs?: number;
-};
-
 export type InvokeNativeHookRelayParams = {
   provider: unknown;
   relayId: unknown;
@@ -157,6 +52,7 @@ export type InvokeNativeHookRelayParams = {
 };
 
 export type InvokeNativeHookRelayBridgeParams = InvokeNativeHookRelayParams & {
+  signal?: AbortSignal;
   registrationTimeoutMs?: number;
   stateDbPath?: string;
   timeoutMs?: number;
@@ -186,25 +82,6 @@ export type NativeHookRelayPermissionApprovalResult =
   | "timed-out"
   | "defer";
 
-export type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
-  generation: string;
-  preToolUseLoopDetection: boolean;
-  preToolUseFailureProjections: Map<string, { promise: Promise<void>; settled: boolean }>;
-};
-
-export type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistrationHandle & {
-  generation: string;
-};
-
-export type OwnedNativeHookRelayRegistrationHandle = ActiveNativeHookRelayRegistrationHandle & {
-  /** Strict policy preparation and direct publication result. */
-  ready: Promise<void>;
-  /** Requires current foreground authority; direct publication may use the Gateway fallback. */
-  prepareInvocation: () => Promise<void>;
-  /** Joins accepted policy, publication, renewal and cleanup without retiring retained children. */
-  drain: () => Promise<void>;
-};
-
 export type NativeHookRelayPermissionApprovalRequest = {
   provider: NativeHookRelayProvider;
   agentId?: string;
@@ -223,21 +100,6 @@ export type NativeHookRelayPermissionApprovalRequester = (
   request: NativeHookRelayPermissionApprovalRequest,
 ) => Promise<NativeHookRelayPermissionApprovalResult>;
 
-export type NativeHookRelayPendingPermissionApproval = {
-  relayId: string;
-  promise: Promise<NativeHookRelayPermissionApprovalResult>;
-  controller: AbortController;
-  waiters: number;
-  cancelWhenUnobserved: boolean;
-};
-
-export type NativeHookRelayPreToolUseApproval = {
-  relayId: string;
-  deferredApproval: DeferredPluginToolApproval;
-  originalParamsFingerprint: string;
-  resolutionPromise?: Promise<NativeHookRelayDeferredApprovalOutcome>;
-};
-
 export type NativeHookRelayDeferredApprovalOutcome =
   | {
       handled: true;
@@ -249,68 +111,3 @@ export type NativeHookRelayDeferredApprovalOutcome =
       reason: string;
       failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
     };
-
-export type NativeHookRelayBridgeRegistration = {
-  relayId: string;
-  stateDbPath: string;
-  token: string;
-  server: Server;
-  ready: Promise<void>;
-  pending: Promise<void>;
-  cancelStartup: () => void;
-  closing?: Promise<void>;
-};
-
-export type NativeHookRelaySharedState = {
-  relays: Map<string, ActiveNativeHookRelayRegistration>;
-  relayBridges: Map<string, NativeHookRelayBridgeRegistration>;
-  pendingOperations: Set<Promise<unknown>>;
-  invocations: NativeHookRelayInvocation[];
-  pendingPermissionApprovals: Map<string, NativeHookRelayPendingPermissionApproval>;
-  pendingPreToolUseApprovals: Map<string, NativeHookRelayPreToolUseApproval>;
-  permissionApprovalWindows: Map<string, number[]>;
-  permissionAllowAlwaysApprovals: Map<string, { relayId: string; expiresAtMs?: number }>;
-};
-
-/** Private bundled-runtime callbacks for retained direct-child hook policy. */
-type NativeHookRelayRetention = Readonly<{
-  readClaim: (rawPayload: unknown) => string | undefined;
-  shouldRetainAfterForegroundClose: () => boolean;
-  allowPreToolUse: (claim: string) => boolean;
-  awaitForegroundAdmission?: (
-    claim: string,
-    signal?: AbortSignal,
-  ) => Promise<(() => boolean) | undefined>;
-  onDispose: () => void;
-}>;
-
-/** Records bundled native execution custody without granting action permission. */
-export type NativeHookRelayExecutionAdmission = Readonly<{
-  toolNames: readonly string[];
-  /** A returned guard runs after async admission; a reason denies execution before allow. */
-  admit: (
-    invocation: NativeHookRelayInvocation,
-    assertCurrent: () => void,
-    preparation: Readonly<{ signal?: AbortSignal; assertCurrent: () => void }>,
-  ) => void | (() => string | void) | Promise<void | (() => string | void)>;
-}>;
-
-export type NativeHookRelayOwnerOptions = {
-  retention?: NativeHookRelayRetention;
-  approvalHost?: NativeHookRelayRegistration["approvalHost"];
-  executionAdmission?: NativeHookRelayExecutionAdmission;
-};
-
-export type OwnedNativeHookRelayParams = RegisterNativeHookRelayParams &
-  NativeHookRelayOwnerOptions;
-
-export type RelayLifetime = {
-  foregroundOpen: boolean;
-  foregroundToken: symbol;
-  policyReady: Promise<void>;
-  retained?: ReturnType<typeof retainBeforeToolCallForNativeHookRelay>;
-  retention?: NativeHookRelayRetention;
-  executionAdmission?: NativeHookRelayExecutionAdmission;
-  removeAbortListener?: () => void;
-  expiryTimer?: ReturnType<typeof setTimeout>;
-};

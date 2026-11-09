@@ -71,6 +71,8 @@ describe("sessions cleanup model-run preview", () => {
       expect(preview?.summary).toMatchObject({
         modelRunPruned,
         capped,
+        archived: 0,
+        capArchived: capped,
         afterCount: 3 - modelRunPruned,
       });
       expect(preview?.modelRunPrunedKeys.has(modelRunSessionKey)).toBe(modelRunPruned === 1);

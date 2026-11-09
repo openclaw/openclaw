@@ -1,24 +1,24 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { positiveSecondsToSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import {
+  isStandaloneRuntimeExecutable,
+  resolveOpenClawCliInvocation,
+} from "../../../cli-invocation.mjs";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveBrewOpenClawPath } from "../../infra/brew.js";
 import { hasErrnoCode } from "../../infra/errors.js";
+import { UPDATE_GIT_RETRY_DELAYS_MS, withGitNetworkRetry } from "../../infra/git-network-retry.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../../infra/runtime-process-url.js";
+import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
-import {
-  normalizeUpdateFailureFacts,
-  type UpdateFailureFact,
-} from "../../infra/update-failure-facts.js";
-import {
-  createFreeBsdPkgOwnershipInspection,
-  type FreeBsdPkgOwnershipInspection,
-} from "../../infra/update-freebsd-pkg-ownership.js";
 import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
@@ -27,6 +27,7 @@ import {
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
 import { cleanupUpdateTemporaryDirectory } from "../../infra/update-maintenance.js";
+import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
@@ -38,15 +39,21 @@ import {
 } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import {
+  createSystemPackageOwnershipInspection,
+  type SystemPackageOwnershipInspection,
+} from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
+import { resolveCommandProcessSignal } from "../../process/exec-spawn.js";
+import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import { UPDATE_INSTALL_SKIP_GUIDANCE } from "../../shared/update-outcome.js";
 import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { resolveNodeRunner } from "./node-runner.js";
 
+export { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 export { resolveNodeRunner } from "./node-runner.js";
 
 export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"> & {
@@ -66,7 +73,11 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
     /** Immutable original bytes for this invocation; never restoration authority. */
     originalRecoveryCapture?: UpdateRecoveryBaselineRef;
     defaultStepTimeoutMs?: number;
+    /** Retain the admitted SQLite writer allowance through finalization. */
+    busyTimeoutMs?: number;
     activationTimeoutMs?: number;
+    /** Explicit operator budget, minted once by this invocation’s admission. */
+    deadline?: import("../daemon-cli/restart-health-deadline.js").GatewayRestartDeadline;
     env: NodeJS.ProcessEnv;
     /** Candidate-reported admission checks; execution authority remains installed-owned. */
     candidateAdmissionChecks?: readonly string[];
@@ -83,6 +94,7 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
     sourceArtifactLock?: import("@openclaw/fs-safe/file-lock").FileLockHandle;
   };
   acceptCapabilities?: boolean;
+  fullIntegrityCheck?: boolean;
   admission?: "auto" | "installed";
   json?: boolean;
   restart?: boolean;
@@ -107,7 +119,7 @@ export function usesCandidateUpdateAdmission(
 
 export type UpdateFinalizeOptions = Pick<
   UpdateCommandOptions,
-  "acceptCapabilities" | "json" | "channel" | "timeout" | "yes"
+  "acceptCapabilities" | "fullIntegrityCheck" | "json" | "channel" | "timeout" | "yes"
 > & {
   /** Internal external-supervisor handshake; public repair always leaves this false. */
   deferCompletionCache?: boolean;
@@ -115,44 +127,17 @@ export type UpdateFinalizeOptions = Pick<
 
 export type UpdateWizardOptions = Pick<
   UpdateCommandOptions,
-  "runtimeRecoveryEnv" | "acceptCapabilities" | "timeout"
+  "runtimeRecoveryEnv" | "acceptCapabilities" | "fullIntegrityCheck" | "timeout"
 >;
 
-export class UpdatePreMutationError<Reason extends string = string> extends Error {
-  readonly origin?: "candidate-admission";
-  readonly nextAction?: string;
-  readonly recoverySteps?: readonly UpdateRecoveryStep[];
-  readonly failureFacts: UpdateFailureFact[];
-  readonly #stepResult?: Pick<UpdateRunResult, "steps" | "failedStep">;
-
-  get stepResult(): Pick<UpdateRunResult, "steps" | "failedStep"> | undefined {
-    return this.#stepResult;
-  }
-
-  constructor(
-    readonly reason: Reason,
-    message: string,
-    options?: ErrorOptions & {
-      failureFacts?: readonly UpdateFailureFact[];
-      stepResult?: Pick<UpdateRunResult, "steps" | "failedStep">;
-      recoverySteps?: readonly UpdateRecoveryStep[];
-      origin?: "candidate-admission";
-      nextAction?: string;
-    },
-  ) {
-    super(message, options);
-    this.name = "UpdatePreMutationError";
-    this.origin = options?.origin;
-    this.nextAction = options?.nextAction;
-    this.recoverySteps = options?.recoverySteps;
-    // Completed attempts are diagnostics, never recovery authority or enumerable error output.
-    this.#stepResult = options?.stepResult
-      ? { steps: options.stepResult.steps, failedStep: options.stepResult.failedStep }
-      : undefined;
-    this.failureFacts = normalizeUpdateFailureFacts(
-      options?.failureFacts ?? [{ check: reason, code: reason, message }],
+export function parseUpdateChannel(value?: string) {
+  const channel = normalizeUpdateChannel(value);
+  if (value !== undefined && !channel) {
+    throwExpectedCliError(
+      `--channel must be "stable", "extended-stable", "beta", or "dev" (got ${JSON.stringify(value)})`,
     );
   }
+  return channel;
 }
 
 /** Parse the shared timeout contract without exiting an owning operation. */
@@ -181,12 +166,6 @@ export function normalizeTag(value?: string | null): string | null {
   return normalizePackageTagInput(value, [DEFAULT_PACKAGE_NAME]);
 }
 
-function normalizeVersionTag(tag: string): string | null {
-  const trimmed = tag.trim();
-  const cleaned = trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
-  return parseSemver(cleaned) ? cleaned : null;
-}
-
 export { readPackageName, readPackageVersion };
 
 export async function resolveTargetVersion(
@@ -197,8 +176,9 @@ export async function resolveTargetVersion(
   if (!canResolveRegistryVersionForPackageTarget(tag)) {
     return { version: null };
   }
-  const direct = normalizeVersionTag(tag);
-  if (direct) {
+  const trimmed = tag.trim();
+  const direct = trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
+  if (parseSemver(direct)) {
     return { version: direct };
   }
   return await fetchNpmTagVersion({
@@ -217,8 +197,7 @@ export async function isGitCheckout(root: string): Promise<boolean> {
 
 export async function isEmptyDir(targetPath: string): Promise<boolean> {
   try {
-    const entries = await fs.readdir(targetPath);
-    return entries.length === 0;
+    return (await fs.readdir(targetPath)).length === 0;
   } catch {
     return false;
   }
@@ -252,21 +231,16 @@ export async function resolveUpdateRoot(context?: { root: string }): Promise<str
   );
 }
 
-export async function runUpdateStep(params: {
-  name: string;
-  argv: string[];
-  cwd?: string;
-  timeoutMs?: number;
-  progress?: UpdateStepProgress;
-  env?: NodeJS.ProcessEnv;
-  input?: string;
-  runCommand?: Parameters<typeof runStep>[0]["runCommand"];
-  results?: UpdateStepResult[];
-}): Promise<UpdateStepResult> {
+export async function runUpdateStep(
+  params: Omit<Parameters<typeof runStep>[0], "cwd" | "runCommand" | "stepIndex" | "totalSteps"> &
+    Partial<Pick<Parameters<typeof runStep>[0], "cwd" | "runCommand">>,
+): Promise<UpdateStepResult> {
   return await runStep({
     ...params,
     cwd: params.cwd ?? process.cwd(),
-    runCommand: params.runCommand ?? runCommandWithTimeout,
+    runCommand:
+      params.runCommand ??
+      ((argv, options) => runCommandWithTimeout(argv, { ...options, killProcessTree: true })),
     stepIndex: 0,
     totalSteps: 0,
   });
@@ -286,7 +260,7 @@ type StagedGitCheckout = (
 
 async function cloneGitCheckoutTransactionally(
   params: Parameters<typeof ensureGitCheckout>[0],
-): Promise<GitCheckoutResult> {
+): Promise<GitCheckoutResult & { commandResult?: SpawnResult }> {
   const parentDir = path.dirname(params.dir);
   await fs.mkdir(parentDir, { recursive: true });
   const canonicalParentDir = await fs.realpath(parentDir);
@@ -314,7 +288,8 @@ async function cloneGitCheckoutTransactionally(
   const stagingIdentity = await fs.lstat(stagingDir, { bigint: true });
   let cleanupStaging = true;
   let published = false;
-  let result: UpdateStepResult | undefined;
+  let result: UpdateStepResult | null = null;
+  let commandResult: SpawnResult | undefined;
 
   async function ownsDirectory(
     directory: string,
@@ -339,16 +314,21 @@ async function cloneGitCheckoutTransactionally(
     }
   }
 
-  const runOperation = async (): Promise<GitCheckoutResult> => {
+  const runOperation = async (): Promise<void> => {
     result = await runUpdateStep({
       name: "git-clone",
+      runCommand: async (argv, options) => {
+        params.assertCurrent?.();
+        commandResult = await runCommandWithTimeout(argv, options);
+        return commandResult;
+      },
       argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, UPSTREAM_REPOSITORY_URL, stagingDir],
       env: params.env,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
     });
     if (result.exitCode !== 0) {
-      return { checkoutDir: targetDir, step: result };
+      return;
     }
 
     const publish = async (): Promise<string> => {
@@ -361,6 +341,10 @@ async function cloneGitCheckoutTransactionally(
           `The clone destination or staging directory changed before publication: ${targetDir}. The replacement was left unchanged; choose an empty OPENCLAW_GIT_DIR and retry.`,
         );
       }
+      const destinationAppeared = () =>
+        new Error(
+          `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
+        );
       if (!preserveDir) {
         try {
           await fs.lstat(targetDir);
@@ -372,16 +356,12 @@ async function cloneGitCheckoutTransactionally(
           published = true;
           return targetDir;
         }
-        throw new Error(
-          `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
-        );
+        throw destinationAppeared();
       }
 
       const destinationEntries = await fs.readdir(targetDir);
       if (destinationEntries.length !== 1 || destinationEntries[0] !== path.basename(storageRoot)) {
-        throw new Error(
-          `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
-        );
+        throw destinationAppeared();
       }
 
       const entries = (await fs.readdir(stagingDir)).toSorted((a, b) =>
@@ -423,18 +403,17 @@ async function cloneGitCheckoutTransactionally(
     } else {
       await publish();
     }
-    return { checkoutDir: targetDir, step: result };
   };
-  let outcome: { result: GitCheckoutResult } | { error: unknown };
+  let operationFailure: { error: unknown } | undefined;
   try {
-    outcome = { result: await runOperation() };
+    await runOperation();
   } catch (error) {
-    outcome = { error };
+    operationFailure = { error };
     if (hasCommandProcessCleanupError(error)) {
       cleanupStaging = false;
     }
   }
-  let cleanupOutcome: { ok: true } | { ok: false; error: unknown } = { ok: true };
+  let cleanupFailure: { error: unknown } | undefined;
   // The container does not confer ownership of a replaced repository child.
   // Only completed publication permits that child to be absent at cleanup.
   if (cleanupStaging) {
@@ -462,27 +441,27 @@ async function cloneGitCheckoutTransactionally(
         },
       });
     } catch (error) {
-      cleanupOutcome = { ok: false, error };
+      cleanupFailure = { error };
     }
   }
-  if (!cleanupOutcome.ok) {
+  if (cleanupFailure) {
     if (
-      "error" in outcome &&
-      outcome.error !== cleanupOutcome.error &&
-      hasCommandProcessCleanupError(cleanupOutcome.error)
+      operationFailure &&
+      operationFailure.error !== cleanupFailure.error &&
+      hasCommandProcessCleanupError(cleanupFailure.error)
     ) {
       throw new AggregateError(
-        [outcome.error, cleanupOutcome.error],
+        [operationFailure.error, cleanupFailure.error],
         "Git clone and cleanup progress both failed",
-        { cause: outcome.error },
+        { cause: operationFailure.error },
       );
     }
-    throw cleanupOutcome.error;
+    throw cleanupFailure.error;
   }
-  if ("error" in outcome) {
-    throw outcome.error;
+  if (operationFailure) {
+    throw operationFailure.error;
   }
-  return outcome.result;
+  return { checkoutDir: targetDir, step: result, commandResult };
 }
 
 export async function ensureGitCheckout(params: {
@@ -491,6 +470,7 @@ export async function ensureGitCheckout(params: {
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
   useStagedCheckout?: StagedGitCheckout;
+  assertCurrent?: () => void;
 }): Promise<GitCheckoutResult> {
   const gitEnv = params.env ?? (await createGlobalInstallEnv());
   const dirExists = await pathExists(params.dir);
@@ -501,13 +481,38 @@ export async function ensureGitCheckout(params: {
         `OPENCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
       );
     }
-    return await cloneGitCheckoutTransactionally({
-      dir: params.dir,
-      env: gitEnv,
-      timeoutMs: params.timeoutMs,
-      progress: params.progress,
-      useStagedCheckout: params.useStagedCheckout,
-    });
+    // Each attempt settles its transaction and disposes partial artifacts before
+    // retry admission. An uncertain cleanup retains its warning and stops retries.
+    const result = await withGitNetworkRetry(
+      "clone",
+      {
+        timeoutMs: params.timeoutMs,
+        retryDelaysMs: UPDATE_GIT_RETRY_DELAYS_MS,
+        signal: resolveCommandProcessSignal(),
+      },
+      async (timeoutMs) => {
+        const { commandResult, ...checkout } = await cloneGitCheckoutTransactionally({
+          ...params,
+          env: gitEnv,
+          timeoutMs: timeoutMs ?? params.timeoutMs,
+        });
+        // Classify native stderr before the step's diagnostic tail truncates it.
+        return {
+          ...commandResult,
+          checkout,
+          code: commandResult ? commandResult.code : null,
+          stderr: commandResult?.stderr ?? "",
+          termination: commandResult?.termination ?? ("signal" as const),
+          cleanup: checkout.step?.warnings?.length ? "uncertain" : commandResult?.cleanup,
+        };
+      },
+    );
+    if (result.checkout.step) {
+      result.checkout.step.exitCode = result.code;
+      result.checkout.step.termination = result.termination;
+      result.checkout.step.signal = result.signal;
+    }
+    return result.checkout;
   }
 
   if ((await readPackageName(params.dir)) !== DEFAULT_PACKAGE_NAME) {
@@ -520,25 +525,32 @@ export async function ensureGitCheckout(params: {
   return { checkoutDir: await fs.realpath(params.dir), step: null };
 }
 
+/** Inspect installation ownership without package-manager discovery or cache writes. */
+export async function assertGlobalUpdateOwner(
+  params: Parameters<typeof resolveGlobalManager>[0],
+): Promise<void> {
+  await (
+    params.pkgOwnership ?? createSystemPackageOwnershipInspection(params.timeoutMs)
+  ).assertUnowned(params.root);
+  if (params.installKind !== "git" && (await resolveBrewOpenClawPath(params.root))) {
+    const reason = resolveUnmanagedUpdateInstallReason();
+    throw new UpdatePreMutationError(
+      reason,
+      "This OpenClaw installation is managed by Homebrew. To update OpenClaw, run:\n\n  brew upgrade openclaw-cli\n\nThen restart the gateway:\n\n  openclaw gateway restart",
+      { failureFacts: [] },
+    );
+  }
+}
+
 export async function resolveGlobalManager(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
   timeoutMs: number;
-  pkgOwnership?: FreeBsdPkgOwnershipInspection;
+  pkgOwnership?: SystemPackageOwnershipInspection;
   serviceUnitTarget?: string;
 }): Promise<GlobalInstallManager> {
-  await (
-    params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(params.timeoutMs)
-  ).assertUnowned(params.root);
+  await assertGlobalUpdateOwner(params);
   if (params.installKind !== "git") {
-    if (await resolveBrewOpenClawPath(params.root)) {
-      const reason = resolveUnmanagedUpdateInstallReason();
-      throw new UpdatePreMutationError(
-        reason,
-        "This OpenClaw installation is managed by Homebrew. To update OpenClaw, run:\n\n  brew upgrade openclaw-cli\n\nThen restart the gateway:\n\n  openclaw gateway restart",
-        { failureFacts: [] },
-      );
-    }
     const diagnostics: string[] = [];
     const detected = await detectGlobalInstallManagerForRoot(
       runCommandWithTimeout,
@@ -577,23 +589,27 @@ export async function tryWriteCompletionCache(
   timeoutMs = COMPLETION_CACHE_WRITE_TIMEOUT_MS,
   nodeRunner = resolveNodeRunner(),
 ): Promise<"completed" | "failed" | "skipped"> {
-  const binPath = path.join(root, "openclaw.mjs");
-  if (!(await pathExists(binPath))) {
+  const binPath = fileURLToPath(resolveExternalPackageRuntimeEntrypointUrl("cliLauncher", root));
+  const standalone = isStandaloneRuntimeExecutable(nodeRunner);
+  if (!standalone && !(await pathExists(binPath))) {
     return "skipped";
   }
 
   let failure: string;
   try {
-    const result = await runCommandWithTimeout(
-      [nodeRunner, binPath, "completion", "--write-state"],
-      {
-        cwd: root,
-        env: { ...process.env, [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },
-        input: "",
-        timeoutMs,
-        killProcessTree: true,
-      },
-    );
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: nodeRunner,
+      entryPath: standalone ? undefined : binPath,
+      execArgv: [],
+      args: ["completion", "--write-state"],
+    });
+    const result = await runCommandWithTimeout([invocation.command, ...invocation.args], {
+      cwd: root,
+      env: { ...process.env, [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },
+      input: "",
+      timeoutMs,
+      killProcessTree: true,
+    });
     if (result.code === 0) {
       return "completed";
     }
@@ -602,6 +618,9 @@ export async function tryWriteCompletionCache(
         ? `timed out after ${timeoutMs / 1000}s`
         : result.stderr.trim();
   } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     failure = String(error);
   }
   if (!jsonMode) {
@@ -647,25 +666,24 @@ export async function confirmUpdateDowngrade(params: {
     tag,
   });
   const run = opts.run!;
+  if (decision === "confirmed") {
+    return true;
+  }
+  finishUpdateRun(
+    run.runId,
+    {
+      status: "skipped",
+      reason: decision === "cancelled" ? "cancelled" : "downgrade-confirmation-required",
+    },
+    run,
+  );
   if (decision === "confirmation-required") {
-    finishUpdateRun(
-      run.runId,
-      { status: "skipped", reason: "downgrade-confirmation-required" },
-      { env: run.env },
-    );
     defaultRuntime.error(
       "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
     );
-    defaultRuntime.exit(1);
-    return false;
+  } else if (!opts.json) {
+    defaultRuntime.log(theme.muted("Update cancelled."));
   }
-  if (decision === "cancelled") {
-    finishUpdateRun(run.runId, { status: "skipped", reason: "cancelled" }, { env: run.env });
-    if (!opts.json) {
-      defaultRuntime.log(theme.muted("Update cancelled."));
-    }
-    defaultRuntime.exit(0);
-    return false;
-  }
-  return true;
+  defaultRuntime.exit(decision === "confirmation-required" ? 1 : 0);
+  return false;
 }

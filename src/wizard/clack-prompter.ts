@@ -67,43 +67,16 @@ function resolveNavigationDirection(
   return undefined;
 }
 
-function hasPromptNavigation(navigation: WizardPromptNavigation | undefined): boolean {
-  return navigation?.canGoBack === true || navigation?.canGoForward === true;
-}
-
-async function withHorizontalCursorActionsDisabled<T>(
-  disabled: boolean,
-  work: () => Promise<T>,
-): Promise<T> {
-  if (!disabled) {
-    return await work();
-  }
-
-  const hadLeft = settings.actions.has("left");
-  const hadRight = settings.actions.has("right");
-  settings.actions.delete("left");
-  settings.actions.delete("right");
-  try {
-    return await work();
-  } finally {
-    if (hadLeft) {
-      settings.actions.add("left");
-    }
-    if (hadRight) {
-      settings.actions.add("right");
-    }
-  }
-}
-
 async function runPromptWithNavigation<T>(
   navigation: WizardPromptNavigation | undefined,
   work: (signal: AbortSignal | undefined) => Promise<T | symbol>,
   output: NodeJS.WriteStream,
   externalSignal?: AbortSignal,
 ): Promise<T> {
-  // Restore cursor actions after cancellation handling and stdin cleanup, so
-  // Clack cannot consume navigation keys during prompt finalization.
-  return await withHorizontalCursorActionsDisabled(hasPromptNavigation(navigation), async () => {
+  const navigationEnabled = navigation?.canGoBack === true || navigation?.canGoForward === true;
+  const hadLeft = navigationEnabled && settings.actions.delete("left");
+  const hadRight = navigationEnabled && settings.actions.delete("right");
+  try {
     const controller = new AbortController();
     const signal = externalSignal
       ? AbortSignal.any([controller.signal, externalSignal])
@@ -158,7 +131,15 @@ async function runPromptWithNavigation<T>(
       process.stdin.off("end", queueCancellation);
       process.stdin.off("keypress", onKeypress);
     }
-  });
+  } finally {
+    // Restore after cancellation handling and stdin cleanup, not during prompt finalization.
+    if (hadLeft) {
+      settings.actions.add("left");
+    }
+    if (hadRight) {
+      settings.actions.add("right");
+    }
+  }
 }
 
 export function tokenizedOptionFilter<T>(search: string, option: Option<T>): boolean {
@@ -206,7 +187,7 @@ export function createClackPrompter(
             : params.navigation
               ? selectWithNavigationFooter
               : select;
-          return await prompt({
+          return await prompt<(typeof params.options)[number]["value"]>({
             message,
             options,
             initialValue: params.initialValue,

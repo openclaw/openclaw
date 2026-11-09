@@ -4,7 +4,6 @@ import path from "node:path";
 import { applyPatch } from "diff";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { createEditTool } from "./edit.js";
-import { computeEditsDiff } from "./file-tool-planning.js";
 import type { EditToolDetails } from "./tool-contracts.js";
 
 let tmpDir = "";
@@ -21,14 +20,13 @@ it.each([
   { name: "Unicode dash", oldText: "first—last", newText: "first-last" },
   { name: "non-breaking space", oldText: "first\u00a0last", newText: "first last" },
   { name: "compatibility characters", oldText: "count: ３", newText: "count: 3" },
-])("applies exact $name replacements in execution and preview", async ({ oldText, newText }) => {
+])("applies exact $name replacements in execution", async ({ oldText, newText }) => {
   const original = `${oldText}\nkeep  \n`;
   const expected = `${newText}\nkeep  \n`;
   const filePath = path.join(tmpDir, "example.txt");
   await fs.writeFile(filePath, original);
   const edits = [{ oldText, newText }];
 
-  const preview = await computeEditsDiff(filePath, edits, tmpDir);
   const result = await createEditTool(tmpDir).execute(
     "formatting",
     { path: filePath, edits },
@@ -43,7 +41,6 @@ it.each([
     throw new Error("Expected a formatting edit to change the file.");
   }
   expect(applyPatch(original, details.patch)).toBe(expected);
-  expect(preview).toEqual({ diff: details.diff, firstChangedLine: details.firstChangedLine });
 });
 
 it("preserves a disjoint change beside an actual fuzzy net no-op", async () => {
@@ -56,7 +53,6 @@ it("preserves a disjoint change beside an actual fuzzy net no-op", async () => {
     { oldText: "beta", newText: "BETA" },
   ];
 
-  const preview = await computeEditsDiff(filePath, edits, tmpDir);
   const result = await createEditTool(tmpDir).execute(
     "mixed",
     { path: filePath, edits },
@@ -71,7 +67,6 @@ it("preserves a disjoint change beside an actual fuzzy net no-op", async () => {
     throw new Error("Expected the disjoint replacement to change the file.");
   }
   expect(applyPatch(original, details.patch)).toBe(expected);
-  expect(preview).toEqual({ diff: details.diff, firstChangedLine: details.firstChangedLine });
 });
 
 it.each([

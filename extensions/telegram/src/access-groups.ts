@@ -47,19 +47,15 @@ export async function resolveTelegramDmAllow(params: {
   senderId?: string;
 }): Promise<{
   allowFrom?: Array<string | number>;
-  expandedAllowFrom: string[];
   effectiveAllow: NormalizedAllowFrom;
 }> {
   const allowFrom = params.groupAllowOverride ?? params.allowFrom;
   const expandedAllowFrom = await expandTelegramAllowFromWithAccessGroups({
-    cfg: params.cfg,
+    ...params,
     allowFrom,
-    accountId: params.accountId,
-    senderId: params.senderId,
   });
   return {
     allowFrom,
-    expandedAllowFrom,
     effectiveAllow: normalizeDmAllowFromWithStore({
       allowFrom: expandedAllowFrom,
       storeAllowFrom: params.storeAllowFrom,

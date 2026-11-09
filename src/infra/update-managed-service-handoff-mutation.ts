@@ -6,18 +6,37 @@ import {
   createManagedHandoffLeaseDatabase,
   leaseQueries,
 } from "./update-managed-service-handoff-database.js";
-import type { ManagedHandoffParent } from "./update-managed-service-handoff-lease-types.js";
-import type { createManagedHandoffLeaseRows } from "./update-managed-service-handoff-rows.js";
+import type {
+  ManagedHandoffLease,
+  ManagedHandoffParent,
+} from "./update-managed-service-handoff-lease-types.js";
+import type { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
+import {
+  managedHandoffLeaseRow,
+  type createManagedHandoffLeaseRows,
+} from "./update-managed-service-handoff-rows.js";
 import { isRetiredManagedHandoffLeasePayload } from "./update-managed-service-handoff-schema.js";
 
 type Rows = ReturnType<typeof createManagedHandoffLeaseRows>;
-/** Original cancellation's row/lineage checks over the receiver's existing store. */
+/** Live row, lineage and process authority over the receiver's existing store. */
 export function createManagedHandoffMutationReader(
-  deps: Pick<Rows, "row" | "handle" | "sameRow" | "currentLegacyParent"> & {
-    withDatabase: ReturnType<typeof createManagedHandoffLeaseDatabase>;
-  },
+  deps: Pick<Rows, "row" | "handle" | "sameRow" | "currentLegacyParent"> &
+    Pick<
+      ReturnType<typeof createManagedHandoffProcessIdentityReader>,
+      "isProcessIdentityCurrent" | "acceptSelfIdentity"
+    > & {
+      withDatabase: ReturnType<typeof createManagedHandoffLeaseDatabase>;
+    },
 ) {
-  const { row, handle, sameRow, currentLegacyParent, withDatabase } = deps;
+  const {
+    row,
+    handle,
+    sameRow,
+    currentLegacyParent,
+    withDatabase,
+    isProcessIdentityCurrent,
+    acceptSelfIdentity,
+  } = deps;
   function storedCurrent(lease: ManagedHandoffParent, db: HandoffDatabase): boolean {
     if (lease.version === 1) {
       return currentLegacyParent(lease, db);
@@ -25,10 +44,7 @@ export function createManagedHandoffMutationReader(
     const value = row(db, lease.key);
     return Boolean(
       value &&
-      sameRow(
-        { owner: lease.owner, payload_json: lease.payload, updated_at: lease.updatedAt },
-        value,
-      ) &&
+      sameRow(managedHandoffLeaseRow(lease), value) &&
       isDeepStrictEqual(handle(lease.key, value), lease),
     );
   }
@@ -37,10 +53,7 @@ export function createManagedHandoffMutationReader(
       return true;
     }
     const original = lease.mutationOriginal;
-    return sameRow(
-      { owner: original.owner, payload_json: original.payload, updated_at: original.updatedAt },
-      row(db, original.key),
-    );
+    return sameRow(managedHandoffLeaseRow(original), row(db, original.key));
   }
   function ancestorsAllowMutation(
     key: string,
@@ -55,10 +68,7 @@ export function createManagedHandoffMutationReader(
         if (!orphanCommand) {
           return false;
         }
-        marker = key.indexOf("/.openclaw-update-child-", marker + 1);
-        continue;
-      }
-      if (!isRetiredManagedHandoffLeasePayload(ancestor.payload_json)) {
+      } else if (!isRetiredManagedHandoffLeasePayload(ancestor.payload_json)) {
         const lease = handle(ancestorKey, ancestor);
         if (lease.version === 4 || !originalAllowsMutation(lease, db)) {
           return false;
@@ -94,14 +104,9 @@ export function createManagedHandoffMutationReader(
     ) {
       return false;
     }
-    if (
-      childAliases(lease.key, db).some(
-        (key) => !ancestorsAllowMutation(key, db, Boolean(managedCommandCustody(lease))),
-      )
-    ) {
-      return false;
-    }
-    return true;
+    return !childAliases(lease.key, db).some(
+      (key) => !ancestorsAllowMutation(key, db, Boolean(managedCommandCustody(lease))),
+    );
   }
   function current(lease: ManagedHandoffParent) {
     try {
@@ -110,5 +115,60 @@ export function createManagedHandoffMutationReader(
       return false;
     }
   }
-  return { storedCurrent, originalAllowsMutation, childAliases, mutationCurrent, current };
+  function ownsProcess(lease: ManagedHandoffLease, role: "helper" | "executor") {
+    return (
+      !(
+        lease.action.kind === "triage" &&
+        ["closing", "closed", "uncertain"].includes(lease.action.phase)
+      ) &&
+      lease[role].pid === process.pid &&
+      isProcessIdentityCurrent(lease.helper) &&
+      acceptSelfIdentity(lease[role])
+    );
+  }
+  function owns(lease: ManagedHandoffLease, role: "helper" | "executor" = "helper") {
+    return current(lease) && ownsProcess(lease, role);
+  }
+  function ownsDelegation(
+    parents: readonly ManagedHandoffParent[],
+    receivers: readonly ManagedHandoffLease[],
+  ) {
+    // Share only this synchronous assertion's snapshot, retaining distinct
+    // parent and receiver roles even when they name the same full lease.
+    const unique = <T>(leases: readonly T[]) =>
+      leases.filter(
+        (lease, index) => leases.findIndex((other) => isDeepStrictEqual(other, lease)) === index,
+      );
+    const parentLeases = unique(parents);
+    const receiverLeases = unique(receivers);
+    try {
+      if (
+        !withDatabase(
+          false,
+          (db) =>
+            parentLeases.every((lease) => mutationCurrent(lease, db)) &&
+            receiverLeases.every((lease) => mutationCurrent(lease, db)),
+        )
+      ) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+    return (
+      parentLeases.every(
+        (lease) =>
+          isProcessIdentityCurrent(lease.helper) && isProcessIdentityCurrent(lease.executor),
+      ) && receiverLeases.every((lease) => ownsProcess(lease, "executor"))
+    );
+  }
+  return {
+    storedCurrent,
+    originalAllowsMutation,
+    childAliases,
+    mutationCurrent,
+    current,
+    owns,
+    ownsDelegation,
+  };
 }

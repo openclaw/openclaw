@@ -1,21 +1,24 @@
 import fs from "node:fs/promises";
-import http from "node:http";
 import path from "node:path";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
-import { isJsonObject } from "./protocol.js";
 import { createCodexAppServerBindingStore, sessionBindingIdentity } from "./session-binding.js";
 import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import {
-  createAppServerOptions,
   createParams,
   resetThreadLifecycleTestFixtures,
 } from "./thread-lifecycle.test-fixtures.js";
+import {
+  listenForNativeResponses,
+  nativeAppServerOptions,
+  nativeProviderConfig,
+  runNativeTurn,
+  sendNativeResponse,
+} from "./thread-native.test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 vi.unmock("node:child_process");
@@ -38,7 +41,7 @@ describe("native Codex cold thread recovery", () => {
       vi.stubEnv("HOME", native.env.HOME);
       vi.stubEnv("CODEX_HOME", native.codexHome);
       let requests = 0;
-      const server = http.createServer((request, response) => {
+      const port = await listenForNativeResponses(context, (request, response) => {
         request.resume();
         request.on("end", () => {
           if (request.method !== "POST" || request.url !== "/v1/responses") {
@@ -46,93 +49,25 @@ describe("native Codex cold thread recovery", () => {
             return;
           }
           requests += 1;
-          const events = [
-            { type: "response.created", response: { id: "recovered-response" } },
-            {
-              type: "response.output_item.done",
-              item: {
-                type: "message",
-                role: "assistant",
-                id: "recovered-answer",
-                content: [{ type: "output_text", text: "Recovered conversation." }],
-              },
-            },
-            {
-              type: "response.completed",
-              response: {
-                id: "recovered-response",
-                usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-              },
-            },
-          ];
-          response.writeHead(200, { "Content-Type": "text/event-stream" });
-          response.end(
-            events
-              .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-              .join(""),
-          );
+          sendNativeResponse(response, "recovered-response", {
+            type: "message",
+            role: "assistant",
+            id: "recovered-answer",
+            content: [{ type: "output_text", text: "Recovered conversation." }],
+          });
         });
       });
-      context.onTestFinished(async () => {
-        server.closeAllConnections();
-        if (server.listening) {
-          await new Promise<void>((resolve, reject) => {
-            server.close((error) => (error ? reject(error) : resolve()));
-          });
-        }
-      });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing loopback provider address");
-      }
       await fs.writeFile(
         path.join(native.codexHome, "config.toml"),
-        [
-          'model="gpt-5.6-luna"',
-          'model_provider="recovery-fixture"',
-          'cli_auth_credentials_store="ephemeral"',
-          'web_search="disabled"',
-          'approval_policy="never"',
-          'sandbox_mode="read-only"',
-          "allow_login_shell=false",
-          "[features]",
-          "shell_snapshot=false",
-          "[analytics]",
-          "enabled=false",
-          "[feedback]",
-          "enabled=false",
-          "[model_providers.recovery-fixture]",
-          'name="Synthetic recovery provider"',
-          `base_url="http://127.0.0.1:${address.port}/v1"`,
-          'wire_api="responses"',
-          "requires_openai_auth=false",
-          "supports_websockets=false",
-          "request_max_retries=0",
-          "stream_max_retries=0",
-        ].join("\n"),
-      );
-      const agentDir = path.join(root, "agent");
-      const childEnv = Object.fromEntries(
-        Object.entries(native.env).filter(
-          (entry): entry is [string, string] => entry[1] !== undefined,
+        nativeProviderConfig(
+          "recovery-fixture",
+          port,
+          ['sandbox_mode="read-only"', "allow_login_shell=false"],
+          ["shell_snapshot=false"],
         ),
       );
-      const appServer = {
-        ...createAppServerOptions(),
-        start: {
-          transport: "stdio" as const,
-          command: native.command,
-          commandSource: "config" as const,
-          args: ["app-server"],
-          cwd: native.cwd,
-          headers: {},
-          env: childEnv,
-          clearEnv: Object.keys(process.env).filter((key) => !(key in childEnv)),
-        },
-      };
+      const agentDir = path.join(root, "agent");
+      const appServer = nativeAppServerOptions(native);
       const client = await createIsolatedCodexAppServerClient({
         startOptions: appServer.start,
         agentDir,
@@ -146,6 +81,7 @@ describe("native Codex cold thread recovery", () => {
       expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
       const params = {
         ...createParams(path.join(root, "session.jsonl"), native.cwd),
+        disableTools: false,
         agentId: "main",
         agentDir,
         modelId: "gpt-5.6-luna",
@@ -191,22 +127,9 @@ describe("native Codex cold thread recovery", () => {
         lifecycle: { action: "started" },
       });
       expect(bindingStore.read(identity)?.threadId).toBe(recovered.threadId);
-      const completed = createDeferred<unknown>();
-      const removeHandler = client.addNotificationHandler((notification) => {
-        if (
-          notification.method === "turn/completed" &&
-          isJsonObject(notification.params) &&
-          notification.params.threadId === recovered.threadId
-        ) {
-          completed.resolve(notification.params.turn);
-        }
-      });
-      context.onTestFinished(removeHandler);
-      await client.request("turn/start", {
-        threadId: recovered.threadId,
-        input: [{ type: "text", text: "Continue the conversation.", text_elements: [] }],
-      });
-      await expect(completed.promise).resolves.toMatchObject({ status: "completed" });
+      await expect(
+        runNativeTurn(client, recovered.threadId, "Continue the conversation."),
+      ).resolves.toMatchObject({ status: "completed" });
       expect(requests).toBe(1);
       const history = await client.request("thread/read", {
         threadId: recovered.threadId,

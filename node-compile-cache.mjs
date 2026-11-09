@@ -1,20 +1,149 @@
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
+import * as module from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { isMainThread, Worker, workerData } from "node:worker_threads";
+import { fileURLToPath } from "node:url";
+import { isMainThread } from "node:worker_threads";
+
+if (isMainThread && process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "gateway") {
+  // Node has already started uncached. Restore worker caching after the respawn.
+  delete process.env.NODE_DISABLE_COMPILE_CACHE;
+  delete process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED;
+}
 
 const MAX_BYTES = 512 * 1024 * 1024;
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000;
+const MAX_FILES = 4096;
+const MAX_VISITS = 16384;
+const MAINTENANCE_BUDGET_MS = 30_000;
 const BUILD_MARKER_RE = /^(?:[a-f0-9]{16}|\d+-\d+|no-package-json|build-[A-Za-z0-9._-]+)$/;
 const sanitize = (value) => {
   const segment = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return segment && segment !== "." && segment !== ".." ? segment : "unknown";
 };
 
-export function resolveOpenClawCompileCacheDirectory({ installRoot, env = process.env }) {
+function isCurrentCompileCache(directory, env) {
+  const current = module.getCompileCacheDir?.();
+  const desired = path.resolve(directory);
+  return (
+    current &&
+    (path.resolve(current) === desired ||
+      (env.NODE_COMPILE_CACHE &&
+        path.resolve(env.NODE_COMPILE_CACHE) === desired &&
+        path.dirname(path.resolve(current)) === desired))
+  );
+}
+
+export function resolveOpenClawCompileCacheRespawnEnv({
+  directory,
+  env = process.env,
+  foregroundGateway = false,
+}) {
+  // Keep a caller-owned cache when Node permissions can forbid process replacement.
+  if (
+    process.permission ||
+    env.NODE_DISABLE_COMPILE_CACHE !== undefined ||
+    (env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "1" && !foregroundGateway) ||
+    !directory ||
+    !module.getCompileCacheDir?.()
+  ) {
+    return undefined;
+  }
+  if (foregroundGateway && isMainThread) {
+    return {
+      ...env,
+      NODE_COMPILE_CACHE: directory,
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "gateway",
+    };
+  }
+  if (isCurrentCompileCache(directory, env)) {
+    return undefined;
+  }
+  return {
+    ...env,
+    NODE_COMPILE_CACHE: directory,
+    OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
+  };
+}
+
+export function enableOpenClawCompileCache({
+  directory,
+  env = process.env,
+  foregroundGateway = false,
+}) {
+  if (!directory || env.NODE_DISABLE_COMPILE_CACHE !== undefined) {
+    return;
+  }
+  const owner = (globalThis[Symbol.for("openclaw.nodeCompileCacheBase")] ??= {});
+  if (foregroundGateway && isMainThread) {
+    // Main-thread synchronous cache flushes stall the event loop; workers keep
+    // this cache base and flush on their own threads at their existing boundaries.
+    owner.baseDirectory ??= path.resolve(directory);
+    void maintainOpenClawCompileCache(directory);
+    return;
+  }
+  try {
+    const result = module.enableCompileCache(directory);
+    if (
+      result.status === module.constants.compileCacheStatus.ENABLED ||
+      (result.status === module.constants.compileCacheStatus.ALREADY_ENABLED &&
+        isCurrentCompileCache(directory, env))
+    ) {
+      owner.baseDirectory ??= path.resolve(directory);
+      void maintainOpenClawCompileCache(directory);
+      return;
+    }
+    if (result.status === module.constants.compileCacheStatus.ALREADY_ENABLED) {
+      return;
+    }
+  } catch {
+    // Disposable bytecode must never prevent startup.
+  }
+  if (!owner.unavailableReported) {
+    owner.unavailableReported = true;
+    process.stderr.write("[openclaw] Compile cache unavailable; continuing without it.\n");
+  }
+}
+
+// Node owns pending bytecode per isolate. Drain it after module loading instead
+// of leaving the whole graph for native worker/process teardown.
+export function scheduleOpenClawCompileCacheFlush() {
+  if (!module.getCompileCacheDir?.()) {
+    return;
+  }
+  const owner = (globalThis[Symbol.for("openclaw.nodeCompileCacheBase")] ??= {});
+  if (owner.flush) {
+    return;
+  }
+  owner.flush = setImmediate(() => {
+    owner.flush = undefined;
+    try {
+      module.flushCompileCache();
+    } catch {
+      // Disposable bytecode must never fail startup or a completed worker task.
+    }
+  });
+  owner.flush.unref();
+}
+
+export function resolveOpenClawCompileCacheDirectory({
+  installRoot,
+  env = process.env,
+  foregroundGateway = false,
+  prewarm = false,
+}) {
+  if (env.NODE_DISABLE_COMPILE_CACHE !== undefined) {
+    return undefined;
+  }
+  // Cold cache persistence runs after output on Node and Bun. Pay that cost only
+  // for a long-lived Gateway, explicit prewarming, or a caller-requested cache.
+  if (!prewarm && !foregroundGateway && env.NODE_COMPILE_CACHE === undefined) {
+    return undefined;
+  }
   const packagePath = path.join(installRoot, "package.json");
   let version = "unknown";
   let marker = "no-package-json";
@@ -60,37 +189,47 @@ export function resolveSafeNodeCompileCacheDirectory(directory) {
   return directory;
 }
 
-export async function maintainOpenClawCompileCache(directory) {
-  // Node permission grants and later revocations do not extend to workers.
+async function maintainOpenClawCompileCache(directory) {
+  // A detached process cannot inherit Node permission grants or revocations.
   if (process.permission) {
-    return undefined;
+    return;
   }
   const owner = (globalThis[Symbol.for("openclaw.nodeCompileCacheBase")] ??= {});
-  const pending = (owner.maintenance ??= new Map());
-  if (pending.has(directory)) {
-    return pending.get(directory);
+  const scheduled = (owner.maintenance ??= new Set());
+  if (scheduled.has(directory)) {
+    return;
   }
-  const task = new Promise((resolve) => {
-    const worker = new Worker(new URL(import.meta.url), {
-      workerData: { openclawCompileCacheDirectory: directory },
-      // Maintenance must not replay CLI entry preloads or application loaders.
-      execArgv: [],
-      env: Object.fromEntries(
-        Object.entries(process.env).filter(([name]) => !/^(NODE_OPTIONS|BUN_OPTIONS)$/i.test(name)),
-      ),
-    });
-    worker.on("error", () => {});
-    worker.once("exit", () => resolve());
-    // Callers can await completed cleanup, but unawaited cache work must not
-    // extend a command's lifetime. A Promise alone does not keep Node alive.
-    worker.unref();
-  })
-    .catch(() => {
-      // Disposable bytecode must never prevent startup or command completion.
-    })
-    .finally(() => pending.delete(directory));
-  pending.set(directory, task);
-  return task;
+  scheduled.add(directory);
+  try {
+    const previous = await fs.lstat(path.dirname(path.dirname(directory))).catch(() => undefined);
+    if (previous && Date.now() - previous.mtimeMs < MAINTENANCE_INTERVAL_MS) {
+      return;
+    }
+    const { spawn } = await import("node:child_process");
+    const child = spawn(
+      process.execPath,
+      [fileURLToPath(import.meta.url), "--maintain", directory],
+      {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+        // Do not replay application preloads or write maintenance's own bytecode.
+        env: {
+          ...Object.fromEntries(
+            Object.entries(process.env).filter(
+              ([name]) => !/^(NODE_OPTIONS|BUN_OPTIONS)$/i.test(name),
+            ),
+          ),
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
+        },
+      },
+    );
+    child.on("error", () => {});
+    child.unref();
+  } catch {
+    // Disposable bytecode must never prevent startup or command completion.
+  }
 }
 
 async function maintain(directory) {
@@ -111,56 +250,109 @@ async function maintain(directory) {
       return;
     }
   }
-  await fs.mkdir(directory, { recursive: true });
-  let retired = false;
-  for (const entry of await fs.readdir(root, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const versionRoot = path.join(root, entry.name);
-    for (const build of await fs.readdir(versionRoot, { withFileTypes: true })) {
-      const candidate = path.join(versionRoot, build.name);
-      if (build.isDirectory() && candidate !== directory) {
-        await fs.rm(candidate, { recursive: true, force: true });
-        retired = true;
-      }
-    }
-    if (versionRoot !== path.dirname(directory)) {
-      await fs.rmdir(versionRoot).catch(() => {});
-    }
-  }
-  if (!retired && previous && now - previous.mtimeMs < MAINTENANCE_INTERVAL_MS) {
+  if (previous && now - previous.mtimeMs < MAINTENANCE_INTERVAL_MS) {
     return;
   }
-  // Claim the interval before walking: later CLIs should not repeat a large
-  // scan while it is running. Interrupted maintenance can retry next hour.
-  await fs.utimes(root, new Date(now), new Date(now));
+  await fs.mkdir(root, { recursive: true });
+  // Keep the lock outside the namespace: acquiring it must not claim completion.
+  const lock = `${root}.maintenance`;
+  const held = await fs.lstat(lock).catch(() => undefined);
+  if (held && now - held.mtimeMs > 5 * 60 * 1000) {
+    await fs.rmdir(lock).catch(() => {});
+  }
+  if (
+    !(await fs.mkdir(lock).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    return;
+  }
   const files = [];
   let bytes = 0;
+  let visits = 0;
+  let completed = false;
+  async function prune() {
+    files.sort((left, right) => right.mtimeMs - left.mtimeMs);
+    while (files.length) {
+      if (Date.now() - now > MAINTENANCE_BUDGET_MS) {
+        return false;
+      }
+      const oldest = files[files.length - 1];
+      if (bytes <= MAX_BYTES && files.length <= MAX_FILES && now - oldest.mtimeMs <= MAX_AGE_MS) {
+        break;
+      }
+      await fs.unlink(oldest.file).catch((error) => {
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
+      });
+      bytes -= oldest.size;
+      files.pop();
+    }
+    return true;
+  }
   async function visit(dir) {
-    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+    for await (const entry of await fs.opendir(dir)) {
+      if (++visits > MAX_VISITS || Date.now() - now > MAINTENANCE_BUDGET_MS) {
+        return false;
+      }
       const file = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        await visit(file);
+        if (!(await visit(file))) {
+          return false;
+        }
       } else if (entry.isFile()) {
-        const stat = await fs.lstat(file);
+        const stat = await fs.lstat(file).catch((error) => {
+          if (error.code !== "ENOENT") {
+            throw error;
+          }
+        });
+        if (!stat) {
+          continue;
+        }
         bytes += stat.size;
         files.push({ file, size: stat.size, mtimeMs: stat.mtimeMs });
+        // Bound retained metadata as well as bytes so tiny files cannot starve
+        // later entries on the next bounded pass. Evict oldest observed files.
+        if (files.length % 256 === 0 && !(await prune())) {
+          return false;
+        }
       }
     }
+    return true;
   }
-  await visit(directory);
-  files.sort((left, right) => left.mtimeMs - right.mtimeMs);
-  for (const file of files) {
-    if (bytes > MAX_BYTES || now - file.mtimeMs > MAX_AGE_MS) {
-      await fs.unlink(file.file);
-      bytes -= file.size;
+  // Keep recent releases together so preparing a candidate cannot evict
+  // the serving release (or vice versa). Bound the entire owned namespace.
+  try {
+    // Another process may have finished between our first read and lock acquisition.
+    if (now - (await fs.lstat(root)).mtimeMs < MAINTENANCE_INTERVAL_MS) {
+      completed = true;
+      return;
     }
+    const walked = await visit(root);
+    if ((await prune()) && walked) {
+      const finished = new Date();
+      await fs.utimes(root, finished, finished);
+      completed = true;
+    }
+  } finally {
+    // Removing a legacy file directly under the namespace also changes mtime.
+    if (!completed) {
+      await fs
+        .utimes(root, previous?.atime ?? new Date(0), previous?.mtime ?? new Date(0))
+        .catch(() => {});
+    }
+    await fs.rmdir(lock);
   }
 }
 
-if (!isMainThread && typeof workerData?.openclawCompileCacheDirectory === "string") {
-  void maintain(workerData.openclawCompileCacheDirectory).catch(() => {
-    // Disposable bytecode cleanup is best-effort inside the worker too.
+if (
+  process.argv[2] === "--maintain" &&
+  process.argv[1] === fileURLToPath(import.meta.url) &&
+  process.argv[3]
+) {
+  void maintain(process.argv[3]).catch(() => {
+    // Disposable bytecode cleanup is best-effort in the detached process too.
   });
 }

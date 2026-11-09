@@ -4,14 +4,10 @@ import {
   asNonArrayRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveFastModeSupport, resolveServiceTiers } from "./provider-policy-api.js";
 import { isSIWCAuthFlow } from "./token-sharing.js";
 
 const noopAuth = async () => ({ profiles: [] });
-const OPENAI_API_KEY_LABEL = "OpenAI API Key";
-const OPENAI_CHATGPT_LOGIN_LABEL = "Codex login (browser)";
-const OPENAI_CHATGPT_LOGIN_HINT = "Sign in to Codex locally with your ChatGPT account";
-const OPENAI_CHATGPT_DEVICE_PAIRING_LABEL = "Codex login (device code)";
-const OPENAI_CHATGPT_DEVICE_PAIRING_HINT = "Use a browser code when OpenClaw runs on a remote VM";
 const OPENAI_ACCOUNT_WIZARD_GROUP = {
   groupId: "openai",
   groupLabel: "OpenAI",
@@ -88,71 +84,69 @@ export function createOpenAIProvider(): ProviderPlugin {
     hookAliases: ["azure-openai", "azure-openai-responses"],
     docsPath: "/providers/models",
     envVars: ["OPENAI_API_KEY"],
-    auth: [
-      {
-        id: "oauth",
-        kind: "oauth",
-        label: OPENAI_CHATGPT_LOGIN_LABEL,
-        hint: OPENAI_CHATGPT_LOGIN_HINT,
+    resolveFastModeSupport,
+    resolveServiceTiers,
+    auth: (
+      [
+        {
+          id: "oauth",
+          kind: "oauth",
+          label: "Codex login (browser)",
+          hint: "Sign in to Codex locally with your ChatGPT account",
+          matchesPersonalAccount,
+          credentialImport: CODEX_CHATGPT_IMPORT,
+          wizard: {
+            choiceId: "openai",
+            assistantPriority: -10,
+          },
+        },
+        {
+          id: "device-code",
+          kind: "device_code",
+          label: "Codex login (device code)",
+          hint: "Use a browser code when OpenClaw runs on a remote VM",
+          matchesPersonalAccount,
+          credentialImport: CODEX_CHATGPT_IMPORT,
+          wizard: {
+            choiceId: "openai-device-code",
+            assistantPriority: -40,
+            onboardingFeatured: true,
+          },
+        },
+        {
+          id: "siwc",
+          kind: "oauth",
+          label: "Sign in with ChatGPT (Beta)",
+          hint: "Authorize OpenClaw for eligible Responses models using your Codex allowance",
+          matchesPersonalAccount: matchesTokenSharingAccount,
+          wizard: {
+            choiceId: "openai-token-sharing",
+            assistantPriority: 0,
+          },
+        },
+        {
+          id: "api-key",
+          kind: "api_key",
+          label: "OpenAI API Key",
+          hint: "Use your OpenAI API key directly",
+          credentialImport: CODEX_API_KEY_IMPORT,
+          wizard: {
+            choiceId: "openai-api-key",
+            assistantPriority: 5,
+            onboardingFeatured: true,
+          },
+        },
+      ] satisfies Omit<ProviderPlugin["auth"][number], "run">[]
+    ).map((method) =>
+      Object.assign({}, method, {
         run: noopAuth,
-        matchesPersonalAccount,
-        credentialImport: CODEX_CHATGPT_IMPORT,
         wizard: {
-          choiceId: "openai",
-          choiceLabel: OPENAI_CHATGPT_LOGIN_LABEL,
-          choiceHint: OPENAI_CHATGPT_LOGIN_HINT,
-          assistantPriority: -10,
+          ...method.wizard,
+          choiceLabel: method.label,
+          choiceHint: method.hint,
           ...OPENAI_ACCOUNT_WIZARD_GROUP,
         },
-      },
-      {
-        id: "device-code",
-        kind: "device_code",
-        label: OPENAI_CHATGPT_DEVICE_PAIRING_LABEL,
-        hint: OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
-        run: noopAuth,
-        matchesPersonalAccount,
-        credentialImport: CODEX_CHATGPT_IMPORT,
-        wizard: {
-          choiceId: "openai-device-code",
-          choiceLabel: OPENAI_CHATGPT_DEVICE_PAIRING_LABEL,
-          choiceHint: OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
-          assistantPriority: -40,
-          onboardingFeatured: true,
-          ...OPENAI_ACCOUNT_WIZARD_GROUP,
-        },
-      },
-      {
-        id: "siwc",
-        kind: "oauth",
-        label: "Sign in with ChatGPT (Beta)",
-        hint: "Authorize OpenClaw for eligible Responses models using your Codex allowance",
-        run: noopAuth,
-        matchesPersonalAccount: matchesTokenSharingAccount,
-        wizard: {
-          choiceId: "openai-token-sharing",
-          choiceLabel: "Sign in with ChatGPT (Beta)",
-          choiceHint: "Authorize OpenClaw for eligible Responses models using your Codex allowance",
-          assistantPriority: 0,
-          ...OPENAI_ACCOUNT_WIZARD_GROUP,
-        },
-      },
-      {
-        id: "api-key",
-        kind: "api_key",
-        label: OPENAI_API_KEY_LABEL,
-        hint: "Use your OpenAI API key directly",
-        run: noopAuth,
-        credentialImport: CODEX_API_KEY_IMPORT,
-        wizard: {
-          choiceId: "openai-api-key",
-          choiceLabel: OPENAI_API_KEY_LABEL,
-          choiceHint: "Use your OpenAI API key directly",
-          assistantPriority: 5,
-          onboardingFeatured: true,
-          ...OPENAI_ACCOUNT_WIZARD_GROUP,
-        },
-      },
-    ],
+      }),
+    ),
   };
 }

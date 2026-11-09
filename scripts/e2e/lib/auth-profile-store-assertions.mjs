@@ -1,4 +1,3 @@
-// Shared auth profile store assertions for install/onboard E2E proof.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -9,14 +8,33 @@ import { isRecord } from "../../lib/record-shared.mjs";
 const SHARED_AUTH_PROFILE_STORE_SCHEMA_VERSION = 7;
 const AUTH_PROFILE_MACHINE_STATE_SCHEMA_VERSION = 13;
 
+function hasAuthTable(db, table) {
+  const schema = db.prepare("SELECT type FROM sqlite_schema WHERE name = ? LIMIT 1").get(table);
+  if (schema && schema.type !== "table") {
+    throw new Error(`${table} is ${String(schema.type)}, not a table`);
+  }
+  return Boolean(schema);
+}
+
+function readAuthDatabase(dbPath, label, read) {
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    return read(db);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`could not read the ${label} auth profile store: ${detail}`, { cause: error });
+  } finally {
+    db?.close();
+  }
+}
+
 function readSharedAuthProfileStore(stateDir) {
   const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
   if (!fs.existsSync(dbPath)) {
     return { ownsStore: false, text: "" };
   }
-  let db;
-  try {
-    db = new DatabaseSync(dbPath, { readOnly: true });
+  return readAuthDatabase(dbPath, "shared", (db) => {
     const schemaVersion = db.prepare("PRAGMA user_version").get()?.user_version;
     if (!Number.isInteger(schemaVersion)) {
       throw new Error(`invalid state schema version ${String(schemaVersion)}`);
@@ -40,10 +58,7 @@ function readSharedAuthProfileStore(stateDir) {
             query: "SELECT store_json FROM auth_profile_stores WHERE store_key = ?",
             table: "auth_profile_stores",
           };
-    const schema = db
-      .prepare("SELECT type FROM sqlite_schema WHERE name = ? LIMIT 1")
-      .get(storage.table);
-    if (!schema) {
+    if (!hasAuthTable(db, storage.table)) {
       return {
         // v7 selects the shared owner. Do not let a missing canonical table
         // reactivate the retired per-agent contract for a broken target.
@@ -51,20 +66,10 @@ function readSharedAuthProfileStore(stateDir) {
         text: "",
       };
     }
-    if (schema.type !== "table") {
-      throw new Error(`${storage.table} is ${String(schema.type)}, not a table`);
-    }
     const row = db.prepare(storage.query).get(storage.key);
     const value = row?.[storage.column];
     return { ownsStore: true, text: typeof value === "string" ? value : "" };
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`could not read the shared auth profile store: ${detail}`, {
-      cause: error,
-    });
-  } finally {
-    db?.close();
-  }
+  });
 }
 
 export function readSharedAuthProfileStoreText(stateDir) {
@@ -76,30 +81,15 @@ function readLegacyPrimaryAuthProfileStoreText(stateDir) {
   if (!fs.existsSync(dbPath)) {
     return "";
   }
-  let db;
-  try {
-    db = new DatabaseSync(dbPath, { readOnly: true });
-    const schema = db
-      .prepare("SELECT type FROM sqlite_schema WHERE name = ? LIMIT 1")
-      .get("auth_profile_store");
-    if (!schema) {
+  return readAuthDatabase(dbPath, "legacy primary", (db) => {
+    if (!hasAuthTable(db, "auth_profile_store")) {
       return "";
-    }
-    if (schema.type !== "table") {
-      throw new Error(`auth_profile_store is ${String(schema.type)}, not a table`);
     }
     const row = db
       .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = ?")
       .get("primary");
     return typeof row?.store_json === "string" ? row.store_json : "";
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`could not read the legacy primary auth profile store: ${detail}`, {
-      cause: error,
-    });
-  } finally {
-    db?.close();
-  }
+  });
 }
 
 // Frozen releases validate the auth store their own persisted schema owns.
@@ -131,14 +121,8 @@ export function assertNoLegacyPrimaryAuthRows(stateDir) {
       },
     ];
     for (const entry of legacyRows) {
-      const schema = db
-        .prepare("SELECT type FROM sqlite_schema WHERE name = ? LIMIT 1")
-        .get(entry.table);
-      if (!schema) {
+      if (!hasAuthTable(db, entry.table)) {
         continue;
-      }
-      if (schema.type !== "table") {
-        throw new Error(`${entry.table} is ${String(schema.type)}, not a table`);
       }
       if (db.prepare(entry.query).get("primary")) {
         throw new Error(`onboard preserved a retired primary row in ${entry.table}`);

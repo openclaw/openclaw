@@ -6,12 +6,14 @@ import type {
 } from "./restart-health.types.js";
 
 const restartFailureReasons: Partial<Record<GatewayRestartWaitOutcome, string>> = {
+  "auth-rejected": "the Gateway rejected this CLI's credentials",
   "plugin-errors": "activated plugins reported load errors",
   "channel-errors": "channel health checks failed",
   "version-mismatch": "the running Gateway version did not match the expected version",
   "build-id-mismatch": "the running Gateway build did not match the expected build",
   "stale-pids": "stale Gateway processes remained",
   "generation-changed": "the Gateway process generation changed before readiness was confirmed",
+  "service-definition-refused": "the service definition refused startup",
 };
 
 function formatGatewayStillStarting(snapshot: GatewayRestartSnapshot): string {
@@ -29,13 +31,17 @@ export function renderGatewayPortHealthDiagnostics(snapshot: GatewayPortHealthSn
     lines.push(`Port diagnostics errors: ${snapshot.portUsage.errors.join("; ")}`);
   }
   if (snapshot.probeError) {
-    lines.push(`Gateway probe failed: ${snapshot.probeError}`);
+    lines.push(`Gateway check failed: ${snapshot.probeError}`);
   }
   return lines;
 }
 
 export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): string[] {
   const lines: string[] = [];
+  const refusal = snapshot.runtime?.systemd?.startRefusal;
+  if (refusal) {
+    lines.push(`SERVICE-DEFINITION: ${refusal.message}`);
+  }
   if (snapshot.waitOutcome === "still-starting") {
     lines.push(formatGatewayStillStarting(snapshot));
   }
@@ -59,7 +65,8 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
   }
   for (const [heading, errors] of [
     ["Activated plugin load errors:", snapshot.activatedPluginErrors],
-    ["Channel health probe errors:", snapshot.channelProbeErrors],
+    ["Channel health check errors:", snapshot.channelProbeErrors],
+    ["Channel health collection warnings:", snapshot.channelProbeTimeouts],
   ] as const) {
     if (errors?.length) {
       lines.push(heading);
@@ -87,21 +94,35 @@ export function formatGatewayRestartFailure(params: {
   health: GatewayRestartSnapshot;
   port: number;
   defaultTimeoutSeconds: number;
+  /** The lifecycle action to name; `gateway start` and install never restart anything. */
+  action?: "start" | "restart";
 }): { statusLine: string; failMessage: string } {
+  const { action = "restart" } = params;
+  const refusal = params.health.runtime?.systemd?.startRefusal;
+  if (params.health.waitOutcome === "service-definition-refused" && refusal) {
+    const message = `SERVICE-DEFINITION: ${refusal.message}`;
+    return { statusLine: message, failMessage: message };
+  }
   if (params.health.waitOutcome === "still-starting") {
     const message = formatGatewayStillStarting(params.health);
+    return { statusLine: message, failMessage: message };
+  }
+  if (params.health.waitOutcome === "port-held") {
+    const message =
+      params.health.probeError ??
+      `Gateway port ${params.port} is held by another process. Inspect it with openclaw gateway status --deep.`;
     return { statusLine: message, failMessage: message };
   }
   if (params.health.waitOutcome === "stopped-free") {
     const elapsedSeconds = Math.max(1, Math.round((params.health.elapsedMs ?? 0) / 1000));
     return {
-      statusLine: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and port ${params.port} stayed free.`,
-      failMessage: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and health checks never came up.`,
+      statusLine: `Gateway ${action} failed after ${elapsedSeconds}s: service stayed stopped and port ${params.port} stayed free.`,
+      failMessage: `Gateway ${action} failed after ${elapsedSeconds}s: service stayed stopped and health checks never came up.`,
     };
   }
   const reason = params.health.waitOutcome && restartFailureReasons[params.health.waitOutcome];
   if (reason) {
-    const message = `Gateway restart failed: ${reason}.`;
+    const message = `Gateway ${action} failed: ${reason}.`;
     return { statusLine: message, failMessage: message };
   }
   const timeoutSeconds = Math.max(
@@ -114,6 +135,31 @@ export function formatGatewayRestartFailure(params: {
   );
   return {
     statusLine: `Timed out after ${timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
-    failMessage: `Gateway restart timed out after ${timeoutSeconds}s waiting for health checks.`,
+    failMessage: `Gateway ${action} timed out after ${timeoutSeconds}s waiting for health checks.`,
   };
+}
+
+export function getGatewayChannelWarnings(
+  health: Pick<
+    GatewayRestartSnapshot,
+    "channelProbeErrors" | "channelProbeTimeouts" | "channelRuntimeWarnings"
+  >,
+  http?: { failingChannels?: string[] },
+): Array<{ id: string; error: string }> {
+  const warnings = new Map<string, { id: string; error: string }>();
+  for (const warning of [
+    ...(health.channelProbeErrors ?? []),
+    ...(health.channelProbeTimeouts ?? []),
+    ...(health.channelRuntimeWarnings ?? []),
+  ]) {
+    if (!warnings.has(warning.id)) {
+      warnings.set(warning.id, warning);
+    }
+  }
+  for (const id of http?.failingChannels ?? []) {
+    if (![...warnings.keys()].some((key) => key === id || key.startsWith(`${id}/`))) {
+      warnings.set(id, { id, error: "channel readiness unavailable" });
+    }
+  }
+  return [...warnings.values()];
 }

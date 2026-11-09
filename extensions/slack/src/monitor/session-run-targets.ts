@@ -1,5 +1,6 @@
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import type { SlackMonitorContext } from "./context.js";
 import type { SlackEventScope } from "./event-scope.js";
 
@@ -14,27 +15,17 @@ type SlackSessionRunTarget = {
   isActive: () => boolean;
 };
 
-export function captureSlackSessionTargetGuard(
+export async function captureSlackSessionTargetGuard(
   ctx: SlackMonitorContext,
   route: ResolvedAgentRoute,
   isActive?: () => boolean,
-): () => boolean {
-  const scope = {
+) {
+  return captureSessionEntryCurrentCheckAsync({
     agentId: route.agentId,
     sessionKey: route.sessionKey,
     storePath: resolveStorePath(ctx.cfg.session?.store, { agentId: route.agentId }),
-  };
-  const selected = getSessionEntry(scope);
-  return () => {
-    const current = getSessionEntry(scope);
-    // A pending publisher can lack a stored entry. It cannot lend Stop authority
-    // to a future incarnation merely because the logical session key matches.
-    return (
-      isActive?.() !== false &&
-      current?.sessionId === selected?.sessionId &&
-      current?.lifecycleRevision === selected?.lifecycleRevision
-    );
-  };
+    isActive,
+  });
 }
 
 // Reloaded turn contexts inherit the same Bolt app; each new monitor owns a new app.

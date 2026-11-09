@@ -165,28 +165,6 @@ function normalizePathRecord(raw: unknown): MemoryWikiImportRunPathStateRecord |
   };
 }
 
-function importRunMetadata(
-  record: Omit<ChatGptImportRunRecord, "createdPaths" | "updatedPaths">,
-): Omit<ChatGptImportRunRecord, "createdPaths" | "updatedPaths"> {
-  return {
-    version: 1,
-    runId: record.runId,
-    importType: "chatgpt",
-    exportPath: record.exportPath,
-    sourcePath: record.sourcePath,
-    appliedAt: record.appliedAt,
-    conversationCount: record.conversationCount,
-    createdCount: record.createdCount,
-    updatedCount: record.updatedCount,
-    skippedCount: record.skippedCount,
-    ...(record.rollbackStartedAt ? { rollbackStartedAt: record.rollbackStartedAt } : {}),
-    ...(record.rollbackTargetsFinalizedAt
-      ? { rollbackTargetsFinalizedAt: record.rollbackTargetsFinalizedAt }
-      : {}),
-    ...(record.rolledBackAt ? { rolledBackAt: record.rolledBackAt } : {}),
-  };
-}
-
 function composeImportRunRecord(
   meta: MemoryWikiImportRunMetaStateRecord,
   pathRows: MemoryWikiImportRunPathStateRecord[],
@@ -197,23 +175,17 @@ function composeImportRunRecord(
     ...(row.contentHash ? { contentHash: row.contentHash } : {}),
     ...(row.recoveryPaths ? { recoveryPaths: [...row.recoveryPaths] } : {}),
   });
-  const createdPaths = pathRows
-    .filter((row) => row.kind === "created-path")
-    .toSorted((left, right) => left.index - right.index)
-    .map(toEntry);
-  const updatedPaths = pathRows
-    .filter((row) => row.kind === "updated-path")
-    .toSorted((left, right) => left.index - right.index)
-    .map(toEntry);
-  return { ...importRunMetadata(meta), createdPaths, updatedPaths };
-}
-
-function toMetaRecord(
-  vaultRootKey: string,
-  record: ChatGptImportRunRecord,
-): MemoryWikiImportRunMetaStateRecord {
-  const { version, ...metadata } = importRunMetadata(record);
-  return { version, kind: "meta", vaultRootKey, ...metadata };
+  const { kind: _kind, vaultRootKey: _vaultRootKey, ...metadata } = meta;
+  const entries = (kind: MemoryWikiImportRunPathStateRecord["kind"]) =>
+    pathRows
+      .filter((row) => row.kind === kind)
+      .toSorted((left, right) => left.index - right.index)
+      .map(toEntry);
+  return {
+    ...metadata,
+    createdPaths: entries("created-path"),
+    updatedPaths: entries("updated-path"),
+  };
 }
 
 function toPathRecords(
@@ -276,10 +248,22 @@ export function createMemoryWikiImportRunStateStore(
       }
       // Path rows carry rollback recovery evidence. Commit the meta row last
       // so phase fences and rolledBackAt never become visible ahead of it.
-      await store.register(
-        resolveStateEntryKey(vaultRootKey, record.runId),
-        toMetaRecord(vaultRootKey, record),
-      );
+      const {
+        createdPaths: _createdPaths,
+        updatedPaths: _updatedPaths,
+        rollbackStartedAt,
+        rollbackTargetsFinalizedAt,
+        rolledBackAt,
+        ...metadata
+      } = record;
+      await store.register(resolveStateEntryKey(vaultRootKey, record.runId), {
+        ...metadata,
+        kind: "meta",
+        vaultRootKey,
+        ...(rollbackStartedAt ? { rollbackStartedAt } : {}),
+        ...(rollbackTargetsFinalizedAt ? { rollbackTargetsFinalizedAt } : {}),
+        ...(rolledBackAt ? { rolledBackAt } : {}),
+      });
       for (const row of await store.entries()) {
         const pathRecord = normalizePathRecord(row.value);
         if (
@@ -326,38 +310,9 @@ export function configureMemoryWikiImportRunStateStore(
   configuredImportRunStore = store;
 }
 
-function resolveImportRunStore(store = configuredImportRunStore): MemoryWikiImportRunStateStore {
-  if (!store) {
+export function getMemoryWikiImportRunStateStore(): MemoryWikiImportRunStateStore {
+  if (!configuredImportRunStore) {
     throw new Error("Memory Wiki import run state store is not configured.");
   }
-  return store;
-}
-
-export async function readMemoryWikiImportRunRecord(
-  vaultRoot: string,
-  runId: string,
-  store?: MemoryWikiImportRunStateStore,
-): Promise<ChatGptImportRunRecord | null> {
-  return await resolveImportRunStore(store).read(vaultRoot, runId);
-}
-
-export async function writeMemoryWikiImportRunRecord(
-  vaultRoot: string,
-  record: ChatGptImportRunRecord,
-  store?: MemoryWikiImportRunStateStore,
-): Promise<void> {
-  await resolveImportRunStore(store).write(vaultRoot, record);
-}
-
-export async function listMemoryWikiImportRunRecords(
-  vaultRoot: string,
-  store?: MemoryWikiImportRunStateStore,
-): Promise<ChatGptImportRunRecord[]> {
-  return await resolveImportRunStore(store).list(vaultRoot);
-}
-
-export async function countMemoryWikiImportRunStateRows(
-  store?: MemoryWikiImportRunStateStore,
-): Promise<number> {
-  return await resolveImportRunStore(store).rowCount();
+  return configuredImportRunStore;
 }

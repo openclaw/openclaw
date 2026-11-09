@@ -1,7 +1,6 @@
-// Gateway node connect reconciliation.
-// Computes approved runtime surfaces and pending pairing upgrades on reconnect.
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { rememberBoundedKey } from "../infra/dedupe.js";
 import type {
   PairedDeviceNode,
   NodePairingRequestInput,
@@ -16,6 +15,7 @@ import {
   parseComputerUseCapabilityDescriptor,
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
+import { resolveGlobalSet } from "../shared/global-singleton.js";
 import {
   normalizeDeclaredNodeCommands,
   resolveNodePairingCommandAllowlist,
@@ -23,6 +23,11 @@ import {
 } from "./node-command-policy.js";
 
 const log = createSubsystemLogger("gateway/node-connect");
+// Eviction may repeat a warning; Gateway close/restart starts a fresh warning history.
+const warnedWithheldSets = resolveGlobalSet<string>(
+  Symbol.for("openclaw.nodeConnectWithheldWarnings"),
+  "close-and-restart",
+);
 
 // Node connect reconciliation turns declared caps/commands/permissions into the
 // effective runtime surface. New or upgraded surfaces create a pending pairing
@@ -56,7 +61,6 @@ function normalizePermissionMap(
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-/** Reconciles a connecting node against stored approval and requests pairing when needed. */
 export async function reconcileNodePairingOnConnect(params: {
   cfg: OpenClawConfig;
   connectParams: ConnectParams;
@@ -93,7 +97,11 @@ export async function reconcileNodePairingOnConnect(params: {
     withheldCommands,
   });
   if (withheldCommands.length > 0) {
-    log.warn(`node command surface withheld node=${nodeId} commands=${withheldCommands.join(",")}`);
+    const key = JSON.stringify([nodeId, [...new Set(withheldCommands)].toSorted()]);
+    const level = rememberBoundedKey(warnedWithheldSets, key, 1024) ? "warn" : "debug";
+    log[level](
+      `node command surface withheld node=${nodeId} commands=${withheldCommands.join(",")}`,
+    );
   }
   const declaredPermissions = normalizePermissionMap(params.connectParams.permissions);
   const declaredComputerUse =

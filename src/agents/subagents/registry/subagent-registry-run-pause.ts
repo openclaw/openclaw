@@ -1,23 +1,63 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAuthority,
+} from "./subagent-child-owner-match.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
   resetRequesterSettleWakeRetry,
 } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { mutateSubagentRuns, SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner, latestSubagentRun } from "./subagent-run-generation.js";
+import { isYieldedSubagentRun } from "./subagent-run-liveness.js";
+import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
 
-export type SubagentYieldClaim =
-  | "nothing-pending"
-  | "pending-work"
-  | { messageWaitRegistered: boolean };
+const COLLECTOR_YIELD_ERROR =
+  "Collector yielded under a build that predates the admission gate, so it has no recorded collectorCompletion and nothing can continue it. Rerun the collector and have it end its turn normally instead of calling sessions_yield.";
 
-/** Claim a live native task, recording announcing waits before the yielded terminal. */
+type YieldedRunContinuation = { state: "continuable" } | { state: "unreachable"; error: string };
+
+/**
+ * Owns "can a continuation still resume this yielded run?" for a row where
+ * `isYieldedSubagentRun` (run liveness) holds. Callers settle an unreachable run through the
+ * completion owner instead of leaving it parked. Every other yielded row stays continuable.
+ */
+export function resolveYieldedRunContinuation(
+  entry: SubagentRunRecord,
+  requesterEnded = false,
+): YieldedRunContinuation {
+  if (entry.waitForMessage && requesterEnded) {
+    return {
+      state: "unreachable",
+      error:
+        "Requester finished or was released while this subagent waited for a continuation message.",
+    };
+  }
+  // A collector result is read by an explicit wait, never delivered by a continuation.
+  return entry.collect === true && entry.collectorCompletion === undefined
+    ? { state: "unreachable", error: COLLECTOR_YIELD_ERROR }
+    : { state: "continuable" };
+}
+
+/** Whether the yield pause refuses this completion; a kill or an explicit settle may pass it. */
+export function isCompletionHeldByYield(
+  entry: SubagentRunRecord,
+  request: Pick<SubagentCompletionRequest, "reason" | "settleYielded">,
+): boolean {
+  // A settle request outlives the sweep that issued it; it must not rewrite a run that has
+  // since resumed, finished, or been claimed by a kill. A kill claim keeps its pause reason.
+  return request.settleYielded === true
+    ? !isYieldedSubagentRun(entry)
+    : entry.pauseReason === "sessions_yield" && request.reason !== SUBAGENT_ENDED_REASON_KILLED;
+}
+
+type SubagentYieldClaim = "nothing-pending" | "pending-work" | { messageWaitRegistered: boolean };
+
+/** Claim a live native task, recording message waits before the yielded terminal. */
 export async function claimSubagentYieldInRuns(params: {
   runId: string;
   sessionKey: string;
@@ -78,25 +118,29 @@ export async function claimSubagentYieldInRuns(params: {
       if (!entry) {
         throw new Error("Subagent yield lost its current native task");
       }
-      // Quiet native tasks may pause, but do not acquire a requester notice.
-      if (entry.expectsCompletionMessage !== true) {
-        return { value: { messageWaitRegistered: false } };
+      const messageWaitRegistered = entry.expectsCompletionMessage === true;
+      if (entry.waitForMessage) {
+        return { value: { messageWaitRegistered } };
       }
-      if (entry.requesterSettleWake?.pauseNotice) {
-        return { value: { messageWaitRegistered: true } };
+      const next = { ...entry, waitForMessage: true as const };
+      // Keep the wait after its one-shot notice is consumed, including quiet tasks.
+      if (messageWaitRegistered && !entry.requesterSettleWake?.pauseNotice) {
+        next.requesterSettleWake = {
+          ...resetRequesterSettleWakeRetry(entry.requesterSettleWake),
+          batchRunIds: entry.requesterSettleWake?.batchRunIds ?? [entry.runId],
+          pauseNotice: {
+            // A pending wake can outlive the reply that supplied this bounded notice.
+            acknowledgment: Buffer.from(
+              truncateUtf16Safe(
+                params.acknowledgment?.trim() || "Paused awaiting continuation.",
+                12_000,
+              ),
+              "utf16le",
+            ).toString("utf16le"),
+          },
+        };
       }
-      const next = structuredClone(entry);
-      next.requesterSettleWake = {
-        ...resetRequesterSettleWakeRetry(entry.requesterSettleWake),
-        batchRunIds: entry.requesterSettleWake?.batchRunIds ?? [entry.runId],
-        pauseNotice: {
-          acknowledgment: truncateUtf16Safe(
-            params.acknowledgment?.trim() || "Paused awaiting continuation.",
-            12_000,
-          ),
-        },
-      };
-      return { value: { messageWaitRegistered: true }, postimages: new Map([[entry.runId, next]]) };
+      return { value: { messageWaitRegistered }, postimages: new Map([[entry.runId, next]]) };
     },
     {
       runs: params.runs,
@@ -124,12 +168,12 @@ export function markSubagentRunPausedAfterYield(params: {
   entry: SubagentRunRecord;
   startedAt?: number;
   endedAt?: number;
-  now?: number;
 }): boolean {
   const { entry } = params;
   if (
-    entry.terminalOwner === "interrupted-recovery" ||
-    shouldSuppressSubagentRecoverySessionEffects(entry) ||
+    (shouldSuppressSubagentSessionEffects(entry) &&
+      (resolveSubagentChildAuthority(entry).status !== "legacy-unverified" ||
+        (entry.execution.status === "terminal" && entry.pauseReason !== "sessions_yield"))) ||
     entry.endedReason === SUBAGENT_ENDED_REASON_KILLED ||
     entry.suppressAnnounceReason === "killed" ||
     (entry.cleanup === "delete" && Number.isFinite(entry.deleteCleanupDispatchedAt))
@@ -147,7 +191,7 @@ export function markSubagentRunPausedAfterYield(params: {
     }
     mutated = true;
   }
-  const endedAt = typeof params.endedAt === "number" ? params.endedAt : (params.now ?? Date.now());
+  const endedAt = typeof params.endedAt === "number" ? params.endedAt : Date.now();
   if (
     entry.execution.status !== "terminal" ||
     entry.execution.endedAt !== endedAt ||
@@ -165,16 +209,14 @@ export function markSubagentRunPausedAfterYield(params: {
     delete entry.archiveAtMs;
     mutated = true;
   }
-  if (entry.endedReason !== undefined) {
-    entry.endedReason = undefined;
-    mutated = true;
+  for (const key of ["endedReason", "cleanupCompletedAt"] as const) {
+    if (entry[key] !== undefined) {
+      entry[key] = undefined;
+      mutated = true;
+    }
   }
   if (entry.cleanupHandled === true) {
     entry.cleanupHandled = false;
-    mutated = true;
-  }
-  if (entry.cleanupCompletedAt !== undefined) {
-    entry.cleanupCompletedAt = undefined;
     mutated = true;
   }
   if (entry.delivery !== undefined) {

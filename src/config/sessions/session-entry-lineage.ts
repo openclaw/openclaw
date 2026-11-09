@@ -22,6 +22,34 @@ type SpawnAuthorityReceipt = Pick<
   "spawnedBySessionId" | "parentSessionLifecycleRevision" | "spawnedBySenderIsOwner"
 >;
 
+type InheritedSessionToolPolicy = Pick<
+  SessionEntry,
+  | "inheritedToolPolicyVersion"
+  | "inheritedToolPolicySource"
+  | "inheritedToolAllow"
+  | "inheritedToolDeny"
+  | "delegatedToolPolicy"
+>;
+
+/** Keep the frozen requester policy and its provenance together across session generations. */
+export function preserveSessionInheritedToolPolicy(
+  entry: InheritedSessionToolPolicy | undefined,
+): InheritedSessionToolPolicy {
+  return {
+    ...(entry?.delegatedToolPolicy
+      ? { delegatedToolPolicy: structuredClone(entry.delegatedToolPolicy) }
+      : {}),
+    ...(entry?.inheritedToolPolicyVersion
+      ? { inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion }
+      : {}),
+    ...(entry?.inheritedToolPolicySource
+      ? { inheritedToolPolicySource: entry.inheritedToolPolicySource }
+      : {}),
+    ...(entry?.inheritedToolAllow ? { inheritedToolAllow: [...entry.inheritedToolAllow] } : {}),
+    ...(entry?.inheritedToolDeny ? { inheritedToolDeny: [...entry.inheritedToolDeny] } : {}),
+  };
+}
+
 /**
  * Builds a spawned child's authority receipt: the exact parent incarnation and the trusted
  * owner bit of the spawning invocation. A rowless parent records no incarnation and never
@@ -75,9 +103,12 @@ export function preserveSessionLineage(
     | "spawnDepth"
     | "subagentRole"
     | "subagentControlScope"
+    | "blindPrompt"
   >
-> {
+> &
+  InheritedSessionToolPolicy {
   return {
+    ...preserveSessionInheritedToolPolicy(entry),
     spawnedBy: entry?.spawnedBy,
     spawnedBySenderIsOwner: entry?.spawnedBySenderIsOwner,
     spawnedBySessionId: entry?.spawnedBySessionId,
@@ -89,6 +120,7 @@ export function preserveSessionLineage(
     spawnDepth: entry?.spawnDepth,
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
+    blindPrompt: entry?.blindPrompt,
   };
 }
 

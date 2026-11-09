@@ -1,10 +1,8 @@
 import type { DaemonRuntimePinUpdate } from "./runtime-pin-types.js";
 import type { ServiceInspectionReason } from "./service-inspection-error.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
-/** Shared daemon service argument, state, and command config contracts. */
 import type { GatewayServiceDefinitionTransactionHooks } from "./service-stage.js";
 
-/** Environment map passed to service renderers and platform supervisors. */
 export type GatewayServiceEnv = Record<string, string | undefined>;
 
 /** Platform service adapter contract shared by inspection and lifecycle owners. */
@@ -42,13 +40,19 @@ export type GatewayService = {
   ) => Promise<GatewayServiceRuntime>;
 };
 
-/** Arguments required to render/install a managed gateway service. */
 export type GatewayServiceInstallArgs = {
   /** Required by managed writers when explicit runtime intent is already stored. */
   runtimePinUpdate?: DaemonRuntimePinUpdate;
   /** Preserve the existing enable policy during an update-owned definition rebind. */
   preserveAutoStart?: boolean;
   beforeMutation?: () => Promise<void>;
+  /**
+   * Runs only when a failed install's native recovery has stopped the replacement and is about to
+   * restart the previous service, so state that service depends on is back in place first. Its
+   * running is the proof that recovery settled; it does not run when recovery refuses, fails or
+   * never starts. It reports its own failures instead of throwing.
+   */
+  beforeRecovery?: () => Promise<void>;
   /** Live caller authority, retained at every native write boundary. */
   assertCurrent?: () => void;
   env: GatewayServiceEnv;
@@ -71,6 +75,8 @@ export type GatewayServiceManageArgs = {
 };
 
 export type GatewayServiceControlArgs = {
+  /** One caller-owned budget for native activation and its recovery. */
+  deadline?: { remainingMs: () => number; signal: AbortSignal };
   /** Retained POSIX recovery observes attempts before a native restart can accept writes. */
   onRestartAttempted?: () => void;
   /** Correlation only: native stop needs live update authority and transferred helpers also revalidate their lease. */
@@ -79,6 +85,8 @@ export type GatewayServiceControlArgs = {
   beforeMutation?: () => Promise<void>;
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
+  /** Prepare service-targeted restart intent after foreground recovery has settled. */
+  prepareRestart?: () => Promise<void>;
   disable?: boolean;
   preserveDefinition?: boolean;
   /** Start the captured manager without changing its separately restored enable policy. */
@@ -183,7 +191,8 @@ export type SystemdServiceReadBinding = {
 };
 
 export type GatewayServiceCommandInspection =
-  | { kind: "absent" | "present" }
+  | { kind: "absent" }
+  | { kind: "present"; command?: GatewayServiceCommandConfig }
   | { kind: "unavailable"; error: unknown };
 
 /** Selected native unit for one inspection; never a service mutation grant. */
@@ -205,13 +214,19 @@ export type SystemdGatewayInstallation =
 
 /** Bounded service inspection; strict reads reject unverified commands/environments and return null only for proven absence. */
 export type GatewayServiceReadOptions = {
+  /** Inspect systemd environment sources and mount mappings before comparing state. */
+  inspectStateIdentity?: boolean;
   systemdReadTarget?: SystemdServiceReadTarget;
   systemdReadBinding?: SystemdServiceReadBinding;
   timeoutMs?: number;
   requireEffective?: boolean;
+  /** Reinstall may replace an absent LaunchAgent plist; existing definitions still require strict reads. */
+  allowMissingDefinition?: boolean;
   /** Carry the command reader's verdict into runtime inspection without repeating it. */
   commandInspection?: GatewayServiceCommandInspection;
   onCommandInspection?: (inspection: GatewayServiceCommandInspection) => void;
+  /** Same-read native executable; separate from persisted argv and command fingerprints. */
+  onEffectiveExecutable?: (executable: string) => void;
   /** Command inspection must not load an unloaded native unit. */
   requireLoaded?: boolean;
   loadForInspection?: GatewayServiceUnitInspection;
@@ -298,6 +313,8 @@ export type GatewayServiceCommandSnapshot = {
   workingDirectory?: string;
   environment?: Record<string, string>;
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource>;
+  /** Omitted environment or namespace facts cannot prove separate state. */
+  stateIdentityUnverified?: true;
 };
 
 export type GatewayServiceManagedOverrides = {
@@ -436,12 +453,13 @@ export type GatewayServiceState = {
   running: boolean;
   env: GatewayServiceEnv;
   command: GatewayServiceCommandConfig | null;
+  /** Operation-local observation, never persisted as service or recovery configuration. */
+  effectiveExecutable?: string;
   definitionMutationCapability?: ServiceDefinitionMutationCapability;
   runtime?: GatewayServiceRuntime;
 };
 
 export type GatewayServiceStartRepairIssue = {
-  code: "missing-program" | "port-mismatch" | "temporary-program";
   message: string;
 };
 

@@ -2,12 +2,16 @@ import type { Writable } from "node:stream";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import type { NodeWorkerCleanupBinding } from "../../node-host/node-worker-launch-receipt.js";
 import { prepareSecretInputStdio, type SpawnStdioEntry } from "../spawn-secret-input.js";
+import { toStringEnv } from "./adapters/env.js";
 import {
   getInheritedNativeProcessOwner,
   getInheritedProcessLineageFds,
 } from "./inherited-process-lineage.js";
 import { assertProcessGroupControl } from "./service-child-group-ownership.js";
-import { supportsNodeWorkerProcessOwner } from "./service-child-protocol.js";
+import {
+  supportsNodeWorkerProcessOwner,
+  type ServiceChildStart,
+} from "./service-child-protocol.js";
 import { reserveStdioEntry } from "./service-child-stdio.js";
 import type { ProcessAdapterConstruction, SpawnProcessAdapter, SpawnSecretInput } from "./types.js";
 
@@ -20,9 +24,12 @@ export type ServiceChildRelayParams = ProcessAdapterConstruction & {
   cwd?: string;
   stdinMode: "inherit" | "pipe-open" | "pipe-closed";
   input?: string;
+  prepareInput?: () => void | Promise<void>;
+  prepareTargetSpawn?: () => void | Promise<void>;
   secretInput?: SpawnSecretInput;
   stderrDestination?: Writable;
   stdoutConsumption?: "awaited";
+  terminateOnHostLoss?: true;
   oomScoreWrapperSelected: boolean;
   onWorkerMessage?: (message: unknown) => void;
   windowsShellCommand?: string;
@@ -44,18 +51,31 @@ export type ServiceChildRelayAdapter = SpawnProcessAdapter<NodeJS.Signals | null
   closeStartGate?: () => void;
 } & Required<Pick<SpawnProcessAdapter<NodeJS.Signals | null>, "onExit" | "onError">>;
 
+/** Transport and target launches share the caller's current synchronous policy. */
+export function assertServiceChildSpawn(
+  params: ServiceChildRelayParams,
+  onAbort?: () => void,
+): void {
+  if (params.abortSignal?.aborted) {
+    onAbort?.();
+    throw new Error("service child construction aborted");
+  }
+  params.assertCurrent?.();
+  params.beforeSpawn?.();
+}
+
 /** Prepare transport facts; the host revalidates authority immediately before spawning. */
 export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
   const nativeProcessOwner =
     getInheritedNativeProcessOwner() ??
-    (process.platform === "linux" &&
-    !process.versions.bun &&
+    ((process.platform === "linux" || process.platform === "darwin") &&
     (typeof WORKER_DEPLOY_BUILD !== "boolean" || !WORKER_DEPLOY_BUILD)
       ? resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor").href
       : undefined);
-  const useLinuxSubreaper =
+  const useNativeProcessOwner =
     nativeProcessOwner !== undefined &&
     (!params.ownedWorker || params.nativeProcessOwnerSupported === true);
+  const useLinuxSubreaper = process.platform === "linux" && useNativeProcessOwner;
   if (!useLinuxSubreaper) {
     assertProcessGroupControl();
   }
@@ -96,7 +116,7 @@ export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
     return {
       useWindowsJobAnchor,
       useLinuxSubreaper,
-      nativeProcessOwner: useLinuxSubreaper ? nativeProcessOwner : undefined,
+      nativeProcessOwner: useNativeProcessOwner ? nativeProcessOwner : undefined,
       controlFd,
       lineageFd,
       ownership: params.ownedWorker
@@ -115,6 +135,7 @@ export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
               useWindowsJobAnchor ? "serviceChildWindowsJobAnchor" : "serviceChildRelay",
             ),
         env: params.ownedWorker ? params.env : process.env,
+        ...(useLinuxSubreaper ? { nativeProcessOwner } : {}),
         detached:
           useWindowsJobAnchor ||
           useLinuxSubreaper ||
@@ -128,4 +149,36 @@ export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
     deliveryOwner[Symbol.dispose]();
     throw error;
   }
+}
+
+/** Build the anchor's first frame; prepare frames wait for a separate launch grant. */
+export function createServiceChildStart(
+  params: ServiceChildRelayParams,
+  preparation: Pick<
+    ReturnType<typeof prepareServiceChildRelay>,
+    "controlFd" | "ownership" | "useLinuxSubreaper" | "nativeProcessOwner"
+  >,
+  generation: string,
+  acknowledgeClosing: boolean,
+): ServiceChildStart {
+  return {
+    type: params.initiateSpawn || params.prepareTargetSpawn ? "prepare" : "start",
+    executionIntent: params.executionIntent,
+    executionScopeKey: params.executionScopeKey,
+    generation,
+    command: params.command,
+    args: params.args,
+    argv0: params.argv0,
+    cwd: params.cwd,
+    env: toStringEnv(params.env ?? process.env),
+    stdinMode: params.stdinMode,
+    secretFd: params.secretInput?.fd,
+    terminateOnHostLoss: params.terminateOnHostLoss,
+    controlFd: preparation.controlFd,
+    ...preparation.ownership,
+    treeOwnership: preparation.useLinuxSubreaper ? "linux-subreaper" : undefined,
+    nativeProcessOwner: preparation.nativeProcessOwner,
+    ...(acknowledgeClosing ? { acknowledgeClosing: true as const } : {}),
+    windowsShellCommand: params.windowsShellCommand,
+  };
 }

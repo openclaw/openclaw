@@ -6,5 +6,4 @@
  */
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 
-/** Import the Chrome MCP adapter module on demand. */
 export const getChromeMcpModule = createLazyRuntimeModule(() => import("./chrome-mcp.js"));

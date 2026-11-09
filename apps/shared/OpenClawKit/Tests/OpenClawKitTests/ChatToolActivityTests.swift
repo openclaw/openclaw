@@ -25,6 +25,20 @@ struct ChatToolActivityTests {
         #expect(!item.isPending)
     }
 
+    @Test func `fallback title for an unseen outcome gives way to the call's own title`() {
+        func item(_ title: String, phase: String, status: String?) -> OpenClawAgentActivityItem {
+            OpenClawAgentActivityItem(
+                itemId: "tool:call", toolCallId: "call", kind: "tool", phase: phase,
+                title: title, name: "exec", status: status,
+                hideFromChannelProgress: nil, suppressChannelProgress: nil)
+        }
+        #expect(item("Mcp Openclaw Exec — outcome unknown", phase: "end", status: nil).preparedTitle == nil)
+        #expect(item("Exec List pull requests", phase: "start", status: "running").preparedTitle
+            == "Exec List pull requests")
+        #expect(item("Exec List pull requests", phase: "end", status: "completed").preparedTitle
+            == "Exec List pull requests")
+    }
+
     @Test func `prepared skipped outcome stays neutral despite raw result error`() throws {
         let items = ChatToolActivity.items(
             calls: [self.content(type: "toolCall", id: "call-1", name: "read")],

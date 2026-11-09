@@ -1,4 +1,4 @@
-// Reset preservation keeps user-selected model/auth overrides while dropping automatic fallbacks.
+// Reset preservation keeps explicit model/auth and communication choices, not automatic fallbacks.
 import { resolveSessionAuthProfileOverrideSource } from "./auth-profile-override-provenance.js";
 import { resolveSessionModelOverrideSource } from "./model-override-provenance.js";
 import type { SessionEntry } from "./types.js";
@@ -13,6 +13,8 @@ type ResetPreservedSelectionState = Pick<
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
+  | "communication"
+  | "cyberAccessProgram"
 >;
 
 /**
@@ -35,6 +37,12 @@ export function resolveResetPreservedSelection(params: {
   }
 
   const preserved: Partial<ResetPreservedSelectionState> = {};
+  if (entry.cyberAccessProgram !== undefined) {
+    preserved.cyberAccessProgram = entry.cyberAccessProgram;
+  }
+  if (entry.communication) {
+    preserved.communication = { ...entry.communication };
+  }
   if (entry.modelOverrideSource === "default") {
     preserved.modelOverrideSource = "default";
   }
@@ -51,7 +59,7 @@ export function resolveResetPreservedSelection(params: {
   }
 
   const authProfileOverrideSource = resolveSessionAuthProfileOverrideSource(entry);
-  if (authProfileOverrideSource === "user" && entry.authProfileOverride) {
+  if (authProfileOverrideSource === "user" || authProfileOverrideSource === "user-link") {
     preserved.authProfileOverride = entry.authProfileOverride;
     preserved.authProfileOverrideSource = authProfileOverrideSource;
     if (entry.authProfileOverrideCompactionCount !== undefined) {

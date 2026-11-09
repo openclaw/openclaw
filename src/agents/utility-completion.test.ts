@@ -52,10 +52,8 @@ describe("prepareUtilityCompletionForAgent", () => {
       });
 
       expect(prepared).toMatchObject({ provider: "anthropic", model: "claude-haiku-4-5" });
-      expect(prepared.agentHarnessRuntimeOverride).toBe(hasAuth ? undefined : "claude-cli");
-      expect(hasAvailableAuthForProvider).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ provider: "anthropic", modelId: "claude-haiku-4-5" }),
-      );
+      expect(prepared.agentHarnessRuntimeOverride).toBe("claude-cli");
+      expect(hasAvailableAuthForProvider).not.toHaveBeenCalled();
     },
   );
 

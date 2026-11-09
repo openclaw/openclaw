@@ -30,16 +30,12 @@ struct Bridge {
 }
 
 impl Bridge {
-    fn gateway(&self) -> tauri::State<'_, GatewayClient> {
-        self.app.state::<GatewayClient>()
-    }
-
     fn route_id(&self, generation: u64) -> String {
         format!("{}:{generation}", self.instance)
     }
 
     fn generation(&self, route_id: &str) -> fdo::Result<u64> {
-        let (generation, _) = self.gateway().desktop_state();
+        let (generation, _) = self.app.state::<GatewayClient>().desktop_state();
         if route_id != self.route_id(generation) {
             return Err(fdo::Error::Failed(
                 "Desktop Gateway changed; refresh before trying again.".into(),
@@ -49,10 +45,6 @@ impl Bridge {
     }
 }
 
-fn failed(message: String) -> fdo::Error {
-    fdo::Error::Failed(message)
-}
-
 #[zbus::interface(name = "ai.openclaw.Desktop1")]
 impl Bridge {
     fn get_state(&self) -> String {
@@ -60,32 +52,32 @@ impl Bridge {
             .last_read
             .lock()
             .expect("desktop demand mutex poisoned") = Some(Instant::now());
-        self.gateway().set_desktop_demand(true);
-        self.gateway().activate(self.app.clone());
-        let (generation, ready) = self.gateway().desktop_state();
+        let gateway = self.app.state::<GatewayClient>();
+        gateway.set_desktop_demand(true);
+        gateway.activate(self.app.clone());
+        let (generation, ready) = gateway.desktop_state();
         json!({"version": 1, "routeId": self.route_id(generation), "ready": ready}).to_string()
     }
 
     async fn snapshot(&self, route_id: &str) -> fdo::Result<String> {
         let generation = self.generation(route_id)?;
-        let gateway = self.gateway();
-        let agents = gateway
-            .desktop_request(generation, DesktopMethod::Agents, json!({}))
-            .await
-            .map_err(failed)?;
+        let gateway = self.app.state::<GatewayClient>();
         let params = json!({"limit":40,"includeDerivedTitles":true,"includeLastMessage":true,"includeGlobal":true});
-        let recent = gateway
-            .desktop_request(generation, DesktopMethod::Sessions, params.clone())
-            .await
-            .map_err(failed)?;
-        let mut active_params = params;
+        let mut active_params = params.clone();
         active_params["activeOnly"] = json!(true);
-        let active = gateway
-            .desktop_request(generation, DesktopMethod::Sessions, active_params)
-            .await
-            .map_err(failed)?;
+        let mut snapshot = json!({});
+        for (key, method, params) in [
+            ("agents", DesktopMethod::Agents, json!({})),
+            ("recent", DesktopMethod::Sessions, params),
+            ("active", DesktopMethod::Sessions, active_params),
+        ] {
+            snapshot[key] = gateway
+                .desktop_request(generation, method, params)
+                .await
+                .map_err(fdo::Error::Failed)?;
+        }
         self.generation(route_id)?;
-        Ok(json!({"agents":agents,"recent":recent,"active":active}).to_string())
+        Ok(snapshot.to_string())
     }
 
     async fn send_prompt(
@@ -109,28 +101,25 @@ impl Bridge {
                 "Choose an agent and enter a prompt (up to 32,000 bytes).".into(),
             ));
         }
-        let mut params =
-            json!({"agentId":agent_id,"message":message,"idempotencyKey":idempotency_key});
+        let mut params = json!({"message":message,"idempotencyKey":idempotency_key});
+        // Canonical agent keys carry ownership; creation and the raw global key
+        // need their separate agent owner.
+        if session_key.is_empty() || session_key == "global" {
+            params["agentId"] = json!(agent_id);
+        }
         let method = if session_key.is_empty() {
             DesktopMethod::Create
         } else {
-            // Canonical agent keys carry ownership; the raw global key needs
-            // its separate agent owner.
-            if session_key != "global" {
-                params
-                    .as_object_mut()
-                    .expect("prompt params object")
-                    .remove("agentId");
-            }
             params["sessionKey"] = json!(session_key);
             params["deliver"] = json!(false);
             DesktopMethod::Send
         };
         let result = self
-            .gateway()
+            .app
+            .state::<GatewayClient>()
             .desktop_request(generation, method, params)
             .await
-            .map_err(failed)?;
+            .map_err(fdo::Error::Failed)?;
         Ok(result.to_string())
     }
 
@@ -200,17 +189,13 @@ impl Bridge {
                     "quit" => {
                         let claimed =
                             gateway.with_desktop_route(generation, |_| Ok(state.claim_quit()));
-                        match claimed {
-                            Ok(won) => {
-                                // Claim under live route authority; teardown takes NAV and
-                                // waits for SSH only after releasing Gateway config.
-                                if won {
-                                    state.finish_quit(&app, 0);
-                                }
-                                Ok(())
+                        claimed.map(|won| {
+                            // Claim under live route authority; teardown takes NAV and
+                            // waits for SSH only after releasing Gateway config.
+                            if won {
+                                state.finish_quit(&app, 0);
                             }
-                            Err(error) => Err(error),
-                        }
+                        })
                     }
                     _ => gateway.with_desktop_route(generation, |_| {
                         match action.as_str() {
@@ -227,11 +212,11 @@ impl Bridge {
                 };
                 let _ = reply.send(outcome);
             })
-            .map_err(|e| failed(e.to_string()))?;
+            .map_err(|e| fdo::Error::Failed(e.to_string()))?;
         result
             .await
-            .map_err(|_| failed("Desktop action interrupted.".into()))?
-            .map_err(failed)
+            .map_err(|_| fdo::Error::Failed("Desktop action interrupted.".into()))?
+            .map_err(fdo::Error::Failed)
     }
 }
 

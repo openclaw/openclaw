@@ -1,5 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isStandaloneRuntimeExecutable } from "../../cli-invocation.mjs";
+import {
+  isDisposableInstallPath,
+  resolveDurableServiceBinDir,
+  resolveDurableServiceCli,
+  type DurableServiceCliReplacement,
+} from "../daemon/durable-service-entrypoint.js";
+import type { PlannedCliEntrypoint } from "../daemon/program-args.js";
 import {
   resolveBunRuntimeInfo,
   resolvePinnedDaemonRuntimePath,
@@ -17,10 +25,12 @@ export type GatewayInstallPlan = {
   workingDirectory?: string;
   environment: Record<string, string | undefined>;
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
+  /** Durable copy the service install must (re)place; see installDurableServiceCli. */
+  durableCliReplacement?: DurableServiceCliReplacement;
 };
 
-function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
-  const entry = argv[1];
+function resolveGatewayDevMode(): boolean {
+  const entry = process.argv[1];
   const normalizedEntry = entry?.replaceAll("\\", "/");
   return (
     normalizedEntry !== undefined &&
@@ -44,7 +54,7 @@ export async function resolveRunningBunFallback(params: {
       : params.nodePath;
   if (
     nodePath ||
-    (await resolveBunRuntimeInfo(process.execPath, undefined, params.env)).status !== "supported"
+    (await resolveBunRuntimeInfo(process.execPath, params.env)).status !== "supported"
   ) {
     return undefined;
   }
@@ -64,6 +74,19 @@ export async function resolveDaemonInstallRuntimeInputs(params: {
   const devMode = params.devMode ?? resolveGatewayDevMode();
   if (params.wrapperPath?.trim()) {
     return { devMode, runtime: params.runtime, runtimePath: params.runtimePath };
+  }
+  if (params.runtime === "standalone") {
+    const executable =
+      params.pinnedRuntimePath ??
+      params.runtimePath ??
+      (isStandaloneRuntimeExecutable() ? process.execPath : undefined);
+    if (!executable) {
+      throw new Error(
+        "Standalone services require --runtime-path pointing to a complete standalone artifact.",
+      );
+    }
+    const runtimePath = await resolvePinnedDaemonRuntimePath(executable, "standalone", params.env);
+    return { devMode: false, runtime: "standalone", runtimePath };
   }
   const pinnedRuntimePath =
     params.pinnedRuntimePath === undefined
@@ -91,24 +114,56 @@ export async function resolveDaemonInstallRuntimeInputs(params: {
   return { devMode, runtime: params.runtime, runtimePath };
 }
 
+/** Wrapper and standalone services run their own executable, never the CLI entrypoint. */
+function runsCliEntrypoint(params: { runtime: GatewayDaemonRuntime; wrapperPath?: string }) {
+  return !params.wrapperPath?.trim() && params.runtime !== "standalone";
+}
+
+/**
+ * Runtime inputs plus the CLI entrypoint the service runs: the retained `serviceCli`, the
+ * durable copy that replaces a disposable npx, dlx, or bunx CLI, or undefined for this CLI.
+ * Runtime and wrapper inputs are validated first. Nothing installs here: with
+ * `installDurableCli` the durable copy becomes `durableCliReplacement`, which the service install
+ * checks and reuses or replaces under the package lock; otherwise only a checked copy is reused.
+ */
+export async function resolveDaemonInstallPlanInputs(
+  params: Parameters<typeof resolveDaemonInstallRuntimeInputs>[0] & {
+    /** Which service runs the CLI; gateway and node services enter it differently. */
+    service: "gateway" | "node";
+    serviceCli?: { entrypoint: string | null };
+    installDurableCli?: boolean;
+  },
+): Promise<
+  Awaited<ReturnType<typeof resolveDaemonInstallRuntimeInputs>> & {
+    cliEntrypoint?: string | PlannedCliEntrypoint;
+    durableCliReplacement?: DurableServiceCliReplacement;
+  }
+> {
+  const inputs = await resolveDaemonInstallRuntimeInputs({
+    ...params,
+    devMode: params.serviceCli ? false : params.devMode,
+  });
+  const retained = params.serviceCli?.entrypoint;
+  const durable =
+    retained || inputs.devMode || !runsCliEntrypoint({ ...inputs, wrapperPath: params.wrapperPath })
+      ? undefined
+      : await resolveDurableServiceCli(params.env, {
+          install: params.installDurableCli === true,
+          service: params.service,
+        });
+  return {
+    ...inputs,
+    cliEntrypoint: retained ?? durable?.entrypoint,
+    ...(durable?.replacement ? { durableCliReplacement: durable.replacement } : {}),
+  };
+}
+
 export function resolveDaemonRuntimeBinDir(runtimePath?: string): string[] | undefined {
   const trimmed = runtimePath?.trim();
   if (!trimmed || !path.isAbsolute(trimmed)) {
     return undefined;
   }
   return [path.dirname(trimmed)];
-}
-
-function isOpenClawCommandBasename(basename: string, platform: NodeJS.Platform): boolean {
-  if (basename === "openclaw") {
-    return true;
-  }
-  if (platform === "win32") {
-    return (
-      basename === "openclaw.cmd" || basename === "openclaw.ps1" || basename === "openclaw.exe"
-    );
-  }
-  return false;
 }
 
 function safeRealpathSync(inputPath: string): string | undefined {
@@ -119,32 +174,43 @@ function safeRealpathSync(inputPath: string): string | undefined {
   }
 }
 
-function addUniquePathDir(dirs: string[], dir: string | undefined): void {
-  if (!dir || !path.isAbsolute(dir) || dirs.includes(dir)) {
-    return;
-  }
-  dirs.push(dir);
-}
-
-/** Merge runtime and active OpenClaw binary directories for the daemon service PATH. */
 export function resolveDaemonServicePathDirs(params: {
   runtimePath?: string;
   argv?: string[];
   env?: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
+  /** The service install (re)places the durable copy, so its launcher does not exist yet. */
+  durableCliPlanned?: boolean;
 }): string[] | undefined {
   const platform = params.platform ?? process.platform;
   const argv = params.argv ?? process.argv;
   const env = params.env ?? process.env;
   const argv1 = argv[1]?.trim();
-  const dirs = resolveDaemonRuntimeBinDir(params.runtimePath) ?? [];
+  const dirs = new Set(resolveDaemonRuntimeBinDir(params.runtimePath));
+  // An npx, dlx, or temp folder goes stale once its runner evicts it.
+  const addDurable = (dir: string) => {
+    if (!isDisposableInstallPath(safeRealpathSync(dir) ?? path.resolve(dir))) {
+      dirs.add(dir);
+    }
+  };
+  const commandName = path.basename(argv1 ?? "");
+  // From npx or dlx the service runs the durable copy, so its launcher replaces the cache's.
+  const durableBinDir =
+    argv1 && isDisposableInstallPath(safeRealpathSync(argv1) ?? path.resolve(argv1))
+      ? resolveDurableServiceBinDir(env, platform, { planned: params.durableCliPlanned })
+      : undefined;
+  if (durableBinDir) {
+    dirs.add(durableBinDir);
+  }
 
   if (
     argv1 &&
     path.isAbsolute(argv1) &&
-    isOpenClawCommandBasename(path.basename(argv1), platform)
+    (commandName === "openclaw" ||
+      (platform === "win32" &&
+        ["openclaw.cmd", "openclaw.ps1", "openclaw.exe"].includes(commandName)))
   ) {
-    addUniquePathDir(dirs, path.dirname(argv1));
+    addDurable(path.dirname(argv1));
   }
 
   const argvRealpath = argv1 && path.isAbsolute(argv1) ? safeRealpathSync(argv1) : undefined;
@@ -168,8 +234,8 @@ export function resolveDaemonServicePathDirs(params: {
         continue;
       }
     }
-    addUniquePathDir(dirs, segment);
+    addDurable(segment);
   }
 
-  return dirs.length > 0 ? dirs : undefined;
+  return dirs.size > 0 ? [...dirs] : undefined;
 }

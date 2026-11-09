@@ -308,9 +308,11 @@ final class DesktopPlatformProbe: MacDesktopAvailabilityPlatform {
 
     private var nextAssertion: UInt32 = 0
     var changed: (@MainActor @Sendable () -> Void)?
+    var onConsoleStateRead: (@MainActor () -> Void)?
 
     func consoleState() -> MacDesktopAvailabilityCoordinator.State {
-        self.state
+        self.onConsoleStateRead?()
+        return self.state
     }
 
     func makeIdleAssertion(timeout: TimeInterval) -> UInt32? {

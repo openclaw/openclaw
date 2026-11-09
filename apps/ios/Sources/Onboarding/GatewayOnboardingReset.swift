@@ -145,10 +145,13 @@ enum GatewayOnboardingReset {
         }
 
         if gatewayStableID == nil {
+            appModel.focusChatSession(nil)
+            for entry in GatewaySettingsStore.loadGatewayRegistry().entries {
+                GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: entry.stableID, sessionKey: nil)
+            }
             GatewaySettingsStore.clearGatewayRegistry()
         }
-        GatewaySettingsStore.clearPreferredGatewayStableID(defaults: defaults)
-        GatewaySettingsStore.clearLastDiscoveredGatewayStableID(defaults: defaults)
+        GatewaySettingsStore.clearGatewaySelectors(defaults: defaults)
         defaults.set(false, forKey: "gateway.autoconnect")
         return true
     }

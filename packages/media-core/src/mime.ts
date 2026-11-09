@@ -5,7 +5,6 @@ import { extnameFromAnyPath } from "./file-name.js";
 /** Maximum byte prefix passed to dependency MIME sniffers for bounded memory/CPU work. */
 export const FILE_TYPE_SNIFF_MAX_BYTES = 1024 * 1024;
 
-// Map common mimes to preferred file extensions.
 const EXT_BY_MIME: Record<string, string> = {
   "image/avif": ".avif",
   "image/heic": ".heic",
@@ -67,16 +66,11 @@ const EXT_BY_MIME: Record<string, string> = {
   "application/xml": ".xml",
 };
 
-function buildMimeByExt(): Record<string, string> {
-  const byExt: Record<string, string> = {};
-  for (const [mime, ext] of Object.entries(EXT_BY_MIME)) {
-    byExt[ext] ??= mime;
-  }
-  return byExt;
+const MIME_BY_EXT: Record<string, string> = {};
+for (const [mime, ext] of Object.entries(EXT_BY_MIME)) {
+  MIME_BY_EXT[ext] ??= mime;
 }
-
-const MIME_BY_EXT: Record<string, string> = {
-  ...buildMimeByExt(),
+Object.assign(MIME_BY_EXT, {
   // Canonical extension mappings for common MIME aliases
   ".jpg": "image/jpeg",
   ".m2a": "audio/mpeg",
@@ -85,7 +79,6 @@ const MIME_BY_EXT: Record<string, string> = {
   ".oga": "audio/ogg",
   ".wav": "audio/wav",
   ".webm": "video/webm",
-  // Additional extension aliases
   ".aif": "audio/aiff",
   ".aifc": "audio/aiff",
   ".jpeg": "image/jpeg",
@@ -99,7 +92,7 @@ const MIME_BY_EXT: Record<string, string> = {
   ".tsv": "text/tab-separated-values",
   ".xml": "text/xml",
   ".yml": "application/yaml",
-};
+});
 
 const AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME: Readonly<Record<string, string>> = {
   "audio/mp4": "video/mp4",
@@ -182,21 +175,17 @@ export function normalizeMimeType(mime?: string | null): string | undefined {
   return Object.hasOwn(MIME_SYNONYMS, cleaned) ? MIME_SYNONYMS[cleaned] : cleaned;
 }
 
-/** Returns the bounded buffer prefix used for dependency MIME sniffing. */
-export function sliceMimeSniffBuffer(buffer: Buffer): Buffer {
-  if (buffer.byteLength <= FILE_TYPE_SNIFF_MAX_BYTES) {
-    return buffer;
-  }
-  return buffer.subarray(0, FILE_TYPE_SNIFF_MAX_BYTES);
-}
-
 async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
   if (!buffer) {
     return undefined;
   }
   try {
     const { fileTypeFromBuffer } = await import("file-type");
-    const type = await fileTypeFromBuffer(sliceMimeSniffBuffer(buffer));
+    const type = await fileTypeFromBuffer(
+      buffer.byteLength <= FILE_TYPE_SNIFF_MAX_BYTES
+        ? buffer
+        : buffer.subarray(0, FILE_TYPE_SNIFF_MAX_BYTES),
+    );
     if (type?.mime) {
       return normalizeMimeType(type.mime);
     }
@@ -237,7 +226,6 @@ export function mimeTypeFromFilePath(filePath?: string | null): string | undefin
   return MIME_BY_EXT[ext];
 }
 
-/** Returns true when a filename extension is a supported audio container. */
 export function isAudioFileName(fileName?: string | null): boolean {
   return mediaKindFromMime(mimeTypeFromFilePath(fileName)) === "audio";
 }
@@ -295,7 +283,6 @@ export function extensionForMime(mime?: string | null): string | undefined {
   return Object.hasOwn(EXT_BY_MIME, normalized) ? EXT_BY_MIME[normalized] : undefined;
 }
 
-/** Returns true when content type or filename identifies GIF media. */
 export function isGifMedia(opts: {
   contentType?: string | null;
   fileName?: string | null;

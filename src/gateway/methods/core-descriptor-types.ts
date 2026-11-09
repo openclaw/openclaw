@@ -1,9 +1,10 @@
 import type {
   GatewayMethodDescriptor,
+  GatewayReadSharing,
   GatewayMethodScope,
   GatewayMethodSessionAccess,
 } from "./descriptor.js";
-export type CoreGatewayMethodSpec = {
+export type CoreGatewayMethodSpec = Partial<GatewayReadSharing> & {
   name: string;
   family?: string;
   scope: GatewayMethodScope;
@@ -15,10 +16,14 @@ export type CoreGatewayMethodSpec = {
   compatibilityRestored?: true;
   description?: string;
   sessionAccess?: GatewayMethodSessionAccess;
+  profileAccess?: "required";
 };
 
 type CoreGatewayMethodPolicy = Pick<
   CoreGatewayMethodSpec,
+  | "shareKey"
+  | "shareInvalidationEvents"
+  | "shareMaxAgeMs"
   | "advertise"
   | "startup"
   | "lifetime"
@@ -26,6 +31,7 @@ type CoreGatewayMethodPolicy = Pick<
   | "compatibilityRestored"
   | "description"
   | "sessionAccess"
+  | "profileAccess"
 >;
 export type CoreGatewayMethodSpecRow = readonly [
   name: string,

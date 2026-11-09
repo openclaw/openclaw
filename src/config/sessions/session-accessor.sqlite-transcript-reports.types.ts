@@ -5,6 +5,7 @@ import type {
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
 import type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.types.js";
+import type { InternalSessionEntry } from "./types.js";
 
 export type AbortedSessionTranscriptPartial = {
   runId: string;
@@ -27,6 +28,7 @@ export type CustomMessageReportAppend = {
   customType: string;
   content: string;
   display: boolean;
+  excludeFromContext?: boolean;
   details?: unknown;
 };
 export type TranscriptReport =
@@ -34,7 +36,6 @@ export type TranscriptReport =
   | {
       kind: "custom";
       customTypes: readonly string[];
-      suppressWhenAssistantRun?: string;
       /** Pure selection; a definite concurrent transcript change may repeat it. */
       selectReport: (
         latest: CustomMessageReport | undefined,
@@ -47,10 +48,7 @@ export type SelectedTranscriptReport =
 
 export type TranscriptReportSelection =
   | { kind: "assistant"; responseId: string }
-  | Pick<
-      Extract<TranscriptReport, { kind: "custom" }>,
-      "kind" | "customTypes" | "suppressWhenAssistantRun"
-    >;
+  | Pick<Extract<TranscriptReport, { kind: "custom" }>, "kind" | "customTypes">;
 
 export type PreparedTranscriptReport = {
   appendParentId: string | null;
@@ -64,6 +62,8 @@ export type TranscriptReportCommit = {
   cliHistoryChanged?: boolean;
   abortedPartial?: AbortedSessionTranscriptPartialResult;
   sessionEntryChanged?: boolean;
+  entry?: InternalSessionEntry;
+  fullEntry?: InternalSessionEntry;
 };
 
 export type TranscriptReportWorkerOperations = {

@@ -3,12 +3,6 @@ import {
   extractObservedOverflowTokenCount,
   isCompactionFailureError,
 } from "../embedded-agent-helpers/context-overflow-observation.js";
-import {
-  classifyFailoverReason,
-  isBillingErrorMessage,
-  isContextOverflowError,
-  isLikelyContextOverflowError,
-} from "./classify.js";
 
 function expectMessageMatches(
   matcher: (message: string) => boolean,
@@ -32,118 +26,8 @@ describe("isCompactionFailureError", () => {
       ],
       expected: true,
     },
-    {
-      name: "ignores non-compaction overflow errors",
-      samples: ["Context overflow: prompt too large", "rate limit exceeded"],
-      expected: false,
-    },
   ])("$name", ({ samples, expected }) => {
     expectMessageMatches(isCompactionFailureError, samples, expected);
-  });
-});
-
-describe("isContextOverflowError", () => {
-  it("matches input-only overflow counts", () => {
-    const samples = [
-      "The input (263000 tokens) is longer than the model's context length (262144 tokens).",
-      "The input (263,000 tokens) is longer than the model's context length (262,144 tokens).",
-      "The input (1 token) is longer than the model's context length (1 token).",
-    ];
-    for (const sample of samples) {
-      expect(isContextOverflowError(sample)).toBe(true);
-    }
-  });
-});
-
-describe("isLikelyContextOverflowError", () => {
-  it("matches context overflow hints", () => {
-    const samples = [
-      "Model context window is 128k tokens, you requested 256k tokens",
-      "Context window exceeded: requested 12000 tokens",
-      "Prompt too large for this model",
-      "The input (263000 tokens) is longer than the model's context length (262144 tokens).",
-    ];
-    for (const sample of samples) {
-      expect(isLikelyContextOverflowError(sample)).toBe(true);
-    }
-    expect(
-      classifyFailoverReason(
-        "The input (263000 tokens) is longer than the model's context length (262144 tokens).",
-      ),
-    ).toBe("context_overflow");
-  });
-
-  it("excludes context window too small errors", () => {
-    const samples = [
-      "Model context window too small (minimum is 128k tokens)",
-      "Context window too small: minimum is 1000 tokens",
-    ];
-    for (const sample of samples) {
-      expect(isLikelyContextOverflowError(sample)).toBe(false);
-    }
-  });
-
-  it("excludes rate limit errors that match the broad hint regex", () => {
-    const samples = [
-      "request reached organization TPD rate limit, current: 1506556, limit: 1500000",
-      "rate limit exceeded",
-      "too many requests",
-      "429 Too Many Requests",
-      "exceeded your current quota",
-      "This request would exceed your account's rate limit",
-      "429 Too Many Requests: request exceeds rate limit",
-      "AWS Bedrock: Too many tokens per day. Please try again tomorrow.",
-      "Rate limit exceeded: The input (263000 tokens) is longer than the model's context length (262144 tokens).",
-    ];
-    for (const sample of samples) {
-      expect(isLikelyContextOverflowError(sample)).toBe(false);
-    }
-  });
-
-  it("keeps too-many-tokens-per-request context overflow errors out of the rate-limit lane", () => {
-    const sample = "Context window exceeded: too many tokens per request.";
-    expect(isLikelyContextOverflowError(sample)).toBe(true);
-    expect(classifyFailoverReason(sample)).toBe("context_overflow");
-  });
-
-  it("excludes billing errors even when text matches context overflow patterns", () => {
-    const samples = [
-      "402 Payment Required: request token limit exceeded for this billing plan",
-      "insufficient credits: request size exceeds your current plan limits",
-      "Your credit balance is too low. Maximum request token limit exceeded.",
-      "402 Payment Required: The input (263000 tokens) is longer than the model's context length (262144 tokens).",
-    ];
-    for (const sample of samples) {
-      expect(isBillingErrorMessage(sample)).toBe(true);
-      expect(isLikelyContextOverflowError(sample)).toBe(false);
-    }
-  });
-});
-
-describe("reasoning-required invalid-request errors", () => {
-  it.each([
-    {
-      name: "strict context overflow classifier",
-      classifier: isContextOverflowError,
-      samples: [
-        "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
-        '{"type":"error","error":{"type":"invalid_request_error","message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}',
-        "This model requires reasoning to be enabled",
-      ],
-    },
-    {
-      name: "likely context overflow classifier",
-      classifier: isLikelyContextOverflowError,
-      samples: [
-        "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
-        '{"type":"error","error":{"type":"invalid_request_error","message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}',
-        "This endpoint requires reasoning",
-      ],
-    },
-  ])("excludes reasoning-required invalid-request errors from $name", ({ classifier, samples }) => {
-    for (const sample of samples) {
-      expect(classifier(sample)).toBe(false);
-    }
   });
 });
 

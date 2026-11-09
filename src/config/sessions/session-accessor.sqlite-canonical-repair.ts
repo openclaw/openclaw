@@ -2,26 +2,30 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
+  copySessionDeliveriesForRepair,
+  resolveSqliteCanonicalRepairLookupKeys,
+} from "./session-accessor.sqlite-delivery-repair.js";
+import {
   copySqliteSessionGenerationRows,
   readSqliteSessionGenerationWindows,
   rehomeSqliteSessionGenerationWindow,
 } from "./session-accessor.sqlite-generation-copy.js";
-import { readSessionGenerationIdsForKeys } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
   copySessionNodeArtifactsForRepair,
   deleteSessionMembersForRepair,
 } from "./session-accessor.sqlite-node-artifacts.js";
-import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
+import {
+  collectSessionStateIdsForEntry,
+  readSessionGenerationIdsForKeys,
+} from "./session-accessor.sqlite-references.js";
 import {
   getSessionKysely,
   resolveSqliteStoreScope,
@@ -33,30 +37,12 @@ import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { ensureTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
-import {
-  attachSessionEntrySnapshots,
-  sessionEntrySnapshotColumns,
-} from "./session-entry-snapshots.js";
+import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
+import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
-type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
-
 // Doctor-only cross-store transfer. Runtime readers never reconcile aliases.
-
-function resolveSqliteCanonicalRepairLookupKeys(
-  canonicalKey: string,
-  storedKeys: readonly string[],
-): string[] {
-  return uniqueStrings([
-    canonicalKey,
-    ...storedKeys,
-    ...storedKeys.flatMap((key) => {
-      const trimmedKey = key.trim();
-      return [trimmedKey, normalizeStoreSessionKey(trimmedKey)];
-    }),
-  ]);
-}
 
 /** Doctor probes only the exact staged target and may replace a malformed partial row. */
 export function readExactSessionEntryRowForCanonicalRepair(
@@ -160,13 +146,20 @@ export async function ensureSqliteTranscriptGenerationsForCanonicalRepair(
 ): Promise<void> {
   const byDatabase = new Map<
     string,
-    { resolved: ReturnType<typeof resolveSqliteStoreScope>; sources: typeof sources }
+    {
+      resolved: ReturnType<typeof resolveSqliteStoreScope>;
+      sources: Array<(typeof sources)[number]>;
+    }
   >();
   for (const source of sources) {
     const resolved = resolveSqliteStoreScope(source.storePath, { agentId: source.agentId });
     const key = `${resolved.path ?? source.storePath}\0${resolved.databaseAgentId ?? resolved.agentId}`;
-    const grouped = byDatabase.get(key) ?? { resolved, sources: [] };
-    byDatabase.set(key, { ...grouped, sources: [...grouped.sources, source] });
+    const grouped = byDatabase.get(key);
+    if (grouped) {
+      grouped.sources.push(source);
+    } else {
+      byDatabase.set(key, { resolved, sources: [source] });
+    }
   }
   for (const group of byDatabase.values()) {
     await runExclusiveSqliteSessionWrite(
@@ -238,7 +231,7 @@ export function rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch(
   const storedSessionKeySet = new Set(storedSessionKeys);
   const identityCounts = new Map<string, number>();
   for (const sessionKey of storedSessionKeys) {
-    const identity = normalizeStoreSessionKey(sessionKey.trim());
+    const identity = normalizeStoreSessionKey(sessionKey);
     identityCounts.set(identity, (identityCounts.get(identity) ?? 0) + 1);
   }
   for (const repair of repairs) {
@@ -248,7 +241,7 @@ export function rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch(
       if (!storedSessionKeySet.has(sessionKey)) {
         continue;
       }
-      const identity = normalizeStoreSessionKey(sessionKey.trim());
+      const identity = normalizeStoreSessionKey(sessionKey);
       ownedIdentityCounts.set(identity, (ownedIdentityCounts.get(identity) ?? 0) + 1);
     }
     const aliases = resolveSqliteCanonicalRepairLookupKeys(
@@ -261,7 +254,7 @@ export function rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch(
       if (ownedKeys.has(key)) {
         return true;
       }
-      const identity = normalizeStoreSessionKey(key.trim());
+      const identity = normalizeStoreSessionKey(key);
       return (identityCounts.get(identity) ?? 0) <= (ownedIdentityCounts.get(identity) ?? 0);
     });
     if (aliases.length === 0) {
@@ -315,107 +308,14 @@ function copySqliteSessionOwnedStateForRepair(params: {
     ...windows.flatMap((row) => (row.primary_conversation_id ? [row.primary_conversation_id] : [])),
     ...sessionLinks.map((row) => row.conversation_id),
   ]);
-  const sourceKeyReferences = new Set(sourceKeys);
-  const sourceLineageIdentities = new Set(
-    sourceKeys.map((key) => normalizeStoreSessionKey(key.trim())),
-  );
-  const deliveryLookupKeys = resolveSqliteCanonicalRepairLookupKeys(
-    params.canonicalKey,
+  const sourceLineageIdentities = new Set(sourceKeys.map(normalizeStoreSessionKey));
+  copySessionDeliveriesForRepair({
+    canonicalKey: params.canonicalKey,
+    destination: params.destination,
+    source: params.source,
     sourceKeys,
-  );
-  const competingDeliveryIdentities = new Set(
-    executeSqliteQuerySync(
-      params.source.db,
-      sourceDb.selectFrom("session_nodes").select("session_key"),
-    ).rows.flatMap((row) =>
-      sourceKeyReferences.has(row.session_key)
-        ? []
-        : [normalizeStoreSessionKey(row.session_key.trim())],
-    ),
-  );
-  const deliverySourceKeys = deliveryLookupKeys.filter(
-    (key) =>
-      sourceKeyReferences.has(key) ||
-      !competingDeliveryIdentities.has(normalizeStoreSessionKey(key.trim())),
-  );
-  const deliverySourceKeyReferences = new Set(deliverySourceKeys);
-  const deliveries = executeSqliteQuerySync(
-    params.source.db,
-    sourceDb
-      .selectFrom("conversation_deliveries")
-      .selectAll()
-      .where("source_session_key", "in", deliverySourceKeys),
-  ).rows;
-  const conversationIds = uniqueStrings([
-    ...linkedConversationIds,
-    ...deliveries.map((delivery) => delivery.conversation_id),
-  ]);
-  if (conversationIds.length > 0) {
-    const conversations = executeSqliteQuerySync(
-      params.source.db,
-      sourceDb
-        .selectFrom("conversations")
-        .selectAll()
-        .where("conversation_id", "in", conversationIds),
-    ).rows;
-    for (const conversation of conversations) {
-      const { conversation_id: _conversationId, ...replacement } = conversation;
-      executeSqliteQuerySync(
-        params.destination.db,
-        destinationDb
-          .insertInto("conversations")
-          .values(conversation)
-          // conversation_id hashes the same fields as the natural unique identity.
-          .onConflict((conflict) => conflict.column("conversation_id").doUpdateSet(replacement)),
-      );
-    }
-    const sourceCache = getNodeSqliteKysely<AgentCacheDatabase>(params.source.db);
-    const destinationCache = getNodeSqliteKysely<AgentCacheDatabase>(params.destination.db);
-    for (const delivery of deliveries) {
-      const canonicalDelivery = {
-        ...delivery,
-        source_session_key:
-          delivery.source_session_key !== null &&
-          deliverySourceKeyReferences.has(delivery.source_session_key)
-            ? params.canonicalKey
-            : delivery.source_session_key,
-      };
-      const { operation_id: _operationId, ...replacement } = canonicalDelivery;
-      executeSqliteQuerySync(
-        params.destination.db,
-        destinationDb
-          .insertInto("conversation_deliveries")
-          .values(canonicalDelivery)
-          .onConflict((conflict) => conflict.column("operation_id").doUpdateSet(replacement)),
-      );
-      const snapshot = executeSqliteQueryTakeFirstSync(
-        params.source.db,
-        sourceCache
-          .selectFrom("cache_entries")
-          .selectAll()
-          .where("scope", "=", "conversation-progress")
-          .where("key", "=", delivery.operation_id),
-      );
-      if (snapshot) {
-        executeSqliteQuerySync(
-          params.destination.db,
-          destinationCache
-            .insertInto("cache_entries")
-            .values(snapshot)
-            .onConflict((conflict) => conflict.columns(["scope", "key"]).doUpdateSet(snapshot)),
-        );
-      } else {
-        // Replacing a receipt cannot retain another receipt's presentation at the same key.
-        executeSqliteQuerySync(
-          params.destination.db,
-          destinationCache
-            .deleteFrom("cache_entries")
-            .where("scope", "=", "conversation-progress")
-            .where("key", "=", delivery.operation_id),
-        );
-      }
-    }
-  }
+    linkedConversationIds,
+  });
   const preferredWindowProjection = params.preferredEntry
     ? bindSessionWindowEntryProjection({
         entry: params.preferredEntry,

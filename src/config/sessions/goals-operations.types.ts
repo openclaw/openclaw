@@ -1,5 +1,9 @@
-import type { SessionsGoalMutationResult } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
+import type {
+  SessionGoal,
+  SessionsGoalMutationResult,
+} from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import type { SessionEntry } from "./types.js";
 
 type SessionGoalOperationIdentity = {
   operationId: string;
@@ -12,7 +16,17 @@ export type SessionGoalOperation = SessionGoalOperationIdentity &
   (
     | { action: "start"; objective: string; tokenBudget?: number }
     | { action: "edit"; goalId: string; objective: string }
-    | { action: "resume" | "pause" | "block" | "complete"; goalId: string; note?: string }
+    /** Internal completed-interruption receipt; preserves the Goal unchanged. */
+    | { action: "replace"; goalId: string; expectedRunId: string }
+    | {
+        action: "resume";
+        goalId: string;
+        note?: string;
+        preserveBudget?: true;
+        /** Receipt-derived postimage, checked by the continuation writer before its own transition. */
+        replacementSource?: { runId: string; goal: SessionGoal };
+      }
+    | { action: "pause" | "block" | "complete"; goalId: string; note?: string }
     | { action: "clear"; goalId: string }
   );
 
@@ -69,4 +83,17 @@ export type SessionTranscriptTurnMutation = {
 export type SessionTranscriptTurnMutationResult = {
   result: SessionGoalOperationResult;
   replayed: boolean;
+};
+
+export type SessionGoalManagementInput = {
+  sessionKey: string;
+  expectedSessionId: string;
+  operation: Exclude<SessionGoalOperation, { action: "start" }> & {
+    action: "edit" | "replace" | "pause" | "block" | "complete" | "clear";
+  };
+};
+
+export type SessionGoalManagementCommit = SessionTranscriptTurnMutationResult & {
+  sessionEntry?: SessionEntry;
+  previous?: SessionEntry;
 };

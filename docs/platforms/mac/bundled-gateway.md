@@ -1,135 +1,113 @@
 ---
-summary: "Bundled Gateway runtime, app hosting, and background services on macOS"
+summary: "Run, update, and troubleshoot the Gateway included with the macOS app"
+doc-schema-version: 1
 read_when:
-  - Packaging OpenClaw.app
+  - Running the Gateway included with OpenClaw.app
   - Debugging the macOS gateway launchd service
   - Installing the gateway CLI for macOS
 title: "Gateway on macOS"
 ---
 
-OpenClaw.app bundles a private runtime built from the OpenClaw Bun fork, a signed
-SQLite library with extension loading, and the full matching OpenClaw package
-(CLI, Gateway, and Control UI). Its app-owned `node worker` helper and fixed local
-Chrome-extension setup entry point run on this Bun runtime. The app bundle
-contains no Node executable.
+OpenClaw.app includes everything needed to run a Gateway on your Mac. You do
+not need to install Node, Bun, or a global CLI.
 
-The payload lives in one `Contents/Resources/runtime` directory. Universal apps
-share the JavaScript package between architectures and include universal Bun and
-SQLite binaries plus each architecture's native dependencies. Rebuilding or
-replacing the app replaces this runtime too, including rebuilds with the same
-public version. The app validates the package's version, commit, build time, and
-build ID before launch. Moving the app or removing its build checkout does not
-change which runtime it uses.
+On a fresh setup, the Gateway starts and stops with the app. You can also
+[keep it running in the background](/platforms/mac/bundled-gateway#launchd-gateway-as-launchagent). If a Gateway
+already runs on the configured port, the app connects to it instead of starting
+another one. Independently managed Gateways keep their existing lifecycle.
 
-On a fresh profile, the **app hosts the Gateway** as a child process using its
-bundled Bun runtime. The Gateway starts with the app and stops when the app
-quits. An existing Gateway on the configured port is attached instead of
-duplicated. Existing independently managed installations keep their current
-lifecycle. Eligible app-managed Node services move to bundled Bun while keeping
-their always-on service.
-
-The app first copies its runtime to `<state>/runtime/<runtimeBuildId>/`, where
-`<state>` is `~/.openclaw` or `~/.openclaw-<profile>`. Copies use APFS
-clone-on-write when available and are published atomically after provenance and
-Bun checks succeed. The child and app-managed Bun service use the concrete
-build directory so each process keeps its matching package and SQLite library.
-The `runtime/current` symlink selects the runtime for the terminal CLI shim.
-The app retains the current and previous builds; older copies are removed only
-after Gateway health succeeds and no process runs from them.
-
-For an app-owned full Gateway payload, packaging writes
-`openclaw-install-owner.json` at the OpenClaw package root with `schemaVersion: 1`,
-`owner: "macos-app"`, `displayName: "OpenClaw.app"`, and
-`updateHint: "Update OpenClaw.app to update this Gateway."`. This contract keeps
-payload and runtime updates with the app updater (Sparkle): core reports the
-owner, skips package-registry update checks, and refuses self-update and runtime
-migration. A launching host can set `OPENCLAW_GATEWAY_HOST_LIFELINE=stdin` and
-retain the stdin pipe writer; EOF or a pipe error requests graceful Gateway
-shutdown. App-hosted Gateways use this lifeline so they exit even if the app
-ends unexpectedly.
-
-The private worker validates core and node configuration through a read-only
-bootstrap, without Gateway-wide Doctor preflight or channel-schema validation.
-Node plugins still validate their own settings before publishing commands, and
-the node runtime owns its MCP clients. Node startup retains the Doctor-owned
-device-auth, device-identity, and exec-approval migrations; this is not a promise
-that all worker startup is read-only. Public `node run`, Gateway, and Doctor
-retain their existing startup policies.
-
-When the native app creates identity, device-auth, or approval tables before
-the worker starts, node startup completes that recognized version-zero database
-through the canonical initializer before plugins read their state. Existing
-native rows are preserved. This does not migrate an already-versioned shared
-Gateway database or adopt unknown or occupied bootstrap state.
+For first-time setup, start with [Onboarding (macOS app)](/start/onboarding).
+This page covers local hosting, updates, recovery, and runtime details.
 
 ## Automatic setup
 
-On a fresh Mac, choose **This Mac** during onboarding. **Getting things ready**
-prepares the included runtime, starts the Gateway, and verifies that it is
-ready. This setup needs no runtime download, Node installation, Terminal,
-Homebrew, or administrator access. Connecting an AI provider can still require
-internet access.
+On a fresh local setup with no configuration or saved connections, opening the
+app shows **Setting up OpenClaw on this Mac**. The app prepares its runtime,
+starts the Gateway, and opens automatic setup in the dashboard.
 
-The app creates `<state>/bin/openclaw`, a small shell wrapper that runs the
-current bundled CLI with Bun and the included SQLite library. It also links
-`openclaw-mac` beside it and adds that bin directory to the usual shell profile
-files. An existing operator-created `openclaw` file is preserved; only the
-app's own wrapper or a recognized `install-cli.sh` wrapper is replaced.
+- Choose **Set up manually** to use native setup. Its **Getting things ready**
+  page prepares the same runtime when needed.
+- Existing configurations keep their connection.
+- Setup needs no runtime download, Terminal, Homebrew, or administrator access.
+  Connecting an AI provider may still need internet access.
+- Setup waits while Gateway startup retries. If startup fails, the relevant
+  native setup step opens. Failure or cancellation leaves onboarding unfinished.
 
-Unbundled DEBUG builds retain the developer installer and channel chooser.
-That installer uses a private temporary directory for downloads and build tools,
-falling back to a private directory under `/tmp` when the inherited temporary
-directory is inaccessible.
+See [Onboarding (macOS app)](/start/onboarding) for eligibility and fallbacks.
 
-Remote connections and attachment to an independently managed local Gateway
-skip this installation. Attach-only mode never prompts for a CLI to run the
-app's node. Pausing preserves who manages the Gateway, even when stopping an
-app-managed service removes its LaunchAgent record. If an independent endpoint
-is no longer available on reattachment, local setup becomes available again.
-An unreadable service ownership record blocks automatic installation instead
-of being treated as a missing service; check the LaunchAgent and retry.
+### Terminal commands
 
-Chrome-extension preparation also runs automatically for the default app
-profile, including remote-only and attach-only Macs. It uses the validated
-private runtime, registers the native helper before requesting the Store
-extension, and leaves Chrome’s permission approval to you. Browser setup does not
-run Gateway-wide Doctor or migrate Gateway state. The Dashboard’s **Set up Chrome
-on this device** action retries the same serialized operation. See
+The app creates `<state>/bin/openclaw` to run its bundled CLI with Bun and SQLite.
+By default, `<state>` is `~/.openclaw` or `~/.openclaw-<profile>`.
+
+When the app runs from a persistent location, it also links `openclaw-mac` beside
+that command. The default profile adds the bin directory to the usual shell
+profile files.
+
+Named profiles and apps running from Downloads, Desktop, a disk image, or a
+temporary directory such as `/tmp` do not change shell profiles. Use the full
+command path instead, for example `~/.openclaw-<profile>/bin/openclaw`.
+
+The app preserves an operator-created `openclaw` file.
+
+### Existing and development Gateways
+
+Remote connections and independently managed local Gateways skip runtime
+installation. Attach-only mode does not prompt for a CLI to run the app's node.
+
+Pausing does not change who manages the Gateway, even if stopping an app-managed
+service removes its LaunchAgent record. If an independent endpoint is unavailable
+when reconnecting, local setup becomes available again. If the service ownership
+record cannot be read, installation stops: check the LaunchAgent and retry.
+
+Unbundled DEBUG builds use a separate installer and channel chooser. See
+[macOS development setup](/platforms/mac/dev-setup).
+
+### Set up Chrome
+
+In the dashboard, choose **Settings → This Mac → Set up Chrome on this device**.
+This also works on remote-only and attach-only Macs. Use the same action to retry.
+
+You approve Chrome's permissions. Opening OpenClaw alone does not inspect or
+change Chrome data. For setup and troubleshooting, see
 [Chrome extension](/tools/chrome-extension).
 
 ## Manual recovery
 
-Read the version to install from the app: choose **About OpenClaw** in the
-menu bar, or run `openclaw-mac status --json`, which reports the app version
-and build.
-
-For a manual install, use Node 26 (recommended) or another supported release:
-Node 24.16+ or Node 26.1+. Install `openclaw` globally:
-
-The command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
-omit `--allow-scripts=openclaw`.
-
-```bash
-npm install -g openclaw@<version> --allow-scripts=openclaw
-```
-
-Use **Retry setup** after a failed bundled setup. If the runtime payload is
+Use **Retry setup** after a failed bundled setup. If the bundled runtime is
 missing or incompatible, reinstall OpenClaw.app. Installing a global CLI does
-not repair the app's bundled payload. The manual Node installation above is for
-an independently managed Gateway or unbundled development setup.
+not repair the app's runtime.
 
-For an existing app-managed Gateway using the app's exact-version policy,
-**Retry setup** updates an older package through its installed CLI before starting
-it. Failed updates remain retryable; channel policies and operator runtime pins
-keep their existing update path.
+The app automatically restarts a crashed Gateway, including an illegal instruction
+(`SIGILL`), after 1, 2, 4, then 8 seconds. It stops after five fast failures and
+preserves the crash output in the Gateway log. A minute of healthy operation resets
+that limit. Update or reinstall the app if failures persist, and include the log
+when reporting them. The app does not automatically switch to Node.
+
+For an app-managed Gateway with an exact-version policy, **Retry setup** updates
+an older package through its installed CLI before starting it. Failed updates
+can be retried. Channel policies and operator runtime pins keep their existing
+update path.
+
+### Install an independent Node Gateway
+
+An independently managed [Node Gateway](/install/node) is an alternative to the
+bundled Gateway. Connect the app to it after installation. This is also an option
+for unbundled development setups.
+
+1. Find the app version in **About OpenClaw**, or run
+   `openclaw-mac status --json` to see its version and build.
+2. Use Node 26.12.1+ (recommended) or Node 24.22.1+.
+3. Install the matching OpenClaw version:
+
+   ```bash
+   npm install -g openclaw@<version> --allow-scripts=openclaw
+   ```
+
+   This command requires npm 12 or npm 11.16+. On npm 11.15 and earlier, omit
+   `--allow-scripts=openclaw`.
 
 ## Launchd (Gateway as LaunchAgent)
-
-Label: `ai.openclaw.gateway` (default profile), or `ai.openclaw.<profile>`
-for a named profile.
-
-Plist location (per-user): `~/Library/LaunchAgents/ai.openclaw.gateway.plist`
-(or `ai.openclaw.<profile>.plist`).
 
 The macOS app can manage the Gateway as a background service instead of a
 child process. Turn on **Keep OpenClaw running when the app is closed** next to
@@ -140,19 +118,25 @@ control is unavailable for independently managed Gateways and connections that
 do not host a local Gateway. A paused Gateway stays paused when this preference
 changes.
 
+### Switch hosting modes
+
 If the replacement Gateway fails to start, the app restores the previous hosting
 mode and verifies its health before reporting the failure. An operator change to
 the service, or pausing or quitting during the switch, stops automatic recovery;
 the app preserves the newer choice and reports what could not finish.
 
-The app preserves settings from the Gateway's generated service environment and
-rereads that file on later app launches. If a service has settings that would be
-lost after switching to app hosting, the app leaves the service unchanged and
-asks you to move the needed settings into the profile's persistent configuration
-or `.env` file. Run `openclaw gateway install --force`, then retry the hosting
-change. This uses the Gateway CLI's existing persistence rules for
-provider credentials and referenced configuration; arbitrary ambient variables
-are not guaranteed to persist through a new service installation.
+If switching to app hosting would lose service settings, the app leaves the
+service unchanged. Move the reported settings into the profile's persistent
+configuration or `.env` file, run `openclaw gateway install --force`, then retry.
+Do not rely on temporary shell variables surviving service reinstallation.
+
+### Manage the service from the CLI
+
+Label: `ai.openclaw.gateway` (default profile), or `ai.openclaw.<profile>`
+for a named profile.
+
+Plist location (per-user): `~/Library/LaunchAgents/ai.openclaw.gateway.plist`
+(or `ai.openclaw.<profile>.plist`).
 
 The CLI can also install it directly: `openclaw gateway install`
 (named profiles are selected via the `OPENCLAW_PROFILE` env var).
@@ -161,24 +145,13 @@ If the pin is invalid, enabling fails with the CLI error; reinstall explicitly w
 `--runtime` or `--runtime-path` to replace the saved pin.
 Disabling it uninstalls the LaunchAgent, which removes the pin.
 
-A newly installed app-managed Bun service is pinned to
-`<state>/runtime/<runtimeBuildId>/bin/bun`, with the matching package and
-`OPENCLAW_SQLITE_LIBRARY` environment. After an app update, the app reinstalls
-only services it owns whose executable is inside `<state>/runtime/` onto the new
-concrete build. A service using an executable outside that directory stays
-unchanged, including an unpinned executable. The update window reports
-"Gateway service uses an operator-pinned runtime; update it yourself."
+In service mode:
 
-Behavior:
-
-- In service mode, "OpenClaw Active" enables/disables the LaunchAgent.
-- In service mode, quitting the app does **not** stop the Gateway (launchd keeps it alive).
-- If a Gateway is already running on the configured port, the app attaches to
-  it instead of starting a new one.
+- **OpenClaw Active** enables or disables the LaunchAgent.
+- Quitting the app does **not** stop the Gateway; launchd keeps it alive.
 - Other listeners are left running. Resolve port conflicts through the process
-  or service that owns them; automatic cleanup only reaps recorded orphaned SSH tunnels.
-- If service inspection is inconclusive, the app defers installation and uses
-  its existing readiness checks. A service confirmed absent can still be installed.
+  or service that owns them. If the app cannot determine service ownership, it
+  defers installation.
 
 Use the CLI for lifecycle checks and recovery:
 
@@ -187,13 +160,20 @@ openclaw gateway status --deep
 openclaw gateway restart
 ```
 
-When **Also run a Gateway on this Mac** is enabled with a remote primary, the
-managed launch agent includes `--allow-unconfigured` so it can run while
-`gateway.mode` remains `remote`. Switching the primary to local removes that
-argument. See [local hosting alongside a remote primary](/platforms/mac/remote#run-a-local-gateway-alongside-a-remote-primary).
+To keep a local Gateway alongside a remote primary, enable **Also run a Gateway
+on this Mac**. See [local hosting alongside a remote primary](/platforms/mac/remote#run-a-local-gateway-alongside-a-remote-primary).
 
-Launchd provides auto-start at login, crash restarts, and one predictable log
-location without tying the Gateway lifetime to the app process.
+### Runtime pins and migration state
+
+For bundled services, an app update replaces only app-managed runtimes under
+`<state>/runtime/`. Other executables stay unchanged. If you see **Gateway service uses an
+operator-pinned runtime; update it yourself**, update that installation through
+its owner.
+
+If status reports `migrationPending`, run `openclaw doctor` or complete a CLI
+start/repair. The current runtime stays selected until migration completes.
+For storage and migration details, see
+[local service runtime state](/reference/database-schemas/layout#local-daemon-service-intent).
 
 ### Unexpected repeated restarts
 
@@ -204,19 +184,10 @@ openclaw gateway status
 openclaw doctor
 ```
 
-On macOS, both commands report foreign loaded jobs in the `ai.openclaw.*`
-namespace, including jobs submitted without a plist. The report shows each
-label, program, KeepAlive flag, and detected `openclaw gateway restart`,
-`start`, or `stop` invocation. Plain-text status shows the list as a warning when
-at least one job has KeepAlive or a verified lifecycle invocation. Otherwise,
-the list appears informationally under "Other OpenClaw launchd jobs (macOS)".
-Status JSON includes all these jobs under
-`service.foreignLaunchdJobs`. For warnings, recent external forced restarts in
-the lifecycle log provide a possible correlation; the count alone does not
-identify which job caused a restart.
-After three external forced restarts within ten minutes, the managed Gateway
-logs an actionable warning naming likely KeepAlive jobs when available. It
-does not suppress an operator's restart command.
+Look for unexpected `ai.openclaw.*` jobs, especially ones with KeepAlive or
+commands that start, stop, or restart the Gateway. Status lists their labels
+and programs; JSON output uses `service.foreignLaunchdJobs`. Restart warnings
+can identify likely jobs, but a restart count alone does not prove the cause.
 
 To remove confirmed stray Gateway lifecycle jobs and verify recovery:
 
@@ -226,23 +197,14 @@ openclaw gateway status
 openclaw health
 ```
 
-Doctor removes a foreign job only when its literal, straight-line script or
-direct arguments invoke an absolute OpenClaw path with a Gateway lifecycle
-subcommand. Shell jobs must also have no launchd environment entries that alter
-shell execution. Everything outside this contract is reported and left unchanged.
-This is command-metadata verification; it does not probe binary executability,
-interpreter availability, or quarantine state.
+Doctor removes only jobs it can verify as stray Gateway lifecycle commands.
+It reports each removal and preserves managed LaunchAgents, unrelated jobs, and
+jobs it cannot identify. Service repair is disabled during updates, under
+external supervision, and for isolated install identities.
 
-Doctor preserves managed LaunchAgents, unrelated labels,
-and jobs whose purpose cannot be established, and names every removal even
-in noninteractive runs. Service repair remains disabled for an isolated install
-identity, external supervision, or an update in progress.
-
-Never use `launchctl submit` or an ad-hoc KeepAlive job for updates or Gateway
-lifecycle commands. Such a job can repeatedly run `openclaw gateway restart`
-whenever its script exits, as described in
-[#114967](https://github.com/openclaw/openclaw/issues/114967). Use the managed
-update workflow and its suspension fence, then verify status and health.
+Do not use `launchctl submit` or an ad-hoc KeepAlive job to run updates or
+Gateway lifecycle commands: they can create restart loops. Use the managed
+update workflow, then verify status and health. See [Doctor](/gateway/doctor).
 
 ### Attach-only development
 
@@ -263,7 +225,7 @@ If a port ownership conflict occurs, automatic recovery preserves the failure
 instead of repeatedly reopening the dashboard. Resolve the conflict, then
 relaunch the app.
 
-Logging:
+### Logs and installation identity
 
 - Gateway stdout: `~/Library/Logs/openclaw/gateway.log` (profiles use
   `gateway-<profile>.log`)
@@ -274,86 +236,117 @@ Logging:
   launchd-marker workaround in
   [Gateway troubleshooting](/gateway/troubleshooting#macos-launchd-supervisor-loop-with-duplicate-gateway%2Fnode-launchagents).
 
+The shell CLI and running Gateway can belong to different installations even
+when their versions match. Use `openclaw gateway status --deep` and
+`openclaw health` to check the service command and runtime. For an app-managed
+Gateway, choose **Retry** in the app. A healthy process is not enough if the app
+still reports unfinished repair work.
+
 ## App-hosted lifecycle and updates
 
-The app restarts a crashed child with a delay that doubles from one second to
-30 seconds, resetting after 60 healthy seconds. Five rapid failures stop the
-restart loop and show the failure with the Gateway log tail. Pausing or quitting
-closes the host lifeline and waits for graceful shutdown before forcing an
-unresponsive process group to exit.
+Update OpenClaw.app to update its bundled Gateway. Bundled installations do not
+run npm self-update. Rebuilds with the same public version also replace the
+runtime.
 
-After an app update, including a rebuild with the same public version, the app
-seeds the new runtime and restarts its Gateway in the selected hosting mode.
-It verifies health before removing old builds. A paused Gateway stays paused.
-Seeded installations never run npm self-update; update OpenClaw.app to update
-their Gateway. A paused legacy app-managed Node installation keeps background-service
-hosting even when the old app removed its LaunchAgent. While paused, the app records
-that preference without probing or changing the runtime. On resume it recovers the
-managed Node CLI before updating; this also applies to named profiles. Existing
-app-managed Node services continue through their installed CLI's update and repair flow, including health verification, and keep their runtime
-pin. A seed left on disk does not adopt an attached Node service. If that legacy
-runtime cannot be verified, the update window keeps the failure retryable instead
-of replacing it with a fresh bundled installation. A missing `runtime/current`
-link is repaired by seeding; old builds stay until a later successful update
-reestablishes the previous-build record. Invalid existing metadata remains a
-retryable failure. External services and channel policies keep their existing
-ownership rules. With a remote primary, an installed legacy Mac node service is
-updated and verified through its own captured CLI. The app-owned local companion
-Gateway is then updated separately; the update receipt stays pending until both
-required runtimes are healthy. The bundled private worker is not a Node LaunchAgent,
-and absent node services or named profiles do not trigger legacy node lifecycle work.
+### Startup and crash recovery
+
+After a child process crashes, the app retries after 1, 2, 4, and 8 seconds.
+The failure count resets after 60 healthy seconds. A fifth rapid failure stops
+restarts and displays the error with the Gateway log tail.
+
+Pausing or quitting allows graceful shutdown before forcing an unresponsive
+app-hosted Gateway to exit.
+
+### What an app update does
+
+1. Prepares the new runtime.
+2. Runs Doctor for migrations and required plugin repairs.
+3. Restarts the Gateway in its selected hosting mode.
+4. Verifies health before removing old builds.
+
+A paused Gateway stays paused. External services and channel policies keep their
+existing ownership rules.
+
+If required repair cannot finish, recovery stays pending. The app restores the
+previous service when possible. If Doctor cleanup cannot be confirmed, the
+Gateway stays stopped. Keep the reported diagnostics before retrying; plugin
+warnings remain visible.
+
+### Legacy and remote installations
+
+Existing app-managed Node services update through their installed CLI and retain
+their runtime pin. If that runtime cannot be verified, the app offers a retry
+instead of replacing it with a fresh installation.
+
+With a remote primary, a legacy Mac node service and the local companion Gateway
+update separately. Both must be healthy before the update completes. The
+bundled private worker is not a Node LaunchAgent.
+
+### Replace a release app with a local build
+
+Package the rebuild with the release identity. A default debug package has
+separate permissions, default-profile preferences, and saved Gateway profiles.
+It also prompts for login-keychain access to the release app's Keychain items.
+See [Replace an installed release app](/platforms/mac/dev-setup#replace-an-installed-release-app).
 
 ### Existing app-managed Node services
 
-For the default profile after onboarding, the app migrates its exact-version
-Node installation in two separate attempts. If the installed version differs
-from the bundled version, the existing managed updater first updates the Node
-installation to the app's version. The core updater owns backups, rollback, and
-database migrations. A failed update leaves the runtime on Node and shows the
-existing update failure and Retry window.
+<Accordion title="Migration steps, exclusions, and recovery">
 
-On the next launch or Retry, once the core update or repair completes and the
-versions match, the app seeds its bundled runtime and reinstalls the service with matching concrete Bun, package, and
-SQLite paths. It verifies health before completing the migration. If that step
-fails, it reinstalls and verifies the retained same-version Node command, then
-shows the failure with Retry. The app retains the old Node tools and npm package
-for recovery. Pausing and relaunching before migration finishes preserves the
-Node resume path; it does not skip the version update or enable the hosting
-toggle early.
+For the default profile, migration happens after onboarding in two attempts:
 
-Before an app-owned install through the bundled CLI, the app reads runtime intent
-with that same CLI, runtime, and environment using `gateway status --deep --json`.
-It passes the observed revision and service definition to the installer after its
-final local custody checks. Failed or unknown inspection stops the install. If an
-operator changes the service or runtime pin before installation begins, the CLI
-preserves that selection and the app reports it without retrying or rolling it
-back. Older installed CLIs keep their existing invocation contract.
+1. **Update Node first.** An older installation uses its managed updater to
+   reach the app's version. The core updater handles backups, rollback, and
+   database migrations. Failure leaves Node in place and shows the existing
+   update error and Retry window.
+2. **Switch on the next launch or Retry.** Once update or repair is complete
+   and versions match, the app prepares bundled Bun and reinstalls the service
+   with matching Bun, package, and SQLite paths. It checks health before
+   completing migration.
 
-Node rollback and restoration of a prior bundled build still run the retained
-CLI, which cannot be assumed to accept this expectation. An operator change
-between the app's final custody check and that CLI's initial snapshot is not yet
-fenced. The app cannot substitute its current bundled CLI: the installer derives
-the service entrypoint from its own package, which would change what recovery
-restores. A narrow core installer capability for selecting the retained service
-entrypoint is the follow-up needed to close this recovery window.
+If the second step fails, the app reinstalls and verifies the retained
+same-version Node command, then shows the error with Retry. Old Node tools and
+the npm package stay available for recovery. Pausing and relaunching preserves
+this Node recovery path; it does not skip the version update or enable the
+hosting toggle early.
 
-Channel-policy installs, independently managed services, and services with
-saved operator runtime pins are not migrated. This includes a saved pin pointing
-at the app's Node tools. This registered-service migration does not run
-automatically in named profiles.
+#### Checks before replacing a service
 
-Older apps removed the LaunchAgent when paused. After onboarding in local mode,
-the surviving app-managed Node installation preserves service hosting even when
-the LaunchAgent is absent. This applies to default and named profiles using an
-exact or unset install policy. While paused, the app only records the hosting
-preference; it does not update, seed, or install a Gateway.
+The app checks service ownership and the saved runtime choice before replacement
+or rollback. Uncertain state stops installation. A runtime or service change
+made by the operator is preserved and reported, not overwritten or retried.
 
-On Resume, the app uses that Node installation's core updater to reach the app's
-version without restarting a service. It then seeds Bun, installs the service,
-and verifies health in the same startup attempt. If the runtime switch fails,
-the app reinstalls and verifies the same-version Node service and shows the
-update failure with Retry. Fresh profiles retain app hosting; channel policies,
-attach-only profiles, and independently managed installations are not adopted.
+Rollback restores the retained runtime and does not require the failed Gateway
+to be running. If the app's bundled runtime is missing or incompatible,
+reinstall OpenClaw.app before retrying recovery.
+
+#### Installations that stay on their current runtime
+
+Automatic registered-service migration excludes:
+
+- Channel-policy installations.
+- Independently managed services.
+- Services with operator runtime pins, including pins to the app's Node tools.
+- Named profiles.
+
+#### Resume a paused legacy installation
+
+A paused legacy Node installation keeps background-service hosting even if an
+older app removed its LaunchAgent. This applies to default and named profiles
+with an exact or unset install policy. Pausing does not install or update a
+runtime.
+
+On **Resume**, an older installation updates to the app's version, then switches
+to Bun and verifies health in the same attempt. If the switch fails, the app
+restores the same-version Node service and offers Retry. Fresh profiles keep
+app hosting. Attach-only, channel-policy, and independently managed installations
+are not adopted.
+
+A compatible newer Node installation resumes without being downgraded or
+switched to an older bundled runtime. Recovery completes only after health
+checks and required migrations finish.
+
+</Accordion>
 
 ## Version compatibility
 
@@ -376,6 +369,12 @@ installation diagnostics. Use **Retry setup** after failed setup, or open
 **Connection… → Connection** from the menu bar and choose
 **Recheck** after repairing it. The Connection window remains available when
 the Dashboard cannot reach the Gateway.
+
+For a bundled app, Connection reports the connected local Gateway's version,
+or the installed service's version when disconnected—not just the app's bundled
+version. An older Gateway exposes **Update Gateway…**; unfinished preparation or
+recovery exposes **Repair Gateway…**, including when the Gateway is newer than
+the app. A healthy compatible newer Gateway does not offer a downgrade.
 
 ## State directory on macOS
 
@@ -405,7 +404,7 @@ The app's CLI installer links `openclaw-mac` beside its profile-managed
 [remote control](/platforms/mac/remote#macos-app-setup) for `primary set`,
 saved-Gateway commands, profiles, and credential input.
 
-For standalone Gateway WebSocket handshake and discovery probes from a source
+For standalone Gateway WebSocket handshake and discovery checks from a source
 checkout, the existing debug commands remain available:
 
 ```bash
@@ -435,6 +434,56 @@ Then:
 ```bash
 openclaw gateway call health --port 18999 --timeout 3000
 ```
+
+## Runtime and credential details
+
+The app includes matching Bun, SQLite, CLI, Gateway, and Control UI components.
+Its private worker uses that runtime too. Update the app to replace these
+components; changing a global CLI does not update them.
+
+For troubleshooting, runtime builds live under
+`<state>/runtime/<runtimeBuildId>/`; `runtime/current` selects the terminal CLI.
+The app retains the current and previous builds for recovery and removes older
+unused builds only after a successful health check.
+
+### Service permissions after an update
+
+App-managed Bun services use a stable executable path,
+`<state>/runtime/service/bun`, to preserve Messages Automation permission across
+updates. The first move to this path, including migration from Node, requires
+Automation approval once.
+
+Replacing an ad-hoc or source-built Bun can also reset Full Disk Access, even
+if System Settings still shows it enabled. Grant access again for
+`<state>/runtime/service/bun`.
+
+### Local authentication
+
+Local connections prefer configured `gateway.auth.token` or
+`gateway.auth.password` credentials over the app's environment variables,
+matching Gateway startup. Environment credentials are fallbacks when no
+configured credential resolves. Remote connections keep environment overrides.
+
+If token authentication is selected or implicit and no credentials exist in
+config or the child environment, the app saves a token before starting its
+Gateway. Failure to save stops setup with a retryable error. Existing credentials,
+SecretRefs, and other auth modes stay unchanged; unreadable credential sources
+are not overwritten. This also applies to a local Gateway alongside a remote
+primary. See [Gateway configuration](/gateway/config-gateway).
+
+### Credential recovery
+
+Credential and local runtime-pin migrations run before the app selects its
+Gateway runtime. Existing private keys and explicit pins are preserved;
+a migration conflict stops startup and shows recovery guidance.
+
+After an in-place app update, the app stops a previous build's app-managed
+Gateway before preparing credentials and installing the updated service.
+Normal migrations complete automatically; unsupported or inconsistent state
+requires Doctor recovery.
+
+For storage, migration, and rollback details, see
+[local client credentials](/reference/database-schemas/versioning#local-client-credentials).
 
 ## Related
 

@@ -8,19 +8,16 @@ extension MacGatewayChatTransport: OpenClawSidebarCatalogTransport {
         AsyncStream { continuation in
             let task = Task { @MainActor in
                 var observedLease: GatewayConnection.ServerLease?
-                var changedEvents = false
                 for await delivery in await self.connection.subscribe() {
                     guard !Task.isCancelled else { break }
                     if case .disconnected = delivery.event, observedLease == delivery.serverLease {
                         observedLease = nil
-                        changedEvents = false
                         continuation.yield(.disconnected)
                     }
                     guard delivery.isCurrent, let push = delivery.push else { continue }
                     switch push {
                     case let .snapshot(hello):
                         observedLease = delivery.serverLease
-                        changedEvents = false
                         let methods = hello.advertisedServerMethods() ?? []
                         let scopes = hello.advertisedOperatorScopes() ?? []
                         guard methods.contains("sessions.catalog.list"),
@@ -31,9 +28,6 @@ extension MacGatewayChatTransport: OpenClawSidebarCatalogTransport {
                             continuation.yield(.unavailable)
                             continue
                         }
-                        changedEvents = hello.features["events"]?.arrayValue?.contains {
-                            $0.stringValue == "sessions.catalog.changed"
-                        } == true
                         let lease = delivery.serverLease
                         let primaryScope = self.connection === GatewayConnection.shared
                             ? MacChatTranscriptCache.currentGatewayID() : nil
@@ -43,7 +37,6 @@ extension MacGatewayChatTransport: OpenClawSidebarCatalogTransport {
                             lease.route.url.absoluteString
                         continuation.yield(.connected(OpenClawSidebarCatalogConnection(
                             profileID: profileID,
-                            changedEvents: changedEvents,
                             allowsArchive: methods.contains("sessions.catalog.archive") &&
                                 !scopes.isDisjoint(with: ["operator.write", "operator.admin"]),
                             request: { request in
@@ -51,8 +44,6 @@ extension MacGatewayChatTransport: OpenClawSidebarCatalogTransport {
                             },
                             isCurrent: { self.connection.serverLeaseMatchesCurrentState(lease) },
                             openSources: { self.openCatalogSources(lease: lease) })))
-                    case let .event(event) where changedEvents && event.event == "sessions.catalog.changed":
-                        continuation.yield(.changed(event.payload?.dictionaryValue?["agentId"]?.stringValue))
                     default: break
                     }
                 }

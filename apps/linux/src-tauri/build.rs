@@ -1,8 +1,18 @@
 fn main() {
+    println!("cargo:rerun-if-env-changed=OPENCLAW_DESKTOP_TEST_PROFILE");
+    let profile = std::env::var("OPENCLAW_DESKTOP_TEST_PROFILE").unwrap_or_default();
+    assert!(
+        matches!(profile.as_str(), "" | "aot-test"),
+        "Unsupported desktop test profile"
+    );
+    println!("cargo:rustc-env=OPENCLAW_DESKTOP_TEST_PROFILE={profile}");
+    if profile == "aot-test" {
+        prepare_gateway_stop_budget();
+    }
     link_macos_swift_runtime();
     prepare_runtime_manifest();
-    // Cargo builds do not require Node; this is the same literal include used by
-    // scripts/lib/standalone-installers.mjs, with no candidate code execution.
+    // Normal Cargo builds do not require Node; this is the same literal include
+    // used by scripts/lib/standalone-installers.mjs, with no candidate code execution.
     let installer = include_str!("../../../scripts/install-cli.sh").replace(
         r#"source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}./install-policy.sh""#,
         include_str!("../../../scripts/install-policy.sh").trim_end(),
@@ -36,8 +46,31 @@ fn main() {
     .expect("Tauri build configuration should be valid");
 }
 
+fn prepare_gateway_stop_budget() {
+    println!("cargo:rerun-if-changed=../../../gateway-shutdown-budget.mjs");
+    let output = std::process::Command::new("node")
+        .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.."))
+        .args([
+            "--input-type=module",
+            "--eval",
+            "import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from './gateway-shutdown-budget.mjs'; process.stdout.write(String(GATEWAY_SERVICE_STOP_TIMEOUT_MS));",
+        ])
+        .output()
+        .expect("Node is required to read the canonical Gateway shutdown budget");
+    assert!(
+        output.status.success(),
+        "Could not read Gateway shutdown budget"
+    );
+    let millis = std::str::from_utf8(&output.stdout)
+        .expect("Gateway shutdown budget must be UTF-8")
+        .parse::<u64>()
+        .expect("Gateway shutdown budget must be milliseconds");
+    assert!(millis > 0, "Gateway shutdown budget must be positive");
+    println!("cargo:rustc-env=OPENCLAW_GATEWAY_SERVICE_STOP_TIMEOUT_MS={millis}");
+}
+
 fn prepare_runtime_manifest() {
-    // The Tauri hooks fetch verified Linux resources. Plain Cargo tests stay offline and
+    // The Tauri hooks fetch verified resources. Plain Cargo tests stay offline and
     // compile a sentinel that makes local installation fail with an actionable error.
     let directory = std::path::Path::new("target/desktop-runtime");
     std::fs::create_dir_all(directory).expect("runtime resource directory");
@@ -47,9 +80,12 @@ fn prepare_runtime_manifest() {
     }
     println!("cargo:rerun-if-changed={}", manifest.display());
     let output = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo output"));
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") {
+    if !matches!(
+        std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("linux" | "windows" | "macos")
+    ) {
         std::fs::write(output.join("desktop-runtime.json"), "{}\n")
-            .expect("non-Linux runtime sentinel");
+            .expect("unbundled runtime sentinel");
         return;
     }
     std::fs::copy(manifest, output.join("desktop-runtime.json")).expect("compile runtime identity");

@@ -1,0 +1,34 @@
+rules:
+  - id: raw-image-download-fetch-without-ssrf-guard
+    languages:
+      - typescript
+      - javascript
+    severity: ERROR
+    message: Image download helper uses raw fetch instead of a shared SSRF-guarded fetch path.
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              async function $F(...){
+                ...
+              }
+          - pattern-inside: |
+              const $F = async (...) => {
+                ...
+              }
+      - pattern: const $RESP = await fetch($URL, ...);
+      - metavariable-regex:
+          metavariable: $F
+          regex: .*(fetchImage|downloadImage|loadImage|download).*
+      # GitHub release assets use a fixed download endpoint; arbitrary fixed-origin
+      # paths can still redirect, so they do not qualify for this exception.
+      - metavariable-pattern:
+          metavariable: $URL
+          patterns:
+            - pattern-not-regex: >-
+                \A`https://github\.com/[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*/releases/download/\$\{encodeURIComponent\(\s*[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\s*\)\}/\$\{encodeURIComponent\(\s*[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\s*\)\}`\z
+    metadata:
+      ghsa: GHSA-QXGF-HMCJ-3XW3
+      advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-QXGF-HMCJ-3XW3
+      detector-bucket: precise
+      source-run: 2026-04-17T07-37-10Z
+      source-rule-id: raw-image-download-fetch-without-ssrf-guard

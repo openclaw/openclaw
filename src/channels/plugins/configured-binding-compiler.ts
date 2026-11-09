@@ -4,12 +4,10 @@ import {
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import {
-  buildConfiguredAcpSessionKey,
   normalizeBindingConfig,
   normalizeMode,
   normalizeText,
   toConfiguredAcpBindingRecord,
-  type ConfiguredAcpBindingSpec,
 } from "../../acp/persistent-bindings.types.js";
 import { resolveAgentConfig, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { parseModelRef } from "../../agents/model-selection-normalize.js";
@@ -22,9 +20,7 @@ import type { CompiledConfiguredBinding } from "./binding-types.js";
 import { getLoadedChannelPluginEntryById } from "./registry-loaded.js";
 import type { ChannelId } from "./types.public.js";
 
-export function resolveCompiledBindingRegistry(
-  cfg: OpenClawConfig,
-): Map<ChannelId, CompiledConfiguredBinding[]> {
+export function resolveCompiledBindingRegistry(cfg: OpenClawConfig) {
   const rulesByChannel = new Map<ChannelId, CompiledConfiguredBinding[]>();
 
   for (const binding of listConfiguredBindings(cfg)) {
@@ -83,7 +79,6 @@ export function resolveCompiledBindingRegistry(
         ? resolveAgentWorkspaceDir(cfg, agentId)
         : undefined);
     const backend = bindingOverrides.backend ?? normalizeText(runtimeDefaults?.backend);
-    const label = bindingOverrides.label;
     const rule: CompiledConfiguredBinding = {
       channel: channelId,
       accountPattern: normalizeOptionalString(binding.match.accountId),
@@ -96,7 +91,7 @@ export function resolveCompiledBindingRegistry(
         driverId: "acp",
         materialize: ({ accountId, conversation }) => {
           // Wildcard bindings get a stable session key only after the conversation is known.
-          const spec: ConfiguredAcpBindingSpec = {
+          const record = toConfiguredAcpBindingRecord({
             channel: channelId,
             accountId,
             conversationId: conversation.conversationId,
@@ -108,27 +103,24 @@ export function resolveCompiledBindingRegistry(
             thinking,
             cwd,
             backend,
-            label,
-          };
+            label: bindingOverrides.label,
+          });
           return {
-            record: toConfiguredAcpBindingRecord(spec),
+            record,
             statefulTarget: {
               kind: "stateful",
               driverId: "acp",
-              sessionKey: buildConfiguredAcpSessionKey(spec),
+              sessionKey: record.targetSessionKey,
               agentId,
-              ...(label ? { label } : {}),
+              ...(bindingOverrides.label ? { label: bindingOverrides.label } : {}),
             },
           };
         },
       },
     };
-    const existing = rulesByChannel.get(rule.channel);
-    if (existing) {
-      existing.push(rule);
-    } else {
-      rulesByChannel.set(rule.channel, [rule]);
-    }
+    const rules = rulesByChannel.get(rule.channel) ?? [];
+    rules.push(rule);
+    rulesByChannel.set(rule.channel, rules);
   }
 
   return rulesByChannel;

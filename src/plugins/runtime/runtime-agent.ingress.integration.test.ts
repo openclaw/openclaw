@@ -1,19 +1,24 @@
 import fs from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
+import { text } from "node:stream/consumers";
 import { describe, expect, it } from "vitest";
+import {
+  createOpenAiResponsesModelConfig,
+  startOpenAiResponsesModelServer,
+} from "../../../test/helpers/openai-responses-model-fixture.js";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { createDefaultDeps } from "../../cli/deps.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../../gateway/local-request-context.js";
-import { buildMockOpenAiResponsesProvider } from "../../gateway/test-openai-responses-model.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createRuntimeEnv } from "../../test-utils/plugin-runtime-env.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 
 const sessionKey = "agent:main:discord:channel:ingress-proof";
@@ -59,15 +64,12 @@ function writeToolCalls(response: ServerResponse): void {
   ]);
 }
 
-async function withIngressFixture(
-  options: { senderIsOwner: boolean; toolsAllow: string[]; cancel?: boolean },
-  assertEffects: (effects: {
-    storedLabel: string | undefined;
-    file: string | undefined;
-    toolResults: string;
-  }) => void,
-): Promise<void> {
-  await withOpenClawTestState(
+async function withIngressFixture(options: {
+  senderIsOwner: boolean;
+  toolsAllow: string[];
+  cancel?: boolean;
+}) {
+  return withOpenClawTestState(
     {
       label: "runtime-agent-ingress",
       env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_SKIP_PROVIDERS: undefined },
@@ -79,88 +81,56 @@ async function withIngressFixture(
       const controller = new AbortController();
       let toolResults = "";
       let turn: Promise<unknown> | undefined;
-      const server = createServer((request, response) => {
-        void (async () => {
-          if (request.method === "GET" && request.url === "/v1/models") {
-            response.writeHead(200, { "content-type": "application/json" });
-            response.end(JSON.stringify({ data: [{ id: "voice-ingress", object: "model" }] }));
-            return;
+      const server = await startOpenAiResponsesModelServer({
+        modelId: "voice-ingress",
+        bindError: "Voice ingress provider did not bind a loopback port",
+        onRequest: async (request, response) => {
+          try {
+            const body = await text(request);
+            if (body.includes("function_call_output")) {
+              toolResults = body;
+              writeOpenAiResponsesText(response, {
+                text: "Voice turn finished.",
+                responseId: "response_voice_done",
+                messageId: "message_voice_done",
+              });
+              return;
+            }
+            if (options.cancel) {
+              response.once("close", () => {
+                if (!response.writableFinished) {
+                  cancelled.resolve();
+                }
+              });
+              received.resolve(response);
+              return;
+            }
+            writeToolCalls(response);
+          } catch (error) {
+            received.reject(error);
+            response.destroy(error instanceof Error ? error : new Error(String(error)));
           }
-          if (request.method !== "POST" || request.url !== "/v1/responses") {
-            response.writeHead(404).end();
-            return;
-          }
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-          }
-          const body = Buffer.concat(chunks).toString("utf8");
-          if (body.includes("function_call_output")) {
-            toolResults = body;
-            writeOpenAiResponsesText(response, {
-              text: "Voice turn finished.",
-              responseId: "response_voice_done",
-              messageId: "message_voice_done",
-            });
-            return;
-          }
-          if (options.cancel) {
-            response.once("close", () => {
-              if (!response.writableFinished) {
-                cancelled.resolve();
-              }
-            });
-            received.resolve(response);
-            return;
-          }
-          writeToolCalls(response);
-        })().catch((error: unknown) => {
-          received.reject(error);
-          response.destroy(error instanceof Error ? error : new Error(String(error)));
-        });
+        },
       });
       try {
-        await new Promise<void>((resolve, reject) => {
-          server.once("error", reject);
-          server.listen(0, "127.0.0.1", resolve);
+        const cfg = createOpenAiResponsesModelConfig({
+          baseUrl: server.baseUrl,
+          providerId: "mock-openai",
+          modelId: "voice-ingress",
+          reasoning: false,
+          toolProfile: "coding",
         });
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Voice ingress provider did not bind a loopback port");
-        }
-        const provider = buildMockOpenAiResponsesProvider(
-          `http://127.0.0.1:${address.port}/v1`,
-          "voice-ingress",
-        );
-        const cfg: OpenClawConfig = {
-          plugins: { enabled: false },
-          agents: {
-            entries: { main: { workspace: state.workspaceDir } },
-            defaults: {
-              model: { primary: provider.modelRef, fallbacks: [] },
-              models: { [provider.modelRef]: { agentRuntime: { id: "openclaw" } } },
-              skills: [],
-              skipBootstrap: true,
-              heartbeat: { every: "0m" },
-            },
-          },
-          tools: {
-            allow: ["sessions", "write", "read"],
-            codeMode: { enabled: false },
-            // The synthetic provider emits direct tool calls instead of catalog lookups.
-            toolSearch: false,
-          },
-          models: {
-            mode: "replace",
-            providers: {
-              [provider.providerId]: {
-                ...provider.config,
-                request: { allowPrivateNetwork: true },
-              },
-            },
-          },
+        cfg.plugins = { enabled: false };
+        cfg.agents = { ...cfg.agents, entries: { main: { workspace: state.workspaceDir } } };
+        cfg.tools = {
+          allow: ["sessions", "write", "read"],
+          codeMode: { enabled: false },
+          // The synthetic provider emits direct tool calls instead of catalog lookups.
+          toolSearch: false,
         };
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg, cfg);
+        const { log, error: logError, exit } = createRuntimeEnv();
         turn = withLocalGatewayRequestScope(
           { deps: createDefaultDeps(), getRuntimeConfig: () => cfg },
           () =>
@@ -177,13 +147,7 @@ async function withIngressFixture(
                 deliver: false,
                 timeout: "30",
               },
-              {
-                log: () => {},
-                error: () => {},
-                exit: (code) => {
-                  throw new Error(`Agent attempted to exit with code ${code}`);
-                },
-              },
+              { log, error: logError, exit },
             ),
         );
         if (options.cancel) {
@@ -213,17 +177,14 @@ async function withIngressFixture(
             }
             return undefined;
           });
-        assertEffects({
+        return {
           storedLabel: loadSessionEntry({ agentId: "main", sessionKey })?.label,
           file,
           toolResults,
-        });
+        };
       } finally {
         controller.abort();
-        server.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
+        await server.close();
         await Promise.allSettled(turn ? [turn] : []);
       }
     },
@@ -236,24 +197,19 @@ describe("host runtime ingress agent effects", () => {
     { name: "guest", senderIsOwner: false, toolsAllow: ["sessions", "write"], canPatch: false },
     { name: "restricted owner", senderIsOwner: true, toolsAllow: ["write"], canPatch: false },
   ])("enforces $name authority in the real tool loop", { timeout: 90_000 }, async (scenario) => {
-    await withIngressFixture(scenario, ({ storedLabel, file }) => {
-      expect(storedLabel).toBe(scenario.canPatch ? label : undefined);
-      expect(file).toBe(fileContent);
+    expect(await withIngressFixture(scenario)).toMatchObject({
+      storedLabel: scenario.canPatch ? label : undefined,
+      file: fileContent,
     });
   });
 
-  it(
-    "cancels before tool I/O and discards late provider tool calls",
-    { timeout: 90_000 },
-    async () => {
-      await withIngressFixture(
-        { senderIsOwner: true, toolsAllow: ["sessions", "write"], cancel: true },
-        ({ storedLabel, file, toolResults }) => {
-          expect(storedLabel).toBeUndefined();
-          expect(file).toBeUndefined();
-          expect(toolResults).toBe("");
-        },
-      );
-    },
-  );
+  it("cancels tool I/O and discards late provider calls", { timeout: 90_000 }, async () => {
+    expect(
+      await withIngressFixture({
+        senderIsOwner: true,
+        toolsAllow: ["sessions", "write"],
+        cancel: true,
+      }),
+    ).toEqual({ storedLabel: undefined, file: undefined, toolResults: "" });
+  });
 });

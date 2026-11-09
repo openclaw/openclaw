@@ -65,6 +65,7 @@ function resultBlock(card: ToolCard): Record<string, unknown> {
       id: card.resultMessageId,
       toolOutput: card.toolOutput,
       truncated: card.outputTruncated,
+      ...(card.catalogTruncated ? { catalogTruncated: true } : {}),
     },
   };
 }
@@ -177,6 +178,7 @@ function readProjections(item: MessageItem, index: number): Projection[] {
                 id: card?.resultMessageId,
                 toolOutput: card?.toolOutput,
                 truncated: card?.outputTruncated,
+                ...(card?.catalogTruncated ? { catalogTruncated: true } : {}),
               },
             }),
         ...(card?.details !== undefined ? { details: card.details } : {}),
@@ -266,11 +268,8 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       projections: [],
     };
     invocation.projections.push(projection);
-    if (projection.call) {
-      invocation.call = preferProjection(invocation.call, projection);
-    } else {
-      invocation.result = preferProjection(invocation.result, projection);
-    }
+    const kind = projection.call ? "call" : "result";
+    invocation[kind] = preferProjection(invocation[kind], projection);
     if (projection.source.message["__openclawToolStreamLive"] === true) {
       invocation.live = projection.source.message;
     }
@@ -287,7 +286,11 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
   const rows = new Map<number, ProjectedItem[]>();
   const bundles = new Map<string, { item: ProjectedItem; index: number; inputs: unknown[] }>();
   const memoInputs = new Map<ProjectedItem, { owner: object; inputs: unknown[] }>();
-  const unchanged = new Set(sources.values());
+  // Commentary beside a call always splits into its own row, even when the
+  // call needs no merging, so no tool row renders outside its activity group.
+  const unchanged = new Set(
+    [...sources.values()].filter(({ remaining }) => remaining.length === 0),
+  );
   for (const invocation of invocations.values()) {
     const owners = new Set(invocation.projections.map((projection) => projection.source));
     if (
@@ -326,7 +329,18 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     ];
     // Batch only calls with the same message-scoped rendering metadata. Separate
     // result refs or completion states need separate rows, never sibling flags.
+    // Prose between calls also separates them, so it keeps its position below.
+    const ownerContent = Array.isArray(owner.source.message.content)
+      ? owner.source.message.content
+      : [];
+    const ownerAt = ownerContent.findIndex(
+      (block) => resolveToolBlockId(asRecord(block) ?? {}, owner.source.message) === owner.id,
+    );
+    const proseBefore = ownerContent
+      .slice(0, Math.max(0, ownerAt))
+      .filter((block) => owner.source.remaining.includes(block)).length;
     const renderingKey = JSON.stringify([
+      proseBefore,
       owner.runId,
       Boolean(invocation.live),
       completed,
@@ -351,7 +365,12 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     ];
     const bundle = bundles.get(bundleKey);
     const prepared = new Map<string, ReturnType<typeof readPreparedActivity>[number]>();
-    for (const source of [message, invocation.live, result?.source.message]) {
+    const activitySources = [message, invocation.live, result?.source.message];
+    // An empty prepared projection means hidden calls; sources without one keep raw cards.
+    const ownsActivity = activitySources.some((source) =>
+      Array.isArray(asRecord(source)?.activity),
+    );
+    for (const source of activitySources) {
       const activityItems = readPreparedActivity(source).filter(
         (activity) =>
           (activity.toolCallId ?? activity.itemId) === owner.id &&
@@ -366,7 +385,9 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       }
       for (const activity of activityItems) {
         const previous = prepared.get(activity.itemId);
-        if (previous?.phase !== "end" || activity.phase === "end") {
+        // Only an explicitly unpaired history call yields to live progress.
+        // A real terminal receipt stays terminal even when its outcome is unknown.
+        if (previous?.phase !== "end" || previous.unpairedCall || activity.phase === "end") {
           prepared.set(activity.itemId, activity);
         }
       }
@@ -374,10 +395,12 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     if (bundle) {
       bundle.inputs.push(...inputs);
       bundle.item.message.content.push(...content);
-      bundle.item.message.activity = [
-        ...readPreparedActivity(bundle.item.message),
-        ...prepared.values(),
-      ];
+      if (ownsActivity || Array.isArray(bundle.item.message.activity)) {
+        bundle.item.message.activity = [
+          ...readPreparedActivity(bundle.item.message),
+          ...prepared.values(),
+        ];
+      }
       bundle.index = Math.min(bundle.index, index);
       continue;
     }
@@ -389,7 +412,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
         role: invocation.call ? "assistant" : message.role,
         runId: owner.runId,
         content,
-        activity: [...prepared.values()],
+        activity: ownsActivity ? [...prepared.values()] : undefined,
         ...(transcript ? { messageId: transcript } : {}),
         ...(invocation.live
           ? {
@@ -418,56 +441,57 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       return [item];
     }
     const row = rows.get(index) ?? [];
-    if (source.remaining.length > 0) {
-      // Keep surrounding prose/media at its original position even when all
-      // tool blocks in this projection were already represented elsewhere.
-      if (row.length > 0) {
-        const pending = row.map((entry) => ({
-          message: entry.message,
-          blocks: entry.message.content,
-        }));
-        pending.forEach(({ message }) => {
-          message.content = [];
-        });
-        let current = pending[0]!;
-        const blocks = Array.isArray(source.message.content) ? source.message.content : [];
-        for (const block of blocks) {
-          if (source.remaining.includes(block)) {
-            current.message.content.push(block);
-            continue;
-          }
-          const raw = asRecord(block) ?? {};
-          const id = resolveToolBlockId(raw, source.message);
-          for (const target of pending) {
-            const matches = target.blocks.filter((entry) => {
-              const record = asRecord(entry);
-              return record?.id === id && (!raw.name || raw.name === record?.name);
-            });
-            if (matches.length > 0) {
-              target.message.content.push(...matches);
-              target.blocks = target.blocks.filter((entry) => !matches.includes(entry));
-              current = target;
-            }
-          }
-        }
-        pending.forEach((entry) => entry.message.content.push(...entry.blocks));
-      } else {
-        row.unshift({
-          ...source.item,
-          message: {
-            ...source.message,
-            content: source.remaining,
-            toolCallId: undefined,
-            tool_call_id: undefined,
-            toolUseId: undefined,
-            tool_use_id: undefined,
-            toolName: undefined,
-            tool_name: undefined,
-          },
-        });
+    if (source.remaining.length === 0) {
+      return row;
+    }
+    // Prose and media keep their original position as their own rows, so
+    // commentary never carries a tool call: every call joins the tool rows
+    // that its activity group summarizes.
+    const prose = (content: unknown[], segment: number): ProjectedItem => ({
+      ...source.item,
+      key: segment === 0 ? source.item.key : `${source.item.key}:prose:${segment}`,
+      message: {
+        ...source.message,
+        content,
+        activity: undefined,
+        toolCallId: undefined,
+        tool_call_id: undefined,
+        toolUseId: undefined,
+        tool_use_id: undefined,
+        toolName: undefined,
+        tool_name: undefined,
+      },
+    });
+    const ordered: ProjectedItem[] = [];
+    let pendingProse: unknown[] = [];
+    const flushProse = () => {
+      if (pendingProse.length > 0) {
+        ordered.push(prose(pendingProse, ordered.length));
+        pendingProse = [];
+      }
+    };
+    const unplaced = new Set(row);
+    for (const block of Array.isArray(source.message.content) ? source.message.content : []) {
+      if (source.remaining.includes(block)) {
+        pendingProse.push(block);
+        continue;
+      }
+      const raw = asRecord(block) ?? {};
+      const id = resolveToolBlockId(raw, source.message);
+      const target = [...unplaced].find((entry) =>
+        entry.message.content.some((part) => {
+          const record = asRecord(part);
+          return record?.id === id && (!raw.name || raw.name === record?.name);
+        }),
+      );
+      if (target) {
+        flushProse();
+        ordered.push(target);
+        unplaced.delete(target);
       }
     }
-    return row;
+    flushProse();
+    return [...ordered, ...unplaced];
   });
   // Assembly and prose/media interleaving are complete. Only messages are
   // reused: duplicate grouping can still mutate the returned item wrappers.
@@ -518,7 +542,7 @@ export function coalesceToolActivityMessages(
         return;
       }
       owner ??= message;
-      inputs.push(item.kind, item.key, message, item.duplicateCount, item.startsTurn);
+      inputs.push(item.kind, item.key, message, item.startsTurn);
       // Preserve the content-replacement contract of the tool-card owner too.
       inputs.push(message.content);
       if (Array.isArray(message.content)) {

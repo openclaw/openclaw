@@ -23,6 +23,8 @@ export function createCommandMaintenanceFollowup(params: {
   provider: string;
   model: string;
   thinkLevel: FollowupRun["run"]["thinkLevel"];
+  /** The selected route's catalog; maintenance budgets its declared context window. */
+  thinkingCatalog: FollowupRun["run"]["thinkingCatalog"];
   auth?: Pick<FollowupRun["run"], "authProfileId" | "authProfileIdSource">;
   /** The command's trusted source owner status; it selects only the flush memory audience. */
   senderIsOwner: boolean | undefined;
@@ -41,6 +43,7 @@ export function createCommandMaintenanceFollowup(params: {
       groupChannel: params.embeddedSessionState.runContext.groupChannel ?? undefined,
       groupSpace: params.embeddedSessionState.runContext.groupSpace ?? undefined,
       skillsSnapshot: params.embeddedSessionState.skillsSnapshot,
+      thinkingCatalog: params.thinkingCatalog,
       thinkLevel: params.thinkLevel,
       verboseLevel: params.embeddedSessionState.resolvedVerboseLevel ?? "off",
       timeoutMs: prepared.timeoutMs,
@@ -73,7 +76,6 @@ export async function prepareCommandForegroundRun(
   params: CommandPreflight & {
     ingress: AgentCommandAdmissionIngress;
     suppressVisibleSessionEffects: boolean;
-    preserveUserFacingSessionModelState: boolean;
   },
 ) {
   const budget = createCommandBudget(
@@ -87,8 +89,7 @@ export async function prepareCommandForegroundRun(
     entry =
       params.opts.modelRun === true ||
       params.opts.promptMode === "none" ||
-      params.suppressVisibleSessionEffects ||
-      params.preserveUserFacingSessionModelState
+      params.suppressVisibleSessionEffects
         ? params.sessionEntry
         : await runCommandPreflightMaintenance({
             ...params,
@@ -134,6 +135,7 @@ async function runCommandPreflightMaintenance(
   const assertSourceCurrent = opts.assertSourceCurrent;
   if (
     prepared.isNewSession ||
+    prepared.commandRuntimeContext?.freshChild ||
     !sessionEntry ||
     !prepared.sessionKey ||
     prepared.cfg.agents?.defaults?.compaction?.enabled === false
@@ -158,6 +160,7 @@ async function runCommandPreflightMaintenance(
     provider: modelSelection.provider,
     model: modelSelection.model,
     thinkLevel: modelSelection.effectiveTurnThinkLevel,
+    thinkingCatalog: modelSelection.thinkingCatalog,
     senderIsOwner: opts.senderIsOwner,
     auth: {
       authProfileId: modelSelection.sessionEntryForAttempt?.authProfileOverride,
@@ -178,7 +181,6 @@ async function runCommandPreflightMaintenance(
     sessionKey: prepared.sessionKey,
     runtimePolicySessionKey: prepared.sessionKey,
     storePath: prepared.storePath,
-    isHeartbeat: opts.bootstrapContextRunKind === "heartbeat",
     abortSignal: opts.abortSignal,
   };
   return memory.runSessionCompactionIfNeeded({

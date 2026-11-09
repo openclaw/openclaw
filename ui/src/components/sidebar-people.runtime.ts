@@ -1,15 +1,12 @@
-import { nothing, render } from "lit";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
-import { i18n, t } from "../i18n/index.ts";
-import { presenceUserLabel, projectOnlinePresenceViewers } from "../lib/presence-users.ts";
+import { projectOnlinePresenceViewers, profilePresenceViewer } from "../lib/presence-users.ts";
+import { profileDirectory } from "../lib/profile-directory.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
-import {
-  resolveSessionPreferredFace,
-  sessionNavigationTarget,
-} from "../lib/sessions/route-navigation.ts";
+import { resolveSessionPreferredFace } from "../lib/sessions/route-navigation.ts";
 import {
   isUiGlobalScopeConfigured,
   resolveUiConfiguredMainKey,
@@ -20,9 +17,10 @@ import {
   hovercardBootstrapIntentActive,
   remainingHovercardOpenDelay,
 } from "./lazy-hovercard-registration.ts";
-import { renderPersonActivityCard } from "./person-activity-card.ts";
+import { updatePersonActivityCard } from "./person-activity-card.tsx";
+import { observePersonActivityData } from "./person-activity-data.ts";
 import { personActivityRouting } from "./person-activity-link.ts";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 
 let nextCardId = 0;
 
@@ -35,13 +33,20 @@ export class SidebarPeopleRuntime {
     gateway: ApplicationGateway;
     client: GatewayBrowserClient | null;
   } | null = null;
-  private readonly portal = new PortaledHovercardController(() => this.close(), 100);
+  private readonly portal = createPortaledHovercardOwner(() => this.close(), 100);
   private readonly observer = new MutationObserver(() => this.sync());
   private lastOpenAt = -Infinity;
-  private readonly stopLocale: () => void;
+  private activity: ReturnType<typeof observePersonActivityData> | undefined;
+  private readonly stopGateway: (() => void) | undefined;
+  private stopListeners: Array<() => void> = [];
 
   constructor(private readonly host: AppSidebarSessionNavigationElement) {
-    this.stopLocale = i18n.subscribe(() => this.sync());
+    // Retire connection-bound cards without waiting for a sidebar repaint.
+    this.stopGateway = host.sessionDataContext?.gateway.subscribe(() => {
+      if (!this.isCurrent()) {
+        this.close();
+      }
+    });
   }
 
   private scope(): string {
@@ -89,13 +94,17 @@ export class SidebarPeopleRuntime {
       if (this.portal.explicitHold && this.active?.row !== row) {
         return;
       }
-      const delay = this.portal.card || performance.now() - this.lastOpenAt < 300 ? 80 : 450;
-      this.activate(
-        row,
-        remainingHovercardOpenDelay(bootstrapStartedAt ?? performance.now(), delay),
-      );
-      this.portal.pointerInside = true;
-      this.portal.clearClose();
+      const enter = (startedAt = performance.now()) => {
+        const delay = this.portal.card || performance.now() - this.lastOpenAt < 300 ? 80 : 450;
+        this.activate(row, remainingHovercardOpenDelay(startedAt, delay));
+        this.portal.pointerInside = true;
+        this.portal.clearClose();
+      };
+      // Rows crossed on the way to the open card must not take it over.
+      if (this.active?.row !== row && this.portal.deferPointerSwitch(event, row, enter)) {
+        return;
+      }
+      enter(bootstrapStartedAt);
     } else if (
       event.type === "pointerout" &&
       event instanceof PointerEvent &&
@@ -104,7 +113,7 @@ export class SidebarPeopleRuntime {
       if (event.relatedTarget instanceof Node && row.contains(event.relatedTarget)) {
         return;
       }
-      this.portal.schedulePointerExit();
+      this.portal.schedulePointerExit(event);
     } else if (event.type === "focusin" && !this.portal.restoringFocus) {
       // Pointer focus must not put a card over a navigation link before its click.
       if (event.target instanceof HTMLAnchorElement && !event.target.matches(":focus-visible")) {
@@ -128,7 +137,7 @@ export class SidebarPeopleRuntime {
   }
 
   private activate(row: HTMLElement, delay: number): void {
-    const trigger = row.querySelector<HTMLElement>("[data-person-card-trigger]") ?? row;
+    const trigger = this.host.personCardTriggers.get(row) ?? row;
     const id = trigger.dataset.personCardKey;
     if (!id || !this.host.connected) {
       return;
@@ -150,10 +159,12 @@ export class SidebarPeopleRuntime {
       client: gateway.snapshot.client,
     };
     this.portal.markTrigger(trigger);
-    this.observer.observe(this.host, { childList: true, subtree: true });
-    document.addEventListener("pointerdown", this.outsideInteraction, true);
-    document.addEventListener("focusin", this.outsideInteraction, true);
-    document.addEventListener("keydown", this.outsideKey, true);
+    this.observer.observe(this.host.hostElement, { childList: true, subtree: true });
+    this.stopListeners = [
+      listen(document, "pointerdown", this.outsideInteraction, true),
+      listen(document, "focusin", this.outsideInteraction, true),
+      listen(document, "keydown", this.outsideKey, true),
+    ];
     this.portal.scheduleOpen(delay, () => {
       if (this.portal.held) {
         this.show();
@@ -172,9 +183,7 @@ export class SidebarPeopleRuntime {
       active.gateway === gateway &&
       active.client === gateway.snapshot.client &&
       active.scope === this.scope() &&
-      this.host.contains(active.row) &&
-      (active.row.dataset.personCardSection === undefined ||
-        !this.host.collapsedSessionSections.has(active.row.dataset.personCardSection)),
+      this.host.hostElement.contains(active.row),
     );
   }
 
@@ -199,6 +208,10 @@ export class SidebarPeopleRuntime {
     );
     if (!user && active.id.startsWith("profile:")) {
       const profileId = active.id.slice("profile:".length);
+      const profile = profileDirectory(context.gateway).get(profileId);
+      if (profile) {
+        user = profilePresenceViewer(profile);
+      }
       const actor = [data.sessionsResult, ...Object.values(data.sessionResultsByAgent)]
         .flatMap((result) => result?.sessions ?? [])
         .flatMap((row) => [row.owner?.actor, row.createdActor])
@@ -206,7 +219,7 @@ export class SidebarPeopleRuntime {
           (candidate) =>
             candidate?.identity?.type === "profile" && candidate.identity.id === profileId,
         );
-      if (actor) {
+      if (!user && actor) {
         user = {
           id: profileId,
           identity: { type: "profile", id: profileId },
@@ -221,6 +234,7 @@ export class SidebarPeopleRuntime {
       this.close();
       return;
     }
+    const activity = (this.activity ??= observePersonActivityData(context, () => this.sync()));
     const defaults = {
       agentsList: context.agents.state.agentsList,
       hello: context.gateway.snapshot.hello,
@@ -232,13 +246,12 @@ export class SidebarPeopleRuntime {
         `openclaw-person-activity-${++nextCardId}`,
         "session-progress-hovercard person-activity-hovercard",
       );
-    const label = presenceUserLabel(user, t("presence.card.person"));
-    card.setAttribute("aria-label", t("presence.card.ariaLabel", { name: label.name }));
     this.portal.renderContents(card, () =>
-      render(
-        renderPersonActivityCard({
+      updatePersonActivityCard(
+        card,
+        {
           user,
-          sessionData: data,
+          sessionData: activity.data,
           watchAgentId: resolveUiDefaultAgentId(defaults),
           mainKey: resolveUiConfiguredMainKey(defaults),
           globalScope: isUiGlobalScopeConfigured(defaults),
@@ -249,16 +262,8 @@ export class SidebarPeopleRuntime {
             },
             () => this.close(),
           ),
-          openSession: (row, agentId) => {
+          openSession: (row, agentId, options) => {
             const face = resolveSessionPreferredFace(row);
-            const target = sessionNavigationTarget({
-              face,
-              sessionKey: row.key,
-              row,
-              fallbackAgentId: agentId,
-              basePath: this.host.basePath,
-              mainKey: resolveUiConfiguredMainKey(defaults),
-            });
             this.close();
             runSessionNavigationIntent(this.host, {
               agentId,
@@ -273,8 +278,8 @@ export class SidebarPeopleRuntime {
                 ) {
                   return false;
                 }
-                this.host.prepareSessionNavigation(row.key, target.options.pathname);
-                this.host.onNavigate?.(face, target.options);
+                this.host.prepareSessionNavigation(row.key, options.pathname);
+                this.host.onNavigate?.(face, options);
                 selectApplicationSession({
                   selection: context.agentSelection,
                   gateway: context.gateway,
@@ -285,8 +290,8 @@ export class SidebarPeopleRuntime {
               },
             });
           },
-        }),
-        card,
+        },
+        () => this.portal.position(),
       ),
     );
     if (existing) {
@@ -294,17 +299,8 @@ export class SidebarPeopleRuntime {
       return;
     }
     this.lastOpenAt = performance.now();
-    card.addEventListener("pointerleave", () => {
-      this.portal.pointerOverCard = false;
-      this.portal.scheduleClose();
-    });
-    card.addEventListener("keydown", this.portal.handleCardKeyDown);
-    this.portal.mount(active.row, card, "horizontal", true, () => render(nothing, card));
-  }
-
-  private returnFocus(): void {
-    this.portal.returnFocus(this.active?.trigger ?? null);
-    this.portal.focusInside = document.activeElement === this.active?.trigger;
+    this.stopListeners.push(listen(card, "pointerleave", this.portal.handleCardPointerLeave));
+    this.portal.mount(active.row, card, "horizontal", true, () => updatePersonActivityCard(card));
   }
 
   private readonly outsideInteraction = (event: Event) => {
@@ -323,7 +319,8 @@ export class SidebarPeopleRuntime {
       event.preventDefault();
       event.stopPropagation();
       if (this.portal.card?.contains(document.activeElement)) {
-        this.returnFocus();
+        this.portal.returnFocus(this.active?.trigger ?? null);
+        this.portal.focusInside = document.activeElement === this.active?.trigger;
       }
       this.close();
     }
@@ -333,10 +330,11 @@ export class SidebarPeopleRuntime {
     if (this.portal.card) {
       this.lastOpenAt = performance.now();
     }
+    this.activity?.dispose();
+    this.activity = undefined;
     this.observer.disconnect();
-    document.removeEventListener("pointerdown", this.outsideInteraction, true);
-    document.removeEventListener("focusin", this.outsideInteraction, true);
-    document.removeEventListener("keydown", this.outsideKey, true);
+    this.stopListeners.forEach((stop) => stop());
+    this.stopListeners = [];
     this.portal.reset();
     this.active?.trigger.setAttribute("aria-haspopup", "dialog");
     this.active?.trigger.setAttribute("aria-expanded", "false");
@@ -351,6 +349,6 @@ export class SidebarPeopleRuntime {
 
   dispose(): void {
     this.close();
-    this.stopLocale();
+    this.stopGateway?.();
   }
 }

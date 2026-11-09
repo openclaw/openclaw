@@ -1,91 +1,129 @@
-import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { ProcSafeError } from "@openclaw/proc-safe/errors";
+import { readProcessCommand } from "@openclaw/proc-safe/inspect";
+import { isBunRuntime, isNodeRuntime } from "../../daemon/runtime-binary.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import type { ProcessCommand } from "./service-child-group-ownership.js";
 
-let native: ReturnType<typeof loadNative> | undefined;
 let reportedForeignArguments = false;
 
-function loadNative() {
-  const koffi: typeof import("koffi").default = createRequire(import.meta.url)("koffi");
-  const system = koffi.load("/usr/lib/libSystem.B.dylib");
-  const sysctl = system.func(
-    "int sysctl(const int *name, unsigned int namelen, void *oldp, size_t *oldlenp, const void *newp, size_t newlen)",
+// codesign prints a key/value dump by default and XML with --xml; some macOS 27
+// hosts reject the XML form for this blob, so accept either representation.
+const REDACTED_ARGUMENTS_ENTITLEMENT =
+  /\[Key\] com\.apple\.private\.no-read-procargs\s*\[Value\]\s*\[Bool\] true|<key>com\.apple\.private\.no-read-procargs<\/key>\s*<true\/>/u;
+
+/** The running image: the first text mapping, confirmed by the kernel accounting
+ * name (exec basename, truncated to 16 bytes), so a mapped binary cannot pose as it. */
+function readDarwinImagePath(pid: number): string | undefined {
+  const options = { encoding: "utf8", timeout: 2_000 } as const;
+  const mapping = spawnSync(
+    "/usr/sbin/lsof",
+    ["-a", "-p", String(pid), "-d", "txt", "-Fn"],
+    options,
   );
-  const size = Buffer.alloc(8);
-  const argMax = Buffer.alloc(4);
-  size.writeBigUInt64LE(4n);
-  if (sysctl(new Int32Array([1, 8]), 2, argMax, size, null, 0) !== 0 || argMax.readInt32LE() <= 4) {
-    throw new Error("Darwin process argument limit is unavailable");
-  }
-  const buffer = Buffer.alloc(argMax.readInt32LE());
-  return {
-    readArguments(pid: number): { bytes: Buffer } | { errno: number } {
-      size.writeBigUInt64LE(BigInt(buffer.length));
-      // CTL_KERN/KERN_PROCARGS2 returns argc, executable, NUL padding, then argv.
-      if (sysctl(new Int32Array([1, 49, pid]), 3, buffer, size, null, 0) !== 0) {
-        return { errno: koffi.errno() };
-      }
-      const length = Number(size.readBigUInt64LE());
-      if (length < 4 || length > buffer.length) {
-        throw new Error(`Incomplete Darwin process arguments for PID ${pid}`);
-      }
-      return { bytes: buffer.subarray(0, length) };
-    },
-  };
+  const image = mapping.status === 0 ? /^n(\/.+)$/mu.exec(mapping.stdout)?.[1] : undefined;
+  const name = image && spawnSync("/bin/ps", ["-o", "ucomm=", "-p", String(pid)], options);
+  return name && name.status === 0 && name.stdout.trim() === path.basename(image).slice(0, 16)
+    ? image
+    : undefined;
 }
 
-function parseArguments(bytes: Buffer, pid: number): ProcessCommand {
-  const argc = bytes.readInt32LE();
-  let offset = bytes.indexOf(0, 4);
-  if (argc <= 0 || argc > bytes.length || offset <= 4) {
-    throw new Error(`Invalid Darwin process arguments for PID ${pid}`);
+/** A sealed Apple binary that opts out of argument inspection, such as mdworker. */
+function isRedactedSystemImage(image: string): boolean {
+  if (!image.startsWith("/System/")) {
+    return false;
   }
-  while (offset < bytes.length && bytes[offset] === 0) {
-    offset++;
-  }
-  const argv: string[] = [];
-  for (let index = 0; index < argc; index++) {
-    const end = bytes.indexOf(0, offset);
-    if (end < 0) {
-      throw new Error(`Truncated Darwin process arguments for PID ${pid}`);
+  const result = spawnSync("/usr/bin/codesign", ["-d", "--entitlements", "-", image], {
+    encoding: "utf8",
+    timeout: 2_000,
+  });
+  return result.status === 0 && REDACTED_ARGUMENTS_ENTITLEMENT.test(result.stdout);
+}
+
+function readCommandWithServiceMarker(pid: number) {
+  try {
+    return readProcessCommand(pid, { environmentKeys: ["OPENCLAW_SERVICE_MARKER"] });
+  } catch (cause) {
+    if (!(cause instanceof ProcSafeError) || cause.code !== "incomplete") {
+      throw cause;
     }
-    argv.push(bytes.toString("utf8", offset, end));
-    offset = end + 1;
+    // macOS 27 omits envp for hardened executables, and a JS runtime that set
+    // process.title (the Gateway, every OpenClaw CLI) leaves no terminated
+    // environment on earlier releases. As on Linux, only a JS runtime needs the
+    // marker; its argv still classifies, and only a marker decision stays unknown.
+    const command = readProcessCommand(pid);
+    return command &&
+      [command.executable, command.argv[0] ?? ""].some(
+        (value) => isNodeRuntime(value) || isBunRuntime(value) || path.basename(value) === "tsx",
+      )
+      ? { ...command, serviceMarkerUnavailable: true as const }
+      : command;
   }
-  // Retain only the service owner's marker; process environments may contain credentials.
-  const marker = bytes
-    .toString("utf8", offset)
-    .split("\0")
-    .find((entry) => entry.startsWith("OPENCLAW_SERVICE_MARKER="));
-  return {
-    argv,
-    ...(marker ? { serviceMarker: marker.slice("OPENCLAW_SERVICE_MARKER=".length) } : {}),
-  };
 }
 
-/** Exact argv, or observed foreign ownership when Darwin denies argument inspection. */
-export function readDarwinProcessCommand(pid: number, uid?: number): ProcessCommand | undefined {
-  native ??= loadNative();
-  const result = native.readArguments(pid);
-  if ("bytes" in result) {
-    return parseArguments(result.bytes, pid);
-  }
-  if (isPidDefinitelyDead(pid)) {
-    return undefined;
-  }
-  const currentUid = process.getuid?.();
-  if (uid !== undefined && currentUid !== undefined && uid !== currentUid) {
-    if (!reportedForeignArguments) {
-      reportedForeignArguments = true;
-      createSubsystemLogger("process/census").debug(
-        "Unreadable Darwin arguments for another UID do not establish capture custody.",
-        { pid, uid, errno: result.errno },
+/** Exact argv, or observed foreign ownership when Darwin denies argument inspection.
+ * Callers that never consult the service marker skip the environment: some macOS
+ * argument images end without the separator that bounds it. */
+export function readDarwinProcessCommand(
+  pid: number,
+  owner?: "same" | "different" | "unknown",
+  options: { serviceMarker?: boolean } = {},
+): ProcessCommand | undefined {
+  try {
+    const command =
+      options.serviceMarker === false ? readProcessCommand(pid) : readCommandWithServiceMarker(pid);
+    if (!command) {
+      return undefined;
+    }
+    const serviceMarker = command.environment.OPENCLAW_SERVICE_MARKER;
+    return {
+      argv: [...command.argv],
+      executable: command.executable,
+      ...(serviceMarker === undefined ? {} : { serviceMarker }),
+      ...("serviceMarkerUnavailable" in command ? { serviceMarkerUnavailable: true } : {}),
+    };
+  } catch (cause) {
+    if (!(cause instanceof ProcSafeError)) {
+      throw cause;
+    }
+    if (cause.code === "layout-mismatch" || cause.code === "incomplete") {
+      // Darwin redacts the argument image of binaries entitled with
+      // no-read-procargs, which then fails the alignment check. Those sealed
+      // system binaries cannot hold OpenClaw artifacts. Other unparseable images
+      // (non-UTF-8 argv) may, so they stay unknown.
+      const image = readDarwinImagePath(pid);
+      if (image && isRedactedSystemImage(image)) {
+        return { argvUnavailable: true, executable: image, ...(owner ? { owner } : {}) };
+      }
+      throw cause;
+    }
+    if (cause.code === "unsupported-platform" && process.platform === "darwin") {
+      throw new Error(
+        "Cannot inspect Darwin process arguments under Rosetta; run OpenClaw with native arm64 Node.js.",
+        { cause },
       );
     }
-    return { argvUnavailable: true, uid };
+    if (cause.code !== "access-denied" && cause.code !== "operation-failed") {
+      throw cause;
+    }
+    if (isPidDefinitelyDead(pid)) {
+      return undefined;
+    }
+    if (owner === "different") {
+      if (!reportedForeignArguments) {
+        reportedForeignArguments = true;
+        createSubsystemLogger("process/census").debug(
+          "Unreadable Darwin arguments for another UID do not establish capture custody.",
+          { pid, code: cause.code },
+        );
+      }
+      return { argvUnavailable: true, owner };
+    }
+    throw new Error(
+      `Could not classify PID ${pid}: cannot inspect Darwin arguments (${cause.code}).`,
+      { cause },
+    );
   }
-  throw new Error(
-    `Could not classify PID ${pid}: cannot inspect Darwin arguments (errno ${result.errno}).`,
-  );
 }

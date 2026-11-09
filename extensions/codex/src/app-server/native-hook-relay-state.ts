@@ -32,9 +32,7 @@ export const nativeHookRelayUnregisterQueue = {
       clearTimeout(entry.timeout);
       entry.unregister();
     }
-    while (closing.size > 0) {
-      await Promise.allSettled(closing);
-    }
+    await nativeHookRelayUnregisterQueue.clear();
   },
   async clear(): Promise<void> {
     for (const entry of pending) {

@@ -78,7 +78,7 @@ struct ChatSidebarCatalogPresentation {
         currentIsKnown: Bool) -> [ChatSessionSidebarModel.Section]
     {
         // lib/sessions/navigation.ts:253 never synthesizes an ordinary row for an unadopted catalog route.
-        let rawCatalog = !currentIsKnown && Self.isCatalogKey(currentKey) ? currentKey : nil
+        let rawCatalog = !currentIsKnown && OpenClawChatSessionKey.catalogSource(currentKey) != nil ? currentKey : nil
         guard !excluding.isEmpty || rawCatalog != nil else { return sections }
         return sections.map { section in
             let nodes: [ChatSessionSidebarModel.Node]
@@ -102,23 +102,6 @@ struct ChatSidebarCatalogPresentation {
             }
             return .init(id: section.id, title: section.title, nodes: nodes)
         }
-    }
-
-    static func isCatalogKey(_ key: String) -> Bool {
-        self.catalogSource(key) != nil
-    }
-
-    private static func catalogSource(_ key: String) -> [Data]? {
-        let parts = key.components(separatedBy: ":")
-        if parts.first == "agent", parts.count < 2 || parts[1].isEmpty { return nil }
-        let source = parts.first == "agent" ? Array(parts.dropFirst(2)) : parts
-        guard source.count == 4, source[0] == "catalog" else { return nil }
-        let decoded = source.dropFirst().compactMap { part -> Data? in
-            guard let value = part.removingPercentEncoding, !value.isEmpty else { return nil }
-            // Opaque IDs use exact bytes, without Swift String's canonical Unicode equivalence.
-            return Data(value.utf8)
-        }
-        return decoded.count == 3 ? decoded : nil
     }
 
     static func target(catalogID: String, hostID: String, row: SessionCatalogSession, agentID: String)
@@ -147,8 +130,8 @@ struct ChatSidebarCatalogPresentation {
         current: OpenClawChatSessionTarget) -> Bool
     {
         // app-sidebar-catalog-menu.ts:155 compares source IDs even when its row has since been adopted.
-        guard let identity = catalogSource(source.sessionKey) else { return false }
-        return source.agentID == current.agentID && identity == Self.catalogSource(current.sessionKey)
+        guard let identity = OpenClawChatSessionKey.catalogSource(source.sessionKey) else { return false }
+        return source.agentID == current.agentID && identity == OpenClawChatSessionKey.catalogSource(current.sessionKey)
     }
 
     static func title(_ row: SessionCatalogSession) -> String {

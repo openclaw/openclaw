@@ -134,7 +134,7 @@ class WearViewModelLifecycleTest {
         assertFalse(vm.state.value.talkBusy)
         assertFalse(vm.state.value.realtimeTalk.active)
         assertEquals(1, fixture.input.closes.get())
-        client.callTalkTestMethod("clearOutput", fixture.attempt, true)
+        client.callTalkTestMethod("clearOutput", fixture.attempt)
         assertFalse(client.isCapturing.value)
       } finally {
         owner.viewModelStore.clear()

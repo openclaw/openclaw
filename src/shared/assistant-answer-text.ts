@@ -1,69 +1,33 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  extractAssistantTextForPhase,
+  normalizeAssistantPhase,
   parseAssistantTextSignature,
+  readAssistantTextBlocksForPhase,
 } from "./chat-message-content.js";
-import {
-  sanitizeAssistantFinalAnswerText,
-  sanitizeAssistantVisibleText,
-} from "./text/assistant-visible-text.js";
 
-function isAssistantTextContentBlockType(value: unknown): boolean {
-  return value === "text" || value === "input_text" || value === "output_text";
-}
 /** Selects canonical final-answer bytes before channel reply directives are parsed. */
 export function resolveRawAssistantAnswerText(message: unknown): string {
   const lastAssistant = asOptionalRecord(message);
   if (!lastAssistant) {
     return "";
   }
-  const finalAnswerText = extractAssistantTextForPhase(lastAssistant, {
-    phase: "final_answer",
-    sanitizeText: sanitizeAssistantFinalAnswerText,
-  });
-  if (finalAnswerText) {
-    return normalizeOptionalString(finalAnswerText) ?? "";
+  const inlineText =
+    typeof lastAssistant.text === "string" ? lastAssistant.text : lastAssistant.content;
+  if (typeof inlineText === "string") {
+    return normalizeAssistantPhase(lastAssistant.phase) === "commentary" ? "" : inlineText;
   }
-  if (Array.isArray(lastAssistant.content)) {
-    const hasExplicitPhasedTextBlock = lastAssistant.content.some((block) => {
-      const record = asOptionalRecord(block);
-      return (
-        record !== undefined &&
-        isAssistantTextContentBlockType(record.type) &&
-        Boolean(parseAssistantTextSignature(record)?.phase)
-      );
-    });
-    if (!hasExplicitPhasedTextBlock) {
-      const signedUnphasedParts = lastAssistant.content
-        .map((block) => {
-          const record = asOptionalRecord(block);
-          if (!record) {
-            return null;
-          }
-          const signature = parseAssistantTextSignature(record);
-          if (
-            !isAssistantTextContentBlockType(record.type) ||
-            typeof record.text !== "string" ||
-            !signature?.id ||
-            signature.phase
-          ) {
-            return null;
-          }
-          const text = sanitizeAssistantFinalAnswerText(record.text);
-          return text.trim() ? text : null;
-        })
-        .filter((value): value is string => typeof value === "string");
-      if (signedUnphasedParts.length) {
-        return normalizeOptionalString(signedUnphasedParts.join("\n")) ?? "";
-      }
-    }
+  const finalBlocks = readAssistantTextBlocksForPhase(lastAssistant, "final_answer");
+  if (finalBlocks.length > 0) {
+    return finalBlocks.map((block) => block.text).join("");
   }
-  return (
-    normalizeOptionalString(
-      extractAssistantTextForPhase(lastAssistant, {
-        sanitizeText: sanitizeAssistantVisibleText,
-      }),
-    ) ?? ""
-  );
+  // Signed unphased blocks retain their own answer semantics regardless of the message phase.
+  const signedUnphasedParts = readAssistantTextBlocksForPhase({
+    content: lastAssistant.content,
+  }).filter((block) => parseAssistantTextSignature(block)?.id);
+  if (signedUnphasedParts.length > 0) {
+    return signedUnphasedParts.map((block) => block.text).join("");
+  }
+  return readAssistantTextBlocksForPhase(lastAssistant)
+    .map((block) => block.text)
+    .join("");
 }

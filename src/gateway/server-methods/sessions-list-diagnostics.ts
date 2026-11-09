@@ -14,11 +14,11 @@ import type {
 import { SLOW_GATEWAY_REQUEST_MS } from "../slow-request-diagnostics.js";
 import { summarizeSessionListForWsLog } from "../ws-log.js";
 import { sessionLog } from "./sessions-shared.js";
-import type { GatewayRequestHandler, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+import type { RespondFn } from "./types.js";
 
 const sessionListDiagnostics = channel("openclaw.session.list");
 
-function startSessionListDiagnostics(
+export function startSessionListDiagnostics(
   respond: RespondFn,
   operation: "sessions.list" | "sessions.subscribe",
   params: unknown,
@@ -142,29 +142,5 @@ function startSessionListDiagnostics(
         // Diagnostic sinks cannot replace the response or original exception.
       }
     },
-  };
-}
-
-export function withSessionListDiagnostics(
-  handler: (
-    args: GatewayRequestHandlerOptions,
-    diagnostics?: SessionListDiagnostics,
-  ) => Promise<void>,
-): GatewayRequestHandler {
-  return async (args) => {
-    const diagnostics = startSessionListDiagnostics(
-      args.respond,
-      args.req.method === "sessions.subscribe" ? "sessions.subscribe" : "sessions.list",
-      args.params,
-    );
-    let outcome: "returned" | "threw" = "returned";
-    try {
-      await handler(diagnostics ? { ...args, respond: diagnostics.respond } : args, diagnostics);
-    } catch (error) {
-      outcome = "threw";
-      throw error;
-    } finally {
-      diagnostics?.finish(outcome);
-    }
   };
 }

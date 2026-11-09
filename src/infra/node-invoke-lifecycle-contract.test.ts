@@ -5,11 +5,7 @@ import {
   validateNodeInvokeResultParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import type fixtureData from "../../test/fixtures/node-invoke-lifecycle-contract.json";
-import {
-  buildNodeInvokeCancel,
-  buildNodeInvokeInput,
-  buildNodeInvokeRequest,
-} from "../gateway/node-invoke-request.js";
+import { buildNodeInvokeRequest } from "../gateway/node-invoke-request.js";
 import {
   coerceNodeInvokeCancelPayload,
   coerceNodeInvokeInputPayload,
@@ -51,14 +47,6 @@ describe("node invocation lifecycle contract", () => {
 
   it("matches input and cancellation payload handling", () => {
     for (const input of fixture.input.canonical) {
-      expect(
-        buildNodeInvokeInput({
-          invokeId: input.id,
-          nodeId: input.nodeId,
-          seq: input.seq,
-          payloadJSON: input.payloadJSON,
-        }),
-      ).toEqual(input);
       expect(coerceNodeInvokeInputPayload(input)).toEqual({
         invokeId: input.id,
         nodeId: input.nodeId,
@@ -67,7 +55,6 @@ describe("node invocation lifecycle contract", () => {
       });
     }
     expect(coerceNodeInvokeInputPayload(fixture.input.invalid)).toBeNull();
-    expect(buildNodeInvokeCancel(fixture.cancel.canonical)).toEqual(fixture.cancel.canonical);
     expect(coerceNodeInvokeCancelPayload(fixture.cancel.canonical)).toEqual(
       fixture.cancel.canonical,
     );

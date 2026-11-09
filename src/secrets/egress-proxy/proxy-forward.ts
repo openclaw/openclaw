@@ -1,4 +1,5 @@
 import {
+  createServer as createHttpServer,
   request as httpRequest,
   ServerResponse,
   type ClientRequest,
@@ -46,7 +47,7 @@ export function sendHttpRefusal(res: ServerResponse, status = 502, body = REFUSA
   res.end(body);
 }
 
-export function handleUpgradeRequest(
+function handleUpgradeRequest(
   handler: RequestHandler,
   request: IncomingMessage,
   head: Buffer,
@@ -108,6 +109,12 @@ export function handleUpgradeRequest(
   handler(request, response, { stream, stopBuffering });
 }
 
+export function createRequestServer(handleRequest: RequestHandler) {
+  return createHttpServer(handleRequest).on("upgrade", (request, _socket, head) =>
+    handleUpgradeRequest(handleRequest, request, head),
+  );
+}
+
 /** Forwards one authorized request, retaining ownership across a WebSocket upgrade. */
 type ForwardRequest = {
   request: IncomingMessage;
@@ -118,6 +125,7 @@ type ForwardRequest = {
   host: string;
   substituted: boolean;
   upstreamTlsAgent: HttpsAgent;
+  upstreamHttpAgent?: HttpsAgent;
   isActive: () => boolean;
   ownResource: <T extends Readable | Writable>(resource: T) => T;
   releaseResponse: () => void;
@@ -158,7 +166,7 @@ function sendSecretEgressRequest(
         path: `${target.pathname}${target.search}`,
         method: forward.request.method,
         headers,
-        agent: secure ? forward.upstreamTlsAgent : false,
+        agent: secure ? forward.upstreamTlsAgent : (forward.upstreamHttpAgent ?? false),
       },
       (upstreamResponse) => {
         forward.ownResource(upstreamResponse);
@@ -173,6 +181,7 @@ function sendSecretEgressRequest(
             statusCode,
             toForwardableResponseHeaders(upstreamResponse.headers),
           );
+          forward.response.flushHeaders();
         } catch {
           // This callback runs outside any caller's try block; a throw here
           // would exit the Gateway. Keep the failure on this one request.
@@ -390,21 +399,26 @@ export function forwardSecretEgressRequest(
     clearTimeout(timer);
     releaseBudget?.();
   };
-  const refuse = (reason: SecretEgressRefusalReason, status = 502, message = REFUSAL_BODY) => {
-    if (refused) {
-      return;
-    }
+  const cancel = (drainRequest: boolean) => {
     refused = true;
     if (collector) {
       forward.request.unpipe(collector);
       collector.destroy();
     }
-    forward.request.resume();
+    if (drainRequest) {
+      forward.request.resume();
+    }
     if (upstream) {
       upstream.destroy();
     } else {
       release();
     }
+  };
+  const refuse = (reason: SecretEgressRefusalReason, status = 502, message = REFUSAL_BODY) => {
+    if (refused) {
+      return;
+    }
+    cancel(true);
     // An early refusal need not consume the declared body. Close the incoming
     // message after the reply too, so the registration releases that resource.
     forward.response.once("close", () => forward.request.destroy());
@@ -464,19 +478,8 @@ export function forwardSecretEgressRequest(
     return;
   }
   forward.request.once("error", () => forward.response.destroy());
-  forward.response.once("close", () => {
-    refused = true;
-    if (collector) {
-      forward.request.unpipe(collector);
-      collector.destroy();
-    }
-    if (upstream) {
-      upstream.destroy();
-    } else {
-      release();
-    }
-  });
-  if (!releaseBudget || length > MAX_BUFFERED_REQUEST_BODY_BYTES) {
+  forward.response.once("close", () => cancel(false));
+  if (!releaseBudget) {
     refuse(
       "upload-capacity",
       503,

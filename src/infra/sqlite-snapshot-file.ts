@@ -1,9 +1,16 @@
 import fsSync, { type BigIntStats, type Stats } from "node:fs";
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
-import { hashFileDescriptorSync, sameFileMutationFingerprint } from "./file-descriptor.js";
-import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
+import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { getChildLogger } from "../logging/logger.js";
+import { sha256File } from "./directory-durability.js";
+import {
+  hashFileDescriptorSync,
+  sameFileMutationFingerprint,
+  type FileMutationFingerprint,
+} from "./file-descriptor.js";
+import { registerProcessExitCleanup } from "./process-exit-cleanup.js";
 
 export type SqliteFileContent = {
   sha256: string;
@@ -29,16 +36,11 @@ export function assertExpectedContent(
 
 export function assertPublishedFileIdentitySync(
   filePath: string,
-  expectedIdentity: Stats,
+  expectedIdentity: BigIntStats,
   expectedContent: SqliteFileContent,
 ): void {
-  const currentIdentity = fsSync.lstatSync(filePath);
-  if (
-    !currentIdentity.isFile() ||
-    !sameFileIdentity(expectedIdentity, currentIdentity) ||
-    expectedIdentity.size !== currentIdentity.size ||
-    expectedIdentity.birthtimeMs !== currentIdentity.birthtimeMs
-  ) {
+  const currentIdentity = fsSync.lstatSync(filePath, { bigint: true });
+  if (!currentIdentity.isFile() || !sameFileStatFingerprint(expectedIdentity, currentIdentity)) {
     throw new Error(`SQLite snapshot file changed: ${filePath}`);
   }
   if (
@@ -56,11 +58,10 @@ export function assertPublishedFileIdentitySync(
 export function assertOpenFileIdentitySync(
   fileDescriptor: number,
   filePath: string,
-  expectedIdentity: Stats | BigIntStats,
+  expectedIdentity: FileIdentityStat,
 ): void {
-  const options = { bigint: typeof expectedIdentity.ino === "bigint" };
-  const openedIdentity = fsSync.fstatSync(fileDescriptor, options);
-  const currentIdentity = fsSync.lstatSync(filePath, options);
+  const openedIdentity = fsSync.fstatSync(fileDescriptor, { bigint: true });
+  const currentIdentity = fsSync.lstatSync(filePath, { bigint: true });
   if (
     !openedIdentity.isFile() ||
     !currentIdentity.isFile() ||
@@ -73,7 +74,7 @@ export function assertOpenFileIdentitySync(
 
 export function hashPublishedFileSync(
   filePath: string,
-  expectedIdentity: Stats | BigIntStats,
+  expectedIdentity: FileIdentityStat,
 ): SqliteFileContent {
   const fileDescriptor = fsSync.openSync(filePath, "r");
   try {
@@ -82,12 +83,7 @@ export function hashPublishedFileSync(
     const content = hashFileDescriptorSync(fileDescriptor);
     const finalStat = fsSync.fstatSync(fileDescriptor, { bigint: true });
     if (!sameFileMutationFingerprint(initialStat, finalStat)) {
-      if (
-        initialStat.dev !== finalStat.dev ||
-        initialStat.ino !== finalStat.ino ||
-        readDatabaseIdentityBirthtime(initialStat) !== readDatabaseIdentityBirthtime(finalStat) ||
-        initialStat.size !== finalStat.size
-      ) {
+      if (!sameFileStatFingerprint(initialStat, finalStat)) {
         throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
       }
       // FUSE may settle timestamps after publication; only matching bytes can admit that drift.
@@ -102,23 +98,26 @@ export function hashPublishedFileSync(
 
 export function removePublishedTargetIfOwned(
   filePath: string,
-  expectedIdentity: Stats | BigIntStats,
-  requireFingerprint = false,
+  expectedIdentity: FileIdentityStat,
+  expectedFingerprint?: Stats | BigIntStats,
 ): boolean {
-  let currentIdentity: Stats | BigIntStats;
+  let currentIdentity: BigIntStats;
+  let currentFingerprint: Stats | BigIntStats;
   try {
-    currentIdentity = fsSync.lstatSync(filePath, {
-      bigint: typeof expectedIdentity.ino === "bigint",
-    });
+    currentIdentity = fsSync.lstatSync(filePath, { bigint: true });
+    currentFingerprint =
+      expectedFingerprint && typeof expectedFingerprint.size === "number"
+        ? fsSync.lstatSync(filePath)
+        : currentIdentity;
   } catch {
     return false;
   }
   const fingerprintMatches =
-    !requireFingerprint ||
-    (expectedIdentity.size === currentIdentity.size &&
-      expectedIdentity.mtimeMs === currentIdentity.mtimeMs &&
-      expectedIdentity.ctimeMs === currentIdentity.ctimeMs &&
-      expectedIdentity.birthtimeMs === currentIdentity.birthtimeMs);
+    !expectedFingerprint ||
+    (expectedFingerprint.size === currentFingerprint.size &&
+      expectedFingerprint.mtimeMs === currentFingerprint.mtimeMs &&
+      expectedFingerprint.ctimeMs === currentFingerprint.ctimeMs &&
+      expectedFingerprint.birthtimeMs === currentFingerprint.birthtimeMs);
   // Unknown Windows identity can admit a read, but cannot authorize deletion.
   const unknownIdentity =
     process.platform === "win32" &&
@@ -144,24 +143,19 @@ export function removePublishedTargetIfOwned(
 }
 
 export function sameFileStatFingerprint(
-  left: Stats | BigIntStats,
-  right: Stats | BigIntStats,
+  left: Pick<Stats | BigIntStats, "dev" | "ino" | "size">,
+  right: Pick<Stats | BigIntStats, "dev" | "ino" | "size">,
 ): boolean {
-  // Creating the publication hard link changes source ctime, so compare the
-  // mutation fields that remain stable for the same bytes and pathname owner.
-  return (
-    sameFileIdentity(left, right) &&
-    left.size === right.size &&
-    left.mtimeMs === right.mtimeMs &&
-    left.birthtimeMs === right.birthtimeMs
-  );
+  // Linking/unlinking changes ctime, which Linux can expose as birthtime without statx.
+  // Publication separately verifies bytes; timestamps do not identify the transferred file.
+  return sameFileIdentity(left, right) && left.size === right.size;
 }
 
 export async function removePublicationStagingDirectory(
   stagingDir: string,
-  expectedIdentity: Stats,
+  expectedIdentity: FileIdentityStat,
 ): Promise<void> {
-  const currentIdentity = await fs.lstat(stagingDir).catch(() => undefined);
+  const currentIdentity = await fs.lstat(stagingDir, { bigint: true }).catch(() => undefined);
   if (!currentIdentity) {
     return;
   }
@@ -170,14 +164,100 @@ export async function removePublicationStagingDirectory(
   }
   const entries = await fs.readdir(stagingDir, { withFileTypes: true });
   if (
-    entries.length > 1 ||
-    entries.some((entry) => entry.name !== "database.sqlite" || !entry.isFile())
+    entries.some(
+      (entry) =>
+        !entry.isFile() ||
+        (entry.name !== "database.sqlite" && !/^\.nfs[\da-f]+$/iu.test(entry.name)),
+    )
   ) {
     throw new Error(`SQLite publication staging directory has unexpected contents: ${stagingDir}`);
   }
-  const stagedEntry = entries[0];
+  const stagedEntry = entries.find((entry) => entry.name === "database.sqlite");
   if (stagedEntry) {
     await fs.unlink(path.join(stagingDir, stagedEntry.name));
   }
-  await fs.rmdir(stagingDir);
+  try {
+    await fs.rmdir(stagingDir);
+  } catch (error) {
+    const errorCode = extractErrorCode(error);
+    if (errorCode !== "EBUSY" && errorCode !== "ENOTEMPTY") {
+      throw error;
+    }
+    // NFS may keep .nfs aliases until the last native handle closes. Never
+    // unlink those aliases; retry only empty-directory removal at process exit.
+    registerProcessExitCleanup(() => {
+      const current = fsSync.lstatSync(stagingDir, { bigint: true, throwIfNoEntry: false });
+      if (current?.isDirectory() && sameFileIdentity(expectedIdentity, current)) {
+        fsSync.rmdirSync(stagingDir);
+      }
+    });
+    try {
+      getChildLogger({ subsystem: "infra/sqlite-snapshot" }).warn(
+        { path: stagingDir, errorCode },
+        "SQLite publication staging cleanup deferred until open files are released. If the directory remains after exit, remove it once no process holds its files open.",
+      );
+    } catch {
+      // Diagnostics must not discard an already verified backup.
+    }
+  }
+}
+
+export async function assertMutationFingerprintUnchanged(
+  handle: FileHandle,
+  expected: FileMutationFingerprint,
+  filePath: string,
+  expectedContent: SqliteFileContent,
+): Promise<void> {
+  const current = await handle.stat({ bigint: true });
+  if (!sameFileMutationFingerprint(current, expected)) {
+    if (!sameFileStatFingerprint(current, expected)) {
+      throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
+    }
+    // Re-read the pinned snapshot when FUSE timestamps settle after copying or hashing.
+    const { digest, bytes } = await sha256File(handle);
+    assertExpectedContent({ sha256: digest, sizeBytes: bytes }, expectedContent, filePath);
+  }
+}
+
+export async function assertOpenFileIdentity(
+  handle: FileHandle,
+  filePath: string,
+  expectedIdentity: FileIdentityStat,
+): Promise<void> {
+  const openedIdentity = await handle.stat({ bigint: true });
+  const currentIdentity = await fs.lstat(filePath, { bigint: true });
+  if (
+    !openedIdentity.isFile() ||
+    !currentIdentity.isFile() ||
+    !sameFileIdentity(expectedIdentity, openedIdentity) ||
+    !sameFileIdentity(expectedIdentity, currentIdentity)
+  ) {
+    throw new Error(`SQLite snapshot file changed: ${filePath}`);
+  }
+}
+
+export async function hashPublishedFile(
+  filePath: string,
+  expectedIdentity: FileIdentityStat,
+): Promise<SqliteFileContent> {
+  const handle = await fs.open(filePath, "r");
+  try {
+    return await hashOpenPublishedFile(handle, filePath, expectedIdentity);
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function hashOpenPublishedFile(
+  handle: FileHandle,
+  filePath: string,
+  expectedIdentity: FileIdentityStat,
+): Promise<SqliteFileContent> {
+  await assertOpenFileIdentity(handle, filePath, expectedIdentity);
+  const fingerprint = await handle.stat({ bigint: true });
+  const { digest, bytes } = await sha256File(handle);
+  const content = { sha256: digest, sizeBytes: bytes };
+  await assertMutationFingerprintUnchanged(handle, fingerprint, filePath, content);
+  await assertOpenFileIdentity(handle, filePath, expectedIdentity);
+  return content;
 }

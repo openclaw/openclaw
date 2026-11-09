@@ -38,10 +38,9 @@ struct ChatViewModelOutboxSettingsTests {
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
 
         await MainActor.run { vm.load() }
-        try await waitUntil("background command dispatch") {
-            await transport.state.sentMessages == ["use captured authority"]
-        }
+        await transport.state.waitForState { $0.sentMessages.count >= 1 }
 
+        #expect(await transport.state.sentMessages == ["use captured authority"])
         #expect(await transport.state.sentSessionKeys == ["agent:main:background"])
         #expect(await transport.state.sentSessionSettings.count == 1)
         #expect(await transport.state.sentSessionSettings[0] == expectation)
@@ -67,12 +66,13 @@ struct ChatViewModelOutboxSettingsTests {
         let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
 
         await MainActor.run { vm.load() }
-        try await waitUntil("offline bootstrap settled") {
-            await MainActor.run { !vm.isLoading && vm.hasRestoredOutboxMessages }
-        }
+        await vm.bootstrapTask?.value
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        #expect(await MainActor.run { !vm.isLoading && vm.hasRestoredOutboxMessages })
         await outbox.holdLoadAfterFailure()
         await transport.goOnline()
         await outbox.waitUntilSnapshotCaptured()
+        let flush = await vm.outboxFlushTask
 
         do {
             #expect(await transport.state.sentMessages.isEmpty)
@@ -91,20 +91,17 @@ struct ChatViewModelOutboxSettingsTests {
                 vm.messages.first { vm.outboxState(for: $0.id)?.isFailed == true }?.id
             })
             await MainActor.run { vm.retryOutboxMessage(messageID) }
-            try await waitUntil("reviewed settings rebound before reload") {
-                await store.loadCommands().first?.status == .queued
-            }
+            await waitForObservedState { vm.outboxState(for: messageID) == .queued }
+            #expect(await store.loadCommands().first?.status == .queued)
         } catch {
             await outbox.releaseSnapshot()
-            try? await waitUntil("failed proof flush released") {
-                await MainActor.run { !vm.isFlushingOutbox }
-            }
+            await flush?.value
             throw error
         }
         await outbox.releaseSnapshot()
-        try await waitUntil("reviewed settings rebound and sent") {
-            await transport.state.sentMessages == ["review before replay"]
-        }
+        await flush?.value
+        await transport.state.waitForState { $0.sentMessages.count >= 1 }
+        #expect(await transport.state.sentMessages == ["review before replay"])
         #expect(await transport.state.sentSessionSettings == [
             OpenClawChatSessionSettingsExpectation(permissionMode: nil, toolOverrides: nil),
         ])
@@ -126,24 +123,30 @@ struct ChatViewModelOutboxSettingsTests {
         #expect(await store.enqueueCommand(command))
         let outbox = ScriptedOutbox(base: store)
         await outbox.setTerminalWriteResult(terminalResult)
+        let terminalWrite = OutboxTestGate()
+        await outbox.setTerminalWriteGate(terminalWrite)
         let transport = OutboxTestTransport(healthy: false, supportsSessionSettingsCAS: false)
         let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
 
         await MainActor.run { vm.load() }
         await transport.goOnline()
-        try await waitUntil("pre-CAS terminal result settled") {
-            let commands = await store.loadCommands()
-            let storedResult = switch terminalResult {
-            case .updated: commands.first?.status == .failed
-            case .unavailable: commands.first?.status == .sending
-            case .confirmed, .missing: commands.isEmpty
-            case .superseded: commands.first?.status == .sending && commands.first?.attemptVersion == command
-                .attemptVersion + 1
-            }
-            return await MainActor.run {
-                storedResult && !vm.isFlushingOutbox && (terminalResult != .unavailable || !vm.healthOK)
-            }
+        await terminalWrite.waitUntilStarted()
+        let flush = await vm.outboxFlushTask
+        await terminalWrite.release()
+        try await #require(flush).value
+        // The held write coalesces reconnect triggers into a successor pass.
+        await vm.outboxFlushTask?.value
+        let commands = await store.loadCommands()
+        let storedResult = switch terminalResult {
+        case .updated: commands.first?.status == .failed
+        case .unavailable: commands.first?.status == .sending
+        case .confirmed, .missing: commands.isEmpty
+        case .superseded: commands.first?.status == .sending && commands.first?.attemptVersion == command
+            .attemptVersion + 1
         }
+        #expect(storedResult)
+        #expect(await vm.outboxFlushTask == nil)
+        #expect(await MainActor.run { terminalResult != .unavailable || !vm.healthOK })
         #expect(await transport.state.sentMessages.isEmpty)
         if terminalResult == .updated {
             #expect(await store.loadCommands().first?.lastError ==
@@ -192,9 +195,9 @@ struct ChatViewModelOutboxSettingsTests {
             })
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
         await MainActor.run { vm.load() }
-        try await waitUntil("outbox restore") {
-            await MainActor.run { vm.hasRestoredOutboxMessages }
-        }
+        await vm.bootstrapTask?.value
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        #expect(await vm.hasRestoredOutboxMessages)
         await MainActor.run {
             vm.sessions = [outboxSessionEntry(
                 key: "main",
@@ -204,14 +207,14 @@ struct ChatViewModelOutboxSettingsTests {
             vm.sessionId = "session-main"
         }
         await vm.loadComposerCapabilities()
+        let target = await vm.currentModelPatchTarget()
         await MainActor.run { vm.selectComposerPermissionMode(.guarded) }
         await patchStarted.wait()
         #expect(await transport.state.sentMessages.isEmpty)
         await MainActor.run { vm.switchSession(to: "other") }
         await patchRelease.open()
-        try await waitUntil("queued row parked before flush") {
-            await store.loadCommands().first?.status == .failed
-        }
+        await vm.waitForPendingSessionSettings(for: target)
+        #expect(await store.loadCommands().first?.status == .failed)
 
         let reopened = await makeOutboxViewModel(transport: transport, outbox: store)
         await MainActor.run {
@@ -241,18 +244,19 @@ struct ChatViewModelOutboxSettingsTests {
         let transport = OutboxTestTransport(healthy: false)
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
         await MainActor.run { vm.load() }
-        try await waitUntil("queued bubble restored") {
-            await MainActor.run { vm.messages.contains { vm.outboxState(for: $0.id) == .queued } }
+        await vm.bootstrapTask?.value
+        await waitForObservedState {
+            vm.messages.contains { vm.outboxState(for: $0.id) == .queued }
         }
+        #expect(await MainActor.run { vm.messages.contains { vm.outboxState(for: $0.id) == .queued } })
 
         #expect(await store.parkQueuedCommands(
             in: OpenClawChatOutboxScope(sessionKey: "main", agentID: "main"),
             lastError: "Restriction was not saved."))
-        try await waitUntil("failed bubble published") {
-            await MainActor.run {
-                vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true }
-            }
+        await waitForObservedState {
+            vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true }
         }
+        #expect(await MainActor.run { vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true } })
     }
 
     @Test(arguments: [false, true])
@@ -332,13 +336,13 @@ struct ChatViewModelOutboxSettingsTests {
         }
         await vm.loadComposerCapabilities()
 
+        let target = await vm.currentModelPatchTarget()
         await MainActor.run { vm.selectComposerPermissionMode(.guarded) }
-        try await waitUntil("parking failure settles") {
-            await MainActor.run {
-                !vm.composerCapabilityMutationDisabled &&
-                    vm.errorText == "Could not secure queued messages before changing session settings."
-            }
-        }
+        await vm.waitForPendingSessionSettings(for: target)
+        #expect(await MainActor.run {
+            !vm.composerCapabilityMutationDisabled &&
+                vm.errorText == "Could not secure queued messages before changing session settings."
+        })
 
         #expect(await patchCalls.current() == 0)
         #expect(await store.loadCommands().first?.status == .queued)

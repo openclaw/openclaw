@@ -15,7 +15,6 @@ import {
 import {
   authorizeScopedGatewayHttpRequestOrReply,
   getHeader,
-  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
@@ -57,7 +56,6 @@ export async function handleToolsInvokeHttpRequest(
     req,
     res,
     operatorMethod: "agent",
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
   });
   if (!authResult) {
     return true;
@@ -96,11 +94,16 @@ export async function handleToolsInvokeHttpRequest(
     const client = createSyntheticPluginRuntimeClient({
       authenticatedUserProfile: requestAuth.authenticatedUserProfile,
       operatorRoleActor: requestAuth.operatorRoleActor,
+      openclawIdPrincipal: requestAuth.openclawIdPrincipal,
       operatorAccessAuthority,
       scopes: operatorScopes,
     });
     const context = opts.resolveGatewayContext?.();
-    if (resolveGatewayOperatorRoleActor(client)?.kind === "operator" && !context) {
+    if (
+      (requestAuth.openclawIdPrincipal !== undefined ||
+        resolveGatewayOperatorRoleActor(client)?.kind === "operator") &&
+      !context
+    ) {
       sendJson(res, 503, {
         error: { message: "Gateway context is unavailable; retry shortly.", type: "unavailable" },
       });
@@ -114,6 +117,7 @@ export async function handleToolsInvokeHttpRequest(
         signal,
         hasCurrentClientAuthority: () => !signal.aborted && requestAuth.hasCurrentClientAuthority(),
         isWebchatConnect: () => false,
+        pluginRegistry: context?.getGatewayMethodRegistry?.().pluginRegistry,
       },
       () =>
         invokeGatewayTool({
@@ -125,6 +129,7 @@ export async function handleToolsInvokeHttpRequest(
           agentThreadId,
           authenticatedUserProfile: requestAuth.authenticatedUserProfile,
           operatorRoleActor: requestAuth.operatorRoleActor,
+          openclawIdPrincipal: requestAuth.openclawIdPrincipal,
           operatorScopes,
           senderIsOwner,
           conversationReadOrigin: "direct-operator",

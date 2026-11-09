@@ -46,7 +46,7 @@ function isLegacyStockLongCatModel(value: unknown): boolean {
   );
 }
 
-function hasLegacyStockLongCatModel(value: unknown): boolean {
+function hasLegacyStockLongCatModel(value: unknown): value is unknown[] {
   return Array.isArray(value) && value.some(isLegacyStockLongCatModel);
 }
 
@@ -67,11 +67,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   const providers = models?.providers;
   const provider = providers?.longcat;
   const configuredModels = provider?.models;
-  if (
-    !provider ||
-    !hasLegacyStockLongCatModel(configuredModels) ||
-    !Array.isArray(configuredModels)
-  ) {
+  if (!provider || !hasLegacyStockLongCatModel(configuredModels)) {
     return { config: cfg, changes: [] };
   }
 

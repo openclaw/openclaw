@@ -6,9 +6,11 @@ import {
   WorkerOperatingSystemSchema,
 } from "../../../packages/gateway-protocol/src/schema/environments.js";
 import { validateProviderSettings } from "../../config/provider-settings.js";
+import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
+  type WorkerExecutionMode,
   type WorkerLease,
   type WorkerLeaseStatus,
   type WorkerProvider,
@@ -17,10 +19,14 @@ import {
   type WorkerOperatingSystem,
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
+import { requireWorkerResourceReceipt } from "../../plugins/worker-resource-receipt.js";
+import { requireWorkerRetentionObservation } from "../../plugins/worker-retention.js";
+import type { WorkerInstallationArtifact } from "./bundle.js";
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import { normalizeWorkerSshEndpoint } from "./store-validation.js";
+import type { WorkerEnvironmentRecord } from "./store.js";
 
 export function requireWorkerProfile(value: unknown): WorkerProfile {
   const error = validateProviderSettings(value, "Worker profile");
@@ -29,6 +35,29 @@ export function requireWorkerProfile(value: unknown): WorkerProfile {
   }
   // SAFETY: Validation accepts only bounded JSON objects and checks any secret references.
   return value as WorkerProfile;
+}
+
+/** Allocation and prepared-worker retention compare the same admitted profile fields. */
+export function snapshotWorkerAllocationProfile(profile: CloudWorkerProfileConfig): WorkerProfile {
+  return {
+    install: profile.install ?? "bundle",
+    settings: requireWorkerProfile(profile.settings ?? {}),
+    ...(profile.workspaceDurability ? { workspaceDurability: profile.workspaceDurability } : {}),
+  };
+}
+
+export function readWorkerProfileSelection(snapshot: WorkerProfile): {
+  machineClass?: string;
+  os?: string;
+  executionMode?: WorkerExecutionMode;
+} {
+  return {
+    ...(typeof snapshot.machineClass === "string" ? { machineClass: snapshot.machineClass } : {}),
+    ...(typeof snapshot.os === "string" ? { os: snapshot.os } : {}),
+    ...(snapshot.executionMode === "worker-turn" || snapshot.executionMode === "remote-exec"
+      ? { executionMode: snapshot.executionMode }
+      : {}),
+  };
 }
 
 export function requireInheritedWorkerProfileAuthorization(
@@ -92,14 +121,7 @@ export function normalizeWorkerMachineOptions(
       defaultSystems.add(option.os);
     }
   }
-  return value.map((option) => ({
-    id: option.id,
-    label: option.label,
-    ...(option.os === undefined ? {} : { os: option.os }),
-    ...(option.cpu === undefined ? {} : { cpu: option.cpu }),
-    ...(option.memoryGb === undefined ? {} : { memoryGb: option.memoryGb }),
-    ...(option.default === undefined ? {} : { default: option.default }),
-  }));
+  return value;
 }
 
 export function normalizeWorkerOperatingSystems(
@@ -125,12 +147,7 @@ export function normalizeWorkerOperatingSystems(
     }
     ids.add(option.id);
     hasDefault ||= option.default === true;
-    systems.push({
-      id: option.id,
-      label: option.label,
-      ...(option.default === undefined ? {} : { default: option.default }),
-      ...(option.disabledReason === undefined ? {} : { disabledReason: option.disabledReason }),
-    });
+    systems.push(option);
   }
   return systems;
 }
@@ -148,16 +165,24 @@ export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
   ) {
     throw new Error("Worker provider returned an invalid inspection status");
   }
+  const receipt = {
+    ...(value.resourceReceipt === undefined
+      ? {}
+      : { resourceReceipt: requireWorkerResourceReceipt(value.resourceReceipt) }),
+    ...(value.retention === undefined
+      ? {}
+      : { retention: requireWorkerRetentionObservation(value.retention) }),
+  };
   if (status === "active") {
     if (value.sharedHost !== undefined && typeof value.sharedHost !== "boolean") {
       throw new Error("Worker provider returned an invalid inspection result");
     }
-    return { status, sharedHost: value.sharedHost === true };
+    return { status, sharedHost: value.sharedHost === true, ...receipt };
   }
   if (value.sharedHost !== undefined) {
     throw new Error("Worker provider returned an invalid inspection result");
   }
-  return { status };
+  return { status, ...receipt };
 }
 
 export function resolveWorkerLeaseTransportError(
@@ -215,8 +240,16 @@ export function requireWorkerLease(value: unknown): WorkerLease {
   ) {
     throw new Error("Worker provider returned an invalid provision result");
   }
+  const receipt =
+    value.resourceReceipt === undefined
+      ? undefined
+      : requireWorkerResourceReceipt(value.resourceReceipt);
+  if (receipt && receipt.leaseId !== value.leaseId.trim()) {
+    throw new Error("Worker provider resource receipt names another lease");
+  }
   const common = {
     leaseId: value.leaseId.trim(),
+    ...(receipt ? { resourceReceipt: receipt } : {}),
     ...(value.sharedHost === undefined ? {} : { sharedHost: value.sharedHost }),
     ...(value.desktop === undefined
       ? {}
@@ -233,4 +266,14 @@ export function requireWorkerLease(value: unknown): WorkerLease {
     throw new Error("Worker provider returned an invalid node device id");
   }
   return { ...common, node: { deviceId: deviceId.trim() } };
+}
+
+export function requireInstall(
+  record: Pick<WorkerEnvironmentRecord, "profileSnapshot">,
+): WorkerInstallationArtifact["install"] {
+  const install = record.profileSnapshot.install;
+  if (install !== undefined && install !== "bundle" && install !== "npm") {
+    throw serviceError("invalid_profile", "Worker profile has an invalid install method");
+  }
+  return install ?? "bundle";
 }

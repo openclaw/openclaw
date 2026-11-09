@@ -19,7 +19,7 @@ type ActiveNodePortal = {
   binding: WorkerNodeCarrierBinding;
   controller: AbortController;
   streams: Set<ActiveNodePortalStream>;
-  closed: boolean;
+  closePromise?: Promise<void>;
 };
 
 type ActiveNodePortalStream = {
@@ -28,7 +28,6 @@ type ActiveNodePortalStream = {
   ticket?: ReturnType<NodeDesktopStreamBroker["mintPortal"]>;
   invocation?: ReturnType<NodeWorkerSupervisorTransport["invoke"]>;
   stream?: Duplex;
-  stopped: boolean;
 };
 
 const UNSUPPORTED_NODE_PORTAL_MESSAGE =
@@ -70,29 +69,28 @@ export function createWorkerNodePortalCarrier(options: {
   };
 
   const retireStream = (active: ActiveNodePortalStream): void => {
-    if (active.stopped) {
-      return;
-    }
-    active.stopped = true;
     active.ticket?.cancel();
     active.controller.abort(new Error("Worker environment node portal stream stopped"));
     active.stream?.destroy();
-    active.portal.streams.delete(active);
   };
 
   const stopStream = async (active: ActiveNodePortalStream): Promise<void> => {
     retireStream(active);
     await active.invocation?.catch(() => undefined);
+    active.portal.streams.delete(active);
   };
 
-  const closePortal = async (portal: ActiveNodePortal): Promise<void> => {
-    if (portal.closed) {
-      return;
+  const closePortal = (portal: ActiveNodePortal): Promise<void> => {
+    if (!portal.closePromise) {
+      // Retain completion before abort callbacks can reenter close or carrier shutdown.
+      portal.closePromise = Promise.resolve()
+        .then(async () => {
+          await Promise.all([...portal.streams].map(stopStream));
+        })
+        .finally(() => activePortals.delete(portal));
+      portal.controller.abort(new Error("Worker environment node portal owner stopped"));
     }
-    portal.closed = true;
-    portal.controller.abort(new Error("Worker environment node portal owner stopped"));
-    activePortals.delete(portal);
-    await Promise.all([...portal.streams].map(stopStream));
+    return portal.closePromise;
   };
 
   const connectPortal = async (
@@ -103,13 +101,13 @@ export function createWorkerNodePortalCarrier(options: {
     touch?: () => Promise<void>,
   ): Promise<Duplex> => {
     const capturedRuntime = runtime;
-    if (!capturedRuntime || portal.closed || portal.controller.signal.aborted) {
+    const signal = portal.controller.signal;
+    if (!capturedRuntime || signal.aborted) {
       throw new Error(UNSUPPORTED_NODE_PORTAL_MESSAGE);
     }
     const active: ActiveNodePortalStream = {
       portal,
       controller: new AbortController(),
-      stopped: false,
     };
     // Publish the connection before node discovery yields so owner teardown can fence it.
     portal.streams.add(active);
@@ -135,7 +133,7 @@ export function createWorkerNodePortalCarrier(options: {
         isDispatchAuthorized: () => {
           try {
             assertCurrent?.();
-            return !portal.closed && bindingIsCurrent(portal.binding, capturedRuntime, node);
+            return !signal.aborted && bindingIsCurrent(portal.binding, capturedRuntime, node);
           } catch {
             return false;
           }
@@ -154,11 +152,16 @@ export function createWorkerNodePortalCarrier(options: {
       assertCurrent?.();
       await touch?.();
       assertCurrent?.();
-      if (portal.closed || !bindingIsCurrent(portal.binding, capturedRuntime, node)) {
+      if (signal.aborted || !bindingIsCurrent(portal.binding, capturedRuntime, node)) {
         throw new Error("Worker environment node portal owner changed before attachment");
       }
-      active.stream.once("close", () => retireStream(active));
-      void active.invocation.finally(() => retireStream(active)).catch(() => undefined);
+      active.stream.once("close", () => void stopStream(active));
+      void active.invocation
+        .finally(() => {
+          retireStream(active);
+          portal.streams.delete(active);
+        })
+        .catch(() => undefined);
       return active.stream;
     } catch (error) {
       await stopStream(active);
@@ -215,7 +218,6 @@ export function createWorkerNodePortalCarrier(options: {
         binding,
         controller: new AbortController(),
         streams: new Set(),
-        closed: false,
       };
       activePortals.add(portal);
       try {
