@@ -1667,7 +1667,6 @@
 ["src/agents/mcp-stdio-client.test.ts","../process/owned-stdio.js","43024cb7bfc79bbd562fa77b9e5cd6a443d4d91ace798019f51629aae9f2f2ee",1]
 ["src/agents/mcp-stdio-transport.test.ts","../process/owned-stdio.js","7cc9b3c3e04a4a5d81be0d97c94ee2178dca451b46e4816c5bf7e836ddfd149d",1]
 ["src/agents/mcp-transport-config.test.ts","../logger.js","6ade37afbb6dc899c329e4d73809b431af0f34f899315b3e3444cea03d39d459",1]
-["src/agents/model-auth.profiles.test.ts","../plugins/provider-runtime.js","5940dd9291593636297fec2a79e3156b421344b61f2fb8569d57e63a3b3d87d7",1]
 ["src/agents/model-auth.profiles.test.ts","../plugins/providers.js","a7ceeb873025d42d3bc60e5c69fb50c6187f58c8a70dcb0e70563c5dd3399a82",1]
 ["src/agents/model-auth.profiles.test.ts","../plugins/setup-registry.js","27dd73708c1c6ba00d5e901c63e075cd0041a0e3cce17bee8141ea5ce96e0fb9",1]
 ["src/agents/model-auth.profiles.test.ts","./cli-credentials.js","1f6358febab24bd8806554262617ce3c279548a349e4216a36f358a05bdb7b95",1]
