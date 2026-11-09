@@ -25,7 +25,8 @@ export const formatProviderAuthProfileApiKeyWithPlugin = (
   },
 ) => {
   const plugin = resolveProviderRuntimePlugin(params);
-  return plugin?.formatApiKey?.call(plugin, params.context);
+  const hook = plugin?.formatApiKey;
+  return hook?.call(plugin, params.context);
 };
 
 export class UnsupportedProviderRuntimeAuthCapabilityError extends Error {
