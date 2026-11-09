@@ -1,2 +1,0 @@
-# Browser regression for dependency provenance, exact versions, and installed-version truthfulness.
-37
