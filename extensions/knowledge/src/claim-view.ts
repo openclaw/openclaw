@@ -1,5 +1,6 @@
 import { ask } from "./ask-dialog.js";
 import { evidenceView } from "./evidence-view.js";
+import { t } from "./i18n/index.js";
 import { assertionOrigin as origin, identityTag } from "./knowledge-presentation.js";
 import { loadingPlaceholder } from "./loading-view.js";
 import { markdownView } from "./markdown-view.js";
@@ -24,8 +25,8 @@ import { icon } from "./ui-icons.js";
 export function metadataBlock(ui: Page, id: string, n: number) {
   const { feature, live, errorText } = ui;
   const block = el("details"),
-    text = el("pre", "Loading…");
-  block.append(el("summary", "Structured metadata"), text);
+    text = el("pre", t("knowledge.common.loading"));
+  block.append(el("summary", t("knowledge.claim.metadata")), text);
   block.addEventListener("toggle", () => {
     if (!block.open || block.dataset.loaded) {
       return;
@@ -38,7 +39,7 @@ export function metadataBlock(ui: Page, id: string, n: number) {
           text.textContent =
             JSON.stringify(result.record?.metadata ?? null, null, 2) +
             (result.omitted?.includes("metadata.evidence")
-              ? "\n\nEvidence descriptors omitted for size. View Markdown for the complete frontmatter."
+              ? `\n\n${t("knowledge.claim.metadataOmitted")}`
               : "");
         }
       })
@@ -121,7 +122,7 @@ export function renderClaim(
     statement ??
       (record.metadata?.source_event && record.source
         ? button(
-            `Meeting: ${record.source.title}`,
+            t("knowledge.claim.meeting", { title: record.source.title }),
             () => open(record.source!.id),
             "knowledge-claim-text",
           )
@@ -154,7 +155,7 @@ export function renderClaim(
     ),
   );
   if (record.metadata?.supersedes) {
-    const corrected = el("span", "Corrected", "knowledge-state-note");
+    const corrected = el("span", t("knowledge.claim.corrected"), "knowledge-state-note");
     corrected.prepend(icon("repeat", 12));
     metadata.append(corrected);
   }
@@ -163,8 +164,8 @@ export function renderClaim(
       el(
         "span",
         record.metadata.continuity.some((link) => link.relation === "contradicts")
-          ? "Conflicting account"
-          : "Reaffirmed",
+          ? t("knowledge.claim.conflicting")
+          : t("knowledge.claim.reaffirmed"),
       ),
     );
   }
@@ -178,18 +179,18 @@ export function renderClaim(
     metadata.append(assertionOrigin);
   }
   if (record.owner) {
-    const owner = el("span", "Owner ");
+    const owner = el("span", `${t("knowledge.claim.owner")} `);
     owner.append(button(record.owner.title, () => open(record.owner!.id), "knowledge-inline-link"));
     metadata.append(owner);
   } else if (record.claimKind === "commitment") {
-    metadata.append(el("span", "Owner not identified"));
+    metadata.append(el("span", t("knowledge.claim.ownerUnknown")));
   }
 
   if (
     record.about?.length &&
     !(record.metadata?.entities?.length === 1 && record.metadata.entities[0] === aboutId)
   ) {
-    const about = el("span", "About ", "knowledge-claim-about");
+    const about = el("span", `${t("knowledge.claim.about")} `, "knowledge-claim-about");
     for (const entity of record.about) {
       about.append(button(entity.title, () => open(entity.id), "knowledge-inline-link"));
     }
@@ -197,7 +198,7 @@ export function renderClaim(
   }
   copy.append(metadata);
   if (result.truncated) {
-    copy.append(el("small", "Excerpt — open claim for the complete text."));
+    copy.append(el("small", t("knowledge.claim.excerpt")));
   }
   row.append(
     tile(
@@ -213,12 +214,29 @@ export function renderClaim(
   disclosure.append(
     el(
       "span",
-      `Evidence · ${result.evidenceSourceTotal ?? "?"} ${result.evidenceSourceTotal === 1 ? "file" : "files"} · ${result.evidenceTotal ?? 0} ${result.evidenceTotal === 1 ? "citation" : "citations"}`,
+      t("knowledge.claim.evidenceSummary", {
+        files: t(
+          result.evidenceSourceTotal === 1
+            ? "knowledge.common.fileCount"
+            : "knowledge.common.filesCount",
+          {
+            count: String(result.evidenceSourceTotal ?? "?"),
+          },
+        ),
+        citations: t(
+          result.evidenceTotal === 1
+            ? "knowledge.common.citationCount"
+            : "knowledge.common.citationsCount",
+          {
+            count: String(result.evidenceTotal ?? 0),
+          },
+        ),
+      }),
       "knowledge-sr-only",
     ),
     icon("chevronDown", 14),
   );
-  disclosure.title = "Show evidence and correction options";
+  disclosure.title = t("knowledge.claim.showEvidence");
   evidence.open = standalone;
   evidence.append(disclosure);
   const evidenceBody = el("div");
@@ -239,20 +257,23 @@ export function renderClaim(
     };
     if (record.claimKind === "commitment") {
       field(
-        "Owner",
+        t("knowledge.claim.owner"),
         record.owner
           ? button(record.owner.title, () => open(record.owner!.id), "knowledge-inline-link")
-          : "Owner not identified",
+          : t("knowledge.claim.ownerUnknown"),
       );
-      field("Deadline", m?.due_at ? formatSourceDate(m.due_at) : "No deadline recorded");
+      field(
+        t("knowledge.claim.deadline"),
+        m?.due_at ? formatSourceDate(m.due_at) : t("knowledge.claim.noDeadline"),
+      );
     }
     field(
-      "Source",
+      t("knowledge.claim.source"),
       record.source
         ? button(record.source.title, () => open(record.source!.id), "knowledge-inline-link")
         : record.assertionOrigin === "user_belief"
-          ? "Conversation not recorded"
-          : "Source page not recorded",
+          ? t("knowledge.claim.sessionUnknown")
+          : t("knowledge.claim.sourceUnknown"),
     );
     const about = el("span", undefined, "knowledge-claim-about");
     for (const id of m?.entities ?? []) {
@@ -260,36 +281,39 @@ export function renderClaim(
       about.append(button(ref?.title ?? id, () => open(id), "knowledge-inline-link"));
     }
     if (about.childNodes.length) {
-      field("About", about);
+      field(t("knowledge.claim.about"), about);
     }
     if (!originInMeta) {
-      field("Origin", origin(record.assertionOrigin, record.attribution));
+      field(t("knowledge.claim.origin"), origin(record.assertionOrigin, record.attribution));
     }
     field(
-      "Saved",
-      `${record.recordedAt ? date(record.recordedAt) : "Time not recorded"} · revision ${record.revision}`,
+      t("knowledge.claim.saved"),
+      t("knowledge.claim.savedValue", {
+        date: record.recordedAt ? date(record.recordedAt) : t("knowledge.common.timeUnknown"),
+        revision: String(record.revision),
+      }),
     );
     evidenceBody.append(details);
     if (record.assertionOrigin === "agent_inference") {
-      evidenceBody.append(
-        el("p", "No direct quote for this inference. Premises below.", "knowledge-notice"),
-      );
+      evidenceBody.append(el("p", t("knowledge.claim.noQuote"), "knowledge-notice"));
     }
     const correct = button(
-      "Correct in chat",
+      t("knowledge.claim.correct"),
       () => ask(ui, record, true),
       "knowledge-quiet knowledge-correct",
     );
     correct.prepend(icon("pencil", 16));
     const openClaim = standalone
       ? undefined
-      : button("Open claim", () => open(record.id), "knowledge-quiet");
+      : button(t("knowledge.claim.open"), () => open(record.id), "knowledge-quiet");
     openClaim?.prepend(icon("fileText", 16));
     if (
       loaded.evidence?.some((e) => !e.verified) &&
       !metadata.querySelector(".knowledge-unverified")
     ) {
-      metadata.append(el("span", "Source file unavailable", "knowledge-unverified"));
+      metadata.append(
+        el("span", t("knowledge.common.sourceFileUnavailable"), "knowledge-unverified"),
+      );
     }
     if (loaded.evidence?.length) {
       evidenceBody.append(
@@ -307,7 +331,7 @@ export function renderClaim(
       if (record.attribution) {
         evidenceBody.append(el("p", record.attribution, "knowledge-attribution"));
       }
-      evidenceBody.append(el("p", "No source evidence recorded."));
+      evidenceBody.append(el("p", t("knowledge.claim.noEvidence")));
       const actions = el("div", undefined, "knowledge-evidence-actions");
       if (openClaim) {
         actions.append(openClaim);
@@ -321,19 +345,19 @@ export function renderClaim(
     }
     if (loaded.relatedStatements?.length) {
       const related = el("section", undefined, "knowledge-related");
-      related.append(el("h4", "Related statements"));
+      related.append(el("h4", t("knowledge.claim.related")));
       for (const link of loaded.relatedStatements) {
         const relatedRow = el("div", undefined, "knowledge-related-row");
         const verb =
           link.relation === "contradicts"
-            ? "Conflicts with"
+            ? t("knowledge.claim.relations.conflicts")
             : link.relation === "updates"
               ? link.incoming
-                ? "Updated by"
-                : "Updates"
+                ? t("knowledge.claim.relations.updatedBy")
+                : t("knowledge.claim.relations.updates")
               : link.incoming
-                ? "Reaffirmed by"
-                : "Reaffirms";
+                ? t("knowledge.claim.relations.reaffirmedBy")
+                : t("knowledge.claim.relations.reaffirms");
         relatedRow.append(
           el("strong", verb),
           button(link.text || link.record.title, () => open(link.record.id), "knowledge-quiet"),
@@ -362,7 +386,9 @@ export function renderClaim(
       return;
     }
     loading = true;
-    evidenceBody.replaceChildren(loadingPlaceholder("cards", "Loading evidence…", 1));
+    evidenceBody.replaceChildren(
+      loadingPlaceholder("cards", t("knowledge.claim.loadingEvidence"), 1),
+    );
     try {
       const fetched = await feature.invoke("record", {
         id: record.id,
@@ -375,7 +401,7 @@ export function renderClaim(
         return;
       }
       if (!fetched.record || fetched.record.hash !== record.hash) {
-        throw new Error("Claim changed or is unavailable; reopen it to refresh evidence.");
+        throw new Error(t("knowledge.claim.changed"));
       }
       showEvidence(fetched);
       loaded = true;
@@ -384,7 +410,7 @@ export function renderClaim(
         evidenceBody.replaceChildren(
           failure(error),
           button(
-            "Retry evidence",
+            t("knowledge.claim.retryEvidence"),
             () => {
               void loadEvidence();
             },

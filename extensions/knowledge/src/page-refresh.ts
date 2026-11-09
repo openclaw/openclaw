@@ -1,3 +1,4 @@
+import { t } from "./i18n/index.js";
 import { loadVocabulary } from "./inspection-client.js";
 import type { Page } from "./page-context.js";
 import { el, time } from "./page-dom.js";
@@ -45,7 +46,7 @@ function applyTabCounts(
   if (vocabulary === null) {
     dropPendingCounts(browseTab);
   } else if (!ready || vocabulary) {
-    browseTab.replaceChildren(document.createTextNode("Browse"));
+    browseTab.replaceChildren(document.createTextNode(t("knowledge.page.tabs.browse")));
   }
   if (vocabulary) {
     const pageCount = vocabulary.definitions.reduce((sum, d) => sum + d.recordCount, 0);
@@ -87,10 +88,16 @@ export async function refreshScope(ui: Page, replaceLocation = true) {
     revealCopy(ui);
     dropPendingCounts(ui.browseTab, ui.scribesTab);
     ++s.statusGeneration;
-    status.textContent = s.viewReady ? "Reconnecting…" : "Offline";
+    status.textContent = s.viewReady
+      ? t("knowledge.page.reconnecting")
+      : t("knowledge.page.offline");
     status.hidden = false;
     banner.hidden = false;
-    banner.textContent = `Can’t reach the vault. ${s.viewReady ? `Showing the last readable view, checked at ${s.lastChecked ? time(s.lastChecked) : "an unknown time"}. Retrying.` : "Reconnect to read your agent’s knowledge."}`;
+    banner.textContent = s.viewReady
+      ? t("knowledge.page.unreachableRetrying", {
+          time: s.lastChecked ? time(s.lastChecked) : t("knowledge.page.unknownTime"),
+        })
+      : t("knowledge.page.unreachable");
     return;
   }
   if (s.refreshing) {
@@ -167,7 +174,15 @@ export async function refreshScope(ui: Page, replaceLocation = true) {
       const entry = s.storesSnapshot && storeOf(s.storesSnapshot, report.agent);
       observedGeneration = s.generation;
       announce(
-        `${displayName(report.agent)}’s knowledge store changed${entry ? ` to ${storeLabel(entry, displayName)}` : ""}.${s.expectedVault && s.expectedVault !== report.vault ? " This link still points to the original store." : " Showing it now."}`,
+        t(
+          s.expectedVault && s.expectedVault !== report.vault
+            ? "knowledge.page.storeChangedLink"
+            : "knowledge.page.storeChanged",
+          {
+            agent: displayName(report.agent),
+            store: entry ? storeLabel(entry, displayName) : t("knowledge.page.anotherStore"),
+          },
+        ),
       );
     }
     const stateChanged = s.storeState !== report.store;
@@ -266,8 +281,10 @@ export async function refreshScope(ui: Page, replaceLocation = true) {
         const count = recent.items.filter((item) => item.sequence > s.recentSequence).length;
         s.pendingSnapshot = report.snapshot;
         updates.textContent = count
-          ? `↑ ${count}${recent.nextBefore !== null ? "+" : ""} activity ${count === 1 ? "update" : "updates"} · Show`
-          : "Knowledge changed · Show";
+          ? t(count === 1 ? "knowledge.page.activityUpdate" : "knowledge.page.activityUpdates", {
+              count: `${count}${recent.nextBefore !== null ? "+" : ""}`,
+            })
+          : t("knowledge.page.changedShow");
         updates.hidden = false;
         return;
       }
@@ -285,7 +302,7 @@ export async function refreshScope(ui: Page, replaceLocation = true) {
     revealCopy(ui);
     dropPendingCounts(ui.browseTab, ui.scribesTab);
     if (!s.disposed && n === s.statusGeneration) {
-      status.textContent = "Refresh unavailable";
+      status.textContent = t("knowledge.page.refreshFailed");
       status.hidden = false;
       if (!s.viewReady) {
         showLoadingFailure(ui, error, () => {

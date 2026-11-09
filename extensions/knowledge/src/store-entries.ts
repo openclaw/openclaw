@@ -1,6 +1,7 @@
 /** Shared store presentation helpers for the Stores & sharing views. */
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
 import type { contract } from "./contract.js";
+import { t } from "./i18n/index.js";
 import type { StoreEntry } from "./stores-contract.js";
 import type { IconName } from "./ui-icons.js";
 
@@ -10,11 +11,15 @@ export type Names = (agentId: string) => string;
 
 /** "A", "A and B", "A, B and C". */
 export const andList = (xs: string[]) =>
-  xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`;
+  xs.length <= 1
+    ? xs.join("")
+    : t("knowledge.common.andList", { items: xs.slice(0, -1).join(", "), last: xs.at(-1)! });
 
 /** Label for a store: named stores by name, isolated stores by owner. */
 export const storeLabel = (entry: StoreEntry, names: Names) =>
-  entry.kind === "named" ? entry.label : `${names(entry.owner!)}’s knowledge`;
+  entry.kind === "named"
+    ? entry.label
+    : t("knowledge.stores.ownStore", { agent: names(entry.owner!) });
 /** The store an agent currently uses, if its assignment is valid. */
 export const storeOf = (snapshot: Snapshot, agentId: string) => {
   const binding = snapshot.agents.find((a) => a.id === agentId)?.binding;
@@ -23,28 +28,32 @@ export const storeOf = (snapshot: Snapshot, agentId: string) => {
 /** "Shared with Research", "No other agents" or "Not shared". */
 export function accessText(entry: StoreEntry, agentId: string, names: Names) {
   if (entry.kind === "isolated") {
-    return "Not shared";
+    return t("knowledge.stores.notShared");
   }
   const others = entry.members.filter((a) => a !== agentId);
-  return others.length ? `Shared with ${andList(others.map(names))}` : "No other agents";
+  return others.length
+    ? t("knowledge.stores.sharedWith", { agents: andList(others.map(names)) })
+    : t("knowledge.stores.noOtherAgents");
 }
 /** Record count or lifecycle; unknown counts stay unknown, never zero. */
 export function recordsText(entry: StoreEntry) {
   switch (entry.state) {
     case "unprovisioned":
-      return "Created on first use";
+      return t("knowledge.stores.states.unprovisioned");
     case "initializing":
-      return "Being created";
+      return t("knowledge.stores.states.initializing");
     case "unavailable":
-      return "Couldn’t be opened";
+      return t("knowledge.stores.states.unavailable");
     case "recovery-required":
-      return "Needs recovery";
+      return t("knowledge.stores.states.recovery");
     default:
       return entry.records === null
         ? ""
         : entry.records === 0
-          ? "Empty"
-          : `${entry.records.toLocaleString()} record${entry.records === 1 ? "" : "s"}`;
+          ? t("knowledge.stores.states.empty")
+          : t(entry.records === 1 ? "knowledge.stores.recordOne" : "knowledge.stores.records", {
+              count: entry.records.toLocaleString(),
+            });
   }
 }
 /** Icon for a store: shared stores show people, isolated stores one person. */

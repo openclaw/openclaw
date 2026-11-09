@@ -1838,7 +1838,7 @@
   color: var(--muted-strong, var(--muted));
   font-weight: 500;
 }
-.knowledge-source-meta .knowledge-save-status[data-change="New"] {
+.knowledge-source-meta .knowledge-save-status[data-change="created"] {
   color: var(--accent);
 }
 .knowledge-disclosure-label {
@@ -1931,6 +1931,7 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
 }
 .knowledge-excerpt-label strong {
   letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 .knowledge-source-unavailable {
   border: 1px solid var(--warn, var(--border));

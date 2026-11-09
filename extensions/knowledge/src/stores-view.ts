@@ -1,5 +1,6 @@
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
 import type { contract } from "./contract.js";
+import { t } from "./i18n/index.js";
 import { button, el } from "./page-dom.js";
 import {
   accessText,
@@ -27,7 +28,7 @@ export function storeBar(
 ) {
   const bar = el("div", undefined, "knowledge-store-bar");
   const pick = el("label", undefined, "knowledge-agent-select");
-  pick.append(el("span", "Agent"));
+  pick.append(el("span", t("knowledge.stores.agent")));
   const wrap = el("span", undefined, "knowledge-select"),
     menu = el("select");
   for (const agent of snapshot.agents) {
@@ -41,7 +42,7 @@ export function storeBar(
   pick.append(wrap);
   const entry = storeOf(snapshot, viewing);
   const context = button("", openSettings, "knowledge-store-context");
-  context.title = "Stores & sharing";
+  context.title = t("knowledge.settings.sections.stores");
   if (entry) {
     context.append(
       icon(storeIcon(entry), 14),
@@ -49,7 +50,7 @@ export function storeBar(
       el("span", `· ${accessText(entry, viewing, names)}`),
     );
   } else {
-    context.append(icon("alertTriangle", 14), el("span", "Store assignment needs attention"));
+    context.append(icon("alertTriangle", 14), el("span", t("knowledge.stores.needsAttention")));
   }
   bar.append(pick, context);
   return bar;
@@ -66,40 +67,41 @@ export function storeNotice(
   retry: () => void,
 ) {
   const panel = el("div", undefined, "knowledge-empty knowledge-store-notice");
-  const label = entry ? storeLabel(entry, names) : `${agentName}’s store`;
+  const label = entry
+    ? storeLabel(entry, names)
+    : t("knowledge.stores.agentStore", { agent: agentName });
   if (state === "unprovisioned") {
     panel.append(
-      el("h2", `${label} doesn’t exist yet`),
-      el(
-        "p",
-        `It’s created the first time ${agentName} uses knowledge. Viewing it here doesn’t create it.`,
-      ),
+      el("h2", t("knowledge.stores.notCreated", { store: label })),
+      el("p", t("knowledge.stores.notCreatedBody", { agent: agentName })),
     );
   } else if (state === "initializing") {
     panel.append(
-      el("h2", `${label} is being created`),
-      el("p", "This takes a moment. It is not an empty store yet."),
+      el("h2", t("knowledge.stores.creating", { store: label })),
+      el("p", t("knowledge.stores.creatingBody")),
     );
   } else {
     panel.append(
-      el("h2", "This store couldn’t be opened"),
+      el("h2", t("knowledge.stores.openFailed")),
       el(
         "p",
-        `${message ?? "Its files or database are missing."} The assignment is kept; nothing is replaced automatically.`,
+        t("knowledge.stores.openFailedBody", {
+          details: message ?? t("knowledge.stores.filesMissing"),
+        }),
       ),
     );
-    panel.append(button("Retry", retry, "knowledge-quiet"));
+    panel.append(button(t("knowledge.common.retry"), retry, "knowledge-quiet"));
   }
-  panel.append(button("Stores & sharing", openSettings, "knowledge-quiet"));
+  panel.append(button(t("knowledge.settings.sections.stores"), openSettings, "knowledge-quiet"));
   return panel;
 }
 
 export type SettingsSection = "stores" | "vocab" | "status" | "maintenance";
-const SECTIONS: [SettingsSection, string, IconName][] = [
-  ["stores", "Stores & sharing", "users"],
-  ["vocab", "Vocabulary", "book"],
-  ["status", "Vault status", "activity"],
-  ["maintenance", "Maintenance", "calendarClock"],
+const SECTIONS: [SettingsSection, IconName][] = [
+  ["stores", "users"],
+  ["vocab", "book"],
+  ["status", "activity"],
+  ["maintenance", "calendarClock"],
 ];
 /** Settings shell: section navigation plus a content slot the caller fills. */
 export function settingsShell(
@@ -111,11 +113,11 @@ export function settingsShell(
 ) {
   const root = el("div", undefined, "knowledge-settings");
   const nav = el("nav", undefined, "knowledge-settings-nav");
-  nav.setAttribute("aria-label", "Settings");
-  nav.append(el("h2", "Settings"));
-  for (const [id, text, glyph] of SECTIONS) {
+  nav.setAttribute("aria-label", t("knowledge.common.settings"));
+  nav.append(el("h2", t("knowledge.common.settings")));
+  for (const [id, glyph] of SECTIONS) {
     const item = button("", () => go(id), "knowledge-settings-link");
-    item.append(icon(glyph, 15), el("span", text));
+    item.append(icon(glyph, 15), el("span", t(`knowledge.settings.sections.${id}`)));
     if (id === "status" && issues) {
       item.append(el("span", String(issues), "knowledge-settings-count"));
     }
@@ -130,7 +132,7 @@ export function settingsShell(
   const slot = el("div", undefined, "knowledge-settings-slot");
   main.append(header, slot);
   const crumb = button("", back, "knowledge-quiet knowledge-crumb");
-  crumb.append(icon("arrowLeft", 14), el("span", "Knowledge"));
+  crumb.append(icon("arrowLeft", 14), el("span", t("knowledge.common.knowledge")));
   root.append(crumb, nav, main);
   return { root, slot };
 }
@@ -151,10 +153,15 @@ export function storesSection(
   }
   const table = el("div", undefined, "knowledge-surface knowledge-assignments");
   table.setAttribute("role", "table");
-  table.setAttribute("aria-label", "Agent store assignments");
+  table.setAttribute("aria-label", t("knowledge.stores.assignments"));
   const head = el("div", undefined, "knowledge-assignment knowledge-assignment-head");
   head.setAttribute("role", "row");
-  for (const text of ["Agent", "Knowledge store", "Access", ""]) {
+  for (const text of [
+    t("knowledge.stores.agent"),
+    t("knowledge.stores.store"),
+    t("knowledge.stores.access"),
+    "",
+  ]) {
     const cell = el("span", text);
     cell.setAttribute("role", "columnheader");
     head.append(cell);
@@ -166,7 +173,7 @@ export function storesSection(
     const who = el("span", undefined, "knowledge-assignment-agent");
     who.append(el("strong", names(agent.id)));
     if (agent.id === viewing) {
-      who.append(el("span", "Viewing", "chip knowledge-chip"));
+      who.append(el("span", t("knowledge.versions.viewing"), "chip knowledge-chip"));
     }
     const entry = storeOf(snapshot, agent.id),
       store = el("span", undefined, "knowledge-assignment-store");
@@ -179,7 +186,7 @@ export function storesSection(
         store.append(el("small", note));
       }
     } else {
-      store.append(el("span", agent.issue ?? "Unavailable", "knowledge-error"));
+      store.append(el("span", agent.issue ?? t("knowledge.common.unavailable"), "knowledge-error"));
     }
     const access = el(
       "span",
@@ -199,7 +206,7 @@ export function storesSection(
     table.append(row);
   }
   const inventory = el("section", undefined, "knowledge-store-inventory");
-  inventory.append(el("h3", "Stores", "knowledge-eyebrow"));
+  inventory.append(el("h3", t("knowledge.stores.stores"), "knowledge-eyebrow"));
   const list = el("div", undefined, "knowledge-surface");
   for (const entry of snapshot.stores.toSorted(
     (a, b) => Number(b.kind === "named") - Number(a.kind === "named"),
@@ -211,25 +218,18 @@ export function storesSection(
       titleLine = el("span");
     titleLine.append(el("strong", storeLabel(entry, names)));
     if (entry.kind === "named") {
-      titleLine.append(el("span", "Shared store", "chip knowledge-chip"));
+      titleLine.append(el("span", t("knowledge.stores.shared"), "chip knowledge-chip"));
     }
     const used = entry.members.length
-      ? `Used by ${andList(entry.members.map(names))}`
+      ? t("knowledge.stores.usedBy", { agents: andList(entry.members.map(names)) })
       : entry.kind === "isolated"
-        ? `Not in use. Kept as it was when ${names(entry.owner!)} switched stores.`
-        : "No agents assigned. Kept as is.";
+        ? t("knowledge.stores.unused", { agent: names(entry.owner!) })
+        : t("knowledge.stores.unassigned");
     copy.append(titleLine, el("span", used, entry.members.length ? "" : "knowledge-muted"));
     row.append(badge, copy, el("span", recordsText(entry), "knowledge-muted"));
     list.append(row);
   }
-  inventory.append(
-    list,
-    el(
-      "p",
-      "Stores are never merged or deleted from here. Removing an agent stops its future access; it can’t remove what the agent already retrieved into its conversations.",
-      "knowledge-muted",
-    ),
-  );
+  inventory.append(list, el("p", t("knowledge.stores.footnote"), "knowledge-muted"));
   root.append(table, inventory);
   return root;
 }
@@ -242,8 +242,12 @@ function changeMenu(
   pick: (mode: StoreChange["kind"]) => void,
 ) {
   const wrap = el("span", undefined, "knowledge-change");
-  const trigger = button("Change…", () => undefined, "knowledge-button knowledge-small");
-  trigger.setAttribute("aria-label", `Change store for ${names(agentId)}`);
+  const trigger = button(
+    t("knowledge.stores.change"),
+    () => undefined,
+    "knowledge-button knowledge-small",
+  );
+  trigger.setAttribute("aria-label", t("knowledge.stores.changeFor", { agent: names(agentId) }));
   trigger.setAttribute("aria-haspopup", "menu");
   const entry = storeOf(snapshot, agentId),
     agent = snapshot.agents.find((a) => a.id === agentId)!;
@@ -251,12 +255,14 @@ function changeMenu(
   if (entry?.kind === "isolated") {
     options.push([
       "share_existing",
-      "Share this store…",
-      entry.state === "ready"
-        ? "Name it and add agents. Knowledge stays where it is."
-        : entry.state === "unprovisioned"
-          ? "Nothing to share until it’s created on first use."
-          : "This store needs recovery first.",
+      t("knowledge.stores.shareMenu"),
+      t(
+        entry.state === "ready"
+          ? "knowledge.stores.shareHint"
+          : entry.state === "unprovisioned"
+            ? "knowledge.stores.shareNotCreated"
+            : "knowledge.stores.shareNeedsRecovery",
+      ),
       entry.state !== "ready",
     ]);
   }
@@ -264,8 +270,8 @@ function changeMenu(
   if (targets.length) {
     options.push([
       "use_named",
-      "Use shared store…",
-      "Switch to a named store. Nothing is moved or merged.",
+      t("knowledge.stores.useSharedMenu"),
+      t("knowledge.stores.useSharedHint"),
       false,
     ]);
   }
@@ -273,16 +279,14 @@ function changeMenu(
     const own = snapshot.stores.find((s) => s.binding === `agent:${agentId}`);
     options.push([
       "use_own",
-      "Use own store",
-      own
-        ? `Resume ${names(agentId)}’s previous store.`
-        : `Use a new, empty store for ${names(agentId)}.`,
+      t("knowledge.stores.useOwn"),
+      t(own ? "knowledge.stores.resumeOwn" : "knowledge.stores.newOwn", { agent: names(agentId) }),
       false,
     ]);
   }
   if (!snapshot.canChange || !agent.supported || !options.length) {
     trigger.disabled = true;
-    trigger.title = snapshot.changeUnavailable ?? agent.issue ?? "No changes available";
+    trigger.title = snapshot.changeUnavailable ?? agent.issue ?? t("knowledge.stores.noChanges");
     wrap.append(trigger);
     return wrap;
   }
@@ -354,59 +358,96 @@ type Maintenance = FeatureOutput<typeof contract, "maintenance_status">;
 export function maintenanceSection(status: Maintenance, when: (iso: string) => string) {
   const root = el("div");
   const schedule = status.configError
-    ? `Not scheduled: ${status.configError}`
+    ? t("knowledge.maintenance.notScheduledReason", { reason: status.configError })
     : !status.writesEnabled
-      ? "Off: Knowledge writes are disabled"
+      ? t("knowledge.maintenance.writesOff")
       : !status.enabled
-        ? "Off"
+        ? t("knowledge.maintenance.off")
         : `${status.schedule} · ${status.timezone}`;
   const last = status.lastRun;
   root.append(
     vaultFacts([
       [
-        "Jobs",
+        t("knowledge.maintenance.jobs"),
         status.jobs
-          .map((job) =>
-            job === "relink" ? "Link remembered claims to the one page they name" : job,
-          )
+          .map((job) => (job === "relink" ? t("knowledge.maintenance.relink") : job))
           .join(", "),
       ],
-      ["Schedule", schedule],
+      [t("knowledge.scribes.facts.schedule"), schedule],
       [
-        "Next run",
+        t("knowledge.scribes.facts.nextRun"),
         status.running
-          ? "Running now"
+          ? t("knowledge.scribes.runningNow")
           : status.nextRunAt
             ? when(status.nextRunAt)
-            : "Not scheduled",
+            : t("knowledge.scribes.notScheduled"),
       ],
       [
-        "Last run",
+        t("knowledge.scribes.facts.lastRun"),
         last
-          ? `${when(last.finishedAt)} · ${last.trigger === "catch-up" ? "caught up after a missed run" : "on schedule"} · ${last.linked} claim${last.linked === 1 ? "" : "s"} linked`
-          : "Not run yet",
+          ? [
+              when(last.finishedAt),
+              t(
+                last.trigger === "catch-up"
+                  ? "knowledge.maintenance.caughtUp"
+                  : "knowledge.maintenance.onSchedule",
+              ),
+              t(
+                last.linked === 1
+                  ? "knowledge.maintenance.linkedOne"
+                  : "knowledge.maintenance.linked",
+                {
+                  count: String(last.linked),
+                },
+              ),
+            ].join(" · ")
+          : t("knowledge.scribes.notRunYet"),
       ],
-      [
-        "Runs on",
-        "Every store you have defined, each conversation partition inside it. Stores not created yet are skipped. Not listed on the Automations page.",
-      ],
+      [t("knowledge.maintenance.runsOn"), t("knowledge.maintenance.runsOnValue")],
     ]),
   );
   if (last) {
     const section = el("section", undefined, "knowledge-findings");
-    section.append(el("h3", `Stores · ${last.vaults.length}`, "knowledge-eyebrow"));
+    section.append(
+      el(
+        "h3",
+        t("knowledge.maintenance.stores", { count: String(last.vaults.length) }),
+        "knowledge-eyebrow",
+      ),
+    );
     if (!last.vaults.length) {
-      section.append(el("p", "No stores are defined.", "knowledge-muted"));
+      section.append(el("p", t("knowledge.maintenance.noStores"), "knowledge-muted"));
     }
     for (const vault of last.vaults) {
       const counts =
         vault.outcome === "ok"
-          ? `${vault.linked} linked · ${vault.ambiguous} ambiguous · ${vault.noSubject} no page named${vault.failed ? ` · ${vault.failed} changed, retried next run` : ""} · ${vault.scanned} checked in ${vault.partitions} partition${vault.partitions === 1 ? "" : "s"}`
+          ? [
+              t("knowledge.maintenance.vault.linked", { count: String(vault.linked) }),
+              t("knowledge.maintenance.vault.ambiguous", { count: String(vault.ambiguous) }),
+              t("knowledge.maintenance.vault.noSubject", { count: String(vault.noSubject) }),
+              vault.failed
+                ? t("knowledge.maintenance.vault.failed", { count: String(vault.failed) })
+                : "",
+              t(
+                vault.partitions === 1
+                  ? "knowledge.maintenance.vault.scannedOne"
+                  : "knowledge.maintenance.vault.scanned",
+                { count: String(vault.scanned), partitions: String(vault.partitions) },
+              ),
+            ]
+              .filter(Boolean)
+              .join(" · ")
           : (vault.message ?? "");
       section.append(
         el(
           "p",
-          `${vault.label} · ${vault.outcome === "ok" ? "Done" : vault.outcome === "skipped" ? "Skipped" : "Failed"} · ${counts}`,
+          `${vault.label} · ${t(
+            vault.outcome === "ok"
+              ? "knowledge.scribes.status.done"
+              : vault.outcome === "skipped"
+                ? "knowledge.scribes.runs.skippedRun"
+                : "knowledge.scribes.runs.failedRun",
+          )} · ${counts}`,
         ),
       );
     }

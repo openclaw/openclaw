@@ -106,12 +106,12 @@ an unsupported guess.
 ## Agent review
 
 Relink leaves claims that name no page, or more than one. Maintenance does not
-review them: it runs relink only and never starts an agent turn. An agent
-review handles them on its own schedule: an automation whose agent turn follows
+review them: it runs relink only and never runs an agent. An agent review
+handles them on its own schedule: an automation whose agent reply follows
 the `knowledge-claim-consolidation` skill over every private claim with no linked
 page and no source page, whichever tool saved it. It runs weekly by default
 (Sundays at 3:45 AM) or, if you choose, nightly at 3:45 AM, after the default
-3:30 AM maintenance pass. Each run is an agent turn over every unlinked claim,
+3:30 AM maintenance pass. Each run is one agent reply over every unlinked claim,
 so nightly costs more; a run that finds nothing left stops right away. The
 retired `maintenance.reviewJobId` setting fails validation; run
 `openclaw doctor --fix` to remove it.
