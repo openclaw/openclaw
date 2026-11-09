@@ -103,14 +103,13 @@ export function* prepareChatTranscript(
     // Freeze the live getter exactly as the stream source does before caching it.
     const items = buildCachedChatItems({ ...input.chatItemsInput });
     const generation = getChatItemsGeneration(items);
-    // Keep grouping with item preparation; the admission task indexes and renders.
-    const chain = chatTranscriptChain(items, props, input.searchFiltering);
     if (items !== preparedItems || generation !== preparedGeneration) {
       preparedItems = items;
       preparedGeneration = generation;
       yield;
       continue;
     }
+    const chain = chatTranscriptChain(items, props, input.searchFiltering);
     projectTranscriptIndex(chain, getExpandedToolCards(props.sessionKey), props);
     return;
   }
