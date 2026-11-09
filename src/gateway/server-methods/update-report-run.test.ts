@@ -586,6 +586,7 @@ describe("Report action from the authoritative update ledger", () => {
     { reason: "already-current", reportable: false },
     { reason: "dry-run", reportable: false },
     { reason: "cancelled", reportable: false },
+    { reason: "managed-service-handoff-unavailable", reportable: false },
   ])(
     "keeps skipped $reason reporting aligned with the actual outcome",
     async ({ reason, reportable }) => {
