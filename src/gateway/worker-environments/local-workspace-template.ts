@@ -17,10 +17,17 @@ import { detectWorktreeFilesystemBackend } from "../../agents/worktrees/filesyst
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import { prepareWorktreeTemplate } from "../../agents/worktrees/template-cache.js";
+import {
+  readTemplateManifest,
+  prepareTemplateManifest,
+} from "../../agents/worktrees/template-registry-async.js";
+import type { WorktreeTemplateRecord } from "../../agents/worktrees/template-registry.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { prepareLocalWorkspaceCheckout } from "./local-workspace-checkout.js";
+import { captureTemplateWorkspaceManifest } from "./workspace-manifest-worker.js";
+import { buildCacheInputPaths, WORKSPACE_PATH_EXCLUSIONS_JS } from "./workspace-path-exclusions.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 const TEMPLATE_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile.template";
@@ -136,6 +143,7 @@ type LocalWorkspaceTemplateParams = {
   templateRoot: string;
   env: NodeJS.ProcessEnv;
   sandbox: SandboxConfig;
+  buildCacheInputs?: string[];
   guard: Pick<WorktreeAllocationGuard, "commitGuard" | "rollbackGuard" | "requireDiskSpace"> & {
     signal: AbortSignal;
   };
@@ -144,6 +152,46 @@ type LocalWorkspaceTemplateParams = {
 /** The returned template retains its generation until the caller settles its clone. */
 export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTemplateParams) {
   const { guard } = params;
+  const buildCacheInputs =
+    params.buildCacheInputs && [...buildCacheInputPaths(params.buildCacheInputs)].toSorted();
+  const policyKey = digest(
+    JSON.stringify(["template-manifest-v1", WORKSPACE_PATH_EXCLUSIONS_JS, buildCacheInputs]),
+  );
+  let manifest: { rawManifest: string; manifestRef: string } | undefined;
+  let previousGeneration: WorktreeTemplateRecord | undefined;
+  let changedPaths: string[] | undefined;
+  const prepareManifest = async (
+    record: WorktreeTemplateRecord,
+    options: Pick<WorktreeAllocationGuard, "commitGuard" | "signal">,
+  ) => {
+    if (!buildCacheInputs) {
+      return;
+    }
+    manifest = await prepareTemplateManifest(
+      record,
+      policyKey,
+      async () => {
+        const prior =
+          previousGeneration &&
+          changedPaths &&
+          !changedPaths.some((entry) => path.posix.basename(entry) === ".gitattributes") &&
+          (await readTemplateManifest(previousGeneration, policyKey));
+        return await timeWorktreePreparationPhase("snapshot", () =>
+          captureTemplateWorkspaceManifest(
+            {
+              root: record.path,
+              baseCommit: record.sourceCommit,
+              buildCacheInputs,
+              previous: prior && changedPaths ? { ...prior, changedPaths } : undefined,
+            },
+            options.signal,
+          ),
+        );
+      },
+      options.signal,
+    );
+    options.commitGuard();
+  };
   const backend = await detectWorktreeFilesystemBackend(params.temporaryRoot, guard);
   if (!backend) {
     return undefined;
@@ -268,41 +316,73 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
     validate: (existing, templateOptions) =>
       validateTemplate(existing.path, existing.sourceCommit, templateOptions),
     refresh: async (existing, preparing, templateOptions) => {
+      previousGeneration = existing;
       // Retain exact commit identity: lifecycle scripts and local packages can consume
       // any source file. Reinstall after advancing; only the full checkout is skipped.
-      const changed = await runGit(
+      const changed = await withWorktreeGitConfig(
         params.source,
-        [
-          "diff-tree",
-          "--quiet",
-          "-r",
-          existing.sourceCommit,
-          params.baseCommit,
-          "--",
-          "pnpm-lock.yaml",
-          ":(glob)**/.gitattributes",
-        ],
+        true,
         { ...gitOptions, signal: templateOptions.signal, beforeRun: templateOptions.commitGuard },
+        (git) =>
+          git.run(
+            params.source,
+            [
+              "diff-tree",
+              "--no-commit-id",
+              "-r",
+              "--no-renames",
+              "--name-only",
+              "-z",
+              existing.sourceCommit,
+              params.baseCommit,
+              "--",
+            ],
+            { signal: templateOptions.signal, killProcessTree: true },
+          ),
       );
-      if (changed.code !== 0 || changed.termination !== "exit") {
+      changedPaths =
+        changed.code === 0 && changed.termination === "exit" && !changed.stdoutTruncatedBytes
+          ? changed.stdout.split("\0").filter(Boolean)
+          : undefined;
+      if (
+        !changedPaths ||
+        changedPaths.some(
+          (entry) => entry === "pnpm-lock.yaml" || path.posix.basename(entry) === ".gitattributes",
+        )
+      ) {
         return false;
       }
       await backend.cloneTemplate(existing.path, preparing.path, templateOptions);
       await prepare(preparing.path, templateOptions, existing.sourceCommit);
+      await prepareManifest(preparing, templateOptions);
       return true;
     },
-    prepare: (preparing, templateOptions) => prepare(preparing.path, templateOptions),
+    prepare: async (preparing, templateOptions) => {
+      await prepare(preparing.path, templateOptions);
+      await prepareManifest(preparing, templateOptions);
+    },
   });
-  return record ? { record, backend } : undefined;
+  if (!record) {
+    return undefined;
+  }
+  try {
+    if (!manifest) {
+      await prepareManifest(record, guard);
+    }
+    return { record, backend, manifest };
+  } catch (error) {
+    await record.release(error);
+    throw error;
+  }
 }
 
 /** The caller holds worktree mutation before projection custody, matching removal's lock order. */
 export async function cloneLocalWorkspaceTemplate(
   params: LocalWorkspaceTemplateParams & { branch: string; destination: string },
-): Promise<boolean> {
+) {
   using phases = observeDiagnosticsTimelinePhases(`${TEMPLATE_PHASE}.select`);
   const prepared = await timeWorktreePreparationPhase("templatePrepare", () =>
-    prepareLocalWorkspaceTemplate(params),
+    prepareLocalWorkspaceTemplate({ ...params, buildCacheInputs: params.buildCacheInputs ?? [] }),
   );
   if (!prepared) {
     return false;
@@ -345,7 +425,7 @@ export async function cloneLocalWorkspaceTemplate(
       beforeRun: guard.commitGuard,
       killProcessTree: true,
     });
-    return true;
+    return prepared.manifest!;
   } catch (error) {
     outcome = error;
     throw error;
