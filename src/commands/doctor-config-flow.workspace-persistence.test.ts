@@ -298,12 +298,64 @@ describe("Doctor workspace persistence", () => {
     },
   );
 
-  it("repairs noncanonical workspace and heartbeat values through persistence", async () => {
+  it.each(["agent", "defaults"] as const)(
+    "preserves invalid %s heartbeat hours until corrected through persistence",
+    async (scope) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+          const hours = { start: "22:00", end: "6:00" };
+          const heartbeat = { every: "30m", activeHours: hours };
+          const configPath = await writeOpenClawConfig(home, {
+            agents: {
+              defaults:
+                scope === "defaults"
+                  ? { heartbeat }
+                  : {
+                      heartbeat: { activeHours: { start: "08:00", end: "20:00" } },
+                    },
+              entries: { main: scope === "agent" ? { heartbeat } : {} },
+            },
+            gateway: { mode: "local" },
+            plugins: { enabled: false },
+          });
+          const original = await fs.readFile(configPath, "utf8");
+          {
+            await using ctx = await prepareDoctorContext(configPath);
+            await runInitialConfigWriteHealth(ctx);
+            expect(ctx.configWriteRefusal).toBe("validation");
+            expect(await fs.readFile(configPath, "utf8")).toBe(original);
+            const warning = ctx.configResult.warnings?.join("\n") ?? "";
+            expect(warning).toContain(
+              scope === "agent"
+                ? "agents.entries.main.heartbeat.activeHours.end"
+                : "agents.defaults.heartbeat.activeHours.end",
+            );
+            expect(warning).toContain('"6:00"');
+            expect(warning).toContain("openclaw doctor --fix");
+          }
+          await fs.writeFile(configPath, original.replace('"6:00"', '"06:00"'));
+          {
+            await using ctx = await prepareDoctorContext(configPath);
+            await runInitialConfigWriteHealth(ctx);
+          }
+          const saved = await readConfigFileSnapshot();
+          expect(saved.valid).toBe(true);
+          const effective =
+            scope === "agent"
+              ? saved.config.agents?.entries?.main?.heartbeat
+              : saved.config.agents?.defaults?.heartbeat;
+          expect(effective?.activeHours).toEqual({ start: "22:00", end: "06:00" });
+        });
+      });
+    },
+  );
+
+  it("repairs noncanonical workspace while preserving valid heartbeat hours through persistence", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const agent = {
           workspace: null,
-          heartbeat: { every: "30m", activeHours: { start: "99:99", end: "17:00" } },
+          heartbeat: { every: "30m", activeHours: { start: "09:00", end: "17:00" } },
         };
         const configPath = await writeOpenClawConfig(home, {
           agents: { list: [{ id: " Ops ", ...agent }] },
@@ -316,11 +368,11 @@ describe("Doctor workspace persistence", () => {
 
         await using ctx = await prepareDoctorContext(configPath);
         expect(ctx.configResult.shouldWriteConfig).toBe(true);
-        expect(ctx.cfg.agents?.entries?.ops).toEqual({ heartbeat: { every: "30m" } });
+        expect(ctx.cfg.agents?.entries?.ops).toEqual({ heartbeat: agent.heartbeat });
         await runInitialConfigWriteHealth(ctx);
 
         const saved = JSON.parse(await fs.readFile(configPath, "utf-8"));
-        expect(saved.agents.entries.ops).toEqual({ heartbeat: { every: "30m" } });
+        expect(saved.agents.entries.ops).toEqual({ heartbeat: agent.heartbeat });
         expect(saved.agents).not.toHaveProperty("list");
         expect((await readConfigFileSnapshot()).valid).toBe(true);
         await using repeated = await prepareDoctorContext(configPath);

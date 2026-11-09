@@ -1,6 +1,7 @@
 // Core doctor compatibility migration pipeline for current config objects.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAgentRosterProperty } from "../../../agents/agent-scope-config.js";
+import { getConfigValueAtPath } from "../../../config/config-paths.js";
 import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
@@ -51,21 +52,26 @@ function repairAgentRoster(
   }
 }
 
-function repairInvalidHeartbeatActiveHours(cfg: OpenClawConfig, changes: string[]): void {
-  const repairHeartbeat = (heartbeat: unknown, path: string) => {
-    if (
-      isRecord(heartbeat) &&
-      Object.hasOwn(heartbeat, "activeHours") &&
-      !HeartbeatSchema.safeParse({ activeHours: heartbeat.activeHours }).success
-    ) {
-      delete heartbeat.activeHours;
-      changes.push(
-        `Removed invalid ${path}.activeHours; heartbeats will use unrestricted hours until it is reconfigured.`,
+function reportInvalidHeartbeatActiveHours(cfg: OpenClawConfig, warnings: string[]): void {
+  const reportHeartbeat = (heartbeat: unknown, path: string) => {
+    if (!isRecord(heartbeat) || !Object.hasOwn(heartbeat, "activeHours")) {
+      return;
+    }
+    const parsed = HeartbeatSchema.safeParse({ activeHours: heartbeat.activeHours });
+    if (parsed.success) {
+      return;
+    }
+    // Removing an invalid override exposes inherited hours or unrestricted execution.
+    for (const issue of parsed.error.issues) {
+      const field = issue.path.map(String);
+      const value = JSON.stringify(getConfigValueAtPath(heartbeat, field));
+      warnings.push(
+        `Kept invalid ${path}.${field.join(".")}=${value}: ${issue.message}. Heartbeat config remains invalid; fix the value, then rerun "openclaw doctor --fix".`,
       );
     }
   };
-  repairHeartbeat(cfg.agents?.defaults?.heartbeat, "agents.defaults.heartbeat");
-  repairAgentRoster(cfg, (agent, path) => repairHeartbeat(agent.heartbeat, `${path}.heartbeat`));
+  reportHeartbeat(cfg.agents?.defaults?.heartbeat, "agents.defaults.heartbeat");
+  repairAgentRoster(cfg, (agent, path) => reportHeartbeat(agent.heartbeat, `${path}.heartbeat`));
 }
 
 function repairNullAgentWorkspaces(cfg: OpenClawConfig, changes: string[]): void {
@@ -142,7 +148,7 @@ export function normalizeCompatibilityConfigValues(
     changes.push(...secrets.changes);
   }
   normalizeLegacyOpenAICodexModelsAddMetadata(next, changes);
-  repairInvalidHeartbeatActiveHours(next, changes);
+  reportInvalidHeartbeatActiveHours(next, warnings);
   repairNullAgentWorkspaces(next, changes);
   next = migrateLegacyCommandOwners(next, changes);
   next = pruneBindingsForMissingAgents(next, changes);

@@ -75,35 +75,24 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toContain("Removed null workspace value from agents.entries entry.");
   });
 
-  it("removes invalid heartbeat active-hours windows so saved config can load", () => {
+  it("keeps invalid heartbeat windows for actionable validation", () => {
+    const heartbeat = { every: "30m", activeHours: { start: "99:99", end: "17:00" } };
     const res = normalizeCompatibilityConfigValues({
       agents: {
-        defaults: {
-          heartbeat: {
-            every: "30m",
-            activeHours: { start: "99:99", end: "17:00" },
-          },
-        },
-        entries: {
-          ops: {
-            heartbeat: {
-              prompt: "Check alerts",
-              activeHours: { start: "09:00", end: "not-a-time" },
-            },
-          },
-        },
+        defaults: { heartbeat },
+        entries: { ops: { heartbeat: { activeHours: { start: "09:00", end: "not-a-time" } } } },
       },
     });
-
-    expect(res.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
-    expect(res.config.agents?.entries?.ops?.heartbeat).toEqual({ prompt: "Check alerts" });
-    expect(res.changes).toContain(
-      "Removed invalid agents.defaults.heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
+    expect(res.config.agents?.defaults?.heartbeat).toEqual(heartbeat);
+    expect(res.config.agents?.entries?.ops?.heartbeat?.activeHours?.end).toBe("not-a-time");
+    expect(res.changes.some((change) => change.includes("heartbeat.activeHours"))).toBe(false);
+    expect(res.warnings?.join(String.fromCharCode(10))).toContain(
+      'agents.defaults.heartbeat.activeHours.start="99:99"',
     );
-    expect(res.changes).toContain(
-      "Removed invalid agents.entries.ops.heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
+    expect(res.warnings?.join(String.fromCharCode(10))).toContain(
+      'agents.entries.ops.heartbeat.activeHours.end="not-a-time"',
     );
-    expect(validateConfigObject(res.config).ok).toBe(true);
+    expect(validateConfigObject(res.config).ok).toBe(false);
   });
 
   it("removes bindings for missing configured agents", () => {

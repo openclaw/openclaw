@@ -1,0 +1,3 @@
+# R0221: preserve invalid defaults/per-agent hours through real Doctor persistence and correction.
+# Exact net regression-test LF growth against 08698b694c33f9d07916dd1c50c5f58d7cea1a1e; no shared scalar change.
+41
