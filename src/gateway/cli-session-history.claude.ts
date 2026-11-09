@@ -533,6 +533,7 @@ export async function readClaudeCliFallbackSeed(
     return undefined;
   }
 
+  await params.assertNativeHistoryAuthorized?.();
   let content: string;
   try {
     content = await fs.promises.readFile(filePath, "utf-8");

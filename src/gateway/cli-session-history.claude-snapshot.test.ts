@@ -82,6 +82,35 @@ it("rechecks native authority after awaited Claude project discovery", () =>
     }
   }));
 
+it("rejects a revoked fallback source before reading it after discovery", () =>
+  withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+    let authorized = true;
+    const originalAccess = rawFs.promises.access.bind(rawFs.promises);
+    const access = vi.spyOn(rawFs.promises, "access").mockImplementationOnce(async (...args) => {
+      await originalAccess(...args);
+      authorized = false;
+    });
+    const readFile = vi.spyOn(rawFs.promises, "readFile");
+    try {
+      await expect(
+        readClaudeCliFallbackSeed({
+          cliSessionId: sessionId,
+          homeDir,
+          projectsRoot: path.dirname(path.dirname(filePath)),
+          assertNativeHistoryAuthorized: async () => {
+            if (!authorized) {
+              throw new Error("native history revoked");
+            }
+          },
+        }),
+      ).rejects.toThrow("native history revoked");
+      expect(readFile.mock.calls.some(([file]) => file === filePath)).toBe(false);
+    } finally {
+      access.mockRestore();
+      readFile.mockRestore();
+    }
+  }));
+
 it("reads changed Claude sources and preserves discovery precedence", () =>
   withClaudeProjectsDir(async ({ filePath, readMessages: read }) => {
     expect(await read()).toHaveLength(3);
