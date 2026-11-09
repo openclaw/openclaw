@@ -9,12 +9,9 @@ import "./toast-host.tsx";
 
 const rect = (element: Element) => element.getBoundingClientRect();
 function touchGesture(target: HTMLElement, x: number, y: number, cancel = false) {
-  const touch = (clientX: number, clientY: number) =>
-    new Touch({ identifier: 1, target, clientX, clientY });
-  const dispatch = (type: string, point: Touch, ended = false) => {
-    const event = new TouchEvent(type, {
-      bubbles: true,
-      cancelable: true,
+  const touch = (clientX: number, clientY: number) => ({ identifier: 1, target, clientX, clientY });
+  const dispatch = (type: string, point: ReturnType<typeof touch>, ended = false) => {
+    const event = Object.assign(new Event(type, { bubbles: true, cancelable: true }), {
       touches: ended ? [] : [point],
       changedTouches: [point],
     });

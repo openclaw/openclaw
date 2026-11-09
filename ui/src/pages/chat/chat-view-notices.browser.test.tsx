@@ -66,10 +66,8 @@ it("keeps redacted diagnostics readable, stable across refreshes, and reset for 
     ["touchmove", 120],
     ["touchend", 120],
   ] as const) {
-    const touch = new Touch({ identifier: 1, target: diagnostic, clientX: 100, clientY });
-    const event = new TouchEvent(type, {
-      bubbles: true,
-      cancelable: true,
+    const touch = { identifier: 1, target: diagnostic, clientX: 100, clientY };
+    const event = Object.assign(new Event(type, { bubbles: true, cancelable: true }), {
       touches: type === "touchend" ? [] : [touch],
       changedTouches: [touch],
     });
