@@ -15,6 +15,7 @@ import {
   preloadUsage,
   refreshButton,
 } from "./usage-page.test-support.ts";
+import { openUsageFilter } from "./view-render.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
 
@@ -157,19 +158,7 @@ describe("Usage query failure ownership", () => {
         expect(host.style.display).toBe(hidden ? "none" : "contents");
       }
     };
-    const trigger = page.querySelector<HTMLButtonElement>('[id="usage-filter-model:trigger"]')!;
-    const menu = trigger.closest<HTMLElement>(".usage-filter-select")!;
-    menu.addEventListener(
-      "overlay-show",
-      () => {
-        // JSDOM has no scrolling layout; exercise the real Menu selection path.
-        for (const item of menu.querySelectorAll<HTMLElement>('[role^="menuitem"]')) {
-          item.scrollIntoView = vi.fn();
-        }
-      },
-      { once: true },
-    );
-    trigger.click();
+    const { surface: menu } = openUsageFilter(page, "Model");
     await page.updateComplete;
     const options = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]')];
     expect(options.map((option) => option.getAttribute("aria-label"))).toEqual([
@@ -375,7 +364,7 @@ describe("Usage query failure ownership", () => {
         } else if (change === "agent") {
           selection.setScope("writer");
         } else {
-          page.querySelector<HTMLButtonElement>(".usage-creator-trigger")!.click();
+          openUsageFilter(page, "Started by");
           await page.updateComplete;
           page
             .querySelector<HTMLButtonElement>('[role="menuitemradio"][aria-label="Alex Morgan"]')!
@@ -441,11 +430,12 @@ describe("Usage query failure ownership", () => {
         expect(page.textContent).not.toContain("Old query row");
         expect(refreshButton(page).disabled).toBe(false);
         if (change === "creator") {
-          const trigger = page.querySelector<HTMLButtonElement>(".usage-creator-trigger")!;
-          expect(trigger.textContent).toContain("Alex Morgan");
-          trigger.click();
+          const { surface } = openUsageFilter(page, "Started by");
+          expect(page.querySelector(".usage-filter-chip__open")?.textContent).toContain(
+            "Alex Morgan",
+          );
           await page.updateComplete;
-          const selected = page.querySelector<HTMLButtonElement>(
+          const selected = surface.querySelector<HTMLButtonElement>(
             '[role="menuitemradio"][aria-label="Alex Morgan"]',
           )!;
           expect(selected.getAttribute("aria-checked")).toBe("true");
