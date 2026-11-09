@@ -26,6 +26,29 @@ export const GatewayProcessNamespaceSchema = z.discriminatedUnion("platform", [
 type ProcessNamespace = z.infer<typeof GatewayProcessNamespaceSchema>;
 let processNamespace: { platform: NodeJS.Platform; value: ProcessNamespace | null } | undefined;
 
+/**
+ * Kernels built without CONFIG_PID_NS (Android GKI, some embedded configs) have
+ * no `/proc/self/ns/pid` link at all: every process on the host shares the one
+ * initial PID namespace, so two owners on the same boot compare as the same.
+ */
+export const LINUX_PID_NAMESPACE_UNSUPPORTED = "unsupported";
+
+function readLinuxPidNamespaceInode(): string | undefined {
+  try {
+    return fs.readlinkSync("/proc/self/ns/pid").match(/^pid:\[(\d+)\]$/u)?.[1];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    // Only a mounted /proc that lacks the pid link proves the kernel has no PID
+    // namespaces; a missing /proc stays unreadable (statSync throws).
+    if (!fs.statSync("/proc/self/ns").isDirectory()) {
+      throw error;
+    }
+    return LINUX_PID_NAMESPACE_UNSUPPORTED;
+  }
+}
+
 /** Cache OS subprocess failures too; only Linux's cheap /proc probes remain retryable. */
 export function readGatewayLockProcessNamespace(): ProcessNamespace | null {
   if (
@@ -46,7 +69,7 @@ export function readGatewayLockProcessNamespace(): ProcessNamespace | null {
       ...(boot.platform === "linux"
         ? {
             // PRoot can read this magic link but cannot follow its synthetic target with stat.
-            pidNsInode: fs.readlinkSync("/proc/self/ns/pid").match(/^pid:\[(\d+)\]$/u)?.[1],
+            pidNsInode: readLinuxPidNamespaceInode(),
           }
         : {}),
     });
