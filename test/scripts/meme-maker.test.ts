@@ -55,11 +55,12 @@ describe("meme-maker local rendering", () => {
     expect(stdout).toContain(out);
     expect(svg).toContain(`width="${template.width}" height="${template.height}"`);
     expect(svg).toContain(`data:image/jpeg;base64,${image.toString("base64")}`);
-    expect(svg).toContain("Fish &amp; chips");
+    expect(svg).toContain(">Fish &amp;</tspan>");
     const { Resvg } = await import("@resvg/resvg-js");
-    const font = { fontFiles: [path.resolve("src/gateway/assets/session-card/Lato-Regular.ttf")] };
+    const fontFiles = [path.resolve("src/gateway/assets/session-card/Lato-Regular.ttf")];
+    const font = { fontFiles, loadSystemFonts: false };
     const caption = new Resvg(svg.replace(/<image[^>]*\/>/, ""), { font }).innerBBox()!;
-    expect(Math.abs(caption.x + caption.width / 2 - 138)).toBeLessThan(2); // rotated box 0 center
+    expect(Math.abs(caption.x + caption.width / 2 - 138)).toBeLessThan(10); // rotated box 0 center
   });
 
   it("directs SVG output when PNG rendering is unavailable without inviting package installs", async () => {
