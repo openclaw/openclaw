@@ -212,6 +212,7 @@ def _load_frontmatter(frontmatter_text: str):
     """Load YAML with the loader's duplicate-key rejection."""
 
     visited = set()
+    alias_ids = set()
     object_identities = {}
 
     def object_identity(node):
@@ -244,6 +245,8 @@ def _load_frontmatter(frontmatter_text: str):
                     continue
 
                 is_alias = id(child) in visited
+                if is_alias:
+                    alias_ids.add(id(child))
                 if isinstance(child, yaml.MappingNode) and not is_alias:
                     if len(child.value) == 1:
                         validate_node(child, ordered_map_keys)
@@ -345,10 +348,44 @@ def _load_frontmatter(frontmatter_text: str):
                 else:
                     return chunks
 
+        def construct_yaml_omap(self, node):
+            # The runtime wraps scalar and alias items as keys, rather than
+            # requiring every ordered-map entry to be a one-pair mapping.
+            omap = []
+            yield omap
+            if not isinstance(node, yaml.SequenceNode):
+                raise yaml.constructor.ConstructorError(
+                    "while constructing an ordered map",
+                    node.start_mark,
+                    f"expected a sequence, but found {node.id}",
+                    node.start_mark,
+                )
+            for subnode in node.value:
+                if id(subnode) in alias_ids or not isinstance(subnode, yaml.MappingNode):
+                    key_node, value_node = subnode, None
+                elif len(subnode.value) > 1:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing an ordered map",
+                        node.start_mark,
+                        f"expected a single mapping item, but found {len(subnode.value)} items",
+                        subnode.start_mark,
+                    )
+                elif subnode.value:
+                    key_node, value_node = subnode.value[0]
+                else:
+                    key_node = value_node = None
+                key = self.construct_object(key_node) if key_node is not None else None
+                value = self.construct_object(value_node) if value_node is not None else None
+                omap.append((key, value))
+
         def construct_document(self, node):
             validate_node(node)
             return super().construct_document(node)
 
+    UniqueKeyLoader.add_constructor(
+        "tag:yaml.org,2002:omap",
+        UniqueKeyLoader.construct_yaml_omap,
+    )
     return yaml.load(frontmatter_text, Loader=UniqueKeyLoader)
 
 

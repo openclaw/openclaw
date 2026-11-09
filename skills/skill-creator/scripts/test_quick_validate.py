@@ -424,6 +424,23 @@ metadata: |
                 self.assertFalse(valid)
                 self.assertIn("found duplicate key", message)
 
+    def test_duplicate_key_check_accepts_omap_entry_shapes(self):
+        for metadata in (
+            "!!omap [first, second]",
+            "!!omap [{}, first]",
+            "{pair: &pair {a: 1, b: 2}, entries: !!omap [*pair]}",
+        ):
+            with self.subTest(metadata=metadata):
+                content = (
+                    "---\n"
+                    "name: omap-entries-skill\n"
+                    "description: Summarize meetings\n"
+                    f"metadata: {metadata}\n"
+                    "---\n"
+                    "# Skill\n"
+                )
+                self.assertTrue(*self.validate_content(content))
+
     def test_omap_alias_object_key_coexists_with_string_key(self):
         content = (
             "---\n"
