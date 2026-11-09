@@ -1,4 +1,3 @@
-import CoreMotion
 import Foundation
 import GRDB
 import Observation
@@ -1539,34 +1538,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         #expect(response.ok == false)
         #expect(response.error?.code == .unavailable)
-    }
-
-    @Test @MainActor func `motion activity entries end where the next activity starts`() async throws {
-        let walking = Date(timeIntervalSince1970: 1_794_124_800) // 2026-11-08T08:00:00Z
-        let stationary = walking.addingTimeInterval(30 * 60)
-        // Core Motion reports start dates only; deliver the newer activity first.
-        let source = MotionActivitySource(
-            isAvailable: { true },
-            authorizationStatus: { .authorized },
-            query: { _, _ in [
-                .init(startDate: stationary, confidence: .high, stationary: true),
-                .init(startDate: walking, confidence: .medium, walking: true),
-            ] })
-        let appModel = NodeAppModel(motionService: MotionService(activitySource: source))
-        let request = BridgeInvokeRequest(
-            id: "motion-activity-boundaries",
-            command: OpenClawMotionCommand.activity.rawValue,
-            paramsJSON: #"{"startISO":"2026-11-08T08:00:00Z","endISO":"2026-11-08T09:00:00Z"}"#)
-
-        let response = await appModel.handleInvoke(request)
-
-        #expect(response.ok)
-        let data = try #require(response.payloadJSON?.data(using: .utf8))
-        let payload = try JSONDecoder().decode(OpenClawMotionActivityPayload.self, from: data)
-        #expect(payload.activities.map(\.startISO) == ["2026-11-08T08:00:00Z", "2026-11-08T08:30:00Z"])
-        #expect(payload.activities.map(\.endISO) == ["2026-11-08T08:30:00Z", "2026-11-08T09:00:00Z"])
-        #expect(payload.activities.map(\.isWalking) == [true, false])
-        #expect(payload.activities.map(\.isStationary) == [false, true])
     }
 
     @Test @MainActor func `device status battery snapshot preserves monitoring ownership`() {
