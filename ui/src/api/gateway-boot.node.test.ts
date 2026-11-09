@@ -123,6 +123,7 @@ it("prepares authorized approval replay on the same observer before the pane att
     role: "operator",
     scopes: ["operator.approvals"],
   });
+  expect(initial.params.includeApprovals).toBe(true);
   socket.emitMessage({
     type: "res",
     id: initial.id,
@@ -130,20 +131,6 @@ it("prepares authorized approval replay on the same observer before the pane att
     payload: {
       key,
       initialHistory: { ok: true, payload: { messages: ["snapshot"] } },
-    },
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  const replay = request("sessions.messages.subscribe")[1];
-  expect(replay.params).toMatchObject({
-    includeApprovals: true,
-    subscriptionId: initial.params.subscriptionId,
-  });
-  socket.emitMessage({
-    type: "res",
-    id: replay.id,
-    ok: true,
-    payload: {
-      key,
       approvalReplay: { exec: ["pending-approval"] },
     },
   });
@@ -158,7 +145,7 @@ it("prepares authorized approval replay on the same observer before the pane att
     includeApprovals: true,
     approvalReplay: { exec: ["pending-approval"] },
   });
-  expect(request("sessions.messages.subscribe")).toHaveLength(2);
+  expect(request("sessions.messages.subscribe")).toHaveLength(1);
   expect(request("sessions.messages.unsubscribe")).toHaveLength(0);
 });
 
@@ -197,14 +184,11 @@ it("counts approval replay against the retained byte bound", async () => {
     type: "res",
     id: request().id,
     ok: true,
-    payload: { key, initialHistory: { ok: true, payload: { messages: [] } } },
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  socket.emitMessage({
-    type: "res",
-    id: request().id,
-    ok: true,
-    payload: { key, approvalReplay: { oversized: "x".repeat(1024 * 1024) } },
+    payload: {
+      key,
+      initialHistory: { ok: true, payload: { messages: [] } },
+      approvalReplay: { oversized: "x".repeat(1024 * 1024) },
+    },
   });
   await vi.advanceTimersByTimeAsync(0);
   expect(boot.adopt(options)).toBeNull();
