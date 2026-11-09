@@ -136,6 +136,12 @@ describe("Feishu Card Action Handler", () => {
     expectSentCardHasP2pAction(sendCardFeishuMock);
     expect(createFeishuClientMock).toHaveBeenCalledTimes(1);
     expect(handleFeishuMessage).not.toHaveBeenCalled();
+    getChat.mockRejectedValueOnce(new Error("cached lookup must not run"));
+    await dispatch(cardEvent({ text: "/help" }, { token: "cached-type-token" }), {
+      accountId: "main",
+    });
+    expect(message()).toMatchObject({ chat_id: "chat1", chat_type: "p2p" });
+    expect(getChat).toHaveBeenCalledTimes(1);
   });
 
   it("does not open approval cards when the expiry would exceed a valid Date", async () => {
@@ -150,6 +156,7 @@ describe("Feishu Card Action Handler", () => {
   });
 
   it("marks synthetic group card callbacks as mentioning the bot", async () => {
+    getChat.mockRejectedValue(new Error("lookup unavailable"));
     await dispatch(
       cardEvent(quickAction({ a: FEISHU_APPROVAL_CONFIRM_ACTION, q: "/new" }), {
         open_message_id: "om_card_message",
@@ -170,6 +177,7 @@ describe("Feishu Card Action Handler", () => {
       user_id: "uid1",
       union_id: "un1",
     });
+    expect(getChat).not.toHaveBeenCalled();
     expect(message()?.mentions).toEqual([
       { key: "mention_bot", id: { open_id: "ou_bot" }, name: "bot" },
     ]);
@@ -200,12 +208,14 @@ describe("Feishu Card Action Handler", () => {
   });
 
   it("preserves p2p callbacks for DM quick actions", async () => {
+    getChat.mockRejectedValue(new Error("lookup unavailable"));
     const event = cardEvent(quickAction({ c: { ...context(), h: "p2p-chat-1", t: "p2p" } }), {
       context: { chat_id: "p2p-chat-1" },
     });
     await dispatch(event, { botOpenId: "ou_bot" });
     expect(message()).toMatchObject({ chat_id: "p2p-chat-1", chat_type: "p2p" });
     expect(message()?.mentions).toBeUndefined();
+    expect(getChat).not.toHaveBeenCalled();
   });
 
   it("does not cache resolved chat type when expiry would exceed a valid Date", async () => {
@@ -221,21 +231,37 @@ describe("Feishu Card Action Handler", () => {
     expect(message()).toMatchObject({ chat_id: "oc_dm_chat_boundary", chat_type: "p2p" });
   });
 
-  it("keeps Feishu chat lookup error logs UTF-16 safe at the truncation boundary", async () => {
-    const log = vi.fn();
-    getChat.mockResolvedValueOnce({ code: 99, msg: `${"x".repeat(499)}😀tail` });
-    await dispatch(cardEvent({ text: "/help" }), { runtime: { ...runtime, log } });
-    expect(message()?.chat_type).toBe("p2p");
-    expect(log).toHaveBeenCalledWith(
-      `feishu[mock-account]: failed to resolve chat type: ${"x".repeat(499)}; defaulting to p2p`,
-    );
-  });
-
-  it("falls back to p2p when Feishu chat API throws", async () => {
-    getChat.mockRejectedValueOnce(new Error("network failure"));
-    await dispatch(cardEvent({ text: "/help" }));
-    expect(message()?.chat_type).toBe("p2p");
-  });
+  it.each(["response", "exception", "missing"])(
+    "refuses unknown chat classification after %s without exposing provider details",
+    async (failure) => {
+      const detail = "private-card-provider-detail";
+      const log = vi.fn();
+      for (const [index, action] of [{ text: "/reset" }, approvalAction()].entries()) {
+        getChat.mockReset();
+        if (failure === "response") {
+          getChat.mockResolvedValueOnce({ code: 99, msg: detail });
+        } else if (failure === "exception") {
+          getChat.mockRejectedValueOnce(new Error(detail));
+        } else {
+          getChat.mockResolvedValueOnce({ code: 0, data: {} });
+        }
+        await dispatch(cardEvent(action, { token: String(index) }), {
+          accountId: "main",
+          runtime: { ...runtime, log },
+        });
+        expect(handleFeishuMessage).not.toHaveBeenCalled();
+        expect(sendCardFeishuMock).not.toHaveBeenCalled();
+        expect(sendMessageFeishuMock).toHaveBeenLastCalledWith({
+          cfg: {},
+          to: "chat:chat1",
+          accountId: "main",
+          text: expect.stringContaining("action was not run"),
+        });
+        expect(log.mock.calls.flat().join("\n")).not.toContain(detail);
+        expect(resolvedCardActionChatTypes.size).toBe(0);
+      }
+    },
+  );
 
   it("does not log raw duplicate callback tokens", async () => {
     const log = vi.fn();

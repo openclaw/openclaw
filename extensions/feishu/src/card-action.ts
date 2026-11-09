@@ -4,7 +4,6 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
@@ -152,10 +151,15 @@ async function dispatchSyntheticCommand(
 ): Promise<void> {
   const resolvedChatType = await resolveCardActionChatType({
     event: params.event,
+    cfg: params.cfg,
+    accountId: params.accountId,
     account: params.account,
     chatType: params.chatType,
     log: params.runtime?.log ?? console.log,
   });
+  if (!resolvedChatType) {
+    return;
+  }
   await handleFeishuMessage({
     trackTask: params.trackTask,
     cfg: params.cfg,
@@ -175,10 +179,6 @@ async function dispatchSyntheticCommand(
 const CHAT_TYPE_CACHE_TTL_MS = 30 * 60_000;
 const CHAT_TYPE_CACHE_MAX_SIZE = 5_000;
 
-function sanitizeLogValue(v: string): string {
-  return truncateUtf16Safe(v.replace(/[\r\n]/g, " "), 500);
-}
-
 function cacheResolvedCardActionChatType(
   cacheKey: string,
   value: "p2p" | "group",
@@ -193,10 +193,12 @@ function cacheResolvedCardActionChatType(
 
 async function resolveCardActionChatType(params: {
   event: FeishuCardActionEvent;
+  cfg: ClawdbotConfig;
+  accountId?: string;
   account: ReturnType<typeof resolveFeishuRuntimeAccount>;
   chatType?: "p2p" | "group";
   log: (message: string) => void;
-}): Promise<"p2p" | "group"> {
+}): Promise<"p2p" | "group" | undefined> {
   const explicitChatType = normalizeFeishuChatType(params.chatType);
   if (explicitChatType) {
     return explicitChatType;
@@ -226,22 +228,20 @@ async function resolveCardActionChatType(params: {
         cacheResolvedCardActionChatType(cacheKey, resolvedChatType, now);
         return resolvedChatType;
       }
-      params.log(
-        `feishu[${params.account.accountId}]: card action missing chat type for chat; defaulting to p2p`,
-      );
-    } else {
-      params.log(
-        `feishu[${params.account.accountId}]: failed to resolve chat type: ${sanitizeLogValue(response.msg ?? "unknown error")}; defaulting to p2p`,
-      );
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "unknown";
-    params.log(
-      `feishu[${params.account.accountId}]: failed to resolve chat type: ${sanitizeLogValue(message)}; defaulting to p2p`,
-    );
+  } catch {
+    // Unknown classification must not select DM policy for a possible group.
   }
-
-  return "p2p";
+  params.log(
+    `feishu[${params.account.accountId}]: card action chat type unavailable; action refused`,
+  );
+  await sendMessageFeishu({
+    cfg: params.cfg,
+    to: resolveCallbackTarget(params.event),
+    text: "⚠️ Could not verify this chat's conversation type, so this action was not run. Try clicking again later.",
+    accountId: params.accountId,
+  });
+  return undefined;
 }
 
 export async function handleFeishuCardAction(params: {
@@ -321,6 +321,17 @@ export async function handleFeishuCardAction(params: {
           await sendInvalidInteractionNotice("malformed");
           return;
         }
+        const chatType = await resolveCardActionChatType({
+          event,
+          cfg,
+          accountId,
+          account,
+          chatType: envelope.c?.t,
+          log,
+        });
+        if (!chatType) {
+          return;
+        }
         await sendCardFeishu({
           cfg,
           to: resolveCallbackTarget(event),
@@ -331,12 +342,7 @@ export async function handleFeishuCardAction(params: {
             prompt,
             sessionKey: envelope.c?.s,
             expiresAt,
-            chatType: await resolveCardActionChatType({
-              event,
-              account,
-              chatType: envelope.c?.t,
-              log,
-            }),
+            chatType,
             confirmLabel: command === "/reset" ? "Reset" : "Confirm",
           }),
           accountId,

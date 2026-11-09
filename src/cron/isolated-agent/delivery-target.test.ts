@@ -277,6 +277,45 @@ describe("resolveDeliveryTarget", () => {
     expect(result).toMatchObject({ ok: true, channel: "alpha", to: "room-allowed" });
   });
 
+  it("uses a non-default-only Discord account for cron announce routing", async () => {
+    setSingleOutboundTestPlugin(
+      { id: "discord", outbound: createStubOutbound("Discord") },
+      { config: { listAccountIds: () => ["main"], resolveAccount: () => ({}) } },
+    );
+    const result = await resolveDeliveryTarget(
+      makeCfg({ channels: { discord: { accounts: { main: { enabled: true } } } } }),
+      AGENT_ID,
+      { channel: "discord", to: "channel:123" },
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      channel: "discord",
+      accountId: "main",
+      to: "channel:123",
+    });
+  });
+
+  it.each([
+    { explicit: undefined, session: undefined, bound: undefined, expected: "main" },
+    { explicit: "explicit", session: "remembered", bound: "bound", expected: "explicit" },
+    { explicit: undefined, session: "remembered", bound: "bound", expected: "remembered" },
+    { explicit: undefined, session: undefined, bound: "bound", expected: "bound" },
+  ])("preserves account precedence before the channel default: $expected", async (row) => {
+    setSingleOutboundTestPlugin(
+      { id: "forum", outbound: createStubOutbound("Forum"), messaging: forumMessagingForTest },
+      { config: { listAccountIds: () => ["main"], resolveAccount: () => ({}) } },
+    );
+    if (row.session) {
+      setLastSessionEntry({ channel: "forum", to: "room:ops", accountId: row.session });
+    }
+    const result = await resolveDeliveryTarget(
+      row.bound ? makeForumBoundCfg(row.bound) : makeCfg(),
+      AGENT_ID,
+      { channel: "forum", to: "room:ops", accountId: row.explicit },
+    );
+    expect(result).toMatchObject({ ok: true, accountId: row.expected, to: "room:ops" });
+  });
+
   it("falls back to the session for a whitespace-only account", async () => {
     setLastSessionEntry({
       channel: "forum",

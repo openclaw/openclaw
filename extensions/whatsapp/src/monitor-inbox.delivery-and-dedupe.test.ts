@@ -22,9 +22,11 @@ import {
 import {
   buildNotifyMessageUpsert,
   DEFAULT_ACCOUNT_ID,
+  mockLoadConfig,
   resetWebInboundDedupeForTests,
   settleInboundWork,
   startInboxMonitor,
+  upsertPairingRequestMock,
   waitForMessageCalls,
   waitForInboundWorkDrained,
   type InboxOnMessage,
@@ -92,6 +94,97 @@ describe("web monitor inbox delivery and dedupe", () => {
     clearWhatsAppApprovalReactionTargetsForTest();
     approvalResolver.mockReset();
   });
+
+  it.each([
+    { domain: "lid", phone: "999" },
+    { domain: "hosted.lid", phone: "999" },
+    { domain: "lid", phone: "888" },
+    { domain: "hosted.lid", phone: "888" },
+  ])("retries unresolved @$domain DMs and authorizes mapped +$phone", ({ domain, phone }) =>
+    withRetryClock(async () => {
+      mockLoadConfig.mockReturnValue({
+        channels: { whatsapp: { dmPolicy: "allowlist", allowFrom: ["+999"] } },
+      });
+      const onMessage = vi.fn();
+      const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+      const { listener, sock } = await startInboxMonitor(onMessage, { durableInboundQueue: queue });
+      const mapping = sock.signalRepository.lidMapping.getPNForLID;
+      const upsert = buildNotifyMessageUpsert({
+        id: nextMessageId("unresolved-lid"),
+        remoteJid: `12345@${domain}`,
+        text: "late identity",
+        timestamp: 1_700_000_000,
+      });
+      try {
+        sock.ev.emit("messages.upsert", upsert);
+        await waitForInboundWorkDrained();
+        expect(await queue.listPending({ limit: "all" })).toMatchObject([{ attempts: 1 }]);
+        expect(onMessage).not.toHaveBeenCalled();
+        expect(sock.readMessages).not.toHaveBeenCalled();
+        expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+
+        mapping.mockResolvedValue(`${phone}@s.whatsapp.net`);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await waitForInboundWorkDrained();
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(onMessage.mock.calls.map(([msg]) => msg.payload.body)).toEqual(
+          phone === "999" ? ["late identity"] : [],
+        );
+        if (phone === "999") {
+          expect(inboundMessage(onMessage).admission?.conversation.id).toBe("+999");
+        }
+
+        // A completed redelivery with a lost mapping must not abort its batch sibling.
+        mapping.mockResolvedValue(null);
+        sock.ev.emit("messages.upsert", {
+          type: "notify",
+          messages: [
+            ...upsert.messages,
+            ...dmUpsert(nextMessageId("lid-sibling"), "sibling").messages,
+          ],
+        });
+        await waitForInboundWorkDrained();
+        expect(onMessage.mock.calls.map(([msg]) => msg.payload.body)).toEqual(
+          phone === "999" ? ["late identity", "sibling"] : ["sibling"],
+        );
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+      } finally {
+        await listener.close();
+      }
+    }),
+  );
+
+  it.each([
+    { remoteJid: "not-a-phone@s.whatsapp.net", empty: false },
+    { remoteJid: "12345@lid", empty: true },
+    { remoteJid: "12345@hosted.lid", empty: true },
+  ])("keeps non-LID and non-content inputs terminal: $remoteJid $empty", (row) =>
+    withRetryClock(async () => {
+      const onMessage = vi.fn();
+      const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+      const { listener, sock } = await startInboxMonitor(onMessage, { durableInboundQueue: queue });
+      const upsert = buildNotifyMessageUpsert({
+        id: nextMessageId("terminal-input"),
+        remoteJid: row.remoteJid,
+        text: "ignored",
+        timestamp: 1_700_000_000,
+      });
+      if (row.empty) {
+        upsert.messages[0]!.message = { conversation: "" };
+      }
+      try {
+        sock.ev.emit("messages.upsert", upsert);
+        await waitForInboundWorkDrained();
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(onMessage).not.toHaveBeenCalled();
+        expect(sock.readMessages).not.toHaveBeenCalled();
+        expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+      } finally {
+        await listener.close();
+      }
+    }),
+  );
 
   it("replays approval reactions after Gateway loss without losing batch siblings", () =>
     withRetryClock(async () => {
