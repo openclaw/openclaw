@@ -51,6 +51,7 @@ export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string
     bindGatewayContextResolver(context, gatewayContextResolver);
     admittedRunContext.current = context;
     params.followupRun.run.skillLibraryAuthoring?.bind(context);
+    params.followupRun.run.humanSenderTurn?.bind(context);
   };
   const cronAdmission =
     automation && sessionKey

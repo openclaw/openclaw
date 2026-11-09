@@ -263,6 +263,8 @@ export function requiresIndividualCollectDrain(item: FollowupRun): boolean {
     item.userTurnTranscriptRecorder?.hasPersisted() === true ||
     item.disableCollectBatching === true ||
     item.run.skillLibraryAuthoring !== undefined ||
+    // A collected batch must not bind one sender's turn to other inputs.
+    item.run.humanSenderTurn !== undefined ||
     item.currentInboundEventKind === "room_event" ||
     item.currentInboundAudio === true
   );

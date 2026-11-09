@@ -1,4 +1,5 @@
 import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
+import type { HumanSenderTurn } from "../../plugins/memory-human-sender-turn.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -20,5 +21,7 @@ type ChatSendExternalAdmissionParams = {
 export type ChatSendExternalAuthorityAdmission = {
   resolve(params: ChatSendExternalAdmissionParams): CronCreatorAuthorityCapability | undefined;
   allowsDashboardReads(params: ChatSendExternalAdmissionParams): boolean;
+  /** Attests a turn typed by the authenticated operator on this connection, owner or not. */
+  issueHumanSenderTurn(params: ChatSendExternalAdmissionParams): HumanSenderTurn | undefined;
   run<T>(capability: CronCreatorAuthorityCapability, run: () => T, signal?: AbortSignal): T;
 };

@@ -9,6 +9,7 @@ import type { SessionEntry, SessionToolOverrides } from "../../config/sessions/t
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-channel-context.types.js";
+import type { HumanSenderTurn } from "../../plugins/memory-human-sender-turn.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { ProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
@@ -104,4 +105,6 @@ export type QueuedAgentRunParams = {
   terminalReplyExpectation?: ReplyExpectation;
   suppressTranscriptOnlyAssistantPersistence?: boolean;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+  /** Gateway-issued authenticated human sender; only the run that admits this turn reads it. */
+  humanSenderTurn?: HumanSenderTurn;
 };

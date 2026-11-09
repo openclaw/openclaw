@@ -167,6 +167,9 @@ export async function handleChatSendWithStorage(
     turnKind: request.turnKind,
   };
   const cronCreatorAuthority = externalAuthorityAdmission?.resolve(externalAdmissionParams);
+  const humanSenderTurn = options
+    ? undefined
+    : externalAuthorityAdmission?.issueHumanSenderTurn(externalAdmissionParams);
 
   const admissionStartedAt = Date.now();
   const commitInitialInput = req.method === "sessions.create";
@@ -640,6 +643,7 @@ export async function handleChatSendWithStorage(
           request.turnKind === "main",
       },
       cronCreatorAuthority,
+      humanSenderTurn,
       assertDashboardReadCurrent,
       getSessionInitializationOptions: createChatSendSessionInitialization({
         sessionKey,

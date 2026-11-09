@@ -145,6 +145,7 @@ type InternalReplySessionOptions = {
   onReplyOperationOwned?: (operation: ReplyOperation) => boolean | void;
   skillOverrides?: SessionToolOverrides["skills"];
   skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
+  humanSenderTurn?: import("../../plugins/memory-human-sender-turn.js").HumanSenderTurn;
 };
 
 export type InternalGetReplyOptions = GetReplyOptions &

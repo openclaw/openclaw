@@ -1,4 +1,5 @@
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
+import type { HumanSenderTurn } from "../../plugins/memory-human-sender-turn.js";
 import type { ReplyMessageInjectionAttempt } from "../../sessions/session-controller.contracts.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
@@ -25,6 +26,7 @@ export type StartChatDispatchParams = {
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   skillLibrary: { owner: SkillLibraryRequestOwner; isHumanTurn: boolean; sessionKey: string };
   cronCreatorAuthority: ReturnType<ChatSendExternalAuthorityAdmission["resolve"]>;
+  humanSenderTurn: HumanSenderTurn | undefined;
   assertDashboardReadCurrent?: () => void;
   getSessionInitializationOptions: ReturnType<typeof createChatSendSessionInitialization>;
   externalAuthorityAdmission: ChatSendExternalAuthorityAdmission | undefined;

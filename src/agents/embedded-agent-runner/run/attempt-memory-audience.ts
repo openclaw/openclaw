@@ -7,6 +7,7 @@ import {
   isHostMemoryAudience,
   resolveMemoryAudienceFromEntry,
 } from "../../../plugins/memory-audience.js";
+import type { HumanSenderTurn } from "../../../plugins/memory-human-sender-turn.js";
 import type { MemoryAudience } from "../../../plugins/memory-provider-types.js";
 import { resolveLoadedMemoryProviderKind } from "../../../plugins/memory-state.js";
 import type { AdmittedRunContext } from "../../admitted-run-context.js";
@@ -19,6 +20,7 @@ type AttemptMemoryRun = {
   memoryAudience?: MemoryAudience;
   config?: OpenClawConfig;
   senderIsOwner?: boolean;
+  humanSenderTurn?: HumanSenderTurn;
   admittedRunContext?: AdmittedRunContext;
 };
 
@@ -62,6 +64,8 @@ export async function resolveEmbeddedAttemptMemoryAudience(params: {
       resolveAgentStorePath: (hopAgentId) =>
         resolveSessionStorePathForScope({ agentId: hopAgentId }, run.config),
       scheduledParent: readScheduledMemoryParent(run.admittedRunContext?.operationalRunInstance),
+      humanSenderTurn: run.humanSenderTurn,
+      operationalRunInstance: run.admittedRunContext?.operationalRunInstance,
       assertCallerCurrent: params.assertCallerCurrent,
     },
     params.admission.entry,

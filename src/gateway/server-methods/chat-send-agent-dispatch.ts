@@ -78,6 +78,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     toolsAllow,
     skillLibrary,
     cronCreatorAuthority,
+    humanSenderTurn,
     assertDashboardReadCurrent,
     injection,
     request,
@@ -383,6 +384,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   providerReviewAcknowledgment: request.providerReviewAcknowledgment,
                   dashboardReadAdmission,
                   skillLibraryAuthoring,
+                  humanSenderTurn,
                   ...(cronCreatorAuthority
                     ? { cronCreatorAuthorityCapability: cronCreatorAuthority }
                     : {}),
