@@ -135,6 +135,17 @@ function installEventLoadProbe() {
   // host→runtime registration as the cold-load probe, then retire interception.
   const NativeWeakMap = window.WeakMap;
   const paneOwners = new NativeWeakMap<HTMLElement, ChatPaneRuntime>();
+  type RunPublication = {
+    frame: number | null;
+    pendingRunPublication?: boolean;
+    framePending?: boolean;
+    pendingViews?: Set<unknown>;
+    viewTimer?: unknown;
+    viewTasks?: unknown;
+    cancelViewSlice?: unknown;
+    flushingViews?: boolean;
+  };
+  const runPublications = new NativeWeakMap<object, RunPublication>();
   class RegistrationWeakMap<K extends WeakKey, V> extends NativeWeakMap<K, V> {
     override set(host: K, owner: V): this {
       if (
@@ -148,6 +159,27 @@ function installEventLoadProbe() {
         typeof owner.render === "function"
       ) {
         capturePane(host, owner);
+      }
+      if (
+        typeof host === "object" &&
+        host !== null &&
+        typeof owner === "object" &&
+        owner !== null &&
+        "values" in owner &&
+        "frame" in owner &&
+        (owner.frame === null || typeof owner.frame === "number") &&
+        "fields" in owner &&
+        Array.isArray(owner.fields) &&
+        owner.fields.includes("chatStream") &&
+        owner.fields.includes("chatToolMessages") &&
+        "batch" in owner &&
+        typeof owner.batch === "function" &&
+        "publish" in owner &&
+        typeof owner.publish === "function"
+      ) {
+        // SAFETY: This is the existing state→run-publication registration. Optional
+        // task fields distinguish the older synchronous and queued prototypes.
+        runPublications.set(host, owner as RunPublication);
       }
       return super.set(host, owner);
     }
@@ -212,6 +244,7 @@ function installEventLoadProbe() {
   let applicationSettledAt = 0;
   let applicationSettledFrameAt = 0;
   let applicationCompletionPending = false;
+  let renderPublicationDrained = () => false;
   let expectedTools = 0;
   let stopResultObserver: (() => void) | undefined;
   const appliedResults: Array<{ id: string; output: string | undefined; received: boolean }> = [];
@@ -432,6 +465,19 @@ function installEventLoadProbe() {
       if (!host || !owner) {
         throw new Error("Event-load application runtime was not captured");
       }
+      const runPublication = owner.state ? runPublications.get(owner.state) : undefined;
+      if (!runPublication) {
+        throw new Error("Event-load run publication owner was not captured");
+      }
+      renderPublicationDrained = () =>
+        runPublication.frame == null &&
+        !runPublication.pendingRunPublication &&
+        !runPublication.framePending &&
+        !runPublication.pendingViews?.size &&
+        runPublication.viewTimer == null &&
+        runPublication.viewTasks == null &&
+        !(Object.hasOwn(runPublication, "cancelViewSlice") && runPublication.cancelViewSlice) &&
+        !runPublication.flushingViews;
       expectedTools = options.toolCount;
       const finalIdentity = JSON.stringify([
         "event-load-foreground",
@@ -445,7 +491,8 @@ function installEventLoadProbe() {
           result?.resultReceived === true &&
           result.output === `Tool ${expectedTools} complete.` &&
           state.toolStreamSyncTimer == null &&
-          state.chatStreamRenderFrame == null,
+          state.chatStreamRenderFrame == null &&
+          renderPublicationDrained(),
         );
       };
       const client = owner.context.gateway.snapshot.client;
@@ -618,7 +665,9 @@ function installEventLoadProbe() {
         followLocked: state?.chatFollowLocked,
         readingHistory: state?.chatReadingHistory,
         appliedResults: appliedResults.length,
-        pendingToolRender: Boolean(state?.toolStreamSyncTimer || state?.chatStreamRenderFrame),
+        pendingToolRender:
+          Boolean(state?.toolStreamSyncTimer || state?.chatStreamRenderFrame) ||
+          !renderPublicationDrained(),
       };
     },
     verifyAppliedResults() {
@@ -1636,9 +1685,16 @@ export async function verifyEngineEventLoad(page: Page, count: number, toolCount
       );
     }, foreground);
     await frames(page);
-    // The scroll exercise deliberately leaves the retained pane reading older history.
-    const latest = page.locator(`${pane} .chat-scroll-to-bottom`);
-    if (await latest.isVisible()) {
+    // Exercise an actual Latest command, rather than skipping an affordance
+    // whose reactive visibility may still be settling after the retained-pane switch.
+    const scrollable = await page
+      .locator(`${pane} .chat-thread`)
+      .evaluate((thread) => thread.scrollHeight - thread.clientHeight > 8);
+    evidence.foregroundLatestActivated = scrollable;
+    if (scrollable) {
+      await page.locator(`${pane} .chat-thread`).press("PageUp");
+      const latest = page.locator(`${pane} .chat-scroll-to-bottom`);
+      await latest.waitFor({ state: "visible" });
       await latest.press("Enter");
     }
     await page
@@ -1647,41 +1703,73 @@ export async function verifyEngineEventLoad(page: Page, count: number, toolCount
       .waitFor();
     // Mounted final text can precede a completed Latest journey. Require both
     // visible content and the physical end to remain stable across three frames.
-    await page.waitForFunction(
-      ({ position }) => {
-        const thread = document.querySelector<HTMLElement>(
-          ".chat-pane-cache__pane--active .chat-thread",
+    await page
+      .waitForFunction(
+        ({ position }) => {
+          const thread = document.querySelector<HTMLElement>(
+            ".chat-pane-cache__pane--active .chat-thread",
+          );
+          const final = [...(thread?.querySelectorAll<HTMLElement>(".chat-text") ?? [])].find(
+            (element) => element.textContent?.trim() === "Event load foreground completed.",
+          );
+          const viewport = thread?.getBoundingClientRect();
+          const bounds = final?.getBoundingClientRect();
+          const atEnd = Boolean(
+            thread &&
+            final?.checkVisibility({ checkOpacity: true, visibilityProperty: true }) &&
+            viewport &&
+            bounds &&
+            bounds.bottom > viewport.top &&
+            bounds.top < viewport.bottom &&
+            bounds.right > viewport.left &&
+            bounds.left < viewport.right &&
+            Math.abs(thread.scrollHeight - thread.clientHeight - thread.scrollTop) <= 8,
+          );
+          const geometry = JSON.stringify([
+            thread?.scrollTop,
+            thread?.scrollHeight,
+            thread?.clientHeight,
+            bounds?.top,
+            bounds?.bottom,
+          ]);
+          position.stable = atEnd && geometry === position.geometry ? position.stable + 1 : 0;
+          position.geometry = geometry;
+          return position.stable >= 3;
+        },
+        { position: { geometry: "", stable: 0 } },
+        { polling: "raf" },
+      )
+      .catch(async (error: unknown) => {
+        const geometry = await page.evaluate(() => {
+          const thread = document.querySelector<HTMLElement>(
+            ".chat-pane-cache__pane--active .chat-thread",
+          );
+          const final = [...(thread?.querySelectorAll<HTMLElement>(".chat-text") ?? [])].find(
+            (element) => element.textContent?.trim() === "Event load foreground completed.",
+          );
+          const bounds = final?.getBoundingClientRect();
+          return {
+            scrollTop: thread?.scrollTop,
+            scrollHeight: thread?.scrollHeight,
+            clientHeight: thread?.clientHeight,
+            endDistance: thread
+              ? thread.scrollHeight - thread.clientHeight - thread.scrollTop
+              : null,
+            viewport: thread?.getBoundingClientRect().toJSON(),
+            final: bounds?.toJSON(),
+            finalVisible: final?.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
+            tail: [...(thread?.children ?? [])].slice(-4).map((child) => ({
+              tag: child.tagName,
+              class: child.className,
+              bounds: child.getBoundingClientRect().toJSON(),
+            })),
+          };
+        });
+        throw new Error(
+          `Latest did not settle at the transcript end: ${JSON.stringify(geometry)}`,
+          { cause: error },
         );
-        const final = [...(thread?.querySelectorAll<HTMLElement>(".chat-text") ?? [])].find(
-          (element) => element.textContent?.trim() === "Event load foreground completed.",
-        );
-        const viewport = thread?.getBoundingClientRect();
-        const bounds = final?.getBoundingClientRect();
-        const atEnd = Boolean(
-          thread &&
-          final?.checkVisibility({ checkOpacity: true, visibilityProperty: true }) &&
-          viewport &&
-          bounds &&
-          bounds.bottom > viewport.top &&
-          bounds.top < viewport.bottom &&
-          bounds.right > viewport.left &&
-          bounds.left < viewport.right &&
-          Math.abs(thread.scrollHeight - thread.clientHeight - thread.scrollTop) <= 8,
-        );
-        const geometry = JSON.stringify([
-          thread?.scrollTop,
-          thread?.scrollHeight,
-          thread?.clientHeight,
-          bounds?.top,
-          bounds?.bottom,
-        ]);
-        position.stable = atEnd && geometry === position.geometry ? position.stable + 1 : 0;
-        position.geometry = geometry;
-        return position.stable >= 3;
-      },
-      { position: { geometry: "", stable: 0 } },
-      { polling: "raf" },
-    );
+      });
     evidence.foregroundFinalVisible = true;
     evidence.foregroundLatestAtEnd = true;
     const context = await getControlUiContextHandle(page);

@@ -1036,6 +1036,10 @@ facts; an unknown receipt falls back to the durable marker. Each new transcript
 read snapshot selects the indexed cold marker before consuming transcript rows.
 Repeated reads inside that snapshot reuse its local fact; a committed-write receipt
 captured before the snapshot cannot replace that initial marker read.
+A selected row with neither an inline nor compressed body is a cold navigation
+row and reports `TRANSCRIPT_COLD`. Malformed non-null compressed bodies report
+`TRANSCRIPT_CORRUPT` with the decode failure and recovery guidance. Pruning deletes
+rows; it does not leave bodyless tombstones.
 
 The session actor also publishes compact transcript projection metadata with its
 committed postimage. History requests carry that receipt to the existing worker,

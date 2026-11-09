@@ -5,7 +5,10 @@ import {
   toErrorObject,
 } from "openclaw/plugin-sdk/error-runtime";
 import { listRegisteredMemoryEmbeddingProviderAdapters } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
-import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type {
+  MemoryEmbeddingProvider,
+  MemoryEmbeddingProviderAdapter,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
   resolveUserPath,
@@ -19,7 +22,7 @@ import type {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
-import { resolveEmbeddingProviderAdapterTransport, type EmbeddingProvider } from "./embeddings.js";
+import { resolveEmbeddingProviderAdapterTransport } from "./embeddings.js";
 import { MemoryManagerReloadError } from "./lifecycle.js";
 import { runMemoryIndexState } from "./manager-cpu-worker-runtime.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
@@ -106,7 +109,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected providerInitPromise: Promise<void> | null = null;
   protected embeddingBootstrapFailure?: MemoryEmbeddingBootstrapDebug;
   protected providerRetirementPromise: Promise<void> = Promise.resolve();
-  protected providersPendingRetirement = new Set<EmbeddingProvider>();
+  protected providersPendingRetirement = new Set<MemoryEmbeddingProvider>();
   protected activeBackgroundCleanup = new Set<Promise<void>>();
   protected indexIdentityDirty = false;
   private primaryRecoveryPromise: Promise<void> | null = null;
@@ -332,7 +335,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     // primary that can read the published index, never implicitly reindexes it.
     this.primaryRecoveryRetryAt = Date.now() + EMBEDDING_PROBE_CACHE_TTL_MS;
     const recovery = (async () => {
-      let candidate: EmbeddingProvider | null = null;
+      let candidate: MemoryEmbeddingProvider | null = null;
       try {
         const result = await this.createConfiguredEmbeddingProvider({
           ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
@@ -473,7 +476,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     return this.retireProvider(provider);
   }
 
-  private retireProvider(provider: EmbeddingProvider | null): Promise<void> {
+  private retireProvider(provider: MemoryEmbeddingProvider | null): Promise<void> {
     if (provider) {
       this.providersPendingRetirement.add(provider);
     }
