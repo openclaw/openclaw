@@ -60,7 +60,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
-- **[advisor](/plugins/reference/advisor)** (`@openclaw/advisor`) - included in OpenClaw. Experimental: reviews ongoing agent work on the session's own model and offers one short correction.
+- **[advisor](/plugins/reference/advisor)** (`@openclaw/advisor`) - included in OpenClaw. Experimental: reviews ongoing agent work and offers one short correction.
 
 - **[agent-guidance](/plugins/reference/agent-guidance)** (`@openclaw/agent-guidance`) - included in OpenClaw. Shares instruction files across selected agents without editing their workspace files.
 
