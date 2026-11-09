@@ -9,6 +9,7 @@ import {
   createEffect,
   createMemo,
   createOptimistic,
+  createSignal,
   latest,
   onSettled,
 } from "solid-js";
@@ -28,6 +29,7 @@ import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import { SimulatorPreview } from "./simulator-preview.tsx";
 import { SystemsBackups } from "./systems-backups.tsx";
 import type { SystemsInventoryRow } from "./systems-data.ts";
 import { SystemMeasurements } from "./systems-measurements.tsx";
@@ -325,8 +327,13 @@ function SystemsWorkspace(props: {
   presented: boolean;
   onDesktopPanel: (panel: HTMLElementTagNameMap["openclaw-desktop-panel"] | undefined) => void;
 }) {
+  const [showSimulator, setShowSimulator] = createSignal(true);
   const controller = () => props.controller;
   const row = () => controller().selected();
+  const simulatorNode = () => {
+    const node = row()?.node;
+    return node?.connected && node.commands?.includes("simulator.capture") ? node : undefined;
+  };
   const readStatus = () => {
     latest(props.inventoryRead.read);
     return null;
@@ -429,6 +436,24 @@ function SystemsWorkspace(props: {
             )}
           </For>
         </select>
+        <Show when={simulatorNode()}>
+          <button
+            class="systems-text-button"
+            aria-pressed={showSimulator()}
+            onClick={() => setShowSimulator(true)}
+          >
+            {t("systems.simulator.title")}
+          </button>
+          <Show when={canView()}>
+            <button
+              class="systems-text-button"
+              aria-pressed={!showSimulator()}
+              onClick={() => setShowSimulator(false)}
+            >
+              {t("systems.desktop")}
+            </button>
+          </Show>
+        </Show>
         <button
           class="systems-icon-button"
           title={t(controller().statsVisible() ? "systems.hideStats" : "systems.stats")}
@@ -527,7 +552,14 @@ function SystemsWorkspace(props: {
       </div>
       <div class="systems-body">
         <div class="systems-desktop">
-          {canView() && row() ? (
+          {simulatorNode() && showSimulator() && controller().context.gateway.snapshot.client ? (
+            <SimulatorPreview
+              nodeId={simulatorNode()!.nodeId}
+              client={controller().context.gateway.snapshot.client!}
+              presented={props.presented}
+              canControl={simulatorNode()!.commands?.includes("simulator.act") === true}
+            />
+          ) : canView() && row() ? (
             <Desktop />
           ) : row()?.environment.id === "gateway" &&
             controller().connected() &&

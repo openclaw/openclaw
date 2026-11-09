@@ -14,6 +14,63 @@ openclaw-systems-page {
   overflow: hidden;
   background: var(--bg);
 }
+.simulator-preview {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  color: var(--text);
+}
+.simulator-preview__header,
+.simulator-preview__footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.simulator-preview__header span {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
+}
+.simulator-preview__footer {
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.simulator-preview__stage {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 12px;
+  background: var(--bg);
+}
+.simulator-preview__stage img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 25%);
+}
+.simulator-preview__interactive {
+  cursor: pointer;
+  touch-action: none;
+}
+.simulator-preview__interactive:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
 /* Systems renders in the full-bleed chat content column: supply the page top inset
    other pages get from content padding, and inset the title to the toolbar heading.
    The selector outranks the shared hub-header insets. */

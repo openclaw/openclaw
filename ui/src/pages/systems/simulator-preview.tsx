@@ -1,0 +1,282 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { createEffect, createSignal, Show } from "solid-js";
+import type { ApplicationGatewaySnapshot } from "../../app/context-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+
+type Client = NonNullable<ApplicationGatewaySnapshot["client"]>;
+type CaptureFrame = {
+  sessionId: string;
+  sequence: number;
+  jpegBase64?: string | null;
+  width: number;
+  height: number;
+};
+
+function frameFrom(value: unknown): CaptureFrame {
+  const frame = asOptionalObjectRecord(value);
+  if (
+    typeof frame?.sessionId !== "string" ||
+    typeof frame.sequence !== "number" ||
+    typeof frame.width !== "number" ||
+    typeof frame.height !== "number" ||
+    (frame.jpegBase64 != null && typeof frame.jpegBase64 !== "string")
+  ) {
+    throw new Error("Simulator returned an invalid frame. Reopen the preview.");
+  }
+  return frame as CaptureFrame;
+}
+
+async function invoke(
+  client: Client,
+  nodeId: string,
+  command: "simulator.capture" | "simulator.act",
+  params: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const result = await client.request<{ payload?: unknown }>(
+    "node.invoke",
+    { nodeId, command, params, idempotencyKey: crypto.randomUUID(), timeoutMs: 10_000 },
+    signal ? { signal } : undefined,
+  );
+  return result.payload;
+}
+
+/** A single live Mac-node capture; the Gateway connection owns its control lease. */
+export function SimulatorPreview(props: {
+  nodeId: string;
+  client: Client;
+  presented: boolean;
+  canControl: boolean;
+}) {
+  const [image, setImage] = createSignal<string | null>(null);
+  const [size, setSize] = createSignal({ width: 0, height: 0 });
+  const [error, setError] = createSignal<string | null>(null);
+  const [fps, setFps] = createSignal(0);
+  const [retry, setRetry] = createSignal(0);
+  let frameSession: { sessionId: string; executionId: string } | undefined;
+  let inputQueue: Promise<unknown> = Promise.resolve();
+  let moveTimer: ReturnType<typeof setTimeout> | undefined;
+  let pendingMove: { x: number; y: number } | undefined;
+  let dragging = false;
+  let active = false;
+  let inputEpoch = 0;
+
+  const sendInput = (action: string, details: Record<string, unknown> = {}) => {
+    const session = frameSession;
+    if (!session || !props.canControl || !active) {
+      return;
+    }
+    const epoch = inputEpoch;
+    const client = props.client;
+    const nodeId = props.nodeId;
+    inputQueue = inputQueue
+      .then(() =>
+        epoch === inputEpoch && active
+          ? invoke(client, nodeId, "simulator.act", {
+              ...session,
+              action,
+              ...details,
+            })
+          : undefined,
+      )
+      .catch((cause: unknown) => {
+        if (active) {
+          setError(formatUiError(cause));
+        }
+      });
+  };
+
+  const point = (event: PointerEvent) => {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    return {
+      x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
+      y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
+    };
+  };
+
+  const flushMove = () => {
+    clearTimeout(moveTimer);
+    moveTimer = undefined;
+    if (pendingMove) {
+      sendInput("mouse_move", pendingMove);
+      pendingMove = undefined;
+    }
+  };
+
+  createEffect(
+    () => ({
+      nodeId: props.nodeId,
+      client: props.client,
+      presented: props.presented,
+      retry: retry(),
+    }),
+    ({ nodeId, client, presented }) => {
+      if (!presented) {
+        return;
+      }
+      const controller = new AbortController();
+      const executionId = crypto.randomUUID();
+      inputEpoch += 1;
+      active = true;
+      setImage(null);
+      setError(null);
+      setFps(0);
+      let sessionId: string | undefined;
+      void (async () => {
+        try {
+          const started = frameFrom(
+            await invoke(
+              client,
+              nodeId,
+              "simulator.capture",
+              { action: "start", executionId },
+              controller.signal,
+            ),
+          );
+          sessionId = started.sessionId;
+          if (controller.signal.aborted) {
+            return;
+          }
+          frameSession = { sessionId, executionId };
+          let sequence = 0;
+          let firstFrameDeadline = Date.now() + 5_000;
+          let measuredAt = Date.now();
+          let frames = 0;
+          while (!controller.signal.aborted) {
+            const frame = frameFrom(
+              await invoke(
+                client,
+                nodeId,
+                "simulator.capture",
+                { action: "read", sessionId, executionId, after: sequence },
+                controller.signal,
+              ),
+            );
+            if (frame.jpegBase64 && frame.sequence > sequence) {
+              sequence = frame.sequence;
+              setSize({ width: frame.width, height: frame.height });
+              setImage(`data:image/jpeg;base64,${frame.jpegBase64}`);
+              frames += 1;
+              const now = Date.now();
+              if (now - measuredAt >= 2_000) {
+                setFps((frames * 1_000) / (now - measuredAt));
+                measuredAt = now;
+                frames = 0;
+              }
+              firstFrameDeadline = Number.POSITIVE_INFINITY;
+            } else if (Date.now() >= firstFrameDeadline) {
+              throw new Error(
+                "Simulator produced no frames. Check Screen Recording access and reopen the preview.",
+              );
+            }
+            await new Promise((resolve) => setTimeout(resolve, 75));
+          }
+        } catch (cause) {
+          if (!controller.signal.aborted) {
+            setError(formatUiError(cause));
+          }
+        }
+      })();
+      return () => {
+        active = false;
+        inputEpoch += 1;
+        dragging = false;
+        clearTimeout(moveTimer);
+        pendingMove = undefined;
+        controller.abort();
+        frameSession = undefined;
+        if (sessionId) {
+          void invoke(client, nodeId, "simulator.capture", {
+            action: "stop",
+            sessionId,
+            executionId,
+          }).catch(() => undefined);
+        }
+      };
+    },
+  );
+
+  return (
+    <section class="simulator-preview" aria-label={t("systems.simulator.title")}>
+      <header class="simulator-preview__header">
+        <strong>{t("systems.simulator.title")}</strong>
+        <span role="status">
+          {error() ??
+            (image()
+              ? t("systems.simulator.live", { fps: fps().toFixed(1) })
+              : t("systems.simulator.connecting"))}
+        </span>
+        <Show when={error()}>
+          <button class="systems-text-button" onClick={() => setRetry((value) => value + 1)}>
+            {t("systems.simulator.retry")}
+          </button>
+        </Show>
+      </header>
+      <div class="simulator-preview__stage">
+        <Show when={image()} fallback={<p>{t("systems.simulator.waiting")}</p>}>
+          {(source) => (
+            <img
+              src={source()}
+              width={size().width}
+              height={size().height}
+              alt={t("systems.simulator.title")}
+              tabindex={props.canControl ? 0 : -1}
+              class={props.canControl ? "simulator-preview__interactive" : undefined}
+              onPointerDown={(event) => {
+                if (!props.canControl || event.button !== 0) return;
+                event.preventDefault();
+                event.currentTarget.focus();
+                event.currentTarget.setPointerCapture(event.pointerId);
+                dragging = true;
+                sendInput("left_mouse_down", point(event));
+              }}
+              onPointerMove={(event) => {
+                if (!dragging) return;
+                pendingMove = point(event);
+                if (!moveTimer) moveTimer = setTimeout(flushMove, 50);
+              }}
+              onPointerUp={(event) => {
+                if (!dragging) return;
+                dragging = false;
+                pendingMove = point(event);
+                flushMove();
+                sendInput("left_mouse_up", point(event));
+              }}
+              onPointerCancel={(event) => {
+                if (!dragging) return;
+                dragging = false;
+                clearTimeout(moveTimer);
+                pendingMove = undefined;
+                sendInput("left_mouse_up", point(event));
+              }}
+              onKeyDown={(event) => {
+                if (!props.canControl || event.metaKey || event.ctrlKey || event.altKey) return;
+                const keys: Record<string, string> = {
+                  Enter: "RETURN",
+                  Backspace: "BACKSPACE",
+                  Tab: "TAB",
+                  Escape: "ESCAPE",
+                  ArrowUp: "UP",
+                  ArrowDown: "DOWN",
+                  ArrowLeft: "LEFT",
+                  ArrowRight: "RIGHT",
+                };
+                if (event.key.length === 1) {
+                  event.preventDefault();
+                  sendInput("type", { text: event.key });
+                } else if (keys[event.key]) {
+                  event.preventDefault();
+                  sendInput("key", { keys: keys[event.key] });
+                }
+              }}
+            />
+          )}
+        </Show>
+      </div>
+      <footer class="simulator-preview__footer">
+        {t(props.canControl ? "systems.simulator.controlActive" : "systems.simulator.viewOnly")}
+      </footer>
+    </section>
+  );
+}

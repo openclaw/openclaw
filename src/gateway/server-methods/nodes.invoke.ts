@@ -48,6 +48,12 @@ import {
   resolveDispatchableNodeSession,
   respondPairingChanged,
 } from "./nodes.shared.js";
+import {
+  admitSimulatorInvoke,
+  completeSimulatorInvoke,
+  isSimulatorAdmissionCurrent,
+  isSimulatorCommand,
+} from "./nodes.simulator-lease.js";
 import { wakeNodeForReconnect } from "./nodes.wake-reconnect.js";
 import { maybeSendNodeWakeNudge, maybeWakeNodeWithApns } from "./nodes.wake.js";
 import { respondError, respondUnavailableOnThrow } from "./response.js";
@@ -496,6 +502,47 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         if (rejectDisabledUpload()) {
           return;
         }
+        const simulatorAdmission = isSimulatorCommand(command)
+          ? admitSimulatorInvoke({
+              nodeId,
+              command,
+              input: forwardedParams.params,
+              client,
+              connId: nodeSession.connId,
+              pairingGeneration: generation.key,
+              isClientCurrent: () => hasCurrentClientAuthority?.() !== false,
+              cleanup: (lease) => {
+                void (async () => {
+                  if (lease.sessionId) {
+                    await context.nodeRegistry.invoke({
+                      nodeId: lease.nodeId,
+                      expectedConnId: lease.connId,
+                      expectedPairingGeneration: lease.pairingGeneration,
+                      command: "simulator.capture",
+                      params: {
+                        action: "stop",
+                        sessionId: lease.sessionId,
+                        executionId: lease.executionId,
+                      },
+                      timeoutMs: 2_000,
+                    });
+                  }
+                  await context.nodeRegistry.invoke({
+                    nodeId: lease.nodeId,
+                    expectedConnId: lease.connId,
+                    expectedPairingGeneration: lease.pairingGeneration,
+                    command: "computer.act",
+                    params: { action: "__close_execution", executionId: lease.executionId },
+                    timeoutMs: 2_000,
+                  });
+                })();
+              },
+            })
+          : undefined;
+        if (simulatorAdmission && "error" in simulatorAdmission) {
+          respondError(respond, ErrorCodes.UNAVAILABLE, simulatorAdmission.error);
+          return;
+        }
         const res = await invokeNodeWithReadinessRetry(context.nodeRegistry, {
           nodeId,
           expectedConnId: nodeSession.connId,
@@ -516,6 +563,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           }),
           isDispatchAuthorized: () =>
             isUploadAllowed() &&
+            (!simulatorAdmission || isSimulatorAdmissionCurrent(simulatorAdmission)) &&
             (nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
             runtimeAuthorityError() === undefined,
           onDispatchReady: (invokeId) => {
@@ -523,6 +571,18 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             nodeInvokeStream?.onDispatchReady(invokeId);
           },
         });
+        if (simulatorAdmission && isSimulatorCommand(command)) {
+          const error = completeSimulatorInvoke(
+            simulatorAdmission,
+            command,
+            forwardedParams.params,
+            res,
+          );
+          if (error) {
+            respondError(respond, ErrorCodes.UNAVAILABLE, error);
+            return;
+          }
+        }
         if (!(await continuePairingWork())) {
           return;
         }
