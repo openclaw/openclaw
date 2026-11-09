@@ -1,0 +1,3 @@
+# Gateway chat.history row proving a configured ACP owner reads without the roster-gated agentId,
+# plus the updated sessions_history/resolution expectations. Exact net growth for PR #164993.
+35

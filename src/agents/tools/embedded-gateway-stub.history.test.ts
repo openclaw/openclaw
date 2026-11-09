@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
@@ -289,83 +288,5 @@ describe("embedded session history anchors", () => {
     await expect(gatewayHistory({ sessionKey: scope.sessionKey, ...params })).rejects.toThrow(
       error,
     );
-  });
-});
-
-describe("embedded session history for configured ACP store owners", () => {
-  const acpAgentId = "opencode";
-  const acpScope = {
-    agentId: acpAgentId,
-    sessionKey: `agent:${acpAgentId}:acp:history-owner`,
-    sessionId: "acp-owner-history",
-  };
-  const acpConfig: OpenClawConfig = {
-    agents: { entries: { main: {} } },
-    acp: { allowedAgents: [acpAgentId] },
-  };
-  let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
-  let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
-  let unbindProjection: (() => void) | undefined;
-
-  beforeEach(async () => {
-    projection = undefined;
-    unbindProjection = undefined;
-    state = await createOpenClawTestState({ prefix: "embedded-acp-history-" });
-    setRuntimeConfigSnapshot(acpConfig);
-    replaceSessionEntrySync(acpScope, { sessionId: acpScope.sessionId, updatedAt: Date.now() });
-    // Real ACP spawn rows persist runtime metadata; the resolve probe's
-    // deleted-agent check refuses ACP-shaped keys without it.
-    seedCanonicalAcpSessionMeta({
-      sessionKey: acpScope.sessionKey,
-      sessionId: acpScope.sessionId,
-      meta: {
-        backend: acpAgentId,
-        agent: acpAgentId,
-        runtimeSessionName: acpScope.sessionId,
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: 0,
-      },
-    });
-    await appendTranscriptMessage(acpScope, {
-      eventId: "acp-answer",
-      message: {
-        role: "assistant",
-        content: "acp history needle",
-        timestamp: 1_700_000_000_000,
-      },
-    });
-    projection = await createSessionRowProjection({ cfg: acpConfig });
-    unbindProjection = bindEmbeddedSessionRowProjection(Promise.resolve(projection));
-  });
-
-  afterEach(async () => {
-    try {
-      unbindProjection?.();
-      projection?.dispose();
-      await projection?.ensureMaterialized();
-    } finally {
-      try {
-        await state?.cleanup();
-      } finally {
-        vi.restoreAllMocks();
-      }
-    }
-  });
-
-  it("reads a configured ACP owner transcript without an explicit agent id", async () => {
-    const tool = createSessionsHistoryTool({
-      config: acpConfig,
-      requesterAgentIdOverride: "main",
-      agentSessionKey: "agent:main:main",
-      callGateway,
-    });
-    const result = await tool.execute("acp-history", {
-      sessionKey: acpScope.sessionKey,
-      limit: 10,
-    });
-    expect(result.details).toMatchObject({ messages: [expect.anything()] });
-    const details = result.details as { messages: Array<Record<string, unknown>> };
-    expect(details.messages.map(readChatHistoryMessageId)).toEqual(["acp-answer"]);
   });
 });
