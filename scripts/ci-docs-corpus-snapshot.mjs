@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
+import { createDocsMarkdown, parseDocsDocument } from "./lib/docs-markdown.mjs";
 const root = process.cwd();
 const docs = path.join(root, "docs");
 function walk(dir) {
   return fs
     .readdirSync(dir, { withFileTypes: true })
-    .sort((a, b) => a.name.localeCompare(b.name))
+    .toSorted((a, b) => a.name.localeCompare(b.name))
     .flatMap((e) =>
       e.name.startsWith(".")
         ? []

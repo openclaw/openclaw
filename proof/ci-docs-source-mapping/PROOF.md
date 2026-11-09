@@ -39,11 +39,12 @@ script hashes parsed tokens, rendered HTML, IDs, links with source lines, and
 collisions. Baseline and candidate per-file snapshots were byte-identical; the
 aggregate digest was
 `27778f56973fc6e4fb0f35b5842b22e99cfd93c57175435c5cb9d174d1009cbf`.
-To reproduce the comparison, copy the accompanying snapshot script to the same
-relative path in a baseline checkout, then run
-`node proof/ci-docs-source-mapping/snapshot-corpus.mjs /tmp/docs-corpus.json`
-from the repository root in each checkout. Compare the resulting JSON files.
-This checks the current corpus, not every possible input.
+To reproduce the comparison, run
+`pnpm docs:check-links:snapshot /tmp/docs-corpus.json` from the candidate root.
+Copy `scripts/ci-docs-corpus-snapshot.mjs` to the same relative path in a
+baseline checkout, then run it there with
+`node scripts/ci-docs-corpus-snapshot.mjs /tmp/docs-corpus.json`. Compare the
+resulting JSON files. This checks the current corpus, not every possible input.
 
 `corepack pnpm test test/scripts/docs-component-attributes.test.ts test/scripts/docs-component-literals.test.ts test/scripts/docs-markdown.test.ts --maxWorkers=1`
 passed 30 tests after formatting. New controls check source lines across CRLF,

@@ -1931,6 +1931,7 @@
     "docs:check-config-examples": "node scripts/check-docs-config-examples.mjs",
     "docs:check-links": "node scripts/docs-link-audit.mjs",
     "docs:check-links:anchors": "node scripts/docs-link-audit.mjs --anchors",
+    "docs:check-links:snapshot": "node scripts/ci-docs-corpus-snapshot.mjs",
     "docs:check-mdx": "node scripts/check-docs-mdx.mjs docs README.md",
     "docs:dev": "node scripts/docs-dev.mjs",
     "docs:list": "node scripts/docs-list.js",
