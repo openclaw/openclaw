@@ -1,0 +1,2 @@
+15
+# #195721 Telegram HTML formatter: unclosed authored start tags are escaped (a prose <b> beside Markdown, a nested same-name tag, a link, pre/code with a language) on the Markdown and textMode html paths.
