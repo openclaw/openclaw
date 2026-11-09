@@ -31,6 +31,7 @@ import {
   withWorktreeBasePreparation,
   type WorktreeBasePreparation,
 } from "./base-ref.js";
+import { trackBaseLookupCallers } from "./base-ref.test-support.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import { git, gitIdentity } from "./git-fixture.test-support.js";
 import { requireGit } from "./git.js";
@@ -40,39 +41,6 @@ import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 
 const lookupTempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function trackBaseLookupCallers(repo: string, count: number) {
-  const current = new AsyncLocalStorage<number>();
-  const seen = new Set<number>();
-  const ready = createDeferred();
-  const observe = () => {
-    const caller = current.getStore();
-    if (caller !== undefined) {
-      seen.add(caller);
-      if (seen.size === count) {
-        ready.resolve();
-      }
-    }
-  };
-  const realpath = fs.realpath;
-  vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
-    const result = await realpath(...args);
-    if (result === repo) {
-      observe();
-    }
-    return result;
-  });
-  return {
-    ready: ready.promise,
-    run: <T>(index: number, run: () => T) => current.run(index, run),
-    observeCommand: (args: string[]) => {
-      // Uncoalesced implementations reach discovery without resolving a sharing key.
-      if (args[0] === "symbolic-ref" && args[1] === "--quiet") {
-        observe();
-      }
-    },
-  };
-}
 
 describe("worktree default-base preparation", () => {
   let root: string;
@@ -276,15 +244,20 @@ describe("worktree default-base preparation", () => {
     await git(remote, "update-ref", "refs/heads/next", advanced);
     await git(repo, "config", "remote.origin.fetch", "+refs/heads/next:refs/remotes/custom/next");
     await resolveAt(150_000);
-    expect(await git(repo, "rev-parse", "refs/remotes/custom/next")).toBe(advanced);
+    expect(await git(repo, "for-each-ref", "--format=%(refname)", "refs/remotes/custom")).toBe("");
     await git(remote, "update-ref", "refs/heads/next", head);
     await expect(resolveAt(180_000)).resolves.toMatchObject({ commit: head, fetchSucceeded: true });
     expect(network.slice(-4)).toEqual(["ls-remote", "fetch", "ls-remote", "fetch"]);
   });
 
-  it.for(["sha1", "sha256"])(
-    "shares a shallow %s refresh without blocking another worktree registration",
-    async (format, { signal }) => {
+  it.for([
+    { format: "sha1", mapping: "single" },
+    { format: "sha1", mapping: "mixed" },
+    { format: "sha256", mapping: "mixed" },
+    { format: "sha1", mapping: "uncached" },
+  ])(
+    "shares a shallow $format/$mapping refresh without blocking another worktree registration",
+    async ({ format, mapping }, { signal }) => {
       const source = path.join(root, "source");
       await git(root, "init", "--bare", `--object-format=${format}`, source);
       await git(source, "config", "uploadpack.allowFilter", "true");
@@ -328,6 +301,23 @@ describe("worktree default-base preparation", () => {
         `includeIf.gitdir:${clone.replaceAll(path.sep, "/")}/.git/.path`,
         included,
       );
+      if (mapping !== "single") {
+        await git(clone, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*");
+        for (const id of [101, 102, 103]) {
+          await git(
+            clone,
+            "config",
+            "--add",
+            "remote.origin.fetch",
+            `+refs/pull/${id}/head:refs/remotes/origin/pr-${id}`,
+          );
+          await git(source, "update-ref", `refs/pull/${id}/head`, target);
+          await git(clone, "update-ref", `refs/remotes/origin/pr-${id}`, base);
+        }
+      }
+      if (mapping === "uncached") {
+        await git(clone, "update-ref", "-d", "refs/remotes/origin/main");
+      }
       const shallow = await fs.readFile(path.join(clone, ".git/shallow"), "utf8");
       const entered = createDeferred();
       const release = createDeferred();
@@ -374,6 +364,11 @@ describe("worktree default-base preparation", () => {
         await Promise.allSettled(pending);
       }
       expect(await git(clone, "rev-parse", "origin/main")).toBe(target);
+      if (mapping !== "single") {
+        expect(
+          await git(clone, "for-each-ref", "--format=%(objectname)", "refs/remotes/origin/pr-*"),
+        ).toBe([base, base, base].join("\n"));
+      }
       expect(await git(linked, "rev-parse", "HEAD")).toBe(base);
       expect(await fs.readFile(path.join(clone, ".git/shallow"), "utf8")).toBe(shallow);
       expect(await git(clone, "merge-base", base, target)).toBe(base);
@@ -470,7 +465,7 @@ describe("worktree default-base preparation", () => {
           command === "update-head"
             ? args[0] === "symbolic-ref" && args.length === 3 && !args[1]!.startsWith("-")
             : command === "verify"
-              ? args[0] === "rev-parse" && args[2]?.startsWith("refs/remotes/origin/")
+              ? args[0] === "rev-parse" && args[2]?.endsWith("^{commit}")
               : args[0] === command;
         if (selectedCommand && !gated) {
           gated = true;
@@ -752,11 +747,11 @@ describe("worktree default-base preparation", () => {
             );
           }
         }
-        // Recovery confirms the landed fetch's tip from origin's advertisement.
+        // Cancellation before source publication leaves the next owner to fetch its default.
         const attempts = ["follower", "all", "budget"].includes(mode) ? 1 : 2;
         expect({ discoveries, fetches, maxActiveRemote }).toEqual({
           discoveries: attempts,
-          fetches: 1,
+          fetches: attempts,
           maxActiveRemote: 1,
         });
         // Surviving preserve-only consumers never inherit the retired owner's

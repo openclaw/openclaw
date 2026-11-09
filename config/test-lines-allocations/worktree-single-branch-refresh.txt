@@ -1,2 +1,0 @@
-# Extend shallow SHA-1/SHA-256 owner proof with concurrent registration and shared refresh.
-41
