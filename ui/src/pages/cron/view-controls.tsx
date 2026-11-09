@@ -21,7 +21,7 @@ export function HistoryButton(props: Pick<CronProps, "listTab" | "onListTabChang
       aria-pressed={props.listTab === "activity" ? "true" : "false"}
       onClick={() => props.onListTabChange(props.listTab === "activity" ? "tasks" : "activity")}
     >
-      {t("cron.list.activityTab")}
+      {t("cron.list.runHistory")}
     </button>
   );
 }

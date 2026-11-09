@@ -313,6 +313,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}cron`);
       await page.getByRole("button", { name: "Run history", exact: true }).click();
 
+      await page.locator('[aria-controls="cron-runs-filters"]').click();
       const statusFilter = page.locator('[data-filter="status"]');
       const deliveryFilter = page.locator('[data-filter="delivery"]');
       const statusTrigger = statusFilter.locator(".cron-filter-dropdown__trigger");
@@ -335,6 +336,7 @@ suite.define(() => {
       );
 
       const statusRequestCount = (await gateway.getRequests("cron.runs")).length;
+      await page.keyboard.press("Escape");
       await deliveryTrigger.click();
       await deliveryFilter.locator('[data-value="option:delivered"]').click();
       await button(page, "Delivery Delivered").waitFor();
@@ -381,6 +383,7 @@ suite.define(() => {
       await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("de");
       await page.getByRole("button", { name: "Run history", exact: true }).click();
 
+      await page.locator('[aria-controls="cron-runs-filters"]').click();
       const statusFilter = page.locator('[data-filter="status"]');
       const deliveryFilter = page.locator('[data-filter="delivery"]');
       const statusTrigger = statusFilter.locator(".cron-filter-dropdown__trigger");
@@ -437,7 +440,8 @@ suite.define(() => {
       await expectRunCount(page, "Initial history", 1);
 
       await gateway.deferNext("cron.runs");
-      const search = page.locator(".cron-run-filter-search input");
+      await page.getByRole("button", { name: "Search runs", exact: true }).click();
+      const search = page.getByRole("searchbox", { name: "Search runs", exact: true });
       await search.fill("stale");
       await expectRunRequest(gateway, 0, (params) => params.query === "stale");
 
@@ -493,7 +497,7 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("cron.runs")).length)
         .toBeGreaterThan(previousHistoryRequestCount);
 
-      await page.getByRole("tab", { name: "All", exact: true }).click();
+      await page.getByRole("button", { name: "Run history", exact: true }).click();
       await jobTitle(page, selectedJob.name).click();
       await page.locator('[data-test-id="cron-detail-tab-history"]').click();
       await expectRunCount(page, "Selected task history", 1);

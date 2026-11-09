@@ -16,6 +16,7 @@ import { resolvePlaywrightChromiumExecutablePath } from "../../ui/src/test-helpe
 import { mapColdLoadCpuProfile } from "../lib/control-ui-cold-load-trace.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
+import { createCronPagingFixture, measureCronPagingPage } from "./cron-paging-measure.ts";
 
 const { values } = parseArgs({
   options: {
@@ -24,6 +25,9 @@ const { values } = parseArgs({
     output: { type: "string" },
     "cron-runs": { type: "string", default: "0" },
     "cron-jobs": { type: "string", default: "20" },
+    "cron-paging": { type: "string" },
+    "cron-paging-total": { type: "string", default: "1000" },
+    "cron-paging-fixture": { type: "string" },
     "interval-ms": { type: "string", default: "2000" },
     "start-at": { type: "string" },
     screenshot: { type: "string" },
@@ -50,6 +54,10 @@ const { values } = parseArgs({
     "activity-models": { type: "string", default: "openai/gpt-5.6-sol,openai/gpt-5.6-luna" },
   },
 });
+if (values["cron-paging-fixture"]) {
+  await createCronPagingFixture(path.resolve(values["cron-paging-fixture"]));
+  process.exit(0);
+}
 if (!values.url || !values.output) {
   throw new Error(
     "Usage: catalog-polling-measure.ts --url <isolated-url> --duration <seconds> --output <report.json>",
@@ -79,6 +87,36 @@ if (
 
 if (values["load-runs"]) {
   await measureLoads(integer(values["load-runs"], "--load-runs"));
+  process.exit(0);
+}
+
+if (values["cron-paging"]) {
+  const kind = values["cron-paging"];
+  const total = integer(values["cron-paging-total"], "--cron-paging-total");
+  if ((kind !== "jobs" && kind !== "history") || total < 50 || total % 50 !== 0) {
+    throw new Error("--cron-paging expects jobs|history and --cron-paging-total a multiple of 50");
+  }
+  const browser = await chromium.launch({
+    executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
+    headless: true,
+  });
+  try {
+    const context = await browser.newContext({
+      viewport: { width: 1440, height: 1000 },
+      storageState: values["storage-state"],
+    });
+    const destination = new URL("/automations", url);
+    destination.hash = url.hash;
+    const report = await measureCronPagingPage(
+      await context.newPage(),
+      destination.href,
+      kind,
+      total,
+    );
+    await writeFile(values.output, `${JSON.stringify(report, null, 2)}\n`);
+  } finally {
+    await browser.close();
+  }
   process.exit(0);
 }
 

@@ -700,7 +700,9 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       return removeJob(job).catch((error: unknown) => presentation.reportError(view, error));
     },
     onLoadMoreJobs: () =>
-      void presentation.read("jobs", (cronState) =>
+      // Appending keeps the accepted rows live while the owner publishes its
+      // loading flag; a new readiness receipt would suspend that entire table.
+      presentation.runTask((cronState) =>
         loadCronJobsPage(cronState, { append: true, tableFilters: true }),
       ),
     onJobsFiltersChange: updateJobsFilters,
@@ -713,7 +715,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         cronJobsSortDir: "asc",
       }),
     onLoadMoreRuns: () =>
-      void presentation.runTask((cronState) => loadCronRuns(cronState, { append: true })),
+      presentation.runTask((cronState) => loadCronRuns(cronState, { append: true })),
     onRunsFiltersChange: (patch: Parameters<typeof updateCronRunsFilter>[1]) =>
       void presentation.runTask(async (cronState) => {
         updateCronRunsFilter(cronState, patch);

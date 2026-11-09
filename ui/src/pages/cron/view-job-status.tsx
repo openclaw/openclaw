@@ -2,11 +2,16 @@ import { Show } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import type { IconName } from "../../components/solid/icon.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
+import {
+  isCronJobActiveFailure,
+  isCronJobRunning,
+  resolveCronJobLastRunStatus,
+} from "../../lib/cron-status.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { runStatusLabel } from "./view-runs.tsx";
 export function describeJobSchedule(job: CronJob): string {
   if (job.schedule.kind !== "event") {
     return formatCronSchedule(job);
@@ -146,5 +151,54 @@ function disabledNoteLabel(data: NonNullable<NonNullable<CronJob["state"]>["auto
       ? "cron.list.autoDisabledScheduleErrors"
       : "cron.list.autoDisabledRunFailures",
     { count: String(data.consecutiveErrors) },
+  );
+}
+export function LastRunCell(props: { job: CronJob }) {
+  const status = () => resolveCronJobLastRunStatus(props.job);
+  const relative = () => {
+    const time = props.job.state?.lastRunAtMs;
+    return time === undefined ? null : formatRelativeTimestamp(time);
+  };
+  return (
+    <>
+      {status() === "unknown" || !relative() ? (
+        <span class="muted">{t("common.na")}</span>
+      ) : (
+        <span
+          class="cron-table__last-run"
+          role="img"
+          aria-label={runStatusLabel(status())}
+          title={runStatusLabel(status())}
+        >
+          <span
+            class={[
+              "cron-last-glyph",
+              {
+                "cron-last-glyph--ok": status() === "ok",
+                "cron-last-glyph--error": status() === "error",
+              },
+            ]}
+          >
+            <Icon
+              name={status() === "ok" ? "check" : status() === "error" ? "x" : "cornerDownRight"}
+            />
+          </span>
+          <span class="cron-table__last-time">{relative()}</span>
+        </span>
+      )}
+    </>
+  );
+}
+
+export function SuccessfulLastRun(props: { job: CronJob }) {
+  const time = () => props.job.state?.lastRunAtMs;
+  return (
+    <>
+      {resolveCronJobLastRunStatus(props.job) === "ok" && time() !== undefined ? (
+        <span class="cron-table__last-success muted">
+          {t("cron.list.lastRun", { at: formatRelativeTimestamp(time()) })}
+        </span>
+      ) : undefined}
+    </>
   );
 }

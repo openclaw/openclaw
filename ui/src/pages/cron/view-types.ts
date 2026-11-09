@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import type { CronJob } from "../../api/types.ts";
 import type { buildCronViewProps } from "./view-props.ts";
 
@@ -17,8 +18,9 @@ export type CronProps = Omit<CronViewProps, OptionalViewProp | "gateway"> &
     gateway: CronViewProps["gateway"] | null;
     canCreate?: boolean;
     canManageJob?: (job: CronJob) => boolean;
-    /** Phone list layout places the history button beside the status tabs. */
+    /** Phone retains the original toolbar and job cards. */
     phoneLayout?: boolean;
+    toolbarScope?: JSX.Element;
     toggleSavingJobId?: string | null;
     focus?: {
       readonly target: string | undefined;

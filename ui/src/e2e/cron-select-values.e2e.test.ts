@@ -254,6 +254,7 @@ suite.define(() => {
       const response = await page.goto(`${suite.server.baseUrl}cron`);
       expect(response?.status()).toBe(200);
       await page.locator('[data-test-id="cron-list-tab-activity"]').click();
+      await page.locator('[aria-controls="cron-runs-filters"]').click();
       const sortMenu = page.locator(".cron-filter-dropdown__details", {
         has: page.locator(".cron-run-sort"),
       });
@@ -263,8 +264,9 @@ suite.define(() => {
       await sortMenu.locator('[data-value="asc"]').click();
       await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
       // Switching tabs recreates the dropdown with the persisted non-first value.
-      await page.locator('[data-test-id="cron-tab-all"]').click();
       await page.locator('[data-test-id="cron-list-tab-activity"]').click();
+      await page.locator('[data-test-id="cron-list-tab-activity"]').click();
+      await page.locator('[aria-controls="cron-runs-filters"]').click();
       await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
       expect(await sortMenu.locator('[data-value="asc"]').getAttribute("aria-current")).toBe(
         "true",

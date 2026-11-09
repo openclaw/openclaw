@@ -128,6 +128,13 @@ it("loads history and delivery accounts only for their visible automation surfac
     );
     expect(page.querySelector("h1")?.textContent).toBe("Run history");
     expect(page.querySelector('[role="region"][aria-label="Run history"]')).not.toBeNull();
+    expect(page.querySelector(".page-subtitle")?.textContent).toContain(
+      "Every run of your automations.",
+    );
+    expect(history.getAttribute("aria-pressed")).toBe("true");
+    expect(page.querySelector(".cron-list-hub-tabs")).toBeNull();
+    expect(page.querySelector(".cron-toolbar:not(.cron-run-toolbar)")).toBeNull();
+    expect(page.querySelector(".hub-page-header__actions .agent-select__trigger")).not.toBeNull();
     expectCalls(request, ["cron.runs"], 1);
 
     holding = true;
@@ -136,7 +143,7 @@ it("loads history and delivery accounts only for their visible automation surfac
     expectCalls(request, ["cron.runs"], 2);
     emitEvent(gateway);
     await page.settle();
-    clickTab("cron-tab-all");
+    history.click();
     await page.settle();
     expect(page.querySelector("h1")?.textContent).toBe("Automations");
     held.resolve(result);

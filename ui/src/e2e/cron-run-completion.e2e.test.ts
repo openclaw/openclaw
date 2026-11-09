@@ -89,7 +89,7 @@ suite.define(() => {
 
         for (const scope of ["all", "job"] as const) {
           if (scope === "job") {
-            await page.locator('[data-test-id="cron-tab-all"]').click();
+            await page.locator('[data-test-id="cron-list-tab-activity"]').click();
             await page
               .locator(`[data-test-id="cron-row-${job.id}"] .cron-table__name-text`)
               .click();
@@ -108,16 +108,17 @@ suite.define(() => {
           const runs = history.locator(".cron-run-entry");
           await expect.poll(() => runs.count()).toBe(entries.length);
           await page.screenshot({ path: path.join(artifactDir, `${scope}-history.png`) });
-          const titles = (await runs.locator(".cron-run-entry__title").allTextContents()).map(
-            (title) => title.replace(/\s+/g, " ").trim(),
-          );
+          const titles =
+            scope === "all"
+              ? await runs
+                  .locator(".cron-run-status")
+                  .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("aria-label")))
+              : (await runs.locator(".cron-run-entry__title").allTextContents()).map((title) =>
+                  title.replace(/\s+/g, " ").trim().replace(`${job.name} · `, ""),
+                );
           expect
             .soft(titles, `${scope} completion labels`)
-            .toEqual([
-              `${job.name} · Completed · Error`,
-              `${job.name} · Completed · Unknown`,
-              `${job.name} · Completed`,
-            ]);
+            .toEqual(["Completed · Error", "Completed · Unknown", "Completed"]);
           expect(await runs.nth(0).textContent()).toContain(
             "Synthetic delivery target unavailable.",
           );
@@ -126,7 +127,10 @@ suite.define(() => {
           );
 
           const previousRequests = (await gateway.getRequests("cron.runs")).length;
-          const statusFilter = history.locator('[data-filter="status"]');
+          if (scope === "all") {
+            await page.locator('[aria-controls="cron-runs-filters"]').click();
+          }
+          const statusFilter = page.locator('[data-filter="status"]');
           await statusFilter.locator(".cron-filter-dropdown__trigger").click();
           await statusFilter.locator('[data-value="option:ok"]').click();
           await expect

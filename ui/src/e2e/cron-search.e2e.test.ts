@@ -71,6 +71,7 @@ suite.define(() => {
         cronJob("inventory-" + index, "Inventory reminder " + index, {
           schedule: { kind: "every", everyMs: 3_600_000 },
           payload: { kind: "systemEvent", text: "Synthetic inventory reminder" },
+          ...(index >= 50 ? { state: { lastStatus: "error", lastError: "Delivery failed" } } : {}),
         }),
       );
       const inventoryPage = (offset: number) =>
@@ -92,9 +93,47 @@ suite.define(() => {
       });
       await page.goto(suite.server.baseUrl + "cron");
       const rows = page.locator(".cron-table__row");
-      const loadMore = page.getByRole("button", { name: "Load more", exact: true });
-      await loadMore.click();
+      await expect.poll(() => rows.first().getAttribute("aria-setsize")).toBe("50");
+      expect(
+        (await gateway.getRequests("cron.list")).find(
+          ({ params }) => isRecord(params) && params.compact !== true,
+        )?.params,
+      ).toMatchObject({ limit: 50 });
+      expect(await page.locator(".cron-table__footer").count()).toBe(0);
+      const appendAfter = await gateway.deferNext("cron.list", { offset: 50 });
+      const anchor = page.locator('[data-test-id="cron-row-inventory-49"]');
+      await anchor.scrollIntoViewIfNeeded();
+      await gateway.waitForRequest("cron.list", { after: appendAfter, match: { offset: 50 } });
+      const loadingMore = page.locator('[data-test-id="cron-jobs-loading-more"]');
+      await loadingMore.waitFor();
+      await page.locator(".cron-search-toggle").scrollIntoViewIfNeeded();
+      await anchor.scrollIntoViewIfNeeded();
+      expect(
+        (await gateway.getRequests("cron.list", { offset: 50 })).slice(appendAfter),
+      ).toHaveLength(1);
+      const originalAnchor = await anchor.elementHandle();
+      const anchorTop = await anchor.evaluate((element) => element.getBoundingClientRect().top);
+      await gateway.resolveDeferred("cron.list");
       await expect.poll(() => rows.first().getAttribute("aria-setsize")).toBe(String(jobs.length));
+      await loadingMore.waitFor({ state: "hidden" });
+      expect(
+        await originalAnchor?.evaluate(
+          (element) => element === document.querySelector('[data-test-id="cron-row-inventory-49"]'),
+        ),
+      ).toBe(true);
+      await expect
+        .poll(async () =>
+          Math.abs(
+            (await anchor.evaluate((element) => element.getBoundingClientRect().top)) - anchorTop,
+          ),
+        )
+        .toBeLessThan(2);
+      expect(await rows.first().getAttribute("data-test-id")).toBe("cron-row-inventory-50");
+      expect(await anchor.getAttribute("aria-posinset")).toBe("100");
+      await anchor.scrollIntoViewIfNeeded();
+      expect(
+        (await gateway.getRequests("cron.list", { offset: 50 })).slice(appendAfter),
+      ).toHaveLength(1);
       expect(await rows.count()).toBeLessThan(40);
       await page.locator(".cron-job-menu__trigger").first().click();
       await page.getByRole("menuitem", { name: "Delete", exact: true }).waitFor();
@@ -182,11 +221,18 @@ suite.define(() => {
         await expect.poll(() => page.locator(".cron-table").getAttribute("aria-busy")).toBe(null);
         expect(await search.inputValue()).toBe(query);
         expect(await search.evaluate((element) => element === document.activeElement)).toBe(true);
-        await expect.poll(() => loadMore.isEnabled()).toBe(true);
-        await loadMore.click();
-        await expect
-          .poll(() => rows.first().getAttribute("aria-setsize"))
-          .toBe(String(jobs.length));
+        const failedAppend = await gateway.deferNext("cron.list", { query, offset: 50 });
+        await anchor.scrollIntoViewIfNeeded();
+        await gateway.waitForRequest("cron.list", {
+          after: failedAppend,
+          match: { query, offset: 50 },
+        });
+        await gateway.rejectDeferred("cron.list", { message: "Next page unavailable" });
+        await page.getByText("Next page unavailable", { exact: false }).waitFor();
+        await loadingMore.waitFor({ state: "hidden" });
+        await page.locator(".cron-search-toggle").scrollIntoViewIfNeeded();
+        await anchor.scrollIntoViewIfNeeded();
+        expect(await rows.first().getAttribute("aria-setsize")).toBe("50");
         expect(await rows.count()).toBeLessThan(40);
         expect(
           (await gateway.getRequests("cron.list"))
@@ -237,11 +283,13 @@ suite.define(() => {
         for (let count = 50; count <= jobs.length; count += 50) {
           await expect.poll(() => rows.first().getAttribute("aria-setsize")).toBe(String(count));
           if (count < jobs.length) {
-            await page.getByRole("button", { name: "Load more", exact: true }).press("Enter");
+            await page
+              .locator(`[data-test-id="cron-row-window-${count - 1}"]`)
+              .scrollIntoViewIfNeeded();
           }
         }
         expect(await rows.count()).toBeLessThan(40);
-        // The last row is pinned as the native reverse-Tab entry from the footer.
+        // The last row remains a native keyboard entry beyond the visible window.
         const edge = rows.nth((await rows.count()) - 2);
         const index = Number(await edge.getAttribute("data-index"));
         await edge.locator(".cron-table__name").focus();

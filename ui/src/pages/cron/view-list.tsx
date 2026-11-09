@@ -12,8 +12,6 @@ import {
   createSignal,
   Errored,
   For,
-  action,
-  createOptimistic,
   isPending,
   latest,
   Loading,
@@ -21,51 +19,20 @@ import {
   Reveal,
   Show,
 } from "solid-js";
-import type { CronJobsEnabledFilter, CronJob } from "../../api/types.ts";
-import { AgentRowChip } from "../../components/agent-row-chip.tsx";
-import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
-import { HeaderSearchField } from "../../components/solid/header-search.tsx";
-import { HubTabs } from "../../components/solid/hub-tabs.tsx";
-import {
-  IconButton,
-  iconButtonClass,
-  ROW_GLYPH_STROKE,
-} from "../../components/solid/icon-button.tsx";
-import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
+import type { CronJob } from "../../api/types.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
-import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
-import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
+import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
-import {
-  AdminRequired,
-  ErrorBanner,
-  EnabledSwitch,
-  JobMenu,
-  HistoryButton,
-  NoticeBanner,
-} from "./view-controls.tsx";
-import {
-  describeJobNextRun,
-  JobSchedule,
-  JobStateIndicator,
-  TriggerIndicator,
-  DisabledNote,
-} from "./view-job-status.tsx";
-import { JobsFilterPopover } from "./view-jobs-filter.tsx";
+import { AdminRequired, ErrorBanner, NoticeBanner } from "./view-controls.tsx";
+import { JobRow } from "./view-job-row.tsx";
+import { ListToolbar } from "./view-list-toolbar.tsx";
 import { RunsSection } from "./view-runs.tsx";
-import type { CronJobActionProps, CronProps } from "./view-types.ts";
-const ENABLED_TABS: Array<{
-  value: CronJobsEnabledFilter;
-  labelKey: string;
-}> = [
-  { value: "all", labelKey: "cron.tabs.all" },
-  { value: "enabled", labelKey: "cron.tabs.active" },
-  { value: "disabled", labelKey: "cron.tabs.paused" },
-];
+import type { CronProps } from "./view-types.ts";
 export function ListView(props: CronProps) {
   const scope = createMemo(() => props.reads?.scope() ?? true);
   // Retry readiness without recreating the table or erroring its row projection.
@@ -94,7 +61,10 @@ export function ListView(props: CronProps) {
     !hasAnyJobsFilters() &&
     props.canManage;
   return (
-    <section class="cron-page" data-panel-mode="overview">
+    <section
+      class={["cron-page", { "cron-page--desktop": !props.phoneLayout }]}
+      data-panel-mode="overview"
+    >
       <SettingsPage wide>
         <Errored
           fallback={(error, reset) => (
@@ -124,39 +94,51 @@ export function ListView(props: CronProps) {
               </Loading>
               <ErrorBanner error={props.listError} /> <ErrorBanner error={props.error} />
               <NoticeBanner notice={props.notice} />
-              <Toolbar {...props} hasAdvancedJobsFilters={hasAdvancedJobsFilters()} />
+              <ListToolbar {...props} hasAdvancedJobsFilters={hasAdvancedJobsFilters()} />
             </div>
             <div
               id="cron-list-panel"
               class="cron-tab-panel"
-              role={props.listTab === "activity" ? "region" : "tabpanel"}
-              aria-label={props.listTab === "activity" ? t("cron.list.activityTab") : undefined}
+              role={!props.phoneLayout && props.listTab === "activity" ? "region" : "tabpanel"}
+              aria-label={
+                !props.phoneLayout && props.listTab === "activity"
+                  ? t("cron.list.runHistory")
+                  : undefined
+              }
               aria-labelledby={
-                props.listTab === "activity"
+                !props.phoneLayout && props.listTab === "activity"
                   ? undefined
-                  : `cron-list-tab-${props.jobsEnabledFilter}`
+                  : `cron-list-tab-${props.listTab === "activity" ? "activity" : props.jobsEnabledFilter}`
               }
             >
               {props.listTab === "activity" ? (
-                <div class="cron-activity">
-                  <RunsSection {...props} />
-                </div>
+                <ListSection phoneLayout={props.phoneLayout}>
+                  <div class="cron-activity">
+                    <RunsSection {...props} overview />
+                  </div>
+                </ListSection>
               ) : (
                 <>
-                  <Show when={latest(scope)} keyed>
-                    {(_scope) => (
-                      <Loading
-                        fallback={
-                          <JobsTableFrame busy>
-                            <JobsLoading />
-                          </JobsTableFrame>
-                        }
-                      >
-                        {readJobs()}
-                        <JobsTable {...props} hasAnyJobsFilters={hasAnyJobsFilters()} />
-                      </Loading>
-                    )}
-                  </Show>
+                  <ListSection phoneLayout={props.phoneLayout}>
+                    <Show when={latest(scope)} keyed>
+                      {(_scope) => (
+                        <Loading
+                          fallback={
+                            <JobsTableFrame
+                              phoneLayout={props.phoneLayout}
+                              canManage={props.canManage}
+                              busy
+                            >
+                              <JobsLoading />
+                            </JobsTableFrame>
+                          }
+                        >
+                          {readJobs()}
+                          <JobsTable {...props} hasAnyJobsFilters={hasAnyJobsFilters()} />
+                        </Loading>
+                      )}
+                    </Show>
+                  </ListSection>
                   {showStarterAutomations() ? <Suggestions {...props} /> : undefined}
                 </>
               )}
@@ -165,6 +147,11 @@ export function ListView(props: CronProps) {
         </Errored>
       </SettingsPage>
     </section>
+  );
+}
+function ListSection(props: { phoneLayout?: boolean; children: JSX.Element }) {
+  return (
+    <>{props.phoneLayout ? <SettingsSection>{props.children}</SettingsSection> : props.children}</>
   );
 }
 function SchedulerStatus(props: CronProps) {
@@ -192,117 +179,6 @@ function JobsLoading() {
   );
 }
 
-function ListTabs(props: CronProps) {
-  const active = createMemo(() => (props.listTab === "activity" ? null : props.jobsEnabledFilter));
-  return (
-    <HubTabs<CronJobsEnabledFilter>
-      id="cron-list"
-      panelId="cron-list-panel"
-      class="cron-tabs"
-      active={active()}
-      tabs={ENABLED_TABS.map((tab) => ({
-        value: tab.value,
-        label: t(tab.labelKey),
-        testId: `cron-tab-${tab.value}`,
-      }))}
-      ariaLabel={t("cron.list.viewLabel")}
-      onSelect={(value) => {
-        props.onListTabChange("tasks");
-        if (value !== props.jobsEnabledFilter) {
-          props.onJobsFiltersChange({ cronJobsEnabledFilter: value });
-        }
-      }}
-    />
-  );
-}
-function Toolbar(
-  props: CronProps & {
-    hasAdvancedJobsFilters: boolean;
-  },
-) {
-  // The jobs read holds its results in a transition; only an optimistic value shows during it.
-  const [manualRefresh, setManualRefresh] = createOptimistic(false);
-  const refreshing = () => manualRefresh() || props.loading;
-  const refresh = action(function* () {
-    const retired = props.getActionRetired();
-    setManualRefresh(true);
-    yield Promise.race([props.onRefresh(), retired]);
-  });
-  const newTask = () =>
-    (props.canCreate ?? props.canManage) ? (
-      <button
-        ref={props.focus?.ref("create")}
-        type="button"
-        class="btn primary btn--sm cron-new-task"
-        data-test-id="cron-new-task"
-        onClick={() => props.onOpenCreate()}
-      >
-        <Icon name="plus" /> {t("cron.list.newTask")}
-      </button>
-    ) : undefined;
-
-  const [searchExpanded, setSearchExpanded] = createSignal(false);
-  const searchOpen = () => searchExpanded() || props.jobsQuery.length > 0;
-  let searchToggle!: HTMLButtonElement;
-  const closeSearch = () => {
-    props.onJobsFiltersChange({ cronJobsQuery: "" });
-    setSearchExpanded(false);
-    searchToggle.focus();
-  };
-  return (
-    <div class="cron-toolbar">
-      <div class="cron-toolbar__primary">
-        <div class="cron-toolbar__navigation">
-          <ListTabs {...props} />
-          {props.phoneLayout ? <HistoryButton {...props} /> : undefined}
-        </div>
-        <div class="cron-toolbar__actions">
-          {props.listTab === "tasks" ? (
-            <div class="cron-toolbar__filters">
-              {searchOpen() ? (
-                <HeaderSearchField
-                  class="settings-input cron-search-field"
-                  label={t("cron.list.searchPlaceholder")}
-                  query={props.jobsQuery}
-                  focus={searchExpanded()}
-                  controlRef={() => props.focus?.ref("search")}
-                  onQueryChange={(query) => {
-                    setSearchExpanded(true);
-                    props.onJobsFiltersChange({ cronJobsQuery: query });
-                  }}
-                  onClose={closeSearch}
-                />
-              ) : undefined}
-              <button
-                ref={[
-                  props.focus?.ref("search", () => !searchOpen()),
-                  (element: HTMLButtonElement) => (searchToggle = element),
-                ]}
-                type="button"
-                class={[iconButtonClass(), "cron-search-toggle"]}
-                aria-label={searchOpen() ? t("common.close") : t("cron.list.searchPlaceholder")}
-                title={searchOpen() ? t("common.close") : t("cron.list.searchPlaceholder")}
-                onClick={() => (searchOpen() ? closeSearch() : setSearchExpanded(true))}
-              >
-                <Icon name={searchOpen() ? "x" : "search"} />
-              </button>
-              <JobsFilterPopover {...props} active={props.hasAdvancedJobsFilters} />
-            </div>
-          ) : undefined}
-          <RefreshButton
-            class="cron-refresh"
-            label={t("cron.list.refresh")}
-            tooltip={refreshing() ? t("cron.list.refreshing") : t("cron.list.refresh")}
-            busy={refreshing()}
-            onClick={() => void refresh()}
-          />
-          {newTask()}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function JobsTable(
   props: CronProps & {
     hasAnyJobsFilters: boolean;
@@ -322,7 +198,7 @@ function JobsTable(
     ),
   );
   return (
-    <JobsTableFrame busy={tableBusy()}>
+    <JobsTableFrame phoneLayout={props.phoneLayout} canManage={props.canManage} busy={tableBusy()}>
       {jobs().length === 0 ? (
         initialPending() ? (
           <div
@@ -346,14 +222,16 @@ function JobsTable(
       ) : (
         <JobRows {...props} rows={jobs()} />
       )}
-      <CronJobsPagination
-        jobsShown={props.jobs.length}
-        jobsTotal={props.jobsTotal}
-        hasMore={props.jobsHasMore}
-        loading={props.loading}
-        loadingMore={props.jobsLoadingMore}
-        onLoadMore={props.onLoadMoreJobs}
-      />
+      {props.jobsLoadingMore ? (
+        <div
+          class="cron-jobs-loading-more"
+          role="status"
+          aria-label={t("cron.list.loading")}
+          data-test-id="cron-jobs-loading-more"
+        >
+          <span class="btn__spinner" aria-hidden="true" />
+        </div>
+      ) : undefined}
     </JobsTableFrame>
   );
 }
@@ -379,8 +257,33 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
     items: [],
     height: 0,
   });
-  const publish = () =>
+  let committedWindow: ReturnType<typeof window> | undefined;
+  let requestingMore = false;
+  const loadNearEnd = () => {
+    // Focus navigation also pins the final row; only the actual viewport range
+    // can request another page. The Cron owner still admits and validates it.
+    const end = virtualizer.range?.endIndex;
+    if (
+      requestingMore ||
+      !props.connected ||
+      props.loading ||
+      props.jobsLoadingMore ||
+      props.listError ||
+      !props.jobsHasMore ||
+      end === undefined ||
+      end < props.rows.length - 6
+    ) {
+      return;
+    }
+    requestingMore = true;
+    void Promise.resolve(props.onLoadMoreJobs()).finally(() => {
+      requestingMore = false;
+    });
+  };
+  const publish = () => {
     setWindow({ items: virtualizer.getVirtualItems(), height: virtualizer.getTotalSize() });
+    loadNearEnd();
+  };
   const virtualizer = new Virtualizer<HTMLElement, HTMLDivElement>({
     count: 0,
     enabled: false,
@@ -394,6 +297,10 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
     },
     scrollToFn: elementScroll,
     overscan: 3,
+    // An appended page can introduce failures before the visible healthy rows.
+    // Keep their keys and viewport position without following the new tail.
+    anchorTo: "end",
+    followOnAppend: false,
     useAnimationFrameWithResizeObserver: true,
     onChange: publish,
   });
@@ -423,6 +330,11 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
       const { rows } = next;
       focusedId ??= props.focus?.target;
       scroller = list.closest<HTMLElement>(".content");
+      // Native scrolling can precede its scroll event. Capture that offset
+      // against the old keys before the virtualizer anchors an appended page.
+      if (rows !== current) {
+        synchronizeScrollOffset?.();
+      }
       current = rows;
       const margin = scroller
         ? list.getBoundingClientRect().top -
@@ -437,8 +349,11 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
         scrollMargin: margin,
       });
       pinFocus();
-      const { _willUpdate: update } = virtualizer;
-      update();
+      // Attach observers now; append anchoring waits for the new list height.
+      if (virtualizer.scrollElement !== scroller) {
+        const { _willUpdate: update } = virtualizer;
+        update();
+      }
       for (const element of elements) {
         virtualizer.measureElement(element);
       }
@@ -447,11 +362,22 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
     { targets: () => [list, ...(scroller ? [scroller] : [])], changeTiming: "sync", fonts: true },
   );
   createLayoutMeasurement(
-    () => window().height,
-    () => {
-      // Retry a clamped scroll adjustment after Solid commits the measured height.
-      const { _willUpdate: update } = virtualizer;
-      update();
+    () => ({
+      window: window(),
+      loading: props.loading,
+      loadingMore: props.jobsLoadingMore,
+      hasMore: props.jobsHasMore,
+      error: props.listError,
+    }),
+    (next) => {
+      // Only committed geometry can consume the pending anchor. A loading-flag
+      // update can precede that commit and clamp the scroll to the old height.
+      if (next && next.window !== committedWindow) {
+        committedWindow = next.window;
+        const { _willUpdate: update } = virtualizer;
+        update();
+      }
+      loadNearEnd();
     },
     { targets: () => [list], changeTiming: "sync" },
   );
@@ -482,6 +408,7 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
     return (
       <JobRow
         job={row.job}
+        phoneLayout={props.phoneLayout}
         jobs={props.jobs}
         canManage={canManageJob()}
         canCreate={canCreate()}
@@ -547,137 +474,28 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
     </div>
   );
 }
-function JobsTableFrame(props: { busy: boolean; children: JSX.Element }) {
-  return (
-    <div class="cron-table" aria-busy={props.busy ? "true" : undefined}>
-      {props.children}
-    </div>
-  );
-}
-function JobRow(
-  props: CronJobActionProps &
-    Pick<CronProps, "jobs" | "onSelectJob" | "focus"> & {
-      job: CronJob;
-      index: number;
-      count: number;
-      rowRef: (node: HTMLDivElement) => void;
-      onFocus: () => void;
-      style?: JSX.CSSProperties;
-    },
-) {
-  const displayName = () => props.job.displayName ?? props.job.name;
-  const description = () => props.job.description?.trim();
+function JobsTableFrame(props: {
+  phoneLayout?: boolean;
+  canManage: boolean;
+  busy: boolean;
+  children: JSX.Element;
+}) {
   return (
     <div
-      ref={props.rowRef}
-      class={[
-        "cron-table__row",
-        {
-          "cron-table__row--paused": !props.job.enabled,
-          "cron-table__row--read-only": !props.canManage,
-        },
-      ]}
-      role="listitem"
-      aria-posinset={props.index + 1}
-      aria-setsize={props.count}
-      data-index={props.index}
-      style={props.style}
-      onFocusIn={() => props.onFocus()}
-      data-test-id={`cron-row-${props.job.id}`}
-      onClick={() => {
-        const job = props.jobs.find((entry) => entry.id === props.job.id);
-        if (job) {
-          props.onSelectJob(job);
-        }
-      }}
+      class={["cron-table", { "cron-table--read-only": props.phoneLayout && !props.canManage }]}
+      aria-busy={props.busy ? "true" : undefined}
     >
-      {props.canManage ? (
-        <span class="cron-table__toggle" onClick={(event) => event.stopPropagation()}>
-          <EnabledSwitch {...props} job={props.job} compact />
-        </span>
+      {props.phoneLayout ? (
+        <div class="cron-table__head">
+          <span>{t("cron.jobs.name")}</span>
+          <span>{t("cron.jobs.schedule")}</span>
+          <span>{t("cron.jobs.nextRun")}</span>
+          <span>{t("cron.jobs.lastRun")}</span>
+          {props.canManage ? <span aria-hidden="true" /> : undefined}
+        </div>
       ) : undefined}
-      <button ref={props.focus?.ref(props.job.id)} type="button" class="cron-table__name">
-        <span class="cron-table__name-copy">
-          <span class="cron-table__name-line">
-            <span class="cron-table__name-text">{displayName()}</span>
-            <JobStateIndicator job={props.job} />
-            {props.job.trigger ? <TriggerIndicator /> : undefined}
-          </span>
-          <span class="cron-table__name-meta">
-            <JobCell
-              class="cron-table__schedule"
-              label={t("cron.jobs.schedule")}
-              value={<JobSchedule job={props.job} />}
-            />
-            <AgentRowChip agentId={props.job.agentId} />
-            {description() ? (
-              <span
-                class="cron-table__description"
-                data-test-id={`cron-row-description-${props.job.id}`}
-                title={`${t("cron.form.description")}: ${description()}`}
-              >
-                {description()}
-              </span>
-            ) : undefined}
-          </span>
-          {isCronJobActiveFailure(props.job) ? (
-            <span class="cron-table__failure">
-              {props.job.state?.autoDisabled ? (
-                <DisabledNote job={props.job} />
-              ) : (
-                t("cron.list.lastRunFailed")
-              )}
-            </span>
-          ) : undefined}
-        </span>
-      </button>
-      <JobCell
-        class="cron-table__next"
-        label={t("cron.jobs.nextRun")}
-        value={
-          <span
-            class={{
-              "cron-table__running": isCronJobRunning(props.job),
-              "cron-table__waiting": Boolean(props.job.state?.admissionDeferred),
-            }}
-          >
-            {describeJobNextRun(props.job)}
-          </span>
-        }
-      />
-      {props.canManage ? (
-        <span class="cron-table__actions" onClick={(e: Event) => e.stopPropagation()}>
-          <IconButton
-            size={28}
-            glyph="row"
-            class="cron-row-run"
-            data-test-id={`cron-row-run-${props.job.id}`}
-            label={t("cron.actions.runNowJob", { name: displayName() })}
-            icon={sessionIcon("play", 12, ROW_GLYPH_STROKE)}
-            disabled={props.busy || !props.connected}
-            onClick={() => props.onRun(props.job, "force")}
-          />
-          <JobMenu
-            {...props}
-            job={props.job}
-            onClone={() => {
-              const job = props.jobs.find((entry) => entry.id === props.job.id);
-              if (job) {
-                props.onClone(job);
-              }
-            }}
-          />
-        </span>
-      ) : undefined}
+      {props.children}
     </div>
-  );
-}
-function JobCell(props: { class: string; label: string; value: JSX.Element }) {
-  return (
-    <span class={["cron-table__cell", props.class]}>
-      <span class="cron-table__cell-label">{props.label}</span>
-      <span class="cron-table__cell-value">{props.value}</span>
-    </span>
   );
 }
 function Suggestions(props: CronProps) {

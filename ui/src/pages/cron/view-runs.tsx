@@ -1,23 +1,14 @@
-import { createMemo, For, onSettled } from "solid-js";
-import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
-import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
-import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
+import { createMemo } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
-import { Menu } from "../../components/solid/menu.tsx";
-import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
-import { i18n } from "../../i18n/index.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
-import { formatDurationCompact, formatDurationHuman } from "../../lib/format-duration.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
-import {
-  formatRelativeTimestamp,
-  createCompactMsFormatter,
-  formatCompactTokenCount,
-} from "../../lib/format.ts";
+import { formatRelativeTimestamp, createCompactMsFormatter } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { RunFilters } from "./view-run-filters.tsx";
+import { RunRows } from "./view-run-rows.tsx";
 import type { CronProps } from "./view-types.ts";
+export { runStatusLabel } from "./view-run-status.ts";
 registerEnglishCatalog(registerCronEnglish);
-type CronRunsSectionProps = Pick<
+export type CronRunsSectionProps = Pick<
   CronProps,
   | "runs"
   | "runsState"
@@ -33,13 +24,17 @@ type CronRunsSectionProps = Pick<
   | "onRunsFiltersChange"
   | "onViewRunTranscript"
   | "onRunMount"
-> & {
-  conditionActivity?: {
-    checkCount: number;
-    lastCheckedAtMs?: number;
-    lastFiredAtMs?: number;
+> &
+  Partial<
+    Pick<CronProps, "phoneLayout" | "jobs" | "canManage" | "canCreate" | "onOpenCreate" | "focus">
+  > & {
+    overview?: boolean;
+    conditionActivity?: {
+      checkCount: number;
+      lastCheckedAtMs?: number;
+      lastFiredAtMs?: number;
+    };
   };
-};
 function ConditionMetric(props: { label: string; value: string }) {
   return (
     <div class="cron-condition-activity__metric">
@@ -86,112 +81,6 @@ function conditionEmptyHint(activity: NonNullable<CronRunsSectionProps["conditio
     activity.checkCount === 1 ? "cron.runs.emptyConditionHintOne" : "cron.runs.emptyConditionHint";
   return t(key, { count: String(activity.checkCount) });
 }
-const RUN_STATUS_LABELS = new Map<CronRunsStatusValue, string>([
-  ["ok", "cron.runs.runStatusOk"],
-  ["error", "cron.runs.runStatusError"],
-  ["skipped", "cron.runs.runStatusSkipped"],
-]);
-const RUN_DELIVERY_LABELS = new Map<CronDeliveryStatus, string>([
-  ["delivered", "cron.runs.deliveryDelivered"],
-  ["not-delivered", "cron.runs.deliveryNotDelivered"],
-  ["unknown", "cron.runs.deliveryUnknown"],
-  ["not-requested", "cron.runs.deliveryNotRequested"],
-]);
-function toggleSelection<T extends string>(selected: T[], value: T, checked: boolean): T[] {
-  const set = new Set(selected);
-  if (checked) {
-    set.add(value);
-  } else {
-    set.delete(value);
-  }
-  return Array.from(set);
-}
-const FILTER_OPTION_PREFIX = "option:";
-const FILTER_COMMAND_PREFIX = "command:";
-function FilterDropdown<T extends string>(props: {
-  id: string;
-  title: string;
-  allLabel: string;
-  options: Array<{
-    value: T;
-    label: string;
-  }>;
-  selected: T[];
-  onToggle: (value: T, checked: boolean) => void;
-  onClear: () => void;
-}) {
-  const selectedLabels = () =>
-    props.options
-      .filter((option) => props.selected.includes(option.value))
-      .map((option) => option.label);
-  const summary = () =>
-    selectedLabels().length === 0
-      ? props.allLabel
-      : selectedLabels().length <= 2
-        ? selectedLabels().join(", ")
-        : `${selectedLabels()[0]} +${selectedLabels().length - 1}`;
-  const accessibleSummary = createMemo(() =>
-    selectedLabels().length > 2
-      ? `${summary()} (${new Intl.ListFormat(i18n.getLocale(), {
-          style: "long",
-          type: "conjunction",
-        }).format(selectedLabels())})`
-      : summary(),
-  );
-  return (
-    <div class="cron-filter-dropdown" data-filter={props.id}>
-      <Menu
-        id={`cron-runs-filter-${props.id}`}
-        label={`${props.title} ${accessibleSummary()}`}
-        class="cron-filter-dropdown__details"
-        triggerClass={[
-          "btn btn--sm cron-filter-dropdown__trigger",
-          { active: props.selected.length > 0 },
-        ]}
-        triggerAttributes={{ title: props.title }}
-        trigger={
-          <>
-            <span>{summary()}</span>
-            <Icon name="chevronDown" />
-          </>
-        }
-        placement="bottom-start"
-        items={[
-          ...props.options.map((option) => ({
-            id: `${FILTER_OPTION_PREFIX}${option.value}`,
-            label: option.label,
-            class: "cron-filter-dropdown__option",
-            type: "checkbox" as const,
-            checked: props.selected.includes(option.value),
-            closeOnSelect: false,
-          })),
-          {
-            kind: "content",
-            id: "separator",
-            content: <div class="session-menu__separator" role="separator" />,
-          },
-          {
-            id: `${FILTER_COMMAND_PREFIX}clear`,
-            label: t("cron.runs.clear"),
-            class: "cron-filter-dropdown__clear",
-          },
-        ]}
-        onSelect={(item) => {
-          if (item.id === `${FILTER_COMMAND_PREFIX}clear`) {
-            props.onClear();
-          } else if (item.id.startsWith(FILTER_OPTION_PREFIX)) {
-            const option = props.options.find(
-              (candidate) => candidate.value === item.id.slice(FILTER_OPTION_PREFIX.length),
-            );
-            if (option) {
-              props.onToggle(option.value, !props.selected.includes(option.value));
-            }
-          }
-        }}
-      />
-    </div>
-  );
-}
 export function RunsSection(props: CronRunsSectionProps) {
   const formatTimestamp = createMemo(() => createCompactMsFormatter(undefined, t("common.na")));
   const runs = createMemo(() => {
@@ -203,8 +92,6 @@ export function RunsSection(props: CronRunsSectionProps) {
     props.runsQuery.trim().length > 0 ||
     props.runsStatuses.length > 0 ||
     props.runsDeliveryStatuses.length > 0;
-  const sortLabel = () =>
-    props.runsSortDir === "asc" ? t("cron.runs.oldestFirst") : t("cron.runs.newestFirst");
   return (
     <div class="cron-runs" aria-busy={props.runsState === "pending" ? "true" : "false"}>
       {props.conditionActivity ? (
@@ -221,101 +108,7 @@ export function RunsSection(props: CronRunsSectionProps) {
           </button>
         </div>
       ) : undefined}
-      <div class="cron-run-filters">
-        <div class="cron-search-box cron-run-filter-search">
-          <span class="cron-search-box__icon" aria-hidden="true">
-            <Icon name="search" />
-          </span>
-          <input
-            type="search"
-            class="settings-input"
-            value={props.runsQuery}
-            aria-label={t("cron.runs.searchRuns")}
-            placeholder={t("cron.runs.searchPlaceholder")}
-            onInput={(e) =>
-              props.onRunsFiltersChange({
-                cronRunsQuery: e.currentTarget.value,
-              })
-            }
-          />
-        </div>
-        <FilterDropdown
-          id="status"
-          title={t("cron.runs.status")}
-          allLabel={t("cron.runs.allStatuses")}
-          options={Array.from(RUN_STATUS_LABELS, ([value, key]) => ({
-            value,
-            label: t(key),
-          }))}
-          selected={props.runsStatuses}
-          onToggle={(value, checked) => {
-            const next = toggleSelection(props.runsStatuses, value, checked);
-            props.onRunsFiltersChange({ cronRunsStatuses: next });
-          }}
-          onClear={() => {
-            props.onRunsFiltersChange({ cronRunsStatuses: [] });
-          }}
-        />
-        <FilterDropdown
-          id="delivery"
-          title={t("cron.runs.delivery")}
-          allLabel={t("cron.runs.allDelivery")}
-          options={Array.from(RUN_DELIVERY_LABELS, ([value, key]) => ({
-            value,
-            label: t(key),
-          }))}
-          selected={props.runsDeliveryStatuses}
-          onToggle={(value, checked) => {
-            const next = toggleSelection(props.runsDeliveryStatuses, value, checked);
-            props.onRunsFiltersChange({ cronRunsDeliveryStatuses: next });
-          }}
-          onClear={() => {
-            props.onRunsFiltersChange({ cronRunsDeliveryStatuses: [] });
-          }}
-        />
-        <div class="cron-filter-dropdown">
-          <Menu
-            id="cron-runs-sort"
-            label={`${t("cron.jobs.sort")} ${sortLabel()}`}
-            class="cron-filter-dropdown__details"
-            triggerClass="btn btn--sm cron-filter-dropdown__trigger cron-run-sort"
-            trigger={
-              <>
-                <span>{sortLabel()}</span>
-                <Icon name="chevronDown" />
-              </>
-            }
-            placement="bottom-start"
-            items={[
-              {
-                id: "desc",
-                label: t("cron.runs.newestFirst"),
-                attributes: { "aria-current": props.runsSortDir === "desc" ? "true" : "false" },
-                details: (
-                  <span aria-hidden="true">
-                    {props.runsSortDir === "desc" ? <Icon name="check" /> : undefined}
-                  </span>
-                ),
-              },
-              {
-                id: "asc",
-                label: t("cron.runs.oldestFirst"),
-                attributes: { "aria-current": props.runsSortDir === "asc" ? "true" : "false" },
-                details: (
-                  <span aria-hidden="true">
-                    {props.runsSortDir === "asc" ? <Icon name="check" /> : undefined}
-                  </span>
-                ),
-              },
-            ]}
-            onSelect={(item) => {
-              if (item.id === "asc" || item.id === "desc") {
-                props.onRunsFiltersChange({ cronRunsSortDir: item.id });
-              }
-            }}
-          />
-        </div>
-      </div>
+      {!props.overview || props.phoneLayout ? <RunFilters {...props} /> : undefined}
       {props.runsState === "failed" ? (
         <button class="btn btn--sm" onClick={() => void props.onRefresh()}>
           {t("common.retry")}
@@ -348,153 +141,18 @@ export function RunsSection(props: CronRunsSectionProps) {
           </div>
         )
       ) : (
-        <div class="cron-runs__list">
-          <For each={runs()} keyed={(entry) => `${entry.jobId}:${entry.ts}:${entry.runId ?? ""}`}>
-            {(entry) => (
-              <Run
-                entry={entry()}
-                formatTimestamp={formatTimestamp()}
-                highlightedRunId={props.highlightedRunId}
-                onRunMount={(element, getEntry) => props.onRunMount?.(element, getEntry)}
-                onViewRunTranscript={(targetEntry, trigger) =>
-                  props.onViewRunTranscript?.(targetEntry, trigger)
-                }
-              />
-            )}
-          </For>
-        </div>
+        <RunRows {...props} rows={runs()} formatTimestamp={formatTimestamp()} />
       )}
-      {props.runsHasMore ? (
-        <button
-          class="btn btn--sm cron-load-more"
-          disabled={props.runsLoadingMore}
-          onClick={() => props.onLoadMoreRuns()}
+      {props.runsLoadingMore ? (
+        <div
+          class="cron-jobs-loading-more cron-runs-loading-more"
+          role="status"
+          aria-label={t("cron.runs.loading")}
+          data-test-id="cron-runs-loading-more"
         >
-          {props.runsLoadingMore ? t("cron.runs.loading") : t("cron.runs.loadMore")}
-        </button>
+          <span class="btn__spinner" aria-hidden="true" />
+        </div>
       ) : undefined}
-    </div>
-  );
-}
-export function runStatusLabel(
-  value: string,
-  completion?: CronRunLogEntry["completionStatus"],
-): string {
-  if (value === "ok" && (completion === "failed" || completion === "unknown")) {
-    const completionLabel = t(
-      completion === "failed" ? "cron.runs.runStatusError" : "cron.runs.runStatusUnknown",
-    );
-    return `${t("cron.runs.runStatusOk")} · ${completionLabel}`;
-  }
-  return t(
-    Array.from(RUN_STATUS_LABELS).find(([status]) => status === value)?.[1] ??
-      "cron.runs.runStatusUnknown",
-  );
-}
-function RunError(props: { error: CronRunLogEntry["error"] }) {
-  return <div class="muted">{formatUiExternalText(props.error)}</div>;
-}
-function Run(props: {
-  entry: CronRunLogEntry;
-  formatTimestamp: ReturnType<typeof createCompactMsFormatter>;
-  highlightedRunId?: string | null;
-  onViewRunTranscript?: CronProps["onViewRunTranscript"];
-  onRunMount?: (
-    ...args: Parameters<NonNullable<CronProps["onRunMount"]>>
-  ) => (() => void) | undefined;
-}) {
-  const status = () =>
-    runStatusLabel(props.entry.status ?? "unknown", props.entry.completionStatus);
-  const delivery = () =>
-    t(
-      RUN_DELIVERY_LABELS.get(props.entry.deliveryStatus ?? "not-requested") ??
-        "cron.runs.deliveryUnknown",
-    );
-  const usageSummary = createMemo(() => {
-    const usage = props.entry.usage;
-    return usage?.total_tokens !== undefined
-      ? t("cron.runEntry.tokens", { count: formatCompactTokenCount(usage.total_tokens) })
-      : usage?.input_tokens !== undefined && usage.output_tokens !== undefined
-        ? t("cron.runEntry.inputOutputTokens", {
-            input: formatCompactTokenCount(usage.input_tokens),
-            output: formatCompactTokenCount(usage.output_tokens),
-          })
-        : null;
-  });
-  const bodySource = () =>
-    props.entry.summary || formatUiExternalText(props.entry.error) || t("cron.runEntry.noSummary");
-  const showErrorInMeta = () => Boolean(props.entry.error) && Boolean(props.entry.summary);
-  const suppressionReason = () => formatUiExternalText(props.entry.deliverySuppressionReason);
-  const facts = createMemo(() =>
-    [
-      delivery(),
-      suppressionReason()
-        ? t("cron.runEntry.deliverySuppression", { reason: suppressionReason() })
-        : null,
-      props.entry.model,
-      props.entry.provider,
-      usageSummary(),
-    ].filter(Boolean),
-  );
-  const highlighted = createMemo(() =>
-    props.highlightedRunId && cronRunEntryMatchesLink(props.highlightedRunId, props.entry)
-      ? props.highlightedRunId
-      : null,
-  );
-  let row!: HTMLDivElement;
-  onSettled(() => props.onRunMount?.(row, () => props.entry));
-  return (
-    <div
-      ref={(element) => {
-        row = element;
-      }}
-      class={["cron-run-entry", { "cron-run-entry--highlighted": Boolean(highlighted()) }]}
-    >
-      <div class="cron-run-entry__header">
-        <div class="cron-run-entry__main">
-          <div class="cron-run-entry__title">
-            {props.entry.jobName ?? props.entry.jobId}
-            <span class="muted"> · {status()}</span>
-          </div>
-          <div class="cron-run-entry__facts muted">{facts().join(" · ")}</div>
-        </div>
-        <div class="cron-run-entry__meta">
-          <div>{props.formatTimestamp(props.entry.ts)}</div>
-          {props.entry.runAtMs !== undefined ? (
-            <div class="muted">
-              {t("cron.runEntry.runAt")} {props.formatTimestamp(props.entry.runAtMs)}
-            </div>
-          ) : undefined}
-          <div class="muted">
-            {props.entry.durationMs !== undefined
-              ? (formatDurationCompact(props.entry.durationMs) ??
-                formatDurationHuman(props.entry.durationMs, t("common.na")))
-              : t("common.na")}
-          </div>
-          {props.entry.nextRunAtMs !== undefined ? (
-            <div class="muted">
-              {t("cron.runEntry.next", { rel: props.formatTimestamp(props.entry.nextRunAtMs) })}
-            </div>
-          ) : undefined}
-          {props.entry.runId || props.entry.runAtMs !== undefined || props.entry.sessionKey ? (
-            <div>
-              <button
-                class="btn btn--sm"
-                onClick={(event) => props.onViewRunTranscript?.(props.entry, event.currentTarget)}
-              >
-                {t("cron.runEntry.viewTranscript")}
-              </button>
-            </div>
-          ) : undefined}
-          {showErrorInMeta() ? <RunError error={props.entry.error} /> : undefined}
-          {props.entry.deliveryError ? <RunError error={props.entry.deliveryError} /> : undefined}
-        </div>
-      </div>
-      <SanitizedHtml
-        tag="div"
-        class="cron-run-entry__body chat-text"
-        html={toSanitizedMarkdownHtml(bodySource())}
-      />
     </div>
   );
 }

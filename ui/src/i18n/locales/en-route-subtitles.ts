@@ -19,7 +19,7 @@ const enRouteSubtitles = {
     sessions: "Active sessions and defaults.",
     systems: "Devices and desktops.",
     usage: "API usage and costs.",
-    cron: "Schedule recurring tasks for your agents.",
+    cron: "Schedule recurring tasks for your agent.",
     skills: "Manage your agent skills",
     plugins: "Add capabilities with plugins.",
     skillWorkshop: "Skills your agent learned, recent changes, and undo.",

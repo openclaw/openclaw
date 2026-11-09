@@ -162,49 +162,72 @@ suite.define(() => {
     });
   });
 
-  it("keeps filtered history on page zero while replacement results are pending", async () => {
+  it("keeps pending history on page zero and pages the settled query once near its end", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
-      const museumRun = (ts: number, summary: string) => ({
-        ...run(ts, "museum-inventory", summary),
+      const museumRun = (index: number, prefix: string) => ({
+        ...run(Date.now() - index * 60_000, "museum-inventory", `${prefix} ${index}`),
+        runId: `${prefix}-${index}`,
         jobName: "Museum inventory",
       });
-      const oldRun = museumRun(1, "Previous unfiltered inventory");
-      const firstRun = museumRun(2, "Lunar inventory first page");
-      const secondRun = museumRun(3, "Lunar inventory second page");
-      const firstPage = runsPage([firstRun], 2, 0, 1);
+      const oldRuns = Array.from({ length: 50 }, (_, index) =>
+        museumRun(index, "Previous inventory"),
+      );
+      const firstRuns = Array.from({ length: 50 }, (_, index) =>
+        museumRun(index, "Lunar inventory"),
+      );
+      const secondRun = museumRun(50, "Lunar inventory");
       const gateway = await installCronGateway(page, {
-        "cron.runs": runsPage([oldRun], 51, 0, 50),
+        "cron.runs": runsPage(oldRuns, 51, 0, 50),
       });
       await page.goto(`${suite.server.baseUrl}cron`);
       await page.getByRole("button", { name: "Run history", exact: true }).click();
-      await page.getByText(oldRun.summary, { exact: true }).waitFor();
-      await gateway.deferNext("cron.runs");
-      await gateway.setMethodResponse("cron.runs", runsPage([secondRun], 2, 50, null));
+      await page.getByText(oldRuns[0]!.summary, { exact: true }).waitFor();
+      await gateway.deferNext("cron.runs", { query: "Lunar", offset: 0 });
+      await page.getByRole("button", { name: "Search runs", exact: true }).click();
       await page.getByRole("searchbox", { name: "Search runs" }).fill("Lunar");
-      await expect
-        .poll(
-          async () =>
-            (await gateway.getRequests("cron.runs", { query: "Lunar", offset: 0 })).length,
-        )
-        .toBe(1);
-      const loadMore = page.getByRole("button", { name: "Load more activity", exact: true });
-      if ((await loadMore.isVisible()) && (await loadMore.isEnabled())) {
-        await loadMore.click();
-      }
-      await gateway.resolveDeferred("cron.runs", firstPage);
-      const filteredRequests = await gateway.getRequests("cron.runs", { query: "Lunar" });
-      expect(filteredRequests.map(({ params }) => isRecord(params) && params.offset)).toEqual([0]);
-      await page.getByText(firstRun.summary, { exact: true }).waitFor();
-      expect(await page.getByText(oldRun.summary, { exact: true }).count()).toBe(0);
-      await gateway.setMethodResponse("cron.runs", runsPage([secondRun], 2, 1, null));
-      await loadMore.click();
-      await page.getByText(secondRun.summary, { exact: true }).waitFor();
-      expect(await page.getByText(firstRun.summary, { exact: true }).count()).toBe(1);
+      await gateway.waitForRequest("cron.runs", { match: { query: "Lunar", offset: 0 } });
+      const lastLoaded = page.locator('.cron-run-entry[data-index="49"]');
+      await page.mouse.wheel(0, 5_000);
       expect(
         (await gateway.getRequests("cron.runs", { query: "Lunar" })).map(
           ({ params }) => isRecord(params) && params.offset,
         ),
-      ).toEqual([0, 1]);
+      ).toEqual([0]);
+      const appendAfter = await gateway.deferNext("cron.runs", { query: "Lunar", offset: 50 });
+      await gateway.resolveDeferred("cron.runs", runsPage(firstRuns, 51, 0, 50), {
+        match: { query: "Lunar", offset: 0 },
+      });
+      await lastLoaded.scrollIntoViewIfNeeded();
+      await gateway.waitForRequest("cron.runs", {
+        after: appendAfter,
+        match: { query: "Lunar", offset: 50 },
+      });
+      const loading = page.locator('[data-test-id="cron-runs-loading-more"]');
+      await loading.waitFor();
+      await page.mouse.wheel(0, -20);
+      await page.mouse.wheel(0, 20);
+      expect(
+        (await gateway.getRequests("cron.runs", { query: "Lunar" })).map(
+          ({ params }) => isRecord(params) && params.offset,
+        ),
+      ).toEqual([0, 50]);
+      await gateway.resolveDeferred("cron.runs", runsPage([secondRun], 51, 50), {
+        match: { query: "Lunar", offset: 50 },
+      });
+      await page.getByText(secondRun.summary, { exact: true }).waitFor();
+      await loading.waitFor({ state: "hidden" });
+      expect(await page.getByText(oldRuns[49]!.summary, { exact: true }).count()).toBe(0);
+      expect(await page.getByText(firstRuns[49]!.summary, { exact: true }).count()).toBe(1);
+      await page.locator('.cron-run-entry[data-index="50"]').scrollIntoViewIfNeeded();
+      expect(await page.locator(".cron-run-entry").count()).toBeLessThan(40);
+      expect(
+        await page.getByRole("button", { name: "Load more activity", exact: true }).count(),
+      ).toBe(0);
+      expect(
+        (await gateway.getRequests("cron.runs", { query: "Lunar" })).map(
+          ({ params }) => isRecord(params) && params.offset,
+        ),
+      ).toEqual([0, 50]);
     });
   });
 });

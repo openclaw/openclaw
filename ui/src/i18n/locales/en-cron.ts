@@ -86,7 +86,8 @@ const enCron = {
     },
     actions: {
       runNow: "Run now",
-      runNowJob: "Run now: {name}",
+      runNowJob: "Start now: {name}",
+      runNowAutomation: "Run now: {name}",
       runIfDue: "Start if due",
       pauseJob: "Pause: {name}",
       resumeJob: "Resume: {name}",
@@ -350,6 +351,7 @@ const enCron = {
       waitingWarning: "Warning: admission deferred {count} times",
     },
     runEntry: {
+      details: "Run details",
       tokens: "{count} Tokens",
       inputOutputTokens: "{input} in / {output} out",
       noSummary: "No summary.",
@@ -490,10 +492,14 @@ const enCron = {
       refreshing: "Refreshing...",
       paused: "Paused",
       lastRunFailed: "Last run failed",
+      lastRun: "Last run {at}",
+      historySubtitle: "Every run of your automations.",
+      subtitle: "Schedule recurring tasks for your agents.",
+      runHistory: "Run history",
       autoDisabledRunFailures: "Auto-disabled · {count} run failures",
       autoDisabledScheduleErrors: "Auto-disabled · {count} schedule errors",
       tasksTab: "Automations",
-      activityTab: "Run history",
+      activityTab: "Activity history",
     },
   },
 } satisfies TranslationMap;

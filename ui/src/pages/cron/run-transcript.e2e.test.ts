@@ -257,7 +257,7 @@ suite.define(() => {
       const gateway = await installCron(page, { "cron.history": history("Shared conversation") });
       await page.locator('html[lang="de"]').waitFor();
       await page.locator('[data-test-id="cron-list-tab-activity"]').click();
-      await page.locator(".cron-run-entry").getByRole("button").click();
+      await page.locator(".cron-run-entry__actions").getByRole("button").click();
       const region = page.locator("[data-cron-run-transcript]");
       await exactText(region, "Shared conversation").waitFor();
       expect(await exactText(region, entry.jobName).count()).toBe(1);
