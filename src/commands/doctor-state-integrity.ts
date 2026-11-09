@@ -36,7 +36,7 @@ import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plu
 import { preparePluginDoctorContractModules } from "../plugins/doctor-contract-preparation.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
-import { shortenHomePath } from "../utils.js";
+import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -640,7 +640,7 @@ export async function noteStateIntegrity(
 
   const orphanAgentDirs = listOrphanAgentDirs(cfg, stateDir, (agentsRoot, error) => {
     warnings.push(
-      `- Could not scan ${shortenHomePath(agentsRoot)} for orphan agent directories: ${formatErrorMessage(error)}. Check the directory's permissions and owner, then rerun openclaw doctor.`,
+      `- Could not scan ${shortenHomePath(agentsRoot)} for orphan agent directories: ${shortenHomeInString(formatErrorMessage(error))}. Check the directory's permissions and owner, then rerun openclaw doctor.`,
     );
   });
   if (orphanAgentDirs.length > 0) {

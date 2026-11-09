@@ -300,7 +300,8 @@ describe("doctor state integrity", () => {
       const readdir = fs.readdirSync;
       vi.spyOn(fs, "readdirSync").mockImplementation((target, options) => {
         if (path.resolve(String(target)) === path.resolve(agentsRoot)) {
-          throw Object.assign(new Error(`readdirSync ${code}`), { code });
+          const message = code === "EACCES" ? "permission denied" : "no such file or directory";
+          throw Object.assign(new Error(`${code}: ${message}, scandir '${agentsRoot}'`), { code });
         }
         // oxlint-disable-next-line openclaw-boundaries/no-recursive-readdir -- Transparent access-denial spy; preserve the Doctor caller options.
         return readdir(target, options);
@@ -308,7 +309,9 @@ describe("doctor state integrity", () => {
       const text = await runStateIntegrityText({});
       if (shouldWarn) {
         expect(text).toContain("Could not scan");
-        expect(text).toContain("for orphan agent directories: readdirSync EACCES");
+        expect(text).toContain("for orphan agent directories: EACCES: permission denied");
+        expect(text).toContain(`scandir '$OPENCLAW_HOME${path.sep}.openclaw${path.sep}agents'`);
+        expect(text).not.toContain(agentsRoot);
       } else {
         expect(text).not.toContain("orphan agent directories");
       }
