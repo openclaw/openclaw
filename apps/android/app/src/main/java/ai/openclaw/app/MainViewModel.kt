@@ -648,6 +648,7 @@ class MainViewModel internal constructor(
   val micCooldown: StateFlow<Boolean> = runtimeState(initial = false) { it.micCooldown }
   val micIsListening: StateFlow<Boolean> = runtimeState(initial = false) { it.micIsListening }
   val talkModeEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeEnabled }
+  val talkMicrophoneMuted: StateFlow<Boolean> = runtimeState(initial = false) { it.talkMicrophoneMuted }
   val talkModeListening: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeListening }
   val talkModeSpeaking: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeSpeaking }
   val talkAwaitingAgent: StateFlow<Boolean> = runtimeState(initial = false) { it.talkAwaitingAgent }
@@ -1185,6 +1186,8 @@ class MainViewModel internal constructor(
   }
 
   fun setTalkModeEnabled(enabled: Boolean): Unit = ensureRuntime().setTalkModeEnabled(enabled)
+
+  fun setTalkMicrophoneMuted(muted: Boolean): Unit = ensureRuntime().setTalkMicrophoneMuted(muted)
 
   internal suspend fun requestRecordAudioPermission(): Boolean {
     val requester = permissionRequester ?: return false

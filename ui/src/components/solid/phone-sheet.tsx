@@ -3,19 +3,13 @@ import { onSettled } from "solid-js";
 import { bindSheetDismissGesture, slideSheetOut } from "../../lib/motion/sheet-dismiss.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { tabbableElements } from "../focus-navigation.ts";
 import { Icon } from "./icon.tsx";
+import { createPhoneSheetLayout } from "./phone-sheet-layout.ts";
 import { Popover, type PopoverHandle } from "./popover.tsx";
 import "./phone-sheet.css";
 
-const PHONE_SHEET_QUERY =
-  "(max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
-
-/** Phone layouts open form-like filters as a sheet; everywhere else they stay popovers. */
-export function createPhoneSheetLayout() {
-  return createMediaQuery(PHONE_SHEET_QUERY, globalThis.matchMedia?.(PHONE_SHEET_QUERY).matches);
-}
+export { createPhoneSheetLayout };
 
 /**
  * A modal bottom sheet with a popover's trigger, handle, and in-place children, so a surface can

@@ -274,6 +274,33 @@ it("restores profile appearance across identity switches and a reload during a p
     tabIcon: undefined,
   });
 });
+it.each([{}, { theme: "knot" }])(
+  "finishes an identity switch when delayed operator defaults arrive: %j",
+  async (defaults) => {
+    patchSettings({ theme: "claw" });
+    let activeProfile = "profile-b";
+    const request = vi.fn(async () =>
+      response(activeProfile === "profile-a" ? { "ui.theme": "rose" } : { "ui.accent": "#336699" }),
+    );
+    const config = configWithPrefs(defaults);
+    const { options: initial } = readProfile(request, config);
+    const options = (configObject: unknown) => ({
+      ...initial,
+      profileId: activeProfile,
+      configObject,
+    });
+    await refreshPrefs(options(config));
+    activeProfile = "profile-a";
+    await refreshPrefs(options(config));
+    expect(loadSettings().theme).toBe("rose");
+    activeProfile = "profile-b";
+    await refreshPrefs(options(null));
+    expect(loadSettings()).toMatchObject({ theme: "rose", accent: "#336699" });
+    applyServerUiPrefs(config, options(config));
+    expect(loadSettings().theme).toBe("theme" in defaults ? defaults.theme : "claw");
+  },
+);
+
 it.each([false, true])("retains device-local appearance when rejected=%s", async (rejected) => {
   const entries = { "ui.theme": "knot", "ui.accent": "#123456", "ui.fontUi": "geist" };
   const request = vi.fn(async (method: string) => {

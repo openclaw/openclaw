@@ -162,7 +162,7 @@ export function createAgentDatabaseExecution(
     }
     assertAgentDeletionExecutionCleanupAccess(owner, executionOptions);
     context.admission.assertCurrent();
-    assertAgentAdmitted();
+    (cleanupOwner?.assertCurrentHost ?? assertAgentAdmitted)();
     creationClaim?.assertCurrent();
   };
   const closeNative = (expected?: AgentDatabaseNativeGeneration): Promise<void> => {
@@ -170,12 +170,9 @@ export function createAgentDatabaseExecution(
       return Promise.resolve();
     }
     clearIdleTimer();
-    if (nativeClosing) {
-      return nativeClosing;
-    }
     const captured = generation;
-    if (!captured) {
-      return Promise.resolve();
+    if (nativeClosing || !captured) {
+      return nativeClosing ?? Promise.resolve();
     }
     const result = captured
       .close()
@@ -201,6 +198,33 @@ export function createAgentDatabaseExecution(
     nativeClosing = result;
     return result;
   };
+  // Persistent generation callbacks must not capture a request's source or operation frame.
+  function createGeneration(
+    expectedIdentity?: AgentDatabaseExecutionFileIdentity,
+    creatingTarget?: DatabasePathIdentity,
+  ): AgentDatabaseNativeGeneration {
+    const created = createAgentDatabaseNativeGeneration(
+      agentId,
+      identity.canonicalPath,
+      context,
+      lifetime.state,
+      assertCurrent,
+      () => {
+        if (executions.get(pathname) !== owner || generation !== created || !nativeClosing) {
+          throw new Error("Agent cleanup no longer owns its original execution reference");
+        }
+      },
+      expectedIdentity ?? fileIdentity ?? toAgentExecutionConstraints(identity).expectedIdentity,
+      acceptFileIdentity,
+      reportTerminal,
+      fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
+      creationClaim?.witness,
+      retainAgentDatabaseStartupWorker(agentId, { env: context.environment }, () =>
+        closeNative(created),
+      ),
+    );
+    return created;
+  }
   async function run<T>(
     source: AgentDatabaseRequestExecutionSource,
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
@@ -241,29 +265,7 @@ export function createAgentDatabaseExecution(
       assertCallerCurrent();
       signal?.throwIfAborted();
     }
-    if (!generation) {
-      const created = createAgentDatabaseNativeGeneration(
-        agentId,
-        identity.canonicalPath,
-        context,
-        lifetime.state,
-        assertCurrent,
-        () => {
-          if (executions.get(pathname) !== owner || generation !== created || !nativeClosing) {
-            throw new Error("Agent cleanup no longer owns its original execution reference");
-          }
-        },
-        expectedIdentity ?? fileIdentity ?? toAgentExecutionConstraints(identity).expectedIdentity,
-        acceptFileIdentity,
-        reportTerminal,
-        fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
-        creationClaim?.witness,
-        retainAgentDatabaseStartupWorker(agentId, { env: context.environment }, () =>
-          closeNative(created),
-        ),
-      );
-      generation = created;
-    }
+    generation ??= createGeneration(expectedIdentity, creatingTarget);
     const current = generation;
     let entered = false;
     try {

@@ -535,6 +535,25 @@ parents as inclusive totals; do not add a parent to its children. Prompt-media
 warnings beginning `Native image:` concern image-file access, not container-image
 validation, and occur outside attempt setup.
 
+`detail.attempt.system-prompt.runtime-and-references` covers concurrent runtime
+and reference preparation. `detail.attempt.system-prompt.context` covers concurrent
+tool context, project memory, and TTS preference preparation; its nested
+`tool-context` span covers concurrent memory and watched-session reads. These
+group durations include overlapping work, not separate timings for each read.
+
+Within `detail.attempt.system-prompt.context`, `detail.project-memory.*`
+separates runtime selection, dynamic imports, provider preparation, candidate
+retrieval, authority checks, rendering, provider close, and final publication.
+Legacy memory runtimes instead report `legacy.manager`, `legacy.candidates`, and
+`legacy.render`. The native provider owners further report
+`detail.memory.provider-open.*` (authority preparation, runtime lookup, opening,
+revalidation, failed-open cleanup, and binding) and `detail.memory.provider-call.*` (authority
+preparation, execution, and revalidation). Authority phases include waits for
+pending audience publications; candidate execution includes the provider's own
+storage and filtering work. These fixed labels contain no project keys or memory
+content, and include failed or denied operations. Parent totals overlap their
+children; the same provider phases can also occur during other memory operations.
+
 Fresh managed sandbox projections also record fixed stages beneath
 `sandbox.workspace_selection.prepare.reconcile`: template selection and cloning,
 checkout packing, indexing and materialization, manifest scanning, publication,
@@ -781,6 +800,15 @@ settlement that mutation is actually awaiting. `completionDelayMs` measures
 synchronous owner-release cleanup after the callback settles. A
 caller can cancel before all of its queued work unwinds; `signalAborted`
 reports the signal without claiming that the holder has released.
+
+Subagent-kill mutations also report `subphaseDurationsMs` for awaited caller facts,
+caller Stop hooks, descendant discovery, durable kill intent, admission draining, runtime loading,
+registry settlement and obligation retirement, prefixed with `prepare.` or `run.`.
+These durations include rejected waits and accumulate repeated waits; they exclude
+each operation's synchronous work before returning its promise. Registry settlement
+includes its persistence and session cleanup bookkeeping. The joins for raw source
+settlement and child-command process cleanup occur after the mutation and are not included.
+The subphase totals therefore need not equal the enclosing phase durations.
 
 The tracker preserves outer ownership across reentrant work and retires a
 holder only when its actual callback exits and the owner releases custody. Its

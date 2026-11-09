@@ -15,6 +15,7 @@ import {
   parseJson,
   readReleaseRun,
 } from "./release-stable-workflows.mts";
+import { isStableReleaseVersionAtLeast } from "./release-version.mjs";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -201,37 +202,7 @@ function workflowCommand(repo: string, workflow: string, inputs: string[]): stri
 
 export async function macos(ctx: ReleaseContext): Promise<void> {
   const { state } = ctx;
-  ctx.log("macos", "checking update compatibility before completing the macOS lanes");
-  await fetchReleaseMain(ctx);
-  const inventory = await ctx.run(
-    "git",
-    ["show", "origin/main:scripts/lib/update-compat-inventory.json"],
-    {
-      allowFailure: true,
-      dryRunStdout: JSON.stringify({ releases: [{ version: state.release }] }),
-    },
-  );
-  if (inventory.exitCode !== 0 || !inventory.stdout.includes(JSON.stringify(state.release))) {
-    const integrity = await ctx.run("npm", ["view", `openclaw@${state.release}`, "dist.integrity"]);
-    throw new ReleaseRefusal(
-      `Update compatibility inventory on main is missing ${state.release}.`,
-      [
-        shellCommand("pnpm", [
-          "update:compat:gen",
-          "--release",
-          `<unpacked-dir>=${integrity.stdout.trim()}`,
-        ]),
-        shellCommand("git", ["add", "scripts/lib/update-compat-inventory.json"]),
-        shellCommand("git", [
-          "commit",
-          "-m",
-          `fix(release): record the ${state.release} npm release in the update compatibility inventory`,
-        ]),
-        `# Open and land the update compatibility inventory PR on main.`,
-        ctx.resume("macos"),
-      ],
-    );
-  }
+  ctx.log("macos", "waiting for macOS validation and publication lanes");
   state.macos.validateRunId ??= state.publish.macosValidateRunId;
   state.macos.preflightRunId ??= state.publish.macosPreflightRunId;
   const validateId = required(state.macos.validateRunId, "macOS validate run");
@@ -398,8 +369,8 @@ async function verifyWebsite(ctx: ReleaseContext): Promise<void> {
     ctx.save();
   }
   if (!ctx.state.closeout.websiteRunId) {
-    // Verification only reads production. Repeating
-    // an unacknowledged dispatch is safe; the website serializes its verification job.
+    // The website owns production refresh and download verification; its workflow
+    // can request a rebuild under the release owner's deployment authority.
     const result = await ctx.run(
       "gh",
       [
@@ -479,13 +450,14 @@ export async function closeout(ctx: ReleaseContext): Promise<void> {
   const manifest = pkg.exitCode === 0 ? parseJson(pkg.stdout, "main package.json") : undefined;
   if (
     !isRecord(manifest) ||
-    manifest.version !== state.release ||
+    typeof manifest.version !== "string" ||
+    !isStableReleaseVersionAtLeast(manifest.version, state.release) ||
     mainNotes.exitCode !== 0 ||
     tagNotes.exitCode !== 0 ||
     mainNotes.stdout !== tagNotes.stdout
   ) {
     throw new ReleaseRefusal(
-      "Main does not carry the shipped version and exact changelog.",
+      "Main must carry the shipped or a later stable version and the exact shipped changelog.",
       closeoutMainRecovery(ctx),
     );
   }

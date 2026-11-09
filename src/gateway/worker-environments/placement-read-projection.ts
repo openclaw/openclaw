@@ -374,8 +374,9 @@ export function readWorkerPlacementRecoveryCandidatesInDatabase(
       ),
     );
     const add = (sessionId: string): WorkerPlacementRecoveryCandidate => {
-      const candidate = candidates.get(sessionId) ??
+      const candidate: WorkerPlacementRecoveryCandidate = candidates.get(sessionId) ??
         placements.get(sessionId) ?? { sessionId, environmentId: null };
+      candidate.workspaceRecoveryPending = true;
       candidates.set(sessionId, candidate);
       return candidate;
     };
@@ -405,3 +406,10 @@ export function readWorkerPlacementRecoveryCandidatesInDatabase(
     return [...candidates.values()];
   });
 }
+
+export const workerPlacementReadOperations = {
+  "workers.placementRecoveryCandidates": (_input: undefined, db: EngineConnection) => ({
+    type: "workers.placementRecoveryCandidates" as const,
+    candidates: readWorkerPlacementRecoveryCandidatesInDatabase(db),
+  }),
+};

@@ -3,7 +3,7 @@ import { en } from "./en.ts";
 
 const enMeetings = {
   meetings: {
-    emptyTitle: "Your meeting notes, together",
+    emptyTitle: "No meetings yet.",
     docs: "Set up meeting transcripts",
     inProgress: "In progress",
     activeNotes:
@@ -22,8 +22,8 @@ const enMeetings = {
     loadingSummary: "Loading summary…",
     loadingTranscript: "Loading transcript…",
     summaryPending: "Summary updates about every 5 minutes as new speech is captured.",
-    summaryUnavailable: "No saved summary preview is available.",
-    noResults: "No meetings match your search",
+    summaryUnavailable: "No saved summary preview yet.",
+    noResults: "No meetings match your search.",
   },
 } satisfies TranslationMap;
 

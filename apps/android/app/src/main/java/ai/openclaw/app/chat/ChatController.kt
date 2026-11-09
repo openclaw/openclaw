@@ -443,6 +443,7 @@ class ChatController internal constructor(
   private val activeSessionReads = mutableSetOf<SessionSettingsRead>()
   private val progressCardUpgradeError = nativeText("Update the gateway to load progress cards for this agent.")
   private val sessionSettingsRefreshError = nativeText("Could not refresh session settings. Refresh before sending.")
+  private val chatMetadataLoadError = nativeText("Could not refresh chat metadata. Tap Refresh to try again.")
   private val chatMetadataRefreshError = nativeText("Could not refresh models. Tap Refresh to try again.")
 
   // Guarded by gatewayScopeApplyLock; stable gateway keys retain choices across reconnects.
@@ -1299,7 +1300,7 @@ class ChatController internal constructor(
   fun refresh() {
     syncSessionReactions(force = true)
     synchronized(gatewayScopeApplyLock) {
-      if (_errorText.value != chatMetadataRefreshError) updateErrorText(null)
+      if (!isChatMetadataNotice(_errorText.value)) updateErrorText(null)
     }
     refreshCommands()
     refreshHistoryForRecovery(forceHealth = true)
@@ -2378,7 +2379,9 @@ class ChatController internal constructor(
     val createGatewayScope = selection.gatewayScope
     val parentKey = selection.sessionKey
     val ownerAgentId = selection.ownerAgentId
-    if (_pendingRunCount.value > 0) {
+    // Ordinary New is a parallel chat. An in-progress response stays on the
+    // open conversation; only an explicit worktree start still waits for it.
+    if (worktree && _pendingRunCount.value > 0) {
       updateLocalizedErrorText(nativeText("Wait for the current response to finish before starting a new chat."))
       return false
     }
@@ -4910,6 +4913,8 @@ class ChatController internal constructor(
     chatMetadataNeedsStatusRefresh = false
   }
 
+  private fun isChatMetadataNotice(text: NativeText?): Boolean = text == chatMetadataLoadError || text == chatMetadataRefreshError
+
   private suspend fun fetchChatMetadata(refresh: ChatMetadataRefresh) {
     val requestSequence = refresh.sequence
     val requestCacheScope = refresh.cacheScope
@@ -4931,6 +4936,7 @@ class ChatController internal constructor(
           currentSessionActionSnapshot(_sessionKey.value)
         }
       var requestedSwarmState: Boolean? = null
+      var metadataLoaded = false
       runCatchingCancellable {
         val root =
           requestGatewayJson(
@@ -4945,6 +4951,7 @@ class ChatController internal constructor(
           synchronized(swarmLock) { swarmEnabled = metadataSwarmEnabled }
           requestedSwarmState = metadataSwarmEnabled
         }
+        metadataLoaded = true
         val catalogParams =
           buildJsonObject {
             put("agentId", JsonPrimitive(metadataScope.agentId))
@@ -4970,9 +4977,9 @@ class ChatController internal constructor(
             if (requestSelection != null && isCurrentSessionAction(requestSelection)) {
               if (!catalogSupported && _errorText.value == null) {
                 updateLocalizedErrorText(nativeText("Update your Gateway to use session model choices."))
-              } else if (refreshFailed && (_errorText.value == null || _errorText.value == chatMetadataRefreshError)) {
+              } else if (refreshFailed && (_errorText.value == null || isChatMetadataNotice(_errorText.value))) {
                 updateLocalizedErrorText(chatMetadataRefreshError)
-              } else if (!refreshFailed && _errorText.value == chatMetadataRefreshError) {
+              } else if (!refreshFailed && isChatMetadataNotice(_errorText.value)) {
                 updateErrorText(null)
               }
             }
@@ -4985,9 +4992,9 @@ class ChatController internal constructor(
             isCurrent() &&
             requestSelection != null &&
             isCurrentSessionAction(requestSelection) &&
-            _errorText.value == null
+            (_errorText.value == null || isChatMetadataNotice(_errorText.value))
           ) {
-            updateLocalizedErrorText(chatMetadataRefreshError)
+            updateLocalizedErrorText(if (metadataLoaded) chatMetadataRefreshError else chatMetadataLoadError)
           }
         }
       }

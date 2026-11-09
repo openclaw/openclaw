@@ -30,6 +30,7 @@ export type PluginHealthSummary = Omit<ProtocolPlugin, "unavailable"> & {
 
 /** Full gateway health payload consumed by `openclaw health`. */
 export type HealthSummary = ProtocolHealth & {
+  recentCrashes?: readonly import("../../infra/gateway-crash.js").GatewayCrashRecord[];
   modelRuntime?: import("../../agents/prepared-model-runtime.startup-status.js").PreparedModelRuntimeStartupStatus;
   ok: true;
   ts: number;

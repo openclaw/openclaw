@@ -9,17 +9,22 @@ it.each(["profile", "plaintext"])(
       prepareAuthFixture({
         provider: "command-fixture",
         modelId: "native",
-        config: providerConfig("command-fixture", {
-          auth: "native-command",
-          api: "openai-responses",
-          baseUrl: risk === "plaintext" ? "http://fixture.test/v1" : "https://fixture.test/v1",
-          agentRuntime: { id: "codex" },
-          models: [model("native")],
-        }),
+        config: {
+          ...providerConfig("command-fixture", {
+            auth: "native-command",
+            api: "openai-responses",
+            baseUrl: risk === "plaintext" ? "http://fixture.test/v1" : "https://fixture.test/v1",
+            agentRuntime: { id: "codex" },
+            models: [model("native")],
+          }),
+          auth: {
+            profiles: { "command-fixture:decoy": { provider: "command-fixture", mode: "api_key" } },
+          },
+        },
         harnessId: "codex",
         harnessRuntime: "codex",
         harnessAuthBootstrap: "harness",
-        sessionAuthProfileId: risk === "profile" ? "openai:decoy" : undefined,
+        sessionAuthProfileId: risk === "profile" ? "command-fixture:decoy" : undefined,
       }),
     ).toThrow(risk === "profile" ? "auth profile binding" : "configured HTTPS Responses endpoint");
   },

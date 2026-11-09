@@ -1041,7 +1041,7 @@ describe("maybeCompactCodexAppServerSession", () => {
   });
 
   it("warns when stale OpenClaw compaction overrides are ignored", async () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    using warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const { sessionFile } = await setupCompaction();
 
     await startCompaction(sessionFile, {
@@ -1062,7 +1062,6 @@ describe("maybeCompactCodexAppServerSession", () => {
       expect.stringContaining("ignoring OpenClaw compaction overrides"),
       expect.anything(),
     );
-    warn.mockRestore();
   });
 
   it("fails closed when the persisted binding auth profile disagrees with the runtime request", async () => {

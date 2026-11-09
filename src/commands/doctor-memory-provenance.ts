@@ -10,7 +10,7 @@ import { readMemoryArtifactProvenance } from "../memory/memory-artifact-provenan
 import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
 import { shortenHomePath } from "../utils.js";
 
-export const MEMORY_PROVENANCE_CHECK_ID = "core/doctor/memory-provenance";
+const MEMORY_PROVENANCE_CHECK_ID = "core/doctor/memory-provenance";
 const DOCS_URL = "https://docs.openclaw.ai/concepts/memory-provenance";
 const FIX_HINT =
   "Review the file content. Writes from non-owner or tainted turns, and tracked writes after a shell or external edit, record untrusted provenance. This check reports the exclusion only; it does not change provenance.";

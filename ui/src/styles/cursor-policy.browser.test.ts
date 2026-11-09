@@ -72,7 +72,7 @@ function fixtureDocument() {
     <div class="sidebar-markdown">${samples(null, "underline", '<a href="https://example.com">Sidebar link</a>')}</div>
     ${["markdown", "chat-thinking", "markdown-body", "dreams-diary__para"].map((name) => `<div class="${name}">${samples(null, "underline", '<a class="markdown-bare-url" href="https://example.com">Content link</a>')}</div>`).join("")}
     <div class="chat-position-rail__preview-copy" inert>${samples(null, "none", '<a class="markdown-bare-url" href="https://example.com">Preview URL</a>', '<a class="markdown-github-link" href="https://github.com/example/project">Preview repository</a>')}</div>
-    ${classLinks("pointer", "underline", "activity-entry__run-link settings-row__value memory-page__link portals-preview__notice-url settings-account transcripts-back")}
+    ${classLinks("pointer", "underline", "activity-entry__run-link settings-row__value memory-page__link portals-preview__notice-url transcripts-back")}
     <aside class="sidebar">
       ${samples(
         "default",

@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { versions } from "node:process";
+import { getCallSites } from "node:util";
 import * as v8 from "node:v8";
 import { isMainThread } from "node:worker_threads";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
@@ -16,20 +17,22 @@ import {
 
 const WINDOW_MS = 5_000;
 
-/** Two short native profiles retain recent stacks without a listener or on-demand heap scan. */
+/** Retain bounded native profiles or interrupted stacks without a debugger listener. */
 export function createStallFlightRecorder(warn: (message: string) => void) {
-  let kernel: ReturnType<typeof createStallKernelRecorder>;
+  const packageRoot = isMainThread
+    ? resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url })
+    : null;
+  const kernel = createStallKernelRecorder(warn, packageRoot);
   let active: v8.SyncCPUProfileHandle | undefined;
   let previous: StallProfileWindow | undefined;
   let startedAt = 0;
-  let disabled = !isMainThread || Boolean(versions.bun) || Number(versions.node.split(".")[0]) < 26;
-  let packageRoot: string | null = null;
+  const native = Number(versions.node.split(".")[0]) >= 26;
+  let disabled = !isMainThread || Boolean(versions.bun);
   const captureSymbol = Symbol.for("openclaw.stallFlightRecorder.capture");
-  const stop = () => {
+  const stopProfile = () => {
     if (Object.getOwnPropertyDescriptor(globalThis, captureSymbol)?.value === capture) {
       Reflect.deleteProperty(globalThis, captureSymbol);
     }
-    kernel?.stop();
     disabled = true;
     previous = undefined;
     const handle = active;
@@ -42,10 +45,39 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
   };
   const start = () => v8.startCpuProfile({ sampleInterval: SAMPLE_MS, maxBufferSize: MAX_SAMPLES });
   const capture = (): StallProfileSnapshot | undefined => {
-    if (disabled || !active) {
+    if (disabled) {
       return undefined;
     }
     const captureStartedAt = performance.now();
+    if (!native) {
+      // Node 24's native profiler ignores interval/buffer options. Interrupt only
+      // to snapshot the executing stack, without enabling a profiler or debugger.
+      if (
+        hasProfilerConflict() ||
+        process.getBuiltinModule("inspector")?.url() ||
+        process.getBuiltinModule("trace_events")?.getEnabledCategories()
+      ) {
+        return undefined;
+      }
+      const frames = getCallSites(18, { sourceMap: false })
+        .slice(2)
+        .map((frame) => ({
+          functionName: frame.functionName.length <= 256 ? frame.functionName : "[redacted]",
+          scriptId: frame.scriptId,
+          url: frame.scriptName.length <= 2_048 ? frame.scriptName : "",
+          lineNumber: frame.lineNumber - 1,
+          columnNumber: frame.columnNumber - 1,
+        }));
+      return {
+        windows: [],
+        stacks: [{ at: captureStartedAt, frames }],
+        endedAt: captureStartedAt,
+        captureMs: performance.now() - captureStartedAt,
+      };
+    }
+    if (!active) {
+      return undefined;
+    }
     const old = active;
     // Keep the native code map and sampler alive; restarting the last profile scans the heap.
     active = start();
@@ -66,13 +98,13 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
         Boolean(process.getBuiltinModule("trace_events")?.getEnabledCategories());
     }
     if (!disabled) {
-      packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-      active = start();
-      startedAt = performance.now();
-      // Inspector interrupts can obtain the bounded native snapshot while ordinary JS is stuck.
+      if (native) {
+        active = start();
+        startedAt = performance.now();
+      }
+      // Inspector interrupts capture bounded evidence while ordinary JS is stuck.
       // Parsing and output stay in the observer; no inspector listener is opened.
       Object.defineProperty(globalThis, captureSymbol, { configurable: true, value: capture });
-      kernel = createStallKernelRecorder(warn, packageRoot);
     }
   } catch {
     disabled = true;
@@ -80,22 +112,26 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
   }
   return {
     sample(stall?: { startedAt: number; endedAt: number; task?: string }): string | undefined {
-      const kernelSummary = kernel?.take(stall) ?? "";
-      if (disabled || !active || (!stall && performance.now() - startedAt < WINDOW_MS)) {
+      const { kernelSummary = "", stacks = [] } = kernel?.take(stall) ?? {};
+      if (!stall && performance.now() - startedAt < WINDOW_MS) {
         return undefined;
       }
       try {
-        const snapshot = capture();
-        if (!stall || !snapshot) {
-          return undefined;
+        const snapshot = active ? capture() : undefined;
+        if (stall && snapshot) {
+          return formatStallProfile(snapshot.windows, stall, packageRoot, kernelSummary);
         }
-        return formatStallProfile(snapshot.windows, stall, packageRoot, kernelSummary);
       } catch {
-        stop();
+        stopProfile();
         warn("stall flight recorder unavailable: profiler-capture-failed");
-        return undefined;
       }
+      return stall && (kernelSummary || stacks.length)
+        ? formatStallProfile([], stall, packageRoot, kernelSummary, stacks)
+        : undefined;
     },
-    stop,
+    stop() {
+      kernel?.stop();
+      stopProfile();
+    },
   };
 }

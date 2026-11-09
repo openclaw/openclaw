@@ -61,6 +61,19 @@ download_file() {
     wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout="$UPDATE_NETWORK_TIMEOUT_SECONDS" -O "$output" "$url"
 }
 
+warn_node_security_patch() {
+    local version="${1#v}" major minor patch
+    [[ "${NODE_SECURITY_WARNING_PRINTED:-0}" != 1 ]] || return 0
+    [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]] || return 0
+    major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}" patch="${BASH_REMATCH[3]}"
+    if { ((major == 24)) && { ((minor < 22)) || ((minor == 22 && patch < 1)); }; } ||
+        { ((major == 26)) && { ((minor < 12)) || ((minor == 12 && patch < 1)); }; }; then
+        printf '%s\n' "SECURITY WARNING: Node.js ${version} may trust TLS certificates signed with keys compromised in the October 2026 eMudhra incident. Upgrade to Node 24.22.1+ on the 24.x line or Node 26.12.1+. Continuing with this compatible runtime." >&2
+        NODE_SECURITY_WARNING_PRINTED=1
+    fi
+    return 0
+}
+
 node_binary_has_safe_sqlite() {
     local node_bin="$1"
     "$node_bin" -e '
@@ -89,9 +102,9 @@ node_binary_has_safe_sqlite() {
             const blobSafe = row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
             const jsonSafe = row?.json_value === json && JSON.parse(row.json_value).value === text;
             if (!textSafe) {
-                console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.22.1+/26.12.1+ or a build with the fix");
+                console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix");
             } else if (!blobSafe || !jsonSafe) {
-                console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability check failed; use 24.22.1+/26.12.1+ or a build with the fix");
+                console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability check failed; use 24.16+/26.1+ or a build with the fix");
             } else if (!safe) {
                 console.error("Node " + process.versions.node + ": SQLite " + value + " is not WAL-reset-safe");
             }
@@ -478,6 +491,57 @@ git_install_lockfile_flag() {
     fi
 }
 
+publish_git_clone_staging() {
+    local source="$1" target="$2" preserve_target="$3"
+    if [[ "$preserve_target" == 0 ]]; then
+        if [[ -e "$target" || -L "$target" ]]; then
+            echo "Git install dir appeared while cloning: ${target}" >&2
+            return 1
+        fi
+        mv "$source" "$target"
+        return
+    fi
+    if [[ ! -d "$target" || -L "$target" || "$(ls -A "$target")" != "$(basename "$source")" ]]; then
+        echo "Git install dir appeared while cloning: ${target}" >&2
+        return 1
+    fi
+    local entry name git_entry="" moved_count=0 publish_failed=0 rollback_failed=0 recovery
+    local -a entries=() moved=()
+    while IFS= read -r entry; do
+        name="${entry##*/}"
+        if [[ "$name" == ".git" ]]; then
+            git_entry="$name"
+        else
+            entries+=("$name")
+        fi
+    done < <(find "$source" -mindepth 1 -maxdepth 1 -print)
+    # .git moves last, so an interrupted publish never looks like a complete checkout.
+    [[ -n "$git_entry" ]] && entries+=("$git_entry")
+    if (( ${#entries[@]} > 0 )); then
+        for name in "${entries[@]}"; do
+            if ! mv "${source}/${name}" "${target}/${name}"; then
+                publish_failed=1
+                break
+            fi
+            moved+=("$name")
+            moved_count=$((moved_count + 1))
+        done
+    fi
+    if (( publish_failed == 0 )) && rmdir "$source"; then
+        return 0
+    fi
+    while (( moved_count > 0 )); do
+        moved_count=$((moved_count - 1))
+        mv "${target}/${moved[$moved_count]}" "${source}/${moved[$moved_count]}" || rollback_failed=1
+    done
+    if (( rollback_failed != 0 )); then
+        recovery="$source"
+        mv "$source" "${source}.recovery" && recovery="${source}.recovery"
+        echo "Could not publish or fully roll back the cloned checkout at ${target}; recovery files remain at ${recovery}" >&2
+    fi
+    return 1
+}
+
 clone_git_checkout_transactionally() {
     local repo_url="$1"
     local repo_dir="$2"
@@ -502,58 +566,8 @@ clone_git_checkout_transactionally() {
         return "$clone_status"
     fi
 
-    if ! node - "$staging_dir" "$repo_dir" "$preserve_repo_dir" <<'NODE'
-const fs = require("node:fs");
-const [source, target, preserveTarget] = process.argv.slice(2);
-if (preserveTarget === "0") {
-  try {
-    fs.lstatSync(target);
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
-    fs.renameSync(source, target);
-    process.exit(0);
-  }
-  throw new Error(`Git install dir appeared while cloning: ${target}`);
-}
-const expected = preserveTarget === "1" ? [source.slice(source.lastIndexOf("/") + 1)] : [];
-if (!fs.statSync(target).isDirectory() || fs.readdirSync(target).sort().join("\0") !== expected.sort().join("\0")) {
-  throw new Error(`Git install dir appeared while cloning: ${target}`);
-}
-const entries = fs.readdirSync(source).sort((a, b) => (a === ".git" ? 1 : b === ".git" ? -1 : 0));
-const moved = [];
-try {
-  for (const entry of entries) {
-    fs.renameSync(`${source}/${entry}`, `${target}/${entry}`);
-    moved.push(entry);
-  }
-  fs.rmdirSync(source);
-} catch (error) {
-  const rollbackErrors = [];
-  for (const entry of moved.reverse()) {
-    try {
-      fs.renameSync(`${target}/${entry}`, `${source}/${entry}`);
-    } catch (rollbackError) {
-      rollbackErrors.push(rollbackError);
-    }
-  }
-  if (rollbackErrors.length > 0) {
-    let recovery = source;
-    try {
-      recovery = `${source}.recovery`;
-      fs.renameSync(source, recovery);
-    } catch (recoveryError) {
-      rollbackErrors.push(recoveryError);
-      recovery = source;
-    }
-    throw new AggregateError(
-      [error, ...rollbackErrors],
-      `Could not publish or fully roll back the cloned checkout at ${target}; recovery files remain at ${recovery}`,
-    );
-  }
-  throw error;
-}
-NODE
-    then
+    # Git installs provision Node after checkout, so publication must not need it.
+    if ! publish_git_clone_staging "$staging_dir" "$repo_dir" "$preserve_repo_dir"; then
         installer_clone_error "$repo_dir"
     fi
 }

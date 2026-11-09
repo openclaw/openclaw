@@ -16,6 +16,29 @@ struct SwiftUIRenderSmokeTests {
         return window
     }
 
+    @Test @MainActor func `Talk microphone states render on compact screens with large text`() {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
+        for muted in [false, true] {
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                let control = OpenClawChatTalkControl(
+                    isEnabled: true,
+                    isListening: false,
+                    isSpeaking: true,
+                    isGatewayConnected: true,
+                    statusText: "Speaking",
+                    providerLabel: "",
+                    isMicrophoneMuted: muted,
+                    toggleMicrophone: {},
+                    recentTranscript: ["A synthetic reply is still playing."],
+                    toggle: { _ in })
+                let root = ChatTalkActivityStrip(control: control)
+                    .environment(\.dynamicTypeSize, typeSize)
+                windows.append(Self.host(root, size: CGSize(width: 320, height: 240)))
+            }
+        }
+    }
+
     @Test @MainActor func `settings hub fallback builds in light and dark mode`() {
         var windows: [UIWindow] = []
         defer { windows.forEach { $0.isHidden = true } }
@@ -32,6 +55,25 @@ struct SwiftUIRenderSmokeTests {
                 .preferredColorScheme(scheme)
 
             windows.append(Self.host(root))
+        }
+    }
+
+    @Test @MainActor func `local device settings build across device widths and text sizes`() {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
+        for width in [320.0, 768.0] {
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+                let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+                let root = NavigationStack {
+                    SettingsProTab(directRoute: .deviceSettings)
+                }
+                .environment(AppAppearanceModel())
+                .environment(appModel)
+                .environment(controller)
+                .environment(\.dynamicTypeSize, typeSize)
+                windows.append(Self.host(root, size: CGSize(width: width, height: 1024)))
+            }
         }
     }
 
@@ -148,21 +190,41 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
-    @Test @MainActor func `managed assistant image starts its artifact load`() async throws {
-        let artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111"
+    @Test(.timeLimit(.minutes(1)), arguments: [
+        (OpenClawChatMediaKind.image, nil, nil),
+        (.audio, nil, .transcode),
+        (.video, nil, .transcode),
+        (.audio, .native, .native),
+        (.video, .native, .native),
+        (.audio, .transcode, .transcode),
+        (.video, .transcode, .transcode),
+    ] as [(OpenClawChatMediaKind, OpenClawChatPlaybackMode?, OpenClawChatPlaybackMode?)])
+    @MainActor func `managed assistant media starts its artifact load with the playback route`(
+        input: (OpenClawChatMediaKind, OpenClawChatPlaybackMode?, OpenClawChatPlaybackMode?)) async
+    {
+        let (kind, playback, expectedPlayback) = input
+        let prefix = kind == .image ? "artifact_managed_image_" : "artifact_managed_media_"
+        let artifactId = prefix + "11111111-1111-4111-8111-111111111111"
+        let mimeType = switch kind {
+        case .audio: "audio/x-ms-wma"
+        case .video: "video/x-matroska"
+        default: "image/png"
+        }
         let message = OpenClawChatMessage(
             role: "assistant",
             content: [OpenClawChatMessageContent(
-                type: "image",
+                type: kind.rawValue,
                 text: nil,
-                mimeType: "image/png",
+                mimeType: mimeType,
                 fileName: nil,
                 artifactId: artifactId,
                 url: "/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full",
                 alt: "Managed preview",
+                playback: playback,
                 content: nil)],
             timestamp: 1)
-        var requestedArtifactId: String?
+        let requests = AsyncStream<OpenClawChatPlaybackMode?>.makeStream()
+        defer { requests.continuation.finish() }
         let root = ChatMessageBubble(
             message: message,
             style: .standard,
@@ -181,9 +243,11 @@ struct SwiftUIRenderSmokeTests {
             inlineWidgetResourceResolver: { _, _ in nil },
             mediaArtifactResolverReady: true,
             mediaPlaybackAllowed: { true },
-            loadMediaArtifact: { requested, kind, _ in
-                requestedArtifactId = requested
-                #expect(kind == .image)
+            loadMediaArtifact: { requested, requestedKind, playback in
+                #expect(requested == artifactId)
+                #expect(requestedKind == kind)
+                requests.continuation.yield(playback)
+                guard kind == .image else { return nil }
                 return OpenClawChatLoadedMedia.data(OpenClawChatMediaData(
                     data: Data(base64Encoded:
                         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8A" +
@@ -193,12 +257,9 @@ struct SwiftUIRenderSmokeTests {
         let window = Self.host(root, size: CGSize(width: 393, height: 420))
         defer { window.isHidden = true }
 
-        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
-        while requestedArtifactId == nil, ContinuousClock().now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-
-        #expect(requestedArtifactId == artifactId)
+        var iterator = requests.stream.makeAsyncIterator()
+        let requestedPlayback = await iterator.next()
+        #expect(requestedPlayback == .some(expectedPlayback))
     }
 
     @Test @MainActor func `streaming assistant bubble builds mixed prose and code`() {

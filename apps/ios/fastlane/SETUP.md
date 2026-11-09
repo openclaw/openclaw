@@ -128,7 +128,7 @@ pnpm ios:screenshots
 
 The screenshot lane runs the app with `--openclaw-screenshot-mode`, which enters the built-in connected screenshot fixture instead of pairing with a live gateway. By default it chooses an available large iPhone model and a 13-inch iPad model from the installed Xcode runtime; override the model selection with a comma-separated `OPENCLAW_SNAPSHOT_DEVICES` value when the requested simulators exist locally.
 
-The lane builds the UI-test products once, creates a fresh simulator for each selected model and runtime, and runs all four screenshot tests in one `xcodebuild test-without-building` session per iPhone or iPad. Each test launches directly into its screenshot fixture and terminates the app afterward. It shuts down and deletes each owned simulator before creating the next, including the final Watch capture, and refuses to start while another simulator is running. Xcode command logs stay in `apps/ios/build/SnapshotLogs`; one result bundle and capture-attempt record per iPhone or iPad stay in `apps/ios/build/SnapshotTestResults`. See [screenshot-only validation](../VERSIONING.md#screenshot-only-validation) for hosted branch runs and opt-in sanitized diagnostics.
+The lane builds the UI-test products once and uses that fresh build's `.xctestrun` specification for capture without reopening the project. It creates a fresh simulator for each selected model and runtime, and runs all four screenshot tests in one `xcodebuild test-without-building` session per iPhone or iPad. Each test launches directly into its screenshot fixture and terminates the app afterward. It shuts down and deletes each owned simulator before creating the next, including the final Watch capture, and refuses to start while another simulator is running. Xcode command logs stay in `apps/ios/build/SnapshotLogs`; one result bundle and capture-attempt record per iPhone or iPad stay in `apps/ios/build/SnapshotTestResults`. See [screenshot-only validation](../VERSIONING.md#screenshot-only-validation) for hosted branch runs and opt-in sanitized diagnostics.
 
 Each iPhone or iPad gets one capture attempt containing all four tests. All four exact test identities must pass once, and every expected screenshot must be freshly captured. A failed capture or Xcode test result stops the lane, retaining its attempt record and any result bundle for diagnosis. CI rejects replacement captures as passing release evidence. Watch capture is unchanged.
 
@@ -289,12 +289,18 @@ The collector takes one serial host sample approximately every 15 seconds. It re
 host CPU counters, load, memory compression and swap activity, memory-pressure
 level, and disk activity. It samples processes at most once a minute, recording
 at most twelve top CPU/RSS process rows. Process rows
-contain PIDs, parent PIDs and roles, state, CPU time, and RSS. Roles use a fixed
+contain PIDs, parent PIDs and roles, state, CPU time, recent CPU utilization, and RSS. Roles use a fixed
 allowlist plus bounded executable basenames from installed Apple simulator runtime
 system directories. Device data, app bundles, containers, and other unknown names
 remain `other`. Fixed origin categories distinguish runtime, Xcode,
 and host-system executable locations where recognizable. Grouped counts and CPU
 deltas cover every parsed process, including rows outside the top-process display.
+`cpuRecentPercent` is macOS `ps`'s decaying average over up to one minute of
+previous real time, available even for a first observation. It ranks CPU rows
+and groups independently of interval deltas; group values sum these estimates.
+It is neither instantaneous utilization nor an exact share of the host sample,
+and may exceed 100% for a multithreaded process. `cpuMs` is lifetime CPU time;
+`cpuDeltaMs` and `cpuPercent` require two successful observations.
 `cpuObservedCount` identifies rows with a previous observation. A failed `ps`
 probe leaves the summary null and resets that baseline. Intentionally skipped
 process samples retain the baseline for the next observation, with CPU deltas

@@ -68,7 +68,7 @@ export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOption
       inheritedToolPolicySource?: "sender";
       inheritedToolDenylist?: string[];
       delegatedToolPolicyActive?: boolean;
-      skillWorkshop?: AnyAgentTool;
+      skillLibrary?: AnyAgentTool;
       portalAvailable?: boolean;
       prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
     }) => Promise<AnyAgentTool[]>;

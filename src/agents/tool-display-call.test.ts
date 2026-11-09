@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { unwrapToolCallForDisplay } from "./tool-display-call.js";
+import { stripOpenClawMcpToolPrefix, unwrapToolCallForDisplay } from "./tool-display-call.js";
+
+it("stripOpenClawMcpToolPrefix strips only the loopback transport prefix", () => {
+  expect(stripOpenClawMcpToolPrefix("mcp__openclaw__memory_search")).toBe("memory_search");
+  expect(stripOpenClawMcpToolPrefix("mcp_openclaw_memory_search")).toBe("memory_search");
+  expect(stripOpenClawMcpToolPrefix("memory_search")).toBe("memory_search");
+  expect(stripOpenClawMcpToolPrefix("mcp__other__tool")).toBe("mcp__other__tool");
+  expect(stripOpenClawMcpToolPrefix("mcp_other_tool")).toBe("mcp_other_tool");
+});
 
 describe("Tool Search display input", () => {
   it.each(
@@ -27,7 +35,7 @@ describe("Tool Search display input", () => {
     },
   );
 
-  it.each(["web_search", "tool_search", "tool_describe", undefined])(
+  it.each(["web_search", "tool_search", "tool_describe", "mcp__other__tool_call", undefined])(
     "leaves %s unchanged",
     (name) => {
       const call = { name, args: { id: "read", args: { path: "/workspace/README.md" } } };

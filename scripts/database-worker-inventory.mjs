@@ -443,6 +443,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/config/sessions/transcript-payload.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["clearSessionTranscriptActiveFacts"],
+        evidence:
+          "Cold navigation retention calls this only from session-cold-storage-worker.ts. Exact-row rewrites run in session-message-rewrite.worker.ts, media maintenance, or the native message/correction adapters whose callers require !isMainThread. createTranscriptPayloadUpdater is consumed only by updateSqliteTranscriptEventJsonInTransaction, called by Doctor transcript-label repair and transcript-directives migration. These invalidation callers have no plugin-SDK value export; other payload operations retain their mixed classification.",
+      },
+    ],
+  ],
+  [
     "src/agents/bash-durable-process-store.ts",
     [
       {
@@ -2309,7 +2320,7 @@ const reviewedOperations = new Map([
           "markPersonalGitHubPublicationReportedInDatabase",
         ],
         evidence:
-          "Only state/github-publication.worker.ts personalMutation restart/report calls these kernels. Native confirmation and reporting adapters retain their separate SQL and existing classification.",
+          "Only github-personal-publication-store.worker.ts githubPublications.personalRestart and state/github-publication.worker.ts personalMutation report call these respective kernels. Native confirmation and reporting adapters retain their separate SQL and existing classification.",
       },
       {
         tier: "T2",
@@ -3532,6 +3543,7 @@ const workerModules = new Set([
   "src/state/user-profile-read.worker.ts", // Shared-state read registry owns catalog identity and channel identity reads.
   "src/state/user-profile-enterprise-github-identity.ts", // Profile read-worker dispatch and profile writer merge/commit projections own these SQL readers; host attribution uses the async read command.
   "src/state/user-profile-catalog-identity.read.ts", // Only readUserProfileReadCommand in user-profile-read.worker.ts executes this reader.
+  "src/state/user-profile-openclaw-id.read.ts", // Only openclaw-state-read-operation-registry.ts imports this worker operation table.
   "src/gateway/github-personal-publication-store.worker.ts", // Shared-state publication request, mutation, and read workers only.
   "src/gateway/github-publication-store.worker.ts", // Shared-state publication request, mutation, and read workers only.
   "src/state/user-github-connections.worker.ts", // openclaw-state-worker-registry installs its operation table; host imports are type-only.
@@ -3546,8 +3558,8 @@ const workerModules = new Set([
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
   "src/skills/library/read.kernel.ts", // Only openclaw-state-read-operation-registry.ts imports this worker operation table.
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
-  "src/skills/workshop/changes.kernel.ts", // changes.worker.ts owns append/list SQL through the shared-state registry.
-  "src/skills/workshop/skill-usage.kernel.ts", // changes.worker.ts owns recordSkillUsageInDatabase; host imports are type-only.
+  "src/skills/workshop-changes/changes.kernel.ts", // changes.worker.ts owns append/list SQL through the shared-state registry.
+  "src/skills/runtime/skill-usage.kernel.ts", // skill-usage.worker.ts owns read/record SQL; host imports are type-only.
   "src/config/sessions/conversation-delivery-store.kernel.ts", // Agent execution registry writes and session transcript worker reads only.
   "extensions/memory-core/src/memory-entry-origin-reads.ts", // Memory search worker origin-read commands only.
   "extensions/memory-core/src/memory-entry-origins-delete.ts", // Memory origin worker delete command only.
@@ -3595,6 +3607,7 @@ const workerModules = new Set([
   "src/audit/message-execution-binding.ts", // Audit writer alone ensures and confirms outbound execution bindings.
 
   "src/channels/message/ingress-queue-health.kernel.ts",
+  "src/channels/message/ingress-queue-prune.kernel.ts", // Only channelIngress.prune in ingress-queue.worker.ts executes runtime retention writes.
   "src/channels/message/ingress-queue.kernel.ts",
 
   "src/config/sessions/session-accessor.sqlite-archive.worker.ts", // The archive owner starts this native worker; cold-prepare callbacks stay inside its read-only scope and private-port dispatcher.

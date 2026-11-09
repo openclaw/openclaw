@@ -135,6 +135,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -238,6 +239,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -393,6 +395,7 @@ internal fun ChatScreen(
   val sessionCreating by viewModel.chatSessionCreating.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val talkStatusText by viewModel.talkModeStatusText.collectAsState()
+  val talkMicrophoneMuted by viewModel.talkMicrophoneMuted.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val selectedActiveRun by viewModel.chatSelectedActiveRunPresentation.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
@@ -964,7 +967,15 @@ internal fun ChatScreen(
       )
     }
     if (talkActive) {
-      ChatNotice(title = nativeString("Talk"), body = talkStatusText)
+      ChatNotice(
+        title = if (talkMicrophoneMuted) nativeString("Talk · Microphone muted") else nativeString("Talk"),
+        body = talkStatusText,
+      ) {
+        TalkMicrophoneButton(
+          muted = talkMicrophoneMuted,
+          onClick = { viewModel.setTalkMicrophoneMuted(!talkMicrophoneMuted) },
+        )
+      }
     }
     ChatSwarmProgress(groups = swarmGroups)
   }
@@ -2966,6 +2977,7 @@ private fun DiffStatChip(
 private fun ChatNotice(
   title: String,
   body: String,
+  trailingContent: (@Composable () -> Unit)? = null,
 ) {
   Surface(
     modifier = Modifier.fillMaxWidth(),
@@ -2984,6 +2996,7 @@ private fun ChatNotice(
         Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
         Text(text = body, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       }
+      trailingContent?.invoke()
     }
   }
 }
@@ -3377,6 +3390,7 @@ private fun ChatComposer(
               BasicTextField(
                 value = textFieldValue,
                 enabled = inputEnabled,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                 // A pending IME callback must not edit the draft behind Details.
                 onValueChange = { if (inputEnabled) updateTextFieldValue(it) },
                 textStyle = draftStyle.copy(color = ClawTheme.colors.text),

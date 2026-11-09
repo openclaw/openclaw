@@ -2,6 +2,7 @@
 
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/user-profile-constants.ts";
 import type { SessionActivityPulse } from "../../../../src/shared/session-types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
@@ -9,12 +10,13 @@ import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../../lib/sessions/route-navigation.ts";
 import { createContext, createGateway, createSessions } from "../../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { mountSolid as mountDashboards } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid, mountSolid as mountDashboards } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DashboardsView } from "../dashboards/view.tsx";
 import { mountSolid, props, row } from "./session-activity-view.test-harness.ts";
 import { renderSessionActivityView } from "./session-activity-view.tsx";
+import { ACTIVITY_PHONE_QUERY } from "./session-activity.ts";
 
 const renderSessionActivityViewSolid = mountSolid<ReturnType<typeof props>>(
   renderSessionActivityView,
@@ -72,12 +74,34 @@ beforeEach(() => {
   );
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  cleanupSolid();
+  container.remove();
+  vi.unstubAllGlobals();
+});
 
 describe("session activity semantics", () => {
   afterEach(() => {
     setAvatarGatewayOrigin(null);
     vi.restoreAllMocks();
+  });
+
+  it("shows denied person activity without a misleading empty timeline", () => {
+    const filters = { personId: "online", query: "", time: "all" as const };
+    show({ filters, rows: [row("agent:main:private-timeline", { id: "online" }, 100)] });
+    expect(find('[data-activity-session="agent:main:private-timeline"]')).not.toBeNull();
+    const message =
+      "Other people's activity is private. You can still open sessions shared with you.";
+    show({
+      filters,
+      result: undefined,
+      error: message,
+    });
+    expect(text('[role="alert"]')).toBe(message);
+    expect(find("[data-activity-identity]")).toBeNull();
+    expect(find(".activity-pulse")).toBeNull();
+    expect(find("[data-activity-session]")).toBeNull();
+    expect(container.textContent).not.toContain("No sessions");
   });
 
   it.each([
@@ -274,7 +298,7 @@ describe("session activity semantics", () => {
               mainKey: "main",
               globalScope,
             },
-            filters: { query: "", ownerId: "", sort: "updated" },
+            filters: { query: "", ownerIds: [], sort: "updated", view: "grid", group: "none" },
             handlers: { onFilterChange: vi.fn() },
           }),
         { container },
@@ -365,6 +389,53 @@ describe("session activity semantics", () => {
 });
 
 describe("session activity people filter", () => {
+  it.each([false, true])("keeps unnamed identities private and unresolved (phone: %s)", (phone) => {
+    const matchMedia = window.matchMedia;
+    vi.stubGlobal("matchMedia", (query: string) =>
+      Object.assign(matchMedia(query), { matches: phone && query === ACTIVITY_PHONE_QUERY }),
+    );
+    const privateId = "private-login@example.test";
+    const opaqueId = "0123456789abcdef";
+    const input = props({
+      filters: { personId: privateId, query: "", time: "7d" },
+      rows: [
+        row("Unresolved session", { id: privateId }, 1),
+        row("Shared owner session", { id: GATEWAY_OWNER_PROFILE_ID }, 2),
+      ],
+      presenceViewers: [profile(opaqueId, { name: " ", email: "other-private@example.test" })],
+    });
+    input.result!.people = [
+      { identity: { type: "profile", id: privateId }, sessionCount: 1 },
+      { identity: { type: "profile", id: opaqueId }, sessionCount: 1 },
+      { identity: { type: "profile", id: "named" }, label: "Public person", sessionCount: 1 },
+      { identity: { type: "profile", id: GATEWAY_OWNER_PROFILE_ID }, sessionCount: 1 },
+    ];
+    show(input);
+    const unresolved = find("[data-activity-unresolved]")!;
+    expect(all("[data-activity-person]", unresolved)).toHaveLength(2);
+    const privateRow = find(`[data-activity-person="${privateId}"]`, unresolved)!;
+    expect(text(".activity-feed__people-name", privateRow)).toBe("Person");
+    expect(privateRow.querySelector(".activity-feed__unknown-avatar")).not.toBeNull();
+    expect(text(`[data-activity-person="${opaqueId}"] .activity-feed__people-name`)).toBe(
+      "01234567…",
+    );
+    expect(find('[data-activity-person="named"]', unresolved)).toBeNull();
+    const sharedOwner = find(`[data-activity-person="${GATEWAY_OWNER_PROFILE_ID}"]`)!;
+    expect(text(".activity-feed__people-name", sharedOwner)).toBe("Shared owner");
+    expect(sharedOwner.closest("[data-activity-unresolved]")).toBeNull();
+    expect(container.textContent).not.toContain("private-");
+    if (phone) {
+      const session = find('[data-activity-session="Unresolved session"]')!;
+      expect(session.querySelector(".activity-feed__unknown-avatar")).not.toBeNull();
+      expect(session.querySelector(".activity-feed__session-owner")).toBeNull();
+      expect(
+        text('[data-activity-session="Shared owner session"] .activity-feed__session-owner'),
+      ).toBe("Shared owner");
+    } else {
+      expect(text(".activity-feed__selected-person")).toBe("Person");
+    }
+  });
+
   it("groups connection diagnostics, orders known watched sessions, and scopes disclosure to the person", () => {
     const entry = {
       ts: 1,
@@ -398,7 +469,7 @@ describe("session activity people filter", () => {
       presenceViewers: [person],
     });
     show(input);
-    expect(text('[data-activity-identity="online"] h2')).toBe("online@example.test");
+    expect(text('[data-activity-identity="online"] h2')).toBe("Person");
     expect(text(".activity-feed__identity")).toContain("Online");
     const details = container.querySelector<HTMLDetailsElement>(
       ".activity-feed__connection-details",
