@@ -5,6 +5,7 @@ import type { MarkdownIt } from "markdown-it";
 const DRIVE_PATH_PREFIX_RE = /^[("'[<]?[A-Za-z]:(?:[\\/]|$)/;
 const UNC_PATH_PREFIX_RE = /^[("'[<]?\\\\[^\s\\/]/;
 const UNC_PATH_START_RE = /^\\\\[^\s\\/]/;
+const ASCII_PUNCTUATION_RE = /^[!-/:-@[-`{-~]$/;
 
 function isWindowsPathBackslash(src: string, pos: number): boolean {
   let start = pos;
@@ -25,10 +26,13 @@ export function installMarkdownWindowsPaths(markdownParser: MarkdownIt): void {
     if (state.src.charCodeAt(state.pos) !== 0x5c || !isWindowsPathBackslash(state.src, state.pos)) {
       return false;
     }
+    // The separator owns the punctuation after it, so `\_cache_` cannot open emphasis.
+    const next = state.src[state.pos + 1] ?? "";
+    const length = ASCII_PUNCTUATION_RE.test(next) ? 2 : 1;
     if (!silent) {
-      state.pending += "\\";
+      state.pending += state.src.slice(state.pos, state.pos + length);
     }
-    state.pos += 1;
+    state.pos += length;
     return true;
   });
 }
