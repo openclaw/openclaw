@@ -116,33 +116,28 @@ export function mergePendingUiPrefs(
     const previous = pending.personalSessionGroups;
     if (base !== undefined && prefValuesEqual(next.personalSessionGroupsPrevious, previous)) {
       const observed = new Map((base ?? []).map((group) => [group.id, group]));
-      const predecessor = new Map(previous.map((group) => [group.id, group]));
-      const wanted = new Map(next.personalSessionGroups.map((group) => [group.id, group]));
+      const previousIds = previous.map((group) => group.id);
+      const desired = next.personalSessionGroups;
+      const desiredIds = desired.map((group) => group.id);
       // Membership intent must survive whether an earlier unacknowledged save committed or not.
-      let ids = foldSidebarEntriesBase(
-        [...observed.keys()],
-        [...predecessor.keys()],
-        [...wanted.keys()],
-      );
-      const shared = new Set(ids.filter((id) => predecessor.has(id) && wanted.has(id)));
-      const priorOrder = [...predecessor.keys()].filter((id) => shared.has(id));
-      const desiredOrder = [...wanted.keys()].filter((id) => shared.has(id));
+      let ids = foldSidebarEntriesBase([...observed.keys()], previousIds, desiredIds);
+      const priorOrder = previousIds.filter((id) => ids.includes(id) && desiredIds.includes(id));
+      const desiredOrder = desiredIds.filter((id) => priorOrder.includes(id));
       if (!prefValuesEqual(priorOrder, desiredOrder)) {
         // Returning to an old order is still an authored reorder of the entries this edit saw.
         let index = 0;
-        ids = ids.map((id) => (shared.has(id) ? priorOrder[index++]! : id));
+        ids = ids.map((id) => (priorOrder.includes(id) ? priorOrder[index++]! : id));
       }
       merged.personalSessionGroupsBase = ids.map((id) => {
         const original = observed.get(id);
-        const prior = predecessor.get(id);
-        const desired = wanted.get(id);
+        const prior = previous.find((group) => group.id === id);
         // A label/reference reversal must not replay as an untouched original value.
         return original &&
-          prior &&
-          desired &&
-          prefValuesEqual(original, desired) &&
-          !prefValuesEqual(original, prior)
-          ? prior
+          prefValuesEqual(
+            original,
+            desired.find((group) => group.id === id),
+          )
+          ? (prior ?? original)
           : (original ?? prior!);
       });
     } else {
