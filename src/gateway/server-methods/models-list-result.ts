@@ -386,7 +386,6 @@ export async function prepareModelsListResult({
       const projectionSnapshot = decisions.snapshot;
       const accountCatalog = preparedProjectionOwner?.accountCatalog;
       const includeDetails = params.params.includeDetails;
-      const preserveUnknownAvailability = view === "provider-config" || includeDetails;
       const projectionIsCurrent =
         view === "provider-config" ? isCurrent : () => isCurrent() && decisions.isCurrent();
       const fastMode = createModelSpeedPolicyResolver({
@@ -480,10 +479,7 @@ export async function prepareModelsListResult({
           entries.set(runtimeKey, preparedEntry);
           prepared.set(entry, entries);
         }
-        const projectedAvailability =
-          preserveUnknownAvailability || evaluation.runtimeAuth?.source === "native"
-            ? evaluation.availability
-            : (evaluation.availability ?? false);
+        const projectedAvailability = evaluation.availability;
         const runtimeId = preparedEntry.agentRuntime.id;
         const speedPolicy = fastMode(entry, evaluation, runtimeId);
         const supportsFastMode = speedPolicy.supportsFastMode;

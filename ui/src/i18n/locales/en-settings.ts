@@ -1104,6 +1104,9 @@ const enSettings = {
     modelOne: "1 model",
     modelsAvailable: "{available} of {count} models available",
     modelsAvailableOne: "{available} of 1 model available",
+    modelAvailabilityUnknown: "1 model · availability unknown",
+    modelsAvailabilityUnknown: "{count} models · availability unknown",
+    modelsAvailabilityPartial: "{count} models · {available} available · {unknown} unknown",
     noStats: "No live usage data reported by this provider.",
     viewUsage: "View usage",
     row: {

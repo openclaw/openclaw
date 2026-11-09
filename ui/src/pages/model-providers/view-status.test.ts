@@ -206,6 +206,36 @@ it("counts a provider's only unavailable model in the singular", () => {
   expect(text(container.querySelector(".provider-row__meta"))).toContain("2 of 3 models available");
 });
 
+it.each([
+  { availability: [undefined], summary: "1 model · availability unknown" },
+  {
+    availability: [undefined, undefined, undefined, undefined],
+    summary: "4 models · availability unknown",
+  },
+  {
+    availability: [true, false, undefined],
+    summary: "3 models · 1 available · 1 unknown",
+  },
+])("preserves unknown readiness in the provider summary: $summary", ({ availability, summary }) => {
+  const models = availability.map((available, index) => ({
+    provider: "ollama",
+    id: `model-${index}`,
+    name: `Model ${index}`,
+    available,
+  }));
+  const cards = buildModelProviderCards({
+    authStatus: null,
+    models,
+    providerUsage: null,
+    providerOutcomes: [{ provider: "ollama", status: "ready" }],
+  });
+  const container = mount(props({ cards, configuredModels: models }));
+  expect(text(container.querySelector(".provider-row__meta"))).toContain(summary);
+  expect(text(container.querySelector("[data-model-readiness]"))).not.toContain(
+    "No models available",
+  );
+});
+
 it("hands the accent to an open API key form", () => {
   const editable = card({ id: "example", displayName: "Example", catalogStatus: "ready" });
   const viewProps = props({ cards: [editable], configuredModels: [] });
