@@ -11,11 +11,7 @@ import { resolveRootPath } from "../infra/boundary-path.js";
 import { toErrorObject } from "../infra/errors.js";
 import { findExistingAncestor, root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
-import {
-  classifyMediaReferenceSource,
-  normalizeMediaReferenceSource,
-  resolveMediaReferenceSandboxPath,
-} from "../media/media-reference.js";
+import { resolveSandboxMediaStoreReadPath } from "../media/media-reference.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { clampNumber } from "../utils.js";
 import {
@@ -832,6 +828,7 @@ type SandboxToolParams = {
   abortSignal?: AbortSignal;
   root: string;
   bridge: SandboxFsBridge;
+  stagedMediaPaths?: ReadonlyMap<string, string>;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
@@ -1127,13 +1124,13 @@ function createSandboxReadOperations(params: SandboxToolParams) {
   return {
     resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
       resolveSandboxFileQueueKey(params, absolutePath, signal),
-    resolvePath: (filePath: string) => {
-      const normalizedMediaSource = normalizeMediaReferenceSource(filePath);
-      if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
-        return resolveMediaReferenceSandboxPath(normalizedMediaSource, "media/inbound").resolved;
-      }
-      return resolveContainerPathCandidate(filePath);
-    },
+    resolvePath: async (filePath: string) =>
+      (await resolveSandboxMediaStoreReadPath({
+        source: filePath,
+        stagedMediaPaths: params.stagedMediaPaths,
+        exists: async (sandboxPath) =>
+          Boolean(await params.bridge.stat({ filePath: sandboxPath, cwd: params.root })),
+      })) ?? resolveContainerPathCandidate(filePath),
     decodeText: ({ buffer, absolutePath }: { buffer: Buffer; absolutePath: string }) =>
       params.bridge.resolvePath({ filePath: absolutePath, cwd: params.root }).hostPath
         ? decodeWindowsTextFileBuffer({ buffer })

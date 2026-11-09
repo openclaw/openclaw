@@ -260,6 +260,7 @@ function* assembleOpenClawCodingTools(
           shellTools: includeShellTools ? "full" : "disabled",
           ...coreToolPolicy,
           sandbox,
+          stagedMediaPaths: options?.stagedMediaPaths,
           skillsSnapshot: options?.skillsSnapshot,
           skillReadResources,
           skillInstructionPaths: options?.skillUsagePaths?.map((entry) => entry.readPath),
