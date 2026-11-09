@@ -143,27 +143,27 @@ export function pluginModule(revision: string, replacements = true) {
 export async function expectComposerFooterLayout(page: Page, composer: Locator, variant: string) {
   for (const width of [1280, 640]) {
     await page.setViewportSize({ width, height: 900 });
-    // Wait for the ResizeObserver-owned scrollport and its settled plugin layout together.
+    // ResizeObserver padding keeps transcript content clear of the overlapping footer.
     await expect
       .poll(
         () =>
           composer.evaluate((element) => {
             const footer = element.closest(".chat-footer");
-            const thread = element
-              .closest(".chat-main__conversation")
-              ?.querySelector(".chat-thread");
+            const thread = footer?.parentElement?.querySelector(".chat-thread");
             if (!(thread instanceof HTMLElement) || !thread.parentElement || !footer) {
               throw new Error("Expected the composer in the footer beside the transcript.");
             }
             const shellBounds = element.getBoundingClientRect();
             const footerBounds = footer.getBoundingClientRect();
+            const threadBounds = thread.getBoundingClientRect();
+            const paddingBottom = Number.parseFloat(getComputedStyle(thread).paddingBottom);
             const input = element.querySelector(".agent-chat__input");
             const style = getComputedStyle(footer, "::before");
             return {
               committed:
                 thread.offsetWidth === thread.parentElement.offsetWidth &&
                 thread.offsetHeight === thread.parentElement.offsetHeight,
-              separated: thread.getBoundingClientRect().bottom <= footerBounds.top,
+              contentClear: threadBounds.bottom - paddingBottom <= footerBounds.top,
               contained:
                 shellBounds.top >= footerBounds.top && shellBounds.bottom <= footerBounds.bottom,
               inputOutsideContext: Boolean(input) && !input?.closest(".chat-footer__context"),
@@ -175,7 +175,7 @@ export async function expectComposerFooterLayout(page: Page, composer: Locator, 
       )
       .toEqual({
         committed: true,
-        separated: true,
+        contentClear: true,
         contained: true,
         inputOutsideContext: true,
         content: "none",
