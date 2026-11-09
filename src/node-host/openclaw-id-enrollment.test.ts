@@ -189,7 +189,7 @@ test("refuses a replayed stale snapshot", async () => {
     { ...descriptor.snapshot.body, issued_at: 1 },
     world.gateway.signer,
   );
-  await expect(join()).rejects.toThrow("freshness_unavailable");
+  await expect(join()).rejects.toThrow(/freshness_unavailable.*Gateway is online.*new link/);
 });
 test("refuses membership that omits W even when Discovery grants a descriptor read", async () => {
   descriptor.snapshot = await signStatement(

@@ -28,6 +28,9 @@ import {
   type NodeHostOpenClawIdTarget,
 } from "./openclaw-id-target.js";
 
+const INVALID_DESCRIPTOR =
+  "Discovery returned an invalid node descriptor. Check --discovery-url with the claw owner, then join with a new link.";
+
 /** Only stable codes are surfaced; untrusted response messages may contain secrets or controls. */
 class NodeDiscoveryError extends Error {
   constructor(
@@ -175,11 +178,11 @@ export async function enrollNode(params: {
       try {
         const raw = await call("getNodeDescriptor");
         if (!isRecord(raw)) {
-          throw new Error("Discovery returned an invalid node descriptor");
+          throw new Error(INVALID_DESCRIPTOR);
         }
         const parsed = parseClawDescriptor(raw.descriptor);
         if (!parsed.ok) {
-          throw new Error("Discovery returned an invalid node descriptor");
+          throw new Error(INVALID_DESCRIPTOR);
         }
         const evidence = descriptorEvidence(parsed.descriptor);
         const checked = await verifyBindingForPin(
@@ -210,7 +213,9 @@ export async function enrollNode(params: {
           },
         );
         if (!freshness.verdict.ok) {
-          throw new Error(`Cannot verify current claw membership: ${freshness.verdict.code}`);
+          throw new Error(
+            `Cannot verify current claw membership: ${freshness.verdict.code}. Ask the claw owner to check that their Gateway is online and connected to OpenClaw ID, then join with a new link.`,
+          );
         }
         const snapshot = parseStatement(raw.snapshot, "MembershipSnapshot");
         if (!snapshot.ok || !snapshot.statement.body.node_peer_keys.includes(peer_key)) {
