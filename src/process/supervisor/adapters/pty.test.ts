@@ -267,9 +267,30 @@ describe("createPtyAdapter", () => {
     expect(stub.write).toHaveBeenCalledWith(process.platform === "win32" ? "\x1a" : "\x04");
     expect(adapter.stdin?.writable).toBe(false);
     expect(adapter.stdin?.writableEnded).toBe(true);
+    expect(adapter.stdin?.writableFinished).toBe(true);
+    adapter.stdin?.end();
+    expect(stub.write).toHaveBeenCalledTimes(2);
+    expect(adapter.stdin?.writable).toBe(false);
 
     adapter.dispose();
     expect(adapter.stdin?.destroyed).toBe(true);
+  });
+
+  it("surfaces a backend EOF write failure", async () => {
+    const stub = createStubPty();
+    const failure = new Error("write EIO");
+    stub.write.mockImplementation(() => {
+      throw failure;
+    });
+    spawnMock.mockReturnValue(stub);
+    const adapter = await createPtyAdapter({ shell: "bash", args: ["-lc", "cat"] });
+
+    try {
+      expect(() => adapter.stdin?.end()).toThrow(failure);
+      expect(adapter.stdin?.writable).toBe(false);
+    } finally {
+      adapter.dispose();
+    }
   });
 
   it("disposes PTY listeners", async () => {
