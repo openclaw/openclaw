@@ -1,0 +1,5 @@
+55
+# LOCAL 2026.11.8 row 22; source 4ed06580a8f4fa72bc348f36ec5e303ee97b9636.
+# Normalizes display only for private run-owned activity, retains strict parsing and leaves public display reader unchanged. Scope limits: Real SQLite append plus mocked executor readback; no live child-report dispatch.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.

@@ -21,7 +21,7 @@ import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transc
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import type { Message } from "../../llm/types.js";
-import { readNestedToolActivity } from "../../sessions/nested-tool-activity.js";
+import { readOwnNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import type { PreparedModelPromptProjection } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
@@ -131,7 +131,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
                   activeBranchAppend &&
                   (canonical.message.role === "assistant" ||
                     canonical.message.role === "toolResult" ||
-                    readNestedToolActivity(canonical.message) !== undefined),
+                    readOwnNestedToolActivity(canonical.message) !== undefined),
                 idempotencyLookup: options?.idempotencyLookup,
               }
             : undefined;
@@ -217,7 +217,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       (canonicalEntry.message.role === "assistant" ||
         canonicalEntry.message.role === "toolResult" ||
         // A nested send can advance the transcript before its tool activity is recorded.
-        readNestedToolActivity(canonicalEntry.message) !== undefined);
+        readOwnNestedToolActivity(canonicalEntry.message) !== undefined);
     let attemptOptions: AppendPersistenceOptions & { expectedMutationAt?: number | null } =
       persistenceOptions;
     const admittedUserId = this.persistenceTarget
