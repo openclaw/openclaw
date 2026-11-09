@@ -71,7 +71,7 @@ const summary = (text = "fallback summary") =>
     content: [{ type: "text", text }],
   });
 async function native(options: Options = {}, mockLoad = true) {
-  const infra = await stubPdfToolInfra(agentDir, {
+  const infra = await stubPdfToolInfra({
     provider: "anthropic",
     input: ["text", "document"],
     mockLoad,
@@ -80,7 +80,7 @@ async function native(options: Options = {}, mockLoad = true) {
   return { ...infra, analyze, pdf: tool(options) };
 }
 async function extraction(api = "openai-responses", config = pdfConfig(OPENAI)) {
-  const infra = await stubPdfToolInfra(agentDir, { provider: "openai", api, input: ["text"] });
+  const infra = await stubPdfToolInfra({ provider: "openai", api, input: ["text"] });
   const extract = vi
     .spyOn(pdfExtract, "extractPdfContent")
     .mockResolvedValue({ text: "Extracted content", images: [] });
@@ -342,7 +342,7 @@ it.each(["bedrock-converse-stream", "openai-completions"])(
     vi.stubEnv("AWS_ACCESS_KEY_ID", "");
     vi.stubEnv("AWS_SECRET_ACCESS_KEY", "");
     vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "");
-    const { setRuntimeApiKey } = await stubPdfToolInfra(agentDir, {
+    const { setRuntimeApiKey } = await stubPdfToolInfra({
       provider: "amazon-bedrock",
       api,
       input: ["text", "image"],
@@ -488,7 +488,7 @@ it.each(["before", "during"])(
 );
 
 it("uses the committed runtime generation for native PDF model selection", async () => {
-  await stubPdfToolInfra(agentDir, {
+  await stubPdfToolInfra({
     provider: "google",
     api: "google-generative-ai",
     input: ["text", "document"],
@@ -529,7 +529,7 @@ it.each([
 ] as const)(
   "preserves $source requester model policy for $scenario",
   async ({ source, scenario }) => {
-    const { loadSpy } = await stubPdfToolInfra(agentDir, {
+    const { loadSpy } = await stubPdfToolInfra({
       provider: "test-provider",
       api: "openai-completions",
       input: ["text"],
@@ -577,7 +577,7 @@ it.each([
 it.each(["runtime acquisition", "model resolution"])(
   "forwards cancellation to %s before provider work starts",
   async (stage) => {
-    await stubPdfToolInfra(agentDir, { provider: "openai" });
+    await stubPdfToolInfra({ provider: "openai" });
     const cancelled = new Error("PDF runtime cancelled");
     const started = createDeferredCore<AbortSignal | undefined>();
     const pending = createDeferredCore<never>();
