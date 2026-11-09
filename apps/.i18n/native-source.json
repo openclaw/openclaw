@@ -145,6 +145,7 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatImageViewer.kt","kind":"ui-call","surface":"android","id":"native.android.76781037f9018eb9","source":"Reset zoom"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatImageViewer.kt","kind":"ui-call","surface":"android","id":"native.android.bec69c3e7ba1df89","source":"Zoom in"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatImageViewer.kt","kind":"ui-call","surface":"android","id":"native.android.3c5bb83a100e94af","source":"Zoom out"},
+    {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatImageViewer.kt","kind":"ui-named-argument","surface":"android","id":"native.android.d7c1a4b02d181297","source":"${(transform.scale * 100).roundToInt()}%"},
     {"path":"apps/macos/Sources/OpenClaw/QuickChatModelMenu.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.4238f1cc6d590fc1","source":"Model"},
     {"path":"apps/macos/Sources/OpenClaw/QuickChatModelMenu.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.bc4027207f6213e0","source":"Session default"},
     {"path":"apps/macos/Sources/OpenClaw/QuickChatModelMenu.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.11910b82859672bc","source":"Unavailable"},
