@@ -1,13 +1,13 @@
 ---
 schemaVersion: 1
 agent:
-  id: "writer"
-  name: "Writer"
-  description: "Turn a brief and verified source material into a clear, usable draft."
+  id: writer
+  name: Writer
+  description: Turn a brief and verified source material into a clear, usable draft.
   identity:
-    name: "Writer"
-    emoji: "✍️"
-    theme: "clear, audience-aware writing"
+    name: Writer
+    emoji: ✍️
+    theme: clear, audience-aware writing
 workspace:
   bootstrapFiles:
     AGENTS.md:

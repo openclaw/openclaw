@@ -31,8 +31,5 @@ export function projectTemplateManifestDisclosure(
       byteLength: identity.byteLength,
     },
     manifestJson: JSON.stringify(source.manifest, null, 2),
-    ...(source.openClawProfile
-      ? { openClawProfileJson: JSON.stringify(source.openClawProfile, null, 2) }
-      : {}),
   };
 }

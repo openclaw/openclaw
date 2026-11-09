@@ -20,14 +20,11 @@ import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { applyTemplateAddPlanStateless } from "../templates/add-stateless.js";
 import { TEMPLATE_ADD_RESULT_SCHEMA_VERSION, TemplateAddMutationError } from "../templates/add.js";
 import {
-  findTemplateExtensionPackageCollisions,
-  planTemplateExtensions,
-} from "../templates/application-plan.js";
-import {
   ClawHubSourceError,
   withResolvedClawHubSource,
   type ClawHubTemplateTrust,
 } from "../templates/clawhub-source.js";
+import { templateDependencyInventory } from "../templates/dependency-inventory.js";
 import {
   assertTemplatesLabsEnabled,
   TEMPLATES_LABS_DISABLED_MESSAGE,
@@ -146,21 +143,8 @@ export async function runTemplatesInspectCommand(
     return;
   }
 
-  const config = getRuntimeConfig();
-  const extensionPlan = await planTemplateExtensions({
-    extensions: result.openClawProfile?.extensions ?? [],
-    workspace: result.source.packageRoot,
-    packagePreflight: (pkg, workspace) => preflightTemplatePackage(pkg, workspace, { config }),
-  });
-  const extensionCollisions = findTemplateExtensionPackageCollisions({
-    packages: result.manifest.packages,
-    extensions: result.openClawProfile?.extensions ?? [],
-  });
-  const diagnostics = [
-    ...result.diagnostics,
-    ...extensionPlan.blockers,
-    ...extensionCollisions.map(({ diagnostic }) => diagnostic),
-  ];
+  const inventory = templateDependencyInventory(result.manifest);
+  const diagnostics = result.diagnostics;
   const valid = diagnostics.every((diagnostic) => diagnostic.level !== "error");
   const payload = {
     schemaVersion: TEMPLATE_INSPECT_RESULT_SCHEMA_VERSION,
@@ -168,8 +152,7 @@ export async function runTemplatesInspectCommand(
     valid,
     source: result.source,
     manifest: result.manifest,
-    ...(result.openClawProfile ? { openClawProfile: result.openClawProfile } : {}),
-    extensions: extensionPlan.extensions,
+    inventory,
     diagnostics,
   };
   if (opts.json) {
@@ -185,13 +168,8 @@ export async function runTemplatesInspectCommand(
   runtime.log(
     `Agent: ${sanitizeTerminalText(result.manifest.agent.name ?? result.manifest.agent.id)}`,
   );
-  runtime.log(`Packages: ${result.manifest.packages.length}`);
-  runtime.log(`Extension requirements: ${extensionPlan.extensions.length}`);
-  for (const extension of extensionPlan.extensions) {
-    runtime.log(
-      `  ${extension.id}: ${extension.requirementState}; ${extension.detectedFormat ?? "unresolved"} -> ${(extension.mapped ?? []).join(", ") || "no mapped capabilities"}`,
-    );
-  }
+  runtime.log(`Skills: ${result.manifest.skills.length}`);
+  runtime.log(`Plugins: ${result.manifest.plugins.length}`);
   runtime.log(`MCP servers: ${Object.keys(result.manifest.mcpServers).length}`);
   runtime.log(`Automations: ${result.manifest.automations.length}`);
   if (!valid) {
@@ -304,7 +282,6 @@ async function runTemplatesAddFromSource(
     manifest: result.manifest,
     templateMarkdownBody: result.templateMarkdownBody,
     packageBootstrap: result.packageBootstrap,
-    openClawProfile: result.openClawProfile,
     source: result.source,
     diagnostics: result.diagnostics,
     context: {

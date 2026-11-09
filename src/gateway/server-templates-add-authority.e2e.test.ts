@@ -95,7 +95,8 @@ async function makeFixture(label: string): Promise<Fixture> {
       schemaVersion: 1,
       agent: { id: agentId, name: `${label} Template` },
       workspace: { bootstrapFiles: {}, files: [] },
-      packages: [{ kind: "plugin", source: "clawhub", ref: pluginName, version }],
+      skills: [],
+      plugins: [{ ref: pluginName, version }],
       mcpServers: {},
       automations:
         label === "allowed"

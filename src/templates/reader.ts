@@ -7,7 +7,6 @@ import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstra
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { digestTemplateBytes } from "./digest.js";
-import { readTemplateOpenClawProfile } from "./openclaw-profile.js";
 import {
   isCanonicalClawHubPackageName,
   isExactSemVer,
@@ -22,7 +21,6 @@ import {
 } from "./source-limits.js";
 import type {
   TemplateDiagnostic,
-  TemplateManifest,
   TemplateReadResult,
   TemplateSourceIdentity,
   TemplateWorkspaceSourceSnapshot,
@@ -134,7 +132,7 @@ export function parseTemplateMarkdown(
   } catch {
     return fileFailure("invalid_template_markdown_utf8", `${path} must contain valid UTF-8.`);
   }
-  const parsed = parseTemplateYaml(frontmatter, path, "frontmatter");
+  const parsed = parseTemplateYaml(frontmatter, path);
   return parsed.ok ? { ...parsed, body } : parsed;
 }
 
@@ -270,19 +268,7 @@ async function resolveSource(
   };
 }
 
-export async function readTemplateManifestFile(
-  path: string,
-  options: {
-    allowLegacyDynamicToolProfile?: boolean;
-    authorizeLegacyLocalUpdateHostSettings?: (params: {
-      manifest: TemplateManifest;
-      source: Pick<
-        TemplateSourceIdentity,
-        "kind" | "name" | "version" | "packageRoot" | "manifestPath"
-      >;
-    }) => boolean | Promise<boolean>;
-  } = {},
-): Promise<TemplateReadResult> {
+export async function readTemplateManifestFile(path: string): Promise<TemplateReadResult> {
   const sourceResult = await resolveSource(path);
   if (!sourceResult.ok) {
     return sourceResult;
@@ -309,28 +295,13 @@ export async function readTemplateManifestFile(
       "$.workspace",
     );
   }
-  const legacyAuthorizationContext = {
-    manifest: parsed.manifest,
-    source: {
-      kind: sourceResult.source.kind,
-      name: sourceResult.source.name,
-      version: sourceResult.source.version,
-      packageRoot: sourceResult.source.packageRoot,
-      manifestPath: sourceResult.source.manifestPath,
-    },
-  };
-  const allowLegacyDynamicToolProfile = options.allowLegacyDynamicToolProfile === true;
-  const allowLegacyLocalUpdateHostSettings = options.authorizeLegacyLocalUpdateHostSettings
-    ? await options.authorizeLegacyLocalUpdateHostSettings(legacyAuthorizationContext)
-    : false;
-  const profile = await readTemplateOpenClawProfile({
-    packageRoot: sourceResult.source.packageRoot,
-    metadata: parsed.manifest.metadata,
-    ...(allowLegacyDynamicToolProfile ? { allowLegacyDynamicToolProfile: true } : {}),
-    ...(allowLegacyLocalUpdateHostSettings ? { allowLegacyLocalUpdateHostSettings: true } : {}),
-  });
-  if (!profile.ok) {
-    return profile;
+  const packageFiles = await fsSafeRoot(sourceResult.source.packageRoot);
+  if (await packageFiles.exists("profiles")) {
+    return fileFailure(
+      "retired_template_configuration",
+      "Move supported settings from profiles into CLAW.md agent, and plugin references into plugins; remove the profiles directory and keep schemaVersion: 1.",
+      "$.profiles",
+    );
   }
   const resolvedSource = sourceResult.source;
   const hash = createHash("sha256");
@@ -344,18 +315,8 @@ export async function readTemplateManifestFile(
     digest: digestTemplateBytes(bytes),
   });
   const manifestSnapshot = snapshotFile(manifestResult.raw);
-  const profileSnapshot =
-    profile.raw && profile.path
-      ? {
-          sourcePath: profile.path.replaceAll("\\", "/"),
-          ...snapshotFile(profile.raw),
-        }
-      : undefined;
   add("canonical-source", Buffer.from(resolvedSource.manifestPath, "utf8"));
   add("manifest", manifestResult.raw);
-  if (profile.raw && profile.path) {
-    add(`profile:${profile.path.replaceAll("\\", "/")}`, profile.raw);
-  }
 
   if (resolvedSource.kind === "package") {
     const packageJson = resolvedSource.packageJsonRaw;
@@ -493,14 +454,12 @@ export async function readTemplateManifestFile(
     manifest: parsed.manifest,
     ...(hasMarkdownBody ? { templateMarkdownBody: manifestResult.body } : {}),
     ...(packageBootstrap ? { packageBootstrap } : {}),
-    ...(profile.profile ? { openClawProfile: profile.profile } : {}),
     source,
     snapshot: {
       manifest: manifestSnapshot,
-      ...(profileSnapshot ? { openClawProfile: profileSnapshot } : {}),
       workspaceSources,
       ...(packageBootstrap ? { packageBootstrap } : {}),
     },
-    diagnostics: [...parsed.diagnostics, ...(profile.diagnostics ?? [])],
+    diagnostics: parsed.diagnostics,
   };
 }

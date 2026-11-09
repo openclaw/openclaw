@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stringify } from "yaml";
 import {
   type TemplateDraftDocument,
@@ -13,6 +12,7 @@ import {
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { templateDependencyInventory } from "./dependency-inventory.js";
 import { TEMPLATE_BOOTSTRAP_FILE_NAMES } from "./manifest-contract.js";
 import { buildTemplateProject, extractBuiltTemplateArtifact } from "./project-build.js";
 import { TemplateProjectError } from "./project.js";
@@ -23,7 +23,6 @@ import {
   portableTemplatePathKey,
 } from "./schema-portability.js";
 import { parseTemplateManifest } from "./schema.js";
-import { parseTemplateYaml } from "./yaml-document.js";
 
 export const MAX_TEMPLATE_DRAFT_BYTES = 1_000_000;
 const DRAFT_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -144,25 +143,6 @@ function titleCaseTemplateName(value: string) {
     .join(" ");
 }
 
-function profileWithoutExcludedPlugins(content: string, refs: ReadonlySet<string>) {
-  if (refs.size === 0) {
-    return content;
-  }
-  const parsed = parseTemplateYaml(content, "profiles/openclaw.yml", "profile");
-  if (!parsed.ok || !isRecord(parsed.value)) {
-    return content;
-  }
-  const profile = parsed.value;
-  if (!Array.isArray(profile.extensions)) {
-    return content;
-  }
-  profile.extensions = profile.extensions.filter(
-    (extension) =>
-      !isRecord(extension) || typeof extension.ref !== "string" || !refs.has(extension.ref),
-  );
-  return stringify(profile);
-}
-
 /** Build a disposable, immutable publication snapshot from authored text only. */
 export async function prepareTemplateDraft(params: {
   workspaceDir: string;
@@ -190,7 +170,6 @@ export async function prepareTemplateDraft(params: {
     ...Object.values(draftManifest.workspace.bootstrapFiles).flatMap((entry) =>
       entry ? [entry.source] : [],
     ),
-    "profiles/openclaw.yml",
     "BOOTSTRAP.md",
     "LICENSE",
   ]);
@@ -199,7 +178,7 @@ export async function prepareTemplateDraft(params: {
       add({ id: `file:${file.path}`, kind: "file", label: file.path, detail: file.content });
     }
   }
-  for (const pkg of draftManifest.packages) {
+  for (const pkg of templateDependencyInventory(draftManifest)) {
     add({
       id: `package:${pkg.kind}:${pkg.ref}`,
       kind: pkg.kind === "skill" ? "skill" : "plugin",
@@ -245,8 +224,11 @@ export async function prepareTemplateDraft(params: {
       delete draftManifest.workspace.bootstrapFiles[target];
     }
   }
-  draftManifest.packages = draftManifest.packages.filter(
-    (pkg) => !excluded.has(`package:${pkg.kind}:${pkg.ref}`),
+  draftManifest.skills = draftManifest.skills.filter(
+    (pkg) => !excluded.has(`package:skill:${pkg.ref}`),
+  );
+  draftManifest.plugins = draftManifest.plugins.filter(
+    (pkg) => !excluded.has(`package:plugin:${pkg.ref}`),
   );
   for (const key of Object.keys(draftManifest.mcpServers)) {
     if (excluded.has(`mcp:${key}`)) {
@@ -256,20 +238,7 @@ export async function prepareTemplateDraft(params: {
   draftManifest.automations = draftManifest.automations.filter(
     (job) => !excluded.has(`cron:${job.id}`),
   );
-  const removedPluginRefs = new Set(
-    items.filter((item) => item.kind === "plugin" && !item.included).map((item) => item.label),
-  );
-  const selectedFiles = [];
-  for (const file of authored.files) {
-    if (excluded.has(`file:${file.path}`)) {
-      continue;
-    }
-    selectedFiles.push(
-      file.path === "profiles/openclaw.yml"
-        ? { ...file, content: profileWithoutExcludedPlugins(file.content, removedPluginRefs) }
-        : file,
-    );
-  }
+  const selectedFiles = authored.files.filter((file) => !excluded.has(`file:${file.path}`));
   const proposal = {
     ...authored,
     name: draftName,

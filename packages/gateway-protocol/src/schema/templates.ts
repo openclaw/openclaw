@@ -63,16 +63,23 @@ const TemplatesCatalogContentsSchema = closedObject({
   skills: Type.Array(
     closedObject({
       name: NonEmptyString,
+      source: Type.Literal("clawhub"),
+      ref: TemplatePackageName,
       version: NonEmptyString,
       excerpt: Type.Optional(Type.String()),
     }),
   ),
   integrations: Type.Array(
-    closedObject({
-      name: NonEmptyString,
-      kind: stringLiteralUnion(["plugin", "mcpServer"]),
-      version: Type.Optional(NonEmptyString),
-    }),
+    Type.Union([
+      closedObject({
+        name: NonEmptyString,
+        kind: Type.Literal("plugin"),
+        source: Type.Literal("clawhub"),
+        ref: TemplatePackageName,
+        version: NonEmptyString,
+      }),
+      closedObject({ name: NonEmptyString, kind: Type.Literal("mcpServer") }),
+    ]),
   ),
   automations: Type.Array(
     closedObject({
@@ -416,7 +423,6 @@ export const TemplateManifestDisclosureSchema = closedObject({
     byteLength: Type.Integer({ minimum: 1 }),
   }),
   manifestJson: NonEmptyString,
-  openClawProfileJson: Type.Optional(NonEmptyString),
 });
 
 export const TemplateLifecyclePlanResultSchema = closedObject({

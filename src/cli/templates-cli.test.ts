@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Command } from "commander";
 import { create as createTar } from "tar";
@@ -334,6 +334,7 @@ describe("templates cli", () => {
   it("discloses capability escalations in the human dry-run", async () => {
     const path = await writeManifest({
       ...cliTestHelpers.minimalManifest,
+      agent: { ...cliTestHelpers.minimalManifest.agent, tools: { allow: ["read"] } },
       mcpServers: {
         docs: {
           command: "node",
@@ -342,13 +343,6 @@ describe("templates cli", () => {
         },
       },
     });
-    const root = dirname(path);
-    await mkdir(join(root, "profiles"));
-    await writeFile(
-      join(root, "profiles", "openclaw.yml"),
-      "schemaVersion: 1\nagent:\n  tools:\n    allow: [read]\n",
-      "utf8",
-    );
 
     await add(["--dry-run"], path);
 
@@ -492,7 +486,8 @@ async function registryFixture(
   const manifestPath = join(root, "CLAW.md");
   const manifest = JSON.parse((await readFile(manifestPath, "utf8")).split("---")[1]!);
   if (failure !== "dependency") {
-    manifest.packages = [];
+    manifest.skills = [];
+    manifest.plugins = [];
   }
   await writeFile(manifestPath, `---\n${JSON.stringify(manifest)}\n---\n`);
   const archive = join(tempDirs.make("openclaw-registry-archive-"), "package.tgz");

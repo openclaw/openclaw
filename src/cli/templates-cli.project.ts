@@ -136,9 +136,6 @@ export async function runTemplatesValidateCommand(
       root: result.root,
       source: result.template.source,
       manifest: result.template.manifest,
-      ...(result.template.openClawProfile
-        ? { openClawProfile: result.template.openClawProfile }
-        : {}),
       excludedPaths: result.excludedPaths,
       diagnostics: result.diagnostics,
     });
@@ -216,7 +213,6 @@ export async function runTemplatesDevCommand(
       manifest: result.manifest,
       templateMarkdownBody: result.templateMarkdownBody,
       packageBootstrap: result.packageBootstrap,
-      openClawProfile: result.openClawProfile,
       source: {
         ...result.source,
         integrityKind: "artifact",

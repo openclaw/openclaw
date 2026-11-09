@@ -160,7 +160,8 @@ const emptyManifest: TemplateManifest = {
   schemaVersion: 1,
   agent: { id: "research-briefing", name: "Research Briefing" },
   workspace: { bootstrapFiles: {}, files: [] },
-  packages: [],
+  skills: [],
+  plugins: [],
   mcpServers: {},
   automations: [],
 };
@@ -206,10 +207,17 @@ async function useRealTrust(security = matchingSecurity) {
   mocks.security.mockResolvedValue(security);
 }
 
-async function prepareResolverFixture(packages: TemplateManifest["packages"] = []) {
+async function prepareResolverFixture(
+  packages: Array<{
+    kind: "skill" | "plugin";
+    source: "clawhub";
+    ref: string;
+    version: string;
+  }> = [],
+) {
   await fs.writeFile(
     path.join(fixtureRoot, "CLAW.md"),
-    `---\n${JSON.stringify({ ...emptyManifest, packages })}\n---\n`,
+    `---\n${JSON.stringify({ ...emptyManifest, skills: packages.filter((pkg) => pkg.kind === "skill").map((entry) => ({ ref: entry.ref, version: entry.version })), plugins: packages.filter((pkg) => pkg.kind === "plugin").map((entry) => ({ ref: entry.ref, version: entry.version })) })}\n---\n`,
   );
   return { stateDir: fixtureStateDir };
 }
@@ -232,10 +240,8 @@ beforeEach(async () => {
       bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } },
       files: [{ source: "USER.md", path: "USER.md" }],
     },
-    packages: [
-      { kind: "skill", source: "clawhub", ref: "@openclaw/citation-check", version: "1.1.0" },
-      { kind: "plugin", source: "clawhub", ref: "@openclaw/source-plugin", version: "2.0.0" },
-    ],
+    skills: [{ ref: "@openclaw/citation-check", version: "1.1.0" }],
+    plugins: [{ ref: "@openclaw/source-plugin", version: "2.0.0" }],
     mcpServers: { sources: { command: "source-tool" } },
     automations: [
       {
