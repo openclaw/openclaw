@@ -263,7 +263,8 @@ export function DesktopPicker(props: {
             {t("common.retry")}
           </button>
         </div>
-      ) : (
+      ) : null}
+      {!props.automatic && (!props.hostSetup || props.environments.length > 0) && (
         <>
           <div
             class={["desktop-toolbar", { "session-panel-rail": props.presentation === "desktop" }]}
