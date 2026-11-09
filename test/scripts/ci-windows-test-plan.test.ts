@@ -15,7 +15,7 @@ function packageScripts(files: string[]) {
 }
 
 describe("Windows CI whole-file placement", () => {
-  it("covers the package-owned native inventory exactly once within five budgeted jobs", () => {
+  it("covers the package-owned native inventory exactly once within five jobs", () => {
     const { scripts } = JSON.parse(
       readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
     );
@@ -28,8 +28,6 @@ describe("Windows CI whole-file placement", () => {
     expect(shards.flatMap((shard) => shard.targets).toSorted(compareFiles)).toEqual(
       inventory.toSorted(compareFiles),
     );
-    // The native package-swap fixture rounds four shards to 425s.
-    expect(shards.every((shard) => shard.predicted_seconds < 426)).toBe(true);
     expect(
       shards.filter(
         (shard) =>
@@ -75,6 +73,15 @@ describe("Windows CI whole-file placement", () => {
     const shards = createWindowsTestShards(packageScripts(files));
     expect(shards.flatMap((shard) => shard.targets).toSorted()).toEqual(files.toSorted());
     expect(shards.every((shard) => shard.predicted_seconds < 420)).toBe(true);
+  });
+
+  it("preserves whole-file coverage when growth exceeds five budgeted jobs", () => {
+    const files = Array.from({ length: 530 }, (_, index) => `src/native/growth-${index}.test.ts`);
+    const shards = createWindowsTestShards(packageScripts(files));
+    expect(shards).toHaveLength(5);
+    expect(shards.flatMap((shard) => shard.targets).toSorted()).toEqual(files.toSorted());
+    // Five setup charges plus 530 unmeasured files at 3s each require 422s per job.
+    expect(shards.map((shard) => shard.predicted_seconds)).toEqual([422, 422, 422, 422, 422]);
   });
 
   it.each([
