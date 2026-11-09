@@ -119,6 +119,17 @@ describe("heartbeat event prompts", () => {
     expect(prompt).not.toContain("Please relay the command output");
   });
 
+  it("keeps delivery-disabled exec output private in response-tool mode", () => {
+    const prompt = buildExecEventPrompt(["Exec completed (job, code 0) :: private-canary"], {
+      deliverToUser: false,
+      useHeartbeatResponseTool: true,
+    });
+    expect(prompt).toContain("user delivery is disabled");
+    expect(prompt).toContain("heartbeat_respond");
+    expect(prompt).not.toContain("private-canary");
+    expect(prompt).not.toContain("reply NO_REPLY only");
+  });
+
   it("uses heartbeat_respond for empty cron events in response-tool mode", () => {
     const prompt = buildCronEventPrompt([""], { useHeartbeatResponseTool: true });
 
