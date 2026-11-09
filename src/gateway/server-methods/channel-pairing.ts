@@ -11,6 +11,7 @@ import {
   validateChannelsPairingApproveParams,
   validateChannelsPairingDismissParams,
   validateChannelsPairingListParams,
+  validateChannelsPairingRemoveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   describeChannelAccount,
@@ -31,6 +32,7 @@ import {
   CHANNEL_PAIRING_PENDING_TTL_MS,
   dismissChannelPairingRequest,
   listChannelPairingRequests,
+  removeChannelAllowFromStore,
   resolveChannelPairingRequestId,
 } from "../../pairing/pairing-store.js";
 import { formatForLog } from "../ws-log.js";
@@ -346,6 +348,27 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
       } catch (error) {
         respondUnavailable(respond, error);
       }
+    },
+  ),
+
+  "channels.pairing.remove": defineValidatedGatewayHandler(
+    "channels.pairing.remove",
+    validateChannelsPairingRemoveParams,
+    async (opts) => {
+      const { params, respond } = opts;
+      const assertCurrent = capturePairingCliGuard(params.expectedOwnerId, opts);
+      if (!assertCurrent) {
+        return;
+      }
+      await respondUnavailableOnThrow(respond, async () => {
+        const removed = await removeChannelAllowFromStore({
+          channel: params.channel,
+          accountId: params.accountId,
+          target: "all" in params ? { all: true } : { entry: params.entry },
+          assertCurrent,
+        });
+        respond(true, { removed }, undefined);
+      });
     },
   ),
 

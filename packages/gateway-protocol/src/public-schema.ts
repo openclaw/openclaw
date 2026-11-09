@@ -279,6 +279,8 @@ export {
   ChannelsPairingApproveResultSchema,
   ChannelsPairingDismissParamsSchema,
   ChannelsPairingDismissResultSchema,
+  ChannelsPairingRemoveParamsSchema,
+  ChannelsPairingRemoveResultSchema,
   ChannelsStartParamsSchema,
   ChannelsStopParamsSchema,
   ChannelsLogoutParamsSchema,

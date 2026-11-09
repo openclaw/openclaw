@@ -1,13 +1,14 @@
 ---
-summary: "CLI reference for `openclaw pairing` (approve/list pairing requests)"
+summary: "CLI reference for `openclaw pairing` (approve/list pairing requests, remove approved senders)"
 read_when:
   - You're using pairing-mode DMs and need to approve senders
+  - You need to forget a sender that was approved through pairing
 title: "Pairing CLI"
 ---
 
 # `openclaw pairing`
 
-Approve or inspect DM pairing requests for channels that support pairing (chat DMs only - node/device pairing uses [`openclaw devices`](/cli/devices)).
+Approve or inspect DM pairing requests, and forget approved senders, for channels that support pairing (chat DMs only - node/device pairing uses [`openclaw devices`](/cli/devices)).
 
 Related: [Pairing flow](/channels/pairing)
 
@@ -16,7 +17,7 @@ Channels → DM access requests**. The Control UI supports approve, optional
 requester notification, and dismiss. Dismiss removes the current request but does
 not permanently block the sender.
 
-Both CLI commands use the authenticated Gateway that owns the selected local
+All three CLI commands use the authenticated Gateway that owns the selected local
 state directory, or hold exclusive offline ownership when no Gateway owns it.
 `list` participates because listing can prune expired or excess requests. The
 route requires `operator.admin` and the command's
@@ -36,11 +37,16 @@ openclaw pairing list telegram --json
 openclaw pairing approve <code>
 openclaw pairing approve telegram <code>
 openclaw pairing approve --channel telegram --account work <code> --notify
+
+openclaw pairing remove telegram <senderId>
+openclaw pairing remove --channel telegram --account work <senderId>
+openclaw pairing remove telegram --all
 ```
 
-Use `--account <accountId>` to restrict either command to one channel account.
+Use `--account <accountId>` to restrict a command to one channel account.
 If you omit `--account`, `list` shows pending requests across the channel's accounts,
-and `approve` uses the account belonging to the matching request. Explicitly empty
+`approve` uses the account belonging to the matching request, `remove <senderId>`
+targets the default account, and `remove --all` clears every account. Explicitly empty
 or whitespace-only values, such as `--account ""`, are rejected with
 `--account must not be blank`.
 
@@ -89,6 +95,40 @@ notification contracts; they do not run after a refused or uncertain RPC result.
 The command owner is the human operator account allowed to run owner-only commands and approve dangerous actions. Those actions include `/diagnostics`, `/export-session`, `/export-trajectory`, `/config`, and exec approvals. Pairing only lets a sender talk to the agent. It does not by itself grant owner privileges beyond this one-time bootstrap.
 
 If you approved a sender before the first-owner bootstrap shipped in 2026.4.29, run [`openclaw doctor`](/cli/doctor). It warns when no command owner is configured. It also shows the exact `openclaw config set commands.ownerAllowFrom ...` command to fix it.
+
+## `pairing remove`
+
+Forget senders that were approved through pairing. Approval writes the sender to
+the pairing allowlist store (`channel_pairing_allow_entries` in the state
+database), and that entry outlives the channel configuration: unsetting the bot
+token or reconnecting the channel with a new one keeps answering the same
+senders. This command removes those entries. It does not touch
+`channels.<channel>.allowFrom` in the config file.
+
+Usage:
+
+- `openclaw pairing remove <channel> <senderId>` forgets one sender
+- `openclaw pairing remove --channel <channel> <senderId>`
+- `openclaw pairing remove <channel> --all` forgets every approved sender of the channel
+- `openclaw pairing remove <channel> --all --account <accountId>` forgets every approved sender of one account
+
+Options: `--channel <channel>`, `--account <accountId>`, `--all`, `--json`.
+
+The sender id is the channel's own id for the sender, the value shown in the
+`list` table before approval (for Telegram, the numeric user id). Without
+`--account`, a single-sender removal targets the default account; pass
+`--account` when the sender was approved on another account. `--all` without
+`--account` clears every account of the channel.
+
+Each removed entry is printed with its account. When nothing matched, the command
+fails with status `1` and says so; nothing is changed. `--json` prints
+`{ channel, removed: [{ accountId, entry }] }`, with an empty array when nothing
+matched.
+
+The chat command `/allowlist remove --store <senderId>` removes the same entry,
+but it requires `commands.config` to be enabled and the channel to be running.
+`pairing remove` works offline through the local state owner, so a host that
+disconnects a channel can forget its approved senders without a running bot.
 
 ## Related
 

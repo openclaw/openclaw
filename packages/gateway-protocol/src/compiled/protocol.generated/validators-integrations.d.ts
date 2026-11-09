@@ -39,6 +39,7 @@ export {
   isChannelsPairingListParams,
   isChannelsPairingApproveParams,
   isChannelsPairingDismissParams,
+  isChannelsPairingRemoveParams,
   isChannelsStartParams,
   isChannelsStopParams,
   isChannelsLogoutParams,

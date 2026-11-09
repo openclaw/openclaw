@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
+import { defaultRuntime } from "../runtime.js";
 import { formatCliFailureLines } from "./failure-output.js";
 import type { runWithLocalStateOwner } from "./local-state-owner.js";
 import { registerPairingCli } from "./pairing-cli.js";
@@ -11,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   runWithLocalStateOwner: vi.fn<typeof runWithLocalStateOwner>(),
   listChannelPairingRequests: vi.fn(),
   approveChannelPairingCode: vi.fn(),
+  removeChannelAllowFromStore: vi.fn(),
   notifyPairingApproved: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
   replaceConfigFile: vi.fn(),
@@ -26,6 +28,7 @@ const mocks = vi.hoisted(() => ({
 const {
   listChannelPairingRequests,
   approveChannelPairingCode,
+  removeChannelAllowFromStore,
   notifyPairingApproved,
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
@@ -61,6 +64,7 @@ function expectApproval(channel = "telegram", account = {}) {
 vi.mock("../pairing/pairing-store.js", () => ({
   listChannelPairingRequests: mocks.listChannelPairingRequests,
   approveChannelPairingCode: mocks.approveChannelPairingCode,
+  removeChannelAllowFromStore: mocks.removeChannelAllowFromStore,
 }));
 
 vi.mock("./local-state-owner.js", () => ({
@@ -99,12 +103,13 @@ beforeEach(() => {
   );
   listChannelPairingRequests.mockResolvedValue([]);
   approveChannelPairingCode.mockResolvedValue({ id: "123", entry: pairingRequest });
+  removeChannelAllowFromStore.mockResolvedValue([{ accountId: "default", entry: "123" }]);
   readConfigFileSnapshotForWrite.mockResolvedValue(configSnapshot());
   replaceConfigFile.mockResolvedValue(undefined);
   notifyPairingApproved.mockResolvedValue(undefined);
 });
 
-async function runPairing(command: "list" | "approve", ...args: string[]) {
+async function runPairing(command: "list" | "approve" | "remove", ...args: string[]) {
   const program = new Command();
   program.name("test");
   registerPairingCli(program);
@@ -224,4 +229,64 @@ it("does not bootstrap, notify, or approve locally after OUTCOME_UNKNOWN", async
   await expect(runPairing("approve", "telegram", "ABCDEFGH", "--notify")).rejects.toThrow(reason);
 
   expectNoCalls(approveChannelPairingCode, replaceConfigFile, notifyPairingApproved);
+});
+
+it("removes one approved sender with the channel passed positionally", async () => {
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+  await runPairing("remove", "telegram", "123");
+
+  expect(removeChannelAllowFromStore).toHaveBeenCalledWith({
+    channel: "telegram",
+    target: { entry: "123" },
+    env: process.env,
+    assertCurrent: expect.any(Function),
+  });
+  expect(log.mock.calls).toEqual([
+    [
+      `${theme.success("Removed")} ${theme.muted("telegram")} sender ${theme.command("123")} ${theme.muted("(account default)")}.`,
+    ],
+  ]);
+});
+
+it("clears every approved sender of one account with --all and prints JSON", async () => {
+  const removed = [
+    { accountId: "work", entry: "123" },
+    { accountId: "work", entry: "456" },
+  ];
+  removeChannelAllowFromStore.mockResolvedValueOnce(removed);
+  const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+
+  await runPairing("remove", "--channel", "telegram", "--account", "work", "--all", "--json");
+
+  expect(removeChannelAllowFromStore).toHaveBeenCalledWith({
+    channel: "telegram",
+    accountId: "work",
+    target: { all: true },
+    env: process.env,
+    assertCurrent: expect.any(Function),
+  });
+  expect(writeJson).toHaveBeenCalledWith({ channel: "telegram", removed });
+});
+
+it("fails when no approved sender matched", async () => {
+  removeChannelAllowFromStore.mockResolvedValueOnce([]);
+
+  await expect(runPairing("remove", "telegram", "999")).rejects.toThrow(
+    'No approved sender "999" found for telegram.',
+  );
+});
+
+it.each([
+  { name: "a sender id together with --all", args: ["telegram", "123", "--all"] },
+  { name: "a missing sender id without --all", args: ["telegram"] },
+  { name: "a missing channel", args: ["--all"] },
+  {
+    name: "a sender id after --channel plus a positional one",
+    args: ["--channel", "telegram", "1", "2"],
+  },
+])("rejects $name for remove", async ({ args }) => {
+  await expect(runPairing("remove", ...args)).rejects.toThrow("openclaw pairing remove");
+
+  expectNoCalls(removeChannelAllowFromStore);
 });

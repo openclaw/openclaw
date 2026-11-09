@@ -25,6 +25,7 @@ import {
 import type { PairingRequestRecord } from "./pairing-store.types.js";
 import type {
   ChannelPairingWorkerOperations,
+  PairingAllowRemoval,
   PairingSelector,
 } from "./pairing-store.worker-contract.js";
 
@@ -254,6 +255,19 @@ export const channelPairingOperations = {
               state.allowFrom[mutation.accountId] = next;
             }
             result = { action: "allow", changed, allowFrom: changed ? next : current };
+          } else if (mutation.action === "allowClear") {
+            const removed: PairingAllowRemoval[] = [];
+            for (const [accountId, entries] of Object.entries(state.allowFrom ?? {})) {
+              if (mutation.accountId && accountId !== mutation.accountId) {
+                continue;
+              }
+              for (const entry of entries) {
+                removed.push({ accountId, entry });
+              }
+              delete state.allowFrom?.[accountId];
+            }
+            changed = removed.length > 0;
+            result = { action: "allowClear", removed };
           } else {
             const nowMs = Date.now();
             const expired = pruneExpiredRequests(state.requests, nowMs);
