@@ -17,6 +17,10 @@ const { values } = parseArgs({
     reference: { type: "string" },
     rounds: { type: "string", default: "5" },
     help: { type: "boolean" },
+    "query-plan": { type: "boolean" },
+    "plan-base": { type: "string" },
+    "plan-module": { type: "string" },
+    "plan-worker": { type: "string" },
   },
 });
 if (values.help) {
@@ -27,7 +31,237 @@ if (values.help) {
 Creates a disposable schema and SQLite database, reuses PGSEARCHPATH text and queries,
 records production SQL, compares 256 query results and EXPLAIN plans, then runs warm
 counterbalanced SQL timing rounds. Reference SQL is executed only from trusted local
-benchmark output. No model or embedding service is called. Removes its databases.`);
+benchmark output. No model or embedding service is called. Removes its databases.
+
+Query planning only (no PostgreSQL connection or database setup):
+  --query-plan --rounds 20 --plan-base <frozen keyword-query.ts> --out <new directory>
+Runs fresh serial base/head workers per query/tokenizer cell, separating the first
+production call after import from 100 warmups and 20,000 measured warm calls.
+The base source and current source must belong to this checkout. Run the whole
+command under the normal resource owner for complete CPU/wall/RSS accounting.`);
+  process.exit(0);
+}
+// Query planning is a source-loaded production workload, not SQL client timing.
+// Use --query-plan --rounds 20 --plan-base <frozen keyword-query.ts> --out <new dir>.
+// Each cell runs serial A/B pairs in fresh workers. Cold means the first call
+// after import, not filesystem-cold; 100 explicit warmups precede warm timing.
+if (values["query-plan"]) {
+  const assert = (await import("node:assert/strict")).default;
+  const { createHash } = await import("node:crypto");
+  const {
+    parseBenchmarkInteger,
+    runBenchmarkWorker,
+    summarizeBenchmarkTimings,
+    writeBenchmarkJson,
+  } = await import("./lib/benchmark-harness.mts");
+  const root = fs.realpathSync(process.cwd());
+  const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const iterations = 20_000;
+  const warmup = 100;
+  const fixtures = [
+    { id: "long-nfc", tokens: ["München"], match: [["München", "Mu\u0308nchen"]], short: [] },
+    { id: "long-nfd", tokens: ["Mu\u0308nchen"], match: [["Mu\u0308nchen", "München"]], short: [] },
+    { id: "mixed-nfc", tokens: ["fé", "noir"], match: [["noir"]], short: ["fé"] },
+    { id: "mixed-nfd", tokens: ["fe\u0301", "noir"], match: [["noir"]], short: ["fe\u0301"] },
+    { id: "short-nfc", tokens: ["fé"], match: [], short: ["fé"] },
+    { id: "short-nfd", tokens: ["fe\u0301"], match: [], short: ["fe\u0301"] },
+    { id: "substring", tokens: ["東京"], match: [], short: ["東京"] },
+    { id: "empty", tokens: [], match: [], short: [] },
+  ];
+  const cells = ["trigram", "unicode61"].flatMap((tokenizer) =>
+    fixtures.map((fixture) => ({ id: `${tokenizer}-${fixture.id}`, tokenizer, fixture })),
+  );
+  const modulePath = (value) => {
+    const file = fs.realpathSync(path.resolve(value));
+    assert(file.startsWith(root + path.sep), "production source must belong to this checkout");
+    return file;
+  };
+  const current = modulePath(
+    values["plan-module"] ?? "extensions/memory-core/src/memory/keyword-query.ts",
+  );
+  if (values["plan-worker"]) {
+    const cell = cells.find((entry) => entry.id === values["plan-worker"]);
+    assert(cell, "unknown query-plan cell");
+    const { fixture, tokenizer } = cell;
+    const groups = tokenizer === "trigram" ? fixture.match : fixture.tokens.map((token) => [token]);
+    const clauses = groups.map((forms) =>
+      forms.length === 1
+        ? { kind: "term", text: forms[0] }
+        : { kind: "any", clauses: forms.map((text) => ({ kind: "term", text })) },
+    );
+    const input = {
+      query: fixture.tokens.join(" "),
+      ftsTokenizer: tokenizer,
+      canonicalVariants: true,
+    };
+    const inputBytes = JSON.stringify(input);
+    const expected = {
+      matchQuery: clauses.length ? { kind: "all", clauses } : null,
+      substringTerms: tokenizer === "trigram" ? fixture.short : [],
+      tokens: fixture.tokens,
+    };
+    const sourceSHA256 = digest(fs.readFileSync(current));
+    const importStarted = performance.now();
+    const owner = await import(pathToFileURL(current).href);
+    const importMs = performance.now() - importStarted;
+    assert.equal(typeof owner.planKeywordSearch, "function");
+    const loadBefore = os.loadavg();
+    const coldCpu = process.cpuUsage();
+    const coldStart = performance.now();
+    const coldOutput = owner.planKeywordSearch(input);
+    const coldMs = performance.now() - coldStart;
+    const coldUsage = process.cpuUsage(coldCpu);
+    assert.deepEqual(coldOutput, expected);
+    for (let index = 0; index < warmup; index++) owner.planKeywordSearch(input);
+    const warmCpu = process.cpuUsage();
+    const warmStart = performance.now();
+    let output;
+    for (let index = 0; index < iterations; index++) output = owner.planKeywordSearch(input);
+    const warmMs = performance.now() - warmStart;
+    const warmUsage = process.cpuUsage(warmCpu);
+    assert.deepEqual(output, expected);
+    assert.equal(JSON.stringify(input), inputBytes, "planner mutated the input");
+    assert.equal(digest(fs.readFileSync(current)), sourceSHA256, "production source changed");
+    const usage = process.resourceUsage();
+    const payload = {
+      cell: cell.id,
+      sourceSHA256,
+      inputSHA256: digest(inputBytes),
+      outputSHA256: digest(JSON.stringify(output)),
+      coldMs,
+      coldCpuUs: coldUsage.user + coldUsage.system,
+      warmMsPerOp: warmMs / iterations,
+      warmCpuUsPerOp: (warmUsage.user + warmUsage.system) / iterations,
+      importMs,
+      processSnapshotMs: process.uptime() * 1000,
+      processSnapshotCpuUs: usage.userCPUTime + usage.systemCPUTime,
+      maxRSSKiB: usage.maxRSS,
+      loadBefore,
+      loadAfter: os.loadavg(),
+      node: process.version,
+      platform: process.platform,
+      arch: process.arch,
+    };
+    await new Promise((resolve) =>
+      process.stdout.write(`KEYWORD_PLAN ${JSON.stringify(payload)}\n`, resolve),
+    );
+    process.exit(0);
+  }
+  assert(values.out && values["plan-base"], "query planning requires --out and --plan-base");
+  const rounds = parseBenchmarkInteger(values.rounds, "--rounds", 20, 20);
+  const baseline = modulePath(values["plan-base"]);
+  const modules = { base: baseline, head: current };
+  const seals = Object.fromEntries(
+    Object.entries(modules).map(([arm, file]) => [arm, digest(fs.readFileSync(file))]),
+  );
+  assert.notEqual(seals.base, seals.head, "base and head source blobs must differ");
+  const out = path.resolve(values.out);
+  fs.mkdirSync(out);
+  const report = {
+    workloadSHA256: digest(fs.readFileSync(new URL(import.meta.url))),
+    head: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+    sourceSHA256: seals,
+    lockSHA256: digest(fs.readFileSync("pnpm-lock.yaml")),
+    loaderSHA256: digest(fs.readFileSync("scripts/lib/tsx-cli-shim.mjs")),
+    cachePolicy: "maintained TSX disk cache disabled; fresh worker process-local Map retained",
+    coldBoundary: "first production call after source import; not filesystem-cold",
+    snapshotBoundary:
+      "worker process metrics before result emission; outer command metrics must include all setup/output/cleanup",
+    rounds,
+    iterations,
+    warmup,
+    status: "running",
+    cells: [],
+    unrun: cells.map((cell) => cell.id),
+  };
+  const metrics = [
+    "coldMs",
+    "coldCpuUs",
+    "warmMsPerOp",
+    "warmCpuUsPerOp",
+    "processSnapshotMs",
+    "processSnapshotCpuUs",
+    "maxRSSKiB",
+  ];
+  const save = () => writeBenchmarkJson(report, path.join(out, "result.json"));
+  try {
+    for (const cell of cells) {
+      const samples = { base: [], head: [] };
+      const result = { id: cell.id, samples, summaries: {}, rejected: [] };
+      report.cells.push(result);
+      report.unrun.shift();
+      for (let round = 0; round < rounds; round++) {
+        for (const arm of ["base", "head"]) {
+          report.active = { cell: cell.id, round, arm };
+          const value = runBenchmarkWorker({
+            args: [
+              "--import",
+              "./scripts/tsx.mjs",
+              "scripts/bench-memory-keyword.mjs",
+              "--query-plan",
+              "--plan-worker",
+              cell.id,
+              "--plan-module",
+              modules[arm],
+            ],
+            label: `${cell.id}-${arm}-${round}`,
+            sentinel: "KEYWORD_PLAN ",
+            timeoutMs: 30_000,
+            validate(value) {
+              assert(
+                value &&
+                  typeof value === "object" &&
+                  value.cell === cell.id &&
+                  value.sourceSHA256 === seals[arm],
+              );
+              for (const metric of metrics)
+                assert(Number.isFinite(value[metric]) && value[metric] >= 0, metric);
+              assert.match(value.inputSHA256, /^[a-f0-9]{64}$/u);
+              assert.match(value.outputSHA256, /^[a-f0-9]{64}$/u);
+              assert.equal(value.node, process.version);
+              assert.equal(value.platform, process.platform);
+              assert.equal(value.arch, process.arch);
+              return value;
+            },
+          });
+          samples[arm].push(value);
+          if (arm === "head") {
+            const base = samples.base[round];
+            assert.equal(value.inputSHA256, base.inputSHA256);
+            assert.equal(value.outputSHA256, base.outputSHA256);
+          }
+          save();
+        }
+      }
+      for (const metric of metrics) {
+        const base = summarizeBenchmarkTimings(samples.base.map((sample) => sample[metric]));
+        const head = summarizeBenchmarkTimings(samples.head.map((sample) => sample[metric]));
+        result.summaries[metric] = { base, head };
+        for (const percentile of ["p50", "p95"]) {
+          assert(base[percentile] > 0, `${cell.id}/${metric}/${percentile}: non-positive baseline`);
+          if (head[percentile] >= base[percentile] * 1.2)
+            result.rejected.push(`${metric}/${percentile}`);
+        }
+      }
+      save();
+      assert.equal(
+        result.rejected.length,
+        0,
+        `${cell.id}: inclusive 20% cost STOP: ${result.rejected.join(", ")}`,
+      );
+    }
+    delete report.active;
+    report.status = "complete";
+    save();
+  } catch (error) {
+    report.status = "hold";
+    report.failure = error instanceof Error ? error.message : String(error);
+    save();
+    throw error;
+  }
+  await new Promise((resolve) =>
+    process.stdout.write(`Query-plan report: ${path.join(out, "result.json")}\n`, resolve),
+  );
   process.exit(0);
 }
 const count = Number(values.chunks),
