@@ -107,7 +107,7 @@ async function fixture(
     plannedRunAttempt: 1,
     jobs: jobs
       .slice(0, -1)
-      .sort(compareReleaseJobsByName)
+      .toSorted(compareReleaseJobsByName)
       .map((job) => ({
         acceptedRunAttempt: 1,
         completedAt: job.completed_at,
@@ -196,7 +196,9 @@ async function fixture(
         return { total_count: 0, artifacts: [] };
       }
       const attempt =
-        /^actions\/runs\/101\/attempts\/([1-9][0-9]*)\/jobs\?per_page=(100|50|30)&page=([1-9][0-9]*)$/u.exec(endpoint);
+        /^actions\/runs\/101\/attempts\/([1-9][0-9]*)\/jobs\?per_page=(100|50|30)&page=([1-9][0-9]*)$/u.exec(
+          endpoint,
+        );
       if (attempt) {
         const attemptJobs = attempts[Number(attempt[1]) - 1]!;
         const perPage = Number(attempt[2]);
