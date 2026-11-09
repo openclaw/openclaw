@@ -217,7 +217,7 @@ sizingSuite.define(() => {
       await capture("fit-before-axis");
       await sizing.selectOption("focus");
       const focusOverlay = panel.locator(".desktop-focus-overlay");
-      await expect(focusOverlay).toBeVisible();
+      await focusOverlay.waitFor({ state: "visible" });
       const canvasBounds = await canvas.boundingBox();
       if (!canvasBounds) {
         throw new Error("Desktop canvas must be visible");
@@ -226,7 +226,7 @@ sizingSuite.define(() => {
       await page.mouse.down();
       await page.mouse.move(canvasBounds.x + 400, canvasBounds.y + 400);
       await page.mouse.up();
-      await expect(focusOverlay).toBeHidden();
+      await focusOverlay.waitFor({ state: "hidden" });
       expect(await pointer()).toBeNull();
       await expect.poll(async () => (await dimensions())[1]).toBeGreaterThan(750);
       await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
@@ -249,10 +249,10 @@ sizingSuite.define(() => {
       await sizing.selectOption("fit");
       await expect.poll(dimensions).toEqual([1000, 750]);
       await sizing.selectOption("focus");
-      await expect(focusOverlay).toBeVisible();
+      await focusOverlay.waitFor({ state: "visible" });
       await focusOverlay.press("ArrowRight");
       await focusOverlay.press("Enter");
-      await expect(focusOverlay).toBeHidden();
+      await focusOverlay.waitFor({ state: "hidden" });
       await sizing.selectOption("fit");
       await selectAxis("fit-height");
       await expect.poll(dimensions).toEqual([Math.round((bounds.height * 4) / 3), bounds.height]);
