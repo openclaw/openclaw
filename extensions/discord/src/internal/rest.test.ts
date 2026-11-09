@@ -241,6 +241,41 @@ describe("RequestClient", () => {
     },
   );
 
+  it("honors a callback's own global Retry-After without pausing other callbacks", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const limitedPath = "/interactions/123/token/callback";
+    const otherPath = "/interactions/456/token/callback";
+    const attempts: Array<{ path: string; at: number }> = [];
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const path = new URL(new Request(input).url).pathname.replace(/^\/api\/v\d+/, "");
+      attempts.push({ path, at: Date.now() });
+      if (attempts.length === 1) {
+        return rateLimitResponse(0.1, { "Retry-After": "0.1", "X-RateLimit-Global": "true" }, true);
+      }
+      return createJsonResponse({ ok: path });
+    });
+    const client = requestClient(fetch);
+    const limited = client.post(limitedPath, { body: { type: 6 } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(attempts).toEqual([{ path: limitedPath, at: 0 }]);
+    const ordinary = client.get(messagePath);
+    await expect(client.post(otherPath, { body: { type: 6 } })).resolves.toEqual({ ok: otherPath });
+    await vi.advanceTimersByTimeAsync(99);
+    expect(attempts).toEqual([
+      { path: limitedPath, at: 0 },
+      { path: otherPath, at: 0 },
+    ]);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(limited).resolves.toEqual({ ok: limitedPath });
+    await expect(ordinary).resolves.toEqual({ ok: messagePath });
+    expect(attempts).toEqual([
+      { path: limitedPath, at: 0 },
+      { path: otherPath, at: 0 },
+      { path: limitedPath, at: 100 },
+      { path: messagePath, at: 100 },
+    ]);
+  });
+
   it("aborts stalled REST response bodies after the idle timeout", async () => {
     let cancelReason: unknown;
     const response = new Response(

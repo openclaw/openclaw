@@ -1,2 +1,2 @@
-# Regression: initial interaction callbacks bypass a global pause while ordinary requests wait.
-44
+# Regression: callbacks bypass global pauses but honor their own route and request retry deadlines.
+79

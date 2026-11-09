@@ -25,6 +25,7 @@ type ScheduledRequest<TData> = {
   query?: RequestQuery;
   routeKey: string;
   retryCount: number;
+  retryAt: number;
   state: ScheduledRequestState;
   signal?: AbortSignal;
   detachAbort?: () => void;
@@ -102,6 +103,7 @@ export class RestScheduler<TData> {
         ...params,
         routeKey,
         retryCount: 0,
+        retryAt: 0,
         state: "queued",
         resolve: (value) => {
           this.settleRequest(request);
@@ -305,8 +307,9 @@ export class RestScheduler<TData> {
           continue;
         }
         // Initial interaction callbacks are outside the bot-global limit,
-        // but still wait for their own route bucket.
+        // but still honor their own 429 deadline and route bucket.
         const waitMs = Math.max(
+          queued.retryAt - now,
           this.getBucketWaitMs(bucket, now),
           isInteractionCallbackPath(queued.path) ? 0 : globalWaitMs,
         );
@@ -331,7 +334,7 @@ export class RestScheduler<TData> {
     try {
       queued.resolve(await this.executor(queued));
     } catch (error) {
-      if (error instanceof RateLimitError && this.requeueRateLimitedRequest(queued)) {
+      if (error instanceof RateLimitError && this.requeueRateLimitedRequest(queued, error)) {
         return;
       }
       // A caller that cancelled during the issued attempt still learns the real
@@ -344,7 +347,10 @@ export class RestScheduler<TData> {
     }
   }
 
-  private requeueRateLimitedRequest(queued: ScheduledRequest<TData>): boolean {
+  private requeueRateLimitedRequest(
+    queued: ScheduledRequest<TData>,
+    error: RateLimitError,
+  ): boolean {
     // A caller that aborted while the attempt was in flight must not have its
     // never-issued retry queued again.
     if (queued.signal?.aborted || queued.retryCount >= MAX_RATE_LIMIT_RETRIES) {
@@ -352,6 +358,7 @@ export class RestScheduler<TData> {
     }
     const bucketKey = this.routeBuckets.get(queued.routeKey) ?? queued.routeKey;
     queued.retryCount += 1;
+    queued.retryAt = resolveRateLimitResetAt(error.retryAfter * 1000) ?? 0;
     queued.state = "queued";
     this.getBucket(bucketKey).pending[queued.priority].push(queued);
     this.queuedByLane[queued.priority] += 1;
