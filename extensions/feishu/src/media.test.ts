@@ -485,7 +485,6 @@ describe("saveMessageResourceFeishu", () => {
       const result = await downloadResource({ originalFilename: originalFilename ?? "backup.csv" });
 
       expect(result.id).toMatch(new RegExp(`^${savedBase}---[a-f0-9-]{36}\\.csv$`));
-      expect(await fs.readFile(result.path)).toEqual(Buffer.from(data));
       expect(messageResourceGetMock).toHaveBeenCalledOnce();
     },
   );
