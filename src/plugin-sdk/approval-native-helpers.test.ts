@@ -456,4 +456,39 @@ describe("shouldSuppressLocalNativeExecApprovalPrompt", () => {
     expect(suppress(true)).toBe(true);
     expect(suppress(false)).toBe(false);
   });
+
+  it("uses the plugin forwarding config and requires a matching native approval kind", () => {
+    const pluginPayload = {
+      ...payload,
+      channelData: {
+        execApproval: { ...payload.channelData.execApproval, approvalKind: "plugin" },
+      },
+    };
+    const hint = { ...activeExecHint, approvalKind: "plugin" as const };
+    const cfg = {
+      approvals: {
+        exec: { enabled: false },
+        plugin: { enabled: true, agentFilter: ["main"] },
+      },
+    };
+    const params = { cfg, payload: pluginPayload, hint, isTransportEnabled: () => true };
+
+    expect(shouldSuppressLocalNativeExecApprovalPrompt(params)).toBe(true);
+    expect(shouldSuppressLocalNativeExecApprovalPrompt({ ...params, hint: activeExecHint })).toBe(
+      false,
+    );
+    expect(shouldSuppressLocalNativeExecApprovalPrompt({ ...params, payload })).toBe(false);
+    expect(
+      shouldSuppressLocalNativeExecApprovalPrompt({
+        ...params,
+        cfg: { approvals: { exec: { enabled: true }, plugin: { enabled: false } } },
+      }),
+    ).toBe(false);
+    expect(
+      shouldSuppressLocalNativeExecApprovalPrompt({
+        ...params,
+        cfg: { approvals: { plugin: { enabled: true, agentFilter: ["other"] } } },
+      }),
+    ).toBe(false);
+  });
 });

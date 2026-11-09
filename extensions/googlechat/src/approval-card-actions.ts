@@ -166,7 +166,7 @@ function hasActiveGoogleChatExecApprovalCardForManualCommand(params: {
   ]) {
     for (const binding of entries) {
       if (
-        binding.approvalKind === "exec" &&
+        (binding.approvalKind === "exec" || binding.approvalKind === "plugin") &&
         binding.allowedDecisions.includes(params.decision) &&
         approvalRefMatches(binding.approvalId, params.approvalRef)
       ) {
