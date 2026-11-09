@@ -4,8 +4,8 @@ import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
-  ensureOpenClawModelsJson as ensurePreparedModelsJson,
-  planOpenClawModelsJsonSource as planPreparedModelsJsonSource,
+  ensurePreparedModelsJson,
+  planPreparedModelsJsonSource,
   prepareModelsConfigContext,
   resolveModelsConfigInput,
   type EnsureOpenClawModelsJsonOptions,

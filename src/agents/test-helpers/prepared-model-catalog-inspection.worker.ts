@@ -36,10 +36,10 @@ mockNativeModuleExports(new URL("../../infra/sqlite-snapshot-source.ts", import.
   },
 });
 const models = await import("../models-config.prepared.js");
-const planModels = models.planOpenClawModelsJsonSource;
+const planModels = models.planPreparedModelsJsonSource;
 mockNativeModuleExports(new URL("../models-config.prepared.ts", import.meta.url), {
   ...models,
-  planOpenClawModelsJsonSource: async (...args: Parameters<typeof planModels>) => {
+  planPreparedModelsJsonSource: async (...args: Parameters<typeof planModels>) => {
     const plan = await planModels(...args);
     plans.push(plan);
     return plan;

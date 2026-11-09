@@ -248,10 +248,10 @@ vi.mock("./model-catalog.js", async () => ({
 vi.mock("./models-config.prepared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./models-config.prepared.js")>()),
   // Lifecycle fixtures observe the prepared writer's captured config and directory.
-  ensureOpenClawModelsJson: (
+  ensurePreparedModelsJson: (
     context: import("./models-config.plan.js").PreparedModelsConfigContext,
   ) => mocks.ensureOpenClawModelsJson(context.discoveryAuthConfig, context.agentDir, context),
-  planOpenClawModelsJsonSource: (
+  planPreparedModelsJsonSource: (
     context: import("./models-config.plan.js").PreparedModelsConfigContext,
   ) => mocks.planOpenClawModelsJsonSource(context.discoveryAuthConfig, context.agentDir, context),
 }));
