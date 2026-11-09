@@ -140,7 +140,9 @@ suite.define(() => {
             await button.click();
           }
           await row.getByLabel("API key", { exact: true }).fill(key);
-          await row.getByRole("button", { name: "Save", exact: true }).click();
+          return saveAndRead(row, () =>
+            row.getByRole("button", { name: "Save", exact: true }).click(),
+          );
         };
 
         for (const [key, reason] of [
@@ -149,7 +151,7 @@ suite.define(() => {
           // A 5xx says nothing about the key, so it's reported as an unfinished check.
           ["sk-synthetic-servererror", /check didn’t finish\. The connection check failed\./u],
         ] as const) {
-          const { text, ms } = await saveAndRead(row, () => replace(key));
+          const { text, ms } = await replace(key);
           expect(text, key).not.toMatch(/API key saved\.(?! but)/u);
           expect(text, key).toMatch(reason);
           expect(ms, key).toBeLessThan(2_000);
@@ -162,7 +164,7 @@ suite.define(() => {
           }
         }
 
-        const good = await saveAndRead(row, () => replace("sk-synthetic-good"));
+        const good = await replace("sk-synthetic-good");
         expect(good.text).toContain("API key saved and verified.");
         expect(await row.getByLabel("API key", { exact: true }).count()).toBe(0);
 
@@ -172,10 +174,10 @@ suite.define(() => {
         await picker.getByRole("searchbox", { name: "Search providers…" }).fill("Tencent");
         await picker.getByRole("button", { name: "Tencent TokenHub" }).click();
         const form = page.getByRole("dialog", { name: "Add provider" });
-        const added = await saveAndRead(form, async () => {
-          await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-revoked");
-          await form.getByRole("button", { name: "Save provider", exact: true }).click();
-        });
+        await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-revoked");
+        const added = await saveAndRead(form, () =>
+          form.getByRole("button", { name: "Save provider", exact: true }).click(),
+        );
         expect(added.text).toMatch(/Authentication failed/u);
         expect(await form.isVisible()).toBe(true);
         expect(await form.getByRole("textbox", { name: "API key" }).isEditable()).toBe(true);
