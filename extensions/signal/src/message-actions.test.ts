@@ -9,9 +9,10 @@ const removeReactionSignalMock = vi
   .spyOn(sendReactionsModule, "removeReactionSignal")
   .mockResolvedValue({ ok: true });
 const sendModule = await import("./send.js");
-const sendMessageSignalMock = vi
-  .spyOn(sendModule, "sendMessageSignal")
-  .mockResolvedValue({ messageId: "1700000000999", receipt: {} as never });
+const sendMessageSignalMock = vi.spyOn(sendModule, "sendMessageSignal").mockResolvedValue({
+  messageId: "1700000000999",
+  receipt: { platformMessageIds: [], parts: [], sentAt: 0 },
+});
 const { signalMessageActions } = await import("./message-actions.js");
 
 const DEFAULT_CFG: OpenClawConfig = { channels: { signal: { account: "+15550001111" } } };
@@ -91,7 +92,7 @@ describe("signalMessageActions", () => {
       });
     sendMessageSignalMock.mockResolvedValueOnce({
       messageId: "1700000000600",
-      receipt: {} as never,
+      receipt: { platformMessageIds: [], parts: [], sentAt: 0 },
     });
     await edit("rev 1");
     await edit("rev 2");

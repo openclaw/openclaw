@@ -1,2 +1,2 @@
-46
-# Signal edit action: action-handler cases prove edits reach signal-cli with edit-timestamp and a repeat edit targets the newest revision; one send RPC case; action-list cases updated.
+77
+# Signal edit action: handler cases prove initial and repeated edits; loopback native/container cases preserve edit timestamps on success and rejection without ordinary-send fallback; action discovery cases updated.
