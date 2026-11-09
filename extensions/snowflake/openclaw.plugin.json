@@ -1,0 +1,23 @@
+{
+  "id": "snowflake",
+  "categories": ["models"],
+  "activation": { "onStartup": false },
+  "enabledByDefault": true,
+  "providers": ["snowflake"],
+  "providerAuthChoices": [
+    {
+      "provider": "snowflake",
+      "method": "oauth",
+      "choiceId": "snowflake-oauth",
+      "choiceLabel": "Snowflake local browser sign-in",
+      "groupId": "snowflake",
+      "groupLabel": "Snowflake Cortex",
+      "groupHint": "Local application OAuth; configure the Cortex endpoint first"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
