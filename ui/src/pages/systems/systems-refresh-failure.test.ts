@@ -239,8 +239,16 @@ it("keeps a live Simulator capture through telemetry and inventory polls", async
     retryInput.value = "漢".repeat(1366);
     retryInput.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
+    await waitForSolid(() =>
+      expect(
+        mounted.container.querySelector<HTMLButtonElement>(".simulator-preview__text button")
+          ?.disabled,
+      ).toBe(false),
+    );
     mounted.container.querySelector<HTMLButtonElement>(".simulator-preview__text button")!.click();
-    expect(mounted.container.querySelector('[role="alert"]')?.textContent).toContain("4,096");
+    await waitForSolid(() =>
+      expect(mounted.container.querySelector('[role="alert"]')?.textContent).toContain("4,096"),
+    );
     expect(retryInput.value).toBe("漢".repeat(1366));
     expect(
       request.mock.calls.filter(
