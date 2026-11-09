@@ -130,7 +130,9 @@ it("keeps a live Simulator capture through telemetry and inventory polls", async
   const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
   let sequence = 0;
   const request = vi.spyOn(client, "request").mockImplementation(async (method, params) => {
-    if (method === "environments.list") return { environments };
+    if (method === "environments.list") {
+      return { environments };
+    }
     if (method === "node.list") {
       return {
         nodes: [
@@ -143,12 +145,20 @@ it("keeps a live Simulator capture through telemetry and inventory polls", async
         ],
       };
     }
-    if (method === "system.info") return systemInfo;
-    if (method === "backup.status") return { targets: [], schedules: [], locations: [] };
+    if (method === "system.info") {
+      return systemInfo;
+    }
+    if (method === "backup.status") {
+      return { targets: [], schedules: [], locations: [] };
+    }
     if (method === "node.invoke") {
       const action = (params as { params: { action: string } }).params.action;
-      if (action === "stop") return { payload: { ok: true } };
-      if (action === "type") throw new Error("typed input refused");
+      if (action === "stop") {
+        return { payload: { ok: true } };
+      }
+      if (action === "type") {
+        throw new Error("typed input refused");
+      }
       if (action === "start") {
         return { payload: { sessionId: "session", sequence: 0, width: 402, height: 874 } };
       }
@@ -195,7 +205,9 @@ it("keeps a live Simulator capture through telemetry and inventory polls", async
     await controller.refresh();
     flush();
     // The old capture effect restarted after its async stop completed, not during the poll.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 100);
+    });
     expect(mounted.container.querySelector(".simulator-preview")).toBe(preview);
     expect(
       request.mock.calls.filter(
