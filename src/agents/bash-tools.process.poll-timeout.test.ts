@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
+import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
 import {
   resetDiagnosticSessionStateForTest,
   type SessionState,
@@ -247,6 +248,22 @@ test("an already-aborted poll leaves buffered output unread", async () => {
   controller.abort();
   await expect(poll(30_000, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
   check(await poll(), { status: "running", sessionId: session.id }, ["interactive prompt"]);
+});
+
+test("Send now stops a poll wait without cancelling its background process", async () => {
+  const { session, poll } = harness();
+  const controller = new AbortController();
+  const pending = poll(30_000, controller.signal);
+  await vi.advanceTimersByTimeAsync(0);
+  controller.abort(new ToolInterruptedByUser());
+  check(await pending, { status: "running", sessionId: session.id }, [
+    "Poll interrupted by the user",
+    "remains independently managed",
+  ]);
+  expect(getSession(session.id)).toBe(session);
+  expect(session.exited).toBe(false);
+  expect(cancel).not.toHaveBeenCalled();
+  expect(killTree).not.toHaveBeenCalled();
 });
 
 test("a waiting poll cannot adopt a same-id successor after removal", async () => {

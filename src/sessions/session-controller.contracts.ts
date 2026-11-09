@@ -46,6 +46,7 @@ import type {
   ReplyBackendMessageInjectionV2,
   ReplyBackendHandle,
   ReplyTurnParticipantInput,
+  ReplySteerNowResult,
 } from "./session-controller.backend-contracts.js";
 import type { LifecycleDiagnosticOperation } from "./session-controller.lifecycle-diagnostics.js";
 import type { SessionTarget } from "./session-controller.target.js";
@@ -218,6 +219,11 @@ export type ReplyOperation = {
   /** A steered input joined this operation; any earlier source answer predates it. */
   markSteeredInputAccepted(params: { inboundAudio: boolean }): void;
   markSourceReplyDelivered(): void;
+  /**
+   * Observe the moment a final message-tool send answers this turn's source, while the
+   * run continues. Channel progress UI retires here instead of rendering below the answer.
+   */
+  onSourceReplyDelivered(listener: () => void): () => void;
   /** Freeze the complete caller policy before a concrete backend attempt attaches. */
   /** @deprecated Use bindToolAuthoritySnapshotAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   bindToolAuthoritySnapshot(snapshot: ReplyToolAuthoritySnapshot): void;
@@ -546,6 +552,13 @@ export type SessionControllerInput = {
     settle(accepted: boolean): void;
     admitted?: boolean;
   };
+  /** The accepted steer's captured run survives withdrawal into followup custody. */
+  steerNow?: {
+    target: ReplyMessageInjectionTarget;
+    queueIdentity: string;
+    result?: ReplySteerNowResult | Promise<ReplySteerNowResult>;
+    retry?: (assertCurrent: () => void) => Promise<ReplyMessageInjectionAttempt | undefined>;
+  };
   claim?: SessionControllerMailboxClaim;
   ready?: (claim: SessionControllerMailboxClaim) => void;
   reject?: (error: unknown) => void;
@@ -574,6 +587,8 @@ export type SessionControllerMailboxClaim = {
   retryBeforeExecution?: boolean;
 };
 
+type FollowupSummaryEntry = { source: FollowupRun; line: string };
+
 /** All runnable inputs, including direct native producers, share this ordered owner. */
 export type SessionControllerMailbox = {
   readonly key: string;
@@ -598,14 +613,11 @@ export type SessionControllerMailbox = {
   cap: number;
   dropPolicy: "old" | "new" | "summarize";
   droppedCount: number;
-  summaryLines: string[];
-  summarySources: FollowupRun[];
+  summaryEntries: FollowupSummaryEntry[];
   activeSummarySources: Set<FollowupRun>;
   summaryElisions: Array<{
     contextKey: string;
-    count: number;
-    sources: FollowupRun[];
-    summaryLines: string[];
+    entries: FollowupSummaryEntry[];
     sourceRefs: Map<FollowupRun, FollowupRun>;
   }>;
   lastRun?: FollowupRun["run"];

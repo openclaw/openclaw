@@ -5,12 +5,12 @@ import type { SQLInputValue } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { readSessionArchiveText } from "../../test/helpers/session-archive.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareAgentDeleteDatabases } from "../agents/agent-delete-databases.js";
 import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { acquireAuthProfileReadDatabase } from "../agents/auth-profiles/sqlite-read-pool.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
-import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import { resolveSessionArtifactDirectory } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly as readEntry } from "../config/sessions/session-accessor.js";
 import * as archiveWorker from "../config/sessions/session-accessor.sqlite-archive.js";
@@ -31,6 +31,11 @@ import {
   removeAgentDeletionJournal,
 } from "../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createAgentDatabaseDeletionRefusal,
+  createAgentDatabaseInspectionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "./agent-database-admission.js";
 import { useAgentDeletionFixture } from "./agent-deletion.test-support.js";
 import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "./openclaw-agent-db-lease.js";
 import { closeDeletedAgentDatabases, reviveAgentDatabases } from "./openclaw-agent-db-readers.js";
@@ -79,13 +84,38 @@ function expectPublishedArchive(databasePath: string, sessionId: string, content
   assert(archive && typeof archive.archive_name === "string");
   expect(archive).toMatchObject({ published_at: expect.any(Number), last_publish_error: null });
   expect(
-    readSessionArchiveContentSync(
+    readSessionArchiveText(
       path.join(resolveSessionArtifactDirectory(databasePath), archive.archive_name),
     ),
   ).toContain(content);
 }
 
 describe("agent deletion database cleanup authority", () => {
+  it("purges a retained database after startup refuses its deleting agent", async () => {
+    const f = fixture();
+    await f.withDeletion(async (deletion) => {
+      recordAgentDatabaseAdmissions(
+        [
+          createAgentDatabaseDeletionRefusal(
+            createAgentDatabaseInspectionRefusal({
+              agentId: "worker",
+              paths: [f.target.path],
+              reason: "inspection pending",
+              pending: true,
+            }),
+          ),
+        ],
+        { env: f.env, source: "startup" },
+      );
+      await expect(f.purgeStore(deletion)).resolves.toBe(false);
+      expect(readRow(f.target.path, "SELECT count(*) AS count FROM session_nodes")).toEqual({
+        count: 0,
+      });
+      expect(fs.existsSync(f.target.path)).toBe(true);
+      expect(() => f.open()).toThrow("deleted during startup inspection");
+    });
+  });
+
   it.each([false, true])(
     "purges through the live deletion owner without host SQLite (cold: %s)",
     async (cold) => {
@@ -146,7 +176,7 @@ describe("agent deletion database cleanup authority", () => {
       );
     });
     assert(exported);
-    expect(readSessionArchiveContentSync(exported)).toContain("accepted export proof");
+    expect(readSessionArchiveText(exported)).toContain("accepted export proof");
     expect(f.read()).toBeUndefined();
     expect(
       readRow(

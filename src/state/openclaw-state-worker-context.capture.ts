@@ -7,7 +7,10 @@ import { getGatewayServiceInstallation } from "../infra/gateway-service-installa
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
-import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
+import {
+  isArtifactPreservingStateRead,
+  isLiveStateRead,
+} from "./artifact-preserving-state-reads.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { resolveLegacyCronDefaultStoreKey } from "./openclaw-state-db-cron-identity-migration.js";
 import { captureOpenClawStateSchemaReadAdmission } from "./openclaw-state-db-schema-policy.js";
@@ -29,6 +32,7 @@ export function captureOpenClawStateReadContextWithAdmission(
   | "runInCapturedSchemaScope"
   | "stateIntegrity"
   | "artifactPreservingReads"
+  | "liveStateReads"
 > & { assertPublicationCurrent: () => void } {
   const schema = captureOpenClawStateSchemaReadAdmission(pathname);
   const capturedAdmission = captureAdmission(pathname);
@@ -73,6 +77,7 @@ export function captureOpenClawStateReadContextWithAdmission(
     stateIntegrity: integrity,
     runInCapturedSchemaScope,
     artifactPreservingReads: isArtifactPreservingStateRead("agent", pathname) || undefined,
+    liveStateReads: isLiveStateRead() || undefined,
   };
 }
 

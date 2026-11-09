@@ -4,7 +4,7 @@ import { setRuntimeConfigSnapshotRefreshHandler } from "../../config/runtime-sna
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTestModelDefinition } from "../test-runtime-config-helpers.js";
-import { allowProviderModels } from "./auth-model-policy.js";
+import { allowLoginProviderModels } from "./auth-model-policy.js";
 import { updateConfig } from "./shared.js";
 
 describe("provider model access after sign-in", () => {
@@ -14,8 +14,8 @@ describe("provider model access after sign-in", () => {
   const readSaved = async (): Promise<OpenClawConfig> =>
     JSON.parse(await fs.readFile(state.configPath, "utf8"));
   const readBytes = () => fs.readFile(state.configPath, "utf8");
-  const allow = (assertCurrent?: (config?: OpenClawConfig) => void) =>
-    allowProviderModels({ config, agentId: "main", provider: "sample", runtime, assertCurrent });
+  const allow = (assertCurrent?: () => void) =>
+    allowLoginProviderModels({ config, runtime, assertCurrent }, "main", "sample");
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "model-access" });

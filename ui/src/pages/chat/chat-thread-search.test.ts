@@ -15,9 +15,11 @@ const messageGroups = (props: Partial<CachedChatItemsProps>) =>
 it.each([
   ["inline code", "Title: fix(review)", "Title: `fix(review): keep proof`"],
   ["emphasis", "ready for review", "**Ready** for _review_"],
+  ["plain prose whitespace", "17.\tSynthetic", "Transcript 0 message 17.\nSynthetic detail."],
+  ["Unicode case folding", "ſearch", "**Search**"],
   ["composed query", "CAFÉ now", "**Cafe**\u0301 now"],
   ["decomposed query", "cafe\u0301 now", "**Café** now"],
-  ["hex color", "Use #fff now", "**Use** #fff now"],
+  ["hex color", "Use #ffffff now", "**Use** #ffffff now"],
   ["link label", "see the docs", "See [the docs](https://docs.openclaw.ai/chat)"],
   ["link target", "docs.openclaw.ai/chat", "See [the docs](https://docs.openclaw.ai/chat)"],
   ["html block", "proof steps", "<details>\n<summary>Proof</summary>\n\nsteps\n</details>"],
@@ -57,6 +59,16 @@ it("does not omit a visible color when matching a phrase", () => {
       messages: [assistant("**Use** #fff now", 1_000)],
       searchOpen: true,
       searchQuery: "Use now",
+    }),
+  ).toEqual([]);
+});
+
+it.each(["1. hello", "1.\nhello"])("does not treat ordered-list markers as prose: %s", (source) => {
+  expect(
+    messageGroups({
+      messages: [assistant(source, 1_000)],
+      searchOpen: true,
+      searchQuery: "1.\thello",
     }),
   ).toEqual([]);
 });

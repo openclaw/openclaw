@@ -69,6 +69,9 @@ export function createPlacementRecoveryActions(
   initialPlacements: readonly WorkerDispatchPlacement[],
 ) {
   const { environments, failure, placements } = deps;
+  const startupClaims = new Map(
+    initialPlacements.map((placement) => [placement.sessionId, placement.turnClaim]),
+  );
   // Retire orphan refs in bounded post-start sweeps, never on readiness or targeted recovery.
   // Completed roots belong to this startup pass; settlement removes new refs itself.
   let orphanCleanupPending: PendingWorkspaceResultOrphanCleanup | undefined;
@@ -126,6 +129,20 @@ export function createPlacementRecoveryActions(
       }
     }
     if (mode === "restart" && placement.turnClaim) {
+      const current = placement.turnClaim;
+      const interrupted = startupClaims.get(placement.sessionId);
+      // Background startup can reach this session after a worker or remote-exec turn
+      // has been admitted. Only the exact pre-start claim belongs to restart recovery.
+      if (
+        !interrupted ||
+        current.claimId !== interrupted.claimId ||
+        current.runId !== interrupted.runId ||
+        current.generation !== interrupted.generation ||
+        current.owner !== interrupted.owner ||
+        current.ownerEpoch !== interrupted.ownerEpoch
+      ) {
+        return;
+      }
       const claim = projectWorkerSessionTurnClaim(placement);
       if (claim && isExactAttachedEnvironment(environment, placement)) {
         // Retain files before stopping the old worker; this never adopts its execution authority.
@@ -258,7 +275,16 @@ export function createPlacementRecoveryActions(
     const diskAuthority = placementOwner
       ? (await getSessionRepositoryWorkspaceStore().find(placementOwner))?.diskAuthority
       : undefined;
-    if (diskAuthority && (placementOwner?.state !== "active" || facts.moves.size > 0)) {
+    const diskMove = facts.moves.get(sessionId);
+    const gatewayDiskMove =
+      placementOwner?.state === "draining" &&
+      diskMove?.target.kind === "gateway" &&
+      !diskMove.abandonSource;
+    if (
+      diskAuthority &&
+      !gatewayDiskMove &&
+      (placementOwner?.state !== "active" || facts.moves.size > 0)
+    ) {
       // Transfer/export and destructive lifecycle support must precede activation.
       // Recovery never replaces a disk binding with an old mirror or fresh source clone.
       log.warn("Disk-authoritative workspace transfer or teardown is held for explicit recovery");
@@ -524,6 +550,26 @@ export function createPlacementRecoveryActions(
         candidate.moveSourceEnvironmentId !== environmentId
       ) {
         continue;
+      }
+      if (
+        environmentId === undefined &&
+        candidate.state === "active" &&
+        !candidate.workspaceRecoveryPending
+      ) {
+        const placement = await placements.getAsync(candidate.sessionId);
+        const environment = placement?.environmentId
+          ? environments.get(placement.environmentId)
+          : undefined;
+        // Periodic healthy owners need no workspace projection or repository lookup. Interrupted
+        // results, moves, and journals remain candidates even with an unchanged attachment.
+        if (
+          placement?.state === "active" &&
+          isCurrentActiveWorkerEnvironment(placement, environment) &&
+          environment &&
+          !activePlacementExecutionError(placement, environment, environments)
+        ) {
+          continue;
+        }
       }
       await measureGatewayRestartTrace(
         "worker-placement.reconcile.session",

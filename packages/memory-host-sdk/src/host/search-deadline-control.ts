@@ -1,10 +1,10 @@
 import type {
   EmbeddingDeadlineControl,
   EmbeddingDeadlineControlOptions,
-} from "../../../../src/plugins/embedding-provider-types.js";
+} from "../../../../src/plugins/embedding-provider-runtime-types.js";
 
 // Keep existing memory callers on the same per-call channel as embedding providers.
-export { EMBEDDING_DEADLINE_CONTROL as MEMORY_SEARCH_DEADLINE_CONTROL } from "../../../../src/plugins/embedding-provider-types.js";
+export { EMBEDDING_DEADLINE_CONTROL as MEMORY_SEARCH_DEADLINE_CONTROL } from "../../../../src/plugins/embedding-provider-runtime-types.js";
 
 type MemorySearchDeadlineControlAction = "pause" | "resume";
 

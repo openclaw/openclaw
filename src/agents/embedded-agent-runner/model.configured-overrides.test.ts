@@ -39,6 +39,40 @@ function resolveRoute(baseUrl: string) {
 }
 
 describe("configured model proxy routing", () => {
+  it.each([
+    ["https://api.anthropic.com", "preferred"],
+    ["https://proxy.example.com", undefined],
+  ])(
+    "resolves catalog capabilities independently of configured output limits at %s",
+    (baseUrl, expectedCodeMode) => {
+      const staticCatalogModel: ProviderRuntimeModel = {
+        ...catalogModel,
+        contextWindow: 32_000,
+        maxTokens: 2048,
+        compat: { codeMode: "preferred", supportsTemperature: false },
+      };
+      const resolved = applyConfiguredProviderOverrides({
+        provider: "anthropic",
+        modelId: catalogModel.id,
+        discoveredModel: {
+          ...staticCatalogModel,
+          maxTokens: 512,
+          maxTokensSource: "configured",
+          compat: { codeMode: "capable" },
+        },
+        providerConfig: { api: "anthropic-messages", baseUrl, models: [] },
+        manifestAlias: { provider: "anthropic" },
+        providerMetadataOwners,
+        getStaticCatalogModel: () => staticCatalogModel,
+        runtimeHooks: createProviderRuntimeTestMock({ handledDynamicProviders: [] }),
+      });
+      expect(resolved?.maxTokens).toBe(512);
+      expect(resolved?.maxTokensSource).toBe("configured");
+      expect(resolved?.compat?.codeMode).toBe(expectedCodeMode);
+      expect(resolved?.compat?.supportsTemperature).toBe(expectedCodeMode ? false : undefined);
+    },
+  );
+
   it("keeps catalog models routed through Vercel AI Gateway as operator proxy routes", () => {
     expect(resolveRoute("https://ai-gateway.vercel.sh")?.baseUrl).toBe(
       "https://ai-gateway.vercel.sh",

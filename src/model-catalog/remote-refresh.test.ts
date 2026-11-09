@@ -71,9 +71,8 @@ const storeCatalog = (row: StoredCatalog) => writeCatalog(row, workerContext(dat
 const mirrorConfig = (suffix = "") => ({
   models: { catalogRefresh: { url: `https://mirror.example.test/${suffix}catalog.json` } },
 });
-const currentKey = "modelCatalog.remote.v4";
-const previousKey = "modelCatalog.remote.v3";
-const olderKey = "modelCatalog.remote.v2";
+const currentKey = "modelCatalog.remote.v3";
+const previousKey = "modelCatalog.remote.v2";
 const legacyKey = "modelCatalog.remote";
 const initial: StoredCatalog = {
   bundle_json: '{"schemaVersion":1}',
@@ -321,9 +320,6 @@ describe("remote model catalog store", () => {
     machineState.importConfigMachineState([[previousKey, initial]], db);
     expect(await read()).toEqual({ id: 1, ...initial });
     put(previousKey, null);
-    put(olderKey, { ...initial, checked_at: 4 });
-    expect(await read()).toEqual({ id: 1, ...initial, checked_at: 4 });
-    put(olderKey, null);
     put(legacyKey, { ...initial, checked_at: 5 });
     expect(await read()).toEqual({ id: 1, ...initial, checked_at: 5 });
     const beforeFailure = workerContext(db);
@@ -373,7 +369,7 @@ describe("remote model catalog store", () => {
     ).toEqual({ value_json: "{" });
   });
 
-  it.each([legacyKey, olderKey, previousKey])(
+  it.each([legacyKey, previousKey])(
     "adopts only matching %s rows without writing the older client slot",
     async (key) => {
       const { db, check, state, put } = store();
@@ -386,7 +382,7 @@ describe("remote model catalog store", () => {
       put(key, latest);
       expect(readCatalog(db)).toEqual({ id: 1, ...latest });
       if (key === legacyKey) {
-        // Raw newer-slot precedence survives a null payload; reads still fall back.
+        // Raw v2 precedence survives a null payload, while reads still fall back to v1.
         put(previousKey, null);
         expect(await check(15, { expected: latest })).toBe(false);
         expect(state()).toBeUndefined();

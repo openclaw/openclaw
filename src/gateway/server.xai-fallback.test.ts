@@ -35,7 +35,7 @@ const rejections = new Map<
     code?: string;
     type?: string;
     message: string;
-    reason: "auth" | "billing" | "rate_limit";
+    reason: "auth" | "billing" | "rate_limit" | "server_error";
   }
 >([
   ...[400, 401, 403, 404, 410, 422].map(
@@ -44,6 +44,11 @@ const rejections = new Map<
   ["auth-code", { code: "credential_rejected", message: authError, reason: "auth" }],
   ["auth-type", { type: "upstream_error", message: authError, reason: "auth" }],
   ["auth-text", { message: authError, reason: "auth" }],
+  [
+    "token-generation-event",
+    { type: "error", message: tokenGenerationError, reason: "server_error" },
+  ],
+  ["auth-event", { type: "error", message: authError, reason: "auth" }],
   [
     "billing",
     {
@@ -151,7 +156,7 @@ it(
         const payload: { model: string } = JSON.parse(body);
         requests.push(payload.model);
         const rejection = rejections.get(scenario);
-        if (payload.model === primaryModel && rejection) {
+        if (payload.model === primaryModel && rejection && rejection.type !== "error") {
           const error = {
             message: rejection.message,
             code: rejection.code,
@@ -186,16 +191,25 @@ it(
             writeEvent("response.output_item.done", { output_index: 0, item });
           }
           response.end(
-            encodeEvent({
-              type: "response.failed",
-              response: {
-                id: `failure-${requests.length}`,
-                status: "failed",
-                error: { code: null, message: tokenGenerationError },
-                output: scenario === "fallback" ? [] : [item],
-                usage: { input_tokens: 21, output_tokens: 4, total_tokens: 25 },
-              },
-            }),
+            encodeEvent(
+              rejection?.type === "error"
+                ? {
+                    type: "error",
+                    code: null,
+                    sequence_number: 2,
+                    message: rejection.message,
+                  }
+                : {
+                    type: "response.failed",
+                    response: {
+                      id: `failure-${requests.length}`,
+                      status: "failed",
+                      error: { code: null, message: tokenGenerationError },
+                      output: scenario === "fallback" ? [] : [item],
+                      usage: { input_tokens: 21, output_tokens: 4, total_tokens: 25 },
+                    },
+                  },
+            ),
           );
           return;
         }
@@ -322,13 +336,10 @@ it(
           idempotencyKey: `xai-${scenario}`,
         });
         const terminalReceived = createDeferred();
-        const expectsSuccess = selected !== "no-fallback" && selected !== "exhausted";
         const receiveTerminal = (event: ChatEvent) => {
           if (
             event.sessionKey === sessionKey &&
-            (expectsSuccess
-              ? event.state === "final" && event.stopReason === "stop"
-              : event.state === "error")
+            ((event.state === "final" && event.stopReason === "stop") || event.state === "error")
           ) {
             terminalReceived.resolve();
           }
@@ -363,7 +374,9 @@ it(
         const runEvents = events.filter((event) => event.runId === started.runId);
         check(requests[0]).toBe(primaryModel);
         check(requests.filter((requested) => requested === primaryModel)).toHaveLength(
-          rejection && rejection.reason !== "rate_limit" ? 1 : 2,
+          rejection && rejection.reason !== "rate_limit" && rejection.reason !== "server_error"
+            ? 1
+            : 2,
         );
         const terminal = runEvents
           .filter((event) => event.state === "final")

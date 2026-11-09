@@ -21,6 +21,10 @@
   --list-row-min-height: 48px;
   --list-row-padding: var(--space-3) var(--space-4);
   --list-row-icon-size: 15px;
+  --chrome-icon-size: 14px;
+  /* Lucide draws on a 24 grid, so these strokes render at 1px at their icon size. */
+  --list-row-icon-stroke: 1.6px;
+  --chrome-icon-stroke: calc(12px / 7);
   --list-row-title-weight: 500;
   --surface-hover-amount: 6%;
   --surface-selected-amount: 8%;
@@ -39,7 +43,10 @@
   --card-highlight: rgba(255, 255, 255, 0.04);
   --popover: #191c24;
   --popover-foreground: #f0f0f2;
+  --chat-send-bg: var(--primary);
   --chat-send-foreground: var(--primary-foreground);
+  --chat-send-hover-bg: color-mix(in srgb, var(--primary) 86%, var(--text-strong));
+  --chat-send-active-bg: var(--primary-active);
   --chat-composer-surface: var(--popover);
   /* Composer controls take their ink from the composer's own surface rather
      than the canvas. Built-in dark themes lift that surface well above the
@@ -54,7 +61,6 @@
     var(--text) 50%,
     var(--chat-composer-surface)
   );
-  --session-hovercard-surface: color-mix(in srgb, var(--card) 94%, black 6%);
 
   --panel: #0e1015;
   --panel-strong: #191c24;
@@ -85,8 +91,9 @@
   --sidebar-rail-control-color: var(--icon-interactive);
   --sidebar-toolbar-action-opacity: 1;
   --sidebar-rail-action-bg: var(--accent);
+  --sidebar-rail-action-foreground: var(--accent-foreground);
   --sidebar-rail-action-hover-bg: var(--accent-hover);
-  --sidebar-rail-action-active-bg: color-mix(in srgb, var(--accent) 90%, var(--text));
+  --sidebar-rail-action-active-bg: var(--accent-active);
 
   /* GitHub references share an opaque neutral surface; only their ink carries status. */
   --github-item-bg: color-mix(in srgb, var(--text) 6%, var(--bg));
@@ -111,12 +118,9 @@
   --rail-header-action-disabled-opacity: 0.4;
   --rail-header-action-gap: 2px;
   --rail-header-background: var(--bg);
-  --session-header-sharing-surface: color-mix(in srgb, var(--text) 4%, transparent);
-  --session-header-control-surface: color-mix(in srgb, var(--text) 5%, transparent);
+  --session-header-control-surface: var(--surface-selected);
   --session-header-control-hover-bg: var(--surface-hover);
-  --session-header-control-active-hover-bg: color-mix(in srgb, var(--text) 10%, transparent);
-  --session-header-sharing-hover-bg: var(--surface-hover);
-  --session-header-sharing-active-bg: var(--session-header-control-active-hover-bg);
+  --session-header-control-active-hover-bg: var(--surface-selected-hover);
   --session-header-control-active-color: var(--icon-active);
   --rail-header-title-size: var(--control-ui-text-sm);
   --rail-header-title-weight: 600;
@@ -137,6 +141,7 @@
   --accent-muted: #ff5c5c;
   --accent-subtle: rgba(255, 92, 92, 0.1);
   --accent-foreground: #0e1015;
+  --accent-active: var(--accent);
   --accent-glow: rgba(255, 92, 92, 0.2);
   --inbox-attention: #e5243b;
   --inbox-attention-foreground: #ffffff;
@@ -167,6 +172,7 @@
   /* Imported palettes supply a fill/ink pair, not a hover pair. Keep their
      contrast intact; built-in palettes override with audited hover colors. */
   --primary-hover: var(--primary);
+  --primary-active: var(--primary);
   --primary-foreground: #ffffff;
 
   --secondary: #161920;
@@ -240,7 +246,6 @@
    * --bg-muted, --panel-hover or --input: include the actual host in validation.
    */
   --ok: #22c55e;
-  --ok-muted: rgba(34, 197, 94, 0.75);
   --ok-subtle: rgba(34, 197, 94, 0.08);
   --destructive: #ef4444;
   --destructive-hover: var(--destructive);
@@ -253,6 +258,8 @@
   --danger-muted: rgba(248, 113, 113, 0.75);
   --danger-subtle: rgba(248, 113, 113, 0.08);
   --info: #60a5fa;
+  /* A run in progress: the accent, unless a theme's accent reads as waiting or as plain text. */
+  --status-running: var(--accent);
   --info-subtle: rgba(96, 165, 250, 0.08);
   --pr-merged: #a78bfa;
   /* Categorical chart series: distinct hues validated for color-vision separation on this surface. */
@@ -304,6 +311,13 @@
   --control-ui-text-md: calc(14px * var(--control-ui-text-scale));
   --control-ui-text-lg: calc(16px * var(--control-ui-text-scale));
   --control-ui-input-text-size: max(16px, calc(14px * var(--control-ui-text-scale)));
+  --field-padding-inline: 10px;
+  --field-radius: calc(10px * var(--openclaw-corner-radius-scale));
+  --composer-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  --field-font-size: var(--control-ui-text-sm);
+  --field-bg: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  --field-border: color-mix(in srgb, var(--border) 70%, transparent);
+  --field-focus-border: color-mix(in srgb, var(--accent) 85%, var(--text));
   --chat-text-size: var(--control-ui-text-md);
   --chat-block-gap: var(--chat-text-size);
 
@@ -355,16 +369,26 @@
   --radius-full: 9999px;
   --radius: 10px;
 
-  /* One profile for every scroll surface: 12px hit target, 6px visible thumb
-     (transparent border + content-box clip). Derived from --muted so every
-     theme family and both modes follow with no override. scrollbar-color is a
-     real property, not a token, but it lives here (not a second :root block)
-     to satisfy no-duplicate-selectors; it also inherits into shadow roots. */
+  /* Every spinner: a closed ring at 20% with a short round-capped arc on top.
+     A mask paints currentColor, and each stroke stays the same px at any size. */
+  --spinner-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='2'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 1.0px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
+  --spinner-mask-small: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.75px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
+  --spinner-mask-avatar: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.75'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.875px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
+  --spinner-mask-large: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='2.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 1.25px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
+  --spinner-trace-stroke: 1.75px;
+  --spinner-trace-dash: 26 74;
+
+  /* One profile for every scroll surface, thumb only: faint at rest, a step
+     stronger while the pointer is over the scroller, clearly visible on the
+     thumb itself or while dragging. 12px hit target, 6px visible thumb
+     (transparent border + content-box clip); compact surfaces (menus,
+     popovers, phone widths) swap in the 8px/4px pair. Derived from --muted so
+     every theme family and both modes follow with no override. */
   --scrollbar-size: 12px;
-  --scrollbar-thumb-inset: 3px;
-  --scrollbar-thumb: color-mix(in srgb, var(--muted) 32%, transparent);
+  --scrollbar-size-compact: 8px;
+  --scrollbar-thumb: color-mix(in srgb, var(--muted) 10%, transparent);
+  --scrollbar-thumb-near: color-mix(in srgb, var(--muted) 16%, transparent);
   --scrollbar-thumb-hover: color-mix(in srgb, var(--muted) 64%, transparent);
-  scrollbar-color: var(--scrollbar-thumb) transparent;
 
   /* Corner-scale signal: whatever the @supports block below sets this to,
      tests and other introspection can read it to learn the active multiplier
@@ -373,21 +397,29 @@
      inherit the widened surface treatment (excluded selectors, the tokens
      exported to embedded MCP apps in mcp-app-theme.ts). */
   --openclaw-corner-radius-scale: 1;
-  /* Theme-facing composer corner family; themes may pick e.g. `scoop scoop round round`.
-     Engines without corner-shape keep the circular radius. */
-  --chat-composer-corner-shape: superellipse(1.5);
+  /* Circular defaults avoid the reported WebKit 27.3 superellipse paint failure.
+     Themes can still override this shared corner family for the input and its notices. */
+  --chat-composer-corner-shape: round;
 
   /* Menu steps sit on the --radius-* chain so themes keep their corner character;
      near-square themes pin them. Shared knobs keep transient menus from drifting. */
   --radius-menu: calc(var(--radius-md) * 1.6 * var(--openclaw-corner-radius-scale));
-  --radius-menu-item: calc(var(--radius-sm) * 2 * var(--openclaw-corner-radius-scale));
+  --radius-menu-item: calc(var(--radius-md) * var(--openclaw-corner-radius-scale));
   --radius-tooltip: calc(var(--radius-sm) * 1.25 * var(--openclaw-corner-radius-scale));
   --menu-radius: var(--radius-menu);
+  --menu-radius-large: 22px;
   --menu-item-radius: var(--radius-menu-item);
   --menu-item-height: 28px;
   --menu-padding: 4px;
+  --menu-item-gap: 2px;
   --menu-selected: var(--surface-selected);
-  --menu-surface: color-mix(in srgb, var(--popover) 90%, transparent);
+  /* Half the selected fill: an unchosen choice row must not read as the chosen one. */
+  --menu-hover: color-mix(
+    in srgb,
+    var(--text) calc(var(--surface-selected-amount) / 2),
+    transparent
+  );
+  --menu-surface: color-mix(in srgb, var(--popover) 95%, transparent);
   --menu-backdrop: blur(8px);
   /* Hairlines are spread shadows so they never consume the panel's box. */
   --menu-shadow:
@@ -405,6 +437,18 @@
   --duration-fast: 100ms;
   --duration-normal: 180ms;
   --duration-slow: 300ms;
+  /* Loading placeholder sweep: `.skeleton::after`. */
+  --skeleton-duration: 2s;
+  --skeleton-easing: ease-in-out;
+  --skeleton-highlight-strength: 12%;
+  --skeleton-sweep-width: 50%;
+  /* Sits past the surface in both modes, so the sweep never passes through the surface color. */
+  --skeleton-base-raised: color-mix(in srgb, var(--muted) 15%, transparent);
+  /* Running label sweep: `.text-shimmer`. */
+  --text-shimmer-duration: 2.4s;
+  --text-shimmer-easing: ease-in-out;
+  --text-shimmer-highlight-strength: 100%;
+  --text-shimmer-sweep-width: 30%;
   /* Sheet spring from ui/src/lib/motion/spring.ts (SwiftUI duration/bounce model:
      0.3 s, no bounce, fitted to the iOS sheet curve). spring.test.ts keeps it in sync. */
   --motion-sheet-duration: 441ms;
@@ -430,7 +474,7 @@
   --safe-area-right: env(safe-area-inset-right, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left: env(safe-area-inset-left, 0px);
-  --shell-viewport-base: 100vh;
+  --shell-viewport-base: 100dvh;
   --shell-safe-area-bottom: var(--safe-area-bottom);
   --shell-canvas-height: min(
     var(--shell-viewport-base),
@@ -451,10 +495,26 @@
   color-scheme: dark;
 }
 
-/* Menu actions follow the platform 44px touch-target contract for coarse pointers. */
+/* Touch menu rows sit one step above the 38px touch controls; phones keep their taller rows. */
 @media (pointer: coarse) {
   :root {
+    --menu-item-height: 40px;
+  }
+}
+
+@media (pointer: coarse) and (max-width: 640px) {
+  :root {
     --menu-item-height: 44px;
+  }
+}
+
+/* A still spinner shows the full ring, so it reads as a status and not a frozen arc. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --spinner-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='2'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 1.0px)}%3C/style%3E%3Ccircle/%3E%3C/svg%3E");
+    --spinner-mask-small: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.75px)}%3C/style%3E%3Ccircle/%3E%3C/svg%3E");
+    --spinner-mask-avatar: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.75'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.875px)}%3C/style%3E%3Ccircle/%3E%3C/svg%3E");
+    --spinner-mask-large: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='2.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 1.25px)}%3C/style%3E%3Ccircle/%3E%3C/svg%3E");
   }
 }
 
@@ -498,7 +558,6 @@
   .exec-approval-list.exec-approval-list,
   .login-gate__card.login-gate__card,
   .card.card,
-  .settings-group.settings-group,
   .option-card__choice.option-card__choice {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
@@ -513,10 +572,7 @@
   .sidebar-recent-session.sidebar-recent-session,
   .plugin-catalog-detail__security-score.plugin-catalog-detail__security-score,
   .settings-sidebar__item.settings-sidebar__item,
-  .btn.btn,
-  .agent-select__trigger.agent-select__trigger,
-  .settings-input.settings-input,
-  .field.field :is(input, textarea, select) {
+  .btn.btn {
     border-radius: calc(10px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
@@ -531,13 +587,19 @@
     :is(.chat-thread, .chat-session-rail__thread)
     .chat-group.user
     :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
-    > :is(.chat-text, .chat-message-disclosure) {
+    > .chat-text,
+  :where(:root:not([data-theme="crt"], [data-theme="crt-light"]))
+    :is(.chat-thread, .chat-session-rail__thread)
+    .chat-group.user
+    :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
+    > .chat-message-disclosure {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
 
-  .option-card.option-card {
-    border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  .option-card.option-card,
+  .settings-group.settings-group {
+    border-radius: var(--composer-radius);
     corner-shape: superellipse(1.5);
   }
 
@@ -548,24 +610,11 @@
     corner-shape: superellipse(1.5);
   }
 
-  /* Menu panels and items get the same direct-property treatment: item
-     radius is computed inline as panel-minus-padding rather than read from
-     --menu-item-radius, so nothing here is inheritable either. */
+  /* Menu panels take their radius from --menu-radius in their home rules; only
+     the shape is added here. Menu rows get theirs in overlay.css. */
   .slash-menu.slash-menu,
   .chat-reply-context-menu.chat-reply-context-menu,
   .chat-selection-popup.chat-selection-popup {
-    border-radius: calc(10px * var(--openclaw-corner-radius-scale));
-    corner-shape: superellipse(1.5);
-  }
-
-  /* Items pick up corner-shape too, not just the scaled radius: corner-shape
-     doesn't inherit, and a bigger round radius sitting inside a squircle
-     panel with no shape of its own reads as an unrelated smaller circle
-     poking out of a superellipse, not a coherent nested row. */
-  .slash-menu-item.slash-menu-item,
-  .chat-reply-context-menu.chat-reply-context-menu button,
-  .chat-selection-popup.chat-selection-popup button {
-    border-radius: calc(10px * var(--openclaw-corner-radius-scale) - 4px);
     corner-shape: superellipse(1.5);
   }
 }
@@ -615,9 +664,6 @@
   --surface-hover-amount: 4%;
   --surface-selected-amount: 6%;
   --surface-selected-hover-amount: 9%;
-  --session-header-sharing-surface: color-mix(in srgb, var(--text) 3%, transparent);
-  --session-header-control-surface: var(--surface-selected);
-  --session-header-control-active-hover-bg: var(--surface-selected-hover);
   --subagent-avatar-ink: 45% 36%;
   --subagent-avatar-tint: 45% 94%;
   --subagent-avatar-tint-strength: 100%;
@@ -627,7 +673,6 @@
   --card-highlight: rgba(60, 42, 24, 0.03);
   --popover: #ffffff;
   --popover-foreground: #211e1a;
-  --session-hovercard-surface: var(--card);
 
   --panel: #faf9f7;
   --panel-strong: #f4f1ec;
@@ -697,7 +742,6 @@
   /* Semantic status follows the base pairing rule. Validate label contrast on
      the actual host surface, including neutral interaction layers. */
   --ok: #166534;
-  --ok-muted: rgba(22, 101, 52, 0.75);
   --ok-subtle: rgba(22, 101, 52, 0.08);
   --destructive: #dc2626;
   --destructive-foreground: #fafafa;
@@ -873,9 +917,6 @@
 
 * {
   box-sizing: border-box;
-  /* scrollbar-width doesn't inherit (unlike scrollbar-color above), so every
-     element needs its own declaration to stay off the wider UA default. */
-  scrollbar-width: thin;
 }
 
 .sr-only,
@@ -958,14 +999,6 @@ summary,
   }
 }
 
-/* iOS Safari shows the document canvas around its browser chrome. The system
-   chrome owner selects it where the exposed narrow route canvas or the open
-   navigation drawer's backdrop differs from the page surface. */
-html.control-ui-system-chrome-canvas,
-.control-ui-system-chrome-canvas body {
-  background: var(--control-ui-system-chrome-background, var(--bg));
-}
-
 /* iOS Safari zooms the viewport when a focused text control is under 16px;
    important keeps feature-local typography from silently dropping this floor.
    Controls that manage their own touch size declare it via
@@ -998,12 +1031,6 @@ openclaw-app {
 /* Empty contribution hosts must not add layout boxes before the plugin runtime loads. */
 openclaw-plugin-contributions {
   display: contents;
-}
-
-@supports (height: 100dvh) {
-  :root {
-    --shell-viewport-base: 100dvh;
-  }
 }
 
 @media (display-mode: standalone) {
@@ -1062,7 +1089,6 @@ a:where(
     .settings-row__value,
     .memory-page__link,
     .portals-preview__notice-url,
-    .settings-account,
     .transcripts-back,
     .chat-text a,
     .chat-thinking a,
@@ -1126,7 +1152,31 @@ textarea,
   color: var(--selection-fg);
 }
 
-/* Canonical scrollbar for every light-DOM scroll surface, including owned overlays. */
+/* Canonical scrollbar for every light-DOM scroll surface, including owned overlays.
+   Phone widths and touch pointers use the compact pair everywhere. */
+@media (max-width: 640px), (pointer: coarse) {
+  :root {
+    --scrollbar-size: var(--scrollbar-size-compact);
+  }
+}
+
+/* Engines with ::-webkit-scrollbar get all three levels from the pseudo
+   elements below. Chromium ignores those pseudo elements on any element whose
+   scrollbar-width or scrollbar-color is not auto, so the standard properties
+   are only set where the pseudo elements don't exist (Firefox). There the
+   container-hover level is the closest stand-in: Firefox can't target the
+   thumb, but it darkens a hovered or dragged thumb on its own. */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+    scrollbar-width: thin;
+  }
+
+  *:hover {
+    scrollbar-color: var(--scrollbar-thumb-near) transparent;
+  }
+}
+
 ::-webkit-scrollbar {
   width: var(--scrollbar-size);
   height: var(--scrollbar-size);
@@ -1140,17 +1190,35 @@ textarea,
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   background-clip: content-box;
-  border: var(--scrollbar-thumb-inset) solid transparent;
+  /* One size controls the 2:1 hit-area/thumb ratio; explicit inset overrides still win. */
+  border: var(--scrollbar-thumb-inset, calc(var(--scrollbar-size) / 4)) solid transparent;
   border-radius: var(--radius-full);
+}
+
+@property --scrollbar-hover {
+  syntax: "<integer>";
+  inherits: false;
+  initial-value: 0;
+}
+
+/* Chromium re-resolves scrollbar parts only when the scroller's own style
+   changes, and a pseudo-element-only :hover rule doesn't count. This
+   non-inherited flag changes the hovered element alone, so the container
+   level below repaints without restyling descendants. */
+:hover {
+  --scrollbar-hover: 1;
 }
 
 /* :hover::-webkit-scrollbar-thumb (container hover) is safe here because html,
    body set overflow: clip above, so the document itself never scrolls and the
    always-true html:hover/body:hover can't hover a document scrollbar. */
-::-webkit-scrollbar-thumb:hover,
 :hover::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb-hover);
-  background-clip: content-box;
+  background-color: var(--scrollbar-thumb-near);
+}
+
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 @keyframes rise {
@@ -1205,14 +1273,39 @@ textarea,
 }
 
 /* Sweep a 200%-wide text-clipped gradient with matching end stops one full
-   period per cycle so the loop wraps seamlessly. Consumers set the gradient,
-   duration, and easing. */
+   period per cycle so the loop wraps seamlessly. `.text-shimmer` owns the
+   gradient, duration, and easing. */
 @keyframes text-shimmer {
   from {
     background-position: 100% 0;
   }
   to {
     background-position: -100% 0;
+  }
+}
+
+/* Running labels. Add the class only while the work is active. Accessibility modes
+   and browsers without text clipping keep the element's own static text. */
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+    /* Doubled so a surface's own `background` reset cannot leave transparent text unpainted. */
+    .text-shimmer.text-shimmer {
+      background-image: linear-gradient(
+        90deg,
+        var(--muted) 0%,
+        var(--muted) calc(50% - var(--text-shimmer-sweep-width) / 2),
+        color-mix(in srgb, var(--text) var(--text-shimmer-highlight-strength), var(--muted)) 50%,
+        var(--muted) calc(50% + var(--text-shimmer-sweep-width) / 2),
+        var(--muted) 100%
+      );
+      background-size: 200% 100%;
+      background-repeat: repeat-x;
+      -webkit-background-clip: text;
+      background-clip: text;
+      /* Inherited, so nested syntax tokens and names paint through the gradient too. */
+      -webkit-text-fill-color: transparent;
+      animation: text-shimmer var(--text-shimmer-duration) var(--text-shimmer-easing) infinite;
+    }
   }
 }
 
@@ -1228,14 +1321,15 @@ textarea,
   inset: 0;
   background: linear-gradient(
     90deg,
-    transparent 25%,
-    var(--skeleton-highlight, var(--bg-hover)) 50%,
-    transparent 75%
+    transparent calc(50% - var(--skeleton-sweep-width) / 2),
+    color-mix(in srgb, var(--text) var(--skeleton-highlight-strength), transparent) 50%,
+    transparent calc(50% + var(--skeleton-sweep-width) / 2)
   );
   content: "";
-  /* Keep the highlight offscreen when reduced motion disables the sweep. */
+  /* Keep the highlight offscreen when accessibility modes disable the sweep. */
   transform: translateX(-100%);
-  animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
+  animation: var(--skeleton-animation, shimmer) var(--skeleton-duration) var(--skeleton-easing)
+    infinite;
   will-change: transform;
 }
 
@@ -1262,25 +1356,28 @@ textarea,
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
   .skeleton::after {
     animation: none !important;
   }
+}
 
+@media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    /* A positive duration enables the default transition-property: all, even
-       on static controls. Keep reduced-motion updates immediate instead. */
+    /* Avoid WebKit transition work on static elements. Authored property lists
+       still win; the duration reset keeps their reduced-motion updates immediate. */
+    transition-property: none;
     transition-duration: 0ms !important;
     scroll-behavior: auto !important;
   }
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 

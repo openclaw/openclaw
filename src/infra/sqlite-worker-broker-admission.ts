@@ -8,6 +8,7 @@ import { serialize } from "node:v8";
 import { getChildLogger } from "../logging/logger.js";
 import { INCOGNITO_AGENT_SQLITE_BASENAME } from "../state/openclaw-agent-db.paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerGenerationUrl } from "./runtime-worker-generation.js";
 import type {
@@ -27,6 +28,10 @@ import {
 } from "./sqlite-worker-state-context.js";
 
 export const SQLITE_WORKER_ADMISSION_TIMEOUT_MS = 10_000;
+
+export function waitForSqliteOpen<T>(pending: Promise<T>, signal?: AbortSignal) {
+  return racePromiseWithAbortSignal(pending, signal, (aborted) => aborted.reason);
+}
 
 export function createSqliteWorkerAdmissionWarning() {
   let nextWarning = 0;
@@ -142,6 +147,7 @@ export function captureSqliteWorkerOpen(
   const carrierUrl = resolveRuntimeWorkerGenerationUrl(carrier, options.runtimeGeneration);
   return {
     ...native,
+    carrierClass: custody.carrierClass ?? options.isolation,
     retireIdle: retireIdle ? () => inCaller(retireIdle) : undefined,
     maintenanceScope: custody.cleanupAccess
       ? undefined

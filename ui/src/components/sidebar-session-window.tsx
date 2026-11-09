@@ -17,12 +17,9 @@ export function createSidebarSessionWindow(
 ) {
   const scroll = useContext(SidebarScrollContext);
   let list: HTMLDivElement;
-  const [rowFloor, setRowFloor] = createSignal(32);
+  const [rowFloor, setRowFloor] = createSignal(scroll?.rowFloor() ?? 32);
   const [focusedKey, setFocusedKey] = createSignal<string>();
-  const [view, setView] = createSignal<{ items: WindowItem[]; height: number }>({
-    items: [],
-    height: 0,
-  });
+  const [view, setView] = createSignal<{ items: WindowItem[]; height: number }>();
   const retained = (row: SidebarRecentSession, focused: string | undefined): boolean =>
     row.visuallyActive ||
     row.key === focused ||
@@ -94,23 +91,30 @@ export function createSidebarSessionWindow(
   const restoreAnchor = scroll.readAnchor();
   const anchorAt = (top: number) =>
     top < 0 || top >= totalHeight ? undefined : positions.findLast((item) => item.top <= top);
-  const publish = () => {
-    const scroller = scroll.element();
-    if (!scroller) {
-      return;
-    }
-    const top = scroller.scrollTop - margin;
+  const windowAt = (offset: number) => {
+    const top = offset - margin;
     const first = positions.findIndex((item) => item.top + item.height > top);
     const beyond = positions.findIndex((item) => item.top >= top + viewportHeight);
     const start = first < 0 ? positions.length : Math.max(0, first - 2);
     // A section below the viewport has no visible rows to overscan.
     const end =
       beyond < 0 ? positions.length : beyond === 0 ? 0 : Math.min(positions.length, beyond + 2);
-    const items = positions.filter(
-      (_, index) => (index >= start && index < end) || current[index]!.retained,
+    // Scroll can precede geometry's retention update after selection or focus.
+    return positions.filter(
+      (item, index) =>
+        (index >= start && index < end) ||
+        current[index]!.retained ||
+        retained(item.row, focusedKey()),
     );
+  };
+  const publish = () => {
+    const scroller = scroll.element();
+    if (!scroller) {
+      return;
+    }
+    const items = windowAt(scroller.scrollTop);
     setView((previous) =>
-      previous.height === totalHeight &&
+      previous?.height === totalHeight &&
       previous.items.length === items.length &&
       previous.items.every(
         (item, index) =>
@@ -126,7 +130,7 @@ export function createSidebarSessionWindow(
   const rebuild = () => {
     const scroller = scroll.element();
     const anchor = scroller && anchorAt(scroller.scrollTop - margin);
-    const offset = anchor && scroller ? scroller.scrollTop - margin - anchor.top : 0;
+    const offset = anchor ? scroller.scrollTop - margin - anchor.top : 0;
     let top = 0;
     positions = current.map((input, index) => {
       const known = measured.get(input.row.key);
@@ -166,6 +170,7 @@ export function createSidebarSessionWindow(
         scroller.scrollTop;
       // All layout reads precede the publication/scroll writes.
       return () => {
+        scroll.captureRowFloor(nextRowFloor);
         // This request still contains estimates for the previous CSS minimum.
         if (rowFloor() !== nextRowFloor) {
           setRowFloor(nextRowFloor);
@@ -245,7 +250,32 @@ export function createSidebarSessionWindow(
       }
     }),
   );
-  const items = createMemo(() => new Map(view().items.map((item) => [item.row.key, item])));
+  onSettled(() =>
+    // Snapshot capture samples the measured zero-offset range without layout reads.
+    scroll.registerWindow(() => {
+      const source = inputs();
+      if (source.length === 0) {
+        return [];
+      }
+      return view() && current === source ? windowAt(0).map((item) => item.row.key) : undefined;
+    }),
+  );
+  const items = createMemo(() => {
+    const ready = view();
+    // A zero-height measurement still belongs to the previous empty row set.
+    if (ready && (ready.height > 0 || inputs().length === 0)) {
+      return new Map(ready.items.map((item) => [item.row.key, item]));
+    }
+    const keys = new Set(host().sidebarSnapshot?.windowKeys);
+    let top = 0;
+    return new Map(
+      inputs().flatMap((input, index) => {
+        const item = { row: input.row, index, top, height: input.height };
+        top += input.height;
+        return keys.has(input.row.key) ? [[input.row.key, item] as const] : [];
+      }),
+    );
+  });
   const fullHeight = createMemo(() => {
     view();
     return Math.max(

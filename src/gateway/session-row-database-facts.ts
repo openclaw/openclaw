@@ -4,14 +4,11 @@ import {
   SessionRuntimeOwnershipChanged,
 } from "../agents/harness/session-runtime-ownership.js";
 import { readSessionActorRowFacts } from "../config/sessions/session-actor-replica.js";
-import { captureSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { capturePluginStateReadDependencies } from "../plugin-state/plugin-state-publication.js";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
@@ -23,6 +20,7 @@ import {
   type RetainedSessionRowDatabaseFacts,
   type PreparedSessionRowDatabaseFacts,
   type Row,
+  type SessionRowStore,
 } from "./session-row-projection-record.js";
 import { prepareSessionRowSharedFacts } from "./session-row-projection-shared-facts.js";
 
@@ -30,6 +28,7 @@ import { prepareSessionRowSharedFacts } from "./session-row-projection-shared-fa
 export async function withSessionRowDatabaseFacts(
   owner: {
     rows: ReadonlyMap<string, Row>;
+    stores: ReadonlyMap<string, SessionRowStore>;
     dirty: ReadonlySet<string>;
     isActive: () => boolean;
     prepareRegistryFacts: () => Promise<void> | undefined;
@@ -93,18 +92,13 @@ export async function withSessionRowDatabaseFacts(
   >();
   const actorFacts = new Map<string, RetainedSessionRowDatabaseFacts>();
   for (const row of rows) {
-    const agentId = normalizeAgentId(row.storeTarget.agentId);
-    const pathname = resolveOpenClawAgentSqlitePath({
-      agentId,
-      path: row.storeTarget.storePath,
-      env,
-    });
-    const key = JSON.stringify([agentId, pathname]);
+    const { agentId, storePath } = row.storeTarget;
+    const key = JSON.stringify([agentId, storePath]);
     let group = groups.get(key);
     if (!group) {
-      const candidate = captureSessionStoreReadCandidate(pathname);
+      const source = expectDefined(owner.stores.get(storePath), "admitted session row store");
       group = {
-        database: { agentId, path: candidate.physicalPath, requestedPaths: [candidate.path], env },
+        database: { agentId, path: source.filename, requestedPaths: [storePath], env },
         rows: [],
       };
       groups.set(key, group);

@@ -39,7 +39,7 @@ import {
   writePlacementEnvironmentFixture,
 } from "./placement-test-fixtures.js";
 import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
-import { matchesWorkspaceResultClaim } from "./placement-workspace-result.js";
+import { matchesWorkspaceResultClaim } from "./placement-workspace-result-owner.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import { prepareSessionWorkerPlacementMutationCheckAsync } from "./session-placement-lifecycle.js";
 import { createWorkerEnvironmentStore } from "./store.js";
@@ -662,11 +662,13 @@ it.each([false, true])(
       state: "local",
       environmentId: null,
       moveSourceEnvironmentId: "source-move-z-local",
+      workspaceRecoveryPending: true,
     });
     expect(candidates.find((candidate) => candidate.sessionId === "journal-draining")).toEqual({
       sessionId: "journal-draining",
       state: "draining",
       environmentId: "env-journal-draining",
+      workspaceRecoveryPending: true,
     });
     counters.expectIdle();
     db.prepare("UPDATE worker_session_placements SET updated_at_ms = ? WHERE session_id = ?").run(

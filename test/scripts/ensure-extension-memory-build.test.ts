@@ -28,6 +28,7 @@ describe("ensure-extension-memory-build", () => {
       const result = ensureExtensionMemoryBuild({
         rootDir: root,
         requiredExtensionIds: ["external"],
+        env: { OPENCLAW_EXTENSION_MEMORY_BUILD_TIMEOUT_MS: "invalid" },
         spawnSync: () => {
           throw new Error("unexpected build");
         },
@@ -37,17 +38,32 @@ describe("ensure-extension-memory-build", () => {
     },
   );
 
-  it.each([["dist/extensions/external/index.js", ["external", "internal"]]])(
-    "builds when %s does not satisfy required ids %j",
-    (entry, requiredExtensionIds) => {
-      const { root, write } = makeFixture();
-      write(entry, "export {};\n");
-      const params = { rootDir: root, requiredExtensionIds };
-      expect(ensureExtensionMemoryBuild({ ...params, spawnSync: () => ({ status: 0 }) })).toEqual({
-        built: true,
-      });
-    },
-  );
+  it.each([
+    [undefined, 2345],
+    [3456, 3456],
+  ] as const)("builds missing required ids with timeout %s", (timeoutMs, expectedTimeout) => {
+    const { root, write } = makeFixture();
+    write("dist/extensions/external/index.js", "export {};\n");
+    write("dist/entry.js", "export {};\n");
+    write("dist/cli-startup-metadata.json", "{}\n");
+    let buildTimeout: number | undefined;
+    expect(
+      ensureExtensionMemoryBuild({
+        rootDir: root,
+        requiredExtensionIds: ["external", "internal"],
+        env: {
+          OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: "1",
+          OPENCLAW_EXTENSION_MEMORY_BUILD_TIMEOUT_MS: "2345",
+        },
+        timeoutMs,
+        spawnSync: (_command, _args, options) => {
+          buildTimeout = options?.timeout;
+          return { status: 0 };
+        },
+      }),
+    ).toEqual({ built: true });
+    expect(buildTimeout).toBe(expectedTimeout);
+  });
 
   it("requires all expected bundled entries by default even when local output exists", () => {
     const { root, write } = makeFixture();

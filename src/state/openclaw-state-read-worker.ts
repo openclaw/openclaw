@@ -12,8 +12,11 @@ import {
   captureRetainedNativeWorkerSource,
   type RetainedNativeWorkerSource,
 } from "../infra/worker-native-lifecycle.js";
+import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
+import { getPluginExecutionFrame } from "../plugins/plugin-instance-invocation.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
@@ -276,8 +279,8 @@ class StateReadTransport {
     private readonly onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
     private readonly awaitedOnly = false,
   ) {
-    // Capture nested input before the read owner can yield during snapshot preparation.
-    this.capturedCommand = structuredClone(command);
+    // Immutable owner snapshots can cross preparation waits without another private copy.
+    this.capturedCommand = isDeeplyFrozenPlainData(command) ? command : structuredClone(command);
   }
 
   private async closeTask(task: ReadTask): Promise<void> {
@@ -314,6 +317,7 @@ class StateReadTransport {
           environment: { ...context.environment },
           existingSchemaPath: context.existingSchemaPath,
           stateIntegrity: context.stateIntegrity,
+          liveStateReads: context.liveStateReads,
         },
         databasePath: context.admission.databasePath,
         location,
@@ -321,9 +325,22 @@ class StateReadTransport {
         expectedIdentity,
         snapshotRoot,
         postgresSnapshot,
-        command: { ...readCommand },
+        command: readCommand,
       };
       const pool = readPool(this.source.state, this.source.ownsAdmission(), this.awaitedOnly);
+      if (
+        getDatabaseProcessRole() === "gateway" &&
+        !getPluginExecutionFrame()?.canUseInteractiveStateReadCapacity
+      ) {
+        const { pendingTasks, maxWorkers } = pool.pool.getSnapshot();
+        // Leave two reads per worker for authenticated UI requests; the pool keeps its hard caps.
+        if (pendingTasks >= DEFAULT_WORKER_PENDING_TASKS - 2 * maxWorkers) {
+          throw new WorkerTaskError(
+            "worker task capacity reached (shared-state interactive reserve)",
+            "overloaded",
+          );
+        }
+      }
       // Maintenance reuses this reader; standalone inspection releases it before metadata loads.
       const retireAfterRead =
         !pool.retained && !context.maintenanceScope && readCommand.type !== "admit";

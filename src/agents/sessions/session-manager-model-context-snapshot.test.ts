@@ -139,13 +139,6 @@ it("reuses resident transcript bytes for admitted reads outside the actor withou
       const prepareHydration = () =>
         transcriptHydration.prepareSessionTranscriptHydration(target, limits);
       const cohort = { sessionKey: target.sessionKey, entryIds: [entryId] };
-      const expected = await prepareHydration().read();
-      await prepareHydration().readCohort!(cohort, () => {});
-      const hot = actor.snapshot({ assertCurrent() {}, authorize() {} });
-      assert(hot);
-      const retained = readSessionActorTranscriptReplica(hot);
-      assert(retained?.context);
-      const retainedBytes = serialize(retained).byteLength;
       const replies: number[] = [];
       const spies = [historyLane, targetDiscoveryLane].map(({ pool }) => {
         const run = pool.run.bind(pool);
@@ -164,6 +157,25 @@ it("reuses resident transcript bytes for admitted reads outside the actor withou
         });
       });
       try {
+        const [expected, ...joined] = await runWithoutOwnedSessionTranscriptWrites(() =>
+          Promise.all(Array.from({ length: 4 }, () => prepareHydration().read())),
+        );
+        assert(expected);
+        expect(expected.snapshot.events).toEqual(source.getPersistedEntries());
+        expect(replies).toHaveLength(1);
+        for (const result of joined) {
+          expect(result.snapshot).toEqual(expected.snapshot);
+          result.snapshot.events.length = 0;
+        }
+        await runWithoutOwnedSessionTranscriptWrites(() =>
+          prepareHydration().readCohort!(cohort, () => {}),
+        );
+        const hot = actor.snapshot({ assertCurrent() {}, authorize() {} });
+        assert(hot);
+        const retained = readSessionActorTranscriptReplica(hot);
+        assert(retained?.context);
+        const retainedBytes = serialize(retained).byteLength;
+        replies.length = 0;
         await runWithoutOwnedSessionTranscriptWrites(async () => {
           for (let index = 0; index < 10; index++) {
             const actual = await prepareHydration().read();

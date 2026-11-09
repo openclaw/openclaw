@@ -198,7 +198,7 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
 
         if (mode === "graceful") {
           // Freeze only the grace budget; keep the real polling and cleanup.
-          vi.useFakeTimers({ toFake: ["Date"] });
+          vi.useFakeTimers({ toFake: ["performance"] });
           try {
             grace = waitForGatewayActiveWork(5_000, {
               onSnapshot: (snapshot) => {

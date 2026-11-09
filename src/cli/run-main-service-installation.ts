@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { mergeGatewayServiceEnv } from "../daemon/service-env-merge.js";
 import {
   inspectGatewayServiceInstallationDrift,
@@ -8,13 +9,36 @@ import {
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import type { GatewayServiceInstallation } from "../infra/gateway-service-installation-context.js";
 import { compareOpenClawReleaseVersions } from "../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { lstatIfExists, statIfExists } from "../infra/path-existence.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { VERSION } from "../version.js";
 import { isGatewayRunInvocationArgv } from "./gateway-run-argv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
+
+/** Only definite absence permits climbing past a missing service database. */
+async function resolveInspectedServiceDatabasePath(databasePath: string): Promise<string> {
+  let current = databasePath;
+  const suffix: string[] = [];
+  for (;;) {
+    try {
+      return path.join(await fs.realpath(current), ...suffix.toReversed());
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT") || (await lstatIfExists(current, "ENOENT"))) {
+        throw error;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) {
+        throw error;
+      }
+      suffix.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
 
 /** Resolve this Gateway's own manager, never a same-named unit in another scope. */
 export async function readOwnGatewayServiceCommand(
@@ -90,7 +114,7 @@ export async function inspectCliGatewayServiceInstallation(
   try {
     const service = resolveGatewayService();
     const ownCommand = await readOwnGatewayServiceCommand(env);
-    const command = ownCommand ?? (await service.readCommand(env));
+    const command = ownCommand ?? (await service.readCommand(env, { inspectStateIdentity: true }));
     const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
     const layout = await summarizeGatewayServiceLayout(command);
     const drift = root ? await inspectGatewayServiceInstallationDrift(layout, root) : undefined;
@@ -127,13 +151,46 @@ export async function inspectCliGatewayServiceInstallation(
         }
       }
     }
+    const callerDatabasePath = resolveIdentityPathViaExistingAncestorSync(
+      resolveOpenClawStateSqlitePath(env),
+    );
+    let databasePath = callerDatabasePath;
+    // Relative service selectors depend on its cwd, not this CLI's invocation base.
+    const relativeServiceSelector = [
+      "HOME",
+      "USERPROFILE",
+      "OPENCLAW_HOME",
+      "OPENCLAW_STATE_DIR",
+    ].some((key) => {
+      const value = command?.environment?.[key]?.trim();
+      return value && !path.isAbsolute(value) && !/^~(?:$|[\\/])/u.test(value);
+    });
+    if (!command?.stateIdentityUnverified && !relativeServiceSelector) {
+      try {
+        const serviceDatabasePath = await resolveInspectedServiceDatabasePath(
+          resolveOpenClawStateSqlitePath(serviceEnv),
+        );
+        const [callerDatabase, serviceDatabase] = await Promise.all([
+          statIfExists(callerDatabasePath),
+          statIfExists(serviceDatabasePath),
+        ]);
+        // Bind mounts and hard links can expose the same database under different paths.
+        databasePath =
+          callerDatabase &&
+          serviceDatabase &&
+          callerDatabase.dev === serviceDatabase.dev &&
+          callerDatabase.ino === serviceDatabase.ino
+            ? callerDatabasePath
+            : serviceDatabasePath;
+      } catch {
+        // Keep the older-service restriction when its state identity cannot be inspected.
+      }
+    }
     return {
       root: drift.serviceRoot,
       version: drift.serviceVersion,
       cliVersion: VERSION,
-      databasePath: resolveIdentityPathViaExistingAncestorSync(
-        resolveOpenClawStateSqlitePath(serviceEnv),
-      ),
+      databasePath,
     };
   } catch {
     // Service inspection is best effort and must not make an uninspectable host unusable.

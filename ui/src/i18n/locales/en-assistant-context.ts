@@ -12,7 +12,6 @@ const enAssistantContext = {
     dockBottom: en.assistantPanel.dockBottom,
     dockRight: en.assistantPanel.dockRight,
     context: "Working on: {context}",
-    contextOff: en.assistantPanel.contextOff,
     removeContext: "Remove work context",
     includeContext: "Include work context",
     selection: "Selected text",

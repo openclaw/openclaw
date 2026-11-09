@@ -23,6 +23,7 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "../../config/sessions/session-entry-codec.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import {
   resolveSessionTranscriptReadFence,
@@ -479,7 +480,9 @@ export class SessionManager extends SessionManagerBranching {
   ) {
     const { cwd, signal } = options;
     const limits = { compaction: true } as const;
-    const hydration = prepareSessionTranscriptHydration(target, limits, signal);
+    const hydration = withSessionTranscriptHydrationCaller("compaction", () =>
+      prepareSessionTranscriptHydration(target, limits, signal),
+    );
     const prepared = await hydration.read({ compaction: true });
     if (prepared.kind !== "bounded" || !prepared.compaction) {
       throw new Error("Expected a prepared compaction transcript");
@@ -756,20 +759,4 @@ export class SessionManager extends SessionManagerBranching {
   }
 }
 
-export type ReadonlySessionManager = Pick<
-  SessionManager,
-  | "getCwd"
-  | "getSessionId"
-  | "getSessionTarget"
-  | "getLeafId"
-  | "getAppendParentId"
-  | "getAppendMode"
-  | "getLeafEntry"
-  | "getEntry"
-  | "getLabel"
-  | "getBranch"
-  | "getHeader"
-  | "getEntries"
-  | "getTree"
-  | "getSessionName"
->;
+export type { ReadonlySessionManager } from "./session-manager-core.js";

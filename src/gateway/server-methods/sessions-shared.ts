@@ -10,7 +10,10 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveWorkerPlacementCapabilities } from "../worker-environments/placement-capabilities.js";
+import {
+  resolveWorkerPlacementCapabilities,
+  resolveWorkerPlacementRuntimeChangeError,
+} from "../worker-environments/placement-capabilities.js";
 import { prepareWorkerPlacementSessionRuntime } from "../worker-environments/placement-session-runtime-preparation.js";
 import {
   type readSessionWorkerPlacementAsync,
@@ -117,13 +120,11 @@ function resolveSessionWorkerPlacementPatchError(
   if (!runtime) {
     throw new Error("Session worker placement runtime validation was not prepared");
   }
-  const { executionMode } = runtime;
-  if (executionMode === placement.executionMode) {
-    return undefined;
-  }
-  return executionMode
-    ? `Session ${params.key} cannot change cloud placement execution mode while placement is ${placement.state}.`
-    : `Session ${params.key} cannot select a runtime without cloud placement support while cloud worker placement is ${placement.state}.`;
+  return resolveWorkerPlacementRuntimeChangeError(
+    placement,
+    runtime.executionMode,
+    `Session ${params.key}`,
+  );
 }
 
 export function requireSessionKey(key: unknown, respond: RespondFn): string | null {

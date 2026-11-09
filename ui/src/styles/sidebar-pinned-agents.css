@@ -1,6 +1,7 @@
 .sidebar-pinned-agents {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 4px;
   max-height: min(280px, 36dvh);
   overflow-y: auto;
@@ -10,6 +11,7 @@
 
 .sidebar-pinned-agent {
   position: relative;
+  flex: 0 0 72px;
   min-width: 0;
 }
 
@@ -68,7 +70,6 @@
 
 .sidebar-pinned-agent__avatar .session-glyph__ring {
   inset: -3px;
-  border-width: 2px;
 }
 
 .sidebar-pinned-agent__avatar .session-glyph,

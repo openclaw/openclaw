@@ -174,27 +174,42 @@ export const worktreeTemplateOperations = {
       {
         id,
         now,
-        content,
+        publication,
       }: {
         id: string;
         now: number;
-        content?: Pick<WorktreeTemplateRecord, "sourceCommit" | "contentKey">;
+        publication?: { cacheKey: string; previousId?: string };
       },
-    ) =>
-      executeSqliteQuerySync(
-        db,
-        kyselyFor(db)
-          .updateTable("worktree_templates")
-          .set({
-            status: "ready",
-            last_used_at: now,
-            ...(content
-              ? { source_commit: content.sourceCommit, content_key: content.contentKey }
-              : {}),
-          })
-          .where("id", "=", id)
-          .where("status", "=", "preparing"),
-      ).numAffectedRows === 1n,
+    ) => {
+      const k = kyselyFor(db);
+      const updated =
+        executeSqliteQuerySync(
+          db,
+          k
+            .updateTable("worktree_templates")
+            .set({ status: "ready", last_used_at: now })
+            .where("id", "=", id),
+        ).numAffectedRows === 1n;
+      if (updated && publication) {
+        if (publication.previousId) {
+          executeSqliteQuerySync(
+            db,
+            k
+              .updateTable("worktree_templates")
+              .set({ cache_key: `retired:${publication.previousId}`, status: "preparing" })
+              .where("id", "=", publication.previousId),
+          );
+        }
+        executeSqliteQuerySync(
+          db,
+          k
+            .updateTable("worktree_templates")
+            .set({ cache_key: publication.cacheKey })
+            .where("id", "=", id),
+        );
+      }
+      return updated;
+    },
   ),
   "worktrees.templates.delete": worktreeTemplateMutation(
     "worktrees.templates.delete",
@@ -244,7 +259,12 @@ export const worktreeTemplateOperations = {
       if (unpublish) {
         executeSqliteQuerySync(
           db,
-          k.updateTable("worktree_templates").set({ status: "preparing" }).where("id", "=", row.id),
+          k
+            .updateTable("worktree_templates")
+            .set({
+              status: "preparing",
+            })
+            .where("id", "=", row.id),
         );
       }
       const now = Date.now();

@@ -93,9 +93,7 @@ function wildcardOffer(
 }
 
 /** Exact-ref allowlists that mirror agents.defaults.models, the shape the legacy migration copied. */
-export function collectModelAllowlistWildcardOffers(
-  cfg: OpenClawConfig,
-): ModelAllowlistWildcardOffer[] {
+function collectModelAllowlistWildcardOffers(cfg: OpenClawConfig): ModelAllowlistWildcardOffer[] {
   const modelKeys = new Set(
     Object.keys(cfg.agents?.defaults?.models ?? {})
       .map((key) => key.trim())

@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
+import { forceFullGc } from "../../../test-utils/retention.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/index.js";
@@ -130,7 +130,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
     });
     const control = new WeakRef({});
     await nextTurn();
-    queryObjects(WeakRef);
+    forceFullGc();
     expect(control.deref()).toBeUndefined();
     expect(completed.filter(({ continuation }) => continuation.deref())).toHaveLength(0);
     for (const { callback } of completed) {

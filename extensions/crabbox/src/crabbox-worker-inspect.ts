@@ -1,4 +1,8 @@
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import type {
+  WorkerResourceReceipt,
+  WorkerRetentionPolicy,
+} from "openclaw/plugin-sdk/plugin-entry";
 import {
   isRecord,
   normalizeOptionalString as nonEmptyString,
@@ -7,6 +11,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parseCrabboxJson, sanitizeCrabboxNotice } from "./crabbox-worker-command.js";
 import { parseCrabboxDurationMs } from "./crabbox-worker-profile.js";
 import { readCrabboxResourceReceipt } from "./crabbox-worker-resource-receipt.js";
+import { readCrabboxRetention } from "./crabbox-worker-retention.js";
 
 export type CrabboxLeaseLifetime = {
   expiresAtMs?: number;
@@ -57,7 +62,11 @@ export function parseCrabboxLeaseLifetime(value: Record<string, unknown>): Crabb
 
 export type ParsedInspect = ReturnType<typeof parseInspectJson>;
 
-export function parseInspectJson(stdout: string) {
+export function parseInspectJson(
+  stdout: string,
+  policy?: WorkerRetentionPolicy,
+  expectedReceipt?: WorkerResourceReceipt,
+) {
   const value = parseCrabboxJson(stdout, "inspect");
   if (!isRecord(value)) {
     throw new Error("Crabbox inspect returned invalid JSON");
@@ -94,10 +103,15 @@ export function parseInspectJson(stdout: string) {
   const failureError = nonEmptyString(value.failureError);
   const lifetime = parseCrabboxLeaseLifetime(value);
   const resourceReceipt = readCrabboxResourceReceipt(value);
+  const retention = readCrabboxRetention(value, policy, expectedReceipt);
+  if (retention?.state === "running" && !resourceReceipt) {
+    throw new Error("Crabbox retained running resource has no qualified receipt");
+  }
   return {
     id,
     state,
     tailscaleEnabled,
+    ...(retention ? { retention } : {}),
     ...(resourceReceipt ? { resourceReceipt } : {}),
     ...(Object.keys(lifetime).length ? { lifetime } : {}),
     ...(failureError

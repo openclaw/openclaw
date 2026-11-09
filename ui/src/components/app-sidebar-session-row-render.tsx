@@ -21,8 +21,9 @@ import {
 import { sameSidebarPresentation } from "./sidebar-projection-cache.ts";
 import type { createSidebarSessionWindow } from "./sidebar-session-window.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 import "./tooltip.ts";
+import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
 
 /** Compose independently owned session state and context indicators. */
 
@@ -123,11 +124,6 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const controls: CatalogRowControls = {};
   const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (event) =>
     handleContextMenuEvent(event, controls.link ?? null, (trigger, x, y) => {
-      const catalogMenu = display()?.catalogMenu;
-      if (catalogMenu) {
-        host().sidebarMenus.catalogMenu.open(catalogMenu, x, y, trigger ?? undefined);
-        return;
-      }
       if (!host().sidebarSnapshot) {
         host().sidebarMenus.openSessionMenu(actionSession(), x, y, trigger);
       }
@@ -139,18 +135,13 @@ function renderRecentSessionRow(params: RecentSessionParams) {
     const sessionValue = session();
     return t(sessionValue.archived ? "sessionsView.restoreSession" : "sessionsView.archiveSession");
   });
-  const menuOpen = createMemo(() => {
-    const displayValue = display();
-    const hostValue = host();
-    const sessionValue = session();
-    return displayValue?.catalogMenu
-      ? hostValue.sidebarMenus.catalogMenuView.isOpenFor(displayValue.catalogMenu.key)
-      : hostValue.sidebarMenus.sessionMenu?.session.key === sessionValue.key;
-  });
+  const menuOpen = createMemo(() => host().sidebarMenus.sessionMenu?.session.key === session().key);
   const color = createMemo(() => normalizeSessionColorValue(session().color ?? ""));
   const archived = createMemo(() => session().archived === true);
   const pinnable = createMemo(() => session().pinnable);
-  const hasChildren = createMemo(() => session().childSessionKeys.length > 0);
+  const childCount = createMemo(
+    () => session().snapshot?.childCount ?? session().childSessionKeys.length,
+  );
   const groupWriteAccess = createMemo(() =>
     host().readSessionMutationAccess({
       method: "sessions.groups.put",
@@ -222,6 +213,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           "sidebar-recent-session--dragging":
             host().sessionOrganizer.draggingSessionKey === session().key,
           "sidebar-recent-session--naming": session().titlePending,
+          "sidebar-recent-session--menu-open": menuOpen(),
         },
       ]}
       style={{ "--session-color": color() ? `var(--session-color-${color()})` : undefined }}
@@ -295,16 +287,12 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           </span>
         </span>
       </a>
-      <Show when={hasChildren()}>
+      <Show when={childCount() > 0}>
         <button
-          class={[
-            "sidebar-child-session-toggle",
-            {
-              "sidebar-child-session-toggle--running": session().runningChildCount > 0,
-            },
-          ]}
+          class="sidebar-child-session-toggle"
           type="button"
           ref={(element) => (controls.children = element)}
+          disabled={Boolean(session().snapshot)}
           data-child-session-toggle={session().key}
           aria-expanded={childrenExpanded() ? "true" : "false"}
           aria-label={t(
@@ -312,33 +300,22 @@ function renderRecentSessionRow(params: RecentSessionParams) {
               ? "sessionsView.hideChildSessions"
               : "sessionsView.showChildSessions",
             {
-              count: String(session().childSessionKeys.length),
+              count: String(childCount()),
               session: label(),
             },
           )}
-          aria-description={
-            !childrenExpanded() && session().runningChildCount > 0
-              ? t("sessionsView.activeRun")
-              : undefined
-          }
           onClick={() => host().toggleSessionChildren(actionSession())}
         >
           <span class="sidebar-child-session-toggle__icon" aria-hidden="true">
-            <Show
-              when={!childrenExpanded() && session().runningChildCount > 0}
-              fallback={<Icon name={childrenExpanded() ? "chevronDown" : "chevronRight"} />}
-            >
-              <span class="session-run-spinner" />
-            </Show>
+            <Icon name={childrenExpanded() ? "chevronDown" : "chevronRight"} />
           </span>
-          <span class="sidebar-child-session-toggle__count">
-            {session().childSessionKeys.length}
-          </span>
+          <span class="sidebar-child-session-toggle__count">{childCount()}</span>
         </button>
       </Show>
       <span class="sidebar-recent-session__aside session-row-aside">
         <span class="session-row-actions">
-          <Show when={pinnable()}>
+          {/* Cached pin geometry is display-only; actions still require the live row. */}
+          <Show when={session().snapshot ? session().snapshot?.pinnable !== false : pinnable()}>
             <button
               class="session-action session-action--pin"
               ref={(element) => (controls.pin = element)}
@@ -346,6 +323,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
               type="button"
               title={pinLabel()}
               aria-label={pinLabel()}
+              disabled={!pinnable()}
               onClick={() => host().toggleSessionPin(actionSession())}
             >
               <Icon name="pin" />
@@ -376,7 +354,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
                   },
                 );
               } else {
-                void host().sessionOrganizer.archiveSessionWithUndo(target);
+                void host().sessionOrganizer.archiveSessionWithUndo(target, rowElement);
               }
             }}
           >
@@ -394,11 +372,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
             aria-expanded={menuOpen() ? "true" : "false"}
             onClick={(event) => {
               event.stopPropagation();
-              host().toggleSessionMenu(
-                actionSession(),
-                event.currentTarget,
-                display()?.catalogMenu,
-              );
+              host().toggleSessionMenu(actionSession(), event.currentTarget);
             }}
           >
             <Icon name="moreHorizontal" />
@@ -413,21 +387,23 @@ export function renderChildSessionLoadError(host: () => SessionListHost, parentK
   const error = createMemo(() => host().sessionData.childSessionErrorsByParent.get(parentKey));
   return (
     <Show when={error()}>
-      <div
-        class="sidebar-session-error callout danger"
+      <InlineAlert
+        tone="danger"
+        class="sidebar-session-error"
         data-child-session-error={parentKey}
-        role="alert"
+        action={
+          <button
+            class="sidebar-session-tree__show-more"
+            type="button"
+            data-retry-child-sessions={parentKey}
+            onClick={() => host().sessionData.retryChildSessions(parentKey)}
+          >
+            {t("common.retry")}
+          </button>
+        }
       >
-        <span>{error()}</span>
-        <button
-          class="sidebar-session-tree__show-more"
-          type="button"
-          data-retry-child-sessions={parentKey}
-          onClick={() => host().sessionData.retryChildSessions(parentKey)}
-        >
-          {t("common.retry")}
-        </button>
-      </div>
+        {error()}
+      </InlineAlert>
     </Show>
   );
 }

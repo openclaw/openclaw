@@ -247,7 +247,7 @@ it.each<ActivationCase>([
   ],
   [
     "authored entry settings",
-    { ...enabledEntry, hooks: { allowPromptInjection: false } },
+    { ...enabledEntry, hooks: { allowPromptModification: false } },
     bothProviders,
     false,
   ],
@@ -256,6 +256,7 @@ it.each<ActivationCase>([
 ])("preserves plugin choices and reports %s", (_name, entry, allow, warning, persistedAllow) =>
   withDoctorConfigPreflightHome(async (home) => {
     const configPath = await writeOpenClawConfig(home, {
+      meta: { migrations: { skillWorkshopPlugin: true } },
       gateway: { mode: "local" },
       // Isolate the privacy seed from Doctor's separate implicit-default route repair.
       agents: { defaults: { model: "anthropic/claude-sonnet-4-6" } },

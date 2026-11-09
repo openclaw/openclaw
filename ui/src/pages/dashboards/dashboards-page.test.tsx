@@ -22,6 +22,7 @@ import {
   createApplicationGateway,
 } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { stubManualIntersectionObserver } from "../chat/components/chat-media-observer.test-support.ts";
 import { page as dashboardRoute } from "./route.ts";
 import type { DashboardsRouteData } from "./view.tsx";
 
@@ -120,16 +121,13 @@ function connect(readList: (params: Parameters<GatewayRequestHandler>[1]) => unk
 beforeEach(async () => {
   await i18n.setLocale("en");
   // Gallery E2E owns Board preview rendering; these tests stop before viewport admission.
-  vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
-  const { requestAnimationFrame, cancelAnimationFrame } = globalThis;
-  vi.spyOn(window, "requestAnimationFrame").mockImplementation(requestAnimationFrame);
-  vi.spyOn(window, "cancelAnimationFrame").mockImplementation(cancelAnimationFrame);
+  stubManualIntersectionObserver(() => {});
 });
 
 afterEach(() => {
   cleanupSolid();
   vi.restoreAllMocks();
-  vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 it("keeps the gallery skeleton through a held first read and an error retry", async () => {

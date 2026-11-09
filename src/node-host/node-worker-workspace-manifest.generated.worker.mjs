@@ -64,7 +64,9 @@ const DERIVED_WORKSPACE_ROOT_PATHS = [
   ".cache/openclaw/bun",
   ".cache/ms-playwright",
   ".local/share/pnpm/store",
+  "artifacts/task-environment/local/share/pnpm/store",
   ".openclaw/.pnpm-store",
+  ".openclaw/tools",
   ".artifacts/vitest-workers",
   ".artifacts/vitest-worker-cache",
   ".artifacts/vitest-shard-timings.json",
@@ -239,7 +241,11 @@ const requestedManifestDigest = process.argv[3] === "resolve" ? process.argv[4] 
 const publishedManifestDigest = process.argv[3] === "publish" ? process.argv[4] : null;
 const memoMode = process.argv.at(-1) === "memo-v1";
 const priorManifestDigests = [
-  ...new Set(process.argv.slice(4).filter((value) => value && value !== "memo-v1")),
+  ...new Set(
+    process.argv
+      .slice(4)
+      .filter((value) => value && value !== "memo-v1" && !value.startsWith("memo:")),
+  ),
 ];
 const MAX_WORKSPACE_GIT_CANDIDATES = 1000000;
 const MAX_WORKSPACE_INVENTORY_ENTRIES = 250000;
@@ -250,6 +256,7 @@ const entriesByPath = new Map();
 let inventoryPathBytes = 0;
 let eligibleBytes = 0;
 const usedHashMemo = new Map();
+const capturedHashMemo = new Map();
 const metrics = {
   contentHashCount: 0,
   memoHitCount: 0,
@@ -277,6 +284,42 @@ function readHashMemo() {
   return new Map(entries);
 }
 const hashMemo = readHashMemo();
+// Snapshot artifacts contain only stat identities and hashes, never file contents.
+// The node OS/user is trusted, as for worker state; this is not an authenticity
+// seal against code that can rewrite the node's own files or process memory.
+// Block-level forks preserve inode/timestamps; a changed device or stat fact misses.
+// Accept same-size, same-mtime, same-ctime edits, as with the in-process memo.
+const memoFiles = [
+  ...priorManifestDigests.map((digest) =>
+    path.join(process.env.HOME, ".openclaw-worker", "manifests", digest + ".memo"),
+  ),
+  ...process.argv
+    .slice(4)
+    .filter((value) => value.startsWith("memo:"))
+    .map((value) => value.slice(5)),
+];
+for (const memoFile of memoFiles) {
+  try {
+    const saved = JSON.parse(readManifestFile(memoFile));
+    if (
+      !Array.isArray(saved) ||
+      saved.length > MAX_WORKSPACE_INVENTORY_ENTRIES ||
+      saved.some(
+        (entry) =>
+          !Array.isArray(entry) ||
+          entry.length !== 2 ||
+          typeof entry[0] !== "string" ||
+          !/^worker:\d+:\d+:\d+:\d+:\d+$/.test(entry[0]) ||
+          typeof entry[1] !== "string" ||
+          !/^[a-f0-9]{64}$/.test(entry[1]),
+      )
+    )
+      continue;
+    for (const [identity, hash] of saved) if (!hashMemo.has(identity)) hashMemo.set(identity, hash);
+  } catch {
+    // Missing, corrupt or unreadable optional memo: verify by hashing instead.
+  }
+}
 function canonicalMode(type, mode) {
   if (type === "directory") return 0o700;
   if (type === "symlink") return 0o777;
@@ -645,6 +688,7 @@ async function hashFiles(entries) {
         entry.mode = Number(after.mode & 0o777n);
         entry.size = Number(after.size);
         entry.sha256 = sha256;
+        capturedHashMemo.set(identity, sha256);
         if (reusable) usedHashMemo.set(identity, sha256);
       } catch (error) {
         stop(error);
@@ -817,8 +861,17 @@ async function main() {
   }
   const ignoredPaths = await initializeBuildCacheInputs();
   assertManifestCurrent();
-  if (eligibleOnly) {
+  // Git owns input eligibility, including authenticated staged inputs. Results
+  // additionally retain authored artifacts without enrolling unrelated ignored files.
+  if (eligibleOnly || requestedBaseCommit) {
     for (const relative of await eligiblePaths(ignoredPaths)) addWithParents(relative);
+    if (!eligibleOnly) {
+      const absolute = path.join(root, ".artifacts");
+      const stats = fs.lstatSync(absolute, { throwIfNoEntry: false });
+      if (stats && (!stats.isDirectory() || walk(".artifacts"))) {
+        recordNode(".artifacts", absolute, stats);
+      }
+    }
   } else {
     walk("");
   }
@@ -829,6 +882,21 @@ async function main() {
   const manifest = serializeManifest(requestedBaseCommit, entries);
   assertManifestCurrent();
   const digest = publishManifest(manifestRoot, manifest);
+  // Keep the full bounded inventory locally; transport memos retain their smaller cap.
+  // Record recent hashes too, but the existing ctime safety window still gates reuse.
+  const memoPath = path.join(manifestRoot, digest + ".memo");
+  const temporaryMemo = memoPath + "." + process.pid + "." + crypto.randomBytes(4).toString("hex");
+  try {
+    const saved = JSON.stringify([...capturedHashMemo]);
+    if (Buffer.byteLength(saved) <= MAX_WORKSPACE_MANIFEST_BYTES) {
+      fs.writeFileSync(temporaryMemo, saved, { flag: "wx", mode: 0o600 });
+      fs.renameSync(temporaryMemo, memoPath);
+    }
+  } catch {
+    console.warn("Workspace hash memo could not be saved; future verification will rehash");
+  } finally {
+    fs.rmSync(temporaryMemo, { force: true });
+  }
   const manifestRef = "sha256:" + digest;
   if (memoMode) {
     const memo = selectWorkerWorkspaceHashMemoEntries(

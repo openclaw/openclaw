@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
 import type {
   MemoryProviderHandle,
@@ -18,6 +18,11 @@ const runtimeMocks = vi.hoisted(() => ({
   providerRuntime: undefined as unknown,
 }));
 
+// These fast-provider cases exclude cold module loading from their latency fixture.
+beforeAll(async () => {
+  await import("../plugins/memory-audience.js");
+});
+
 const projectKeys = ["github.com/OpenClaw/OpenClaw"];
 const bootstrap = (overrides: Partial<Parameters<typeof prepareProjectMemoryBootstrap>[0]> = {}) =>
   prepareProjectMemoryBootstrap({
@@ -36,7 +41,7 @@ function expectProjectSelection(lines: string[]) {
   expect(rendered.length).toBeLessThanOrEqual(2_000);
 }
 
-const logMocks = vi.hoisted(() => ({ debug: vi.fn() }));
+const logMocks = vi.hoisted(() => ({ debug: vi.fn(), warn: vi.fn() }));
 
 vi.mock("../plugins/memory-state.js", () => ({
   getMemoryRuntime: () => runtimeMocks.legacyRuntime,
@@ -403,3 +408,72 @@ describe("native project memory bootstrap", () => {
     },
   );
 });
+
+it.each(["legacy", "native", "open", "close"])(
+  "bounds optional project recall and records a slow %s provider",
+  async (stage) => {
+    resetRuntime(stage !== "legacy");
+    vi.useFakeTimers();
+    const pending = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const delayed = async () => {
+      started.resolve();
+      await pending.promise;
+      return stage === "legacy" ? entries : { hits: nativeEntries };
+    };
+    const closed = Promise.withResolvers<void>();
+    const provider = setProvider({
+      close: vi.fn(async () => {
+        if (stage === "close") {
+          await delayed();
+        }
+        closed.resolve();
+      }),
+    });
+    runtimeMocks.getManager.mockResolvedValue({
+      manager: { listCuratedProjectCandidates: runtimeMocks.listCurated },
+    });
+    runtimeMocks.listCurated.mockImplementation(delayed);
+    if (stage === "open") {
+      runtimeMocks.getProvider.mockImplementation(async () => {
+        await delayed();
+        return { provider };
+      });
+      runtimeMocks.listCurated.mockResolvedValue({ hits: nativeEntries });
+    }
+    if (stage === "close") {
+      runtimeMocks.listCurated.mockResolvedValue({ hits: nativeEntries });
+    }
+    const caller = new AbortController();
+    let result: string[] | undefined;
+    const preparation = bootstrap({
+      context: {
+        authority: { kind: "host", operation: "project-test" },
+        signal: caller.signal,
+        assertCurrent() {},
+      },
+    }).then((lines) => {
+      result = lines;
+    });
+    try {
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(result).toEqual([]);
+      expect(logMocks.warn).toHaveBeenCalledWith(expect.stringContaining("1000ms budget"));
+      expect(caller.signal.aborted).toBe(false);
+      caller.abort();
+      if (stage !== "legacy") {
+        const context = runtimeMocks.getProvider.mock.calls[0]?.[0].context;
+        expect(context?.signal.aborted).toBe(true);
+        expect(() => context?.assertCurrent()).toThrow();
+      }
+    } finally {
+      pending.resolve();
+      await preparation;
+      if (stage !== "legacy") {
+        await closed.promise;
+      }
+      vi.useRealTimers();
+    }
+  },
+);

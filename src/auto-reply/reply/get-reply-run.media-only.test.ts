@@ -617,8 +617,8 @@ describe("runPreparedReply media-only handling", () => {
           }
           if (kind === "owner-overflow") {
             expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
-            expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(1);
-            expect(getExistingFollowupQueue(key)?.summaryElisions[0]?.sources).toHaveLength(1);
+            expect(getExistingFollowupQueue(key)?.summaryEntries).toHaveLength(1);
+            expect(getExistingFollowupQueue(key)?.summaryElisions[0]?.entries).toHaveLength(1);
           }
           if (kind === "revoked-before-drain") {
             current = false;

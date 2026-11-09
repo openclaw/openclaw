@@ -6,7 +6,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { withWorktreeAllocationLease } from "../../src/agents/worktrees/allocation.js";
 import { estimateWorktreeGitBytes } from "../../src/agents/worktrees/capacity.js";
-import { addManagedWorktree } from "../../src/agents/worktrees/checkout.js";
 import { WORKTREE_CHECKOUT_TIMEOUT_MS } from "../../src/agents/worktrees/git.js";
 import {
   executeGitCommand,
@@ -262,7 +261,6 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
         killProcessTree: true,
       };
       const rawGit = async (args: string[], cwd = root) => {
-        assertCurrent();
         const result = await executeGitCommand(cwd, args, gitOptions);
         assertCurrent();
         return result;
@@ -445,6 +443,7 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
       } else {
         // Native Git does not consume acceleration policy; keep config startup
         // out of that entry path, including hook and sparse-checkout fallbacks.
+        const { addManagedWorktree } = await import("../../src/agents/worktrees/checkout.js");
         const { createConfigIO } = await import("../../src/config/config.js");
         assertCurrent();
         const added = await addManagedWorktree({

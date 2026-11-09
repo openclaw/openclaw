@@ -7,6 +7,7 @@ import {
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { createSessionMcpRuntimeManagerInstall } from "./agent-bundle-mcp-manager-install.js";
 import {
@@ -22,7 +23,6 @@ import {
   type CreateSessionMcpRuntime,
 } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
-  McpToolCatalog,
   SessionMcpRuntime,
   SessionMcpRuntimeLease,
   SessionMcpRuntimeManager,

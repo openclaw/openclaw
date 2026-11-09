@@ -621,7 +621,7 @@ openclaw-chat-detail-panel,
 .side-panel-position-menu .oc-menu-item {
   min-height: 36px;
   padding: 8px 10px;
-  border-radius: calc(10px * var(--openclaw-corner-radius-scale));
+  border-radius: var(--menu-item-radius);
   font: inherit;
 }
 

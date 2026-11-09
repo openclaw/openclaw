@@ -1,5 +1,8 @@
 import { resolveAgentRunAbortLifecycleFields } from "../../agents/run-termination.js";
-import type { TurnAdoptionLifecycle } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  FollowupQueueDisposition,
+  TurnAdoptionLifecycle,
+} from "../../auto-reply/get-reply-options.types.js";
 import type {
   QueuedFollowupReplyBatch,
   QueuedFollowupReplyDelivery,
@@ -54,7 +57,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
   isTerminal: () => boolean;
   isSteered: () => boolean;
   onRunStarted: (runId: string) => void;
-  onQueueDisposition: (reason: string) => void;
+  onQueueDisposition: (reason: FollowupQueueDisposition) => void;
   onQueuedFollowupReplyBatch: QueuedFollowupReplyDelivery;
 } {
   let terminalKnown = false;
@@ -301,7 +304,13 @@ export function createChatSendTurnAdoptionLifecycle(params: {
     },
     onQueueDisposition: (reason) => {
       recordQueuedTerminal(
-        { kind: "failed", error: `Queued input was dropped (${reason}).` },
+        {
+          kind: "failed",
+          error:
+            reason === "queue-cap-old"
+              ? "Your queued message was dropped because the session queue is full."
+              : "This message was not queued because the session queue is full.",
+        },
         true,
       );
       params.context.logGateway.info("chat queue turn intentionally skipped", {

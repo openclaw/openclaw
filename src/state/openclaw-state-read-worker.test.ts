@@ -10,6 +10,7 @@ import * as pathExistence from "../infra/path-existence.js";
 import * as sqliteIdentity from "../infra/sqlite-worker-identity.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   registerOpenClawStateDatabaseAsyncResource,
@@ -440,6 +441,7 @@ function captureCase<T extends OpenClawStateReadCommand>(
     queued?: () => void;
     checkFreshAdmission?: boolean;
     mutateWhenQueued?: boolean;
+    mutate?: () => void;
   } = {},
 ) {
   return { command, reply, bytes, mutate: () => mutateInput(command), ...options };
@@ -506,6 +508,40 @@ const metadataEntries = [
   { keys: ["entry-without-optionals"] },
 ];
 const captures = [
+  ...["mutable", "shallow-frozen", "immutable"].map((mode) => {
+    const command = {
+      type: "subagents.runs",
+      scope: {
+        kind: "descendants",
+        sessionKeys: ["agent:main:cron:parent"],
+        liveTopology: [
+          { childSessionKey: "agent:main:child", requesterSessionKey: "agent:main:cron:parent" },
+        ],
+      },
+    } as const;
+    if (mode === "immutable") {
+      freezeTrustedJsonSnapshot(command);
+    } else if (mode === "shallow-frozen") {
+      Object.freeze(command);
+    }
+    return captureCase(
+      command,
+      { ok: true, sourceAdmitted: true, type: "subagents.runs", runs: new Map() },
+      0,
+      {
+        prepared: true,
+        mutate: () => {
+          for (const [target, key, value] of [
+            [command, "scope", { kind: "maintenance" }],
+            [command.scope.sessionKeys, "0", "different-root"],
+            [command.scope.liveTopology[0], "childSessionKey", "different-child"],
+          ] as const) {
+            Reflect.set(target, key, value);
+          }
+        },
+      },
+    );
+  }),
   captureCase(
     { type: "acpSessions.metadata", entries: metadataEntries },
     { ok: true, type: "acpSessions.metadata", sourceAdmitted: true, rows: [null, null] },
@@ -580,6 +616,8 @@ it.each(captures)(
     const baseline = baselineTransport
       ? baselineTransport.startRead(location, authority)
       : executeExistingOpenClawStateRead(options, { type: "backup.runs" });
+    // Bind the FIFO baseline before another filesystem probe can overtake it.
+    await baselineTask.submitted;
     const result = transport
       ? transport.startRead(location, authority)
       : executeExistingOpenClawStateRead(options, fixture.command);

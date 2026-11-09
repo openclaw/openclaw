@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SessionEntryCohortReader } from "../config/sessions/session-entry-read-runtime.types.js";
+import type { WebSearchProviderToolExecutionContext } from "../plugins/web-provider-types.js";
 import {
   createOAuthAuthProfileStore,
   createWebSearchTestProvider,
@@ -72,6 +73,91 @@ afterEach(() => {
 });
 
 it.each([
+  { model: "gpt-5.4", profile: undefined, expected: "openai:configured" },
+  { model: "gpt-5.4", profile: "openai:selected", expected: "openai:selected" },
+  { model: "gpt-5.5", profile: undefined, expected: undefined },
+])(
+  "retains the selected credential owner through search execution ($model, $profile)",
+  async ({ model, profile, expected }) => {
+    const execute = vi.fn(async () => ({ results: [] }));
+    resolveProviders.mockReturnValue([
+      createWebSearchTestProvider({
+        pluginId: "test-search",
+        id: "test-search",
+        requiresCredential: false,
+        credentialPath: "plugins.entries.test-search.config.apiKey",
+        createTool: () => ({ description: "Fixture search", parameters: {}, execute }),
+      }),
+    ]);
+    const tools = await createOpenClawToolsAsync({
+      config: {
+        agents: { defaults: { model: "openai/gpt-5.4@openai:configured" } },
+        tools: { web: { search: { provider: "test-search" } } },
+      },
+      webSearchModelSelection: { provider: "openai", model, authProfileId: profile },
+      disableMessageTool: true,
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+    });
+    const search = tools.find((tool) => tool.name === "web_search");
+    expect(search).toBeDefined();
+    await search?.execute("selected-search", { query: "synthetic query" });
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "synthetic query" }),
+      expect.objectContaining({
+        modelSelection: { provider: "openai", model, authProfileId: expected },
+      }),
+    );
+  },
+);
+
+it("carries invocation authority through assembled search preparation", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const effect = vi.fn();
+  let allowed = true;
+  const assertInvocationCurrent = () => {
+    if (!allowed) {
+      throw new Error("Search invocation retired");
+    }
+  };
+  resolveProviders.mockReturnValue([
+    createWebSearchTestProvider({
+      pluginId: "test-search",
+      id: "test-search",
+      requiresCredential: false,
+      credentialPath: "plugins.entries.test-search.config.apiKey",
+      createTool: () => ({
+        description: "Fixture search",
+        parameters: {},
+        async execute(_args, context?: WebSearchProviderToolExecutionContext) {
+          entered.resolve();
+          await release.promise;
+          context?.assertCurrent?.();
+          effect();
+          return { results: [] };
+        },
+      }),
+    }),
+  ]);
+  const tools = await createOpenClawToolsAsync({
+    config: { tools: { web: { search: { provider: "test-search" } } } },
+    assertInvocationCurrent,
+    disableMessageTool: true,
+    disablePluginTools: true,
+    wrapBeforeToolCallHook: false,
+  });
+  const search = tools.find((tool) => tool.name === "web_search");
+  expect(search).toBeDefined();
+  const pending = search!.execute("retired-search", { query: "synthetic query" });
+  await entered.promise;
+  allowed = false;
+  release.resolve();
+  await expect(pending).rejects.toThrow("Search invocation retired");
+  expect(effect).not.toHaveBeenCalled();
+});
+
+it.each([
   ["unconfigured", undefined, false, false],
   ["configured", { provider: "brave" }, true, true],
   ["explicit key-free", { provider: "duckduckgo" }, true, true],
@@ -132,7 +218,7 @@ it.each([true, false])(
   },
 );
 
-it("gives missing-setup context in minimal prompts without a callable", () => {
+it("gives missing-setup context in minimal prompts without a callable", async () => {
   const render = (webSearchUnconfigured: boolean, capabilityToolNames: string[] = []) =>
     buildConfiguredAgentSystemPrompt({
       config: {},
@@ -142,13 +228,13 @@ it("gives missing-setup context in minimal prompts without a callable", () => {
       webSearchUnconfigured,
       promptMode: "minimal",
     });
-  const prompt = render(true);
+  const prompt = await render(true);
   expect(prompt).toContain(unconfigured);
   expect(prompt).toContain("openclaw configure --section web");
   expect(prompt).toContain("Settings → Ask OpenClaw");
   expect(prompt).not.toContain("- web_search:");
-  expect(render(false)).not.toContain(unconfigured);
-  expect(render(true, ["web_search"])).not.toContain(unconfigured);
+  expect(await render(false)).not.toContain(unconfigured);
+  expect(await render(true, ["web_search"])).not.toContain(unconfigured);
 });
 
 async function unexpectedRead(): Promise<never> {
