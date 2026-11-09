@@ -176,6 +176,11 @@ describe("PostgreSQL conformance selection", () => {
     );
     expect(Object.keys(workflow.on).toSorted()).toEqual(["schedule", "workflow_dispatch"]);
     expect(workflow.on.schedule).toEqual([{ cron: "17 7 * * *" }, { cron: "43 6 * * 1" }]);
+    expect(workflow.concurrency).toEqual({
+      group: "postgres-conformance-weekly",
+      queue: "max",
+      "cancel-in-progress": false,
+    });
     const versions = workflow.on.workflow_dispatch.inputs.versions;
     expect(versions.default).toBe("all");
     expect(versions.options).toEqual(["all", "pg16", "pg17", "pg18"]);
@@ -248,10 +253,13 @@ describe("PostgreSQL conformance selection", () => {
     [["extensions/workboard/README.md", "extensions/workboard/src/store.ts"], true],
     [["extensions/workboard/test/fixtures/README.md", "src/utils/absolute-deadline.test.ts"], true],
     [["src/infra/database-engine/open.ts"], true],
+    [["package.json"], true],
+    [["pnpm-lock.yaml"], true],
     ...[
       "src/cron/store/row-codec.ts",
       "src/cron/store/runtime-rows.kernel.ts",
       "src/cron/store/run-finalization.worker.ts",
+      "src/cron/store/run-queue.worker.ts",
       "src/cron/service.ts",
       "src/cron/service/ops-run.ts",
       "src/gateway/server-methods/cron.ts",
@@ -3980,6 +3988,15 @@ describe("ci workflow guards", () => {
       performance: true,
     },
   ])("selects owner/release coverage for $eventName $changedPaths", (fixture) => {
+    // Keep manifest routing isolated; the selector suite checks the real checkout's edges.
+    const performanceRoot = tempDirs.make("openclaw-ci-performance-owner-");
+    mkdirSync(path.join(performanceRoot, "ui"));
+    mkdirSync(path.join(performanceRoot, "src/gateway"), { recursive: true });
+    writeFileSync(
+      path.join(performanceRoot, "ui/vite.config.ts"),
+      'import "../src/gateway/control-ui-route-preloads.ts";\n',
+    );
+    writeFileSync(path.join(performanceRoot, "src/gateway/control-ui-route-preloads.ts"), "");
     const plannerUrl = pathToFileURL(
       path.resolve("scripts/lib/ci-changed-node-test-plan.mts"),
     ).href;
@@ -3990,7 +4007,7 @@ describe("ci workflow guards", () => {
       changedPlannerSource: `
         import { hasQaSmokeAffectingChange, hasControlUiPerformanceAffectingChange as performance } from ${JSON.stringify(plannerUrl)};
         export { hasQaSmokeAffectingChange };
-        export const hasControlUiPerformanceAffectingChange = paths => performance(paths, { cwd: ${JSON.stringify(process.cwd())} });
+        export const hasControlUiPerformanceAffectingChange = paths => performance(paths, { cwd: ${JSON.stringify(performanceRoot)} });
         export const createChangedNodeTestShards = () => [];
       `,
     });
@@ -6718,31 +6735,38 @@ describe("ci workflow guards", () => {
     ]);
     const coreLint = workflow.jobs["check-lint-hosted-core-shard"];
     expect(coreLint.needs).toEqual(["preflight", "check-plan", "check-extension-package-boundary"]);
-    const coreRestores = coreLint.steps.filter(
-      (step: WorkflowStep) =>
-        step.uses === "./.ci-harness/.github/actions/sdk-declarations" &&
-        String(step.with?.mode).startsWith("restore"),
-    );
-    for (const sharing of ["true", "false"]) {
-      for (const needsSdk of [true, false]) {
-        const selected = coreRestores.filter((step: WorkflowStep) =>
-          evaluateWorkflowCondition(expectDefined(step.if, "SDK restore condition"), {
-            eventName: "pull_request",
-            repository: "openclaw/openclaw",
-            runAttempt: 1,
-            matrix: { requires_sdk_declarations: needsSdk },
-            preflightOutputs: {
-              shared_sdk_declarations: sharing,
-              runner_profile: "github",
-              cache_mode: "read",
-            },
-          }),
-        );
-        expect(selected.map((step: WorkflowStep) => step.with?.mode)).toEqual([
-          sharing === "true" && needsSdk ? "restore-run" : "restore-main",
-        ]);
-        expect(selected[0]?.["continue-on-error"]).not.toBe(true);
-      }
+    const sdkRestores = (steps: WorkflowStep[]) =>
+      steps.filter(
+        (step) =>
+          step.uses === "./.ci-harness/.github/actions/sdk-declarations" &&
+          String(step.with?.mode).startsWith("restore"),
+      );
+    const coreRestores = sdkRestores(coreLint.steps);
+    for (const [sharing, needsSdk, selection, modes] of [
+      ["true", true, "", ["restore-run"]],
+      ["true", true, "{}", ["restore-run"]],
+      ["true", undefined, "", ["restore-main"]],
+      ["true", undefined, "{}", []],
+      ["false", true, "", ["restore-main"]],
+      ["false", true, "{}", ["restore-main"]],
+      ["false", undefined, "", ["restore-main"]],
+      ["false", undefined, "{}", ["restore-main"]],
+    ] as const) {
+      const selected = coreRestores.filter((step: WorkflowStep) =>
+        evaluateWorkflowCondition(expectDefined(step.if, "SDK restore condition"), {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          matrix: { requires_sdk_declarations: needsSdk, lint_selection_json: selection },
+          preflightOutputs: {
+            shared_sdk_declarations: sharing,
+            runner_profile: "github",
+            cache_mode: "read",
+          },
+        }),
+      );
+      expect(selected.map((step: WorkflowStep) => step.with?.mode)).toEqual(modes);
+      expect(selected.some((step: WorkflowStep) => step["continue-on-error"] === true)).toBe(false);
     }
     const steps = producer.steps as WorkflowStep[];
     expect(
@@ -6753,11 +6777,7 @@ describe("ci workflow guards", () => {
     );
     expect(steps.at(-1)?.with?.mode).toBe("publish-run");
     expect(workflow.jobs["ci-gate"].needs).toContain("check-extension-package-boundary");
-    const restoreSteps = workflow.jobs["check-lint-hosted-extension-shard"].steps.filter(
-      (step: WorkflowStep) =>
-        step.uses === "./.ci-harness/.github/actions/sdk-declarations" &&
-        String(step.with?.mode).startsWith("restore"),
-    );
+    const restoreSteps = sdkRestores(workflow.jobs["check-lint-hosted-extension-shard"].steps);
     for (const enabled of ["true", "false"]) {
       const selected = restoreSteps.filter((step: WorkflowStep) =>
         evaluateWorkflowCondition(expectDefined(step.if, "SDK restore condition"), {
@@ -6825,9 +6845,6 @@ describe("ci workflow guards", () => {
     );
     expect(boundaryCache.if).toBe(
       "needs.preflight.outputs.cache_mode != 'off' && matrix.group == 'extension-package-boundary' && steps.extension-boundary-inputs.outputs.enabled == 'true'",
-    );
-    expect(hostedCoreCache.if).toBe(
-      "(needs.preflight.outputs.shared_sdk_declarations != 'true' || matrix.requires_sdk_declarations != true) && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate",
     );
     for (const cache of [hostedLintCache, hostedCoreCache]) {
       expect(cache.uses).toBe("./.ci-harness/.github/actions/sdk-declarations");
@@ -11971,6 +11988,76 @@ describe("ci workflow guards", () => {
     },
   );
 
+  it("projects narrow worker archives without changing the selected tests", () => {
+    const tooling = {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      includePatterns: ["test/scripts/test-projects.test.ts"],
+    };
+    const runtime = {
+      configs: ["test/vitest/vitest.runtime-config.config.ts"],
+      includePatterns: ["src/config/io.load-async.test.ts"],
+    };
+    const selections = [
+      tooling,
+      runtime,
+      { groups: [tooling, runtime] },
+      { ...tooling, pretestBuildMode: "runtime" },
+      { groups: [{ ...tooling, requiresDist: true }] },
+      { ...tooling, env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--testNamePattern=proof"]' } },
+      { ...tooling, includePatterns: ["unknown.test.ts"] },
+      { targets: runtime.includePatterns },
+      { configs: tooling.configs },
+      { ...tooling, env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: null } },
+    ];
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "push",
+      nodeTestShards: selections.map((selection, index) => ({
+        checkName: `worker-${index}`,
+        shardName: `worker-${index}`,
+        runner: "ubuntu-24.04",
+        requiresDist: false,
+        ...selection,
+      })),
+    });
+    expect(result.status, result.output).toBe(0);
+    const rows = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include;
+    expect(rows.map((row: { worker_cache_preset?: string }) => row.worker_cache_preset)).toEqual([
+      "tooling",
+      "runtime",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "runtime",
+      undefined,
+      undefined,
+    ]);
+    for (const [index, row] of rows.entries()) {
+      const selection = selections[index]!;
+      const plans = resolveShardPlans({
+        OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify(row.targets),
+        OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(row.configs),
+        OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: row.groups_gzip_base64,
+        OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: JSON.stringify(row.includePatterns),
+      });
+      expect(
+        plans.flatMap((plan) =>
+          plan.kind === "target" ? [plan.target] : (plan.plan.includePatterns ?? []),
+        ),
+      ).toEqual(
+        "groups" in selection
+          ? selection.groups!.flatMap((group) => group.includePatterns)
+          : "targets" in selection
+            ? selection.targets
+            : "includePatterns" in selection
+              ? selection.includePatterns
+              : [],
+      );
+    }
+  });
+
   it("keeps docs i18n CI on the workflow-owned Go toolchain", () => {
     const workflow = readCiWorkflow();
     const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
@@ -13967,6 +14054,14 @@ describe("shared test-source check execution", () => {
       "extensions/codex/src/session-catalog-index.test-support.ts",
     ],
     ["src/shared.test-support.ts", "src/shared.test.ts"],
+    ["src/test-helpers/shared.ts", "src/shared.test.ts"],
+    ["src/shared.test-support.ts", "src/runtime.ts"],
+    [
+      "src/shared.test-support.ts",
+      "src/runtime.ts",
+      "docs/selection.md",
+      "config/test-lines-allocations/selection-proof.txt",
+    ],
     ["packages/example/src/shared.test-support.ts"],
     ["ui/src/shared.test-support.ts"],
     ["src/selection.test.ts", "config/test-lines-allocations/selection-proof.txt"],
@@ -14027,13 +14122,6 @@ describe("shared test-source check execution", () => {
     ["test/helpers/shared.ts"],
     ["test/scripts/ci-check-plan.test.ts", "scripts/generate-kysely-types.mts"],
     ["src/shared.test-support.d.ts"],
-    ["src/shared.test-support.ts", "src/runtime.ts"],
-    [
-      "src/shared.test-support.ts",
-      "src/runtime.ts",
-      "docs/selection.md",
-      "config/test-lines-allocations/selection-proof.txt",
-    ],
     ["src/shared.test-support.ts", "tsconfig.json"],
     ["src/shared.test-support.ts", "src/config/settings.json"],
     ["unknown/shared.test-support.ts"],

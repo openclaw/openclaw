@@ -569,14 +569,17 @@ export function createChangedCheckPlan(
       const roots = new Set(config.fileNames.map((file) => path.resolve(file)));
       rootTestTargets = rootTestTargets.filter((file) => roots.has(path.resolve(file)));
     }
-    for (let offset = 0; offset < rootTestTargets.length; offset += TARGETED_LINT_PATH_LIMIT) {
-      const batch = rootTestTargets.slice(offset, offset + TARGETED_LINT_PATH_LIMIT);
-      addLintCommand(
-        batch.length === 1 ? "lint test root changed file" : "lint test root changed files",
-        "node",
-        ["scripts/run-oxlint.mjs", "--tsconfig", ROOT_TEST_TS_CONFIG, ...batch],
-        baseEnv,
-      );
+    for (const command of batchTargetedLintCommand(
+      {
+        name: "lint test root changed files",
+        bin: "node",
+        args: ["scripts/run-oxlint.mjs", "--tsconfig", ROOT_TEST_TS_CONFIG, ...rootTestTargets],
+        env: baseEnv,
+      },
+      options.platform ?? process.platform,
+      "test root",
+    )) {
+      addLintCommand(command.name, command.bin, command.args, command.env);
     }
     for (const command of [...lintChecks].filter(isOxlintCommand)) {
       command.env = createChangedOxlintEnv(
@@ -1524,10 +1527,14 @@ export function createTargetedCoreLintCommands(
     tsconfig: CORE_OXLINT_TS_CONFIG,
     ...options,
   });
-  return command ? batchCoreLintCommand(command, options.platform ?? process.platform) : null;
+  return command ? batchTargetedLintCommand(command, options.platform ?? process.platform) : null;
 }
 
-function batchCoreLintCommand(command: TargetedLintCommand, platform: NodeJS.Platform) {
+function batchTargetedLintCommand(
+  command: TargetedLintCommand,
+  platform: NodeJS.Platform,
+  label = "core",
+) {
   const prefix = command.args.slice(0, 3);
   const windows = platform === "win32";
   // POSIX uses the formatter's conservative argv budget. Keep Windows batches
@@ -1543,7 +1550,7 @@ function batchCoreLintCommand(command: TargetedLintCommand, platform: NodeJS.Pla
   for (const file of command.args.slice(3)) {
     const fileBytes = argumentBytes([file]);
     if (prefixBytes + fileBytes > maxBytes) {
-      throw new Error(`Core lint target exceeds the command-line budget: ${file}`);
+      throw new Error(`Targeted lint target exceeds the command-line budget: ${file}`);
     }
     if (batch.length === maxPaths || bytes + fileBytes > maxBytes) {
       batches.push(batch);
@@ -1557,7 +1564,7 @@ function batchCoreLintCommand(command: TargetedLintCommand, platform: NodeJS.Pla
     batches.push(batch);
   }
   return batches.map((files) => ({
-    name: files.length === 1 ? "lint core changed file" : "lint core changed files",
+    name: `lint ${label} changed ${files.length === 1 ? "file" : "files"}`,
     bin: command.bin,
     args: [...prefix, ...files],
     env: command.env,
