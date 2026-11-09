@@ -53,6 +53,13 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor recovers interrupted legacy heartbeat runs through cron's startup
+recovery owner before converting them to automations, while holding offline
+maintenance custody. Live or unproved runtime ownership leaves the conversion and
+configuration pending with an update warning. Runs needing startup notifications
+also remain pending so the Gateway can deliver them during recovery. The candidate
+must contain this fix; published updaters need no new marker or schema change.
+
 Candidate Doctor repairs retained ISO-8601 session `endedAt` strings before
 canonical session admission, preserving the original database backup and updating
 indexed timing together. This repair must be present in the candidate Doctor;

@@ -44,6 +44,7 @@ import {
   resolveDoctorHeartbeatReceiptJob,
   selectDoctorHeartbeatMonitor,
 } from "./doctor-heartbeat-monitors.js";
+import { recoverDoctorHeartbeatRun } from "./doctor-heartbeat-run-recovery.js";
 import {
   resolveHeartbeatPhaseMs,
   resolveHeartbeatSchedulerSeed,
@@ -277,7 +278,8 @@ export async function ensureHeartbeatMonitorJobs(
     return conversions;
   });
   return runOpenClawStateWriteTransaction(
-    ({ db }) => {
+    (database) => {
+      const { db } = database;
       const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
       const rows = loadCronRows(db, storeKey);
       const currentJobs = decodeDoctorHeartbeatJobRows(rows);
@@ -325,7 +327,7 @@ export async function ensureHeartbeatMonitorJobs(
           }
           continue;
         }
-        const current = item.previous
+        let current = item.previous
           ? currentJobs.find((job) => job.id === item.previous!.id)
           : undefined;
         if (
@@ -340,8 +342,18 @@ export async function ensureHeartbeatMonitorJobs(
           );
         }
         if (current?.state.runningAtMs !== undefined) {
-          throw new Error(
-            `Automation ${current.id} is running; stop the Gateway and rerun Doctor to preserve its execution boundary.`,
+          current = recoverDoctorHeartbeatRun({ database, storeKey, job: current, cfg, nowMs });
+          if (!current) {
+            continue;
+          }
+          item.job = convertMonitor(
+            cfg,
+            item.agentId,
+            current,
+            nowMs,
+            schedulerSeed,
+            env,
+            enrolledAgentIds.has(item.agentId),
           );
         }
         const sortOrder = current
