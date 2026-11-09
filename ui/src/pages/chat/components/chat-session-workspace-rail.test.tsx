@@ -3,6 +3,7 @@
 import { createSignal, flush, onSettled } from "solid-js";
 import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { loadSettings, patchSettings } from "../../../app/settings.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { stubTargetRetainingObserver } from "../../../test-helpers/resize-observer.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -19,6 +20,10 @@ import {
   createSessionWorkspaceProps,
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
+import type {
+  TranscriptAttachmentEntry,
+  TranscriptAttachments,
+} from "./chat-sidebar-content-types.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 
 type List = NonNullable<SessionWorkspaceProps["list"]>;
@@ -830,4 +835,120 @@ it("mobile restores folder search and root groups without mixing global search r
   await ready();
   expect(mounted.container.textContent).toContain("No files match your search.");
   expect(mounted.queryByRole("button", { name: "Browse files" })).toBeNull();
+});
+
+function transcriptAttachments(
+  entries: TranscriptAttachmentEntry[],
+  coverage: TranscriptAttachments["coverage"] = "complete",
+): TranscriptAttachments {
+  const source: TranscriptAttachments = {
+    pairingQrExpirations: [],
+    refresh: () => source,
+    entries,
+    coverage,
+    loading: false,
+    omittedMedia: false,
+  };
+  return source;
+}
+
+function transcriptImage(label: string | undefined, key = label ?? "untitled") {
+  return {
+    kind: "image",
+    key: `image:${key}`,
+    label: label ?? "Image",
+    mimeType: "image/png",
+    image: { url: "data:image/png;base64,AA==", alt: label },
+    options: {},
+    onOpenSidebar: vi.fn(),
+  } satisfies TranscriptAttachmentEntry;
+}
+
+it("desktop lists session files and transcript attachments together, sorted and tiled on request", async () => {
+  setupDesktopLayout();
+  const onSessionFilesDisplayChange = vi.fn();
+  const workspace = createWorkspace({
+    presentation: "desktop",
+    list: {
+      root: "/workspace",
+      files: [file("/tmp/zeta.txt")],
+      artifacts: [artifact("concept", "alpha.pdf")],
+    },
+    transcriptAttachments: transcriptAttachments(
+      [transcriptImage(undefined), transcriptImage("beta.png")],
+      "unknown",
+    ),
+    sessionFilesDisplay: { view: "list", sort: "default" },
+    onSessionFilesDisplayChange,
+  });
+  const mounted = await mountWorkspace(workspace);
+  try {
+    const sessionList = () =>
+      mounted.container.querySelector<HTMLElement>(".workspace-desktop__session-scroll")!;
+    const labels = () =>
+      Array.from(sessionList().querySelectorAll("[role=listitem] > button"), (row) =>
+        row.getAttribute("aria-label"),
+      );
+    expect(labels()).toEqual(["/tmp/zeta.txt", "alpha.pdf", "Image", "beta.png"]);
+    expect(sessionList().querySelector(".workspace-desktop__tile")).toBeNull();
+    expect(mounted.getByRole("status").textContent).toContain("coverage is not yet known");
+
+    mounted.update({ ...workspace, sessionFilesDisplay: { view: "grid", sort: "name" } });
+    expect(sessionList().classList.contains("workspace-desktop__session-scroll--grid")).toBe(true);
+    expect(labels()).toEqual(["alpha.pdf", "beta.png", "Image", "/tmp/zeta.txt"]);
+    const tiles = sessionList().querySelectorAll<HTMLButtonElement>(".workspace-desktop__tile");
+    expect(tiles).toHaveLength(4);
+    // Inline image bytes render immediately; the untitled image shows pixels, not a generic caption.
+    const untitled = tiles[2]!;
+    expect(untitled.querySelector("img.workspace-desktop__tile-image")).not.toBeNull();
+    expect(untitled.querySelector(".workspace-desktop__tile-name")).toBeNull();
+    expect(tiles[1]!.querySelector(".workspace-desktop__tile-name")?.textContent).toBe("beta.png");
+    expect(tiles[0]!.querySelector(".chat-attachment-file-icon")?.getAttribute("data-mode")).toBe(
+      "large-placeholder",
+    );
+    tiles[0]!.click();
+    expect(workspace.onOpenArtifact).toHaveBeenCalledWith("concept", "preview");
+
+    mounted.update({ ...workspace, sessionFilesDisplay: { view: "grid", sort: "type" } });
+    expect(labels()).toEqual(["beta.png", "Image", "alpha.pdf", "/tmp/zeta.txt"]);
+
+    mounted.getByRole("button", { name: "Session files view and order" }).click();
+    await waitForSolid(() => expect(mounted.getByRole("menu")).not.toBeNull());
+    const listOption = mounted.getByRole("menuitemradio", { name: "List" });
+    expect(mounted.getByRole("menuitemradio", { name: "Grid" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    listOption.click();
+    expect(onSessionFilesDisplayChange).toHaveBeenCalledWith({ view: "list" });
+    mounted.getByRole("button", { name: "Session files view and order" }).click();
+    await waitForSolid(() => expect(mounted.getByRole("menu")).not.toBeNull());
+    mounted.getByRole("menuitemradio", { name: "Date" }).click();
+    expect(onSessionFilesDisplayChange).toHaveBeenLastCalledWith({ sort: "date" });
+  } finally {
+    mounted.unmount();
+  }
+});
+
+it("remembers the session files display for every Files panel in this browser", () => {
+  const previous = loadSettings().sessionFilesDisplay;
+  onTestFinished(() => {
+    patchSettings({ sessionFilesDisplay: previous });
+  });
+  patchSettings({ sessionFilesDisplay: undefined });
+  const state = createSessionWorkspaceHost({ settings: loadSettings() });
+  const props = () =>
+    createSessionWorkspaceProps(state, { expanded: false, presentation: "desktop" });
+  expect(props().sessionFilesDisplay).toEqual({ view: "list", sort: "default" });
+  props().onSessionFilesDisplayChange?.({ view: "grid" });
+  expect(props().sessionFilesDisplay).toEqual({ view: "grid", sort: "default" });
+  props().onSessionFilesDisplayChange?.({ sort: "name" });
+  expect(loadSettings().sessionFilesDisplay).toEqual({ view: "grid", sort: "name" });
+  const other = createSessionWorkspaceHost({
+    sessionKey: "agent:main:other",
+    settings: loadSettings(),
+  });
+  expect(
+    createSessionWorkspaceProps(other, { expanded: false, presentation: "desktop" })
+      .sessionFilesDisplay,
+  ).toEqual({ view: "grid", sort: "name" });
 });

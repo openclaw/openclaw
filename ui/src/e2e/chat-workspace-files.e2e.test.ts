@@ -137,7 +137,7 @@ suite.define(() => {
         }
         const selector = mobile
           ? '.chat-workspace-mobile__group[role="list"] .chat-workspace-mobile__row'
-          : ".workspace-desktop__attachments .workspace-desktop__row";
+          : ".workspace-desktop__session-scroll .workspace-desktop__row";
         const attachments = page.locator(selector);
         await expect.poll(() => attachments.count()).toBe(2);
         await attachments.first().waitFor();
@@ -437,6 +437,159 @@ suite.define(() => {
         .toBe(true);
       expect(await page.locator(".chat-workspace-rail__dock").count()).toBe(0);
       expect(await page.locator(".chat-workspace-rail__grip").count()).toBe(0);
+    });
+  });
+
+  it("tiles session files in the chosen order and remembers the display", async () => {
+    const evidence = createControlUiE2eArtifactDir("session-files-grid");
+    const swatch = (fill: string) =>
+      `data:image/svg+xml;utf8,${encodeURIComponent(
+        `<svg xmlns='http://www.w3.org/2000/svg' width='400' height='300'><rect width='100%' height='100%' fill='${fill}'/><circle cx='200' cy='150' r='90' fill='white' fill-opacity='0.35'/></svg>`,
+      )}`;
+    const document = (label: string, mimeType: string) => ({
+      type: "attachment",
+      attachment: {
+        kind: "document",
+        label,
+        mimeType,
+        url: `https://example.com/${label}`,
+      },
+    });
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await installMockGateway(page, {
+        historyMessages: [
+          {
+            role: "assistant",
+            timestamp: 1_700_000_100_000,
+            content: [
+              { type: "image", url: swatch("#8e2b2b") },
+              { type: "image", url: swatch("#1f1f1f") },
+              document("Back_Isometric_on_Black.jpg", "image/jpeg"),
+              document("ClawCon_Shenzhen_Isometric_Concept_11.pdf", "application/pdf"),
+              document("ClawCon_Shenzhen_Isometric_Artwork_11.zip", "application/zip"),
+            ],
+          },
+          {
+            role: "assistant",
+            timestamp: 1_700_000_300_000,
+            content: [
+              { type: "image", url: swatch("#2b5f8e"), alt: "Silicon_Front_Detail.png" },
+              { type: "image", url: swatch("#e8e2d6") },
+              document("ClawCon_Shenzhen_Silicon_Concept_12.pdf", "application/pdf"),
+            ],
+          },
+        ],
+        methodResponses: {
+          "artifacts.list": { artifacts: [] },
+          "sessions.files.list": {
+            sessionKey: "main",
+            root: "/workspace",
+            files: [
+              {
+                path: "/tmp/outputs/notes.md",
+                name: "notes.md",
+                kind: "modified",
+                missing: false,
+                workspacePath: "/tmp/outputs/notes.md",
+                updatedAtMs: 1_700_000_200_000,
+              },
+            ],
+          },
+        },
+      });
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await openChatSidePanelType(page, "Files");
+      const sessionList = page.getByRole("list", { name: "Session files" });
+      const rows = sessionList.locator("[role=listitem] > button");
+      await expect.poll(() => rows.count()).toBe(9);
+      const labels = () => rows.evaluateAll((items) => items.map((item) => item.ariaLabel));
+      expect(await labels()).toEqual([
+        "/tmp/outputs/notes.md",
+        "Image",
+        "Image",
+        "Back_Isometric_on_Black.jpg",
+        "ClawCon_Shenzhen_Isometric_Concept_11.pdf",
+        "ClawCon_Shenzhen_Isometric_Artwork_11.zip",
+        "Silicon_Front_Detail.png",
+        "Image",
+        "ClawCon_Shenzhen_Silicon_Concept_12.pdf",
+      ]);
+      const panel = page.locator('[data-panel-slot="workspace"]:not([hidden])');
+      const capture = async (stage: string) => {
+        await page.mouse.move(0, 0);
+        const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [panel], {
+          animations: "disabled",
+          elements: [panel],
+        });
+        await fs.writeFile(path.join(evidence, `${stage}.png`), frame.png);
+        await fs.writeFile(path.join(evidence, `${stage}-panel.png`), frame.elements[0]!.png);
+      };
+      await capture("list");
+
+      const display = page.getByRole("button", { name: "Session files view and order" });
+      await display.click();
+      await page.getByRole("menuitemradio", { name: "Grid" }).click();
+      const tiles = sessionList.locator(".workspace-desktop__tile");
+      await expect.poll(() => tiles.count()).toBe(9);
+      // Untitled transcript images show their pixels without a generic caption; files keep names.
+      const untitled = tiles.nth(1);
+      await untitled.locator("img.workspace-desktop__tile-image").waitFor();
+      expect(await untitled.locator(".workspace-desktop__tile-name").count()).toBe(0);
+      await expect
+        .poll(() =>
+          untitled.locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth > 0),
+        )
+        .toBe(true);
+      expect(await tiles.nth(3).locator(".workspace-desktop__tile-name").textContent()).toBe(
+        "Back_Isometric_on_Black.jpg",
+      );
+      const tileBoxes = await Promise.all(
+        [0, 1, 2].map(async (index) => (await tiles.nth(index).boundingBox())!),
+      );
+      expect(tileBoxes[0]!.y).toBe(tileBoxes[1]!.y);
+      expect(tileBoxes[1]!.x).toBeGreaterThan(tileBoxes[0]!.x);
+      await capture("grid");
+
+      await display.click();
+      await page.getByRole("menuitemradio", { name: "Type" }).click();
+      await expect
+        .poll(labels)
+        .toEqual([
+          "ClawCon_Shenzhen_Isometric_Artwork_11.zip",
+          "Back_Isometric_on_Black.jpg",
+          "Image",
+          "Image",
+          "Image",
+          "Silicon_Front_Detail.png",
+          "/tmp/outputs/notes.md",
+          "ClawCon_Shenzhen_Isometric_Concept_11.pdf",
+          "ClawCon_Shenzhen_Silicon_Concept_12.pdf",
+        ]);
+      await capture("grid-by-type");
+
+      // Date interleaves the session file (modified between the two messages) by real time.
+      await display.click();
+      await page.getByRole("menuitemradio", { name: "Date" }).click();
+      await expect
+        .poll(labels)
+        .toEqual([
+          "Silicon_Front_Detail.png",
+          "Image",
+          "ClawCon_Shenzhen_Silicon_Concept_12.pdf",
+          "/tmp/outputs/notes.md",
+          "Image",
+          "Image",
+          "Back_Isometric_on_Black.jpg",
+          "ClawCon_Shenzhen_Isometric_Concept_11.pdf",
+          "ClawCon_Shenzhen_Isometric_Artwork_11.zip",
+        ]);
+
+      // The display is a browser preference: a reload keeps grid and date order.
+      await page.reload();
+      await openChatSidePanelType(page, "Files");
+      await expect.poll(() => sessionList.locator(".workspace-desktop__tile").count()).toBe(9);
+      expect((await labels())[0]).toBe("Silicon_Front_Detail.png");
     });
   });
 });
