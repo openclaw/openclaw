@@ -123,12 +123,8 @@ export function scrollTranscriptToEnd(
       () => cancelScroll(true),
       () => state.scrollCommand === command,
     );
-    const element = instance.scrollElement;
-    // A smooth no-op emits no native idle event to capture the end. Preserve
-    // that actual resting edge before a later row measurement grows the range.
-    if (behavior !== "smooth" || endAnchor.recordViewport(element)) {
-      endAnchor.capture(element);
-    }
+    // A smooth no-op emits no native idle event; capture its resting edge now.
+    endAnchor.capture(instance.scrollElement);
   };
   if (source === "auto" || behavior === "smooth") {
     // Automatic following joins native measurements; manual motion prepares synchronously.
@@ -274,8 +270,17 @@ export function observeTranscriptOffset(
       const actualOffset = element?.scrollTop;
       owner.state.maintenanceScrollOffset = actualOffset === target ? actualOffset : null;
     }
-    // Earlier native motion can arrive while Latest prepares its destination.
-    // Fresh reader input cancels in interrupt(), before its movement arrives.
+    // Unissued Latest and native smooth settling can carry earlier motion.
+    // Instant commands own no such trajectory after their measured writes.
+    if (
+      delta < 0 &&
+      owner.state.scrollCommand?.target === "end" &&
+      owner.state.scrollCommand.offset !== undefined &&
+      owner.state.scrollCommand.behavior !== "smooth" &&
+      !isTranscriptMaintenanceScroll(owner.state, element)
+    ) {
+      owner.cancelScroll();
+    }
     const programmatic = owner.isProgrammaticScroll();
     // The follow threshold releases pane policy before a command's last pixels settle.
     const readerDelta = programmatic || owner.state.scrollCommand !== null ? 0 : delta;

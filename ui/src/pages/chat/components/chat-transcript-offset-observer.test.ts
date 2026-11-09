@@ -170,6 +170,12 @@ it.each([
   element.dispatchEvent(new Event("scroll"));
   onOffset.mockClear();
   state.scrollCommand = { target: "end", behavior: "smooth", offset: 20 };
+  // Native smooth settling can move backward without new reader input.
+  element.scrollTop = 10;
+  element.dispatchEvent(new Event("scroll"));
+  expect(cancelScroll).not.toHaveBeenCalled();
+  expect(state.scrollCommand?.target).toBe("end");
+  onOffset.mockClear();
   element.scrollTop = 19;
   expect(isTranscriptProgrammaticScroll(state, element)).toBe(false);
   element.dispatchEvent(new Event("scroll"));
