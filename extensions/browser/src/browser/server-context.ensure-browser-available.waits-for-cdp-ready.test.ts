@@ -307,6 +307,31 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(chrome.launch).toHaveBeenCalledTimes(4);
   });
 
+  it("measures the launch cooldown on elapsed time, not wall-clock position", async () => {
+    // Only the wall clock is faked here: the cooldown must track performance.now, so
+    // performance must keep advancing with real time while Date jumps.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const { freshProfile } = setupEnsureBrowserAvailableHarness();
+    chrome.launch.mockRejectedValue(new Error("Failed to start Chrome CDP"));
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(freshProfile().ensureBrowserAvailable()).rejects.toThrow(
+        "Failed to start Chrome CDP",
+      );
+    }
+
+    const cooledDown = freshProfile();
+    await expect(cooledDown.ensureBrowserAvailable()).rejects.toThrow("is cooling down after 3");
+    expect(chrome.launch).toHaveBeenCalledTimes(3);
+
+    // A forward wall-clock step must not end the cooldown early: the window measures elapsed
+    // time, so while no monotonic time has passed the retry stays refused. A wall-clock
+    // window would read the jump as "the cooldown already finished" and relaunch Chrome.
+    vi.setSystemTime(new Date(Date.now() + 3_600_000));
+    await expect(cooledDown.ensureBrowserAvailable()).rejects.toThrow("is cooling down after 3");
+    expect(chrome.launch).toHaveBeenCalledTimes(3);
+  });
+
   it("does not let no-display preflight failures block explicit headless recovery", async () => {
     const { runtime, freshProfile } = setupEnsureBrowserAvailableHarness();
     chrome.launch.mockRejectedValue(
