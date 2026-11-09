@@ -4494,7 +4494,7 @@ jobs:
 
       - name: Cache extension package boundary artifacts for hosted core lint
         id: sdk-boundary-cache
-        if: (needs.preflight.outputs.shared_sdk_declarations != 'true' || matrix.requires_sdk_declarations != true) && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate
+        if: (needs.preflight.outputs.shared_sdk_declarations != 'true' || (!matrix.lint_selection_json && matrix.requires_sdk_declarations != true)) && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate
         uses: ./.ci-harness/.github/actions/sdk-declarations
         with: *sdk_main_restore_inputs
 
