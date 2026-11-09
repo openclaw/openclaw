@@ -46,8 +46,9 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
-  // Coordinator-approved full locale hints: measured document plus 64 B headroom.
-  documentGzipBytes: 13_893,
+  // Coordinator-approved full locale hints plus the warm-frame admission hint
+  // (#195865): measured 13,962 B plus 64 B headroom.
+  documentGzipBytes: 14_026,
   // Consolidated eager/route partitions measure 5/20/17 requests over HTTP/1.1.
   // Preserve the initial two-request headroom; route limits match their measured graphs.
   startupJsRequests: 7,
@@ -57,9 +58,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Coordinator-accepted completed-run anchor fix: keep cold overscan out of flow.
-  // Current-main 1,296,592 B + 159 B measured growth; no startup growth.
-  chatBootJsGzipBytes: 1_296_751,
+  // Coordinator-accepted warm cached-page reveal latch (#195865): measured
+  // 1,297,193 B plus 64 B headroom; no startup growth.
+  chatBootJsGzipBytes: 1_297_257,
   // Channels: raw -159 B, served +22 B; coordinator-accepted normalized trade +64 B.
   newBootJsGzipBytes: 803_250,
   startupCssRequests: 1,
