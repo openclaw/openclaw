@@ -88,7 +88,10 @@ describe("createSandboxBridgeReadFile", () => {
 
   it("fails as before when two staged facts share one media:// ref", async () => {
     const resolvePath = vi.fn(({ filePath }: { filePath: string }) => containerPath(filePath));
-    const stat = vi.fn<SandboxFsBridge["stat"]>(async () => null);
+    // Both staged copies exist, so only the ambiguity rule can reject the ref.
+    const stat = vi.fn<SandboxFsBridge["stat"]>(async ({ filePath }) =>
+      filePath.includes("openclaw-staged-") ? { type: "file", size: 1, mtimeMs: 1 } : null,
+    );
     await expect(
       resolveSandboxedBridgeMediaPath({
         sandbox: {
