@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { startChatSendDiagnostics } from "../../../gateway/server-methods/chat-send-diagnostics.js";
 import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
+import * as mediaLocalRoots from "../../../media/local-roots.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
@@ -211,11 +212,21 @@ describe("prepareEmbeddedAttemptSetup", () => {
       if (!agent.transformContext) {
         throw new Error("expected installed history transform");
       }
+      using roots = vi.spyOn(mediaLocalRoots, "getAgentScopedMediaLocalRoots");
+      for (const content of [
+        [{ type: "text", text: "describe" }],
+        [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }],
+      ]) {
+        const messages = [castAgentMessage({ role: "user", content })];
+        expect(await agent.transformContext(messages)).toEqual(messages);
+      }
+      expect(roots).not.toHaveBeenCalled();
       const replay = await agent.transformContext([message]);
       expect((replay[0] as { content?: unknown }).content).toEqual([
         { type: "text", text: "describe" },
         { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
       ]);
+      expect(roots).toHaveBeenCalledOnce();
     } finally {
       guards.remove();
     }

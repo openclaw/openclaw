@@ -45,6 +45,7 @@ import {
   captureGatewayToolCallerAssertion,
   createAdmittedGatewayToolCallerIdentity,
   getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
   withGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
 import { createGitHubPublishTool } from "./github-publish-tool.js";
@@ -154,6 +155,11 @@ it.for([
               : { sessionKey, action: "prepare_pr" },
           );
           expect(getGatewayToolCallerIdentity()?.workspacePrAdoptionSessionId).toBe(sessionId);
+          if (!localPublication) {
+            const selected = resolveGatewayToolOperatorSelection();
+            expect(selected.operatorAuthority).toMatchObject({ profileId, scopes });
+            selected.assertCurrent();
+          }
           expect(getSessionControllerEntryForOperation(operation).successorBarrier).toBeDefined();
           order.push("prepare");
           if (outcome === "failed") {
@@ -204,7 +210,7 @@ it.for([
           [
             ["sessions.github.action", "operator.sessions.write", "sessions", endpoint],
             ["sessions.github.publish", "operator.sessions.write", "sessions", publish],
-            ["tools.effective", "operator.read", "tools", forbidden],
+            ["tools.catalog", "operator.read", "tools", forbidden],
             ["plugins.reload", "operator.admin", "plugins", forbidden],
           ],
           () => config,
@@ -232,7 +238,7 @@ it.for([
               ).toMatchObject({ status: "requested", requestId: "synthetic-publication" });
               await expect(
                 callAgentToolGatewayRequest({
-                  method: "tools.effective",
+                  method: "tools.catalog",
                   params: scope,
                 }),
               ).rejects.toThrow("operator.read");

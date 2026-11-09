@@ -1,28 +1,29 @@
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { collectSourceFileContents } from "../../scripts/lib/source-file-scan-cache.mts";
+import {
+  collectSourceFileContents,
+  mapSourceFileContents,
+} from "../../scripts/lib/source-file-scan-cache.mts";
 import { createDeferred } from "../helpers/promise.js";
 
 const tempDirs: string[] = [];
 let pendingScan: ReturnType<typeof collectSourceFileContents> | undefined;
 
-async function sourceFixture(files: Record<string, string>) {
+async function sourceFixture(files: Record<string, string | Uint8Array>) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-source-scan-"));
   tempDirs.push(repoRoot);
   await mkdir(path.join(repoRoot, "src"));
   for (const [name, content] of Object.entries(files)) {
     await writeFile(path.join(repoRoot, "src", name), content, "utf8");
   }
-  return (overrides: Partial<Parameters<typeof collectSourceFileContents>[0]>) =>
-    collectSourceFileContents({
-      repoRoot,
-      scanRoots: ["src"],
-      scanExtensions: new Set([".ts"]),
-      ignoredDirNames: new Set(),
-      ...overrides,
-    });
+  return {
+    repoRoot,
+    scanRoots: ["src"],
+    scanExtensions: new Set([".ts"]),
+    ignoredDirNames: new Set<string>(),
+  };
 }
 
 afterEach(async () => {
@@ -44,7 +45,8 @@ it("bounds reads, refills the pool, and returns sorted content despite a held fi
   const release = () => held.resolve();
   signal.throwIfAborted();
   signal.addEventListener("abort", release, { once: true });
-  const scan = (pendingScan = fixture({
+  const scan = (pendingScan = collectSourceFileContents({
+    ...fixture,
     maxConcurrentReads: 2,
     statFile: (file) => {
       maximum = Math.max(maximum, ++active);
@@ -85,7 +87,8 @@ it.each<[string, string, number, number]>([
   const scan = await sourceFixture({ "oversized.ts": content });
   let readCalls = 0;
   await expect(
-    scan({
+    collectSourceFileContents({
+      ...scan,
       maxFileBytes: 8,
       readFile: async () => {
         readCalls += 1;
@@ -95,3 +98,88 @@ it.each<[string, string, number, number]>([
   ).rejects.toThrow(`source scan file exceeds 8 byte limit: src/oversized.ts (${bytes} bytes)`);
   expect(readCalls).toBe(calls);
 });
+
+it("maps decoded contents to compact results in source-path order", async () => {
+  const fixture = await sourceFixture({
+    "b.ts": new Uint8Array([0xff]),
+    "a.ts": "\uFEFFhello\r\n猫",
+  });
+  const results = await mapSourceFileContents(fixture, ({ relativeFile, content }) => [
+    relativeFile,
+    Buffer.byteLength(content, "utf8"),
+  ]);
+  expect(results).toEqual([
+    ["src/a.ts", 13],
+    ["src/b.ts", 3],
+  ]);
+});
+
+it("propagates a read failure before mapping its source", async () => {
+  const fixture = await sourceFixture({ "denied.ts": "source" });
+  const error = Object.assign(new Error("read denied"), { code: "EACCES" });
+  let mapped = 0;
+  await expect(
+    mapSourceFileContents(
+      {
+        ...fixture,
+        readFile: async () => {
+          throw error;
+        },
+      },
+      () => ++mapped,
+    ),
+  ).rejects.toBe(error);
+  expect(mapped).toBe(0);
+});
+
+it.each(["delete", "grow", "replace"] as const)(
+  "preserves read semantics when a source changes after stat: %s",
+  async (mutation) => {
+    for (const mode of ["collect", "map"] as const) {
+      const fixture = await sourceFixture({ "mutable.ts": "before" });
+      let mapped = 0;
+      const params = {
+        ...fixture,
+        maxFileBytes: 8,
+        statFile: async (file: string) => {
+          const before = await stat(file);
+          if (mutation === "delete") {
+            await rm(file);
+          } else if (mutation === "grow") {
+            await writeFile(file, "x".repeat(16));
+          } else {
+            const replacement = `${file}.replacement`;
+            await writeFile(replacement, "after");
+            await rename(replacement, file);
+          }
+          return before;
+        },
+      };
+      const scan =
+        mode === "collect"
+          ? collectSourceFileContents(params)
+          : mapSourceFileContents(params, ({ relativeFile, content }) => {
+              mapped += 1;
+              return { relativeFile, content };
+            });
+      if (mutation === "delete") {
+        await expect(scan).rejects.toMatchObject({ code: "ENOENT" });
+      } else if (mutation === "grow") {
+        await expect(scan).rejects.toThrow(
+          "source scan file exceeds 8 byte limit: src/mutable.ts (16 bytes)",
+        );
+      } else {
+        await expect(scan).resolves.toEqual([
+          {
+            ...(mode === "collect"
+              ? { filePath: path.join(fixture.repoRoot, "src/mutable.ts") }
+              : {}),
+            relativeFile: "src/mutable.ts",
+            content: "after",
+          },
+        ]);
+      }
+      expect(mapped).toBe(mode === "map" && mutation === "replace" ? 1 : 0);
+    }
+  },
+);

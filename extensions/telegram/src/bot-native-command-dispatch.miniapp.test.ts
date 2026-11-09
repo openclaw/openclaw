@@ -2,7 +2,7 @@ import type { BotCommand } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import {
   apiCalls,
   commandMessage,
@@ -16,13 +16,6 @@ import { registerTelegramMiniAppCommand } from "./miniapp/command.js";
 import { createTelegramMiniAppLaunchTickets } from "./miniapp/launch-ticket.js";
 import { getTelegramRuntime } from "./runtime.js";
 
-vi.mock("./miniapp/url.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./miniapp/url.js")>()),
-  resolveTelegramMiniAppUrls: async () => ({
-    pageUrl: "https://gateway.example/__openclaw_tg_miniapp/",
-  }),
-}));
-
 function sentMessage() {
   const sends = apiCalls.mock.calls.filter(([method]) => method === "sendMessage");
   expect(sends).toHaveLength(1);
@@ -31,6 +24,7 @@ function sentMessage() {
 
 it("registers and dispatches session /dashboard separately from owner-only /controlui", async () => {
   const cfg: OpenClawConfig = {
+    gateway: { publicOrigin: "https://gateway.example" },
     commands: { native: true, text: true },
     channels: { telegram: { dmPolicy: "open", allowFrom: ["*"], streaming: { mode: "off" } } },
   };

@@ -102,18 +102,45 @@ function shouldPreserveTelegramListBoundarySpacing(previous: string, next: strin
   );
 }
 
+const TELEGRAM_ORDERED_ITEM_PATTERN = /^([ \t]*)\d+([.)])[ \t]+(?=\S)/;
+
+function continuesEnclosingOrderedList(lines: readonly string[], index: number): boolean {
+  const next = TELEGRAM_ORDERED_ITEM_PATTERN.exec(lines[index] ?? "");
+  if (!next) {
+    return false;
+  }
+  const nextIndent = next[1]?.length ?? 0;
+  const bulletIndent = /^[ \t]*/.exec(lines[index - 1] ?? "")?.[0].length ?? 0;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const line = lines[cursor] ?? "";
+    const indent = /^[ \t]*/.exec(line)?.[0].length ?? 0;
+    if (!line.trim() || indent > nextIndent) {
+      continue;
+    }
+    const parent = TELEGRAM_ORDERED_ITEM_PATTERN.exec(line);
+    return (
+      parent !== null &&
+      indent === nextIndent &&
+      parent[2] === next[2] &&
+      bulletIndent >= parent[0].length
+    );
+  }
+  return false;
+}
+
 function preserveTelegramListBoundarySpacing(markdown: string): string {
   // Preserve literal fence examples and indented code when separating prose lists.
   let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
   let previousLine = "";
   let previousOffset = 0;
   let offset = 0;
-  return markdown
-    .split("\n")
-    .map((line) => {
+  const lines = markdown.split("\n");
+  return lines
+    .map((line, index) => {
       const normalizedLine = line.replace(/\r$/, "");
       const insertBoundary =
         shouldPreserveTelegramListBoundarySpacing(previousLine, normalizedLine) &&
+        !continuesEnclosingOrderedList(lines, index) &&
         !isInsideCode(previousOffset, (codeRegions ??= findCodeRegions(markdown))) &&
         !isInsideCode(offset, codeRegions);
       previousLine = normalizedLine;
@@ -224,6 +251,20 @@ function preserveTelegramHtmlTag(
   return rawTag;
 }
 
+// A `<` followed by another `<` before any `>` is text (`a < b <i>c</i>`): the
+// `>` closes the later tag, which must not be escaped along with it.
+function findTelegramHtmlTagEnd(text: string, start: number): number {
+  for (let index = start + 1; index < text.length; index += 1) {
+    if (text[index] === ">") {
+      return index;
+    }
+    if (text[index] === "<") {
+      return -1;
+    }
+  }
+  return -1;
+}
+
 function escapeUnsupportedTelegramHtml(text: string): string {
   let result = "";
   const openTags: string[] = [];
@@ -233,7 +274,7 @@ function escapeUnsupportedTelegramHtml(text: string): string {
       char === "&"
         ? findTelegramHtmlEntityEnd(text, index)
         : char === "<"
-          ? text.indexOf(">", index + 1)
+          ? findTelegramHtmlTagEnd(text, index)
           : -1;
     if (end === -1) {
       result += char === "&" || char === "<" || char === ">" ? escapeTelegramHtml(char) : char;

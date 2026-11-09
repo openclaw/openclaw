@@ -61,6 +61,21 @@ approval, command, URL, web-app, question, callback, and model-picker actions
 distinguishable until that encoding boundary; never infer picker intent from a
 raw callback string. Actor and source-message checks remain channel-owned.
 
+## Native mention display
+
+A channel can provide `mentions.readDisplayMentions(text)` for native user references.
+Return ordered, non-overlapping UTF-16 `start`/`end` ranges, the channel's canonical `senderId`, and an optional
+`fallbackLabel` already present in the source text. Include the whole native
+ID/name form in the range so it can be displayed as one name. Keep this parser
+pure: the Gateway resolves verified profile links using the captured channel
+and account, and applies the reader's existing session and profile-visibility
+policy. References inside Markdown code remain literal.
+
+This is a read-time display projection, not a recipient selection. It does not
+rewrite stored/model text, change routing or authorization, or create mention
+notifications. Missing source scope stays unchanged; an unlinked or invisible
+profile uses only the source fallback, or keeps the raw ID if none is available.
+
 ## Opted-in public child sessions
 
 The ingress resolver accepts an optional host-invocation intent,
@@ -357,6 +372,33 @@ when initialization must finish before the child runs.
     credential-readiness rule as account listing. The shared surface then includes that
     default as a consumer of root secrets. Keep field activation rules in `collect`.
 
+    External channel plugins must also publish a lightweight secret-contract
+    artifact: `secret-contract-api` (preferred) or `contract-api`, with a `.js`,
+    `.mjs`, `.cjs`, `.ts`, `.mts`, or `.cts` extension, in the plugin root or
+    `dist/`. Built OpenClaw prefers `dist/`; source runs prefer the root.
+    Include the artifact and its dependencies in the published package and declare
+    the channel in the plugin manifest's `channels` or `channelConfigs`.
+
+    The loader reads named exports: `secretTargetRegistryEntries` supplies targets
+    for `openclaw secrets audit` and secret planning; `collectRuntimeConfigAssignments`
+    collects channel SecretRefs during runtime preparation. Export both for full
+    support; a default export alone is ignored. Defining `ChannelPlugin.secrets`
+    alone does not publish an external contract for these paths.
+
+    ```typescript secret-contract-api.ts
+    import { createSimpleChannelSecretContract } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+
+    const channelSecrets = createSimpleChannelSecretContract({
+      channelKey: "acme-chat",
+      label: "Acme Chat",
+      accountFields: ["token"],
+      channelFields: ["token"],
+      mode: "account-inheritance",
+    });
+
+    export const { secretTargetRegistryEntries, collectRuntimeConfigAssignments } = channelSecrets;
+    ```
+
     Config-backed logout handlers can use `clearAccountFieldsFromConfigSection`
     from `openclaw/plugin-sdk/channel-config-helpers`. Pass `cfg`, `sectionKey`,
     `accountId`, and the plugin-owned `fields` to remove. It returns
@@ -449,6 +491,17 @@ when initialization must finish before the child runs.
       source. These messages will not run, so channels should finalize their status
       without waiting for `onAgentRunTerminalOutcome`. Overflow retained for a summary
       remains pending; sources evicted from the summary cap report `queue-cap-old`.
+
+      Durable ingress wrappers must also forward and await
+      `turnAdoptionLifecycle.onDropped(reason)` for terminal queue-policy losses.
+      The ingress owner records `queue-cap-old` or `queue-cap-new` as the failed
+      row's reason, without replay. Keep `onAbandoned` for retryable relinquishment;
+      `queue-cap` when all entries are protected still uses that path. Wrappers
+      must settle their handoff and source cleanup when either callback completes.
+      Spreading the lifecycle while overriding only `onAbandoned` does not intercept
+      drops: also wrap `onDropped`, or use the reply lifecycle's `onSettled` for
+      shared terminal cleanup. Omitting `onDropped` retains legacy abandonment and
+      replay. Policy drops do not send retry-failure notices.
 
       A `queuedDeliveryCorrelations` entry stays bound to its source through collect
       batching. Its optional `shouldSuppressReply(payload)` applies before an
@@ -1046,6 +1099,12 @@ upgrade OpenClaw and the plugin, implement the request and retry checks above,
 declare only the covered actions, and load the updated registration. Existing
 direct-operator and interactive actions retain their admission rules. Upgrading
 the plugin does not grant additional authority to an existing job.
+
+`ChannelMessageActionContext.abortSignal` is the host-owned cancellation for the
+originating invocation. Canceling it may drop work that was never issued, such as
+a request still waiting in a rate-limit queue or retry backoff. A provider request
+already dispatched must still settle and keep its outcome, so an accepted write is
+never reported as unsent or replayed.
 
 ## Advanced topics
 

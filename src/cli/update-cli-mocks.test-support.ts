@@ -291,41 +291,10 @@ vi.mock("../config/io.js", async (importOriginal) => {
 });
 
 vi.mock("../infra/update-check.js", async (importOriginal) => ({
-  formatGitInstallLabel: (await importOriginal<typeof import("../infra/update-check.js")>())
-    .formatGitInstallLabel,
+  ...(await importOriginal<typeof import("../infra/update-check.js")>()),
   checkUpdateStatus: vi.fn(),
   resolveUpdateInstallKind: vi.fn(),
   resolveUpdateInstallIdentity: vi.fn(),
-  compareSemverStrings: vi.fn((left: string | null, right: string | null) => {
-    const parse = (value: string | null) => {
-      if (!value) {
-        return null;
-      }
-      const match = value.match(/(\d+)\.(\d+)\.(\d+)/);
-      if (!match) {
-        return null;
-      }
-      return [
-        Number.parseInt(match[1] ?? "0", 10),
-        Number.parseInt(match[2] ?? "0", 10),
-        Number.parseInt(match[3] ?? "0", 10),
-      ] as const;
-    };
-    const a = parse(left);
-    const b = parse(right);
-    if (!a || !b) {
-      return null;
-    }
-    for (let index = 0; index < a.length; index += 1) {
-      const diff =
-        expectDefined(a[index], "a[index] test invariant") -
-        expectDefined(b[index], "b[index] test invariant");
-      if (diff !== 0) {
-        return diff;
-      }
-    }
-    return 0;
-  }),
   fetchNpmTagVersion: vi.fn(),
   resolveExtendedStablePackage: vi.fn(),
   resolveNpmChannelTag: vi.fn(),
@@ -356,11 +325,6 @@ vi.mock("../infra/restart-stale-pids.js", () => ({
     return { pids, complete: pids.has(1) };
   },
   terminateStaleGatewayPids: (...args: unknown[]) => terminateStaleGatewayPids(...args),
-}));
-
-vi.mock("../infra/update-managed-service-handoff-cleanup.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/update-managed-service-handoff-cleanup.js")>()),
-  cleanupStaleManagedServiceUpdateHandoffs: vi.fn(async () => 0),
 }));
 
 vi.mock("node:child_process", async () => {
@@ -440,6 +404,38 @@ vi.mock("node:child_process", async () => {
       return isMacosAclInspection(args[0], childArgs) || isPlistStdinConversion(args[0], childArgs)
         ? actual.spawn(...args)
         : spawn(...args);
+    },
+  };
+});
+
+// Synthetic CLI packages omit the candidate worker; native delegation is covered separately.
+// Keep compensation on its real live owner while replacing only the process adapter.
+vi.mock("./update-cli/update-command-cohort.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./update-cli/update-command-cohort.js")>();
+  return {
+    ...actual,
+    settleUpdatePluginCohortInCandidate: async (
+      params: Parameters<typeof actual.settleUpdatePluginCohortInCandidate>[0],
+    ) => {
+      const { settleUpdatePluginCohort } = await import("../plugins/update-cohort-recovery.js");
+      const { readUpdateConfigSnapshot } =
+        await import("./update-cli/update-command-config-snapshot.js");
+      params.configRestoration.assertCurrent();
+      const settled = await settleUpdatePluginCohort({
+        runId: params.run.runId,
+        env: params.env,
+        fence: expectDefined(params.run.executorFence, "live fixture update executor"),
+        action: "rollback",
+      });
+      params.configRestoration.assertCurrent();
+      for (const file of params.configRestoration.files) {
+        if (settled.configPaths.includes(file.path)) {
+          const snapshot = await readUpdateConfigSnapshot(file.path);
+          params.configRestoration.assertCurrent();
+          params.configRestoration.expectedHashes.set(file.path, snapshot.hash);
+        }
+      }
+      return settled;
     },
   };
 });

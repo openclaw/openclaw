@@ -100,6 +100,7 @@ suite.define(() => {
         await settings
           .locator('[data-machine="local"][data-project="docs"]')
           .waitFor({ state: "visible" });
+        await settings.locator(".header-search__toggle").click();
         const search = settings.getByRole("searchbox", { name: "Search", exact: true });
         await search.fill("Paired device");
         const choices = settings.locator('[data-machine="device:paired-device"]');

@@ -7,7 +7,7 @@ import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -32,7 +32,7 @@ import { ChatSubagentsNative } from "./chat-subagents-native.tsx";
 import { ChatSubagentsPanelDesktop } from "./chat-subagents-panel-desktop.tsx";
 import { createSubagentsPresentation } from "./chat-subagents-presentation.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 registerEnglishCatalog(registerChatDetailsEnglish);
 
 type Props = SessionPanelProps & {
@@ -62,7 +62,12 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     let mobileReturn: { scrollTop: number; focus: HTMLElement | null } | undefined;
     const data = useSessionPanel(
       host,
-      () => ({ sessionKey: host.sessionKey, agentId: host.agentId, presented: host.presented }),
+      () => ({
+        sessionKey: host.sessionKey,
+        agentId: host.agentId,
+        presented: host.presented,
+        includeDescendants: host.mobile !== true,
+      }),
       SubagentsPanelData,
       syncSelection,
     );
@@ -554,6 +559,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
         key === "sessionKey" ||
         key === "agentId" ||
         key === "presented" ||
+        key === "mobile" ||
         key === "showRequest"
       ) {
         syncSessionPanelInputs(host);

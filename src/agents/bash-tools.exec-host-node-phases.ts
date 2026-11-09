@@ -50,7 +50,7 @@ import {
 } from "./bash-tools.exec-host-node-failure.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { appendExecTimeoutRetryGuidance, renderExecUpdateText } from "./bash-tools.exec-output.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import { resolveNodeExecTimeouts } from "./exec-tool-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -258,6 +258,7 @@ export async function dispatchNodeSystemRun(params: {
       signal: params.request.signal,
     }),
   );
+  const warnings = [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])];
   if (!result.ok) {
     return formatNodeInvokeFailureToolResult({
       failure: result.failure,
@@ -265,10 +266,9 @@ export async function dispatchNodeSystemRun(params: {
       command: params.request.command,
       startedAt,
       cwd: params.request.workdir,
-      warnings: [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])],
+      warnings,
     });
   }
-  const warnings = [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])];
   const payloadObj = asNullableRecord(asNullableRecord(result.raw)?.payload) ?? {};
   const stdout = typeof payloadObj.stdout === "string" ? payloadObj.stdout : "";
   const stderr = typeof payloadObj.stderr === "string" ? payloadObj.stderr : "";
@@ -303,6 +303,7 @@ export async function dispatchNodeSystemRun(params: {
       nodeId: params.target.nodeId,
       ...(timedOut ? { timedOut: true } : {}),
       cwd: params.request.workdir,
+      ...(warnings.length ? { warningText: warnings.join("\n") } : {}),
     } satisfies ExecToolDetails,
   };
 }

@@ -2,8 +2,9 @@ import { mountOpenClawApp } from "./app/app-root.tsx";
 import type { prepareApplicationStartup } from "./app/bootstrap-connection.ts";
 import { bootstrapApplication } from "./app/bootstrap.ts";
 import type { EarlyApplicationGateway } from "./app/early-gateway.ts";
+import { reportPendingForegroundActivity } from "./app/foreground-activity.ts";
 import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
-import { isRemoteControlUiIngress } from "./app/remote-ingress.ts";
+import { hasEmbedderTransport, isRemoteControlUiIngress } from "./app/remote-ingress.ts";
 import {
   installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
@@ -61,7 +62,8 @@ export async function startControlUi(
       });
   }
 
-  if (isProd && !isRemoteControlUiIngress() && "serviceWorker" in navigator) {
+  const ownsServiceWorker = !isRemoteControlUiIngress() && !hasEmbedderTransport();
+  if (isProd && ownsServiceWorker && "serviceWorker" in navigator) {
     const swUrl = new URL(inferControlUiPublicAssetPath("sw.js"), window.location.origin);
     swUrl.searchParams.set("v", currentControlUiBuildId);
     if (document.documentElement.dataset.openclawProxySessionEntry === "true") {
@@ -90,11 +92,14 @@ export async function startControlUi(
     listen(navigator.serviceWorker, "controllerchange", () => void refresh());
     void navigator.serviceWorker
       .register(swUrl, { updateViaCache: "none" })
-      .then(refresh)
+      .then((registration) => {
+        reportPendingForegroundActivity(registration);
+        return refresh();
+      })
       .catch((error: unknown) => {
         console.warn("OpenClaw service worker registration failed.", error);
       });
-  } else if (!isProd && !isRemoteControlUiIngress() && "serviceWorker" in navigator) {
+  } else if (!isProd && ownsServiceWorker && "serviceWorker" in navigator) {
     // Unregister any leftover dev SW to avoid stale cache issues.
     void navigator.serviceWorker.getRegistrations().then((registrations) => {
       for (const r of registrations) {

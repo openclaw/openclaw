@@ -22,6 +22,7 @@ import type { PreparedTtsPreferences } from "../../tts/tts-preferences.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
+import { getRequesterProfile } from "../requester-profile.js";
 import type { MsgContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
@@ -72,8 +73,12 @@ type InternalReplySessionOptions = {
   modelOverride?: string;
   /** Host-owned scheduling authority retained through ordinary session execution. */
   scheduledAutomation?: ScheduledSessionAutomation;
+  /** Host-owned silence permission for a producer's turn; never derived from provenance. */
+  replyExpectation?: "optional";
   /** Producer callbacks follow this occurrence through queueing and delivery. */
   internalEventExecution?: SessionEventExecution;
+  /** Host-only fallback eligibility; false preserves a caller without a profile grant. */
+  sessionPrincipalTurn?: boolean;
   /** Source-owned cancellation retained when dispatch borrows an active lane for queued followups. */
   queuedFollowupAbortSignal?: AbortSignal;
   /** Host-minted original operator authority; never restored from session metadata. */
@@ -94,14 +99,6 @@ type InternalReplySessionOptions = {
   admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   /** Host-stamped exact-run capability for late Codex creator-authority capture. */
   cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
-  /** An accepted source supplies a fresh exact-run message capability without new ingress. */
-  prepareMessageActionTurnCapability?: (identity: {
-    agentId: string;
-    runId: string;
-    sessionId: string;
-    sessionKey: string;
-    runtimePolicySessionKey?: string;
-  }) => string | undefined;
   /** Current external dashboard turn only; never persisted or inherited by another run. */
   dashboardReadAdmission?: DashboardMessageReadAdmission;
   expectedExistingSessionId?: string;
@@ -161,7 +158,10 @@ export function prepareInternalGetReplyOptions(
   opts: GetReplyOptions | undefined,
   context?: MsgContext,
 ): InternalGetReplyOptions | undefined {
-  const channelAuthority = context && getCommandOwnerAuthority(context)?.operatorAuthority;
+  const channelAuthority =
+    context &&
+    (getRequesterProfile(context)?.operatorAuthority ??
+      getCommandOwnerAuthority(context)?.operatorAuthority);
   if (!opts && !channelAuthority) {
     return undefined;
   }

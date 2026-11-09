@@ -551,13 +551,6 @@ export function listConfiguredChannelIdsForReadOnlyScope(
     .map((entry) => entry.channelId);
 }
 
-/** True when read-only scoped discovery has any effective configured channel. */
-export function hasConfiguredChannelsForReadOnlyScope(
-  params: Parameters<typeof resolveConfiguredChannelPresencePolicy>[0],
-): boolean {
-  return resolveConfiguredChannelPresencePolicy(params).some((entry) => entry.effective);
-}
-
 export async function listConfiguredChannelIdsForReadOnlyScopeAsync(
   params: ConfiguredChannelPresencePolicyParams,
 ): Promise<string[]> {
@@ -566,6 +559,7 @@ export async function listConfiguredChannelIdsForReadOnlyScopeAsync(
     .map((entry) => entry.channelId);
 }
 
+/** True when read-only scoped discovery has any effective configured channel. */
 export async function hasConfiguredChannelsForReadOnlyScopeAsync(
   params: ConfiguredChannelPresencePolicyParams,
 ): Promise<boolean> {

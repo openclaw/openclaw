@@ -38,6 +38,7 @@ import type {
   ResolvedInProcessGatewayDispatch,
 } from "./server-plugin-in-process-dispatch.types.js";
 import { mergePluginRuntimeClientInternal } from "./server-plugin-runtime-client.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { cancelSubagentCompletionToolHandoff } from "./subagent-completion-tool-handoff.js";
 
 export {
@@ -149,9 +150,12 @@ async function withInProcessGatewayDispatch<T>(
   options: DispatchGatewayMethodInProcessOptions | undefined,
   run: (resolved: ResolvedInProcessGatewayDispatch) => Promise<T>,
 ): Promise<T> {
-  const resolved = resolveInProcessGatewayDispatch(method, params, options);
   let releaseOperatorAuthority: (() => void) | undefined;
+  let delegatedToolPolicyHandoffId: ResolvedInProcessGatewayDispatch["delegatedToolPolicyHandoffId"];
+  let preparationComplete = false;
   try {
+    const resolved = resolveInProcessGatewayDispatch(method, params, options);
+    delegatedToolPolicyHandoffId = resolved.delegatedToolPolicyHandoffId;
     const captured = await captureGatewayOperatorRunAuthority({
       client: resolved.operatorSourceClient,
       context: resolved.context,
@@ -176,6 +180,9 @@ async function withInProcessGatewayDispatch<T>(
         );
       }
     }
+    // Only preparation refusals prove method work was never entered. Errors
+    // from the callback may follow effects and must retain their original form.
+    preparationComplete = true;
     // Autonomous turns establish their own transcript writer and request fence and
     // must not retain the caller's tool or request authority after that invocation
     // closes: a cron-root parent's fence expires when its run ends.
@@ -186,9 +193,15 @@ async function withInProcessGatewayDispatch<T>(
           ),
         )
       : await run(resolved);
+  } catch (error) {
+    if (!preparationComplete && error instanceof SessionMutationAuthorizationChangedError) {
+      // Match the ordinary router's structured refusal before handler entry.
+      unwrapGatewayMethodDispatchResponse(method, { ok: false, error: error.error });
+    }
+    throw error;
   } finally {
     releaseOperatorAuthority?.();
-    cancelSubagentCompletionToolHandoff(resolved.delegatedToolPolicyHandoffId);
+    cancelSubagentCompletionToolHandoff(delegatedToolPolicyHandoffId);
   }
 }
 

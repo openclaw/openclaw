@@ -56,6 +56,38 @@ export function withGuardedFetchBeforeRequest<T>(
   );
 }
 
+// Retained guards must not share the async producer's lexical frame.
+function createRequestAuthority(source: {
+  assertCurrent: (() => void) | undefined;
+  beforeRequest: (() => void) | undefined;
+  inherited: RequestAuthority | undefined;
+}) {
+  let active = true;
+  const assertAuthority = () => {
+    source.inherited?.assertCurrent();
+    if (!active) {
+      throw new Error("Guarded request authority is no longer active.");
+    }
+    invokeSynchronousGuard(source.assertCurrent);
+  };
+  return {
+    assertCurrent: assertAuthority,
+    beforeRequest:
+      source.beforeRequest || source.inherited?.beforeRequest
+        ? () => {
+            source.inherited?.beforeRequest?.();
+            invokeSynchronousGuard(source.beforeRequest);
+          }
+        : undefined,
+    close() {
+      active = false;
+      source.inherited = undefined;
+      source.assertCurrent = undefined;
+      source.beforeRequest = undefined;
+    },
+  };
+}
+
 /** Start work that outlives the caller (an accepted autonomous run) with no inherited request fence. */
 export function runOutsideGuardedFetchRequestAuthority<T>(run: () => T): T {
   return requestAuthority.exit(run);
@@ -71,30 +103,11 @@ export async function withGuardedFetchRequestAuthority<T>(
   if (!assertCurrent && !beforeRequest && !inherited) {
     return await run(undefined);
   }
-  let active = true;
-  const assertAuthority = () => {
-    inherited?.assertCurrent();
-    if (!active) {
-      throw new Error("Guarded request authority is no longer active.");
-    }
-    invokeSynchronousGuard(assertCurrent);
-  };
+  const authority = createRequestAuthority({ assertCurrent, beforeRequest, inherited });
   try {
-    assertAuthority();
-    return await requestAuthority.run(
-      {
-        assertCurrent: assertAuthority,
-        beforeRequest:
-          beforeRequest || inherited?.beforeRequest
-            ? () => {
-                inherited?.beforeRequest?.();
-                invokeSynchronousGuard(beforeRequest);
-              }
-            : undefined,
-      },
-      () => run(assertAuthority),
-    );
+    authority.assertCurrent();
+    return await requestAuthority.run(authority, () => run(authority.assertCurrent));
   } finally {
-    active = false;
+    authority.close();
   }
 }

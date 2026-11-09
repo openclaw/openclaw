@@ -518,10 +518,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   personalGroupSessionReferences = () => personalGroupSessionReferences(this);
 
-  personalGroupSessionRows = (
-    group: PersonalSessionGroup,
-    zone?: SidebarPinZone,
-  ): SidebarRecentSession[] => personalSidebarGroupRows(this, group, zone);
+  personalGroupSessionRows = (group: PersonalSessionGroup, zone?: SidebarPinZone) =>
+    personalSidebarGroupRows(this, group, zone, () =>
+      this.selectedAgentSessionRows(this.getSessionNavigationState()),
+    );
 
   /** Explicit personal unpins remove a reference, never shared session metadata. */
   pruneSidebarSessionEntry(key: string) {

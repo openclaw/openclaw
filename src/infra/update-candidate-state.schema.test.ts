@@ -6,6 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import {
   readUpdateDatabaseGenerationsIsolated,
@@ -120,7 +121,10 @@ it("reports a best-effort generation verification failure for its actual sources
   const stateDir = fs.realpathSync(dirs.make("update-generation-unstable-"));
   const file = agentFile(stateDir);
   const missing = agentFile(stateDir, "ops");
-  createDatabase(file, "PRAGMA user_version=3;");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  using db = openNodeSqliteDatabase(file);
+  db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA user_version=3;");
+  expect(fs.statSync(`${file}-wal`).size).toBeGreaterThan(32);
   const preload = path.join(stateDir, "write-between-reads.cjs");
   // Wait for the private image to close, then commit between the final generation
   // reads. A write during provisional capture can instead fail snapshot acquisition.
@@ -315,9 +319,7 @@ it("fences WAL schema migration without copying a large registered agent payload
   const migrated = await read();
   expect(migrated).toContainEqual({ path: agentPath, userVersion: 5 });
   expect(updateStateSchemaVersionsMatch(baseline, migrated, comparison)).toBe(false);
-  expect(
-    fs.existsSync(path.join(cache, "openclaw")) ? fs.readdirSync(path.join(cache, "openclaw")) : [],
-  ).toEqual([]);
+  expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot(env))).toEqual([]);
 });
 
 async function writeInstalledCandidateWorkers(packageRoot: string, legacy: boolean): Promise<void> {

@@ -5,45 +5,6 @@ import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js"
 import type { SessionStoreWorkerReadScope } from "./session-entry-read-runtime.types.js";
 import { maintenanceLane } from "./session-transcript-worker-resources.js";
 
-/** Select only exec recovery owners, retaining bounded metadata pages in the host. */
-export async function* iteratePendingExecNotificationEntriesInWorker(
-  input: SessionStoreWorkerReadScope,
-): AsyncGenerator<SessionEntrySummary> {
-  let afterSessionKey: string | undefined;
-  do {
-    const result = await withSessionStoreReaderInWorker(
-      input,
-      ({ reader, database }) =>
-        reader.readEntries({
-          agentId: database.agentId,
-          storePath: database.path,
-          env: database.env,
-          pendingExecRecovery: { afterSessionKey, limit: 64 },
-        }),
-      { lane: maintenanceLane, dataOnly: true },
-    );
-    yield* result.entries;
-    afterSessionKey = result.nextExecRecoverySessionKey ?? undefined;
-  } while (afterSessionKey !== undefined);
-}
-
-/** Discover saved-input candidates without opening every session's history. */
-export async function readPendingInputRecoveryEntriesInWorker(input: SessionStoreWorkerReadScope) {
-  return withSessionStoreReaderInWorker(
-    input,
-    async ({ reader, database }) => {
-      const { entries } = await reader.readEntries({
-        agentId: database.agentId,
-        storePath: database.path,
-        env: database.env,
-        pendingInputRecovery: true,
-      });
-      return entries;
-    },
-    { lane: maintenanceLane, dataOnly: true },
-  );
-}
-
 /** Keep the physical reader owner through a registry maintenance consumer and its commit guard. */
 export function withSessionRegistryEntriesInWorker(
   input: SessionStoreWorkerReadScope,

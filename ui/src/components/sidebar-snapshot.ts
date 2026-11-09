@@ -4,6 +4,7 @@ import { listen } from "../lib/reactive/listener.ts";
 import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "../pages/chat/chat-history-events.ts";
 import {
   sidebarSnapshotInvalidationMatches,
+  sidebarSnapshotDeletedSessionKey,
   subscribeSnapshotInvalidation,
 } from "../pages/chat/session-snapshot-invalidation-events.ts";
 import {
@@ -13,10 +14,12 @@ import {
   type SidebarSnapshotScope,
 } from "../pages/chat/session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
+import { removeSidebarSnapshotSession } from "./sidebar-snapshot-data.ts";
 import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 export function createSidebarSnapshot(host: {
   sidebarSnapshot: SidebarSnapshotModel | null;
+  readonly sidebarAgentsMode: "chip" | "roster";
   readonly sessionDataContext?: {
     gateway: ApplicationGateway;
     agentSelection: { readonly state: { readonly scopeId: string | null } };
@@ -32,21 +35,20 @@ export function createSidebarSnapshot(host: {
   let publish: (() => void) | undefined;
   let pending = false;
   let saved = false;
+  let lastCapture = "none";
   const store = new SessionSnapshotStore();
   let gateway: ApplicationGateway | undefined;
   let revision = -1;
   let scope: SidebarSnapshotScope | null = null;
   let generation = 0;
-  let serialized: string | null = null;
+  let captured: { model: SidebarSnapshotModel; serialized: string } | null = null;
   let retirement = Promise.resolve();
   let cleanup: Array<() => void> = [];
   let stopGateway: (() => void) | undefined;
   let retiredHello: ApplicationGateway["snapshot"]["hello"] | undefined;
   let cancelCapture: (() => void) | undefined;
-  let handoffTimer: ReturnType<typeof setTimeout> | undefined;
   let handoffIdle: number | undefined;
   let handoffReady = false;
-  let handoffExpired = false;
 
   function subscribe(listener: () => void): () => void {
     publish = listener;
@@ -76,7 +78,33 @@ export function createSidebarSnapshot(host: {
         }
       }),
       subscribeSnapshotInvalidation((event) => {
-        if (scope && sidebarSnapshotInvalidationMatches(sidebarSnapshotScopeKey(scope), event)) {
+        if (!scope) {
+          return;
+        }
+        const key = sidebarSnapshotScopeKey(scope);
+        const deleted = sidebarSnapshotDeletedSessionKey(key, event);
+        if (deleted) {
+          // Cancel accepted stale captures, retaining the rest of the display and cache.
+          generation += 1;
+          cancelCapture?.();
+          cancelCapture = undefined;
+          pending = false;
+          if (captured && saved) {
+            const model = removeSidebarSnapshotSession(captured.model, deleted);
+            if (model !== captured.model) {
+              captured = { model, serialized: JSON.stringify(model) };
+            }
+          } else {
+            captured = null;
+          }
+          if (host.sidebarSnapshot) {
+            const model = removeSidebarSnapshotSession(host.sidebarSnapshot, deleted);
+            if (model !== host.sidebarSnapshot) {
+              host.restoreSidebarSnapshot(model);
+              notify();
+            }
+          }
+        } else if (sidebarSnapshotInvalidationMatches(key, event)) {
           clearDisplay();
         }
       }),
@@ -116,7 +144,7 @@ export function createSidebarSnapshot(host: {
             pending = false;
             if (model && matchesAgent(model) && !host.sidebarSnapshotSettled()) {
               host.restoreSidebarSnapshot(model);
-              serialized = JSON.stringify(model);
+              captured = { model, serialized: JSON.stringify(model) };
               saved = true;
             }
             notify();
@@ -170,11 +198,7 @@ export function createSidebarSnapshot(host: {
     if (snapshot.phase !== "connected") {
       cancelHandoff();
     } else if (host.sidebarSnapshot) {
-      handoffTimer ??= setTimeout(() => {
-        handoffExpired = true;
-        releaseWhenReady();
-      }, 3000);
-      if (!handoffExpired && !host.sidebarSnapshotSettled()) {
+      if (!host.sidebarSnapshotSettled()) {
         return;
       }
       if (!handoffReady) {
@@ -192,8 +216,9 @@ export function createSidebarSnapshot(host: {
       cancelHandoff();
       // Release before rendering so a failed refresh cannot leave cached controls painted.
       host.releaseSidebarSnapshot();
-      saved = false;
-      serialized = null;
+    } else if (!captured) {
+      // Readiness can settle without changing rows, so no render need follow this publication.
+      capture();
     }
   }
 
@@ -204,13 +229,11 @@ export function createSidebarSnapshot(host: {
   }
 
   function cancelHandoff(): void {
-    clearTimeout(handoffTimer);
     if (handoffIdle !== undefined) {
       cancelIdleCallback(handoffIdle);
     }
-    handoffTimer = handoffIdle = undefined;
+    handoffIdle = undefined;
     handoffReady = false;
-    handoffExpired = false;
   }
 
   function capture(): void {
@@ -235,34 +258,51 @@ export function createSidebarSnapshot(host: {
     }
     cancelCapture();
     cancelCapture = undefined;
-    if (
-      !cleanup.length ||
-      pending ||
-      !scope ||
-      (scope.profileId !== null && gateway?.snapshot.selfUser === undefined) ||
-      host.sidebarSnapshot ||
-      !host.sidebarSnapshotSettled()
-    ) {
+    const blocked = !cleanup.length
+      ? "disconnected"
+      : pending
+        ? "boot-read"
+        : !scope
+          ? "missing-scope"
+          : scope.profileId !== null && gateway?.snapshot.selfUser === undefined
+            ? "identity"
+            : host.sidebarSnapshot
+              ? "cached-display"
+              : !host.sidebarSnapshotSettled()
+                ? "unsettled"
+                : null;
+    if (blocked || !scope) {
+      lastCapture = blocked ?? "missing-scope";
       return;
     }
     const model = host.captureSidebarSnapshot();
     if (!model) {
+      lastCapture = "model-unavailable";
       return;
     }
-    const nextSerialized = JSON.stringify(model);
-    if (nextSerialized === serialized) {
+    const next = { model, serialized: JSON.stringify(model) };
+    if (next.serialized === captured?.serialized) {
+      // Retain a failed/in-flight write's phase when an unchanged capture is skipped.
       return;
     }
-    serialized = nextSerialized;
+    captured = next;
     saved = false;
     const current = captureScope();
     const key = sidebarSnapshotScopeKey(scope);
+    lastCapture = "retiring";
     void retirement.then(async () => {
       if (!current()) {
+        if (next === captured) {
+          lastCapture = "superseded";
+        }
         return;
       }
+      lastCapture = "writing";
       const written = await store.writeSidebar(key, model, parseSidebarSnapshot);
-      if (written && current() && nextSerialized === serialized) {
+      if (next === captured) {
+        lastCapture = !current() ? "superseded" : written ? "saved" : "rejected";
+      }
+      if (written && current() && next === captured) {
         saved = true;
         notify();
       }
@@ -280,6 +320,7 @@ export function createSidebarSnapshot(host: {
 
   function matchesAgent(model: SidebarSnapshotModel): boolean {
     return (
+      model.mode === host.sidebarAgentsMode &&
       (model.mode !== "chip" || model.roster?.agentId === host.expandedAgentId()) &&
       (model.navigationView !== "pages" ||
         model.pageScopeId === host.sessionDataContext?.agentSelection.state.scopeId)
@@ -314,13 +355,14 @@ export function createSidebarSnapshot(host: {
     cancelCapture = undefined;
     generation += 1;
     pending = saved = false;
-    serialized = null;
+    lastCapture = "none";
+    captured = null;
     host.clearSidebarSnapshot();
     notify();
   }
 
   return {
-    read: () => ({ pending, saved, model: host.sidebarSnapshot }),
+    read: () => ({ pending, saved, model: host.sidebarSnapshot, captureStatus: lastCapture }),
     subscribe,
     connect,
     disconnect,

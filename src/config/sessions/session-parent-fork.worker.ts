@@ -179,6 +179,7 @@ function commitEntry(
     { parentEntry, base },
     forkCliSessionBindings(parentEntry, (provider) => providers.has(normalizeProviderId(provider))),
     forkedPatch,
+    patch?.preserveVisibility,
   );
   if (!("skip" in committed)) {
     return committed.result;
@@ -199,6 +200,7 @@ function forkSessionEntryInTransaction(
   prepared: { parentEntry: SessionEntry; base: SessionEntry },
   cliSessionBindings: SessionEntry["cliSessionBindings"],
   patch?: Partial<SessionEntry>,
+  preserveVisibility?: boolean,
 ):
   | { result: ForkSessionEntryFromParentTargetResult }
   | {
@@ -253,7 +255,11 @@ function forkSessionEntryInTransaction(
     writeDatabase,
     sessionTarget.canonicalKey,
     mergeSessionEntry(freshBase, forkIdentityPatch),
-    { previousEntry: freshBase },
+    {
+      previousEntry: freshBase,
+      // The child may have received an explicit sharing choice while preparation awaited.
+      preserveVisibility,
+    },
   );
   return {
     result: {

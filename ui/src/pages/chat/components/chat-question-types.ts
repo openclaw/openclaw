@@ -18,6 +18,9 @@ export type QuestionPanelViewModel = {
   drafts: Map<string, QuestionDraft>;
   error?: string | null;
   notice?: string;
+  /** Display name of the child session that asked, when it is not this conversation. */
+  requestedBySession?: string;
+  requestedBySessionHref?: string;
   requestPosition?: { current: number; total: number };
 };
 
@@ -27,6 +30,7 @@ export type QuestionPanelProps = {
   onSubmit?: (answersById: Record<string, string[]>) => void | Promise<void>;
   onSkip?: () => void | Promise<void>;
   onChange?: () => void;
+  onOpenSession?: () => void;
   onSecretStoreAllowedHostsChange?: (allowedHosts: string) => void;
   onDismissError?: () => void;
   onCollapsedChange?: (collapsed: boolean) => void;
@@ -36,8 +40,16 @@ export type QuestionPanelProps = {
 
 export type QuestionPanelOptions = Pick<
   QuestionPanelProps,
-  "onChange" | "onSubmit" | "onSkip" | "onCollapsedChange" | "onPreviousRequest" | "onNextRequest"
+  | "onChange"
+  | "onSubmit"
+  | "onSkip"
+  | "onCollapsedChange"
+  | "onPreviousRequest"
+  | "onNextRequest"
+  | "onOpenSession"
 > & {
   collapsed?: boolean;
+  requestedBySession?: string;
+  requestedBySessionHref?: string;
   requestPosition?: QuestionPanelViewModel["requestPosition"];
 };

@@ -1,11 +1,17 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { listLiveAgentRunIds } from "../../../infra/agent-run-registry.js";
+import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { listSwarmRunReservationIds } from "../swarm/swarm-scheduler.js";
-import { matchesSubagentChildSessionIdentity } from "./subagent-child-owner-match.js";
+import {
+  matchesSubagentChildSessionIdentity,
+  resolveRecordedRequester,
+} from "./subagent-child-owner-match.js";
 import {
   getRecordedSubagentChildAuthority,
+  getSubagentActivationRuns,
   getSubagentChildSessionCandidates,
   getSubagentRunsForChildSession,
   getSubagentSessionReadLookup,
@@ -37,7 +43,11 @@ import {
   copySubagentRunRuntimeOwner,
   latestSubagentRun,
 } from "./subagent-run-generation.js";
-import { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
+import {
+  isSubagentRunLive,
+  isSubagentRunQueued,
+  isYieldedSubagentRun,
+} from "./subagent-run-liveness.js";
 export { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
 
 export type { SubagentRunReadIndex } from "./subagent-registry-queries.js";
@@ -50,36 +60,95 @@ export {
   resolveSubagentSessionStatus,
 } from "./subagent-session-metrics.js";
 
-/** Hydrate retained custody before resolving a private input's restart owner. */
-export async function getPrivateRequesterSettleRecoveryOwner(
-  requester: {
-    entry: { sessionId: string; lifecycleRevision?: string };
-    agentId: string;
-    canonicalKey: string;
-    storePath: string;
-    physicalStorePath?: string;
-  },
-  runId: string | undefined,
-) {
-  if (!runId) {
-    return undefined;
+export type SubagentRootRequester = {
+  sessionKey: string;
+  agentId?: string;
+  storePath?: string;
+};
+
+/** Shutdown follows subagent ancestry; ordinary conversations own their own resume. */
+export function resolveRootSubagentRequester(
+  sessionKey: string,
+  agentId?: string,
+): SubagentRootRequester {
+  let root: SubagentRootRequester = { sessionKey, agentId };
+  const visited = new Set<string>();
+  while (isSubagentSessionKey(root.sessionKey)) {
+    const identity = JSON.stringify([root.agentId, root.sessionKey]);
+    if (visited.has(identity)) {
+      return root;
+    }
+    visited.add(identity);
+    const entry = latestSubagentRun(getSubagentRunsForChildSession(root.sessionKey, root.agentId));
+    if (!entry) {
+      return root;
+    }
+    root = {
+      sessionKey: entry.requesterSessionKey,
+      agentId: resolveRecordedRequester(entry),
+      storePath: entry.requesterStorePath,
+    };
   }
-  const { initSubagentRegistry } = await import("./subagent-registry.js");
-  await initSubagentRegistry();
-  const [
-    { prepareSqliteTargetFromSessionStorePath },
-    { resolvePrivateRequesterSettleRecoveryOwner },
-  ] = await Promise.all([
-    import("../../../config/sessions/session-sqlite-target.js"),
-    import("./subagent-registry-restart-recovery.js"),
-  ]);
-  const physical = await prepareSqliteTargetFromSessionStorePath(
-    requester.physicalStorePath ?? requester.storePath,
-    { agentId: requester.agentId },
-  );
-  return resolvePrivateRequesterSettleRecoveryOwner(
-    { ...requester, physicalStorePath: physical.path },
-    runId,
+  return root;
+}
+
+export function listLiveSubagentRootSessions(): SubagentRootRequester[] {
+  const roots = new Map<string, SubagentRootRequester>();
+  for (const runId of listLiveAgentRunIds()) {
+    const entry = subagentRuns.get(runId);
+    if (!entry || !isSubagentRunLive(entry)) {
+      continue;
+    }
+    const root = resolveRootSubagentRequester(entry.childSessionKey, entry.childAgentId);
+    roots.set(JSON.stringify([root.agentId, root.storePath, root.sessionKey]), root);
+  }
+  return [...roots.values()];
+}
+
+function isMessageWaitingSubagentRun(entry: SubagentRunRecord): boolean {
+  return entry.waitForMessage === true && !entry.collect && isYieldedSubagentRun(entry);
+}
+
+/** Message waits retain their task across restart, without retaining an execution. */
+export function* listMessageWaitingSubagentSessions() {
+  for (const entry of getSubagentActivationRuns(subagentRuns)) {
+    if (isMessageWaitingSubagentRun(entry)) {
+      yield {
+        sessionKey: entry.childSessionKey,
+        agentId: entry.childAgentId,
+        sessionId: entry.childSessionIdentity?.sessionId,
+        parkedRunId: entry.runId,
+      };
+    }
+  }
+}
+
+export function isMessageWaitingSubagentSession(
+  sessionKey: string,
+  session: Pick<
+    InternalSessionEntry,
+    | "sessionId"
+    | "lifecycleRevision"
+    | "lifecycleRunId"
+    | "activeWriterRunId"
+    | "archivedAt"
+    | "incognito"
+  >,
+  agentId: string,
+): boolean {
+  if (session.archivedAt !== undefined || session.incognito) {
+    return false;
+  }
+  return Boolean(
+    getLatestLiveSubagentRunByChildSessionKey(
+      sessionKey,
+      (run) =>
+        run.runId === session.lifecycleRunId &&
+        (!session.activeWriterRunId || session.activeWriterRunId === run.runId) &&
+        isMessageWaitingSubagentRun(run) &&
+        matchesSubagentChildSessionIdentity(run, session),
+      agentId,
+    ),
   );
 }
 

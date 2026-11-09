@@ -24,7 +24,7 @@ import type {
 } from "./bundle-mcp.types.js";
 import { encodePluginInstallDirName } from "./install-paths.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
-import type { PluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 
@@ -543,6 +543,25 @@ export function loadEnabledBundleMcpConfig(params: {
       ),
     ),
   };
+}
+
+/** MCP servers one plugin declares, whether or not it is enabled. */
+export function loadPluginDeclaredMcpServers(
+  record: Pick<PluginManifestRecord, "id" | "format" | "bundleFormat" | "rootDir" | "mcpServers">,
+): Record<string, BundleMcpServerConfig> {
+  if (record.format === "bundle") {
+    return record.bundleFormat
+      ? loadBundleMcpConfig({
+          pluginId: record.id,
+          rootDir: record.rootDir,
+          bundleFormat: record.bundleFormat,
+        }).config.mcpServers
+      : {};
+  }
+  return record.mcpServers
+    ? loadRootRelativeMcpConfig({ rootDir: record.rootDir, mcpServers: record.mcpServers }).config
+        .mcpServers
+    : {};
 }
 
 function withMcpPluginOwnership(

@@ -17,6 +17,9 @@ import { extractPdfContent } from "./document-extractor.runtime.js";
 const { text, render } = page;
 let abort: AbortController;
 const control: WorkerTaskControl = {
+  get signal() {
+    return abort.signal;
+  },
   runNativeSection: async (operation) => operation(),
   throwIfCancelled: () => abort.signal.throwIfAborted(),
 };
@@ -108,7 +111,7 @@ it("normalizes clawpdf password errors", async () => {
   expect(open).toHaveBeenCalledWith(expect.any(Uint8Array), { password: "wrong" });
 });
 
-it("filters selected pages and renders them in selection order", async () => {
+it("filters selected pages and preserves their order and duplicates", async () => {
   pdf.page.mockImplementation((pageNumber: number) => ({
     ...page,
     render: () => ({ ...rendered, rgba: Uint8Array.of(pageNumber) }),
@@ -117,10 +120,15 @@ it("filters selected pages and renders them in selection order", async () => {
     Uint8Array.of(99, ...rgba, 99).subarray(1, -1),
   );
   const buffer = Buffer.from("!%PDF-1.4?").subarray(1, -1);
-  const result = await extract({ buffer, pageNumbers: [3, 2, 0, 1] });
+  const result = await extract({
+    buffer,
+    pageNumbers: [3, 2, 0, 1, 2],
+    maxPages: 3,
+    maxPixels: 150,
+  });
   expect(Buffer.from(open.mock.calls[0]?.[0] ?? [])).toEqual(buffer);
-  expect(result.images.map(({ data }) => data)).toEqual(["Ag==", "AQ=="]);
-  expect(result.metadata?.pages).toMatchObject({ processed: [2, 1], truncated: true });
+  expect(result.images.map(({ data }) => data)).toEqual(["Ag==", "AQ==", "Ag=="]);
+  expect(result.metadata?.pages).toMatchObject({ processed: [2, 1, 2], truncated: true });
 });
 
 it("rejects selected pages outside the PDF page count before extraction", async () => {

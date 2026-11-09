@@ -49,9 +49,9 @@ const mockFsModule = () => ({
 
 const mockFsPromisesModule = () => ({
   ...actualFsPromises,
-  readFile: async (p: string, encoding?: BufferEncoding) => {
+  readFile: async (p: string, options?: Parameters<typeof actualFsPromises.readFile>[1]) => {
     if (!isFixturePath(p)) {
-      return await actualFsPromises.readFile(p, { encoding });
+      return await actualFsPromises.readFile(p, options ?? null);
     }
     return readFixture(p);
   },

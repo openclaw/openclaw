@@ -48,6 +48,16 @@ export function createSettingsComponents(components: ControlUiSettingsComponents
       </>
     );
   }
+  /** Rows joining a group the plugin draws itself; they sit in a portal as a section's do. */
+  function SettingsRows(props: { children?: JSX.Element }) {
+    const content = contentNode();
+    return (
+      <>
+        <Portal mount={content}>{props.children}</Portal>
+        {content}
+      </>
+    );
+  }
   function SettingsRow(props: { title: string; description?: JSX.Element; control?: JSX.Element }) {
     const description = contentNode();
     const control = contentNode();
@@ -99,5 +109,13 @@ export function createSettingsComponents(components: ControlUiSettingsComponents
       />
     );
   }
-  return { SettingsSection, SettingsRow, SettingsStatus, SettingsValue, SettingsNavRow, Lobster };
+  return {
+    SettingsSection,
+    SettingsRows,
+    SettingsRow,
+    SettingsStatus,
+    SettingsValue,
+    SettingsNavRow,
+    Lobster,
+  };
 }

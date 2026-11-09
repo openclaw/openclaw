@@ -69,6 +69,65 @@ const replyButton = (root: Page | Locator, name: string) =>
   root.getByRole("button", { name, exact: true });
 
 suite.define(() => {
+  it.each(["explicit", "current", "automatic"])(
+    "omits excerpts only for an adjacent %s reply",
+    async (replyKind) => {
+      const source = message("adjacent-prompt", "user", "Check the release checklist.", {
+        ...peer,
+        idempotencyKey: "adjacent-run:user",
+      });
+      const messages = sequence([
+        message("thread-owner", "user", "Please review today's release.", self),
+        source,
+        message(
+          "adjacent-answer",
+          "assistant",
+          "The checklist looks good.",
+          {
+            runId: "adjacent-run",
+            ...(replyKind === "explicit" ? { replyToId: "adjacent-prompt" } : {}),
+          },
+          replyKind === "current" ? { openclawDelivery: { replyToCurrent: true } } : {},
+        ),
+        message("new-prompt", "user", "Now check the release notes.", peer),
+        message("older-answer", "assistant", "One more detail about the checklist.", {
+          replyToId: "adjacent-prompt",
+          replyToMessage: { ok: true, message: source },
+        }),
+      ]);
+      await suite.withPage(
+        { viewport: { width: 1100, height: 1000 }, locale: "en-US" },
+        async ({ page }) => {
+          await preparePage(page, `${sessionKey}-adjacent`, messages, "dark", true);
+          const adjacent = page.locator(
+            '.chat-group.assistant:has([data-entry-id="adjacent-answer"])',
+          );
+          const older = page.locator('.chat-group.assistant:has([data-entry-id="older-answer"])');
+          await page.locator('[data-entry-id="older-answer"]').waitFor();
+          await replyButton(adjacent, "Replying to Jordan Lee").waitFor();
+          await replyButton(older, "Replying to Jordan Lee").waitFor();
+          expect(await adjacent.locator(".chat-reply-attribution__excerpt").count()).toBe(0);
+          expect(await older.locator(".chat-reply-attribution__excerpt").textContent()).toBe(
+            "Check the release checklist.",
+          );
+          await page.locator(".agent-chat__composer-combobox textarea").focus();
+          await page.keyboard.press(
+            (await page.evaluate(() => /Mac|iPhone|iPad|iPod/.test(navigator.platform)))
+              ? "Meta+f"
+              : "Control+f",
+          );
+          await page
+            .getByRole("textbox", { name: "Search messages", exact: true })
+            .fill("looks good");
+          expect(await page.locator('[data-entry-id="adjacent-prompt"]').count()).toBe(0);
+          await expect
+            .poll(() => adjacent.locator(".chat-reply-attribution__excerpt").allTextContents())
+            .toEqual(["Check the release checklist."]);
+        },
+      );
+    },
+  );
+
   it("keeps the reply line above completed work across an automatic resumption", async () => {
     const resumedSession = "agent:main:dashboard:reply-strip-resumed-work";
     const messages = sequence([
@@ -220,12 +279,11 @@ suite.define(() => {
               ).toEqual([true, true]);
             }
             await action.press("Enter");
-            const preview = page
-              .locator(".chat-reply-preview")
-              .filter({ has: page.getByRole("button", { name: "Cancel reply" }) });
-            await expect
-              .poll(() => preview.locator(".chat-reply-preview__text").textContent())
-              .toBe(content);
+            const preview = page.locator(".chat-reply-preview:has(.chat-reply-preview__dismiss)");
+            const strip = preview.locator(
+              ".chat-reply-attribution__name, .chat-reply-preview__text",
+            );
+            await expect.poll(() => strip.allTextContents()).toEqual(["Jordan Lee", content]);
             await preview.getByRole("button", { name: "Cancel reply" }).click();
             await action.evaluate((button) => button.blur());
             await page.mouse.move(0, 0);

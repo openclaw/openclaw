@@ -3,11 +3,8 @@ import { visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import type { CronJob } from "../../cron/types.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import {
-  ExpectedCliError,
-  formatCliFailureLines,
-  formatCliJsonFailure,
-} from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
+import { formatCliFailureLines, formatCliJsonFailure } from "../failure-output.js";
 import { CronCliError } from "./cron-cli-error.js";
 import { resolveCronCreateScheduleFromArgs as createSchedule } from "./schedule-options.js";
 import {

@@ -21,6 +21,7 @@ import {
 } from "./page-dom.js";
 import { fileDetails } from "./record-files.js";
 import { recordPanels } from "./record-panels.js";
+import { recordTimeline } from "./record-timeline.js";
 import { claimVersions } from "./record-versions.js";
 import { formatSourceDate, sourceDateNote } from "./temporal.js";
 import { foldTimeline } from "./timeline-fold.js";
@@ -434,6 +435,10 @@ export async function showDetail(
     connections = el("section"),
     learned = el("section");
   if (r.kind === "page" && !merged) {
+    // A meeting is itself a dated source; entities show the sources that mention them.
+    if (r.type !== "meeting") {
+      main.append(recordTimeline(ui, id, n, pending));
+    }
     claims.append(el("h3", `What ${agentName() ?? "your agent"} knows`));
     main.append(claims, owned);
     owned.hidden = true;

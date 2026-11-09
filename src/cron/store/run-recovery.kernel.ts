@@ -108,13 +108,13 @@ export function recoverCronJobInDatabase(
       });
     }
   };
-  if (!job) {
+  const recoverUnmarkedReceipt = (pendingReceipt: CronRunReceipt) => {
     const task = findCronRunRecoveryInDatabase({
       database: database.db,
       storeKey,
-      jobId: receipt.jobId,
-      startedAt: receipt.startedAtMs,
-      receiptId: receipt.receiptId,
+      jobId: pendingReceipt.jobId,
+      startedAt: pendingReceipt.startedAtMs,
+      receiptId: pendingReceipt.receiptId,
     });
     if (task.finalized) {
       finishReceipt(
@@ -130,17 +130,20 @@ export function recoverCronJobInDatabase(
     const interrupted = recordInterruptedRun({
       database: database.db,
       storeKey,
-      receipt,
+      receipt: pendingReceipt,
       taskRunId: task.taskRunId,
       nowMs,
       interrupted: {
-        jobId: receipt.jobId,
-        runAtMs: receipt.startedAtMs,
-        durationMs: Math.max(0, nowMs - receipt.startedAtMs),
+        jobId: pendingReceipt.jobId,
+        runAtMs: pendingReceipt.startedAtMs,
+        durationMs: Math.max(0, nowMs - pendingReceipt.startedAtMs),
       },
     });
     finishReceipt("interrupted", nowMs, STARTUP_INTERRUPTED_ERROR);
     return { interrupted };
+  };
+  if (!job) {
+    return recoverUnmarkedReceipt(receipt);
   }
   const previousEnabled = job.enabled ?? true;
   const runningAtMs = job.state.runningAtMs;
@@ -164,8 +167,8 @@ export function recoverCronJobInDatabase(
       delete job.state.queuedAtMs;
       finishReceipt("skipped", nowMs, error);
       updateCronRuntimeRow(database.db, storeKey, job, previousEnabled);
-    } else {
-      finishReceipt("interrupted", nowMs, "cron: owner unavailable after run marker retirement");
+    } else if (receipt) {
+      return recoverUnmarkedReceipt(receipt);
     }
     return {};
   }

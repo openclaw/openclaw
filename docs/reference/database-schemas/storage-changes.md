@@ -230,7 +230,17 @@ prepare the preserved live files again. This uses the existing retention window,
 without reference counts or a new durable reservation.
 
 A missing-pack load reconstructs the saved root from the projection or canonical
-copy. An intact pending-checkpoint result can also reconstruct the saved baseline
+copy. The repair snapshot traverses surviving packs reachable from that saved
+root, using their paths and directory membership only as selection hints. Normal
+inventory reads still require every pack. Recovery scans current file content;
+it does not substitute retained hashes for live bytes or search unrelated old
+packs. After the ordinary candidates, one additional canonical candidate includes
+paths from a completed projection scan. This retains accepted guest additions
+outside initial admission and the current host index, while preserving the
+ordinary canonical candidate when later guest names overlap unrelated host files.
+Every candidate must still reproduce the exact saved root before metadata
+replacement; partial scan results never supply candidate membership.
+An intact pending-checkpoint result can also reconstruct the saved baseline
 by reversing its authenticated delta in memory and verifying the saved tree digest.
 Neither filesystem is changed by reconstruction. If no candidate reproduces the
 saved digest, reconciliation reports both preserved paths and an inspection
@@ -1224,33 +1234,25 @@ rules, including the five-second polling deadline. The same plugin-owned worker
 reads iMessage's local startup watermark and finishes cleanup before the transport
 check and watch subscription. Empty databases retain the pre-first-row cursor;
 unavailable databases retain the existing fallback. Conversation-binding queries
-remain separate migration work.
+also use their plugin-owned worker.
 
 iMessage persisted echo reads, writes, and failed-send cleanup use the plugin-state
 worker. Sends await provisional echo persistence before transport and cleanup
 before reporting failure. Inbound echo matching awaits persisted facts before
-choosing whether to dispatch. Hosts with plugin-state comparison methods use the
-worker for recovery cursor writes; conditional writes preserve the greatest
-admitted row for each account and database. The declared OpenClaw 2026.9.4 peer
-and plugin API floor remains supported: hosts without those comparison methods
-run the same row decision in the retained synchronous store's transactional
-`update` callback. Failures from an available comparison method never fall back
-to synchronous writes. Remove this fallback only when the declared host floor
-excludes hosts without comparison support. Durable ingress joins each cursor
-update before admitting the next row and joins admitted work on shutdown.
-Existing namespaces, stored values, expiry, migration, and best-effort failure
+choosing whether to dispatch. Recovery cursor writes use the async keyed store
+and the selected state engine. The plugin serializes its cursor updates and
+preserves the greatest admitted row for each account and database. Cursor keys
+hash that pair so they work on PostgreSQL; legacy keys are adopted once.
+Durable ingress joins each cursor update before admitting the next row and joins
+admitted work on shutdown. Existing namespaces, stored values, expiry, and best-effort failure
 policies remain unchanged.
 
 The iMessage reply cache also hydrates and persists through worker-backed keyed
 stores. Its owner allocates short IDs in memory without yielding and serializes
 counter, eviction, and entry writes; callers join persistence before completion.
 A successfully read counter remains available if later entry hydration fails.
-The shared action dispatcher awaits the async conversation-matching companion
-before entering the action, including the first action after a restart. The
-existing boolean callback retains synchronous cold hydration for published
-OpenClaw 2026.9.4 hosts and other hosts without that companion. It remains a
-literal boolean, never a promise. Remove this plugin fallback only when its
-declared host floor excludes hosts without async matching. Existing cache
+The shared action dispatcher awaits async conversation matching and cold
+hydration before entering the action, including the first action after a restart. Existing cache
 namespaces, record shapes, TTLs, limits, and best-effort failure policy are unchanged.
 
 Discord presence cooldown reads, claims, and conditional rollback use the shared
@@ -2565,9 +2567,11 @@ The host retains refresh locks, current write authority, and pricing context.
 Incognito usage reads committed memory actor facts and allocates no database
 worker; its namespace is never reopened as a database.
 Cancellation and database closure join native worker work, accepted host effects,
-and refresh-lock cleanup before releasing custody. Atomic pruning retains all
-obsolete-row comparison bytes on the host until its transaction settles; bounded
-SQL batches do not impose an aggregate memory limit. Cache formats, schemas,
+and refresh-lock cleanup before releasing custody. Pruning retains only the current
+bounded snapshot batch on the host until its transaction settles, releasing the
+ordinary writer between batches. Each obsolete row and its partitions remain
+atomic; interrupted cleanup rediscovers remaining rows on the next refresh.
+Cache formats, schemas,
 retention, and update behavior are unchanged.
 
 Shared-state database drainage also joins resources registered while an earlier
@@ -2847,13 +2851,12 @@ Checkpoint modes, write admission, stored bytes, and reclamation limits are
 unchanged. Updates require no schema or configuration migration; the new process
 reconstructs its connection-owned schedules from the existing database owners.
 
-SQLite FTS5/BM25, vector tables, JSON table-valued queries, attached shadow
-databases, WAL maintenance, integrity checks, and backup operations remain
-SQLite capabilities. Keep their implementation behind the memory or database
-lifecycle owner. A future backend must supply equivalent product behavior or
-an explicit capability boundary; a second SQL dialect alone cannot replace
-these features. Schema, retention, migration, and multi-host changes still use
-the review checkpoint below.
+Keep SQLite FTS5/BM25, vector tables, JSON table-valued queries, attached shadow
+databases, WAL maintenance, integrity checks, and backup implementations behind
+the memory or database lifecycle owner. PostgreSQL supplies its own search and
+matched-backup behavior; see [database engines](/reference/database-engines).
+Schema, retention, migration, and multi-host changes still use the review
+checkpoint below.
 
 Prepared node-workspace registration, binding, mutation completion, and retirement
 run in the same shared-state worker as the node launch journal. Existing-only
@@ -3020,18 +3023,20 @@ other cache scopes, including durable voice sessions, remain unchanged.
 Usage-bearing transcript publications schedule advancement through the existing
 usage worker queue. Each dirty session waits for 30 seconds without another
 usage publication or an active agent turn. Its oldest pending change survives
-back-to-back turns: after five minutes, it can refresh in the next idle gap.
+back-to-back turns: after five minutes, it becomes eligible even during an active
+turn. This bounds coalescing delay; an existing refresh, retry backoff, scanning,
+and draining the ordinary writer queue still take additional time.
 A turn starting during a refresh may overlap its already-admitted bounded batch.
-User and metadata rows join the next usage scan. Cost and overview reads flush
-and await pending publication batches, bypassing the idle delay, so a completed
-turn's usage is visible immediately. Goal budgets and provider billing limits
+User and metadata rows join the next usage scan. Exact cost reads flush and await
+pending publication batches, bypassing the idle delay. Reports use their separate
+reader lane and wait up to 10 seconds for freshness before serving committed
+partial or stale totals. Goal budgets and provider billing limits
 use their own current accounting, independently of this display projection.
 Shutdown cancels pending delays without flushing; committed transcripts remain
 the source of truth. Startup and topology changes backfill in bounded batches,
 yielding between batches. Cache writes wait outside the agent writer FIFO until
-foreground work drains, then commit one session at a time. Report reads use their
-separate worker lane and return partial or stale totals during backfill. Restart
-rediscovers unfinished sessions from their committed checkpoints.
+foreground work drains, then commit a bounded batch. Restart rediscovers
+unfinished sessions from their committed checkpoints.
 Refresh or cleanup failures still warn.
 After in-process DDL, worker admission publishes its validated schema even if a
 retained reader adopted another wrapper of the previous shared receipt while it
@@ -3141,6 +3146,31 @@ execute commands, or require a database restore. The maintainer-authorized
 restart-continuity repair accepts this narrowly scoped durability change; owner
 and separate-Gateway-process tests cover lifecycle cleanup and restart handoff.
 
+## Plugin session notice delivery owner
+
+A channel notice that a loaded plugin posts with `runtime.system.postSessionNotice`
+stores one more `deliveryCompletion` variant in the existing
+`delivery_queue_entries.entry_json`: `{ kind: "plugin-notice", pluginId }`. It names
+the posting plugin and nothing else. Core callers that are not loaded plugins
+store no completion, as before.
+
+Before any channel I/O, restart recovery's existing owner step checks that this
+plugin is loaded, enabled, and not revoked in the active plugin registry. If it is,
+the intent replays as usual. Otherwise the owner logs the reason, and recovery
+settles the intent without sending through its existing owner-rejection path,
+which records a failed delivery audit with no result. The notice uses the existing completion retention under the
+`plugin-notice:` intent prefix (24 hours, 2,000 receipts). A retry with the same
+key therefore finds the kept receipt and does not send again.
+
+There is no table, column, index, or schema-version change, and existing rows are
+not rewritten. The installed updater runs first and is unaffected. Older readers
+(checked against `v2026.10.9`) route an unknown completion kind to the
+conversation owner. That owner has no agent or operation ID for this row, so the
+transition throws, recovery records "delivery owner state unavailable", and the
+row fails without sending until its retry budget moves it to failed. A downgrade
+therefore never sends a pending plugin notice; an upgrade does not resume one
+that an older reader already failed.
+
 ## Memory index batch revisions
 
 Agent schema 31 removes the six row revision triggers on `memory_index_sources`
@@ -3162,6 +3192,54 @@ The declared SQLite backup covers the source and chunk tables and schema metadat
 Other retained tables and planner statistics stay unchanged. Older binaries
 require the verified pre-upgrade backup and matching schema; manually lowering
 version markers cannot restore their revision-update contract.
+
+## Active transcript event facts
+
+Agent schema 41 adds `session_transcript_active_event_facts`, keyed by session
+and transcript sequence. The table starts empty. It stores the transcript
+writer's exact serialized byte count, including the separator, and its guarded
+dependency navigation projection. A missing row means unknown; `{}` means a
+known non-candidate. Readers use the existing payload expression only for
+missing facts and never populate the table.
+
+The transcript projection writer owns the facts in the same transaction as
+active-row insertion or replacement. Payload and eligibility changes replace
+or clear the facts. The foreign key to the active row cascades deletion through
+branch retirement, reset, compaction, and session deletion. SQLite uses
+`STRICT, WITHOUT ROWID`; PostgreSQL carries the same key and foreign key.
+Transcripts remain authoritative, with unchanged retention and admission limits.
+Engine porting omits these derived facts because payload encoding and stored
+predicate materialization can change. The destination starts with missing facts
+and uses its normal fallback; porting does not force a facts backfill.
+
+The version migration creates only this empty table and updates schema metadata.
+It does not alter, scan, backfill, index, or copy existing transcript or active
+rows. Its declared SQLite scoped backup retains `schema_meta`, the prior SQLite user
+version, and the new table's absence. The 40-to-41 crossing uses the established
+schema-only admission policy, then checks the new empty table and its foreign
+key at migration finalization. Existing foreign keys are unchanged and are not
+rescanned for this step. Crossings from schema 38 or 39 retain schema-only
+preflight and global foreign-key validation at finalization. Explicit full
+integrity checks retain their existing coverage.
+Whole-upgrade timing must
+distinguish this version phase from any separate maintenance or update backup.
+PostgreSQL keeps its existing exact-predecessor backup owner; this declaration
+does not narrow that engine's backup scope.
+
+Old rows retain their fallback cost until an ordinary write or rebuild covers
+them. A recent 512-event window can become covered after 512 ordinary, well-formed
+appends. Malformed rows retain their fallback, and old dependency candidates can
+remain uncovered indefinitely. A background backfill is a separate storage and
+lifecycle decision.
+
+Older binaries refuse agent41 stores: their writers cannot keep these facts
+current, so an additive-table reader exception is unsafe. With writers stopped,
+the candidate CLI restores the verified scoped migration backup using
+`openclaw database restore-migration-backup`, removing the companion table and
+restoring both version markers before the matching older build opens the store.
+This version phase does not rewrite transcripts; the scoped restore leaves
+those canonical rows and other undeclared tables intact. It is not a general
+rollback for other migrations or external effects.
 
 ## Review checkpoint for material changes
 
@@ -3187,6 +3265,15 @@ mechanics are engineering decisions within an authorized repair when they
 preserve those contracts. Prove FIFO ordering, current authority after awaited
 work, integrity checks, publication fencing, and settlement of write-capable
 work. Assess performance and storage costs as part of that verification.
+
+Every migration PR states its upgrade cost on the largest known deployment.
+List each statement that touches an existing table (rebuild, `INSERT … SELECT`,
+backfill, index build, integrity-check scope) with that table's size, plus the
+backup scope. Migrations finish before the Gateway serves requests, so a large
+table rewritten in one transaction keeps the Gateway offline until it finishes.
+Prefer changes that leave existing rows untouched, and declare a table-scoped
+backup instead of a full-file copy. A rewrite of a large table needs a measured
+duration at that size and explicit acceptance.
 
 A Doctor or recovery repair that removes only invalid or unreachable rows (for
 example rows whose referenced parent row is missing) is also an engineering
