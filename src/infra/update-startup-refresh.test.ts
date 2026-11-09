@@ -192,15 +192,16 @@ describe("interactive Dev update discovery", () => {
     const cfg: OpenClawConfig = {
       update: { channel: "dev", auto: { enabled: true, schedule: "30 10 * * *" } },
     };
+    vi.setSystemTime(new Date(2026, 0, 17, 10, 0));
     mockDevGitStatus({ behind: 2 });
     await runGatewayUpdateCheck({ cfg });
     await refreshGatewayUpdateStatus(() => cfg);
     expectGitTarget("upstream-sha", 2);
     expect(campaign.getState()).toBeUndefined();
-    vi.setSystemTime(new Date("2026-01-17T10:30:00Z"));
+    vi.setSystemTime(new Date(2026, 0, 17, 10, 30));
     await runGatewayUpdateCheck({ cfg });
     expect(campaign.getState()?.state).toBe("countdown");
-    vi.setSystemTime(new Date("2026-01-17T10:32:00Z"));
+    vi.setSystemTime(new Date(2026, 0, 17, 10, 32));
     mockDevGitStatus({ behind: 3, upstreamSha: "replacement" });
     await refreshGatewayUpdateStatus(() => cfg);
     expectGitTarget("replacement", 3);
