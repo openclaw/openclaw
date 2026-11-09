@@ -16,6 +16,117 @@ import { performance } from "node:perf_hooks";
 import v8 from "node:v8";
 import { isMainThread } from "node:worker_threads";
 
+// Isolated follow-up only: interrupts=measure|noop|off instruments the built
+// observer worker. Never wrap the main capture function: that changes its frames.
+const interruptMode = new URL(import.meta.url).searchParams.get("interrupts");
+if (interruptMode !== null) {
+  if (!["measure", "noop", "off"].includes(interruptMode)) {
+    throw new Error("Invalid benchmark interrupt mode");
+  }
+  const workerThreads = (await import("node:worker_threads")).default;
+  const { pathToFileURL } = await import("node:url");
+  const observer = new URL(
+    "../../dist/logging/diagnostic-stall-observer.worker.js",
+    import.meta.url,
+  );
+  if (isMainThread) {
+    const NativeWorker = workerThreads.Worker;
+    workerThreads.Worker = class extends NativeWorker {
+      constructor(filename, options) {
+        super(
+          filename,
+          String(filename) === observer.href
+            ? { ...options, execArgv: [...(options?.execArgv ?? []), "--import", import.meta.url] }
+            : options,
+        );
+      }
+    };
+    syncBuiltinESMExports();
+  } else if (process.argv[1] && pathToFileURL(process.argv[1]).href === observer.href) {
+    const { Session } = await import("node:inspector/promises");
+    const { writeSync } = await import("node:fs");
+    const { workerData, threadId } = workerThreads;
+    const now = () => performance.now() + (performance.timeOrigin - workerData.timeOrigin);
+    const emit = (row) =>
+      writeSync(
+        2,
+        "STALL_INTERRUPT_COST " + JSON.stringify({ mode: interruptMode, threadId, ...row }) + "\n",
+      );
+    emit({ event: "ready", atMs: now() });
+    const heartbeat = new BigInt64Array(workerData.heartbeat);
+    const records = new WeakMap();
+    let attempts = 0;
+    const connect = Session.prototype.connectToMainThread;
+    const post = Session.prototype.post;
+    const disconnect = Session.prototype.disconnect;
+    Session.prototype.connectToMainThread = function () {
+      const row = { attempt: ++attempts, atMs: now(), failed: 0 };
+      records.set(this, row);
+      emit({ event: "start", ...row });
+      const at = performance.now();
+      try {
+        if (interruptMode !== "off") {
+          connect.call(this);
+        }
+      } catch (error) {
+        row.failed = 1;
+        throw error;
+      } finally {
+        row.connectCallMs = performance.now() - at;
+      }
+    };
+    Session.prototype.post = async function (method, parameters) {
+      const row = records.get(this);
+      const at = now();
+      row.postAtMs = at;
+      const beat = Atomics.load(heartbeat, 0);
+      row.captureRequest = Number(
+        parameters?.expression ===
+          'globalThis[Symbol.for("openclaw.stallFlightRecorder.capture")]?.()',
+      );
+      try {
+        const result =
+          interruptMode === "off"
+            ? { result: { type: "undefined" } }
+            : await post.call(
+                this,
+                method,
+                interruptMode === "noop" && row.captureRequest
+                  ? { ...parameters, expression: "undefined" }
+                  : parameters,
+              );
+        const snapshot = result.result?.value;
+        row.captureMs = snapshot?.captureMs ?? null;
+        row.dispatchMs = snapshot?.endedAt === undefined ? null : snapshot.endedAt - at;
+        row.sampleCount = snapshot?.stacks?.length ?? 0;
+        row.frameCount = snapshot?.stacks?.[0]?.frames?.length ?? 0;
+        row.late = Number((row.dispatchMs ?? 0) > 100);
+        row.exception = Number(Boolean(result.exceptionDetails));
+        return result;
+      } catch (error) {
+        row.failed = 1;
+        throw error;
+      } finally {
+        row.roundTripMs = now() - at;
+        row.heartbeatChanged = Number(Atomics.load(heartbeat, 0) !== beat);
+      }
+    };
+    Session.prototype.disconnect = function () {
+      const row = records.get(this);
+      const at = performance.now();
+      try {
+        if (interruptMode !== "off") {
+          disconnect.call(this);
+        }
+      } finally {
+        row.disconnectCallMs = performance.now() - at;
+        emit({ event: "end", ...row });
+        records.delete(this);
+      }
+    };
+  }
+}
+
 if (isMainThread) {
   const params = new URL(import.meta.url).searchParams;
   const value = params.get("interval");
