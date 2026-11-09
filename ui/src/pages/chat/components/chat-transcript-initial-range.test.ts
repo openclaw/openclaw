@@ -1,6 +1,7 @@
 import { defaultRangeExtractor, Virtualizer } from "@tanstack/virtual-core";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { TranscriptInitialRange } from "./chat-transcript-initial-range.ts";
+import type { TranscriptRow } from "./chat-transcript-layout.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -127,7 +128,11 @@ it("retains the measured destination until the Latest journey settles", async ()
     observeElementRect: () => () => {},
     observeElementOffset: () => () => {},
   });
-  const rows = Array.from({ length: 20 }, (_, index) => ({ key: `row-${index}` }));
+  const rows = Array.from({ length: 20 }, (_, index): TranscriptRow => ({
+    kind: "content",
+    key: `row-${index}`,
+    content: null,
+  }));
   const range = new TranscriptInitialRange(
     0,
     () => virtualizer,
@@ -195,13 +200,11 @@ it.each([false, true])(
       () => measured,
     );
     onTestFinished(() => range.disconnect());
-    let current = true;
-    const settled = vi.fn(() => range.finishEnd());
-    range.finishEndWhenSettled(settled, () => current);
+    range.finishEndWhenSettled();
     paint();
     paint();
     paint();
-    expect(settled).not.toHaveBeenCalled();
+    expect(range.preparingEnd).toBe(true);
     presented = false;
     paint();
     expect(animation.pending()).toBe(0);
@@ -214,17 +217,16 @@ it.each([false, true])(
     paint();
     element.scrollTop -= 9;
     paint();
-    expect(settled).not.toHaveBeenCalled();
+    expect(range.preparingEnd).toBe(true);
     element.scrollTop += 1;
     paint();
     paint();
-    expect(settled).not.toHaveBeenCalled();
+    expect(range.preparingEnd).toBe(true);
     if (cancelled) {
-      current = false;
-      range.finishEnd();
+      range.recordReaderMovement(-20);
     }
     paint();
-    expect(settled).toHaveBeenCalledTimes(cancelled ? 0 : 1);
+    expect(range.preparingEnd).toBe(false);
     expect(animation.pending()).toBe(0);
   },
 );

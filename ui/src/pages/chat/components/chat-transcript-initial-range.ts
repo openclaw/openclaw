@@ -280,6 +280,7 @@ export class TranscriptInitialRange {
         this.afterCommit(this.queueEndWork);
         return;
       }
+      this.endWork = undefined;
       ready();
     };
     this.endWork = () => begin;
@@ -287,19 +288,20 @@ export class TranscriptInitialRange {
   };
 
   // Keep the destination in flow until its real size and native endpoint agree.
-  readonly finishEndWhenSettled = (settled: () => void, isCurrent: () => boolean): void => {
+  readonly finishEndWhenSettled = (): void => {
     if (!this.preparingEnd) {
       this.preparingEnd = true;
       this.refresh();
       this.invalidate();
     }
-    this.endWork = createTranscriptEndSettlement(
+    const endWork = createTranscriptEndSettlement(
       this.virtualizer(),
-      () => this.canPrepare() && isCurrent(),
+      () => this.canPrepare() && this.endWork === endWork,
       this.rowsMeasured,
       this.queueEndWork,
-      settled,
+      () => this.finishEnd(),
     );
+    this.endWork = endWork;
     this.queueEndWork();
   };
 
@@ -415,6 +417,7 @@ export class TranscriptInitialRange {
       velocity: previous.time ? Math.abs(delta) / Math.max(16, now - previous.time) : 0,
       direction: Math.sign(delta),
     };
+    this.finishEnd();
     this.finish();
   }
 
@@ -742,10 +745,7 @@ export class TranscriptInitialRange {
         return;
       }
       this.prepareStarted = performance.now();
-      virtualizer.setOptions({
-        ...virtualizer.options,
-        rangeExtractor: (next) => this.extract(next),
-      });
+      this.refresh();
       this.invalidate();
       // Markdown can keep warming while the single admitted DOM row is measured.
       queueNext();

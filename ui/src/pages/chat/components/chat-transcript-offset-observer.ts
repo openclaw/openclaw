@@ -91,40 +91,61 @@ export function isTranscriptProgrammaticScroll(
   );
 }
 
+function hasReachedIssuedEnd(
+  state: TranscriptOffsetState,
+  element: HTMLDivElement | null,
+  tolerance: number,
+): boolean {
+  const command = state.scrollCommand;
+  if (!element || command?.target !== "end" || command.offset === undefined) {
+    return false;
+  }
+  const max = maxTranscriptScrollOffset(element);
+  return (
+    max !== null &&
+    Math.abs(command.offset - element.scrollTop) <= tolerance &&
+    Math.abs(max - element.scrollTop) <= tolerance
+  );
+}
+
 export function scrollTranscriptToEnd(
   state: TranscriptOffsetState,
   instance: Virtualizer<HTMLDivElement, HTMLElement>,
   { source, behavior }: Required<ChatScrollToEndOptions>,
   cancelScroll: (preserveEnd?: boolean) => void,
+  measureSkippedRows: () => void,
   endAnchor: TranscriptEndAnchor,
   prepareEnd: (ready: () => void, isCurrent: () => boolean, native: boolean) => void,
-  finishEndWhenSettled: (settled: () => void, isCurrent: () => boolean) => void,
 ): void {
-  if (source === "auto" && state.scrollCommand?.target === "end") {
-    const command = state.scrollCommand;
-    const max = maxTranscriptScrollOffset(instance.scrollElement);
-    // Keep the issued journey following growth without replacing its settlement.
-    if (command.offset !== undefined && max !== null && Math.abs(max - command.offset) > 1) {
-      instance.scrollToEnd({ behavior: command.behavior });
-    }
-    return;
-  }
   if (source === "auto" && endAnchor.capture(instance.scrollElement)) {
     return;
   }
-  cancelScroll();
+  // Retargeting retains native motion and its issued destination during preparation.
+  if (source !== "auto" || state.scrollCommand?.target !== "end") {
+    cancelScroll();
+  } else if (state.scrollCommand.behavior === "smooth" && behavior !== "smooth") {
+    // Retargeting bypasses cancellation, which normally replays the row sizes
+    // TanStack suppressed outside the outgoing smooth command’s target buffer.
+    measureSkippedRows();
+  }
   const command = (state.scrollCommand = {
     behavior,
     target: "end",
+    offset: state.scrollCommand?.target === "end" ? state.scrollCommand.offset : undefined,
   });
   const scroll = () => {
     instance.scrollToEnd({ behavior });
-    finishEndWhenSettled(
-      () => cancelScroll(true),
-      () => state.scrollCommand === command,
-    );
-    // A smooth no-op emits no native idle event; capture its resting edge now.
-    endAnchor.capture(instance.scrollElement);
+    // Instant commands and smooth no-ops can reach their target before any
+    // native offset event. Do not let delayed idle reclaim a departed reader.
+    const element = instance.scrollElement;
+    if (hasReachedIssuedEnd(state, element, 1)) {
+      cancelScroll(true);
+    }
+    // A smooth no-op emits no native idle event to capture the end. Preserve
+    // that actual resting edge before a later row measurement grows the range.
+    if (behavior !== "smooth" || endAnchor.recordViewport(element)) {
+      endAnchor.capture(element);
+    }
   };
   if (source === "auto" || behavior === "smooth") {
     // Automatic following joins native measurements; manual motion prepares synchronously.
@@ -500,6 +521,16 @@ export function observeTranscriptOffset(
     }
     if (!scrolling && owner.prependAnchor.hasPrepend) {
       owner.invalidate();
+    }
+    // Retire a completed journey before delayed native idle can recapture a
+    // reader who has since been resize-clamped to a different end. Completion
+    // must not stop a smooth animation on its penultimate 1px frame; retain
+    // the restore path's rounding tolerance only after native scrolling settles.
+    // Reaching the end cannot retire a message reveal awaiting its DOM commit.
+    // Shrinking estimated rows can temporarily clamp the viewport before the
+    // issued destination. Let the virtualizer retarget before retiring it.
+    if (hasReachedIssuedEnd(owner.state, element, scrolling ? 0 : 1)) {
+      owner.cancelScroll(true);
     }
   });
   return () => {
