@@ -47,7 +47,7 @@ extension MacNodeRuntime {
             guard let sessionId = params.sessionId else {
                 throw OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: sessionId required")
             }
-            await services.stopSimulatorCapture(sessionId: sessionId)
+            try await services.stopSimulatorCapture(sessionId: sessionId)
             frame = nil
         default:
             throw OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown simulator capture action")

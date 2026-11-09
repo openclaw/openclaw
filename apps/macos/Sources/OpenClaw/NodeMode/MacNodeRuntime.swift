@@ -178,13 +178,22 @@ actor MacNodeRuntime {
                     return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: #"{"ok":true}"#)
                 }
                 await self.cancelDesktopInvokes(permits: [permit])
-                await self.cachedMainActorServices?.stopSimulatorCapture(forExecutionId: id)
+                var simulatorCleanupError: Error?
+                do {
+                    try await self.cachedMainActorServices?.stopSimulatorCapture(forExecutionId: id)
+                } catch {
+                    simulatorCleanupError = error
+                }
                 let response: BridgeInvokeResponse = if self.computerControlProvider() == .cua, let nodeHostWorker {
                     await nodeHostWorker.invoke(req)
                 } else {
                     BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: #"{"ok":true}"#)
                 }
-                await desktop.finishClose(permit, succeeded: response.ok)
+                await desktop.finishClose(permit, succeeded: response.ok && simulatorCleanupError == nil)
+                if let simulatorCleanupError {
+                    return Self.errorResponse(
+                        req, code: .unavailable, message: simulatorCleanupError.localizedDescription)
+                }
                 return response
             }
             let permit = try await desktop.admit(executionId: envelope.executionId)
@@ -269,7 +278,7 @@ actor MacNodeRuntime {
                 if req.command == "simulator.capture", envelope.action == "start",
                    let executionId = envelope.executionId
                 {
-                    await self.cachedMainActorServices?.stopSimulatorCapture(forExecutionId: executionId)
+                    try? await self.cachedMainActorServices?.stopSimulatorCapture(forExecutionId: executionId)
                 }
                 await desktop.finishInvocation(permit)
                 throw error
@@ -298,7 +307,13 @@ actor MacNodeRuntime {
         _ permits: [MacDesktopAvailabilityCoordinator.Permit],
         reason: String) async
     {
-        await self.cachedMainActorServices?.stopSimulatorCapture(sessionId: nil)
+        let simulatorCleanupSucceeded: Bool
+        do {
+            try await self.cachedMainActorServices?.stopSimulatorCapture(sessionId: nil)
+            simulatorCleanupSucceeded = true
+        } catch {
+            simulatorCleanupSucceeded = false
+        }
         let desktop = if let desktopAvailability {
             desktopAvailability
         } else {
@@ -307,13 +322,13 @@ actor MacNodeRuntime {
         for permit in permits {
             guard await desktop.beginRevocationCleanup(permit) else { continue }
             await self.cancelDesktopInvokes(permits: [permit])
-            var succeeded = true
+            var succeeded = simulatorCleanupSucceeded
             if self.computerControlProvider() == .cua, let nodeHostWorker, let executionId = permit.executionId {
                 let params = ["action": "__close_execution", "executionId": executionId, "reason": reason]
                 if let json = try? Self.encodePayload(params) {
                     let response = await nodeHostWorker.invoke(BridgeInvokeRequest(
                         id: UUID().uuidString, command: OpenClawComputerCommand.act.rawValue, paramsJSON: json))
-                    succeeded = response.ok
+                    succeeded = succeeded && response.ok
                 } else {
                     succeeded = false
                 }
@@ -813,11 +828,11 @@ extension MacNodeRuntime {
         let lifecycleGeneration = self.computerInputReleaseGeneration
         await self.cachedMainActorServices?.releaseHeldInput(
             lifecycleGeneration: lifecycleGeneration)
-        await self.cachedMainActorServices?.stopSimulatorCapture(sessionId: nil)
+        try? await self.cachedMainActorServices?.stopSimulatorCapture(sessionId: nil)
     }
 
     func shutdown() async {
-        await self.cachedMainActorServices?.stopSimulatorCapture(sessionId: nil)
+        try? await self.cachedMainActorServices?.stopSimulatorCapture(sessionId: nil)
         await self.codexThreadCatalogClient.shutdown()
         // Terminal stop settles computer actions through releaseHeldComputerInput
         // first, so no window observation can still write a capture.

@@ -24,8 +24,8 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
     func startSimulatorCapture(executionId: String) async throws -> SimulatorCaptureService.Frame
     func readSimulatorCapture(sessionId: String, after sequence: UInt64) async throws
         -> SimulatorCaptureService.Frame
-    func stopSimulatorCapture(sessionId: String?) async
-    func stopSimulatorCapture(forExecutionId executionId: String) async
+    func stopSimulatorCapture(sessionId: String?) async throws
+    func stopSimulatorCapture(forExecutionId executionId: String) async throws
     func simulatorInput(
         sessionId: String, action: OpenClawComputerAction,
         x: Double?, y: Double?, fromX: Double?, fromY: Double?,
@@ -100,12 +100,12 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
         try await self.simulatorCapture.read(sessionId: sessionId, after: sequence)
     }
 
-    func stopSimulatorCapture(sessionId: String?) async {
-        await self.simulatorCapture.stop(sessionId: sessionId)
+    func stopSimulatorCapture(sessionId: String?) async throws {
+        try await self.simulatorCapture.stop(sessionId: sessionId)
     }
 
-    func stopSimulatorCapture(forExecutionId executionId: String) async {
-        await self.simulatorCapture.stop(forExecutionId: executionId)
+    func stopSimulatorCapture(forExecutionId executionId: String) async throws {
+        try await self.simulatorCapture.stop(forExecutionId: executionId)
     }
 
     func simulatorInput(

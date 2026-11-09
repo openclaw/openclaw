@@ -52,7 +52,7 @@ final class SimulatorCaptureService {
     private var inputInProgress = false
     private var heldTouch = false
     private var pasteboardTransaction: Task<Void, Error>?
-    private var stopTask: Task<Void, Never>?
+    private var stopTask: Task<Void, Error>?
 
     func start(executionId: String) async throws -> Frame {
         guard self.reservationId == nil, self.stopTask == nil else { throw CaptureError.busy }
@@ -126,7 +126,7 @@ final class SimulatorCaptureService {
                             try? await Task.sleep(for: .seconds(5))
                             guard let self, !Task.isCancelled else { return }
                             if Date().timeIntervalSince(self.lastRead) > 15 {
-                                await self.stop()
+                                try? await self.stop()
                                 return
                             }
                         }
@@ -139,7 +139,7 @@ final class SimulatorCaptureService {
             }
             throw CaptureError.unavailable("no device frame or HID ready signal within 5 seconds")
         } catch {
-            if self.reservationId == reservation { await self.stop() }
+            if self.reservationId == reservation { try? await self.stop() }
             throw error
         }
     }
@@ -251,6 +251,8 @@ final class SimulatorCaptureService {
             let transaction = Task { @MainActor in
                 var inputError: Error?
                 do {
+                    try validate()
+                    guard self.sessionId == sessionId else { throw CaptureError.staleSession }
                     _ = try await Self.pasteboard("pbcopy", udid: udid, input: Data(text.utf8))
                     try key(0x19, modifiers: 0x08)
                     try await Task.sleep(for: .milliseconds(100))
@@ -300,20 +302,21 @@ final class SimulatorCaptureService {
         _ = try? self.touchInputPipe?.fileHandleForWriting.write(contentsOf: Data([13, 0, 0, 0, 0, 0, 0, 0, 0]))
     }
 
-    func stop(sessionId: String? = nil) async {
+    func stop(sessionId: String? = nil) async throws {
         if let stopTask = self.stopTask {
-            await stopTask.value
+            try await stopTask.value
             return
         }
         if let sessionId, self.sessionId != sessionId { return }
         // Retain one lifecycle owner across suspension so a new capture cannot
         // overlap HID release or device pasteboard restoration.
-        let task = Task { @MainActor in await self.finishStop() }
+        let task = Task { @MainActor in try await self.finishStop() }
         self.stopTask = task
-        await task.value
+        defer { self.stopTask = nil }
+        try await task.value
     }
 
-    private func finishStop() async {
+    private func finishStop() async throws {
         if let activeSession = self.sessionId { self.cancelHeldTouch(sessionId: activeSession) }
         let touchProcess = self.touchProcess
         let captureProcess = self.captureProcess
@@ -354,15 +357,17 @@ final class SimulatorCaptureService {
         if captureProcess?.isRunning == true { captureProcess?.terminate() }
         // A canceled request can still be finishing pbcopy/conditional restore.
         // Revocation is complete only after that transaction settles.
-        _ = try? await pasteboardTransaction?.value
+        var cleanupError: Error?
+        do { try await pasteboardTransaction?.value } catch { cleanupError = error }
         self.pasteboardTransaction = nil
         self.executionId = nil
-        self.stopTask = nil
+        // Close cannot claim a clean revoke if conditional pasteboard restoration failed.
+        if let cleanupError { throw cleanupError }
     }
 
-    func stop(forExecutionId executionId: String) async {
+    func stop(forExecutionId executionId: String) async throws {
         guard self.executionId == executionId else { return }
-        await self.stop()
+        try await self.stop()
     }
 
     private static func helper(_ name: String, arguments: [String]) throws -> Process {

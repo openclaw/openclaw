@@ -213,6 +213,7 @@ struct MacNodeRuntimeTests {
         var simulatorStarts = 0
         var simulatorStops = 0
         var simulatorInputCount = 0
+        var simulatorStopError: Error?
         var actResultOk = true
         var simulatorStartEntered: AsyncTestGate?
         var releaseSimulatorStart: AsyncTestGate?
@@ -236,8 +237,14 @@ struct MacNodeRuntimeTests {
             return self.simulatorFrame()
         }
 
-        func stopSimulatorCapture(sessionId: String?) async { self.simulatorStops += 1 }
-        func stopSimulatorCapture(forExecutionId executionId: String) async { self.simulatorStops += 1 }
+        func stopSimulatorCapture(sessionId: String?) async throws {
+            self.simulatorStops += 1
+            if let simulatorStopError { throw simulatorStopError }
+        }
+        func stopSimulatorCapture(forExecutionId executionId: String) async throws {
+            self.simulatorStops += 1
+            if let simulatorStopError { throw simulatorStopError }
+        }
 
         func simulatorInput(
             sessionId: String, action: OpenClawComputerAction,
@@ -1114,6 +1121,31 @@ extension MacNodeRuntimeTests {
         #expect(services.releasedExecutionScopes.count == 1)
         #expect(services.simulatorStops == 1)
         #expect(services.desktopPlatform.assertions.isEmpty)
+        #expect(!(await self.invoke(
+            runtime, "sim-late", "simulator.act",
+            "{\"action\":\"mouse_move\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.6,\"y\":0.5}")).ok)
+    }
+
+    @MainActor
+    @Test func `Simulator close reports pasteboard cleanup failure`() async {
+        let services = MainActorServicesProbe()
+        let runtime = MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { .peekaboo })
+        let execution = "33333333-3333-4333-8333-333333333333"
+        #expect(await self.invoke(
+            runtime, "sim-start", "simulator.capture",
+            "{\"action\":\"start\",\"executionId\":\"\(execution)\"}").ok)
+        services.simulatorStopError = SimulatorCaptureService.CaptureError.unavailable(
+            "device pasteboard could not be restored after typing")
+        let closed = await self.invoke(
+            runtime, "sim-close", "computer.act",
+            "{\"action\":\"__close_execution\",\"executionId\":\"\(execution)\"}")
+        #expect(!closed.ok)
+        #expect(closed.error?.message.contains("device pasteboard could not be restored") == true)
+        #expect(services.simulatorStops == 1)
         #expect(!(await self.invoke(
             runtime, "sim-late", "simulator.act",
             "{\"action\":\"mouse_move\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.6,\"y\":0.5}")).ok)
