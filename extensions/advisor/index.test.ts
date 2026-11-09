@@ -35,13 +35,15 @@ async function startAdvisor(
   const registerService = vi.fn<Api["registerService"]>();
   const runtime = createPluginRuntimeMock();
   const forkSession = vi.spyOn(runtime.subagent, "forkSession").mockResolvedValue({ text: reply });
-  vi.spyOn(runtime.agent.session, "getSessionEntryAsync").mockImplementation(async ({ sessionKey }) => {
-    if (options.lookupThrows) {
-      throw new Error("session lookup unavailable");
-    }
-    const entry = options.entries?.[sessionKey];
-    return entry ? { sessionId: "session", updatedAt: 0, ...entry } : undefined;
-  });
+  vi.spyOn(runtime.agent.session, "getSessionEntryAsync").mockImplementation(
+    async ({ sessionKey }) => {
+      if (options.lookupThrows) {
+        throw new Error("session lookup unavailable");
+      }
+      const entry = options.entries?.[sessionKey];
+      return entry ? { sessionId: "session", updatedAt: 0, ...entry } : undefined;
+    },
+  );
   vi.spyOn(runtime.subagent, "getSessionMessages").mockResolvedValue({
     messages: options.messages ?? [],
   });
@@ -101,7 +103,10 @@ async function startAdvisor(
   };
   const startRun = async (runId = "run-1", trigger = "user") => {
     const beforeReply = on.mock.calls[0]?.[1] as Hook | undefined;
-    await beforeReply?.({}, { sessionKey: options.sessionKey ?? "agent:main:main", runId, trigger });
+    await beforeReply?.(
+      {},
+      { sessionKey: options.sessionKey ?? "agent:main:main", runId, trigger },
+    );
     await send("lifecycle", "start", {}, undefined, runId);
     const beforePrompt = on.mock.calls.find(([name]) => name === "before_prompt_build")?.[1] as
       | Hook

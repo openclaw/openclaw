@@ -4,6 +4,7 @@ import {
   type OpenClawPluginApi,
   type PluginServiceSchedulerV1,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const REVIEW_TIMEOUT_MS = 120_000;
 const RUN_CONTEXT_NAMESPACE = "advisor:admitted-run";
@@ -93,11 +94,13 @@ async function resolveNonHumanRoot(
 /** True when the newest user message was routed from another session by sessions_send. */
 function isSessionsSendTurn(messages: unknown[]): boolean {
   for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index] as { role?: string; provenance?: Record<string, unknown> };
-    if (message?.role === "user") {
+    const message = messages[index];
+    if (isRecord(message) && message.role === "user") {
+      const provenance = message.provenance;
       return (
-        message.provenance?.kind === "inter_session" &&
-        message.provenance.sourceTool === "sessions_send"
+        isRecord(provenance) &&
+        provenance.kind === "inter_session" &&
+        provenance.sourceTool === "sessions_send"
       );
     }
   }
