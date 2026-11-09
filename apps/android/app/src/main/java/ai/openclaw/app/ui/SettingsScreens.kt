@@ -105,6 +105,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -804,7 +806,10 @@ private fun AudioInputDevicePanel(
   val preferredAvailable = devices.any { it.key == preferredDeviceKey }
   val unavailablePreferredDevice =
     preferredDeviceKey?.takeUnless { preferredAvailable }?.let(::audioInputDeviceOptionFromKey)
-  ClawPanel(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+  ClawPanel(
+    modifier = Modifier.selectableGroup(),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
     AudioInputDeviceRow(
       title = nativeString("Automatic"),
       subtitle =
@@ -853,9 +858,15 @@ private fun AudioInputDeviceRow(
     title = title,
     subtitle = subtitle,
     metadata = nativeString("Next session").takeIf { pending },
+    modifier =
+      Modifier.selectable(
+        selected = selected,
+        enabled = onClick != null,
+        role = Role.RadioButton,
+        onClick = onClick ?: {},
+      ),
     leading = { ClawIconBadge(Icons.Default.Mic) },
-    trailing = if (selected) ({ SettingsSelectionCheck() }) else null,
-    onClick = onClick,
+    trailing = if (selected) ({ Box(Modifier.clearAndSetSemantics {}) { SettingsSelectionCheck() } }) else null,
   )
 }
 
