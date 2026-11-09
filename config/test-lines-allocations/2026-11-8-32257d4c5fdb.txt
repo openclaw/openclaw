@@ -1,0 +1,2 @@
+38
+# Prove cancelled consult notification is emitted once and never after accepted completion.
