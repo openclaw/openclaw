@@ -2,9 +2,10 @@ import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 
 const observer = vi.hoisted(() => ({
-  heartbeat: new BigInt64Array(new SharedArrayBuffer(16)),
+  heartbeat: new BigInt64Array(new SharedArrayBuffer(24)),
   write: vi.fn(),
   post: vi.fn(),
+  message: vi.fn(),
 }));
 vi.mock("node:fs", async (original) => ({
   ...(await original<typeof import("node:fs")>()),
@@ -14,7 +15,7 @@ vi.mock("node:worker_threads", async (original) => ({
   ...(await original<typeof import("node:worker_threads")>()),
   workerData: {
     heartbeat: observer.heartbeat.buffer,
-    port: { postMessage() {} },
+    port: { postMessage: observer.message },
     packageRoot: null,
     timeOrigin: performance.timeOrigin,
   },
@@ -43,6 +44,7 @@ it.each([false, true, null])(
     const kill = vi.spyOn(process, "kill").mockReturnValue(true);
     observer.write.mockReset();
     observer.heartbeat[0] = 1_000n;
+    observer.heartbeat[2] = 0n;
     observer.heartbeat[1] = process.versions.bun && inspecting ? 1n : 0n;
     observer.post.mockImplementation((_method: string, params: { expression: string }) =>
       inspecting !== null && params.expression.includes("inspector")
@@ -85,5 +87,35 @@ it.each([false, true, null])(
       kill.mock.invocationCallOrder[0]!,
     );
     expect(kill).toHaveBeenCalledExactlyOnceWith(process.pid, "SIGKILL");
+  },
+);
+
+it.skipIf(Boolean(process.versions.bun) || Number(process.versions.node.split(".")[0]) >= 26)(
+  "bounds interrupted stacks and rejects captures dispatched after native work returns",
+  async () => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+    observer.heartbeat.set([1_000n, 0n, 3n]);
+    observer.message.mockReset();
+    let dispatchDelay = 101;
+    observer.post.mockImplementation(() =>
+      Promise.resolve({
+        result: { value: { stacks: [{ at: Date.now() + dispatchDelay, frames: [] }] } },
+      }),
+    );
+    await import("./diagnostic-stall-observer.worker.js");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(observer.message).not.toHaveBeenCalled();
+    expect(observer.heartbeat[2]).toBe(3n);
+    dispatchDelay = 0;
+    observer.heartbeat[0] = BigInt(Date.now());
+    await vi.advanceTimersByTimeAsync(1_250);
+    expect(observer.message).toHaveBeenCalledTimes(3);
+    expect(observer.heartbeat[2]).toBe(0n);
+    observer.heartbeat[0] = BigInt(Date.now());
+    await vi.advanceTimersByTimeAsync(1_250);
+    expect(observer.message).toHaveBeenCalledTimes(3);
   },
 );

@@ -40,6 +40,9 @@ let nextKernelAt = 0;
 let nextReportAt = 0;
 let kernelPending = false;
 let reportPending = false;
+const interruptStacks = !process.versions.bun && Number(process.versions.node.split(".")[0]) < 26;
+let stackAttempts = 0;
+let stackPending = false;
 // Normal long stalls last tens of seconds; five minutes leaves ample recovery headroom.
 const RECOVERY_AFTER_MS = 5 * 60_000;
 let recoveryPending = false;
@@ -142,8 +145,7 @@ async function reportStall(beat: bigint, at: number) {
       throw new Error("capture unavailable");
     }
     session.connectToMainThread();
-    // Starting a fresh Profiler during a spin can omit the already executing leaf.
-    // Interrupt only to rotate the existing bounded native recorder, then format here.
+    // Rotate the bounded native recorder or capture the interrupted Node 24 stack.
     const { result, exceptionDetails } = await session.post("Runtime.evaluate", {
       expression: 'globalThis[Symbol.for("openclaw.stallFlightRecorder.capture")]?.()',
       returnByValue: true,
@@ -153,11 +155,16 @@ async function reportStall(beat: bigint, at: number) {
     }
     // SAFETY: The private capture Symbol returns this owner-typed snapshot, serialized by value.
     const snapshot = result.value as StallProfileSnapshot;
+    if (interruptStacks && snapshot.endedAt - at > 100) {
+      throw new Error("capture dispatched after the stall");
+    }
     const { formatStallProfile } = await import("./diagnostic-stall-profile.js");
     const report = formatStallProfile(
       snapshot.windows,
       { startedAt: Number(beat), endedAt: snapshot.endedAt },
       packageRoot,
+      "",
+      snapshot.stacks,
     );
     // Worker stdout/stderr streams relay through the main event loop. The OS fd does not.
     writeSync(
@@ -175,12 +182,47 @@ async function reportStall(beat: bigint, at: number) {
   }
 }
 
+async function sampleStack(beat: bigint, at: number) {
+  stackPending = true;
+  stackAttempts++;
+  const session = new Session();
+  try {
+    session.connectToMainThread();
+    const { result } = await session.post("Runtime.evaluate", {
+      expression: 'globalThis[Symbol.for("openclaw.stallFlightRecorder.capture")]?.()',
+      returnByValue: true,
+      silent: true,
+      disableBreaks: true,
+    });
+    // SAFETY: Only the recorder's private capture function supplies this snapshot.
+    const snapshot = result.value as StallProfileSnapshot | undefined;
+    const sample = snapshot?.stacks?.[0];
+    // Native calls can defer the interrupt until unrelated JS resumes. Its stack
+    // can still fall inside the heartbeat gap, so reject late dispatch as well.
+    if (
+      sample &&
+      sample.at - at <= 100 &&
+      Atomics.load(clock, 0) === beat &&
+      Atomics.load(clock, 2) > 0n
+    ) {
+      Atomics.sub(clock, 2, 1n);
+      port.postMessage(sample);
+    }
+  } catch {
+    // Kernel observations remain available when the isolate cannot be interrupted.
+  } finally {
+    session.disconnect();
+    stackPending = false;
+  }
+}
+
 setInterval(() => {
   const beat = Atomics.load(clock, 0);
   const at = now();
   if (beat !== observed) {
     observed = beat;
     attempts = 0;
+    stackAttempts = 0;
     nextKernelAt = Number(beat) + 1000;
     nextReportAt = Number(beat) + 30_000;
     nextRecoveryAt = Number(beat) + RECOVERY_AFTER_MS;
@@ -190,6 +232,16 @@ setInterval(() => {
     nextRecoveryAt = at + RECOVERY_AFTER_MS;
   }
   lastPollAt = Math.floor(at);
+  if (
+    interruptStacks &&
+    !stackPending &&
+    stackAttempts < 3 &&
+    at - Number(beat) >= 500 &&
+    Atomics.load(clock, 1) === 0n &&
+    Atomics.load(clock, 2) > 0n
+  ) {
+    void sampleStack(beat, at);
+  }
   if (!recoveryPending && at >= nextRecoveryAt) {
     void recoverStall(beat, at);
   }

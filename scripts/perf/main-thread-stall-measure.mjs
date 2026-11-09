@@ -27,6 +27,44 @@ const [mode = "phase", countText = "21", iterationsText = "200000", recorderModu
 const createStallFlightRecorder = recorderModule
   ? (await import(recorderModule)).createStallFlightRecorder
   : createDefaultStallRecorder;
+// Node 24: interrupt 5 1200 [pinned baseline recorder module URL].
+if (mode === "interrupt") {
+  const { stallCpuOwner } = await import("../../src/logging/diagnostic-stall-cpu.test-support.ts");
+  const warnings = [];
+  const recorder = createStallFlightRecorder((message) => warnings.push(message));
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    for (let sample = 0; sample < Number(countText); sample++) {
+      const before = process.memoryUsage();
+      const cpu = process.cpuUsage();
+      const startedAt = performance.now();
+      stallCpuOwner(Number(iterationsText));
+      const endedAt = performance.now();
+      const reportAt = performance.now();
+      const report = recorder.sample({ startedAt, endedAt });
+      const reportMs = performance.now() - reportAt;
+      const used = process.cpuUsage(cpu);
+      console.log(
+        JSON.stringify({
+          node: process.version,
+          sample,
+          elapsedMs: endedAt - startedAt,
+          reportMs,
+          cpuMs: (used.user + used.system) / 1000,
+          before,
+          after: process.memoryUsage(),
+          load: loadavg(),
+          warnings,
+          report,
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  } finally {
+    recorder.stop();
+  }
+  process.exit(0);
+}
 // Linux: kernel 5 3600 (blocked) or kernel 5 0 (idle A/A control).
 // Compare pinned base/candidate builds in ABBA order; no operator data is needed.
 if (mode === "kernel") {
