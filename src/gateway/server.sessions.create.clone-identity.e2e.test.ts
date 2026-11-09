@@ -155,7 +155,7 @@ test.each(
       const mkdtemp = fs.mkdtemp;
       vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
         const result = await mkdtemp(prefix, options);
-        if (prefix.includes("openclaw-project-fetch-")) {
+        if (prefix.includes("openclaw-git-fetch-")) {
           await revoke();
         }
         return result;
