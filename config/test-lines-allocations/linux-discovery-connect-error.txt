@@ -1,0 +1,4 @@
+# Linux dashboard regression: a discovered-gateway connect failure shows the native reason
+# under the gateway list and clears on the next attempt (fake elements now record children).
+# Exact net growth for this PR.
+45

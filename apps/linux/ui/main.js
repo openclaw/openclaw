@@ -19,6 +19,7 @@ const elements = {
   footerMode: document.querySelector("#footer-mode"),
   gatewayList: document.querySelector("#gateway-list"),
   discoveryStatus: document.querySelector("#discovery-status"),
+  discoveryFeedback: document.querySelector("#discovery-feedback"),
   editConnection: document.querySelector("#edit-connection"),
   installButton: document.querySelector("#install-button"),
   installControls: document.querySelector("#install-controls"),
@@ -208,8 +209,14 @@ function gatewayHost(gateway) {
   return (gateway.host || "").trim().replace(/\.$/, "");
 }
 
+function hideDiscoveryFeedback() {
+  elements.discoveryFeedback.textContent = "";
+  show(elements.discoveryFeedback, false);
+}
+
 function renderGateways(gateways) {
   elements.gatewayList.replaceChildren();
+  hideDiscoveryFeedback();
   elements.discoveryStatus.textContent = gateways.length ? `${gateways.length} FOUND` : "SEARCHING";
   elements.remoteSubtitle.textContent = gateways.length
     ? `${gateways.length} nearby Gateway${gateways.length === 1 ? "" : "s"} found on your network.`
@@ -248,6 +255,7 @@ function renderGateways(gateways) {
     badge.textContent = gateway.tls ? "TLS" : "HTTP";
     button.append(copy, badge);
     button.addEventListener("click", () => {
+      hideDiscoveryFeedback();
       if (
         selectedConnection === "remote" &&
         !elements.connectionChoices.classList.contains("hidden")
@@ -269,9 +277,11 @@ function renderGateways(gateways) {
           button.disabled = false;
           elements.discoveryStatus.textContent = "WINDOW OPENED";
         })
-        .catch(() => {
+        .catch((error) => {
           button.disabled = false;
           elements.discoveryStatus.textContent = "CONNECT FAILED";
+          elements.discoveryFeedback.textContent = friendlyError(error);
+          show(elements.discoveryFeedback, true);
         });
     });
     elements.gatewayList.append(button);
