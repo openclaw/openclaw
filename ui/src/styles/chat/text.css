@@ -1326,6 +1326,12 @@
   white-space: pre;
 }
 
+/* Human fences have no wrap control: keep their source spacing while fitting the bubble. */
+.chat-group.user .chat-text :where(pre code:not(.markdown-block-art)) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .chat-text :where(pre code.markdown-block-art),
 .chat-tool-card__block-content code.markdown-block-art {
   display: block;
