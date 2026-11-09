@@ -40,10 +40,12 @@ export async function retainMemberProfiles(
       ? record.member_approved_at[id]
       : undefined;
   const reports = Object.entries(next.invite_reports ?? {});
-  const invites = next.authority?.invites ?? {};
+  const hasInvite = (id: string) =>
+    Object.hasOwn(next.authority?.invites ?? {}, id) ||
+    Object.hasOwn(next.authority?.node_invites ?? {}, id);
   const needsReports = reports.some(
     ([id, entry]) =>
-      !Object.hasOwn(invites, id) ||
+      !hasInvite(id) ||
       (entry.resolution === "approved" && (entry.email !== null || entry.display_name !== null)),
   );
   if (
@@ -88,7 +90,7 @@ export async function retainMemberProfiles(
   }
   const inviteReports = Object.fromEntries(
     reports
-      .filter(([id]) => Object.hasOwn(invites, id))
+      .filter(([id]) => hasInvite(id))
       .map(([id, report]) => [
         id,
         report.resolution === "approved" ? { ...report, email: null, display_name: null } : report,

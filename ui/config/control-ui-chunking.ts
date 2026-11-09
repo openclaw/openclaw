@@ -88,6 +88,10 @@ export function controlUiStableChunkName(id: string): string | undefined {
   }
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/pages/plugins/catalog-grid.tsx":
+    case "ui/src/pages/plugins/plugin-card.tsx":
+      // Catalogs already load both; a lazy skill reader must not split their first visit.
+      return "plugin-catalog-runtime";
     case "ui/src/components/sandbox-host.ts":
     case "ui/src/lib/widget-sandbox-host.ts":
     case "ui/src/lib/reactive/window-message.ts":
@@ -625,6 +629,8 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("ui/src/i18n/locales/en-session-people.ts");
                 // Placement and delivery share retries without importing either route's bundle.
                 modules.add("ui/src/pages/chat/chat-outbox-retry.ts");
+                // Chat sends and New Session creation quote selections identically.
+                modules.add("ui/src/lib/chat/chat-selection-quote.ts");
                 // Creation still uses the catalog; Chat constructs its capability owner on demand.
                 modules.add("ui/src/pages/chat/composer-capability-catalog.ts");
                 modules.add("ui/src/lib/config/mcp-servers.ts");

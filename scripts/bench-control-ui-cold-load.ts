@@ -25,7 +25,9 @@
 // --layout-matrix covers routes, themes, viewports and cold/warm reloads; --runs is per bundle/cell.
 // Repeat --layout-cell mobile:light:chat:cold to isolate cells with their matrix setup intact.
 // --sidebar-presentation adds badges/avatars; --sidebar-presentation-probe records visible waves.
-// --warm-reload-perf-probe records warm metrics without sidebar presentation observation.
+// --warm-reload-perf-probe defaults to timing without continuous geometry or visual proof.
+// --visual-proofs retains geometry, backtracking and compositor captures.
+// --prime-reloads 0 diagnoses the first return; eligible paint-holding captures default to one.
 // --late-row-facts covers titled links, native/ticketed thumbnails, archive notice and avatars.
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
@@ -304,6 +306,8 @@ const { values } = parseArgs({
     "no-owner-probes": { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     "warm-reload": { type: "boolean", default: false },
+    "visual-proofs": { type: "boolean", default: false },
+    "prime-reloads": { type: "string" },
     "transcript-witness": { type: "boolean", default: false },
     "active-transcript": { type: "boolean", default: false },
     "active-transcript-reader": { type: "boolean", default: false },
@@ -425,7 +429,6 @@ if (values["details-processes"] || values["details-subagent-activity"]) {
   if (!values["warm-reload"]) {
     throw new Error("Details workloads require warm-reload for the populated Details boundary");
   }
-  values["pane-chrome-probe"] = true;
 }
 if (values["pane-chrome-probe"] && !values["warm-reload"]) {
   throw new Error("pane-chrome-probe requires warm-reload for the first transcript paint boundary");
@@ -857,6 +860,49 @@ if (
 ) {
   throw new Error("live-start-at-ms requires one live-events or streaming-reply run");
 }
+const interactiveCapture =
+  values["critical-path"] ||
+  values["live-events"] ||
+  values["streaming-reply"] ||
+  values["session-switch"] ||
+  values["overlay-probe"] ||
+  values["long-session"] ||
+  values["new-session-first-token"];
+const timingCapture =
+  values["warm-reload-perf-probe"] &&
+  bootRoute === "chat" &&
+  face === "chat" &&
+  values.untraced &&
+  !cpuProfile &&
+  !values.coverage &&
+  !values["thread-cpu-time"] &&
+  !captureTrace &&
+  !values["visual-proofs"] &&
+  !values["pane-chrome-probe"] &&
+  !values["row-facts"] &&
+  !values["late-row-facts"] &&
+  !values["sidebar-presentation-probe"] &&
+  !values["transcript-witness-hold"] &&
+  !values["active-transcript-reader"] &&
+  !values["active-transcript-two-round"] &&
+  !values["dashboard-paint-marker"] &&
+  !values["probe-dir"] &&
+  !values["layout-matrix"] &&
+  !interactiveCapture;
+const paneChromeRequested =
+  values["pane-chrome-probe"] || values["details-processes"] || values["details-subagent-activity"];
+// Paint-holding rejects comparison bundles above, so each prime warms the only bundle.
+const primeEligible =
+  values["paint-holding"] && !layoutCells.length && bootRoute === "chat" && !interactiveCapture;
+const primeReloads = Number(values["prime-reloads"] ?? (primeEligible ? "1" : "0"));
+if (!Number.isInteger(primeReloads) || primeReloads < 0 || primeReloads > 10) {
+  throw new Error("prime-reloads must be an integer from 0 to 10");
+}
+if (primeReloads > 0 && !primeEligible) {
+  throw new Error("prime-reloads requires a fixed-route unprofiled paint-holding capture");
+}
+const timingCaptureKey = "openclaw-bench-timing-capture";
+const timingCaptureMs = captureMs || 2200;
 const artifactDir = path.resolve(values.output, new Date().toISOString().replaceAll(":", "-"));
 await mkdir(artifactDir, { recursive: true });
 const explicitBuildId = process.env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim();
@@ -1061,6 +1107,7 @@ let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
 const results = [];
+const priming = [];
 const waterfallArtifacts: Array<{
   file: string;
   capture: Awaited<ReturnType<typeof readCriticalPath>>;
@@ -1164,7 +1211,7 @@ try {
   const page = await context.newPage();
   await page.addInitScript("globalThis.__name = (fn) => fn");
   await page.addInitScript(
-    ({ bootRoute: measuredRoute }) => {
+    ({ bootRoute: measuredRoute, timingCaptureKey: captureModeKey }) => {
       if (window !== window.top || location.protocol === "about:") {
         return;
       }
@@ -1404,9 +1451,11 @@ try {
           requestAnimationFrame(sample);
         }
       };
-      requestAnimationFrame(sample);
+      if (sessionStorage.getItem(captureModeKey) !== "timing") {
+        requestAnimationFrame(sample);
+      }
     },
-    { bootRoute },
+    { bootRoute, timingCaptureKey },
   );
   const rigProbeScript = values["probe-dir"]
     ? (
@@ -1649,15 +1698,15 @@ try {
     },
   );
   const paneChromeScript =
-    values["pane-chrome-probe"] || values["warm-reload-perf-probe"]
+    paneChromeRequested || values["warm-reload-perf-probe"]
       ? `const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome);`
       : "";
   const warmProbes =
     values["warm-reload"] || firstLoad
-      ? `\n${paneChromeScript}\n${values["active-transcript"] || values["archived-session"] || values["chat-dashboard-route"] ? `(${installWarmReloadTranscriptProbe.toString()})(${JSON.stringify(values["active-transcript-reader"] ? "reader" : "end")});` : ""}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"], lateRowFacts: values["late-row-facts"], witnesses: transcriptWitness?.witnesses })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
+      ? `\n${paneChromeScript}\n${values["active-transcript"] || values["archived-session"] || values["chat-dashboard-route"] ? `(${installWarmReloadTranscriptProbe.toString()})(${JSON.stringify(values["active-transcript-reader"] ? "reader" : "end")});` : ""}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"], lateRowFacts: values["late-row-facts"], witnesses: transcriptWitness?.witnesses })}, ${paneChromeRequested ? "__paneChrome.sample" : "undefined"});`
       : "";
   const warmPerformanceProbe = values["warm-reload-perf-probe"]
-    ? `\nReflect.set(window, "__warmReloadProof", (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(face)}));`
+    ? `\nReflect.set(window, "__warmReloadProof", (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(face)}, false, false, sessionStorage.getItem(${JSON.stringify(timingCaptureKey)}) !== "timing"));`
     : "";
   // Changed history must not replay the unchanged-cursor delta. Active reloads
   // retain the server's bounded window instead of prepending the entire fixture.
@@ -1763,7 +1812,7 @@ try {
     ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
     : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(gatewayScenario)}\n${witnessInit}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] || values["long-session"] || latencyProfile === "live-capped" ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes}${warmPerformanceProbe}${presentationProbes}${paritySettings} })();`,
+    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(gatewayScenario)}\n${witnessInit}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] || values["long-session"] || latencyProfile === "live-capped" ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${timingCapture ? `if (sessionStorage.getItem(${JSON.stringify(timingCaptureKey)}) !== "timing") { ${warmProbes} }` : warmProbes}${warmPerformanceProbe}${presentationProbes}${paritySettings} })();`,
   });
   if (values["critical-path"]) {
     await page.addInitScript({
@@ -2427,7 +2476,39 @@ try {
       await route.fallback();
     });
   }
-  for (let run = 0; run < runs; run++) {
+  const readWarmPerformance = async () =>
+    await page.evaluate(() => {
+      const probe: NonNullable<ReturnType<typeof installWarmReloadBrowserProbe>> = Reflect.get(
+        window,
+        "__warmReloadProof",
+      );
+      probe.stopped = true;
+      return {
+        timeOrigin: performance.timeOrigin,
+        capturedUntilMs: performance.now(),
+        helloPublishedMs: probe.helloPublishedMs,
+        helloHandledMs: probe.helloHandledMs,
+        fcpMs: probe.fcpMs,
+        firstPaintedRowsMs: probe.firstPaintedRowsMs,
+        firstDetailsPaintMs: probe.firstDetailsPaintMs,
+        finalRowsDomMs: probe.finalRowsDomMs,
+        firstDashboardContentDomMs: probe.firstDashboardContentDomMs,
+        allBoardWidgetsVisibleMs: probe.allBoardWidgetsVisibleMs,
+        cachedBoardLayoutMs: probe.cachedBoardLayoutMs,
+        boardWidgetSkeletonMs: probe.boardWidgetSkeletonMs,
+        loafBlockingMs: probe.loafBlockingMs,
+        loaf: probe.loaf,
+        cls: probe.cls,
+        marks: performance
+          .getEntriesByType("mark")
+          .map(({ name, startTime }) => ({ name, startTime })),
+      };
+    });
+  for (let capture = 0; capture < runs + primeReloads; capture++) {
+    const isPriming = capture < primeReloads;
+    const run = isPriming ? 0 : capture - primeReloads;
+    const runLabel = isPriming ? `prime-${capture + 1}` : `run-${run + 1}`;
+    const warmReloadOrdinal = values["warm-reload"] ? capture + 1 : undefined;
     const bundleIndex = run % bundleSlots.length;
     // Compare every bundle under the same route and roster conditions.
     const bundleCycle = Math.floor(run / bundleSlots.length);
@@ -2477,18 +2558,16 @@ try {
       const tables = summary.tables!;
       cpuPhases[phase] = tables;
       (cpuRuns[phase] ??= []).push(tables);
-      console.log(
-        formatCpuTables(`Run ${run + 1} ${phase} CPU (profiled; timings inflated)`, tables),
-      );
+      console.log(formatCpuTables(`${runLabel} ${phase} CPU (profiled; timings inflated)`, tables));
       console.log(
         `Mapped frames: ${mapped.mappedFrames}; unmapped asset frames: ${mapped.unmappedFrames}; sampled: ${summary.sampledMs.toFixed(1)} ms; idle: ${summary.idleMs.toFixed(1)} ms`,
       );
       await writeFile(
-        path.join(artifactDir, `run-${run + 1}.${phase}.cpuprofile`),
+        path.join(artifactDir, `${runLabel}.${phase}.cpuprofile`),
         JSON.stringify(mapped.profile),
       );
       await writeFile(
-        path.join(artifactDir, `run-${run + 1}.cpu-profile.json`),
+        path.join(artifactDir, `${runLabel}.cpu-profile.json`),
         JSON.stringify(cpuPhases, null, 2),
       );
       return { ...mapped, summary };
@@ -2521,6 +2600,11 @@ try {
         layoutCell && reloadStorage,
         values["paint-holding"] ? cdp : undefined,
       );
+    }
+    if (timingCapture) {
+      await page.evaluate((key) => sessionStorage.setItem(key, "timing"), timingCaptureKey);
+    }
+    if (!cold) {
       await selectComparisonBundle(bundleIndex, page);
     }
     runTransfer =
@@ -2536,15 +2620,22 @@ try {
     if (values["paint-holding"]) {
       // Only the new document's probes belong in the measured navigation.
       await page.evaluate(() => {
-        Reflect.get(window, "__coldLoadPresentation").stopped = true;
-        Reflect.get(window, "__warmReloadProof").stopped = true;
-        Reflect.get(window, "__warmReload").read();
+        const presentation = Reflect.get(window, "__coldLoadPresentation");
+        if (presentation) {
+          presentation.stopped = true;
+        }
+        const performanceProbe = Reflect.get(window, "__warmReloadProof");
+        if (performanceProbe) {
+          performanceProbe.stopped = true;
+        }
+        Reflect.get(window, "__warmReload")?.read();
       });
     }
-    const surfaceDirectory = path.join(artifactDir, `run-${run + 1}.surfaces`);
-    const finishSurfaces = values["paint-holding"]
-      ? await startWarmReloadSurfaceCapture(cdp, surfaceDirectory)
-      : undefined;
+    const surfaceDirectory = path.join(artifactDir, `${runLabel}.surfaces`);
+    const finishSurfaces =
+      values["paint-holding"] && !timingCapture
+        ? await startWarmReloadSurfaceCapture(cdp, surfaceDirectory)
+        : undefined;
     if (firstLoad || values["cold-http-cache"] || values["critical-path"]) {
       await cdp.send("Network.enable");
     }
@@ -2707,6 +2798,22 @@ try {
     } else {
       await page.reload({ waitUntil: "domcontentloaded" });
     }
+    let timedPerformance: Awaited<ReturnType<typeof readWarmPerformance>> | undefined;
+    if (timingCapture) {
+      // Observe without DOM reads before post-window readiness and qualification.
+      await page.waitForFunction((duration) => performance.now() >= duration, timingCaptureMs, {
+        polling: 250,
+        timeout: timingCaptureMs + 60_000,
+      });
+      timedPerformance = await readWarmPerformance();
+      if (
+        !timedPerformance.firstPaintedRowsMs ||
+        !timedPerformance.fcpMs ||
+        !timedPerformance.helloHandledMs
+      ) {
+        throw new Error(`Incomplete timing capture: ${JSON.stringify(timedPerformance)}`);
+      }
+    }
     if (values["long-session"]) {
       const selector = ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea";
       const composer = page.locator(selector);
@@ -2714,7 +2821,7 @@ try {
         await composer.waitFor({ state: "visible" });
       } catch (error) {
         await writeFile(
-          path.join(artifactDir, `run-${run + 1}.open-failure.json`),
+          path.join(artifactDir, `${runLabel}.open-failure.json`),
           JSON.stringify(
             {
               errors,
@@ -2726,7 +2833,7 @@ try {
             2,
           ),
         );
-        await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.open-failure.png`) });
+        await page.screenshot({ path: path.join(artifactDir, `${runLabel}.open-failure.png`) });
         throw error;
       }
       await page.waitForFunction((targetSelector) => {
@@ -2744,7 +2851,7 @@ try {
         undefined,
         { timeout: 10_000 },
       );
-      await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.saved-witness.png`) });
+      await page.screenshot({ path: path.join(artifactDir, `${runLabel}.saved-witness.png`) });
       // Saved paint can precede startup, including its nested subscription response queue.
       const released = await page.waitForFunction(
         () => {
@@ -2769,7 +2876,7 @@ try {
       witnessHold = await released.jsonValue();
       await released.dispose();
       await writeFile(
-        path.join(artifactDir, `run-${run + 1}.witness-hold.json`),
+        path.join(artifactDir, `${runLabel}.witness-hold.json`),
         JSON.stringify(
           {
             ...witnessReload,
@@ -2834,14 +2941,14 @@ try {
       : undefined;
     if (coverage) {
       await writeFile(
-        path.join(artifactDir, `run-${run + 1}.coverage.json`),
+        path.join(artifactDir, `${runLabel}.coverage.json`),
         JSON.stringify(coverage, null, 2),
       );
     }
     if (historyValidatorDelayMs && historyValidatorRequests !== validatorRequestsBeforeReload + 1) {
       throw new Error("Measured reload did not request the delayed history validator exactly once");
     }
-    if (captureMs) {
+    if (captureMs && !timingCapture) {
       await page.waitForFunction((duration) => performance.now() >= duration, captureMs);
     }
     const criticalPath = criticalPathCpuBefore
@@ -2858,7 +2965,7 @@ try {
     const saveCriticalPath = async () => {
       if (criticalPath) {
         await writeFile(
-          path.join(artifactDir, `run-${run + 1}.critical-path.json`),
+          path.join(artifactDir, `${runLabel}.critical-path.json`),
           JSON.stringify(criticalPath, null, 2),
         );
       }
@@ -2973,7 +3080,7 @@ try {
     });
     if (firstLoad) {
       await writeFile(
-        path.join(artifactDir, `run-${run + 1}.requests.json`),
+        path.join(artifactDir, `${runLabel}.requests.json`),
         JSON.stringify(requests, null, 2),
       );
     }
@@ -2981,13 +3088,13 @@ try {
       throw new Error("Measured reload lacks the delayed validator resource timing");
     }
     const warmReload =
-      values["warm-reload"] || firstLoad
+      !timingCapture && (values["warm-reload"] || firstLoad)
         ? await page.evaluate(() => ({
             ...Reflect.get(window, "__warmReload").read(),
             transcriptRounds: Reflect.get(window, "__activeTranscriptRounds"),
           }))
         : undefined;
-    if (transcriptWitness) {
+    if (transcriptWitness && !timingCapture) {
       const observed = warmReload?.transcriptWitnesses;
       const finalWitnessVisible =
         values["active-transcript"] && !values["active-transcript-reader"]
@@ -3052,7 +3159,7 @@ try {
             (entry: { phase: string }) => entry.phase === "completed-commit",
           ));
       await writeFile(
-        path.join(artifactDir, `run-${run + 1}.transcript-witness.json`),
+        path.join(artifactDir, `${runLabel}.transcript-witness.json`),
         JSON.stringify(
           {
             ...witnessReload,
@@ -3070,52 +3177,32 @@ try {
       );
       if (!valid) {
         await page.screenshot({
-          path: path.join(artifactDir, `run-${run + 1}.witness-failure.png`),
+          path: path.join(artifactDir, `${runLabel}.witness-failure.png`),
         });
         throw new Error(
           "Saved/live witness provenance or final live presentation was not established; see transcript-witness artifact",
         );
       }
     }
-    const paneChrome = values["pane-chrome-probe"]
-      ? {
-          ...(await page.evaluate(
-            (firstPaint) => Reflect.get(window, "__paneChrome").read(firstPaint),
-            warmReload?.milestones.firstTranscriptPaint ?? null,
-          )),
-          snapshotBytes: Buffer.byteLength(
-            JSON.stringify(
-              reloadStorage!.records.snapshots.find((record) =>
-                record.sessionKey.endsWith(`\u0000${fixture.selectedSessionKey}`),
-              )!.snapshot,
+    const paneChrome =
+      paneChromeRequested && !timingCapture
+        ? {
+            ...(await page.evaluate(
+              (firstPaint) => Reflect.get(window, "__paneChrome").read(firstPaint),
+              warmReload?.milestones.firstTranscriptPaint ?? null,
+            )),
+            snapshotBytes: Buffer.byteLength(
+              JSON.stringify(
+                reloadStorage!.records.snapshots.find((record) =>
+                  record.sessionKey.endsWith(`\u0000${fixture.selectedSessionKey}`),
+                )!.snapshot,
+              ),
             ),
-          ),
-        }
-      : undefined;
-    const warmReloadPerformance = values["warm-reload-perf-probe"]
-      ? await page.evaluate(() => {
-          const probe: NonNullable<ReturnType<typeof installWarmReloadBrowserProbe>> = Reflect.get(
-            window,
-            "__warmReloadProof",
-          );
-          probe.stopped = true;
-          return {
-            timeOrigin: performance.timeOrigin,
-            capturedUntilMs: performance.now(),
-            helloPublishedMs: probe.helloPublishedMs,
-            helloHandledMs: probe.helloHandledMs,
-            fcpMs: probe.fcpMs,
-            firstPaintedRowsMs: probe.firstPaintedRowsMs,
-            finalRowsDomMs: probe.finalRowsDomMs,
-            firstDashboardContentDomMs: probe.firstDashboardContentDomMs,
-            allBoardWidgetsVisibleMs: probe.allBoardWidgetsVisibleMs,
-            cachedBoardLayoutMs: probe.cachedBoardLayoutMs,
-            boardWidgetSkeletonMs: probe.boardWidgetSkeletonMs,
-            loafBlockingMs: probe.loafBlockingMs,
-            cls: probe.cls,
-          };
-        })
-      : undefined;
+          }
+        : undefined;
+    const warmReloadPerformance =
+      timedPerformance ??
+      (values["warm-reload-perf-probe"] ? await readWarmPerformance() : undefined);
     if (finishSurfaces && warmReloadPerformance) {
       const probe = await page.evaluate((selectors) => {
         const state: NonNullable<ReturnType<typeof installWarmReloadBrowserProbe>> = Reflect.get(
@@ -3157,18 +3244,21 @@ try {
       : undefined;
     if (sidebarPresentation) {
       await writeFile(
-        path.join(artifactDir, `run-${run + 1}.sidebar-presentation.json`),
+        path.join(artifactDir, `${runLabel}.sidebar-presentation.json`),
         JSON.stringify(sidebarPresentation, null, 2),
       );
     }
     if (warmReloadPerformance) {
       await writeFile(
-        path.join(artifactDir, `run-${run + 1}.warm-perf.json`),
+        path.join(artifactDir, `${runLabel}.warm-perf.json`),
         JSON.stringify(
           {
             ...warmReloadPerformance,
-            measurement:
-              "Unprofiled timing requires untraced without cpu-profile or coverage; existing warm-reload probe metric definitions",
+            warmReloadOrdinal,
+            captureMode: timingCapture ? "timing" : "visual",
+            measurement: timingCapture
+              ? `${values["paint-holding"] ? "Real old-page" : "Legacy reset-document"} reload; Element Timing, Paint Timing and PerformanceObserver metrics without geometry, backtracking or compositor proof. Explicit init scripts remain additional instrumentation.`
+              : "Unprofiled timing requires untraced without cpu-profile or coverage; geometry and visual proof instrumentation is active",
           },
           null,
           2,
@@ -3177,14 +3267,16 @@ try {
     }
     if (cpuProfile) {
       await writeFile(
-        path.join(artifactDir, `run-${run + 1}.cpu-clock.json`),
+        path.join(artifactDir, `${runLabel}.cpu-clock.json`),
         JSON.stringify((await cdp.send("Performance.getMetrics")).metrics),
       );
     }
     await writeFile(
-      path.join(artifactDir, `run-${run + 1}.metrics.json`),
+      path.join(artifactDir, `${runLabel}.metrics.json`),
       JSON.stringify({
         ...metrics,
+        warmReloadOrdinal,
+        captureMode: timingCapture ? "timing" : "visual",
         layoutCell,
         variant: ["base", "candidate", "candidate-2"][bundleIndex],
         hostLoadAverage,
@@ -3203,24 +3295,24 @@ try {
       await cdp.send("Tracing.end");
       await complete;
     }
-    if (!layoutCells.length || run < layoutCells.length * bundleSlots.length) {
-      await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.png`) });
+    if (!timingCapture && (!layoutCells.length || run < layoutCells.length * bundleSlots.length)) {
+      await page.screenshot({ path: path.join(artifactDir, `${runLabel}.png`) });
     }
     if (captureTrace) {
       await writeFile(
-        path.join(artifactDir, `run-${run + 1}.trace.json`),
+        path.join(artifactDir, `${runLabel}.trace.json`),
         JSON.stringify({ traceEvents: rawTrace }),
       );
     }
     if (profile) {
       await writeFile(
-        path.join(artifactDir, `run-${run + 1}.cpuprofile`),
+        path.join(artifactDir, `${runLabel}.cpuprofile`),
         JSON.stringify(profile.profile),
       );
     }
     if (rigProbeScript) {
       await writeFile(
-        path.join(artifactDir, `run-${run + 1}.probes.json`),
+        path.join(artifactDir, `${runLabel}.probes.json`),
         JSON.stringify(await page.evaluate(readRigProbeSnapshot)),
       );
     }
@@ -3241,7 +3333,7 @@ try {
         },
         styleSheets,
       );
-      const artifact = `run-${run + 1}.selectors.json`;
+      const artifact = `${runLabel}.selectors.json`;
       await writeFile(path.join(artifactDir, artifact), JSON.stringify(selectors, null, 2));
       selectorStats = {
         artifact,
@@ -3263,16 +3355,19 @@ try {
       throw new Error("Filmstrip has no main-frame navigation timestamp");
     }
     if ((values["warm-reload"] || values["filmstrip-only"]) && screenshots.length) {
-      await mkdir(path.join(artifactDir, `run-${run + 1}.filmstrip`));
+      await mkdir(path.join(artifactDir, `${runLabel}.filmstrip`));
       for (const [index, frame] of screenshots.entries()) {
         await writeFile(
-          path.join(artifactDir, `run-${run + 1}.filmstrip`, `${index}-${frame.ts}.jpg`),
+          path.join(artifactDir, `${runLabel}.filmstrip`, `${index}-${frame.ts}.jpg`),
           Buffer.from(frame.data, "base64"),
         );
       }
     }
     const visual = await page.evaluate(
-      async ({ frames, navigationStartUs, marker }) => {
+      async ({ frames, navigationStartUs, marker, timingOnly }) => {
+        if (timingOnly) {
+          return undefined;
+        }
         const canvas = document.createElement("canvas");
         canvas.width = 344;
         canvas.height = 236;
@@ -3385,13 +3480,14 @@ try {
         frames: screenshots,
         navigationStartUs: traceNavigationStartUs,
         marker: values["dashboard-paint-marker"],
+        timingOnly: timingCapture,
       },
     );
     if (
       captureTrace &&
       values["dashboard-paint-marker"] &&
       face === "dashboard" &&
-      visual.dashboardFirstVisiblePixelsMs === null
+      visual?.dashboardFirstVisiblePixelsMs === null
     ) {
       throw new Error("Filmstrip never captured the synthetic dashboard paint marker");
     }
@@ -3559,7 +3655,7 @@ try {
       } catch (error) {
         const progress = await page.evaluate(() => Reflect.get(window, "__streamingReply").read());
         await writeFile(
-          path.join(artifactDir, `run-${run + 1}.streaming-error.json`),
+          path.join(artifactDir, `${runLabel}.streaming-error.json`),
           JSON.stringify({ progress, errors, consoleErrors }, null, 2),
         );
         throw error;
@@ -3595,13 +3691,13 @@ try {
         await cdp.send("Tracing.end");
         await complete;
         await writeFile(
-          path.join(artifactDir, `run-${run + 1}.streaming.trace.json`),
+          path.join(artifactDir, `${runLabel}.streaming.trace.json`),
           JSON.stringify({ traceEvents: streamingTrace }),
         );
         const frames = streamingTrace
           .map(prepareColdLoadTraceEvent)
           .filter((event) => event.name === "Screenshot" && event.args?.snapshot);
-        const directory = path.join(artifactDir, `run-${run + 1}.streaming.filmstrip`);
+        const directory = path.join(artifactDir, `${runLabel}.streaming.filmstrip`);
         await mkdir(directory);
         for (const [index, frame] of frames.entries()) {
           await writeFile(
@@ -3624,7 +3720,7 @@ try {
       streaming = { ...streaming, typing: streaming.typingByPane[0]! };
       if (allocationProfile) {
         await writeFile(
-          path.join(artifactDir, `run-${run + 1}.streaming.heapprofile`),
+          path.join(artifactDir, `${runLabel}.streaming.heapprofile`),
           JSON.stringify(allocationProfile),
         );
       }
@@ -3632,7 +3728,7 @@ try {
         throw new Error("Streaming reply produced no visible Markdown");
       }
       await writeFile(
-        path.join(artifactDir, `run-${run + 1}.streaming.json`),
+        path.join(artifactDir, `${runLabel}.streaming.json`),
         JSON.stringify(
           {
             head,
@@ -3647,7 +3743,7 @@ try {
           2,
         ),
       );
-      await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.streaming.png`) });
+      await page.screenshot({ path: path.join(artifactDir, `${runLabel}.streaming.png`) });
       for (const [index, typing] of streaming.typingByPane.entries()) {
         if (
           !typing.characters ||
@@ -3778,7 +3874,7 @@ try {
           });
         } catch (error) {
           await writeFile(
-            path.join(artifactDir, `run-${run + 1}.live-failure.json`),
+            path.join(artifactDir, `${runLabel}.live-failure.json`),
             JSON.stringify({
               error: String(error),
               metrics: await page.evaluate(() => Reflect.get(window, "__coldLoad").read()),
@@ -3794,7 +3890,7 @@ try {
       let allocationProfile;
       if (allocations) {
         const { profile: heapProfile } = await cdp.send("HeapProfiler.stopSampling");
-        const profilePath = path.join(artifactDir, `run-${run + 1}.live.heapprofile`);
+        const profilePath = path.join(artifactDir, `${runLabel}.live.heapprofile`);
         await writeFile(profilePath, JSON.stringify(heapProfile));
         allocationProfile = readGatewayHeapProfile(profilePath);
       }
@@ -3804,7 +3900,7 @@ try {
           await recordCpu("live", liveProfile.profile);
         } else {
           await writeFile(
-            path.join(artifactDir, `run-${run + 1}.live.cpuprofile`),
+            path.join(artifactDir, `${runLabel}.live.cpuprofile`),
             JSON.stringify(liveProfile.profile),
           );
         }
@@ -3817,7 +3913,7 @@ try {
         await liveComplete;
       }
       await writeFile(
-        path.join(artifactDir, `run-${run + 1}.live.trace.json`),
+        path.join(artifactDir, `${runLabel}.live.trace.json`),
         JSON.stringify({ traceEvents: liveTrace }),
       );
       const after = await readLivePresentation();
@@ -3919,9 +4015,9 @@ try {
             }))
           : undefined,
       };
-      await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.live.png`) });
+      await page.screenshot({ path: path.join(artifactDir, `${runLabel}.live.png`) });
       await writeFile(
-        path.join(artifactDir, `run-${run + 1}.live.json`),
+        path.join(artifactDir, `${runLabel}.live.json`),
         JSON.stringify(live, null, 2),
       );
       if (pairedRefreshes !== undefined && pairedRefreshes < 3) {
@@ -3984,7 +4080,7 @@ try {
       await cdp.send("Tracing.end");
       await complete;
       await writeFile(
-        path.join(artifactDir, `run-${run + 1}.long-session.trace.json`),
+        path.join(artifactDir, `${runLabel}.long-session.trace.json`),
         JSON.stringify({ traceEvents: longSessionTrace }),
       );
     }
@@ -4065,7 +4161,7 @@ try {
           rpcOffset,
         ),
       };
-      await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.session-switch.png`) });
+      await page.screenshot({ path: path.join(artifactDir, `${runLabel}.session-switch.png`) });
       if (criticalPath && switchCpuBefore) {
         criticalPath.push({
           ...(await readCriticalPath(page)),
@@ -4111,7 +4207,7 @@ try {
           await complete;
           await recordCpu(route, routeProfile);
           await writeFile(
-            path.join(artifactDir, `run-${run + 1}.${route}.trace.json`),
+            path.join(artifactDir, `${runLabel}.${route}.trace.json`),
             JSON.stringify({ traceEvents: routeTrace }),
           );
         }
@@ -4166,7 +4262,7 @@ try {
         });
         const routeRequests = requests.slice(routeRequestsOffset);
         await writeFile(
-          path.join(artifactDir, `run-${run + 1}.${route}.requests.json`),
+          path.join(artifactDir, `${runLabel}.${route}.requests.json`),
           JSON.stringify(
             {
               timeOrigin: routeCapture.timeOrigin,
@@ -4180,12 +4276,12 @@ try {
           ),
         );
         waterfallArtifacts.push({
-          file: path.join(artifactDir, `run-${run + 1}.${route}.waterfall.html`),
+          file: path.join(artifactDir, `${runLabel}.${route}.waterfall.html`),
           capture: routeCapture,
           requests: routeRequests,
         });
         await saveCriticalPath();
-        await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.${route}.png`) });
+        await page.screenshot({ path: path.join(artifactDir, `${runLabel}.${route}.png`) });
       }
     }
     const newSessionFirstToken = values["new-session-first-token"]
@@ -4206,7 +4302,9 @@ try {
     const result = {
       newSessionFirstToken,
       layoutCell,
-      run: run + 1,
+      run: isPriming ? null : run + 1,
+      warmReloadOrdinal,
+      captureMode: timingCapture ? "timing" : "visual",
       hostLoadAverage,
       ...(comparisonBundleDirs.length
         ? {
@@ -4256,7 +4354,11 @@ try {
       snapshotSave: snapshotSaves[bundleIndex],
       overlays,
     };
-    results.push(result);
+    if (isPriming) {
+      priming.push(result);
+    } else {
+      results.push(result);
+    }
     // The preview server shares this process; keep full result serialization
     // after the measured runs, in summary.json.
     console.log(
@@ -4344,6 +4446,16 @@ try {
             ? "Production Gateway HTTP handler; synthetic bootstrap, WebSocket RPC and fixture media. Immutable server asset caches stay warm per bundle."
             : "Vite production preview HTTP; synthetic bootstrap, WebSocket RPC and fixture media.",
         firstLoad,
+        captureMode: timingCapture ? "timing" : "visual",
+        harness: {
+          geometrySampler: !timingCapture,
+          screencast: values["paint-holding"] && !timingCapture,
+          rpcCensus: Boolean(values["probe-dir"]),
+          cpuProfiler: traced || cpuProfile,
+          externalInitScripts: extraInitScripts.length,
+          primingReloads: primeReloads,
+          firstMeasuredWarmOrdinal: values["warm-reload"] ? primeReloads + 1 : null,
+        },
         transcriptWitness: transcriptWitness
           ? {
               witnesses: transcriptWitness.witnesses,
@@ -4352,6 +4464,9 @@ try {
               snapshotMessageCount: transcriptWitness.snapshotMessageCount,
               twoRound: values["active-transcript-two-round"],
               totalMessages: transcriptWitness.totalMessages,
+              proofScope: timingCapture
+                ? "Workload fixture only; continuous witness and backtracking proofs are disabled"
+                : "Continuous saved/live witness and transcript stability proof",
               measurement: values["transcript-witness-hold"]
                 ? "held-correctness"
                 : "natural-timing",
@@ -4384,7 +4499,9 @@ try {
         sidebarPresentationProbe: values["sidebar-presentation-probe"],
         warmReloadPerfProbe: values["warm-reload-perf-probe"],
         performanceProbeScope: values["warm-reload-perf-probe"]
-          ? "Existing warm-reload-browser-probe metric definitions in the final document; tracing and profiling must be off for timing."
+          ? timingCapture
+            ? "Element Timing, Paint Timing and PerformanceObserver metrics in the final document; no geometry or complete-frame visual proof."
+            : "Existing warm-reload-browser-probe metric definitions with geometry and diagnostic instrumentation."
           : undefined,
         sidebarCachedParity: values["sidebar-cached-parity"],
         sidebarScrollTop: Number(values["sidebar-scroll-top"]),
@@ -4437,7 +4554,7 @@ try {
         fullUuidRoute: values["full-uuid-route"],
         offRosterRoute: values["off-roster-route"],
         frameGapMs,
-        captureMs,
+        captureMs: timingCapture ? timingCaptureMs : captureMs,
         sessionEventDurationMs,
         sessionEventAncestorRefs: values["session-event-ancestor-refs"],
         fixtureNowMs,
@@ -4445,6 +4562,7 @@ try {
         port,
         sandboxPort,
         results,
+        priming,
       },
       null,
       2,

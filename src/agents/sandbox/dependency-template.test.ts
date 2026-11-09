@@ -259,11 +259,11 @@ it.each(["stdout", "stderr"] as const)(
   },
 );
 
-it("uses offline installation when the sandbox has no network", async () => {
+it("uses offline installation without skipping source lifecycle scripts", async () => {
   const offlineCfg = { ...cfg, docker: { ...cfg.docker, network: "none" } };
   await prepare(offlineCfg);
   expect(mocks.exec.mock.calls.find(([, args]) => args[0] === "exec")?.[1]).toContain(
-    'exec pnpm install --offline --frozen-lockfile --store-dir "$XDG_DATA_HOME/pnpm/store"',
+    'exec pnpm install --offline --frozen-lockfile --config.optimistic-repeat-install=false --store-dir "$XDG_DATA_HOME/pnpm/store"',
   );
 });
 

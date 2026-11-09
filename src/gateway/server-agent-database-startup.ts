@@ -164,6 +164,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
             refreshPreparedModelRuntimeSnapshots,
             getPreparedModelRuntimeSnapshot,
             getPendingPreparedModelRuntimeReplacement,
+            retirePreparedModelRuntimeAgent,
           },
           { listConfiguredOwnerInputs },
           {
@@ -171,17 +172,19 @@ export function activateGatewayAgentDatabaseStartup(params: {
             getActiveSecretsRuntimeSnapshotRevision,
             refreshActiveSecretsRuntimeSnapshotForConfig,
           },
+          { clearRuntimeAuthProfileStoreSnapshotAtDatabasePath },
         ] = await Promise.all([
           import("../agents/prepared-model-runtime.js"),
           import("../agents/prepared-model-runtime.configured.js"),
           import("../secrets/runtime.js"),
+          import("../agents/auth-profiles/runtime-snapshots.js"),
         ]);
         assertCurrent();
         const beforeConfig = params.getConfig();
         assertAgentDatabaseConfiguration(beforeConfig, agentId, paths, env);
         // Non-roster stores (ACP-only or reserved) need no native auth/model publication.
         if (!listAgentIds(beforeConfig).includes(agentId)) {
-          return;
+          return undefined;
         }
         const previousSecretsRevision = getActiveSecretsRuntimeSnapshotRevision();
         const previousSecrets = getActiveSecretsRuntimeSnapshot();
@@ -209,7 +212,8 @@ export function activateGatewayAgentDatabaseStartup(params: {
         const cfg = params.getConfig();
         const secretsRevision = getActiveSecretsRuntimeSnapshotRevision();
         const secrets = getActiveSecretsRuntimeSnapshot();
-        const authDatabasePath = resolveAuthProfileDatabasePath(resolveAgentDir(cfg, agentId, env));
+        const agentDir = resolveAgentDir(cfg, agentId, env);
+        const authDatabasePath = resolveAuthProfileDatabasePath(agentDir);
         if (
           secretsRevision !== previousSecretsRevision + 1 ||
           !secrets?.authStores.some((entry) =>
@@ -264,6 +268,18 @@ export function activateGatewayAgentDatabaseStartup(params: {
           }
           throw new Error(`Agent ${agentId} model preparation has not published`);
         }
+        return () => {
+          if (!params.isCurrent()) {
+            return;
+          }
+          // Retire synchronously before auth invalidation can schedule another owner build.
+          const retiring = retirePreparedModelRuntimeAgent({ agentId, agentDirs: [agentDir] });
+          // The model owner retains in-flight builds; admission only withdraws visibility.
+          void retiring.catch((error: unknown) =>
+            params.log.warn(`Agent ${agentId} model runtime retirement failed: ${String(error)}`),
+          );
+          clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(authDatabasePath, agentDir);
+        };
       }),
   });
 }

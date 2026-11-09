@@ -246,6 +246,9 @@ export async function generateTeamShapeFixture(
     const state = stateDb.openOpenClawStateDatabase();
     let summary;
     try {
+      // This offline writer owns checkpoints; join periodic work before a long bulk load.
+      await agent.walMaintenance.stop();
+      await state.walMaintenance.stop();
       if (options.authAvailabilityStorm) {
         const { upsertAuthProfileAsync } =
           await import("../../src/agents/auth-profiles/profiles.js");

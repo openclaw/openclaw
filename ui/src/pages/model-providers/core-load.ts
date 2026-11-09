@@ -6,7 +6,8 @@ import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
 import { loadModelCatalog, peekModelCatalog } from "../../lib/model-catalog-store.ts";
 import {
   catalogDiscoveryError,
-  loadModelProvidersData,
+  EMPTY_MODEL_PROVIDERS_DATA,
+  startModelProvidersData,
   type ModelProvidersCatalogData,
   type ModelProvidersData,
 } from "./load.ts";
@@ -22,15 +23,10 @@ const PUBLICATION_SETTLE_MS = 150;
 
 type ModelProviderRefreshTarget = { providerId?: string; data: ModelProvidersData };
 
-async function loadConnectedProviderData(
-  client: GatewayBrowserClient,
-  agentId: string,
+function mergeConnectedProviderData(
+  refreshed: ModelProvidersData,
   target: { providerId?: string; data: ModelProvidersData },
-  signal: AbortSignal,
-): Promise<ModelProvidersData> {
-  // Read auth first so the catalog sees the newly connected runtime. This one
-  // shared refresh absorbs the intermediate catalog invalidations during login.
-  const refreshed = await loadModelProvidersData(client, { agentId, refresh: true, signal });
+): ModelProvidersData {
   const authStatus = refreshed.authStatus;
   return {
     ...target.data,
@@ -249,17 +245,44 @@ export class ModelProviderCoreLoader {
     }
     this.notify();
     try {
-      const data = target
-        ? await loadConnectedProviderData(client, agentId, target, request.signal)
-        : await loadModelProvidersData(client, {
-            agentId,
-            ...(reason === "forced" ? { refresh: true } : {}),
-            signal: request.signal,
-          });
+      const read = startModelProvidersData(client, {
+        agentId,
+        ...(target || reason === "forced" ? { refresh: true } : {}),
+        signal: request.signal,
+      });
+      if (reason === "publication") {
+        // Keep known rows and their actionable warning until background reconciliation settles.
+        const refreshed = {
+          ...EMPTY_MODEL_PROVIDERS_DATA,
+          ...(await read.auth),
+          ...(await read.catalog),
+        };
+        if (this.request === request) {
+          this.active = false;
+          this.resetCatalog();
+          const data = target ? mergeConnectedProviderData(refreshed, target) : refreshed;
+          this.retryProvider = target && data.error ? target.providerId : undefined;
+          this.options.onComplete({ client, data });
+        }
+        return;
+      }
+      const refreshed = { ...EMPTY_MODEL_PROVIDERS_DATA, ...(await read.auth) };
       if (this.request === request) {
-        this.active = false;
+        // A page refresh takes over any picker retry started while auth waited.
+        this.resetCatalog();
+        // Publish auth with catalog progress already owned, so unknown models
+        // cannot briefly appear as an empty, completed discovery.
+        const catalog = this.adoptCatalog(
+          () => read.catalog,
+          client,
+          agentId,
+          () => this.request === request,
+          request,
+        );
+        const data = target ? mergeConnectedProviderData(refreshed, target) : refreshed;
         this.retryProvider = target && data.error ? target.providerId : undefined;
         this.options.onComplete({ client, data });
+        await catalog;
       }
     } catch {
       // Each source reports its own error; a retired request has no result to publish.

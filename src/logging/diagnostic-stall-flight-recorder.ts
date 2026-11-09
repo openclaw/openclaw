@@ -80,20 +80,21 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
   return {
     sample(stall?: { startedAt: number; endedAt: number; task?: string }): string | undefined {
       const kernelSummary = kernel?.take(stall) ?? "";
-      if (disabled || !active || (!stall && performance.now() - startedAt < WINDOW_MS)) {
+      if (!stall && performance.now() - startedAt < WINDOW_MS) {
         return undefined;
       }
       try {
         const snapshot = capture();
-        if (!stall || !snapshot) {
-          return undefined;
+        if (stall && snapshot) {
+          return formatStallProfile(snapshot.windows, stall, packageRoot, kernelSummary);
         }
-        return formatStallProfile(snapshot.windows, stall, packageRoot, kernelSummary);
       } catch {
         stopProfile();
         warn("stall flight recorder unavailable: profiler-capture-failed");
-        return undefined;
       }
+      return stall && kernelSummary
+        ? formatStallProfile([], stall, packageRoot, kernelSummary)
+        : undefined;
     },
     stop() {
       kernel?.stop();

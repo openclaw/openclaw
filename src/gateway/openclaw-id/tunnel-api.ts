@@ -8,9 +8,10 @@
 //   GET  /_openclaw-id/v1/membership  owner devices: seq, binding, active owner certs, members, invites
 //   POST /_openclaw-id/v1/statements  { statement }            MembershipChange, Revocation
 //   POST /_openclaw-id/v1/invites     { cap, proof_key }       InviteCap plus base64url proof key
+//   POST /_openclaw-id/v1/node-invites { cap, proof_key }      NodeInviteCap plus proof key
 //   POST /_openclaw-id/v1/signout     no body                 end this peer's browser credentials
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { AuthorityAccepted, AuthorityRefusal } from "./authority.js";
+import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
 import { decodeInviteProofKey } from "./invites-view.js";
 
 /** Path prefix the tunnel API owns on the claw origin. */
@@ -22,6 +23,8 @@ const MAX_BODY_BYTES = 64 * 1024;
 export type TunnelApiOwner = {
   /** The membership view for an owner device's peer key; undefined for anyone else. */
   membership: (peerKey: string) => Promise<unknown>;
+  /** Loads owner authority once; the returned check is synchronous and live. */
+  prepareOwnerCheck: (peerKey: string) => Promise<() => boolean>;
   /** Applies a signed statement received over the tunnel. */
   submit: (statement: unknown) => Promise<AuthorityAccepted | AuthorityRefusal>;
   /** Registers an owner-signed InviteCap with its proof key. */
@@ -29,13 +32,21 @@ export type TunnelApiOwner = {
     cap: unknown;
     proofKey: Uint8Array;
   }) => Promise<AuthorityAccepted | AuthorityRefusal>;
+  /** Registers an owner-signed NodeInviteCap with its proof key. */
+  registerNodeInvite: (
+    input: {
+      cap: unknown;
+      proofKey: Uint8Array;
+    },
+    isCallerOwner: () => boolean,
+  ) => Promise<AuthorityAccepted | AuthorityRefusal>;
   /** Current membership seq, reported after a write so clients can sign the next change. */
   seq: () => Promise<number>;
   /** Revokes browser tokens and closes RPC connections for the authenticated peer only. */
   signOut: (peerKey: string) => Promise<boolean>;
 };
 
-type Route = "membership" | "statements" | "invites" | "signout";
+type Route = "membership" | "statements" | "invites" | "node-invites" | "signout";
 
 // Refusal code -> HTTP status. Clients match `error.code`, never the status or message.
 function refusalStatus(code: string): number {
@@ -93,7 +104,11 @@ function routeOf(url: string | undefined): Route | undefined {
     return undefined;
   }
   const name = pathname.slice(TUNNEL_API_PREFIX.length);
-  return name === "membership" || name === "statements" || name === "invites" || name === "signout"
+  return name === "membership" ||
+    name === "statements" ||
+    name === "invites" ||
+    name === "node-invites" ||
+    name === "signout"
     ? name
     : undefined;
 }
@@ -170,6 +185,19 @@ export async function handleTunnelApiRequest(
   const proofKey = decodeInviteProofKey(body.proof_key);
   if (!body.cap || !proofKey) {
     sendError(res, 400, "malformed", "cap and a 32-byte base64url proof_key are required");
+    return;
+  }
+  if (route === "node-invites") {
+    const isOwner = await owner.prepareOwnerCheck(peerKey);
+    if (!isOwner()) {
+      sendError(res, 403, "not_owner_device", "only owner devices register node invites");
+      return;
+    }
+    await answerWrite(
+      res,
+      owner,
+      await owner.registerNodeInvite({ cap: body.cap, proofKey }, isOwner),
+    );
     return;
   }
   await answerWrite(res, owner, await owner.registerInvite({ cap: body.cap, proofKey }));
