@@ -1,11 +1,17 @@
 // Feishu tests cover streaming card plugin behavior.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readRequestBody, stripDispatcher, writeOversizedJson } from "./http.test-support.js";
 import { FeishuStreamingFinalizationError, FeishuStreamingSession } from "./streaming-card.js";
-import { createStreamingSession, type StreamingFetchDeps } from "./streaming-card.test-support.js";
+import {
+  createMemoryFetch,
+  createStreamingSession,
+  hermeticPublicLookup,
+  jsonResponse,
+  mockAcceptedStreamingCard,
+  type StreamingFetchDeps,
+} from "./streaming-card.test-support.js";
 
 const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
 type FeishuStreamingFetch = typeof fetch;
@@ -32,11 +38,6 @@ type StreamingRequest = {
 };
 
 const serverStops: Array<() => Promise<void>> = [];
-const HERMETIC_PUBLIC_LOOKUP_ADDRESS = "93.184.216.34";
-
-const hermeticPublicLookup: LookupFn = async () => [
-  { address: HERMETIC_PUBLIC_LOOKUP_ADDRESS, family: 4 },
-];
 
 async function startLocalServer(
   handler: (request: StreamingRequest) => void | Promise<void>,
@@ -95,31 +96,9 @@ async function createStreamingFetch(
   };
 }
 
-function createMemoryFetch(
-  handler: (url: URL, body: string) => Response | Promise<Response>,
-): StreamingFetchDeps {
-  return {
-    fetchImpl: withFetchPreconnect(
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = new URL(input instanceof Request ? input.url : input.toString());
-        const body = typeof init?.body === "string" ? init.body : "";
-        return await handler(url, body);
-      }),
-    ) as FeishuStreamingFetch,
-    lookupFn: hermeticPublicLookup,
-  };
-}
-
 function writeJson(res: ServerResponse, payload: unknown, status = 200): void {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(payload));
-}
-
-function jsonResponse(payload: unknown, status = 200): Response {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
 }
 
 function setStreamingSessionInternals(
@@ -249,102 +228,6 @@ describe("FeishuStreamingSession", () => {
     } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
     return { authTokens, client, deps };
   }
-
-  function mockAcceptedStreamingCard(params: {
-    accountId: string;
-    response?: { code: number; msg: string; data?: { message_id?: string } };
-    rejectClose?: boolean;
-    rejectClear?: boolean;
-  }) {
-    const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
-    const deps = createMemoryFetch((url, body) => {
-      if (url.pathname.includes("/auth/")) {
-        return jsonResponse({
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
-      }
-      if (url.pathname.endsWith("/cardkit/v1/cards")) {
-        return jsonResponse({ code: 0, msg: "ok", data: { card_id: "card_accepted" } });
-      }
-      requests.push({ path: url.pathname, body: JSON.parse(body) as Record<string, unknown> });
-      return jsonResponse(
-        params.rejectClose && url.pathname.endsWith("/settings")
-          ? { code: 91400, msg: "close rejected" }
-          : params.rejectClear && url.pathname.endsWith("/elements/content")
-            ? { code: 19002, msg: "clear rejected" }
-            : { code: 0, msg: "ok" },
-      );
-    });
-    const response = params.response ?? { code: 0, msg: "ok", data: {} };
-    const create = vi.fn(async () => response);
-    const reply = vi.fn(async () => response);
-    const remove = vi.fn(async () => ({ code: 0, msg: "ok" }));
-    const client = {
-      im: { message: { create, reply, delete: remove } },
-    } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
-    const session = createStreamingSession(
-      client,
-      { appId: params.accountId, appSecret: "test-secret" },
-      undefined,
-      deps,
-    );
-    return { session, requests, create, reply, remove };
-  }
-
-  it.each([
-    { mode: "create", options: undefined, method: "create" },
-    { mode: "root_create", options: { rootId: "root_1" }, method: "create" },
-    {
-      mode: "reply",
-      options: { replyToMessageId: "inbound_1", replyInThread: true, rootId: "root_1" },
-      method: "reply",
-    },
-  ] as const)(
-    "updates and closes an accepted $mode card when its optional message receipt is absent",
-    async ({ mode, options, method }) => {
-      const { session, requests, create, reply } = mockAcceptedStreamingCard({
-        accountId: `accepted-without-receipt-${mode}`,
-      });
-
-      await session.start("chat_1", "chat_id", options);
-      await session.update("The accepted answer");
-
-      await expect(session.closeWithResult("The accepted answer")).resolves.toEqual({
-        visibleReplySent: true,
-        content: "The accepted answer",
-      });
-      expect(method === "reply" ? reply : create).toHaveBeenCalledOnce();
-      expect(method === "reply" ? create : reply).not.toHaveBeenCalled();
-      if (mode === "root_create") {
-        expect(create).toHaveBeenCalledWith(
-          expect.objectContaining({
-            data: expect.objectContaining({ root_id: "root_1" }),
-          }),
-        );
-      } else if (mode === "create") {
-        expect(create).toHaveBeenCalledWith(
-          expect.objectContaining({
-            data: expect.not.objectContaining({ root_id: expect.anything() }),
-          }),
-        );
-      } else {
-        expect(reply).toHaveBeenCalledWith(
-          expect.objectContaining({
-            path: { message_id: "inbound_1" },
-            data: expect.objectContaining({ reply_in_thread: true }),
-          }),
-        );
-      }
-      expect(requests.map(({ path }) => path)).toEqual([
-        "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
-        "/open-apis/cardkit/v1/cards/card_accepted/settings",
-      ]);
-      expect(session.isActive()).toBe(false);
-    },
-  );
 
   it("clears an accepted preview without requesting deletion with an absent message receipt", async () => {
     const { session, requests, remove } = mockAcceptedStreamingCard({
@@ -1167,4 +1050,3 @@ describe("FeishuStreamingSession", () => {
     dateNow.mockRestore();
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -163,6 +163,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
   resetFeishuProxyAgentForTest();
@@ -177,6 +178,68 @@ afterAll(() => {
 });
 
 describe("Feishu delivery authority through the registered adapter and Lark transport", () => {
+  it.each([
+    { route: "direct", failure: "socket" },
+    { route: "reply", failure: "socket" },
+    { route: "card", failure: "socket" },
+    { route: "media", failure: "socket" },
+    { route: "direct", failure: "server" },
+    { route: "direct", failure: "busy" },
+  ] as const)(
+    "recovers an accepted $route message after $failure failure without posting twice",
+    async ({ route, failure }) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout"] });
+      await withFeishuTransport(async (fixture) => {
+        const accepted = new Set<string>();
+        const sender = createSender();
+        fixture.respond(async (request, response) => {
+          if (!request.path.startsWith(MESSAGE_PATH)) {
+            return false;
+          }
+          const { uuid } = JSON.parse(request.body) as { uuid: string };
+          if (!accepted.has(uuid)) {
+            accepted.add(uuid);
+            if (failure === "socket") {
+              response.destroy();
+            } else {
+              response
+                .writeHead(failure === "server" ? 500 : 200, { "content-type": "application/json" })
+                .end(JSON.stringify({ code: failure === "busy" ? 230049 : 500 }));
+            }
+            return true;
+          }
+          return false;
+        });
+        mockAttachmentLoading();
+        const ctx = {
+          ...sender,
+          cfg: fixture.cfg,
+          to: TARGET,
+          text: route === "media" ? "" : "A reply.",
+        };
+        const result = await (route === "media"
+          ? sendMedia(ctx)
+          : preferredTextSend()({
+              cfg: fixture.cfg,
+              to: TARGET,
+              ...sender,
+              text: route === "card" ? CARD : ctx.text,
+              ...(route === "reply" ? { replyToId: "om_parent" } : {}),
+            }));
+        expect(result.receipt?.platformMessageIds).toEqual(["om_accepted"]);
+        const messages = fixture.requests.filter((request) =>
+          request.path.startsWith(MESSAGE_PATH),
+        );
+        expect(messages).toHaveLength(2);
+        const [first, second] = messages.map(({ body }) => JSON.parse(body) as { uuid: string });
+        expect(first?.uuid).toMatch(/^[0-9a-f-]{36}$/);
+        expect(second).toEqual(first);
+        expect(accepted.size).toBe(1);
+        expect(sender.onPlatformSendDispatch).toHaveBeenCalledTimes(2);
+      });
+    },
+  );
+
   it.each(sendRoutes)(
     "stops $name when the sender retires during token preparation",
     async ({ send }) => {
@@ -212,11 +275,17 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
     },
   );
 
-  it("returns the accepted receipt without optional send-authority callbacks", async () => {
+  it("returns accepted receipts with distinct UUIDs for independent sends without authority callbacks", async () => {
     await withFeishuTransport(async ({ cfg, requests }) => {
       const result = await preferredTextSend()({ cfg, to: TARGET, text: "Delivered normally." });
       expect(requests.map((request) => request.path)).toEqual([AUTH_PATH, MESSAGE_PATH]);
       expect(result.receipt?.platformMessageIds).toEqual(["om_accepted"]);
+      await preferredTextSend()({ cfg, to: TARGET, text: "A separate message." });
+      const uuids = requests
+        .filter((request) => request.path === MESSAGE_PATH)
+        .map(({ body }) => (JSON.parse(body) as { uuid: string }).uuid);
+      expect(uuids.every((uuid) => typeof uuid === "string")).toBe(true);
+      expect(new Set(uuids).size).toBe(2);
     });
   });
 
@@ -286,7 +355,7 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
     });
   });
 
-  it.each(["rate limit", "withdrawn reply"] as const)(
+  it.each(["rate limit", "withdrawn reply", "socket loss"] as const)(
     "stops the next request after a %s response retires the sender",
     async (failure) => {
       await withFeishuTransport(async (fixture) => {
@@ -294,6 +363,10 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
         fixture.respond(async (request, response) => {
           if (request.path.startsWith(MESSAGE_PATH)) {
             sender.retire();
+            if (failure === "socket loss") {
+              response.destroy();
+              return true;
+            }
             response.writeHead(200, { "content-type": "application/json" });
             response.end(JSON.stringify({ code: failure === "rate limit" ? 230020 : 230011 }));
             return true;
@@ -428,6 +501,28 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
       });
       expect(result.receipt?.platformMessageIds).toEqual(["om_accepted"]);
       expect(marker).toHaveBeenCalledOnce();
+      expect(fixture.requests.map((request) => request.path)).toEqual([
+        AUTH_PATH,
+        FILE_PATH,
+        MESSAGE_PATH,
+      ]);
+    });
+  });
+
+  it("does not replay an ambiguous upload before sending the link fallback", async () => {
+    await withFeishuTransport(async (fixture) => {
+      mockAttachmentLoading();
+      fixture.respond(async (request, response) => {
+        if (request.path === FILE_PATH) {
+          response.destroy();
+          return true;
+        }
+        return false;
+      });
+      await expect(sendMedia({ cfg: fixture.cfg, to: TARGET, text: "" })).resolves.toHaveProperty(
+        "messageId",
+        "om_accepted",
+      );
       expect(fixture.requests.map((request) => request.path)).toEqual([
         AUTH_PATH,
         FILE_PATH,
