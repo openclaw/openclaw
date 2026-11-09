@@ -1,5 +1,5 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { createEffect, createSignal, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Show } from "solid-js";
 import type { ApplicationGatewaySnapshot } from "../../app/context-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -121,115 +121,124 @@ export function SimulatorPreview(props: {
     },
   );
 
-  createEffect(
+  // Inventory polls recompute node props; only an authority change may restart the capture lease.
+  const captureScope = createMemo(
     () => ({
       nodeId: props.nodeId,
       client: props.client,
       presented: props.presented,
       retry: retry(),
     }),
-    ({ nodeId, client, presented }) => {
-      if (!presented) {
-        return;
-      }
-      const controller = new AbortController();
-      const executionId = crypto.randomUUID();
-      inputQueue.retire();
-      active = true;
-      setImage(null);
-      setError(null);
-      setFps(0);
-      let sessionId: string | undefined;
-      let startedRequest: Promise<unknown> | undefined;
-      let ended = false;
-      const end = () => {
-        if (ended) return;
-        ended = true;
-        active = false;
-        inputQueue.retire();
-        controller.abort();
-        frameSession = undefined;
-        previousStop = previousStop.then(async () => {
-          let startedSession = sessionId;
-          if (!startedSession && startedRequest) {
-            try {
-              startedSession = frameFrom(await startedRequest).sessionId;
-            } catch {
-              return;
-            }
-          }
-          if (startedSession) {
-            await invoke(client, nodeId, "simulator.capture", {
-              action: "stop",
-              sessionId: startedSession,
-              executionId,
-            }).catch(() => undefined);
-          }
-        });
-      };
-      endCapture = end;
-      void (async () => {
-        try {
-          await previousStop;
-          if (controller.signal.aborted) return;
-          startedRequest = invoke(client, nodeId, "simulator.capture", {
-            action: "start",
-            executionId,
-          });
-          const started = frameFrom(await startedRequest);
-          sessionId = started.sessionId;
-          if (controller.signal.aborted) {
-            return;
-          }
-          frameSession = { sessionId, executionId };
-          let sequence = 0;
-          let firstFrameDeadline = Date.now() + 5_000;
-          let measuredAt = Date.now();
-          let frames = 0;
-          while (!controller.signal.aborted) {
-            const frame = frameFrom(
-              await invoke(
-                client,
-                nodeId,
-                "simulator.capture",
-                { action: "read", sessionId, executionId, after: sequence },
-                controller.signal,
-              ),
-            );
-            if (frame.jpegBase64 && frame.sequence > sequence) {
-              sequence = frame.sequence;
-              setSize({ width: frame.width, height: frame.height });
-              setImage(`data:image/jpeg;base64,${frame.jpegBase64}`);
-              frames += 1;
-              const now = Date.now();
-              if (now - measuredAt >= 2_000) {
-                setFps((frames * 1_000) / (now - measuredAt));
-                measuredAt = now;
-                frames = 0;
-              }
-              firstFrameDeadline = Number.POSITIVE_INFINITY;
-            } else if (Date.now() >= firstFrameDeadline) {
-              throw new Error(
-                "Simulator produced no device frames. Check that an iOS Simulator is booted and reopen the preview.",
-              );
-            }
-            await new Promise((resolve) => setTimeout(resolve, 75));
-          }
-        } catch (cause) {
-          if (!controller.signal.aborted) {
-            setError(formatUiError(cause));
-            setImage(null);
-            end();
-          }
-        }
-      })();
-      return () => {
-        end();
-        if (endCapture === end) endCapture = undefined;
-        gesture = undefined;
-      };
+    {
+      equals: (before, after) =>
+        before.nodeId === after.nodeId &&
+        before.client === after.client &&
+        before.presented === after.presented &&
+        before.retry === after.retry,
     },
   );
+
+  createEffect(captureScope, ({ nodeId, client, presented }) => {
+    if (!presented) {
+      return;
+    }
+    const controller = new AbortController();
+    const executionId = crypto.randomUUID();
+    inputQueue.retire();
+    active = true;
+    setImage(null);
+    setError(null);
+    setFps(0);
+    let sessionId: string | undefined;
+    let startedRequest: Promise<unknown> | undefined;
+    let ended = false;
+    const end = () => {
+      if (ended) return;
+      ended = true;
+      active = false;
+      inputQueue.retire();
+      controller.abort();
+      frameSession = undefined;
+      previousStop = previousStop.then(async () => {
+        let startedSession = sessionId;
+        if (!startedSession && startedRequest) {
+          try {
+            startedSession = frameFrom(await startedRequest).sessionId;
+          } catch {
+            return;
+          }
+        }
+        if (startedSession) {
+          await invoke(client, nodeId, "simulator.capture", {
+            action: "stop",
+            sessionId: startedSession,
+            executionId,
+          }).catch(() => undefined);
+        }
+      });
+    };
+    endCapture = end;
+    void (async () => {
+      try {
+        await previousStop;
+        if (controller.signal.aborted) return;
+        startedRequest = invoke(client, nodeId, "simulator.capture", {
+          action: "start",
+          executionId,
+        });
+        const started = frameFrom(await startedRequest);
+        sessionId = started.sessionId;
+        if (controller.signal.aborted) {
+          return;
+        }
+        frameSession = { sessionId, executionId };
+        let sequence = 0;
+        let firstFrameDeadline = Date.now() + 5_000;
+        let measuredAt = Date.now();
+        let frames = 0;
+        while (!controller.signal.aborted) {
+          const frame = frameFrom(
+            await invoke(
+              client,
+              nodeId,
+              "simulator.capture",
+              { action: "read", sessionId, executionId, after: sequence },
+              controller.signal,
+            ),
+          );
+          if (frame.jpegBase64 && frame.sequence > sequence) {
+            sequence = frame.sequence;
+            setSize({ width: frame.width, height: frame.height });
+            setImage(`data:image/jpeg;base64,${frame.jpegBase64}`);
+            frames += 1;
+            const now = Date.now();
+            if (now - measuredAt >= 2_000) {
+              setFps((frames * 1_000) / (now - measuredAt));
+              measuredAt = now;
+              frames = 0;
+            }
+            firstFrameDeadline = Number.POSITIVE_INFINITY;
+          } else if (Date.now() >= firstFrameDeadline) {
+            throw new Error(
+              "Simulator produced no device frames. Check that an iOS Simulator is booted and reopen the preview.",
+            );
+          }
+          await new Promise((resolve) => setTimeout(resolve, 75));
+        }
+      } catch (cause) {
+        if (!controller.signal.aborted) {
+          setError(formatUiError(cause));
+          setImage(null);
+          end();
+        }
+      }
+    })();
+    return () => {
+      end();
+      if (endCapture === end) endCapture = undefined;
+      gesture = undefined;
+    };
+  });
 
   return (
     <section class="simulator-preview" aria-label={t("systems.simulator.title")}>
