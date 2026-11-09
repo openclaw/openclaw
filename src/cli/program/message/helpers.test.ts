@@ -21,7 +21,7 @@ vi.mock("../../../channels/plugins/index.js", () => ({ getChannelPlugin: getChan
 
 const resolveGatewayDelegatedChannelPluginMock = vi.fn();
 // mock-isolation: Manifest delegation comes from synthetic adapters, not installed plugin state.
-vi.mock("../../../channels/plugins/read-only.js", () => ({
+vi.mock("../../../channels/plugins/gateway-delegated-channel-plugin.js", () => ({
   resolveGatewayDelegatedChannelPlugin: resolveGatewayDelegatedChannelPluginMock,
 }));
 

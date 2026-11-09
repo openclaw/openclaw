@@ -121,7 +121,7 @@ async function resolveGatewayDelegatedRegistry(params: {
 }): Promise<PluginRegistry | undefined> {
   const config = await captureRuntimeConfigAsyncReader()();
   const { resolveGatewayDelegatedChannelPlugin } =
-    await import("../../channels/plugins/read-only.js");
+    await import("../../channels/plugins/gateway-delegated-channel-plugin.js");
   const plugin = resolveGatewayDelegatedChannelPlugin({
     channelId: params.channel,
     action: params.action,

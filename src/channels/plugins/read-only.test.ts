@@ -26,10 +26,10 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { channelHasConfiguredState, resolveChannelAccount } from "../account-resolution.js";
 import { buildChannelUiCatalog } from "./catalog.js";
+import { resolveGatewayDelegatedChannelPlugin } from "./gateway-delegated-channel-plugin.js";
 import {
   listReadOnlyChannelPluginsForConfig,
   listReadOnlyChannelPluginsForConfigAsync,
-  resolveGatewayDelegatedChannelPlugin,
   resolveReadOnlyChannelPluginsForConfig,
   resolveReadOnlyChannelPluginsForConfigAsync,
 } from "./read-only.js";
