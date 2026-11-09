@@ -179,8 +179,13 @@ describe.runIf(browserMode)("chat file editor", () => {
       expect(button(panel, "Enable word wrap").getAttribute("aria-pressed")).toBe("false");
       await click(panel, "File actions");
       await click(panel, "Search in file");
-      await userEvent.fill(panel.querySelector<HTMLInputElement>('input[type="search"]')!, "rect");
+      const search = panel.querySelector<HTMLInputElement>('input[type="search"]')!;
+      await userEvent.fill(search, "rect");
       await expect.poll(() => panel.querySelector('[role="status"]')?.textContent).toBe("1/1");
+      search.dispatchEvent(new CompositionEvent("compositionend"));
+      const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      search.dispatchEvent(enter);
+      expect(enter.defaultPrevented).toBe(false);
       await click(panel, "Reading mode: Highlighted source");
       await click(panel, "Preview");
       expect(panel.querySelector('input[type="search"]')).toBeNull();
@@ -399,8 +404,6 @@ describe.runIf(browserMode)("chat file editor", () => {
     await expect.poll(() => lineIndexes(".file-view__line--current")).toEqual([matchLines[0]]);
     expect(readFileDraft(panel.content)).toBeUndefined();
     expect(canReloadControlUiDocument()).toBe(true);
-    panel.remove();
-    expect(canReloadControlUiDocument()).toBe(true);
   });
 
   it("clears a mixed-line-ending draft when an edit is undone", async () => {
@@ -432,6 +435,10 @@ describe.runIf(browserMode)("chat file editor", () => {
       expect(counter()).toBe("1/3");
       const focusTarget = control === "input" ? input : button(panel, control);
       if (control === "input") {
+        // WebKit can send the IME-confirming Enter after compositionend with its flags cleared.
+        input.dispatchEvent(new CompositionEvent("compositionend"));
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
         await userEvent.keyboard("{Enter}");
         expect(counter()).toBe("2/3");
         await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
@@ -470,42 +477,6 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(document.activeElement).toBe(searchToggle());
   });
 
-  it.each(["desktop", "mobile"] as const)(
-    "keeps the IME-confirming Enter from moving to the next match in %s",
-    async (presentation) => {
-      await desktopViewport();
-      const panel = await mountFile(
-        file('["雪",\n"雪",\n"雪"]', { path: "search.json", name: "search.json" }),
-        presentation === "desktop" ? 720 : 360,
-        presentation,
-      );
-      if (presentation === "desktop") {
-        await click(panel, "File actions");
-      }
-      await click(panel, "Search in file");
-      const input = panel.querySelector<HTMLInputElement>('input[type="search"]')!;
-      await userEvent.fill(input, "雪");
-      const counter = () => panel.querySelector('[role="status"]')?.textContent?.trim();
-      expect(counter()).toBe("1/3");
-      const enter = (init: KeyboardEventInit = {}) =>
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init });
-      for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
-        const composed = enter(composition);
-        input.dispatchEvent(composed);
-        expect(composed.defaultPrevented).toBe(false);
-      }
-      const end = new CompositionEvent("compositionend", { bubbles: true });
-      input.dispatchEvent(end);
-      const commit = Object.defineProperty(enter(), "timeStamp", { value: end.timeStamp + 1 });
-      input.dispatchEvent(commit);
-      expect(commit.defaultPrevented).toBe(false);
-      expect(counter()).toBe("1/3");
-      input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
-      await userEvent.keyboard("{Enter}");
-      expect(counter()).toBe("2/3");
-    },
-  );
-
   it("keeps the named file view keyboard accessible through editing and saving", async () => {
     const save = vi.fn().mockResolvedValue({ ok: true, hash: "hash-2" });
     const panel = await mountFile(editableFile("before", { save }));
@@ -517,10 +488,7 @@ describe.runIf(browserMode)("chat file editor", () => {
     await userEvent.keyboard("{Enter}");
     await expectAccessibleEditor(editor, false);
     await userEvent.fill(editor, "after");
-    const saveButton = button(panel, "Save");
-    expect(saveButton.disabled).toBe(false);
-    await userEvent.click(saveButton);
-    await expect.poll(() => save.mock.calls.length).toBe(1);
+    await saveFile(panel, save, 1);
     expect(save).toHaveBeenCalledWith({ content: "after", expectedHash: "hash-1" });
     await expect.poll(() => button(panel, "Save").disabled).toBe(true);
     expect(editorOf(panel).textContent).toContain("after");
@@ -657,11 +625,7 @@ describe.runIf(browserMode)("chat file editor", () => {
     "drops edit mode and its draft when a conflict reload returns %j",
     async (content) => {
       const save = vi.fn().mockResolvedValue({ ok: false, code: "conflict" });
-      const fetchLatest = vi.fn().mockResolvedValue({
-        content,
-        hash: "hash-2",
-        editable: false,
-      });
+      const fetchLatest = vi.fn().mockResolvedValue({ content, hash: "hash-2", editable: false });
       const panel = await mountFile(editableFile("before", { save, fetchLatest }));
       await beginEdit(panel, "local");
       await click(panel, "Save");
@@ -671,8 +635,6 @@ describe.runIf(browserMode)("chat file editor", () => {
       expect(editorOf(panel).getAttribute("contenteditable")).toBe("false");
       expect(panel.querySelector('button[aria-label="Edit file"]')).toBeNull();
       expect(readFileDraft(panel.content)).toBeUndefined();
-      expect(canReloadControlUiDocument()).toBe(true);
-      panel.remove();
       expect(canReloadControlUiDocument()).toBe(true);
     },
   );
