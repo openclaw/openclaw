@@ -69,14 +69,15 @@ internal object VoiceWakePhraseMatcher {
     normalizedTranscript: NormalizedSpokenText,
     trigger: String,
   ): Pair<Int, VoiceWakeMatch>? {
-    val normalizedTrigger = normalizeSpokenText(trigger).value
-    if (normalizedTrigger.isEmpty()) return null
+    val normalizedTriggerText = normalizeSpokenText(trigger)
+    val normalizedTrigger = normalizedTriggerText.value
+    val triggerEndCodePoint = normalizedTriggerText.lastLetterOrDigitCodePoint ?: return null
     var start = normalizedTranscript.value.indexOf(normalizedTrigger)
     while (start >= 0) {
       val end = start + normalizedTrigger.length
       if (
         isBoundary(normalizedTranscript.value, start - 1, normalizedTrigger.codePointAt(0)) &&
-        isBoundary(normalizedTranscript.value, end, normalizedTrigger.codePointBefore(normalizedTrigger.length)) &&
+        isBoundary(normalizedTranscript.value, end, triggerEndCodePoint) &&
         hasOnlyWakeFillers(normalizedTranscript.value.substring(0, start))
       ) {
         val originalStart = normalizedTranscript.originalStarts[start]
@@ -95,6 +96,7 @@ internal object VoiceWakePhraseMatcher {
     val value: String,
     val originalStarts: IntArray,
     val originalEnds: IntArray,
+    val lastLetterOrDigitCodePoint: Int?,
   )
 
   private fun normalizeSpokenText(source: String): NormalizedSpokenText {
@@ -107,7 +109,7 @@ internal object VoiceWakePhraseMatcher {
     while (sourceIndex < source.length) {
       val codePoint = source.codePointAt(sourceIndex)
       val nextSourceIndex = sourceIndex + Character.charCount(codePoint)
-      if (Character.isLetterOrDigit(codePoint)) {
+      if (Character.isLetterOrDigit(codePoint) || isCombiningMark(codePoint)) {
         val separatorStart = pendingSeparatorStart
         val previousCodePoint = previousSpokenCodePoint
         if (
@@ -126,7 +128,7 @@ internal object VoiceWakePhraseMatcher {
           originalStarts += sourceIndex
           originalEnds += nextSourceIndex
         }
-        previousSpokenCodePoint = codePoint
+        if (Character.isLetterOrDigit(codePoint)) previousSpokenCodePoint = codePoint
         pendingSeparatorStart = null
       } else if (value.isNotEmpty() && pendingSeparatorStart == null) {
         pendingSeparatorStart = sourceIndex
@@ -137,6 +139,7 @@ internal object VoiceWakePhraseMatcher {
       value = value.toString(),
       originalStarts = originalStarts.toIntArray(),
       originalEnds = originalEnds.toIntArray(),
+      lastLetterOrDigitCodePoint = previousSpokenCodePoint,
     )
   }
 
@@ -144,10 +147,22 @@ internal object VoiceWakePhraseMatcher {
     value: String,
     index: Int,
     triggerEdgeCodePoint: Int,
-  ): Boolean =
-    index !in value.indices ||
-      !value[index].isLetterOrDigit() ||
-      doesNotUseWhitespaceWordBoundaries(triggerEdgeCodePoint)
+  ): Boolean {
+    if (index !in value.indices) return true
+    val codePoint = value.codePointAt(index)
+    return !isCombiningMark(codePoint) &&
+      (!Character.isLetterOrDigit(codePoint) || doesNotUseWhitespaceWordBoundaries(triggerEdgeCodePoint))
+  }
+
+  private fun isCombiningMark(codePoint: Int): Boolean =
+    when (Character.getType(codePoint)) {
+      Character.NON_SPACING_MARK.toInt(),
+      Character.COMBINING_SPACING_MARK.toInt(),
+      Character.ENCLOSING_MARK.toInt(),
+      -> true
+
+      else -> false
+    }
 
   private fun doesNotUseWhitespaceWordBoundaries(codePoint: Int): Boolean =
     when (Character.UnicodeScript.of(codePoint)) {
@@ -167,7 +182,7 @@ internal object VoiceWakePhraseMatcher {
 
   private fun hasOnlyWakeFillers(prefix: String): Boolean =
     prefix
-      .split(Regex("[^\\p{L}\\p{N}]+"))
+      .split(Regex("[^\\p{L}\\p{M}\\p{N}]+"))
       .filter(String::isNotEmpty)
       .all { it.lowercase() in wakePrefixFillers }
 }
