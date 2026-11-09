@@ -27,17 +27,9 @@ let stopHistory: (() => void) | undefined;
 let stopReloadGuard: (() => void) | undefined;
 const committedBootRegions = new Set<"sidebar" | "transcript">();
 
-/** Reveal committed cached regions together, or release immediately on admission/route escape. */
 export function finishBootFrame(region?: "sidebar" | "transcript"): void {
-  const root = document.documentElement;
-  if (!root.hasAttribute("data-openclaw-warm-frame")) return;
-  if (region) committedBootRegions.add(region);
-  if (!region || committedBootRegions.size === 2) {
-    root
-      .getAnimations()
-      .find((animation) => animation.id === "openclaw-warm-frame")
-      ?.cancel();
-    root.removeAttribute("data-openclaw-warm-frame");
+  if (!region || committedBootRegions.add(region).size === 2) {
+    document.documentElement.removeAttribute("data-openclaw-warm-frame");
   }
 }
 

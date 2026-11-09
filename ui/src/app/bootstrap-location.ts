@@ -358,7 +358,9 @@ export function subscribeForegroundChatBootstrap({
               )
             : null;
     connectionBootstrap.setForegroundRoute(foregroundRoute);
-    if (window.location.pathname !== bootPath || foregroundRoute === null) finishBootFrame();
+    if (window.location.pathname !== bootPath || foregroundRoute === null) {
+      finishBootFrame();
+    }
   };
   const synchronize = () => synchronizeRoute(router.getState());
   const stopConnection = gateway.subscribe((snapshot) => {

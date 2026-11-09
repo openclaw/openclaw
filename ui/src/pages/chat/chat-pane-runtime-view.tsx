@@ -175,8 +175,9 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     runtime.afterRender(focus);
     adoptBootComposer(runtime);
     runtime.chatState.commitRender();
-    if (runtime.ownsRouteComposer && runtime.transcript.isPositionSettled)
+    if (runtime.ownsRouteComposer && runtime.transcript.isPositionSettled) {
       finishBootFrame("transcript");
+    }
     if (runtime.presented && runtime.presentation.documentVisible) {
       notifyRenderLifecycleForTest(runtime.element, "commit");
     }
@@ -196,7 +197,9 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         sessionKey: initialState.sessionKey,
       }),
     );
-    if (runtime.ownsRouteComposer && !initialCachedSession) finishBootFrame();
+    if (runtime.ownsRouteComposer && !initialCachedSession) {
+      finishBootFrame();
+    }
     // Split localized cached panes too, after their catalogs are ready. Only
     // document boot has a retained composer; route handoffs stay immediate.
     if ((!initialCachedSession || i18n.getLocale() !== "en") && bootComposerElement()) {

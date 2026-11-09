@@ -119,16 +119,16 @@
             localStorage.getItem("openclaw.control.bootRecord.v1:" + bootScope)
           ) {
             document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
-            // The document timeline releases even when a task outlives Chromium's paint hold.
-            var warmFrame = document.documentElement.animate(
-              {
-                backgroundColor: ["transparent", "transparent"],
-                "--openclaw-warm-background": ["transparent", "transparent"],
-                "--openclaw-warm-opacity": ["0", "0"],
-              },
-              { duration: 450, fill: "backwards", id: "openclaw-warm-frame" },
-            );
-            warmFrame.startTime = performance.now();
+            var warmDeadline = performance.now() + 450;
+            // Check wall time before paint; a delayed frame's animation timestamp can be stale.
+            function expireWarmFrame() {
+              if (document.documentElement.getAttribute("data-openclaw-warm-frame") !== "holding")
+                return;
+              if (performance.now() >= warmDeadline)
+                document.documentElement.setAttribute("data-openclaw-warm-frame", "fallback");
+              else requestAnimationFrame(expireWarmFrame);
+            }
+            requestAnimationFrame(expireWarmFrame);
           }
           if (s && typeof s.navWidth === "number" && s.navWidth >= 240 && s.navWidth <= 400) {
             document.documentElement.style.setProperty(
@@ -303,9 +303,12 @@
         color-scheme: inherit;
       }
 
+      html[data-openclaw-warm-frame="holding"],
       html[data-openclaw-warm-frame="holding"] body {
-        background: var(--openclaw-warm-background, var(--bg, inherit)) !important;
-        opacity: var(--openclaw-warm-opacity, 1);
+        background: transparent !important;
+      }
+      html[data-openclaw-warm-frame="holding"] body {
+        opacity: 0;
       }
 
       /* Critical loading layout lives here so HTML and the Solid fallback share

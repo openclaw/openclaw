@@ -85,7 +85,7 @@ export function createSidebarSnapshot(host: {
         const key = sidebarSnapshotScopeKey(scope);
         const deleted = sidebarSnapshotDeletedSessionKey(key, event);
         if (deleted) {
-          if (pending) finishBootFrame();
+          finishBootFrame();
           // Cancel accepted stale captures, retaining the rest of the display and cache.
           generation += 1;
           cancelCapture?.();
@@ -148,10 +148,14 @@ export function createSidebarSnapshot(host: {
               host.restoreSidebarSnapshot(model);
               captured = { model, serialized: JSON.stringify(model) };
               saved = true;
-            } else finishBootFrame();
+            } else {
+              finishBootFrame();
+            }
             notify();
           });
-        } else finishBootFrame();
+        } else {
+          finishBootFrame();
+        }
         // Connection receipts retire stale snapshot capture and restore the new scope.
         stopGateway = gateway.subscribe(() => {
           synchronize();
@@ -353,7 +357,9 @@ export function createSidebarSnapshot(host: {
   }
 
   function clearDisplay(): void {
-    if (pending || host.sidebarSnapshot) finishBootFrame();
+    if (pending || host.sidebarSnapshot) {
+      finishBootFrame();
+    }
     cancelHandoff();
     cancelCapture?.();
     cancelCapture = undefined;

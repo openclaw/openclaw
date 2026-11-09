@@ -97,7 +97,9 @@ export function createSessionBootSnapshot(
     void readSidebarBootSnapshot(gateway)
       .then(async (snapshot) => {
         if (!snapshot || retirement.signal.aborted || !current()) {
-          if (!snapshot) finishBootFrame();
+          if (!snapshot) {
+            finishBootFrame();
+          }
           return;
         }
         routingDefaults = snapshot.routingDefaults;

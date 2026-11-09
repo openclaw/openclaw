@@ -53,10 +53,10 @@ function prewarmBootChat(
       : target?.kind === "literal"
         ? target.sessionKey
         : lastSessionKey;
-  if (target?.kind === "short" && parseAgentSessionKey(sessionKey)?.agentId !== target.agentId) {
+  const parsedSession = parseAgentSessionKey(sessionKey);
+  if (!parsedSession || (target?.kind === "short" && parsedSession.agentId !== target.agentId)) {
     return finishBootFrame();
   }
-  if (!parseAgentSessionKey(sessionKey)) return finishBootFrame();
   void prewarmChatSnapshot(
     resolveChatSnapshotKey(
       {

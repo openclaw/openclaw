@@ -52,7 +52,9 @@ function installVisibleSurfaceProbe() {
   Reflect.set(window, "warmJoinSurface", { samples, read });
   const sample = () => {
     const surface = read();
-    if (Object.values(surface).some(Boolean)) samples.push(surface);
+    if (Object.values(surface).some(Boolean)) {
+      samples.push(surface);
+    }
     requestAnimationFrame(sample);
   };
   requestAnimationFrame(sample);
@@ -68,21 +70,24 @@ async function releaseModule(page: Page, module: Awaited<ReturnType<typeof holdM
   await response;
 }
 
-async function readSurfaceAtAnimationTime(page: Page, time: number) {
-  return page.evaluate((elapsed) => {
-    const root = document.documentElement;
-    for (const animation of root.getAnimations()) animation.currentTime = elapsed;
-    // Read in this task: a queued animation finish callback cannot reveal the body for us.
-    return {
-      surface: Reflect.get(window, "warmJoinSurface").read() as Surface,
-      warmFrame: root.getAttribute("data-openclaw-warm-frame"),
-      now: performance.now(),
-      composerVisible:
-        document
-          .querySelector("#openclaw-boot-composer")
-          ?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) ?? false,
-    };
-  }, time);
+async function readNextFrame(
+  page: Page,
+): Promise<{ surface: Surface; now: number; composerVisible: boolean }> {
+  await page.evaluate(() => {
+    Reflect.set(window, "warmJoinNextFrame", null);
+    requestAnimationFrame(() =>
+      Reflect.set(window, "warmJoinNextFrame", {
+        surface: Reflect.get(window, "warmJoinSurface").read() as Surface,
+        now: performance.now(),
+        composerVisible:
+          document
+            .querySelector("#openclaw-boot-composer")
+            ?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) ?? false,
+      }),
+    );
+  });
+  await page.clock.runFor(17);
+  return page.evaluate(() => Reflect.get(window, "warmJoinNextFrame"));
 }
 
 async function prepareWarmPage(page: Page) {
@@ -94,8 +99,12 @@ async function prepareWarmPage(page: Page) {
   });
   await page.addInitScript(
     ({ key, settings, sidebarPrefs }) => {
-      for (const [name, value] of Object.entries(sidebarPrefs)) localStorage.setItem(name, value);
-      if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(settings));
+      for (const [name, value] of Object.entries(sidebarPrefs)) {
+        localStorage.setItem(name, value);
+      }
+      if (!localStorage.getItem(key)) {
+        localStorage.setItem(key, JSON.stringify(settings));
+      }
     },
     {
       key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
@@ -171,20 +180,6 @@ async function prepareWarmPage(page: Page) {
     content: `globalThis.__name = (fn) => fn; Reflect.set(window, "__paneChrome", (${installPaneChromeProbe.toString()})()); (${installWarmReloadBrowserProbe.toString()})("chat");`,
   });
   await page.addInitScript(installVisibleSurfaceProbe);
-  await page.addInitScript(() => {
-    const animate = Element.prototype.animate;
-    Element.prototype.animate = function (keyframes, options) {
-      const animation = animate.call(this, keyframes, options);
-      if (this === document.documentElement) {
-        // Native animation time is independent of Playwright's task/rAF clock.
-        queueMicrotask(() => {
-          animation.pause();
-          animation.currentTime = 0;
-        });
-      }
-      return animation;
-    };
-  });
   await page.clock.install();
   await pauseVirtualClock(page);
 }
@@ -232,7 +227,9 @@ suite.define(() => {
           () => Reflect.get(window, "warmJoinSurface").samples,
         );
         expect(samples.length).toBeGreaterThan(0);
-        for (const surface of samples) expectComplete(surface);
+        for (const surface of samples) {
+          expectComplete(surface);
+        }
         const probe = await page.evaluate(() => Reflect.get(window, "__warmReloadProof"));
         expect(probe.firstTranscriptDomMs).not.toBeNull();
         expect(probe.firstDetailsDomMs).not.toBeNull();
@@ -254,9 +251,8 @@ suite.define(() => {
         await page.reload({ waitUntil: "domcontentloaded" });
         await pane.request;
         await page.clock.runFor(449);
-        expect((await readSurfaceAtAnimationTime(page, 449)).surface.skeleton).toBe(false);
-        await page.clock.runFor(1);
-        expect((await readSurfaceAtAnimationTime(page, 450)).surface.skeleton).toBe(true);
+        expect((await readSurface(page)).skeleton).toBe(false);
+        expect((await readNextFrame(page)).surface.skeleton).toBe(true);
         expect((await readSurface(page)).transcript).toBe(false);
         const boot = page.locator("#openclaw-boot-composer");
         expect(
@@ -278,9 +274,22 @@ suite.define(() => {
     });
   });
 
-  it("reveals the deadline skeleton while JavaScript callback delivery is stalled", async () => {
+  it("reveals the deadline skeleton in the first frame when timeout delivery is stalled", async () => {
     await suite.withPage({ viewport, serviceWorkers: "block" }, async ({ page }) => {
       await prepareWarmPage(page);
+      await page.addInitScript(() => {
+        window.setTimeout = new Proxy(window.setTimeout, {
+          apply(schedule, receiver, args) {
+            if (
+              args[1] === 450 &&
+              document.documentElement?.getAttribute("data-openclaw-warm-frame") === "holding"
+            ) {
+              args[0] = () => {};
+            }
+            return Reflect.apply(schedule, receiver, args);
+          },
+        });
+      });
       const pane = await holdModuleResponse(
         page,
         controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
@@ -288,16 +297,13 @@ suite.define(() => {
       try {
         await page.reload({ waitUntil: "domcontentloaded" });
         await pane.request;
-        await page.clock.runFor(430);
-        const before = await readSurfaceAtAnimationTime(page, 449);
-        expect(before.warmFrame).toBe("holding");
-        expect(before.surface.skeleton).toBe(false);
-        const deadline = await readSurfaceAtAnimationTime(page, 450);
-        expect(deadline.now).toBe(before.now);
-        expect(deadline.warmFrame).toBe("holding");
-        expect(deadline.surface.skeleton).toBe(true);
-        expect(deadline.surface.transcript).toBe(false);
-        expect(deadline.composerVisible).toBe(true);
+        await page.clock.runFor(449);
+        expect((await readSurface(page)).skeleton).toBe(false);
+        const frame = await readNextFrame(page);
+        expect(frame.now).toBeGreaterThanOrEqual(450);
+        expect(frame.surface.skeleton).toBe(true);
+        expect(frame.surface.transcript).toBe(false);
+        expect(frame.composerVisible).toBe(true);
         await releaseModule(page, pane);
         await page.clock.runFor(400);
         expectComplete(await readSurface(page));
@@ -333,8 +339,12 @@ suite.define(() => {
       const cleared = await page.evaluate(async () => {
         const database = await new Promise<IDBDatabase>((resolve, reject) => {
           const open = indexedDB.open("openclaw-chat-snapshots");
-          open.onsuccess = () => resolve(open.result);
-          open.onerror = () => reject(open.error);
+          open.addEventListener("success", () => resolve(open.result), { once: true });
+          open.addEventListener(
+            "error",
+            () => reject(open.error ?? new Error("Synthetic snapshot database open failed")),
+            { once: true },
+          );
         });
         try {
           const transaction = database.transaction("sidebarSnapshots", "readwrite");
@@ -342,9 +352,11 @@ suite.define(() => {
           const count = store.count();
           store.clear();
           await new Promise<void>((resolve, reject) => {
-            transaction.oncomplete = () => resolve();
-            transaction.onabort = () => reject(transaction.error);
-            transaction.onerror = () => reject(transaction.error);
+            transaction.addEventListener("complete", () => resolve(), { once: true });
+            const failed = () =>
+              reject(transaction.error ?? new Error("Synthetic snapshot transaction failed"));
+            transaction.addEventListener("abort", failed, { once: true });
+            transaction.addEventListener("error", failed, { once: true });
           });
           return count.result;
         } finally {

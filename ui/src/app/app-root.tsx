@@ -91,7 +91,9 @@ const LoginGate = lazy(() => import("../components/login-gate-solid.tsx"), {
 export function mountOpenClawApp(host: HTMLElement, runtime = bootstrapApplication()): () => void {
   // The boot frame's composer survives its frame; Solid's loading frames reinsert it.
   adoptBootComposer(runtime.documentMode === null && runtime.focusLocation === null);
-  if (!runtime.warmBoot) finishBootFrame();
+  if (!runtime.warmBoot) {
+    finishBootFrame();
+  }
   // render() appends to existing children; retire the HTML frame in the same
   // task as the first Solid commit so it cannot remain beside the live app.
   host.replaceChildren();

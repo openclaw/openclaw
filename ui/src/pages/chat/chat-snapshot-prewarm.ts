@@ -89,20 +89,19 @@ export function prewarmChatSnapshot(cacheKey: string): Promise<void> {
   };
   pending = entry;
   // Validate once before mount; dispatch reads facts without adopting display rows.
-  entry.ready = (async () => {
-    try {
-      const [{ readPrewarmedChatSnapshot }] = await Promise.all([
-        import("./session-snapshot-store.ts"),
-        loadChatHistoryStateValidator(),
-      ]);
-      if (pending === entry) {
-        const snapshot = await readPrewarmedChatSnapshot(cacheKey);
-        if (!snapshot && pending === entry) finishBootFrame();
+  entry.ready = Promise.all([
+    import("./session-snapshot-store.ts"),
+    loadChatHistoryStateValidator(),
+  ])
+    .then(([{ readPrewarmedChatSnapshot }]) =>
+      pending === entry ? readPrewarmedChatSnapshot(cacheKey) : undefined,
+    )
+    .catch(() => undefined)
+    .then((snapshot) => {
+      if (!snapshot && pending === entry) {
+        finishBootFrame();
       }
-    } catch {
-      if (pending === entry) finishBootFrame();
-    }
-  })();
+    });
   return entry.ready;
 }
 
