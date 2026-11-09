@@ -99,6 +99,28 @@ const it = baseIt.extend<BundlePaths & { bundle: BundlePaths }>({
 });
 
 describe("loadEnabledBundleMcpConfig", () => {
+  it("loads Cursor mcp.json over legacy .mcp.json defaults", async ({ homeDir, workspaceDir }) => {
+    const pluginId = "cursor-mcp";
+    const pluginRoot = resolveBundlePluginRoot(homeDir, pluginId);
+    await writeBundleTextFiles(pluginRoot, {
+      ".cursor-plugin/plugin.json": JSON.stringify({ name: pluginId }),
+      ".mcp.json": JSON.stringify({
+        mcpServers: { legacy: stdio(), shared: stdio({ args: ["legacy"] }) },
+      }),
+      "mcp.json": JSON.stringify({
+        mcpServers: { canonical: stdio(), shared: stdio({ args: ["canonical"] }) },
+      }),
+    });
+    const loaded = loadEnabled(workspaceDir, pluginId);
+    expect(Object.keys(loaded.config.mcpServers).toSorted()).toEqual([
+      "canonical",
+      "legacy",
+      "shared",
+    ]);
+    expect(loaded.config.mcpServers.shared?.args).toEqual(["canonical"]);
+    expectNoDiagnostics(loaded.diagnostics);
+  });
+
   it("loads native plugin MCP declarations", async () => {
     const workspaceDir = await tempHarness.createTempDir("openclaw-native-mcp-workspace-");
     const pluginRoot = await tempHarness.createTempDir("openclaw-native-mcp-plugin-");

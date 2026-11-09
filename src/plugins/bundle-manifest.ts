@@ -28,6 +28,8 @@ import {
 const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
 export const CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH = ".claude-plugin/plugin.json";
 const CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH = ".cursor-plugin/plugin.json";
+// Keep the documented legacy path; Cursor's canonical file takes merge precedence.
+export const CURSOR_BUNDLE_MCP_DEFAULT_PATHS = [".mcp.json", "mcp.json"];
 const AGENT_BUNDLE_MANIFEST_RELATIVE_PATH = "plugin.json";
 export const BUNDLE_MANIFEST_PATHS: Readonly<Record<PluginBundleFormat, string>> = {
   agent: AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
@@ -169,14 +171,14 @@ function resolveCursorComponents(
     ...(commands.length > 0 ? ["commands"] : []),
     ...(agents.length > 0 ? ["agents"] : []),
   ];
-  for (const [capability, defaultPath] of [
-    ["hooks", ".cursor/hooks.json"],
-    ["rules", ".cursor/rules"],
-    ["mcpServers", ".mcp.json"],
+  for (const [capability, defaultPaths] of [
+    ["hooks", [".cursor/hooks.json"]],
+    ["rules", [".cursor/rules"]],
+    ["mcpServers", CURSOR_BUNDLE_MCP_DEFAULT_PATHS],
   ] as const) {
     if (
       hasInlineCapabilityValue(raw[capability]) ||
-      pluginCacheExistsSync(path.join(rootDir, defaultPath))
+      defaultPaths.some((defaultPath) => pluginCacheExistsSync(path.join(rootDir, defaultPath)))
     ) {
       capabilities.push(capability);
     }
