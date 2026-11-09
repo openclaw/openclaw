@@ -43,6 +43,7 @@ import {
   assertTemplatesLabsEnabled,
   TemplatesLabsDisabledError,
 } from "../../templates/labs-gate.js";
+import { TemplateProjectError } from "../../templates/project.js";
 import type { TemplateAddPlan } from "../../templates/types.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { deleteAgentConfigEntry } from "./agents-config-mutations.js";
@@ -137,10 +138,21 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
       }
       diagnostic(stage, "failed", sourceKind);
       const message =
-        error instanceof ClawHubSourceError
-          ? error.message
-          : "Template Add preview is unavailable. Review Gateway logs.";
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+        error instanceof TemplateProjectError && error.code === "project_invalid"
+          ? `${error.message} Run openclaw templates validate <project> and correct the reported diagnostics before retrying.`
+          : error instanceof ClawHubSourceError
+            ? error.message
+            : "Template Add preview is unavailable. Review Gateway logs.";
+      respond(
+        false,
+        undefined,
+        errorShape(
+          error instanceof TemplateProjectError && error.code === "project_invalid"
+            ? ErrorCodes.INVALID_REQUEST
+            : ErrorCodes.UNAVAILABLE,
+          message,
+        ),
+      );
     }
   },
   "templates.add.apply": async ({
@@ -376,7 +388,8 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
         error instanceof TemplateGatewayAuthorityError ||
         error instanceof TemplatesLabsDisabledError
           ? ErrorCodes.FORBIDDEN
-          : error instanceof TemplateGatewayPlanChangedError ||
+          : (error instanceof TemplateProjectError && error.code === "project_invalid") ||
+              error instanceof TemplateGatewayPlanChangedError ||
               error instanceof TemplateGatewayPlanBlockedError ||
               error instanceof TemplateGatewayConsentError ||
               error instanceof TemplateSkillConsentError ||
@@ -386,15 +399,17 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
             : ErrorCodes.UNAVAILABLE;
       diagnostic(stage, code === ErrorCodes.FORBIDDEN ? "forbidden" : "failed", sourceKind);
       const message =
-        error instanceof TemplateGatewayAuthorityError ||
-        error instanceof TemplatesLabsDisabledError ||
-        error instanceof TemplateGatewayConsentError ||
-        error instanceof TemplateSkillConsentError ||
-        error instanceof TemplateGatewayPlanBlockedError ||
-        error instanceof TemplateGatewayPlanChangedError ||
-        error instanceof ClawHubSourceError
-          ? error.message
-          : "Could not add this Template. Review Gateway logs before retrying.";
+        error instanceof TemplateProjectError && error.code === "project_invalid"
+          ? `${error.message} Run openclaw templates validate <project> and correct the reported diagnostics before retrying.`
+          : error instanceof TemplateGatewayAuthorityError ||
+              error instanceof TemplatesLabsDisabledError ||
+              error instanceof TemplateGatewayConsentError ||
+              error instanceof TemplateSkillConsentError ||
+              error instanceof TemplateGatewayPlanBlockedError ||
+              error instanceof TemplateGatewayPlanChangedError ||
+              error instanceof ClawHubSourceError
+            ? error.message
+            : "Could not add this Template. Review Gateway logs before retrying.";
       respond(
         false,
         undefined,

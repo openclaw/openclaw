@@ -9,6 +9,7 @@ import {
 } from "../../templates/gateway-add-apply.js";
 import { TemplateGatewayConsentError } from "../../templates/gateway-plugin-consent.js";
 import { TemplateSkillConsentError } from "../../templates/gateway-skill-consent.js";
+import { TemplateProjectError } from "../../templates/project.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import { templatesAddHandlers } from "./templates-add.js";
@@ -514,3 +515,20 @@ it("records a partial Add as a non-success outcome", async () => {
     expect.objectContaining({ operation: "apply", stage: "apply", outcome: "partial" }),
   );
 });
+
+it.each(["plan", "apply"] as const)(
+  "returns actionable invalid-project diagnostics for %s",
+  async (operation) => {
+    const service = operation === "plan" ? planAdd : applyAdd;
+    service.mockRejectedValueOnce(
+      new TemplateProjectError("project_invalid", "missing openclaw.template"),
+    );
+    const replies = await callAdd(operation, () => enabled, {
+      source: { kind: "local", path: "/tmp/invalid-template" },
+    });
+    expect(replies[0]?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringMatching(/missing openclaw.template.*templates validate/s),
+    });
+  },
+);
