@@ -8,6 +8,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import * as runtimeSnapshot from "../config/runtime-snapshot.js";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
@@ -31,7 +32,10 @@ import {
   refreshPreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimePublicationListener,
 } from "./prepared-model-runtime.js";
-import { withPreparedModelRuntimeReadBatch } from "./prepared-model-runtime.owner.js";
+import {
+  preparedModelRuntimeConfigsMatch,
+  withPreparedModelRuntimeReadBatch,
+} from "./prepared-model-runtime.owner.js";
 
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
   const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
@@ -109,6 +113,34 @@ function holdNextCatalogWrite() {
 }
 
 describe("prepared model runtime owner selection", () => {
+  it("hashes each config once per synchronous read batch", () => {
+    const previousConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    const currentConfig = structuredClone(previousConfig);
+    const hashRuntimeConfig = vi.spyOn(runtimeSnapshot, "hashRuntimeConfigValue");
+    const compareRepeatedly = () => {
+      for (let index = 0; index < 470; index += 1) {
+        expect(preparedModelRuntimeConfigsMatch(previousConfig, currentConfig)).toBe(true);
+      }
+    };
+
+    try {
+      withPreparedModelRuntimeReadBatch(() => {
+        compareRepeatedly();
+        withPreparedModelRuntimeReadBatch(compareRepeatedly);
+        compareRepeatedly();
+      });
+      expect(hashRuntimeConfig).toHaveBeenCalledTimes(4);
+
+      hashRuntimeConfig.mockClear();
+      for (let index = 0; index < 3; index += 1) {
+        expect(preparedModelRuntimeConfigsMatch(previousConfig, currentConfig)).toBe(true);
+      }
+      expect(hashRuntimeConfig).toHaveBeenCalledTimes(6);
+    } finally {
+      hashRuntimeConfig.mockRestore();
+    }
+  });
+
   it("awaits cold metadata preparation before deriving runtime selections", async () => {
     const prepared = createDeferred<pluginMetadata.PluginMetadataSnapshot>();
     const metadataStarted = createDeferred();
