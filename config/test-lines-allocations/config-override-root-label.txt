@@ -1,2 +1,0 @@
-# Cover the root path label in --config-override validation errors.
-1
