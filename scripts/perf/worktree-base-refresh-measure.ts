@@ -6,6 +6,9 @@
  * Add --profile for a separate phase-scoped candidate CPU profile.
  * Acceptance: unchanged origin selects the same commit with fetches 1 -> 0,
  * lower baseRefresh wall/CPU/allocation, no >20% regression in owner metrics.
+ * Add --advancing for a newer local origin HEAD: both arms must fetch once,
+ * preserve the target/ancestry, and reduce ref-completeness without extra objects.
+ * Run on Node 26 for the exact V8 total_allocated_bytes counter.
  * JS allocation is exact V8 allocation; native Git CPU/RSS uses macOS time -l.
  * File copying, startup and hydration are outside baseRefresh. This is neither
  * a Gateway send benchmark nor a reproduction of production queue contention.
@@ -31,6 +34,7 @@ const { values } = parseArgs({
     pairs: { type: "string", default: "5" },
     arm: { type: "string" },
     profile: { type: "boolean" },
+    advancing: { type: "boolean" },
   },
 });
 assert(values.seed && values.output, "--seed and --output are required");
@@ -79,6 +83,9 @@ if (!values.arm) {
           "--arm",
           arm,
         ];
+        if (values.advancing) {
+          args.push("--advancing");
+        }
         if (arm === "base" || control) {
           args.push("--base-file", baseline);
         }
@@ -99,10 +106,19 @@ if (!values.arm) {
 } else {
   const clone = path.join(output, "clone");
   await fs.cp(seed, clone, { recursive: true });
-  const expected = execFileSync(actualGit, ["-C", clone, "rev-parse", "refs/remotes/origin/main"], {
+  const cached = execFileSync(actualGit, ["-C", clone, "rev-parse", "refs/remotes/origin/main"], {
     env: gitEnv,
     encoding: "utf8",
   }).trim();
+  const expected = values.advancing
+    ? execFileSync(actualGit, ["-C", fileURLToPath(origin), "rev-parse", "HEAD"], {
+        env: gitEnv,
+        encoding: "utf8",
+      }).trim()
+    : cached;
+  if (values.advancing) {
+    assert.notEqual(cached, expected, "--advancing needs an unfetched origin tip");
+  }
   const metrics = path.join(output, "git-metrics");
   const bin = path.join(output, "bin");
   await fs.mkdir(metrics);
@@ -111,6 +127,8 @@ if (!values.arm) {
     path.join(bin, "git"),
     `#!/bin/sh\nreceipt=${shellQuote(metrics)}/\${OPENCLAW_PERF_GIT_PHASE:-outside}-$$\n` +
       `printf '%s\\n' "$*" > "$receipt.argv"\n` +
+      `if [ "$OPENCLAW_PERF_GIT_PHASE" = baseRefresh ]; then\n` +
+      `  export GIT_TRACE2_PERF="$receipt.perf" GIT_TRACE_PACKET="$receipt.packet"\nfi\n` +
       `exec /usr/bin/time -l -o "$receipt.time" ${shellQuote(actualGit)} "$@"\n`,
     { mode: 0o755 },
   );
@@ -228,15 +246,44 @@ if (!values.arm) {
     const result = await resolveWorktreeBase(clone);
     assert.equal(result.commit, expected);
     assert.equal(result.fetchSucceeded, true);
-    assert.equal(fetches, baseline ? 1 : 0);
+    assert.equal(fetches, values.advancing || baseline ? 1 : 0);
+    if (values.advancing) {
+      execFileSync(actualGit, ["-C", clone, "merge-base", "--is-ancestor", cached, expected], {
+        env: gitEnv,
+      });
+    }
     assert.equal(advertisements, 1);
     let gitCpuMs = 0;
     let gitPeakRssBytes = 0;
+    let receivedObjects = 0;
+    let offeredHaves = 0;
+    const gitPhasesMs: Record<string, number> = {};
     for (const filename of await fs.readdir(metrics)) {
-      if (!filename.startsWith("baseRefresh-") || !filename.endsWith(".time")) {
+      if (!filename.startsWith("baseRefresh-")) {
         continue;
       }
-      const receipt = await fs.readFile(path.join(metrics, filename), "utf8");
+      const text = await fs.readFile(path.join(metrics, filename), "utf8");
+      if (filename.endsWith(".packet")) {
+        offeredHaves += [...text.matchAll(/fetch> have /gu)].length;
+      }
+      if (filename.endsWith(".perf")) {
+        for (const match of text.matchAll(/write_pack_file\/wrote:(\d+)/gu)) {
+          receivedObjects += Number(match[1]);
+        }
+        for (const line of text.split("\n")) {
+          const fields = line.split("|").map((field) => field.trim());
+          if (fields[3] === "region_leave") {
+            const label = /label:(.*)$/u.exec(fields[8] ?? "")?.[1];
+            if (label) {
+              gitPhasesMs[label] = (gitPhasesMs[label] ?? 0) + Number(fields[6]) * 1000;
+            }
+          }
+        }
+      }
+      if (!filename.endsWith(".time")) {
+        continue;
+      }
+      const receipt = text;
       const cpu = /([\d.]+) user\s+([\d.]+) sys/u.exec(receipt);
       const rss = /(\d+)\s+maximum resident set size/u.exec(receipt);
       assert(cpu && rss, receipt);
@@ -245,6 +292,7 @@ if (!values.arm) {
     }
     const row = {
       arm: values.arm,
+      advancing: Boolean(values.advancing),
       baseline: Boolean(baseline),
       ownerSha256,
       ...phases.baseRefresh,
@@ -253,6 +301,9 @@ if (!values.arm) {
       advertisements,
       gitCpuMs,
       gitPeakRssBytes,
+      receivedObjects,
+      offeredHaves,
+      gitPhasesMs,
       commit: result.commit,
       loadBefore,
       loadAfter: loadavg(),
