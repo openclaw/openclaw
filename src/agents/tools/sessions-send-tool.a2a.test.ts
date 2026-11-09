@@ -150,7 +150,7 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
       reply: {
         status: "ok",
         terminalReply: { disposition: scenario.disposition },
-        sourceReplyDelivered: scenario.delivered,
+        sourceReplyDelivered: scenario.delivered ? true : undefined,
         yielded: "yielded" in scenario ? scenario.yielded : undefined,
       },
     });
