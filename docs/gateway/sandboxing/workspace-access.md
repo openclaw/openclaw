@@ -61,6 +61,16 @@ configured workspace when it is selected with `worktree: true`. This authorizes
 source preparation, not direct access to that host directory. Arbitrary external
 `cwd` values and direct project bindings remain restricted.
 
+On copy-on-write filesystems, managed Docker and Podman workspaces can clone a
+prepared pnpm dependency tree. The builder and runtime use the same pnpm store
+path outside the checkout, so a subsequent install can reuse those dependencies
+instead of replacing them because the store moved. The default store lives in
+the container's disposable `/tmp/openclaw-deps` tmpfs; its bytes are private to
+that container and are not included in the projection snapshot. An explicit
+`PNPM_CONFIG_STORE_DIR` environment setting (or the older `npm_config_store_dir`
+spelling) or command-line store selection still takes precedence. Changed dependencies still need installation, and
+package lifecycle scripts still run.
+
 Visible child sessions keep their managed worktree as the sandbox workspace on
 later turns, including sessions created before an update.
 
