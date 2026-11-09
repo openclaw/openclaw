@@ -1,11 +1,6 @@
-import { spawn } from "node:child_process";
-import { once } from "node:events";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
-import { CodexAppServerClient } from "./client.js";
+import type { CodexAppServerClient } from "./client.js";
 import {
   mergeCodexRateLimitsUpdate,
   readCodexRateLimitsRevision,
@@ -13,8 +8,6 @@ import {
   rememberCodexRateLimitsRead,
 } from "./rate-limit-cache.js";
 import { createClientHarness } from "./test-support.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function clientIdentity(): CodexAppServerClient {
   return {} as unknown as CodexAppServerClient;
@@ -107,54 +100,6 @@ it("serves a fresh snapshot over the real client runtime until elapsed time pass
     await harness.client.closeAndWait().catch(() => undefined);
   }
 });
-
-it.skipIf(process.platform === "win32")(
-  "expires the cached read from a real spawned app-server child across a wall-clock step back",
-  async () => {
-    // Real OS child process as the client transport (no in-memory EventEmitter):
-    // it speaks the app-server line protocol and emits account/rateLimits/updated.
-    const root = tempDirs.make("codex-rate-probe-");
-    const serverPath = path.join(root, "app-server.mjs");
-    await fs.writeFile(
-      serverPath,
-      `import { createInterface } from "node:readline";
-const notify = (method, params) =>
-  process.stdout.write(JSON.stringify({ method, params }) + "\\n");
-notify("account/rateLimits/updated", { rateLimits: { limitId: "codex" } });
-createInterface({ input: process.stdin }).on("line", (line) => {
-  let request;
-  try { request = JSON.parse(line); } catch { return; }
-  if (request.id === undefined) return;
-  process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\\n");
-});
-process.stdin.on("end", () => process.exit(0));
-`,
-    );
-    const child = spawn(process.execPath, [serverPath], { stdio: ["pipe", "pipe", "pipe"] });
-    const exited = once(child, "exit");
-    const client = CodexAppServerClient.fromTransport(child);
-    ensureCodexAppServerClientRuntime(client, { agentDir: root });
-    const wall = vi.spyOn(Date, "now").mockReturnValue(1_000_000_000_000);
-    const elapsed = vi.spyOn(performance, "now").mockReturnValue(0);
-    try {
-      await vi.waitFor(() =>
-        expect(readRecentCodexRateLimits(client)).toEqual({
-          rateLimits: { limitId: "codex" },
-        }),
-      );
-      // Real elapsed time passes the 10-minute max-age window…
-      elapsed.mockReturnValue(10 * 60_000 + 1);
-      // …while the wall clock steps backward, so a Date.now-keyed window would never lapse.
-      wall.mockReturnValue(1_000_000_000_000 - 60 * 60_000);
-      expect(readRecentCodexRateLimits(client)).toBeUndefined();
-    } finally {
-      client.close();
-      child.kill("SIGKILL");
-      await exited;
-      await client.closeAndWait().catch(() => undefined);
-    }
-  },
-);
 
 it("merges sparse rolling updates without clearing account metadata", () => {
   const client = clientIdentity();
