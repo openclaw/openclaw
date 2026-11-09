@@ -34,9 +34,18 @@ Python process, Codex, or Claude.
    Sharing → Screen Sharing**, or repair an existing **Remote Management** setup.
    Remote Management takes control of the Screen Sharing switch and requires
    **Observe** and **Control** permission for the account. OpenClaw's Desktop
-   sharing switch does not start either macOS service. The Control UI asks for
-   the Mac account credentials when it first connects; do not put them in
-   scripts or agent prompts.
+   sharing switch does not start either macOS service. Without a VNC password
+   file, the Control UI asks for the Mac account credentials when it first
+   connects; do not put them in scripts or agent prompts. For pointer and
+   keyboard control through the
+   non-Apple VNC viewer, [Apple requires the separate VNC viewer control
+   option](https://support.apple.com/guide/remote-desktop/apde0dd523e/mac).
+   Enable **VNC viewers may control screen with password** in the Mac's Sharing
+   settings, use a distinct password, and set the node's
+   `desktop.host.passwordFile` to an owner-only file containing it. This legacy
+   VNC option broadens access to the Mac; prefer a dedicated Mac VM for this
+   workflow. With the file configured, OpenClaw selects VncAuth if offered and
+   reports a setup error if the server still offers ARD only.
 
 ## Develop and view
 

@@ -103,6 +103,8 @@ describe("RFB security classification", () => {
     expect(classifyRfbSecurity([30])).toBe("ard-account");
     expect(classifyRfbSecurity([19])).toBe("unsupported");
     expect(classifyRfbSecurity([30, 2])).toBe("ard-account");
+    expect(classifyRfbSecurity([30, 2], { vncPasswordConfigured: true })).toBe("vnc-password");
+    expect(classifyRfbSecurity([30], { vncPasswordConfigured: true })).toBe("unsupported");
     expect(classifyRfbSecurity([2, 30])).toBe("vnc-password");
     expect(classifyRfbSecurity([33, 2])).toBe("vnc-password");
     expect(classifyRfbSecurity([19, 2])).toBe("unsupported");

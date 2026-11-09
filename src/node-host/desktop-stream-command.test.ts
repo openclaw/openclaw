@@ -185,6 +185,19 @@ describe("node desktop stream command", () => {
     ).rejects.toThrow("unsupported fields");
   });
 
+  it("explains when an explicit VNC password cannot authenticate to the host", async () => {
+    const rfb = await listenRfbSecurity([30]);
+    await expect(
+      invokeNodeDesktopStream({
+        paramsJSON: streamParams("desktop"),
+        gatewayUrl: "ws://127.0.0.1:1",
+        config: { enabled: true, port: rfb.port, passwordFile: path.resolve("vnc-password") },
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("RFB server does not offer VNC password authentication");
+    await vi.waitFor(() => expect(rfb.peers.size).toBe(0));
+  });
+
   it("refuses an attach path that changes the connected gateway origin", async () => {
     await expect(
       invokeNodeDesktopStream({
@@ -209,6 +222,7 @@ describe("node desktop stream command", () => {
         username,
         contextPath,
         workerAuth: auth,
+        publicPasswordFile: false,
       })),
     ),
     {
@@ -217,10 +231,19 @@ describe("node desktop stream command", () => {
       username: "worker",
       auth: "vnc-password",
       workerAuth: "ard-account",
+      publicPasswordFile: false,
+    },
+    {
+      contextPath: "",
+      securityTypes: [30, 2],
+      username: undefined,
+      auth: "vnc-password",
+      workerAuth: "vnc-password",
+      publicPasswordFile: true,
     },
   ])(
     "authenticates public and worker attaches through $contextPath with security $securityTypes and tears down on cancellation",
-    async ({ contextPath, securityTypes, username, auth, workerAuth }) => {
+    async ({ contextPath, securityTypes, username, auth, workerAuth, publicPasswordFile }) => {
       const passwordFilePath = path.join(tempDirs.make("desktop-account-"), "password");
       await fs.writeFile(passwordFilePath, "lease-password\n");
       const { port: rfbPort, peers: rfbPeers } = await listenRfbSecurity(securityTypes);
@@ -284,7 +307,11 @@ describe("node desktop stream command", () => {
             ? invokeNodeWorkerDesktopStream(connection)
             : invokeNodeDesktopStream({
                 ...connection,
-                config: { enabled: true, port: rfbPort },
+                config: {
+                  enabled: true,
+                  port: rfbPort,
+                  ...(publicPasswordFile ? { passwordFile: passwordFilePath } : {}),
+                },
                 emitStatus,
               });
         void running.catch(() => undefined);
@@ -301,7 +328,7 @@ describe("node desktop stream command", () => {
         await vi.waitFor(() =>
           expect(stream.metadata).toEqual({
             auth: kind === "worker" ? workerAuth : auth,
-            ...(kind === "worker" ? { vncPassword: "lease-password" } : {}),
+            ...(kind === "worker" || publicPasswordFile ? { vncPassword: "lease-password" } : {}),
           }),
         );
         if (kind === "public") {
