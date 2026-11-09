@@ -190,9 +190,8 @@ describe("native completion final-effect authority", () => {
     async (revokedSource, { signal }) => {
       const context = getContext();
       const pair = await createRegisteredCompletionPair(context);
-      // This fixture supplies ordinary operator inputs; keep those test-owned sources
-      // active until their explicit revocation instead of relying on completion custody.
-      const releaseSources = pair.runs.map((run) => run.source.authority.retain?.());
+      // Registry rows own accepted result settlement, not the original operator invocation.
+      // Native harness custody still enforces its live source in the cases below.
       const gates = [createGate(), createGate()] as const;
       const sources: unknown[] = [];
       const attempts: string[] = [];
@@ -251,7 +250,7 @@ describe("native completion final-effect authority", () => {
         await pair.settle();
         await settleRequests(true);
         expect(attempts.toSorted()).toEqual(pair.runs.map((run) => run.runId).toSorted());
-        const allowed = pair.runs.filter((_, index) => index !== revokedIndex);
+        const allowed = pair.runs;
         expect(requesterCommands).toBe(allowed.length);
         expect(agentCommandMock).toHaveBeenCalledTimes(2 + allowed.length);
         const events = sessionAccessor.loadTranscriptEventsSync(pair.requesterScope);
@@ -265,16 +264,10 @@ describe("native completion final-effect authority", () => {
         const stored = loadSubagentRegistryFromSqlite();
         const runtimeContext = JSON.stringify(requesterRuntimeContext);
         for (const [index, run] of pair.runs.entries()) {
-          expect(sources[index]).toBe(run.source.authority.source);
-          expect(stored.get(run.runId)?.delivery?.status === "delivered").toBe(
-            index !== revokedIndex,
-          );
-          expect(runtimeContext.includes(run.result)).toBe(index !== revokedIndex);
-          if (index === revokedIndex) {
-            expect(context.dedupe.has(`agent:${run.idempotencyKey}`)).toBe(false);
-          } else {
-            expect(context.dedupe.get(`agent:${run.idempotencyKey}`)).toMatchObject({ ok: true });
-          }
+          expect(sources[index]).toBeUndefined();
+          expect(stored.get(run.runId)?.delivery?.status).toBe("delivered");
+          expect(runtimeContext).toContain(run.result);
+          expect(context.dedupe.get(`agent:${run.idempotencyKey}`)).toMatchObject({ ok: true });
           expect(JSON.stringify(events)).not.toContain(run.result);
           resumeSubagentRun(run.runId);
         }
@@ -286,9 +279,6 @@ describe("native completion final-effect authority", () => {
       } finally {
         release();
         await pair.dispose();
-        for (const releaseSource of releaseSources) {
-          releaseSource?.();
-        }
         await settleRequests(true);
         signal.removeEventListener("abort", release);
       }

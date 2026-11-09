@@ -177,10 +177,10 @@ export async function runAnnounceAgentCall(params: {
     };
     const continuationCaller = params.controllerInput?.continuationCaller;
     const resume = () => (continuationCaller ? continuationCaller.run(dispatch) : dispatch());
-    // Registry/controller settlement outlives its original invocation. Ordinary one-way
-    // replies keep their separately retained, live-checked requester custody.
+    // Recorded registry settlement outlives its invocation. A mailbox input alone
+    // does not replace native harness or ordinary reply custody and its live checks.
     const dispatched =
-      params.controllerInput || params.delegatedToolPolicyHandoff
+      continuationCaller || params.delegatedToolPolicyHandoff
         ? withoutGatewayToolCallerIdentity(() =>
             runOutsideOperatorToolGatewayAuthority(() =>
               withPluginRuntimeGatewayContextResolver(params.resolveGatewayContext, resume, {

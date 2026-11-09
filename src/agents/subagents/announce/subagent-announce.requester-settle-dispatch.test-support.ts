@@ -7,7 +7,11 @@ import { createChatRunState } from "../../../gateway/server-chat-state.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { createContext as createGatewayTestContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import {
@@ -138,6 +142,12 @@ export function wakeParams(
 }
 
 export function withGateway(context: GatewayRequestContext, run: () => Promise<boolean>) {
+  const resolveGatewayContext = () => context;
+  for (const entry of registryRead.listSubagentRunsForRequester()) {
+    if (!getGatewayContextResolver(entry)) {
+      bindGatewayContextResolver(entry, resolveGatewayContext);
+    }
+  }
   return withPluginRuntimeGatewayRequestScope(
     { context, client: createSyntheticPluginRuntimeClient(), isWebchatConnect: () => false },
     run,

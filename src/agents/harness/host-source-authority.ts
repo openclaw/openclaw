@@ -175,7 +175,8 @@ export function retainHarnessSource(
   if (!source) {
     return undefined;
   }
-  const modelPolicy = readRunModelPolicy({ admittedRunContext });
+  // Retain only the independent requester ceiling; the operator policy stays live on source.
+  const modelPolicy = admittedRunContext.modelPolicy;
   const modelExecution = nativeModelPolicySupported
     ? undefined
     : bindOperatorModelExecution(source, undefined, undefined, modelPolicy);

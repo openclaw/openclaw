@@ -42,20 +42,27 @@ async function createSourceHost(
 }
 
 it("preserves the requester model ceiling in retained native source authority", async () => {
-  const source = createAdmittedRunOperatorAuthority({
-    profileId: "system-source",
-    scopes: ["operator.write"],
-    assertCurrent: () => {},
-  });
   const modelPolicy = prepareOperatorModelPolicy({
     cfg: { agents: { defaults: { model: "fixture/allowed" } } },
     policy: { allow: ["fixture/allowed"] },
     manifestPlugins: [],
   });
   assert(modelPolicy);
+  let livePolicy: PreparedOperatorModelPolicy | undefined = modelPolicy;
+  const source = createAdmittedRunOperatorAuthority({
+    profileId: "system-source",
+    scopes: ["operator.write"],
+    get modelPolicy() {
+      return livePolicy;
+    },
+    assertCurrent: () => {},
+  });
   const host = await createSourceHost(source, undefined, "exact", {}, modelPolicy);
   const retained = retain(host);
   try {
+    host.closeHost();
+    host.closeAdmission();
+    livePolicy = undefined;
     expect(retained.modelPolicyRequired).toBe(true);
     expect(() =>
       retained.bindModelExecution?.({ provider: "fixture", model: "forbidden" }),

@@ -97,7 +97,7 @@ export async function dispatchSessionsSendFollowup(
     withRequesterAuthority?: <T>(run: () => T) => T;
   },
 ) {
-  const { modelCeiling } = captureSubagentSpawnGatewayContext();
+  const { modelCeiling, gatewayContextResolver } = captureSubagentSpawnGatewayContext();
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
   const completionChild = options.watch
@@ -223,6 +223,7 @@ export async function dispatchSessionsSendFollowup(
               childAgentId: params.sessionStoreTarget.agentId,
               requesterSessionKey: options.requesterSessionKey,
               requesterModelPolicySnapshot: modelCeiling,
+              gatewayContextResolver,
               requesterDisplayKey: options.requesterSessionKey,
               requesterAgentId: options.requesterAgentId,
               requesterTurnRunId: registryTurn,

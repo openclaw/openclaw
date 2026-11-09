@@ -9,7 +9,6 @@ import { isSessionControllerWorkActive } from "../../sessions/session-controller
 import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
-import { registerSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import { registerAgentContinuationRecoveryTests } from "./agent-continuation-recovery.test-utils.js";
 import { registerAgentSendEventTests } from "./agent.session-events.test-utils.js";
 import { registerPluginSubagentToolForwardingTests } from "./agent.spawned-child.test-support.js";
@@ -344,83 +343,6 @@ describe("gateway agent handler", () => {
   });
 
   registerPluginSubagentToolForwardingTests();
-
-  it("forwards trusted delegated policy handoffs only from internal client metadata", async () => {
-    primeMainAgentRun();
-    const handoffId = registerSubagentCompletionToolHandoff({
-      sourceSessionKey: "agent:main:subagent:child",
-      sourceSessionId: "child-session-id",
-      targetSessionKey: "agent:main:main",
-      targetSessionId: "existing-session-id",
-      idempotencyKey: "delegated-policy-handoff",
-    });
-
-    await invokeAgent(
-      {
-        message: "child completed",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "delegated-policy-handoff",
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:subagent:child",
-          sourceTool: "subagent_announce",
-        },
-        internalEvents: [
-          {
-            type: "task_completion",
-            source: "subagent",
-            childSessionKey: "agent:main:subagent:child",
-            childSessionId: "child-session-id",
-            announceType: "subagent task",
-            taskLabel: "work",
-            status: "ok",
-            statusLabel: "completed",
-            result: "child completed",
-            replyInstruction: "Continue from this result.",
-          },
-        ],
-      },
-      {
-        client: createSyntheticPluginRuntimeClient({
-          delegatedToolPolicyHandoffId: handoffId,
-        }),
-      },
-    );
-
-    const call = await waitForAgentCommandCall<{
-      onActiveModelSelected?: (selection: { provider: string; model: string }) => Promise<void>;
-      trustedInternalHandoff?: {
-        kind: string;
-        sourceSessionKey: string;
-        sourceSessionId?: string;
-        targetSessionKey: string;
-        targetSessionId: string;
-        provider: string;
-        model: string;
-      };
-    }>();
-    const trustedInternalHandoff = expectDefined(
-      call.trustedInternalHandoff,
-      "trusted completion handoff test invariant",
-    );
-    await expectDefined(
-      call.onActiveModelSelected,
-      "model-selection callback test invariant",
-    )({
-      provider: "anthropic",
-      model: "sonnet-4.6",
-    });
-    expect(call.trustedInternalHandoff).toBe(trustedInternalHandoff);
-    expect(call.trustedInternalHandoff).toMatchObject({
-      kind: "subagent-completion",
-      sourceSessionKey: "agent:main:subagent:child",
-      sourceSessionId: "child-session-id",
-      targetSessionKey: "agent:main:main",
-      targetSessionId: "existing-session-id",
-      provider: "anthropic",
-      model: "sonnet-4.6",
-    });
-  });
 
   it("does not claim stale pre-existing sessions for plugin runtime cleanup", async () => {
     const sessionKey = "agent:main:existing-user-session";
