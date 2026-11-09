@@ -64,6 +64,10 @@ function assertCompatibleMinVersion(bundle: RemoteModelCatalogWireBundle): void 
   }
 }
 
+function configuredFetchSsrFPolicy(config: OpenClawConfig) {
+  return config.tools?.web?.fetch?.ssrfPolicy;
+}
+
 function isExplicitLocalHttpUrl(config: OpenClawConfig, url: string): boolean {
   if (!config.models?.catalogRefresh?.url) {
     return false;
@@ -122,17 +126,22 @@ export async function refreshRemoteModelCatalog(params: {
     } as const;
     const explicitOverride = Boolean(params.config.models?.catalogRefresh?.url);
     const localHttp = isExplicitLocalHttpUrl(params.config, url);
+    const configuredPolicy = configuredFetchSsrFPolicy(params.config);
     let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
     if (explicitOverride) {
       const configuredOrigin = new URL(url).origin;
       guarded = await fetchConfiguredLocalOriginWithSsrFGuard({
         ...fetchParams,
         configuredLocalOriginBaseUrl: configuredOrigin,
-        policy: { allowedOrigins: [configuredOrigin] },
+        policy: { ...configuredPolicy, allowedOrigins: [configuredOrigin] },
         requireHttps: !localHttp,
       });
     } else {
-      guarded = await fetchWithSsrFGuard({ ...fetchParams, requireHttps: true });
+      guarded = await fetchWithSsrFGuard({
+        ...fetchParams,
+        requireHttps: true,
+        ...(configuredPolicy ? { policy: configuredPolicy } : {}),
+      });
     }
     try {
       if (guarded.response.status === 304) {
