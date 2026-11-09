@@ -438,7 +438,7 @@ export function observeQualificationAdmission(
       isDeepStrictEqual(authenticated.request, admission.request),
       "Retained admission differs from the original frozen request",
     );
-    return { descriptor: admission.descriptor, run: admission.run };
+    return { descriptor: admission.descriptor, run: admission.run, authenticated };
   }
   const inventory: unknown = JSON.parse(
     client.readApi("repos/" + REPOSITORY + "/actions/workflows/" + admission.workflowId + "/runs", [
@@ -513,7 +513,7 @@ export function observeQualificationAdmission(
     isDeepStrictEqual(authenticated.request, admission.request),
     "Admission returned a different frozen request",
   );
-  return { descriptor, run: { id: Number(run.id), attempt: 1 } };
+  return { descriptor, run: { id: Number(run.id), attempt: 1 }, authenticated };
 }
 
 export async function qualifyAdmission(
@@ -625,7 +625,12 @@ export async function qualifyAdmission(
       const packed = JSON.stringify({ ...envelope, qualificationAdmission: observed.descriptor });
       record = {
         ...record,
-        admission: { ...admission, ...observed, phase: "observed" },
+        admission: {
+          ...admission,
+          descriptor: observed.descriptor,
+          run: observed.run,
+          phase: "observed",
+        },
         request: {
           ...record.request,
           inputs: { ...record.request.inputs, trusted_workflow_json: packed },
@@ -633,7 +638,7 @@ export async function qualifyAdmission(
         },
       };
       retain(record);
-      return record;
+      return { record, authenticated: observed.authenticated };
     }
     await sleep(15_000);
   } while (Date.now() < deadline);
