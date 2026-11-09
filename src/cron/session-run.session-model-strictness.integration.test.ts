@@ -37,10 +37,13 @@ import { closeSessionControllerAdmission } from "../sessions/session-controller.
 import { resetSessionControllerStateForTest } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
+import { CronService } from "./service.js";
 import { createCronAgentWatchdog } from "./service/agent-watchdog.js";
 import { runCronSessionTurn } from "./session-run.js";
+import { saveCronStore } from "./store.js";
 import type { CronStoredJob } from "./types.js";
 
 const admission = vi.hoisted(() => ({
@@ -214,6 +217,7 @@ describe("stored session model selections in scheduled session turns", () => {
     preflightCompactionWatchdog?: true;
     storedSelection?: Pick<SessionEntry, "modelOverrideSource">;
     target?: "main" | "session";
+    directMain?: true;
     payload?: { model?: string; fallbacks?: string[] };
     payloadKind?: "systemEvent";
     storedPin?: { provider: string; model: string } | null;
@@ -509,6 +513,14 @@ describe("stored session model selections in scheduled session turns", () => {
         sessionId: "pinned-conversation",
         updatedAt: Date.now(),
         sessionStartedAt: Date.now(),
+        ...(params.directMain
+          ? {
+              chatType: "direct" as const,
+              delivery: normalizeSessionDeliveryState({
+                context: { channel: "telegram", to: "100000001", accountId: "default" },
+              }),
+            }
+          : {}),
         ...(params.preflightCompactionWatchdog
           ? {
               totalTokens: 125_000,
@@ -560,27 +572,68 @@ describe("stored session model selections in scheduled session turns", () => {
         expectDefined(watchdog, "scheduled setup watchdog").start();
       }
       const activeJob: CronStoredJob = { ...stored, id: "active-turn", name: "Active turn" };
-      const runTurn = (scheduled: CronStoredJob) =>
-        runCronSessionTurn({
-          occurrence: TEST_SCHEDULED_OCCURRENCE,
-          cfg,
-          agentId: "main",
-          sessionKey,
-          job: scheduled,
-          text: "Reply.",
-          admissionSource: "operator-schedule",
-          deliveryAttemptFence: null,
-          abortSignal: controller.signal,
-          onExecutionStarted: watchdog?.noteRunnerStarted,
-          onExecutionPhase: watchdog?.notePhase,
-          onLaneWait: (info) =>
-            info?.waiting === false ? watchdog?.noteLaneAdmitted() : watchdog?.noteLaneWait(),
-          assertCurrent() {
-            if (revoked) {
-              throw new Error("Scheduled source revoked");
-            }
-          },
-        });
+      const runTurn = (scheduled: CronStoredJob) => {
+        const execute = (
+          execution: Pick<
+            Parameters<typeof runCronSessionTurn>[0],
+            "occurrence" | "admissionSource" | "deliveryAttemptFence" | "assertCurrent"
+          >,
+        ) =>
+          runCronSessionTurn({
+            ...execution,
+            cfg,
+            agentId: "main",
+            sessionKey,
+            job: scheduled,
+            text: "Reply.",
+            abortSignal: controller.signal,
+            onExecutionStarted: watchdog?.noteRunnerStarted,
+            onExecutionPhase: watchdog?.notePhase,
+            onLaneWait: (info) =>
+              info?.waiting === false ? watchdog?.noteLaneAdmitted() : watchdog?.noteLaneWait(),
+            assertCurrent() {
+              execution.assertCurrent();
+              if (revoked) {
+                throw new Error("Scheduled source revoked");
+              }
+            },
+          });
+        if (!params.directMain) {
+          return execute({
+            occurrence: TEST_SCHEDULED_OCCURRENCE,
+            admissionSource: "operator-schedule",
+            deliveryAttemptFence: null,
+            assertCurrent() {},
+          });
+        }
+        return (async () => {
+          const storePath = state.statePath("cron", "jobs.json");
+          await saveCronStore(storePath, { version: 1, jobs: [scheduled] });
+          let result: Awaited<ReturnType<typeof execute>> | undefined;
+          const cron = new CronService({
+            storePath,
+            scheduler: createTestGatewayScheduler(),
+            cronEnabled: true,
+            defaultAgentId: "main",
+            log: { debug() {}, info() {}, warn() {}, error() {} },
+            enqueueSystemEvent() {},
+            runIsolatedAgentJob: async () => {
+              throw new Error("Expected the native session runner");
+            },
+            runSessionEvent: async (execution) => {
+              result = await execute(execution);
+              return result;
+            },
+          });
+          try {
+            await cron.run(scheduled.id, "force");
+            return expectDefined(result, "native scheduled session result");
+          } finally {
+            cron.stop();
+            await cron.waitForIdle();
+          }
+        })();
+      };
       if (!activeTurn) {
         return {
           result: await runTurn(stored).finally(() => {
@@ -644,6 +697,17 @@ describe("stored session model selections in scheduled session turns", () => {
       return { result, requests, summaryRequests, timeouts };
     });
   }
+
+  it("runs a scheduled direct main session with its policy-scoped delivery capability", async () => {
+    const { result, requests } = await runWithFailingPinnedModel({
+      target: "main",
+      directMain: true,
+      storedPin: null,
+      payload: { fallbacks: [] },
+    });
+    expect(result.status, result.error).toBe("ok");
+    expect(requests).toEqual(["primary/model-a"]);
+  });
 
   it("lets scheduled preflight compaction finish beyond the setup watchdog", async () => {
     const { result, summaryRequests, timeouts, requests } = await runWithFailingPinnedModel({

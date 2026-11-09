@@ -69,7 +69,8 @@ export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string
           agentId: params.followupRun.run.agentId,
           runId,
           sessionId: params.followupRun.run.sessionId,
-          sessionKey,
+          // The occurrence retains the durable session; message tools use the policy scope.
+          sessionKey: params.runtimePolicySessionKey ?? sessionKey,
           jobId: automation.job.id,
           deliveryAttemptFence: automation.deliveryAttemptFence ?? null,
           operatorAuthority: params.followupRun.operatorAuthority,
