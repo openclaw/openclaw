@@ -74,6 +74,11 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
       "package-update-activation-recovery",
       ".mjs",
     ),
+    managedHandoffPostgresBridge: runtimeProcessEntrypoint(
+      "infra/update-managed-service-handoff-postgres.worker",
+      "managed-handoff-postgres-bridge.worker",
+      ".mjs",
+    ),
     managedHandoffRuntime: runtimeProcessEntrypoint(
       "infra/update-managed-service-handoff-sealed",
       "managed-handoff-runtime",
@@ -498,6 +503,10 @@ export const runtimeProcessHelperManifest = {
 
 // Each sealed bootstrap selects only the sibling entries it owns.
 export const runtimeProcessSealedManifest = {
+  managedHandoff: {
+    ownerSource: "src/infra/update-managed-service-handoff-sealed.ts",
+    entries: [["postgresBridge", "managedHandoffPostgresBridge"]],
+  },
   worker: {
     ownerSource: "src/worker/worker-deploy-runtime.ts",
     entries: [
@@ -526,20 +535,14 @@ export const runtimeProcessSealedManifest = {
     ownerSource: string;
     entries: readonly (readonly [
       keyof ReturnType<typeof createRuntimeProcessEntrypoints>,
-      keyof typeof runtimeProcessDeployManifest | keyof typeof runtimeProcessHelperManifest,
+      (
+        | keyof typeof runtimeProcessDeployManifest
+        | keyof typeof runtimeProcessHelperManifest
+        | keyof ReturnType<typeof createRuntimeProcessEntrypoints>
+      ),
     ])[];
   }
 >;
-
-export function createSealedRuntimeProcessEntrypoints(
-  group: keyof typeof runtimeProcessSealedManifest,
-  currentModuleUrl: string,
-) {
-  return runtimeProcessSealedManifest[group].entries.map(([name, entry]) => ({
-    name,
-    url: new URL(`./${entry}.mjs`, currentModuleUrl),
-  }));
-}
 
 /** Source-only build workers are declared without entering the packaged runtime graph. */
 export const runtimeProcessToolingEntrypoints = {

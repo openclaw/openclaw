@@ -1,2 +1,2 @@
-# Issue #196245: real PostgreSQL foreground-origin verification and preserved main-thread SQL refusal.
-128
+# Issue #196245: real PostgreSQL foreground verification and cold native helper adoption/cancellation.
+235

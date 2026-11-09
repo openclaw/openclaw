@@ -1,8 +1,10 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createSealedRuntimeProcessEntrypoints } from "../infra/runtime-process-manifest.js";
-import type { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import {
+  createSealedRuntimeProcessEntrypoints,
+  type resolveRuntimeProcessEntrypointUrl,
+} from "../infra/runtime-process-url.js";
 import { runtimeNeedsTypeScriptLoader } from "../infra/runtime-worker-url.js";
 
 /** Give fixture workers the same filenames as a sealed deployment without replacing its resolver. */

@@ -1,15 +1,20 @@
 import { fileURLToPath } from "node:url";
 import type { UserConfig } from "tsdown";
 import { packageActivationRuntimeEntrypoint } from "../../src/infra/package-update-activation-runtime-assets.ts";
-import { managedHandoffRuntimeEntrypoint } from "../../src/infra/update-managed-service-handoff-runtime-assets.ts";
+import {
+  managedHandoffPostgresBridgeEntrypoint,
+  managedHandoffRuntimeEntrypoint,
+} from "../../src/infra/update-managed-service-handoff-runtime-assets.ts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 
 /** The installed CLI and invocation compiler seal the same typed lease owner. */
 export function createManagedHandoffBuildConfigs() {
-  return [managedHandoffRuntimeEntrypoint, packageActivationRuntimeEntrypoint].map((entry) =>
-    createSealedRecoveryBuildConfig(entry),
-  );
+  return [
+    managedHandoffRuntimeEntrypoint,
+    packageActivationRuntimeEntrypoint,
+    managedHandoffPostgresBridgeEntrypoint,
+  ].map((entry) => createSealedRecoveryBuildConfig(entry));
 }
 
 function createSealedRecoveryBuildConfig(entry: typeof managedHandoffRuntimeEntrypoint) {
