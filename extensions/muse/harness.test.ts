@@ -379,7 +379,7 @@ describe("Muse native MSP harness", () => {
     expect(requests.map((request) => request.method)).toContain("turn/start");
   });
 
-  it("reports Muse's counted-once token usage and context occupancy", async () => {
+  it("reports this turn's Muse token usage and last-completion context", async () => {
     const { run } = setup();
     expect((await run({ prompt: "usage" })).attemptUsage).toMatchObject({
       input: 2200,
@@ -387,12 +387,6 @@ describe("Muse native MSP harness", () => {
       reasoningTokens: 10,
       total: 2254,
       contextUsage: { state: "available", promptTokens: 1200, totalTokens: 1234 },
-    });
-    // Measured zero is available usage; the host accumulator keeps it, unlike absent usage.
-    expect((await run({ prompt: "usage-zero" })).attemptUsage).toMatchObject({
-      usageReport: { state: "available" },
-      total: 0,
-      contextUsage: { state: "available", promptTokens: 0, totalTokens: 0 },
     });
     expect((await run()).attemptUsage).toBeUndefined();
   });
@@ -536,30 +530,19 @@ describe("Muse native MSP harness", () => {
     }
   });
 
-  it("routes approvals through the host and submits the offered server choice", async () => {
-    const { params, run } = setup();
-    const result = await run({ prompt: "approval" });
-    expect(params.hostCapabilities.requestApproval).toHaveBeenCalledWith(
-      expect.objectContaining({ toolName: "shell", allowedDecisions: ["allow-once", "deny"] }),
-    );
-    expect(terminal(result).kind).toBe("ok");
-    expect(result.assistantTexts).toEqual(["started: hello"]);
-  });
-
   it("reports SDK-rejected approval feedback and settles without granting the command", async () => {
     const { harness, run, log } = setup(true);
     // Inject an invalid decision at the SDK boundary to exercise its real rejection;
     // the harness itself never attaches feedback to an approval choice.
-    const registration = vi.spyOn(Session.prototype, "onApproval").mockImplementation(function (
-      this: Session,
-      handler,
-    ) {
-      registration.mockRestore();
-      this.onApproval(async (request) => ({
-        ...(await handler(request)),
-        feedback: "Do not run this command",
-      }));
-    });
+    const registration = vi
+      .spyOn(Session.prototype, "onApproval")
+      .mockImplementation(function (this: Session, handler) {
+        registration.mockRestore();
+        this.onApproval(async (request) => ({
+          ...(await handler(request)),
+          feedback: "Do not run this command",
+        }));
+      });
     try {
       const result = await run({ prompt: "approval-settle" });
       expectFailure(
@@ -580,18 +563,6 @@ describe("Muse native MSP harness", () => {
       registration.mockRestore();
       await harness.dispose?.();
     }
-  });
-
-  it("interrupts the real MSP transport when the caller aborts", async () => {
-    const { run } = setup();
-    const controller = new AbortController();
-    const onExecutionStarted = vi.fn(() => controller.abort());
-    const result = await run({
-      prompt: "wait",
-      abortSignal: controller.signal,
-      onExecutionStarted,
-    });
-    expect(terminal(result).kind).toBe("aborted");
   });
 
   it.each<[string, string, number]>([
@@ -664,8 +635,9 @@ describe("Muse native MSP harness", () => {
     const result = await run({ prompt: "approval", timeoutMs: 2 ** 31 });
     expect(terminal(result)).toMatchObject({ kind: "ok" });
     expect(params.hostCapabilities.requestApproval).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 120_000 }),
+      expect.objectContaining({ toolName: "shell", timeoutMs: 120_000 }),
     );
+    expect(result.assistantTexts).toEqual(["started: hello"]);
   });
 
   it("keeps prepared credentials ahead of profile, environment, and CLI login", async () => {

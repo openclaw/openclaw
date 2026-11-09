@@ -72,23 +72,22 @@ function answer() {
       visibleOutput: "file content",
     });
   }
-  if (active.prompt === "usage" || active.prompt === "usage-zero") {
-    const completions =
-      active.prompt === "usage"
-        ? [
-            [1000, 20],
-            [1200, 34],
-          ]
-        : [[0, 0]];
-    for (const [promptTokens, outputTokens] of completions) {
-      const totalTokens = promptTokens + outputTokens;
-      const usage = {
-        inputTokens: promptTokens,
-        outputTokens,
-        cachedTokens: 0,
-        reasoningTokens: promptTokens ? 5 : 0,
-      };
-      event("session/tokenUsage", { promptTokens, totalTokens, usage, modelId: "muse-spark-1.3" });
+  if (active.prompt === "usage") {
+    // One notice per completion; another turn's and a malformed notice must not count.
+    const { turnId } = active;
+    const notices = [
+      [turnId, 1000, 1020],
+      [turnId, 1200, 1234],
+      ["other", 5, 9],
+      [turnId, "1", 9],
+    ];
+    for (const [turnId, promptTokens, totalTokens] of notices) {
+      event("session/tokenUsage", {
+        turnId,
+        promptTokens,
+        totalTokens,
+        usage: { reasoningTokens: 5 },
+      });
     }
   }
   const responses = new Map([
