@@ -1,4 +1,5 @@
 import { createMemo, onSettled, Show } from "solid-js";
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { createMarkdownRef } from "../../../components/markdown-dom-ref.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
@@ -50,14 +51,14 @@ export function saveFileWrapPreference(wrap: boolean): void {
 }
 
 export function computeFileMatches(content: string, query: string): number[] {
-  const normalizedQuery = query.toLocaleLowerCase();
+  const normalizedQuery = foldSearchCase(query.toLocaleLowerCase());
   if (!normalizedQuery) {
     return [];
   }
   return content
     .split(/\r\n?|\n/)
     .flatMap((line, index) =>
-      line.toLocaleLowerCase().includes(normalizedQuery) ? [index + 1] : [],
+      foldSearchCase(line.toLocaleLowerCase()).includes(normalizedQuery) ? [index + 1] : [],
     );
 }
 

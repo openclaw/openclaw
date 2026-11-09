@@ -1,6 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createMemo, For, Show } from "solid-js";
+import { foldSearchCase } from "../../../../src/shared/search-case.js";
 import { Checkbox } from "../../components/solid/checkbox.tsx";
 import "../../components/tooltip.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -454,7 +455,9 @@ function SessionLogs(props: {
       const showLogData = !initialLoading && !initialError && Boolean(logs?.length);
       const message = initialLoading ? "usage.loading.badge" : "usage.details.noMessages";
 
-      const normalizedQuery = normalizeLowercaseStringOrEmpty(filters.query).normalize("NFC");
+      const normalizedQuery = foldSearchCase(
+        normalizeLowercaseStringOrEmpty(filters.query),
+      ).normalize("NFC");
       const toolOptions = Array.from(
         new Set(parsedEntries.flatMap((entry) => entry.toolInfo.tools.map(([name]) => name))),
       ).toSorted((a, b) => a.localeCompare(b));
@@ -466,7 +469,7 @@ function SessionLogs(props: {
           (filters.tools.length === 0 ||
             entry.toolInfo.tools.some(([name]) => filters.tools.includes(name))) &&
           (!normalizedQuery ||
-            normalizeLowercaseStringOrEmpty(entry.cleanContent)
+            foldSearchCase(normalizeLowercaseStringOrEmpty(entry.cleanContent))
               .normalize("NFC")
               .includes(normalizedQuery)),
       );

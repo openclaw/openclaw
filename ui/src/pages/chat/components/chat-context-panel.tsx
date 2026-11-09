@@ -1,4 +1,5 @@
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
@@ -89,7 +90,7 @@ function ContextList(props: {
   let search: HTMLInputElement | undefined;
   const long = () => props.entries.length > 20;
   const groups = createMemo(() => {
-    const needle = long() && all() ? query().trim().toLocaleLowerCase() : "";
+    const needle = long() && all() ? foldSearchCase(query().trim().toLocaleLowerCase()) : "";
     let remaining = long() && !all() ? 8 : Infinity;
     return (props.groups ?? [{ key: "", entries: props.entries }])
       .map((group) => {
@@ -97,7 +98,9 @@ function ContextList(props: {
           .filter(
             (entry) =>
               !needle ||
-              (entry.name + " " + (entry.path ?? "")).toLocaleLowerCase().includes(needle),
+              foldSearchCase((entry.name + " " + (entry.path ?? "")).toLocaleLowerCase()).includes(
+                needle,
+              ),
           )
           .slice(0, remaining);
         remaining -= entries.length;

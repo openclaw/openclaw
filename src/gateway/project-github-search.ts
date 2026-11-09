@@ -17,6 +17,7 @@ import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate
 import { logWarn } from "../logger.js";
 import { parseConfiguredProjectGitUrl } from "../projects/project-git-url.runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { foldSearchCase } from "../shared/search-case.js";
 import { gitHubPublicApi } from "./github-public-api.js";
 
 const SEARCH_CACHE_MS = 60_000;
@@ -77,11 +78,9 @@ function repositoryArray(value: unknown): RemoteProject[] {
 }
 
 function matchesAffiliatedQuery(project: RemoteProject, query: string): boolean {
-  const needle = query.toLowerCase();
-  return [project.name, project.fullName, project.description ?? ""]
-    .join("\n")
-    .toLowerCase()
-    .includes(needle);
+  return foldSearchCase(
+    [project.name, project.fullName, project.description ?? ""].join("\n"),
+  ).includes(foldSearchCase(query));
 }
 
 type GitHubSearchRequest = (
