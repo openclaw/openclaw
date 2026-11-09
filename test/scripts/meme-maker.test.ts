@@ -19,13 +19,19 @@ const template = expectDefined(
   "Expected the always-has-been template",
 );
 
-function renderFixture(format: "svg" | "png", isolated = false) {
+function renderFixture(format: "svg" | "png", isolated = false, selectedTemplate = template) {
   const root = createTempDir("openclaw-meme-maker-");
   const cache = path.join(root, "cache");
   const imageDir = path.join(cache, "openclaw/meme-maker");
   fs.mkdirSync(imageDir, { recursive: true });
   const image = createSolidPngBuffer(32, 24, { r: 24, g: 160, b: 96 });
-  fs.writeFileSync(path.join(imageDir, `${template.id}-${template.imgflipId}.png`), image);
+  fs.writeFileSync(
+    path.join(
+      imageDir,
+      `${selectedTemplate.id}-${selectedTemplate.imgflipId}${path.extname(new URL(selectedTemplate.imageUrl).pathname)}`,
+    ),
+    image,
+  );
   const hook = path.join(root, "offline.mjs");
   fs.writeFileSync(
     hook,
@@ -45,7 +51,17 @@ globalThis.fetch = () => { throw new Error("Unexpected network access"); };
   const out = path.join(root, `meme.${format}`);
   const result = execFileAsync(
     testNodeExecPath,
-    ["--import", hook, script, "render", template.id, "--text", "Fish & chips", "--out", out],
+    [
+      "--import",
+      hook,
+      script,
+      "render",
+      selectedTemplate.id,
+      "--text",
+      "Fish & chips",
+      "--out",
+      out,
+    ],
     { env: { ...process.env, XDG_CACHE_HOME: cache }, timeout: 30_000 },
   );
   return { image, out, result };
@@ -60,6 +76,27 @@ describe("meme-maker local rendering", () => {
     expect(svg).toContain(`width="${template.width}" height="${template.height}"`);
     expect(svg).toContain(`data:image/png;base64,${image.toString("base64")}`);
     expect(svg).toContain("Fish &amp; chips");
+  });
+
+  it("keeps rotated captions centered in their template boxes", async () => {
+    const selected = expectDefined(
+      templates.find((entry) => entry.id === "two-buttons"),
+      "Two Buttons template",
+    );
+    const { out, result } = renderFixture("svg", true, selected);
+    await result;
+    const { Resvg } = await import("@resvg/resvg-js");
+    const svg = fs.readFileSync(out, "utf8").replace(/<image[^>]*\/>/, "");
+    const renderer = new Resvg(svg, {
+      font: {
+        fontFiles: [path.resolve("src/gateway/assets/session-card/Lato-Regular.ttf")],
+        loadSystemFonts: false,
+        defaultFontFamily: "Lato",
+      },
+    });
+    const bounds = expectDefined(renderer.innerBBox(), "rendered caption bounds");
+    // Allow glyph/stroke asymmetry, but not rotation-induced translation of the caption.
+    expect(Math.abs(bounds.x + bounds.width / 2 - 138)).toBeLessThan(5);
   });
 
   it("directs SVG output when PNG rendering is unavailable without inviting package installs", async () => {
