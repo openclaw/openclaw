@@ -1,3 +1,0 @@
-# Native composer clearance and retained screenshot disclosure fixtures.
-# Exact 7 + 31 test lines; cron import-owner corrections add no lines.
-38
