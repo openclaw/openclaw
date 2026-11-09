@@ -19,14 +19,13 @@ import type { ManagedServiceBoundaryOptions } from "./update-managed-service-han
 import {
   awaitEmulatedRecoveryHandoffExit,
   createManagedServiceCommandFixture,
-  LAUNCHD_GATEWAY_IDENTITY_ENV,
+  prepareManagedServiceManagerEnvironment,
   waitForHandoffResponse,
 } from "./update-managed-service-handoff-command.test-support.js";
 import {
   createManagedServiceCancellationPreload,
   createManagedServiceLaunchdClockPreload,
   createManagedServiceUpdaterFixtureScript,
-  createManagedServiceManagerFixtureScript,
   isManagedServiceInspectionCommand,
   type ManagedServiceCommandTiming,
   type ManagedServiceManagerBoundaryResult,
@@ -90,7 +89,6 @@ export function createManagedServiceManagerBoundary({
     const prefix = `openclaw-${kind}-manager-boundary-${options?.updaterOutput === "split-utf8" ? "安装-" : ""}`;
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
     tempDirs.add(root);
-    const commandsPath = path.join(root, "manager-commands.log");
     const statePath = path.join(root, "manager-state.json");
     const selectedDriverPath = options?.selectedDriver
       ? path.join(root, `selected-driver-${options.selectedDriver}.cjs`)
@@ -108,27 +106,13 @@ export function createManagedServiceManagerBoundary({
       await prepareManagedServiceBoundaryFiles({ root, statePath, options });
     const { parent, parentClosed, parentPid, parentStartIdentity } =
       createManagedServiceBoundaryParent(spawn);
-    await fs.writeFile(
-      path.join(root, kind === "systemd" ? "systemctl" : "launchctl"),
-      createManagedServiceManagerFixtureScript({
-        kind,
-        parentPid,
-        statePath,
-        commandsPath,
-        configPath: path.join(root, "openclaw.json"),
-        options,
-      }),
-      { mode: 0o755 },
-    );
-    const env = {
-      ...process.env,
-      ...(kind === "launchd" ? LAUNCHD_GATEWAY_IDENTITY_ENV : {}),
-      // Source descendants run from the durable helper cwd, outside this checkout.
-      TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-      PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
-    };
+    const { env, commandsPath } = await prepareManagedServiceManagerEnvironment({
+      root,
+      kind,
+      parentPid,
+      statePath,
+      options,
+    });
     options = await prepareManagedServiceProfileRequester(options, env);
     const run = options?.ledger
       ? createUpdateRun(
@@ -152,6 +136,17 @@ export function createManagedServiceManagerBoundary({
       ledger: Boolean(run),
       options,
     });
+    if (options?.handoffDebugRuntime) {
+      Object.assign(env, { OPENCLAW_LOG_LEVEL: "debug", OPENCLAW_TEST_CONSOLE: "1" });
+      await fs.appendFile(
+        recoveryModulePath,
+        `
+        ${sourceRuntimeImport}
+        const { resolveSqliteInspectionBudget } = await import(${JSON.stringify(new URL("./sqlite-readonly-worker.ts", import.meta.url).href)});
+        resolveSqliteInspectionBudget("handoff fixture", "synthetic.sqlite", 1024);
+      `,
+      );
+    }
     let helper: import("node:child_process").ChildProcess | undefined;
     let helperCompletion: Promise<number | null> | undefined;
     let helperLogPath: string | undefined;
@@ -183,6 +178,18 @@ export function createManagedServiceManagerBoundary({
       tempDirs.add(path.dirname(started.logPath));
       const { scriptPath, paramsPath: generatedParamsPath } =
         handoffArtifacts.readManagedHandoffArtifacts(generatedArgs);
+      if (options?.handoffDebugRuntime === "installed") {
+        // Exercise the installed build's sealed bytes, not the invocation compiler's copy.
+        const installedRuntime = await fs.readFile(
+          path.resolve("dist/managed-handoff-runtime.mjs"),
+        );
+        const stagedRuntimePath = path.join(
+          path.dirname(scriptPath),
+          "runtime/managed-handoff-runtime.mjs",
+        );
+        await fs.writeFile(stagedRuntimePath, installedRuntime);
+        expect(await fs.readFile(stagedRuntimePath)).toEqual(installedRuntime);
+      }
       const generated = JSON.parse(await fs.readFile(generatedParamsPath, "utf8")) as Record<
         string,
         unknown
@@ -651,6 +658,8 @@ export function createManagedServiceManagerBoundary({
         db.close();
       }
       return {
+        stdout,
+        stderr,
         ...(run ? { run: getUpdateRun(run.runId, { env }) } : {}),
         ...(options?.expireParentWhileStopPending
           ? { stopSettlement: JSON.parse(await fs.readFile(stopSettlementPath, "utf8")) }

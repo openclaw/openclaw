@@ -75,6 +75,8 @@ export type ManagedServiceCommandTiming = {
 };
 
 export type ManagedServiceManagerBoundaryResult = {
+  stdout: string;
+  stderr: string;
   run?: UpdateRunRecord;
   commands: string[];
   parentSignal: NodeJS.Signals | null;

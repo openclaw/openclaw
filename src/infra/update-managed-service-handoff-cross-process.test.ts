@@ -240,7 +240,10 @@ describe("managed service update handoff cross-process lease", () => {
       const tmpDir = tempDirs.make("openclaw-handoff-scope-wrapper-");
       const helperExitPath = path.join(tmpDir, "nested-helper-exited");
       const launcherPath = path.join(tmpDir, "systemd-run");
-      await fs.writeFile(launcherPath, scopeWrapperSource(helperExitPath), { mode: 0o700 });
+      // Keep the native PATH fixture CommonJS under a module-scoped temp root.
+      const launcherScriptPath = path.join(tmpDir, "systemd-run.cjs");
+      await fs.writeFile(launcherScriptPath, scopeWrapperSource(helperExitPath), { mode: 0o700 });
+      await fs.symlink("systemd-run.cjs", launcherPath);
       const helperExited = createDeferred();
       let launcherClosed = Promise.resolve();
       spawnMock.mockImplementationOnce((...args: Parameters<typeof spawn>) => {

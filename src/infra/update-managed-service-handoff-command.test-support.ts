@@ -6,9 +6,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import type {
-  ManagedServiceManagerBoundaryResult,
-  ManagedServiceManagerBoundaryOptions,
+import {
+  createManagedServiceManagerFixtureScript,
+  type ManagedServiceManagerBoundaryResult,
+  type ManagedServiceManagerBoundaryOptions,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 
@@ -22,6 +23,45 @@ export const LAUNCHD_GATEWAY_IDENTITY_ENV = {
   OPENCLAW_SERVICE_MARKER: "openclaw",
   OPENCLAW_SERVICE_KIND: "gateway",
 } as const;
+
+export async function prepareManagedServiceManagerEnvironment(params: {
+  root: string;
+  kind: "systemd" | "launchd";
+  parentPid: number;
+  statePath: string;
+  options?: ManagedServiceManagerBoundaryOptions;
+}) {
+  const { root, kind, parentPid, statePath, options } = params;
+  const commandsPath = path.join(root, "manager-commands.log");
+  const managerCommand = kind === "systemd" ? "systemctl" : "launchctl";
+  // A .cjs realpath keeps native PATH fixtures CommonJS under a module-scoped TMPDIR.
+  const managerScriptPath = path.join(root, managerCommand + ".cjs");
+  await fs.writeFile(
+    managerScriptPath,
+    createManagedServiceManagerFixtureScript({
+      kind,
+      parentPid,
+      statePath,
+      commandsPath,
+      configPath: path.join(root, "openclaw.json"),
+      options,
+    }),
+    { mode: 0o755 },
+  );
+  await fs.symlink(managerCommand + ".cjs", path.join(root, managerCommand));
+  return {
+    commandsPath,
+    env: {
+      ...process.env,
+      ...(kind === "launchd" ? LAUNCHD_GATEWAY_IDENTITY_ENV : {}),
+      // Source descendants run from the durable helper cwd, outside this checkout.
+      TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
+      OPENCLAW_STATE_DIR: root,
+      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+      PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+    },
+  };
+}
 
 /** The pre-fix CLI emulation restarts launchd after it exits; never leave that shell behind. */
 export async function awaitEmulatedRecoveryHandoffExit(statePath: string): Promise<void> {

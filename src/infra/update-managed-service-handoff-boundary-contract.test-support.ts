@@ -2,6 +2,7 @@ import type { ManagedServiceManagerBoundaryOptions } from "./update-managed-serv
 import type { UpdateRunRecord } from "./update-run-record.js";
 
 export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions & {
+  handoffDebugRuntime?: "source" | "installed";
   trigger?: "cli" | "api" | "campaign";
   origin?: UpdateRunRecord["origin"];
   controlDisconnect?: "transferred" | "unarmed" | "dead-parent";
