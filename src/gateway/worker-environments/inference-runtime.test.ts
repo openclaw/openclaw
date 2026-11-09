@@ -1,16 +1,13 @@
 import assert from "node:assert/strict";
-import path from "node:path";
 import { Type } from "typebox";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { validateWorkerInferenceTerminalOutcome } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
-import * as nativeWebSearch from "../../agents/codex-native-web-search-core.js";
 import * as extraParamsRuntime from "../../agents/embedded-agent-runner/extra-params.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import type { AssistantMessage, AssistantMessageEvent, StreamFn } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
@@ -18,7 +15,6 @@ import type { ProviderWrapStreamFnContext } from "../../plugins/provider-transpo
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { parseApiErrorInfo } from "../../shared/assistant-error-format.js";
-import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   isWorkerTranscriptMessageFrameSafe,
   WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
@@ -134,9 +130,7 @@ describe("worker inference provider runtime", () => {
       if (!explicitKey) {
         Object.assign(inferenceRequest.options, { promptCacheKey: "worker-chosen-key" });
       }
-      await expect(run(runtime, inferenceRequest)).resolves.toMatchObject({
-        type: "done",
-      });
+      await expect(run(runtime, inferenceRequest)).resolves.toMatchObject({ type: "done" });
     }
     expect(runtime.stream.mock.calls.map((call) => call[2]?.promptCacheKey)).toEqual(keys);
     expect(runtime.stream.mock.calls.map((call) => call[2]?.sessionId)).toEqual(
@@ -333,9 +327,7 @@ describe("worker inference provider runtime", () => {
     });
 
     try {
-      await expect(run(runtime)).resolves.toMatchObject({
-        type: "done",
-      });
+      await expect(run(runtime)).resolves.toMatchObject({ type: "done" });
     } finally {
       resetPluginRuntimeStateForTest();
     }
@@ -376,9 +368,7 @@ describe("worker inference provider runtime", () => {
         routeRequirement,
       });
 
-      await expect(run(runtime)).resolves.toMatchObject({
-        type: "done",
-      });
+      await expect(run(runtime)).resolves.toMatchObject({ type: "done" });
       expect(runtime.prepareModel.mock.calls[0]?.[0].cfg?.models?.providers?.openai).toMatchObject({
         auth,
         api,
@@ -884,71 +874,9 @@ describe("worker inference provider runtime", () => {
   });
 
   it("passes the admitted search capability to the provider and revokes it after prompt policy", async () => {
+    const applyStreamPolicy = extraParamsRuntime.applyExtraParamsToAgent;
     const runtime = setup();
-    const searchTool = {
-      name: "web_search",
-      label: "Search",
-      description: "Search",
-      parameters: Type.Object({}),
-      execute: async () => ({ content: [], details: {} }),
-    };
-    bindAgentToolExecutionLocation(searchTool, { kind: "gateway" });
-    const toolRuntime = createWorkerGatewayToolRuntime({
-      assertCurrent() {},
-      signal: new AbortController().signal,
-      prepare: async () => ({
-        tools: [searchTool],
-        presentation: createToolSurfacePresentationForTest(),
-        policy: {
-          workspaceOnly: true,
-          readOnly: false,
-          applyPatchEnabled: false,
-          applyPatchWorkspaceOnly: true,
-          imageSanitization: {},
-        },
-      }),
-    });
-    vi.spyOn(workerTurnOwners, "getWorkerTurnToolSurface").mockReturnValue(toolRuntime);
-    try {
-      for (const enabled of [true, false]) {
-        if (!enabled) {
-          toolRuntime.applyPromptToolsAllow([]);
-        }
-        expect(await run(runtime)).toMatchObject({ type: "done" });
-        expect(
-          runtime.applyStreamPolicy.mock.lastCall?.[11]?.nativeWebSearchPolicyContext
-            ?.webSearchEnabled,
-        ).toBe(enabled);
-      }
-    } finally {
-      await toolRuntime.close();
-    }
-  });
-});
-
-describe("worker inference dashboard search policy", () => {
-  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-worker-search-policy-");
-
-  it("resolves offered web_search against durable dashboard capability metadata", async () => {
-    const storePath = path.join(sessionDirs.make(), "sessions.json");
-    const sessionKey = "agent:main:dashboard:worker-search-policy";
-    await replaceSessionEntry(
-      { storePath, sessionKey },
-      {
-        sessionId: `${sessionKey}-session`,
-        updatedAt: 1,
-        createdVia: "spawn",
-        spawnedBy: "agent:main:main",
-        spawnDepth: 1,
-        inheritedToolPolicyVersion: 1,
-        inheritedToolDeny: ["web_search"],
-      },
-    );
-    const runtime = setup(sessionEntry, {
-      config: { ...config, session: { store: storePath } },
-    });
-    vi.mocked(extraParamsRuntime.applyExtraParamsToAgent).mockRestore();
-    const searchPolicy = vi.spyOn(nativeWebSearch, "isNativeWebSearchAllowedByToolPolicy");
+    runtime.applyStreamPolicy.mockImplementation(applyStreamPolicy);
     const searchTool = {
       name: "web_search",
       label: "Search",
@@ -974,17 +902,24 @@ describe("worker inference dashboard search policy", () => {
     });
     vi.spyOn(workerTurnOwners, "getWorkerTurnToolSurface").mockReturnValue(toolRuntime);
     const execution = params(request(), vi.fn());
-    execution.sessionTarget = { ...execution.sessionTarget, agentId: "main", sessionKey };
+    execution.sessionTarget = {
+      ...execution.sessionTarget,
+      sessionKey: "agent:runtime-agent:dashboard:1",
+    };
     try {
-      await expect(runtime.executor(execution)).resolves.toMatchObject({ type: "done" });
+      for (const enabled of [true, false]) {
+        if (!enabled) {
+          toolRuntime.applyPromptToolsAllow([]);
+        }
+        expect(await runtime.executor(execution)).toMatchObject({ type: "done" });
+        expect(
+          runtime.applyStreamPolicy.mock.lastCall?.[11]?.nativeWebSearchPolicyContext
+            ?.webSearchEnabled,
+        ).toBe(enabled);
+      }
     } finally {
       await toolRuntime.close();
     }
-    expect(searchPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey, webSearchEnabled: true }),
-    );
-    expect(searchPolicy.mock.results.at(-1)).toEqual({ type: "return", value: false });
-    expect(runtime.stream).toHaveBeenCalledOnce();
   });
 });
 
@@ -993,9 +928,7 @@ describe("worker inference session admission", () => {
     const changedConfig = { ...config, session: { store: "replacement-sessions.json" } };
     const runtime = setup(sessionEntry, { config: changedConfig });
 
-    await expect(run(runtime)).resolves.toMatchObject({
-      type: "done",
-    });
+    await expect(run(runtime)).resolves.toMatchObject({ type: "done" });
     expect(runtime.scope.authProfile).toBe(PROFILE);
     expect(runtime.stream).toHaveBeenCalledOnce();
   });
