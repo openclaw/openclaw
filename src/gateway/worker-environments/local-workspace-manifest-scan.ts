@@ -48,7 +48,10 @@ import { scanActualWorkspaceManifest } from "./workspace-actual-manifest.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
-import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
+import {
+  buildCacheInputPaths,
+  isIgnoredWorkspaceBuildOutput,
+} from "./workspace-path-exclusions.js";
 
 export type LocalWorkspaceBaselineDocument = {
   rawManifest: string;
@@ -531,15 +534,30 @@ export async function executeLocalWorkspaceManifestRead(
     assertCurrent: () => undefined,
   });
   const retained = [...buildCacheInputPaths(canonicalPaths)];
+  const root = target === "canonical" ? row.projection_path : action.canonicalRoot;
+  const gitIgnore = await readLocalWorkspaceGitExclusions(
+    action.canonicalRoot,
+    root,
+    canonicalPaths,
+  );
+  const includePaths = target === "projection" ? new Set(canonicalPaths) : undefined;
+  const excluded = new Set<string>();
   const preserveDirectories = new Set<string>();
   for (const [entryPath, { node }] of records) {
     if (entryPath === "") {
       continue;
     }
+    if (
+      !canonicalPaths.has(entryPath) &&
+      isIgnoredWorkspaceBuildOutput(entryPath, gitIgnore.paths)
+    ) {
+      excluded.add(entryPath);
+      continue;
+    }
     if (node.type === "directory") {
       preserveDirectories.add(entryPath);
     }
-    canonicalPaths.add(entryPath);
+    includePaths?.add(entryPath);
   }
   const fingerprintTarget = target === "canonical" ? "projection" : "canonical";
   const previousFingerprints =
@@ -559,17 +577,10 @@ export async function executeLocalWorkspaceManifestRead(
   const changedDuringProbe = new Error("Workspace changed during reuse probe");
   try {
     await scanActualWorkspaceManifest({
-      root: target === "canonical" ? row.projection_path : action.canonicalRoot,
+      root,
       baseCommit: row.base_commit,
-      includePaths: target === "projection" ? canonicalPaths : undefined,
-      gitIgnore:
-        target === "canonical"
-          ? await readLocalWorkspaceGitExclusions(
-              action.canonicalRoot,
-              row.projection_path,
-              canonicalPaths,
-            )
-          : undefined,
+      includePaths,
+      gitIgnore,
       preserveDirectories,
       buildCacheInputs: new Set(retained),
       reuseFile: fingerprintScan.reuseFile,
@@ -635,7 +646,9 @@ export async function executeLocalWorkspaceManifestRead(
   const previousNodes: LocalWorkspaceManifestNode[] = [];
   for (const entryPath of inspected) {
     const previous = records.get(entryPath);
-    if (previous) {
+    // Old captures may own ignored build outputs. Retire their membership, not
+    // their files: omitting both delta sides must never synthesize a deletion.
+    if (previous && !excluded.has(entryPath)) {
       previousNodes.push(previous.node);
     }
   }
