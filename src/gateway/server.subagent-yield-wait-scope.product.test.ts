@@ -5,6 +5,7 @@ import { readRequestText } from "../../test/helpers/gateway-integration-fixtures
 import { startOpenAiResponsesModelServer } from "../../test/helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import {
   getSubagentRunByRunId,
@@ -13,6 +14,7 @@ import {
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
 import {
@@ -30,6 +32,8 @@ const MIDDLE_DONE = "MIDDLE-DONE";
 const HANDOFF = "Handoff: middle runner\nPending: leaf check";
 const PAUSE_NOTICE = "A child is paused awaiting a continuation";
 const FOLLOWUP = "Continue with the follow-up check after requester completion.";
+const CLAIM = "Wait for a message from the middle runner.";
+const RESUME = "Finish the middle task without sending the leaf another message.";
 
 function promptStrings(value: unknown): string[] {
   if (typeof value === "string") {
@@ -73,13 +77,16 @@ function toolOutput(body: unknown, name: string): string | undefined {
   return output === undefined ? undefined : promptStrings(output).join("");
 }
 
-async function startModelServer(requesterCompletes = false) {
+async function startModelServer(completion: "children" | "direct" | "successor" = "children") {
   const rootSettlements: string[] = [];
   const middleDone = createDeferred<string>();
   const middleYieldResult = createDeferred<string>();
   const spawned = createDeferred<SpawnReceipt>();
   const finishRequester = createDeferred();
   const allowMessageWait = createDeferred();
+  const leafSpawned = createDeferred<SpawnReceipt>();
+  const claimed = createDeferred<SpawnReceipt>();
+  const allowFollowup = createDeferred();
   async function handleRequest(request: IncomingMessage, response: ServerResponse) {
     const raw = await readRequestText(request);
     const body = JSON.parse(raw) as unknown;
@@ -92,18 +99,24 @@ async function startModelServer(requesterCompletes = false) {
     const calls = calledTools(body);
     if (raw.includes(rootPrompt)) {
       if (!calls.includes("sessions_spawn")) {
-        writeToolCall(response, "sessions_spawn", { task: middleTask, context: "isolated" });
+        writeToolCall(response, "sessions_spawn", {
+          task: middleTask,
+          context: "isolated",
+          ...(completion === "successor" ? { visible: true } : {}),
+        });
         return;
       }
-      if (requesterCompletes) {
+      if (completion !== "children") {
         const receipt = findSubagentSpawnReceipt(toolOutput(body, "sessions_spawn"));
         if (!receipt) {
           throw new Error("Requester did not receive its child spawn receipt");
         }
         spawned.resolve(receipt);
-        await finishRequester.promise;
-        reply("REQUESTER-DONE", "requester_done");
-        return;
+        if (completion === "direct") {
+          await finishRequester.promise;
+          reply("REQUESTER-DONE", "requester_done");
+          return;
+        }
       }
       if (!calls.includes("sessions_yield")) {
         writeToolCall(response, "sessions_yield", {});
@@ -122,7 +135,47 @@ async function startModelServer(requesterCompletes = false) {
       return;
     }
     if (raw.includes(middleTask)) {
-      if (requesterCompletes) {
+      if (completion === "successor") {
+        if (raw.includes(RESUME)) {
+          reply(MIDDLE_DONE, "requester_successor_done");
+          return;
+        }
+        if (!calls.includes("sessions_spawn")) {
+          writeToolCall(response, "sessions_spawn", { task: leafTask, context: "isolated" });
+          return;
+        }
+        const leaf = findSubagentSpawnReceipt(toolOutput(body, "sessions_spawn"));
+        if (!leaf) {
+          throw new Error("Middle runner did not receive its leaf spawn receipt");
+        }
+        leafSpawned.resolve(leaf);
+        if (!calls.includes("sessions_send")) {
+          await allowFollowup.promise;
+          writeToolCall(response, "sessions_send", {
+            sessionKey: leaf.childSessionKey,
+            mode: "followup",
+            watch: true,
+            timeoutSeconds: 0,
+            message: CLAIM,
+          });
+          return;
+        }
+        if (!calls.includes("sessions_yield")) {
+          const receipt = JSON.parse(toolOutput(body, "sessions_send") ?? "null") as {
+            status?: string;
+            runId?: string;
+          } | null;
+          if (receipt?.status !== "accepted" || !receipt.runId) {
+            throw new Error("Middle runner did not receive its accepted leaf follow-up");
+          }
+          claimed.resolve({ childSessionKey: leaf.childSessionKey, runId: receipt.runId });
+          writeToolCall(response, "sessions_yield", {});
+          return;
+        }
+        reply("NO_REPLY", "requester_pause_notice");
+        return;
+      }
+      if (completion === "direct") {
         await allowMessageWait.promise;
         writeToolCall(response, "sessions_yield", {
           waitFor: "message",
@@ -150,6 +203,11 @@ async function startModelServer(requesterCompletes = false) {
       return;
     }
     if (raw.includes(leafTask)) {
+      if (completion === "successor" && raw.includes(CLAIM)) {
+        await allowMessageWait.promise;
+        writeToolCall(response, "sessions_yield", { waitFor: "message" });
+        return;
+      }
       reply(LEAF_ANSWER, "leaf_answer");
       return;
     }
@@ -174,6 +232,9 @@ async function startModelServer(requesterCompletes = false) {
     spawned: spawned.promise,
     finishRequester: finishRequester.resolve,
     allowMessageWait: allowMessageWait.resolve,
+    leafSpawned: leafSpawned.promise,
+    claimed: claimed.promise,
+    allowFollowup: allowFollowup.resolve,
     close: server.close,
   };
 }
@@ -261,7 +322,7 @@ it("treats a subagent's waitFor yield for its own children as a child wait, not 
 it.each(["before", "after"] as const)(
   "closes a child's message wait when its requester finishes %s it parks",
   async (order) => {
-    const model = await startModelServer(true);
+    const model = await startModelServer("direct");
     const state = await createOpenClawTestState({ label: "subagent-message-wait-requester-done" });
     const gateway = await startGatewayWithClient({
       cfg: {
@@ -367,3 +428,157 @@ it.each(["before", "after"] as const)(
     }
   },
 );
+
+it("closes a claimed child's message wait when its requester task finishes through an adopted run", async () => {
+  const model = await startModelServer("successor");
+  const state = await createOpenClawTestState({ label: "subagent-message-wait-successor" });
+  const base = createSubagentModelConfig(state.workspaceDir, {
+    baseUrl: model.url,
+    modelId: "yield-wait-scope",
+    runtime: true,
+  });
+  const gateway = await startGatewayWithClient({
+    cfg: {
+      ...base,
+      agents: {
+        ...base.agents,
+        defaults: {
+          ...base.agents?.defaults,
+          subagents: { ...base.agents?.defaults?.subagents, maxSpawnDepth: 2 },
+        },
+      },
+      gateway: { controlUi: { enabled: false } },
+    },
+    configPath: state.configPath,
+    token: "yield-wait-scope-token",
+  });
+  let requester: SpawnReceipt | undefined;
+  let child: SpawnReceipt | undefined;
+  let successor: { runId: string } | undefined;
+  const requesterParked = createDeferred();
+  const childParked = createDeferred();
+  const noticeCommitted = createDeferred();
+  const successorCommitted = createDeferred();
+  const closed = createDeferred();
+  const observeRows = () => {
+    if (requester && getSubagentRunByRunId(requester.runId)?.pauseReason === "sessions_yield") {
+      requesterParked.resolve();
+    }
+    if (child && getSubagentRunByRunId(child.runId)?.pauseReason === "sessions_yield") {
+      childParked.resolve();
+    }
+  };
+  const observeRequester = async () => {
+    if (!requester) {
+      return;
+    }
+    const entry = await readSessionEntryReadOnlyInWorker({
+      agentId: "main",
+      sessionKey: requester.childSessionKey,
+    });
+    if (entry?.status !== "done" || !entry.lastRunId) {
+      return;
+    }
+    if (successor && entry.lastRunId === successor.runId) {
+      successorCommitted.resolve();
+    } else if (!successor && entry.lastRunId !== requester.runId) {
+      noticeCommitted.resolve();
+    }
+  };
+  const stopRows = subscribeSubagentRunChanges("persistence", observeRows);
+  const stopSessions = sessionChanges.subscribe((event) => {
+    if (
+      !("all" in event) &&
+      event.scope === "runtime" &&
+      event.sessionKey === requester?.childSessionKey
+    ) {
+      void observeRequester();
+    }
+  });
+  const stopClosed = onSessionLifecycleEvent((event) => {
+    if (event.sessionKey === child?.childSessionKey && event.reason === "subagent-status") {
+      closed.resolve();
+    }
+  });
+  try {
+    await gateway.server.startupSettled;
+    await gateway.client.request("chat.send", {
+      sessionKey: "main",
+      message: rootPrompt,
+      idempotencyKey: `successor-root-${randomUUID()}`,
+      deliver: false,
+    });
+    requester = await within(model.spawned, 30_000, () => "root never spawned the requester");
+    const bootstrap = await within(
+      model.leafSpawned,
+      30_000,
+      () => "requester never spawned its leaf",
+    );
+    await expect(
+      gateway.client.request("agent.wait", { runId: bootstrap.runId, timeoutMs: 30_000 }),
+    ).resolves.toMatchObject({ status: "ok" });
+    model.allowFollowup();
+    child = await within(model.claimed, 30_000, () => "requester never claimed the leaf follow-up");
+    observeRows();
+    await within(requesterParked.promise, 30_000, () => "requester never yielded behind its child");
+    model.allowMessageWait();
+    await within(childParked.promise, 30_000, () => "claimed child never parked for a message");
+    const binding = () =>
+      subagentRuns.getRequesterRunInstance(getSubagentRunByRunId(child!.runId)!);
+    expect(binding()?.runId).toBe(requester.runId);
+    await within(noticeCommitted.promise, 30_000, () => "requester pause notice never committed");
+    expect(getSubagentRunByRunId(child.runId)?.pauseReason).toBe("sessions_yield");
+    expect(binding()?.runId).toBe(requester.runId);
+
+    successor = await gateway.client.request<{ runId: string }>("chat.send", {
+      sessionKey: requester.childSessionKey,
+      message: RESUME,
+      idempotencyKey: `successor-resume-${randomUUID()}`,
+      deliver: false,
+    });
+    await expect(
+      gateway.client.request("agent.wait", { runId: successor.runId, timeoutMs: 30_000 }),
+    ).resolves.toMatchObject({ status: "ok" });
+    expect(getSubagentRunByRunId(successor.runId)?.taskRunId).toBe(requester.runId);
+    await observeRequester();
+    await within(
+      successorCommitted.promise,
+      5_000,
+      () => "requester successor never committed completion",
+    );
+    await testing.sweepOnceForTests();
+    await within(
+      closed.promise,
+      5_000,
+      () =>
+        `finished requester ${successor!.runId} left child waiting on ${binding()?.runId}: ${JSON.stringify(getSubagentRunByRunId(child!.runId))}`,
+    );
+    expect(getSubagentRunByRunId(child.runId)).toMatchObject({
+      execution: { outcome: { status: "error", error: expect.stringMatching(/requester/i) } },
+    });
+    expect(getSubagentRunByRunId(child.runId)?.pauseReason).toBeUndefined();
+    const entry = await readSessionEntryReadOnlyInWorker({
+      agentId: "main",
+      sessionKey: child.childSessionKey,
+    });
+    expect(entry?.lifecycleRunId).toBeUndefined();
+    const followup = await gateway.client.request<{ runId: string }>("sessions.send", {
+      key: child.childSessionKey,
+      message: FOLLOWUP,
+      idempotencyKey: `successor-child-followup-${randomUUID()}`,
+    });
+    await expect(
+      gateway.client.request("agent.wait", { runId: followup.runId, timeoutMs: 30_000 }),
+    ).resolves.toMatchObject({ status: "ok" });
+  } finally {
+    stopRows();
+    stopSessions();
+    stopClosed();
+    model.allowFollowup();
+    model.allowMessageWait();
+    await disconnectGatewayClient(gateway.client);
+    await gateway.server.close({ reason: "requester successor proof complete" });
+    await model.close();
+    await state.cleanup();
+  }
+});
