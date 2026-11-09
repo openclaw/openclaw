@@ -36,6 +36,7 @@ const repositoryScriptEntries = [
   "scripts/finalize-installed-runtime.mjs!",
   // Performance drivers and their preloads are invoked directly from documented commands.
   "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
+  "scripts/perf/decision-tool-catalog-measure.ts!",
   // Spawned directly by native-allocation-profile.test.ts.
   "test/scripts/fixtures/native-profile-census.mjs!",
   // Their source headers document standalone benchmark and measurement commands.
