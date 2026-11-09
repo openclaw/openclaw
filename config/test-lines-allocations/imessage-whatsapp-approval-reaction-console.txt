@@ -1,0 +1,2 @@
+53
+# Console coverage for the imessage/whatsapp approval binding-correlation mismatch, whose fail-closed signal previously reached only the log file.

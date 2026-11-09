@@ -1,7 +1,10 @@
 // Whatsapp tests cover approval reactions plugin behavior.
+import { buildTypedExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
+import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   maybeResolveWhatsAppApprovalReaction,
+  prepareWhatsAppApprovalPayloadForDelivery,
   registerWhatsAppApprovalReactionTarget,
   resolveWhatsAppApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
@@ -100,6 +103,36 @@ describe("WhatsApp approval reactions", () => {
     });
     resolverMocks.isApprovalNotFoundError.mockReset();
     resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
+  });
+
+  it("prints a binding correlation mismatch on the console", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "compact" });
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const payload = buildTypedExecApprovalPendingReplyPayload({
+        approvalId: "exec-console",
+        approvalSlug: "console-1",
+        command: "echo hi",
+        host: "gateway",
+        allowedDecisions: ["allow-once", "deny"],
+      });
+      const presentation = payload.presentation;
+      if (!presentation) {
+        throw new Error("Expected a typed approval presentation");
+      }
+      expect(
+        prepareWhatsAppApprovalPayloadForDelivery({
+          payload: { ...payload, text: "no approval markers here" },
+          presentation,
+        }),
+      ).toBeNull();
+      expect(consoleWarn.mock.calls.flat().join("\n")).toMatch(
+        /failed binding correlation.*approvalId=exec-console/su,
+      );
+    } finally {
+      consoleWarn.mockRestore();
+      setLoggerOverride(null);
+    }
   });
 
   it("registers reaction state when only allow-always is available", async () => {
