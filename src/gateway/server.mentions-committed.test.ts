@@ -216,13 +216,13 @@ it("delivers a committed human mention once through authenticated chat.send", as
     sessionKey: target,
     message: "@Bob Please review.",
     idempotencyKey: "mention-original",
-    // Exercise pending custody in its own turn rather than steering the seed run.
+    // Human-only followups commit without steering or dispatching another agent turn.
     queueMode: "followup",
     mentions: [{ profileId: bob.id, start: 0, end: 4 }],
   };
   const accepted = await sender.request<{ runId: string }>("chat.send", request);
   releaseProvider.resolve();
-  // A pending ACK owns input without a transcript position; wait for its committed identity.
+  // An early ACK is not a transcript commit; wait for the original message's identity.
   expect(await withinTest(committed.promise, signal)).toBeGreaterThan(0);
   await withinTest(inboxChanged.promise, signal);
   const inbox = await bobClient.request<{ items: unknown[] }>("mentions.list", {});
