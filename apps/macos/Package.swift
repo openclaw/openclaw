@@ -31,13 +31,13 @@ let package = Package(
         .executableTarget(
             name: "OpenClawSimulatorTouch",
             path: "ThirdParty/TapflowSimulator",
-            exclude: ["screencapture-helper.swift", "LICENSE", "LICENSE-APACHE-2.0", "NOTICE"],
+            exclude: ["screencapture-helper.swift", "LICENSE", "LICENSE-APACHE-2.0", "NOTICE", "UPSTREAM.md"],
             sources: ["touch-helper.swift"],
             swiftSettings: [.unsafeFlags(["-swift-version", "5"])]),
         .executableTarget(
             name: "OpenClawSimulatorCapture",
             path: "ThirdParty/TapflowSimulator",
-            exclude: ["touch-helper.swift", "LICENSE", "LICENSE-APACHE-2.0", "NOTICE"],
+            exclude: ["touch-helper.swift", "LICENSE", "LICENSE-APACHE-2.0", "NOTICE", "UPSTREAM.md"],
             sources: ["screencapture-helper.swift"],
             swiftSettings: [.unsafeFlags(["-swift-version", "5"])]),
         .target(

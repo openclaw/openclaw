@@ -426,7 +426,7 @@ for simulator_product in openclaw-simulator-touch openclaw-simulator-capture; do
   /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$simulator_product" 2>/dev/null || true
 done
 mkdir -p "$APP_ROOT/Contents/Resources/TapflowSimulator"
-cp "$ROOT_DIR/apps/macos/ThirdParty/TapflowSimulator/"{LICENSE,LICENSE-APACHE-2.0,NOTICE} \
+cp "$ROOT_DIR/apps/macos/ThirdParty/TapflowSimulator/"{LICENSE,LICENSE-APACHE-2.0,NOTICE,UPSTREAM.md} \
   "$APP_ROOT/Contents/Resources/TapflowSimulator/"
 
 if [[ "$SKIP_MLX_TTS" == "1" ]]; then
