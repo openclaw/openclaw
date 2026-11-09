@@ -56,14 +56,11 @@ function serveDist(distDir: string): Promise<{ baseUrl: string; close: () => Pro
     }
     res.setHeader("Content-Type", mime[path.extname(filePath)] ?? "application/octet-stream");
     const source = fs.readFileSync(filePath);
-    // Like the Gateway, anchor the portable entry before a canonical deep route
-    // reloads; otherwise /chat/main asks this fixture for /chat/assets/*.js.
+    // Like the Gateway, root asset URLs and import-map keys and targets before
+    // a canonical deep route reloads; relative maps leave stable aliases unresolved.
     res.end(
       filePath.endsWith("index.html")
-        ? source
-            .toString("utf8")
-            .replaceAll('src="./assets/', 'src="/assets/')
-            .replaceAll('href="./assets/', 'href="/assets/')
+        ? source.toString("utf8").replaceAll('"./assets/', '"/assets/')
         : source,
     );
   });

@@ -28,47 +28,6 @@ export function sourceGroups(messages: readonly unknown[]) {
   return groups;
 }
 
-/** Charge uncovered pin occurrences; retained sources credit only their exact overlap. */
-export function prepareChatHistoryPinCost(messages: readonly unknown[], pins: readonly unknown[]) {
-  const occurrences = new Map<unknown, number>();
-  const messageCounts = new Map<unknown, number>();
-  for (const message of pins) {
-    occurrences.set(message, (occurrences.get(message) ?? 0) + 1);
-  }
-  if (occurrences.size) {
-    for (const message of messages) {
-      messageCounts.set(message, (messageCounts.get(message) ?? 0) + 1);
-    }
-  }
-  const groups = sourceGroups(pins);
-  const covered = new Map<string, { count: number; weight: number }>();
-  const cost = { count: 0, weight: 0, covered };
-  for (const [message, count] of occurrences) {
-    const source = nativeHistoryMessageSourceIdentity(message);
-    // Lifecycle pins keep only their own indivisibility exception, including
-    // a source-less provisional body. Neighbors never borrow that exception.
-    if (
-      source
-        ? intrinsicGroup(groups.get(source))
-        : messageWeight(message) + 1 > CHAT_RESIDENT_WEIGHT_TARGET
-    ) {
-      continue;
-    }
-    const weight = messageWeight(message);
-    cost.count += count;
-    cost.weight += count * weight;
-    if (source !== null) {
-      const overlap = Math.min(count, messageCounts.get(message) ?? 0);
-      const previous = covered.get(source);
-      covered.set(source, {
-        count: (previous?.count ?? 0) + overlap,
-        weight: (previous?.weight ?? 0) + overlap * weight,
-      });
-    }
-  }
-  return cost;
-}
-
 export function intrinsicGroup(group: { count: number; weight: number } | undefined) {
   return Boolean(
     group &&

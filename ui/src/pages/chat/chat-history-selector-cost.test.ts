@@ -1,5 +1,6 @@
 import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expect, it, vi } from "vitest";
+import { prepareChatHistoryAdmission } from "./chat-history-page-preparation.ts";
 import { prepareChatHistorySegment, selectChatHistoryResidency } from "./chat-history-window.ts";
 
 function row(seq: number) {
@@ -61,7 +62,7 @@ it.each(["older", "newer"] as const)(
         direction,
         direction === "older" ? "id:source-1" : "id:source-800",
         [],
-        { visibleSources: [], pins },
+        prepareChatHistoryAdmission(messages, [segment], [], pins),
       );
       const work = { metadataReads, sourceCopies: copies.mock.calls.length };
       const expected = direction === "older" ? messages.slice(0, 380) : messages.slice(-380);
@@ -121,7 +122,7 @@ it.each(["older", "newer"] as const)(
       direction,
       direction === "older" ? "id:source-1" : "id:source-800",
       [],
-      { visibleSources: [], pins: [messages[split]] },
+      prepareChatHistoryAdmission(messages, [left, right], [], [messages[split]]),
     );
     const expected = direction === "older" ? messages.slice(0, 399) : messages.slice(-399);
     expect(selected.messages).toEqual(expected);
@@ -150,7 +151,7 @@ it("unions repeated pin occurrences with complete source fragments without dedup
     "older",
     "id:source-1",
     [],
-    { visibleSources: [], pins: [repeated, repeated, repeated, repeated] },
+    prepareChatHistoryAdmission(messages, [segment], [], [repeated, repeated, repeated, repeated]),
   );
   expect(selected.withinBudget).toBe(true);
   expect(selected.messages).toEqual([...fragments, ...neighbors.slice(0, 395)]);
@@ -181,7 +182,7 @@ it.each([false, true])(
       "newer",
       null,
       retired ? [] : [local],
-      { visibleSources: [], pins: [repeated, repeated] },
+      prepareChatHistoryAdmission(messages, [segment], [], [repeated, repeated]),
     );
     expect(selected.withinBudget).toBe(true);
     // Removing the exempt source loses its two-occurrence pin credit: 398, not400,

@@ -13,7 +13,6 @@ import {
   messageWeight,
   sourceGroups,
   intrinsicGroup,
-  prepareChatHistoryPinCost,
 } from "./chat-history-cost.ts";
 import { advanceChatHistoryNavigation } from "./chat-history-pagination.ts";
 import type {
@@ -305,6 +304,28 @@ export function extendChatHistoryWindow(
       );
 }
 
+export type ChatHistoryResidencyAdmission = {
+  pages: readonly ChatHistorySegment[];
+  protectedSources: ReadonlySet<string>;
+  pinCost: {
+    count: number;
+    weight: number;
+    covered: ReadonlyMap<string, { count: number; weight: number }>;
+  };
+};
+
+/** Resolve coverage once; a pane without pages or local outcomes needs no admission work. */
+export function prepareChatHistoryResidencySegments(
+  messages: readonly unknown[],
+  pagination: ChatHistoryPagination,
+  localOutputs: readonly unknown[],
+): readonly ChatHistorySegment[] | null {
+  if (!pagination.segments?.length && !localOutputs.length) return null;
+  return pagination.segments?.length
+    ? pagination.segments
+    : [prepareChatHistorySegment(messages, pagination, pagination.newerCursor)];
+}
+
 /** Bound the reloadable portion, then let the reducer preserve exact live pins. */
 export function selectChatHistoryResidency(
   messages: readonly unknown[],
@@ -312,23 +333,15 @@ export function selectChatHistoryResidency(
   direction: "older" | "newer" | "tail" = "tail",
   readerSource?: string | null,
   localOutputs: readonly unknown[] = [],
-  admission?: { visibleSources: readonly string[]; pins: readonly unknown[] },
+  admission?: ChatHistoryResidencyAdmission,
 ): { messages: readonly unknown[]; pagination: ChatHistoryPagination; withinBudget: boolean } {
-  if (!pagination.segments?.length && !localOutputs.length) {
+  const pages =
+    admission?.pages ?? prepareChatHistoryResidencySegments(messages, pagination, localOutputs);
+  if (!pages) {
     return { messages, pagination, withinBudget: true };
   }
-  const pages = pagination.segments?.length
-    ? pagination.segments
-    : [prepareChatHistorySegment(messages, pagination, pagination.newerCursor)];
-  const ordered = admission ? pages.flatMap((segment) => segment.sources) : [];
-  const visible = new Set(admission?.visibleSources);
-  const firstVisible = ordered.findIndex((source) => visible.has(source));
-  const lastVisible = ordered.findLastIndex((source) => visible.has(source));
-  const protectedSources = new Set(
-    firstVisible < 0 ? [] : ordered.slice(firstVisible, lastVisible + 1),
-  );
   const protectedSource = (source: string) =>
-    source === readerSource || protectedSources.has(source);
+    source === readerSource || admission?.protectedSources.has(source) === true;
   const ranges = pages.map((segment) => ({
     segment,
     start: 0,
@@ -391,8 +404,11 @@ export function selectChatHistoryResidency(
       memberships.set(source, (memberships.get(source) ?? 0) + 1);
     }
   }
-  const pinCost = prepareChatHistoryPinCost(messages, admission?.pins ?? []);
-  const cost = { count: localCount + pinCost.count, weight: 1 + localWeight + pinCost.weight };
+  const pinCost = admission?.pinCost;
+  const cost = {
+    count: localCount + (pinCost?.count ?? 0),
+    weight: 1 + localWeight + (pinCost?.weight ?? 0),
+  };
   let localOutputSource: string | undefined;
   const chargedGroup = (source: string) =>
     source === intrinsicSource ||
@@ -403,7 +419,7 @@ export function selectChatHistoryResidency(
       : groups.get(source);
   const changeMembershipCost = (source: string, multiplier: number) => {
     const group = chargedGroup(source);
-    const credit = pinCost.covered.get(source);
+    const credit = pinCost?.covered.get(source);
     cost.count += multiplier * ((group?.count ?? 0) - (credit?.count ?? 0));
     cost.weight += multiplier * ((group?.weight ?? 0) - (credit?.weight ?? 0));
   };

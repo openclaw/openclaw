@@ -695,7 +695,6 @@ openclaw-pending-session-create {
   display: grid;
   grid-template: 44px / minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
   overflow: hidden;
-  height: 44px;
   align-items: center;
   gap: 10px;
   padding: 0 8px;
