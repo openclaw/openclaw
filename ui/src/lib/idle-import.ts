@@ -20,11 +20,13 @@ export function createIdleImport<T>(importModule: () => Promise<T>, onLoaded?: (
       )
       .then((value) => {
         stopOnline?.();
-        if (active) {
-          onLoaded?.(value);
-        } else if (onLoaded) {
-          // Reactivation must deliver the callback; existing callers keep this result.
-          moduleLoad = null;
+        if (onLoaded) {
+          if (active) {
+            onLoaded(value);
+          } else {
+            // Reactivation must deliver the callback; existing callers keep this result.
+            moduleLoad = null;
+          }
         }
         return value;
       })
