@@ -315,7 +315,7 @@ describe("startGatewayTailscaleExposure", () => {
     mocks.getTailnetHostnameAfterServe.mockResolvedValue("node.tailnet.ts.net");
     const logTailscale = createLogger();
 
-    await startGatewayTailscaleExposure({
+    const cleanup = await startGatewayTailscaleExposure({
       tailscaleMode: "serve",
       port: 18789,
       logTailscale,
@@ -332,6 +332,7 @@ describe("startGatewayTailscaleExposure", () => {
         { mode: "token", allowTailscale: true },
       ),
     ).toBeUndefined();
+    await cleanup?.();
   });
 
   it("does not publish an origin for an externally preserved Funnel", async () => {
