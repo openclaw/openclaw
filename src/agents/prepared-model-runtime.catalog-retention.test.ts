@@ -3,8 +3,10 @@
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { setImmediate } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
+import { execNodeEvalSync } from "../test-utils/node-process.js";
 import { expectCollected, forceFullGc } from "../test-utils/retention.js";
 import type { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
+import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   markPreparedModelRuntimeSnapshotsStale,
@@ -64,6 +66,45 @@ it("releases superseded catalog inventories across neutral reloads", async () =>
   ]);
 });
 
+it("keeps retained catalog auth facts without retaining a superseded build snapshot", async () => {
+  mocks.configuredAgentIds = ["default"];
+  mocks.runPreparedModelCatalogWorker.mockImplementation(async () => ({
+    entries: [{ provider: "custom", id: "model", name: "Model" }],
+    routeVariants: [],
+  }));
+  const config = {
+    models: {
+      providers: {
+        custom: {
+          baseUrl: "https://retention.invalid/v1",
+          api: "openai-completions" as const,
+          models: [],
+        },
+      },
+    },
+  };
+  await refreshPreparedModelRuntimeSnapshots(config, {
+    gatewayLifecycle: true,
+    catalogMode: "static",
+  });
+  const retained = await (async () => {
+    const snapshot = await prepareModelRuntimeSnapshot(fixture.agentInput("default", config));
+    const catalog = await snapshot.loadFullModelCatalog!({ refresh: true });
+    expect(getPreparedModelFullCatalogAuth(catalog)).toBeDefined();
+    return { catalog, snapshot: new WeakRef(snapshot) };
+  })();
+  await refreshPreparedModelRuntimeSnapshots(
+    { ...config, logging: { level: "debug" } },
+    { gatewayLifecycle: true, catalogMode: "static" },
+  );
+  vi.clearAllMocks();
+  await expectCollected(retained.snapshot);
+  expect(retained.catalog.entries).toEqual([
+    expect.objectContaining({ provider: "custom", id: "model" }),
+  ]);
+  expect(getPreparedModelFullCatalogAuth(retained.catalog)).toBeDefined();
+});
+
 it("releases the reload caller while a superseded acquisition signal remains retained", async () => {
   class ReloadCaller {
     readonly fixtureLabel = "ReloadCaller";
@@ -88,4 +129,34 @@ it("releases the reload caller while a superseded acquisition signal remains ret
   await expectCollected(caller);
   expect(signal!.aborted).toBe(true);
   expect(signal!.reason).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
+});
+
+it("releases closed borrowed snapshots while native async contexts remain retained", () => {
+  const output = execNodeEvalSync(
+    `import assert from "node:assert/strict";
+     import { AsyncLocalStorage } from "node:async_hooks";
+     import { expectCollected } from ${JSON.stringify(new URL("../test-utils/retention.ts", import.meta.url).href)};
+     import { scopePreparedModelRuntimeLease, getPreparedModelRuntimeBorrowedSnapshot } from ${JSON.stringify(new URL("./prepared-model-runtime-generation-scope.ts", import.meta.url).href)};
+     class Snapshot {}
+     const generation = { remoteCatalog: null };
+     const retained = await (async () => {
+       const snapshot = new Snapshot();
+       const lease = scopePreparedModelRuntimeLease({
+         snapshot, pluginGeneration: generation, run: run => run(),
+         [Symbol.asyncDispose]: async () => {},
+       });
+       const context = lease.run(() => AsyncLocalStorage.snapshot());
+       assert.equal(context(() => getPreparedModelRuntimeBorrowedSnapshot(generation)), snapshot);
+       const disposal = lease[Symbol.asyncDispose]();
+       assert.equal(context(() => getPreparedModelRuntimeBorrowedSnapshot(generation)), undefined);
+       assert.throws(() => lease.run(() => {}), /lease is closed/);
+       await disposal;
+       return { context, snapshot: new WeakRef(snapshot) };
+     })();
+     await expectCollected(retained.snapshot);
+     assert.equal(retained.context(() => getPreparedModelRuntimeBorrowedSnapshot(generation)), undefined);
+     console.log("Closed borrowed snapshot released");`,
+    { imports: ["./scripts/tsx.mjs"], execArgv: ["--expose-gc"], timeout: 10_000 },
+  );
+  expect(output.trim()).toBe("Closed borrowed snapshot released");
 });

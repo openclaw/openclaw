@@ -14,14 +14,15 @@ export function createPreparedSessionTargetAssertion(input: {
   isAttemptCurrent: () => boolean;
   assertActiveRun: NonNullable<ReturnType<typeof resolveAdmittedRunActiveAssertion>>;
 }) {
-  const {
-    runId,
-    sessionId,
-    sessionPromptState,
-    selectedPromptTarget,
-    isAttemptCurrent,
-    assertActiveRun,
-  } = input;
+  const { runId, sessionId, isAttemptCurrent, assertActiveRun } = input;
+  const target: {
+    current: Pick<typeof input, "sessionPromptState" | "selectedPromptTarget"> | undefined;
+  } = {
+    current: {
+      sessionPromptState: input.sessionPromptState,
+      selectedPromptTarget: input.selectedPromptTarget,
+    },
+  };
   const targetFields = ["agentId", "sessionId", "sessionKey", "storePath", "threadId"] as const;
   type RefusalReason =
     | "attempt_inactive"
@@ -45,17 +46,20 @@ export function createPreparedSessionTargetAssertion(input: {
   const assertTargetCurrent = () => {
     let reason: RefusalReason | undefined;
     let field: (typeof targetFields)[number] | undefined;
-    if (!isAttemptCurrent()) {
+    if (!isAttemptCurrent() || !target.current) {
       reason = "attempt_inactive";
-    } else if (sessionPromptState.sessionId !== sessionId) {
-      reason = "session_identity_changed";
     } else {
-      field = targetFields.find(
-        (candidate) =>
-          sessionPromptState.sessionTarget?.[candidate] !== selectedPromptTarget[candidate],
-      );
-      if (field) {
-        reason = "target_changed";
+      const { sessionPromptState, selectedPromptTarget } = target.current;
+      if (sessionPromptState.sessionId !== sessionId) {
+        reason = "session_identity_changed";
+      } else {
+        field = targetFields.find(
+          (candidate) =>
+            sessionPromptState.sessionTarget?.[candidate] !== selectedPromptTarget[candidate],
+        );
+        if (field) {
+          reason = "target_changed";
+        }
       }
     }
     if (reason) {
@@ -63,7 +67,7 @@ export function createPreparedSessionTargetAssertion(input: {
       throw new Error("Session target preparation outlived its attempt");
     }
   };
-  return composeSessionSourceAssertion([assertActiveRun], (assertSource) => {
+  const assertCurrent = composeSessionSourceAssertion([assertActiveRun], (assertSource) => {
     assertTargetCurrent();
     try {
       assertSource();
@@ -80,4 +84,12 @@ export function createPreparedSessionTargetAssertion(input: {
       throw cause;
     }
   });
+  return {
+    assertCurrent,
+    [Symbol.dispose]() {
+      // Retained transcript guards must keep refusing without retaining the
+      // completed prompt owner and its snapshot-bearing run parameters.
+      target.current = undefined;
+    },
+  };
 }

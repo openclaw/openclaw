@@ -31,6 +31,7 @@ import {
   readSessionControllerOperationState,
 } from "../../../sessions/session-controller.state.js";
 import { testing } from "../../../sessions/session-controller.test-support.js";
+import { execNodeEvalSync } from "../../../test-utils/node-process.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { installSessionPlacementAdmissionProvider } from "../../session-placement-admission.js";
@@ -598,6 +599,36 @@ describe("controller-owned execution guard", () => {
   });
 });
 
+it("releases closed attempt predicates without retaining abort callbacks or lane inputs", () => {
+  const output = execNodeEvalSync(
+    `import assert from "node:assert/strict";
+     import { expectCollected } from ${JSON.stringify(new URL("../../../test-utils/retention.ts", import.meta.url).href)};
+     import { createTestAdmittedRunContext } from ${JSON.stringify(new URL("../../admitted-run-context.test-support.ts", import.meta.url).href)};
+     import { createLaneControllerFixture } from ${JSON.stringify(new URL("./lane-controller.test-support.ts", import.meta.url).href)};
+     class RuntimeStores {}
+     const retained = (() => {
+       const stores = new RuntimeStores();
+       const admittedRunContext = createTestAdmittedRunContext("retention");
+       const { controller } = createLaneControllerFixture({
+         runId: "retention", sessionId: "retention", sessionFile: "retention.jsonl",
+         workspaceDir: ".", prompt: "synthetic", timeoutMs: 1000, admittedRunContext,
+       }, { globalLane: "retention", configureRuntime: false,
+            onSessionWriterClaimed: () => assert.ok(stores) });
+       const controls = controller.createAttemptControls({ admittedRunContext,
+         onAbort: () => assert.ok(stores) });
+       assert.equal(controls.isAttemptCurrent(), true);
+       controls.close();
+       assert.equal(controls.isAttemptCurrent(), false);
+       return { check: controls.isAttemptCurrent, stores: new WeakRef(stores) };
+     })();
+     await expectCollected(retained.stores);
+     assert.equal(retained.check(), false);
+     console.log("Closed attempt inputs released");`,
+    { imports: ["./scripts/tsx.mjs"], execArgv: ["--expose-gc"], timeout: 20_000 },
+  );
+  expect(output.trim()).toBe("Closed attempt inputs released");
+});
+
 describe("exact attempt deadline transfer", () => {
   const attemptLane = "test:attempt-owner-deadline";
   const cleanups: Array<() => void | Promise<void>> = [];
@@ -812,6 +843,10 @@ describe("exact attempt deadline transfer", () => {
         abort.abort();
         break;
     }
+    expect(old.isCurrent()).toBe(false);
+    expect(old.isAttemptCurrent()).toBe(
+      invalidation === "revoked" || invalidation === "replaced admission",
+    );
     const deadline = operation.watchdog.snapshot().executionDeadlineAtMs;
     old.onAttemptDeadlineChanged({ kind: "bounded", deadlineAtMs: Date.now() });
     old.onAttemptTimeout(new Error("late timeout"));

@@ -432,6 +432,22 @@ export function hasSameLifecycleInput(
   );
 }
 
+// Catalog auth readers retain this live check after publication. Allocate it
+// outside the batch scope so it cannot retain completed result snapshots.
+function createPreparedGenerationCurrentCheck(
+  registration: Pick<
+    Parameters<typeof publishPreparedModelRuntimeOwnerBatch>[0],
+    "owners" | "isOwnerRegistered"
+  >,
+  owner: PreparedModelRuntimeOwner,
+  generation: number,
+  key: string,
+): () => boolean {
+  return () =>
+    owner.generation === generation &&
+    (registration.isOwnerRegistered?.(key, owner) ?? registration.owners.get(key) === owner);
+}
+
 export async function publishPreparedModelRuntimeOwnerBatch(
   params: {
     ownersToPublish: readonly PreparedModelRuntimeOwner[];
@@ -473,9 +489,12 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     let registered = params.owners.get(key) === owner;
     // Scoped reloads retain unaffected generations beyond their creating publication epoch.
     // Persistent catalog/auth callbacks must retire only with this exact registered generation.
-    const isGenerationCurrent = () =>
-      owner.generation === generation &&
-      (params.isOwnerRegistered?.(key, owner) ?? params.owners.get(key) === owner);
+    const isGenerationCurrent = createPreparedGenerationCurrentCheck(
+      params,
+      owner,
+      generation,
+      key,
+    );
     const isCurrent = () => (params.isPublicationCurrent?.() ?? true) && isGenerationCurrent();
     return {
       catalogMode: owner.catalogMode,

@@ -62,6 +62,25 @@ import { claimAgentSessionWriter } from "./session-bootstrap.js";
 
 type LaneParams = RunEmbeddedAgentParams & { sessionFile: string };
 
+type AttemptLiveness = {
+  state: "active" | "aborted" | "closed";
+  activeOwner: { current: object | undefined };
+  owner: object;
+  signal: AbortSignal;
+  lifecycleGeneration: string;
+};
+
+// Transcript authority can outlive the attempt. Retain only its liveness facts,
+// not the lane inputs or abort callbacks in the controller's lexical context.
+function isEmbeddedAttemptCurrent(this: AttemptLiveness): boolean {
+  return (
+    this.state === "active" &&
+    this.activeOwner.current === this.owner &&
+    !this.signal.aborted &&
+    isAgentEventLifecycleGenerationCurrent(this.lifecycleGeneration)
+  );
+}
+
 export function createEmbeddedRunLaneController<TParams extends LaneParams>(options: {
   getLifecycleGeneration: () => string;
   getParams: () => TParams;
@@ -153,7 +172,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     laneTaskProgressAtMs = Date.now();
   };
   let assertPlacementCurrent: (() => void) | undefined;
-  let activeAttemptOwner: object | undefined;
+  const activeAttemptOwner: AttemptLiveness["activeOwner"] = { current: undefined };
   let recoverAttemptDeadline: (() => Promise<boolean>) | undefined;
   const recoverExecutionDeadline = async () => {
     if (await recoverAttemptDeadline?.()) {
@@ -173,21 +192,23 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     // Awaited preflight may finish after recovery has released this lane's claim.
     assertPlacementCurrent?.();
     const owner = {};
-    activeAttemptOwner = owner;
+    activeAttemptOwner.current = owner;
     const lifecycleGeneration = options.getLifecycleGeneration();
     const authority = getAdmittedRunDelegatedAuthority(input.admittedRunContext);
     const signal = input.abortSignal
       ? AbortSignal.any([abortSignal, input.abortSignal])
       : abortSignal;
-    let state: "active" | "aborted" | "closed" = "active";
+    const liveness: AttemptLiveness = {
+      state: "active",
+      activeOwner: activeAttemptOwner,
+      owner,
+      signal,
+      lifecycleGeneration,
+    };
     let deadlineOwned = false;
     let timeoutCleanupRequested = false;
     const operation = options.getParams().replyOperation;
-    const isAttemptCurrent = () =>
-      state === "active" &&
-      activeAttemptOwner === owner &&
-      !signal.aborted &&
-      isAgentEventLifecycleGenerationCurrent(lifecycleGeneration);
+    const isAttemptCurrent = isEmbeddedAttemptCurrent.bind(liveness);
     const isCurrent = () =>
       isAttemptCurrent() &&
       authority !== undefined &&
@@ -251,19 +272,19 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         if (!isCurrent()) {
           return;
         }
-        state = "aborted";
+        liveness.state = "aborted";
         laneTaskAbortController.abort(createAgentRunDirectAbortError());
         input.onAbort?.();
       },
       close: () => {
-        if (state === "closed") {
+        if (liveness.state === "closed") {
           return;
         }
         // Every retry/finalizer gets a fresh closure; retained callbacks must
         // never change the next attempt's deadline or cancellation state.
-        state = "closed";
-        if (activeAttemptOwner === owner) {
-          activeAttemptOwner = undefined;
+        liveness.state = "closed";
+        if (activeAttemptOwner.current === owner) {
+          activeAttemptOwner.current = undefined;
           recoverAttemptDeadline = undefined;
           if (deadlineOwned) {
             setLaneTaskDeadline(undefined);
@@ -684,7 +705,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     setLaneTaskDeadline,
     // Preparation has its own run budget; active auth uses execution time, without teardown grace.
     getExecutionDeadline: (): CommandQueueTaskDeadline | undefined =>
-      !activeAttemptOwner
+      !activeAttemptOwner.current
         ? undefined
         : laneTaskDeadline?.kind === "bounded"
           ? {

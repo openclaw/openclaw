@@ -32,6 +32,7 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
   "scripts/perf/agent-deletion-cancellation-measure.ts",
+  "scripts/perf/gateway-catalog-context-retention.mjs!",
   "scripts/perf/template-retirement-measure.mts",
   "scripts/windows-release-promotion.mjs!",
   // Offline composition is documented; Docker executes the staged finalizer by path.

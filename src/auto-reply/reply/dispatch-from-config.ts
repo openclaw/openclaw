@@ -21,6 +21,22 @@ import { prepareReplySourceInput, retireUnadoptedReplySource } from "./reply-sou
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
+type DispatchRuntimeResources = {
+  stack: AsyncDisposableStack;
+  lease?: ReturnType<typeof scopePreparedModelRuntimeLease>;
+};
+
+function retainDispatchRuntimeLease(
+  this: DispatchRuntimeResources,
+  lease: Parameters<typeof scopePreparedModelRuntimeLease>[0],
+): void {
+  this.lease = this.stack.use(scopePreparedModelRuntimeLease(lease));
+}
+
+function releaseDispatchRuntimeLeaseReference(this: DispatchRuntimeResources): void {
+  this.lease = undefined;
+}
+
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
@@ -87,15 +103,16 @@ async function dispatchReplyFromConfigInner(
   allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
   await using runtimeResources = new AsyncDisposableStack();
-  let runtimeLease: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
+  const runtime: DispatchRuntimeResources = { stack: runtimeResources };
+  // Gathered callbacks outlive dispatch in native async contexts. Bind only this
+  // resource cell, not the execution context; LIFO clears it after its leases drain.
+  runtimeResources.defer(releaseDispatchRuntimeLeaseReference.bind(runtime));
   const gathered = await gatherDispatchRequest(
     params,
     messageAuditTerminal,
     allowActiveQueueResolution,
-    (lease) => {
-      runtimeLease = runtimeResources.use(scopePreparedModelRuntimeLease(lease));
-    },
-    (dispose) => runtimeResources.defer(dispose),
+    retainDispatchRuntimeLease.bind(runtime),
+    runtimeResources.defer.bind(runtimeResources),
   );
   if (gathered.status === "complete") {
     return gathered.result;
@@ -164,5 +181,5 @@ async function dispatchReplyFromConfigInner(
   };
   const runWithRegistry = () =>
     withPluginRuntimeRegistryScope(gathered.state.pluginRegistry, execute);
-  return runtimeLease ? await runtimeLease.run(runWithRegistry) : await runWithRegistry();
+  return runtime.lease ? await runtime.lease.run(runWithRegistry) : await runWithRegistry();
 }

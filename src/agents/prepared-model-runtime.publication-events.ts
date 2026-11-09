@@ -51,6 +51,37 @@ export function notifyPreparedModelCatalogPublication(
 
 const publicationListeners = new Set<(event: PreparedModelRuntimePublicationEvent) => void>();
 
+type PendingCatalogProviders = Record<
+  PreparedModelCatalogAcquisitionKind,
+  readonly string[] | undefined
+>;
+
+function countPendingProviders(pending: PendingCatalogProviders): number {
+  return (pending.provider?.length ?? 0) + (pending.native?.length ?? 0);
+}
+
+// Catalog getters can outlive acquisition. Their closures retain only status
+// facts, not the reporter context with its owner, authority, and failure callback.
+function createPendingProvidersReader(pending: PendingCatalogProviders) {
+  return () =>
+    countPendingProviders(pending)
+      ? [...new Set([...(pending.provider ?? []), ...(pending.native ?? [])])]
+      : undefined;
+}
+
+function createRefreshFailureReader(
+  failed: PreparedModelCatalogAttempt["failedProviders"],
+  nativeOutcomes: NonNullable<ModelCatalogSnapshot["providerOutcomes"]>,
+  catalog: ModelCatalogSnapshot,
+) {
+  return () =>
+    failed.provider.size > 0 ||
+    failed.native.size > 0 ||
+    nativeOutcomes.some((outcome) => outcome.status === "unavailable") ||
+    catalog.providerOutcomes?.some((outcome) => outcome.status === "unavailable") ||
+    undefined;
+}
+
 /** Completes catalog attempts without withdrawing their prepared turn runtime. */
 export function createCatalogAttemptReporter(
   owner: Pick<PreparedModelRuntimeOwner, "catalogAttempt">,
@@ -63,19 +94,11 @@ export function createCatalogAttemptReporter(
     owner.catalogAttempt && isDeepStrictEqual(owner.catalogAttempt.source, source)
       ? owner.catalogAttempt
       : { source, failedProviders: { provider: new Set(), native: new Set() } };
-  const pendingProviders: Record<
-    PreparedModelCatalogAcquisitionKind,
-    readonly string[] | undefined
-  > = {
+  const pendingProviders: PendingCatalogProviders = {
     provider: undefined,
     native: undefined,
   };
-  const pendingCount = () =>
-    (pendingProviders.provider?.length ?? 0) + (pendingProviders.native?.length ?? 0);
-  const readPendingProviders = () =>
-    pendingCount()
-      ? [...new Set([...(pendingProviders.provider ?? []), ...(pendingProviders.native ?? [])])]
-      : undefined;
+  const readPendingProviders = createPendingProvidersReader(pendingProviders);
   const failed = (
     error: unknown,
     providers?: readonly string[],
@@ -141,11 +164,7 @@ export function createCatalogAttemptReporter(
       Object.defineProperty(catalog, "refreshFailed", {
         enumerable: true,
         configurable: true,
-        get: () =>
-          hasFailedProviders() ||
-          nativeOutcomes.some((outcome) => outcome.status === "unavailable") ||
-          catalog.providerOutcomes?.some((outcome) => outcome.status === "unavailable") ||
-          undefined,
+        get: createRefreshFailureReader(attempt.failedProviders, nativeOutcomes, catalog),
       });
       return catalog;
     },
@@ -155,7 +174,7 @@ export function createCatalogAttemptReporter(
       publication?: () => CatalogPublicationChange,
     ) => {
       const previouslyFailed = hasFailedProviders();
-      const previouslyPendingCount = pendingCount();
+      const previouslyPendingCount = countPendingProviders(pendingProviders);
       const acquisitionKind = kind ?? "provider";
       const remaining = providers
         ? pendingProviders[acquisitionKind]?.filter((provider) => !providers.includes(provider))
@@ -172,7 +191,8 @@ export function createCatalogAttemptReporter(
       const change = publication?.();
       notifyPreparedModelCatalogPublication(
         change,
-        previouslyPendingCount !== pendingCount() || previouslyFailed !== hasFailedProviders(),
+        previouslyPendingCount !== countPendingProviders(pendingProviders) ||
+          previouslyFailed !== hasFailedProviders(),
       );
     },
     failed,
