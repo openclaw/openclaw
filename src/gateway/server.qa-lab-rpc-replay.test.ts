@@ -4,6 +4,7 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { requestQaReplayControl } from "./server.qa-lab-rpc-replay.test-support.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -52,16 +53,7 @@ let childPid: number | null;
 let token: string;
 
 async function control(action = "snapshot"): Promise<ProxySnapshot> {
-  const response = await fetch(`${child.baseUrl}/__fixture`, {
-    method: "POST",
-    headers: { "x-qa-fixture-token": token, "content-type": "application/json" },
-    body: JSON.stringify({ action }),
-    signal: AbortSignal.timeout(5_000),
-  });
-  if (!response.ok) {
-    throw new Error(`proxy control failed: ${response.status}`);
-  }
-  return (await response.json()) as ProxySnapshot;
+  return (await requestQaReplayControl(child.baseUrl, token, action)) as ProxySnapshot;
 }
 
 beforeAll(async () => {
