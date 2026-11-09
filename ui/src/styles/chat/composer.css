@@ -1468,6 +1468,31 @@
     stroke-width: 1.75px;
   }
 
+  .chat-comment-preview {
+    .chat-selection-annotations__chip.chat-attachment-thumb {
+      --chat-attachment-radius: calc(var(--radius-md) * var(--openclaw-corner-radius-scale));
+
+      height: 30px;
+    }
+
+    .chat-attachment-file {
+      gap: 6px;
+      padding: 6px 8px;
+    }
+
+    .chat-attachment-preview-icon {
+      flex-basis: 16px;
+      width: 16px;
+      height: 16px;
+    }
+
+    .chat-comment-count-gap {
+      display: inline-block;
+      width: 4px;
+      font-size: 0;
+    }
+  }
+
   &[data-disabled="true"] {
     .chat-attachment-thumb {
       opacity: 0.5;
