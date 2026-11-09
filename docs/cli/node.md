@@ -551,7 +551,10 @@ credentials from the installing shell; the service resumes its enrolled key.
 
 The transport sends QUIC keep-alives, periodically refreshes authority and probes connections, and backs off
 when the relay denies admission. A removed or unadmitted node key stops the host
-with **“re-join this node”** rather than retrying indefinitely. Ordinary Gateway
+with **“re-join this node”** rather than retrying indefinitely. If Discovery
+refuses to serve the node's descriptor, for example after a restart once the owner
+removed it, that refusal is not signed. The host then keeps retrying without dialing,
+and prints once how to re-join. Ordinary Gateway
 pairing-pending responses retain the existing wait-and-retry behavior.
 
 Node is the qualified runtime for this preview. The native addon loads and binds

@@ -32,6 +32,7 @@ import { NodeTunnelConnection } from "./openclaw-id-connection.js";
 import {
   assessNodeDescriptor,
   nodeDiscoveryCall,
+  NodeDiscoveryError,
   OpenClawIdNodeRemovedError,
 } from "./openclaw-id-discovery.js";
 import type { NodeHostOpenClawIdTarget } from "./openclaw-id-target.js";
@@ -143,7 +144,14 @@ export async function startNodeTunnelTransport(options: {
             error.message !== lastRefusal
           ) {
             lastRefusal = error.message;
-            options.onRefusal(error);
+            options.onRefusal(
+              // Discovery's refusal is unsigned, so it cannot stop the host like verified removal.
+              error instanceof NodeDiscoveryError && error.code === "forbidden"
+                ? new Error(
+                    "Discovery does not list this node for the claw; retrying. If the owner removed this node, re-join it with a new link.",
+                  )
+                : error,
+            );
           }
         },
       );

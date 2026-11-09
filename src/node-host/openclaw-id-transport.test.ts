@@ -42,6 +42,7 @@ let served: { descriptor: ClawDescriptor; snapshot?: unknown };
 let signatureErrors: string[];
 let reads: number;
 let persistenceError: Error | undefined;
+let unlisted: boolean;
 let terminal: ReturnType<typeof vi.fn<(error: Error) => void>>;
 let refusal: ReturnType<typeof vi.fn<(error: Error) => void>>;
 let connect: ReturnType<typeof vi.fn<Endpoint["connect"]>>;
@@ -108,6 +109,10 @@ beforeAll(async () => {
             res.writeHead(403).end(JSON.stringify({ error: { code: "forbidden" } }));
             return;
           }
+          if (unlisted) {
+            res.writeHead(403).end(JSON.stringify({ error: { code: "forbidden" } }));
+            return;
+          }
           res.setHeader("content-type", "application/json");
           res.end(JSON.stringify(served));
         })().catch((error: unknown) => {
@@ -125,6 +130,7 @@ beforeEach(async () => {
   reads = 0;
   signatureErrors = [];
   persistenceError = undefined;
+  unlisted = false;
   stateDir = tempDirs.make("openclaw-node-tunnel-");
   const keyDir = path.join(stateDir, "node-openclaw-id");
   await fs.mkdir(keyDir, { mode: 0o700 });
@@ -336,3 +342,15 @@ unixTest.each(["ftp://relay.example/", "https://user:pass@relay.example/"])(
     expect(signatureErrors).toEqual([]);
   },
 );
+
+unixTest("explains an unsigned Discovery refusal once without stopping or dialing", async () => {
+  const tunnel = await start();
+  unlisted = true;
+  expect(await requestThrough(tunnel)).toBe(502);
+  expect(await requestThrough(tunnel)).toBe(502);
+  expect(connect).not.toHaveBeenCalled();
+  expect(terminal).not.toHaveBeenCalled();
+  expect(refusal.mock.calls.map(([error]) => error.message)).toEqual([
+    expect.stringContaining("If the owner removed this node, re-join it"),
+  ]);
+});
