@@ -9,7 +9,6 @@ import {
   createAttemptResult,
 } from "../../agents/harness/lifecycle.test-support.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
@@ -34,7 +33,6 @@ import {
   stopSession,
 } from "../../sessions/session-controller.stop.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
-import { recordSessionGoalChanged } from "../../sessions/session-state-events.js";
 import { mintReplyMessageActionTurnCapability } from "./agent-runner-utils.js";
 import {
   bindGoalContinuationExecution,
@@ -111,17 +109,6 @@ vi.mock("../../agents/harness/registry.js", async (importOriginal) => ({
       : undefined,
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
-  patchSessionEntryCore: vi.fn(),
-}));
-vi.mock("../../sessions/session-state-events.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../sessions/session-state-events.js")>()),
-  recordSessionGoalChanged: vi.fn(async () => {}),
-}));
-let persisted: SessionEntry;
-let beforeCommit: () => void;
-
 const identity = {
   sessionId: "goal-session",
   lifecycleRevision: "revision-2",
@@ -194,22 +181,6 @@ function fixture() {
 }
 beforeEach(() => {
   vi.useFakeTimers();
-  persisted = entry();
-  beforeCommit = () => {};
-  vi.mocked(recordSessionGoalChanged).mockClear();
-  vi.mocked(patchSessionEntryCore)
-    .mockReset()
-    .mockImplementation(async (_scope, update, options) => {
-      const patch = await update(persisted, {});
-      beforeCommit();
-      options?.assertCommitAllowed?.();
-      if (!patch || options?.shouldCommit?.() === false) {
-        return null;
-      }
-      persisted = { ...persisted, ...patch };
-      options?.onCommitted?.(persisted);
-      return persisted;
-    });
   children.mockResolvedValue([]);
   workerPlacement.supported = true;
   workerPlacement.current.mockReset();
@@ -366,75 +337,13 @@ describe("Goal continuation eligibility", () => {
         },
       ],
     },
+    { payloads: [{ text: "failed", isError: true }] },
   ])("preserves an existing continuation, failure or approval owner: %j", async (result) => {
     const f = fixture();
     f.params.result = { ...normal, ...result, meta: { ...normal.meta, ...result.meta } };
     expect(await enqueueGoalContinuation(f.params)).toBe(false);
     expect(enqueueFollowupRun).not.toHaveBeenCalled();
-    f.params.result.payloads = [{ text: "failed", isError: true }];
-    expect(await enqueueGoalContinuation(f.params)).toBe(false);
-    expect(patchSessionEntryCore).not.toHaveBeenCalled();
   });
-});
-
-describe("Goal disposition after a collected child or error reply", () => {
-  it.each(["stop", "queued-input", "revoked"] as const)(
-    "rechecks %s at the pause writer",
-    async (gate) => {
-      const f = fixture();
-      let revoked = false;
-      f.params.base.operatorAuthority = {
-        profileId: "operator",
-        scopes: ["operator.admin"],
-        assertCurrent: () => {
-          if (revoked) {
-            throw new Error("operator revoked");
-          }
-        },
-      };
-      f.params.result = { ...normal, payloads: [{ text: "failed", isError: true }] };
-      beforeCommit = () => {
-        if (gate === "stop") {
-          f.controller.abort();
-        }
-        if (gate === "queued-input") {
-          vi.mocked(getFollowupQueueDepth).mockReturnValue(1);
-        }
-        if (gate === "revoked") {
-          revoked = true;
-        }
-      };
-      if (gate === "revoked") {
-        await expect(enqueueGoalContinuation(f.params)).rejects.toThrow("operator revoked");
-      } else {
-        expect(await enqueueGoalContinuation(f.params)).toBe(false);
-      }
-      expect(persisted.goal?.status).toBe("active");
-      expect(recordSessionGoalChanged).not.toHaveBeenCalled();
-    },
-  );
-  // Currency/status predicates are covered above; these cases prove fresh writer facts.
-  it.each(["paused", "replaced", "resumed"] as const)(
-    "does not pause a changed Goal at the writer: %s",
-    async (change) => {
-      const f = fixture();
-      f.params.result = { ...normal, payloads: [{ text: "failed", isError: true }] };
-      if (!persisted.goal) {
-        throw new Error("Fixture Goal required");
-      }
-      if (change === "replaced") {
-        persisted.goal.id = "other-goal";
-      } else if (change === "resumed") {
-        persisted.goal.updatedAt++;
-      } else {
-        persisted.goal.status = change;
-      }
-      const previous = structuredClone(persisted.goal);
-      expect(await enqueueGoalContinuation(f.params)).toBe(false);
-      expect(persisted.goal).toEqual(previous);
-      expect(recordSessionGoalChanged).not.toHaveBeenCalled();
-    },
-  );
 });
 
 describe("Goal queue custody", () => {
@@ -505,9 +414,6 @@ describe("Goal queue custody", () => {
     children.mockResolvedValue([{ runId: "earlier-child" }]);
     expect(await enqueueGoalContinuation(f.params)).toBe(false);
     expect(enqueueFollowupRun).not.toHaveBeenCalled();
-    f.params.result = { ...normal, payloads: [{ text: "failed", isError: true }] };
-    expect(await enqueueGoalContinuation(f.params)).toBe(false);
-    expect(patchSessionEntryCore).not.toHaveBeenCalled();
   });
   it("allocates each successor before settling the previous one-shot delivery", async () => {
     const delivered = vi.fn(async () => ({ kind: "delivered" as const }));

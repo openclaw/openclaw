@@ -217,10 +217,8 @@ The normal follow-up queue owns these turns. They wait for the previous turn's
 execution and delivery to settle, use normal session admission and permissions,
 and do not appear as new human messages. Queued user input and existing
 child/tool continuations take precedence; the nudge does not run alongside them.
-Children collected within the turn do not hold back pursuit merely because they
-were spawned: only an outstanding completion owner does. If an otherwise normal
-turn ends with an error reply and no continuation owner remains, the Goal pauses
-with a status note; review the error and explicitly Resume to continue.
+Children collected within the turn do not block continuation merely because they
+were spawned.
 When a built-in chat Goal yields to children, their settled requester turn
 receives the current Goal context. A normal final returns pursuit to the same
 follow-up queue only after the child completion batch is committed; it does not

@@ -1,11 +1,7 @@
 import { hasCompletionMessageSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
-import {
-  accountSessionGoalUsage,
-  buildUpdatedSessionGoalStatus,
-} from "../../config/sessions/goals-transitions.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { accountSessionGoalUsage } from "../../config/sessions/goals-transitions.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -21,7 +17,6 @@ import {
   type SessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
-import { recordSessionGoalChanged } from "../../sessions/session-state-events.js";
 import { transferCommandOwnerAuthorityToSuccessor } from "../command-owner-authority.js";
 import { createGoalContinuationReturnScope } from "./goal-continuation-return.js";
 import type { GoalContinuation } from "./goal-continuation.types.js";
@@ -136,7 +131,8 @@ function isGoalContinuationOutcome(result: EmbeddedAgentRunResult): boolean {
     !meta.continuationPending &&
     !meta.pendingToolCalls?.length &&
     !hasCompletionMessageSessionSpawn(result.acceptedSessionSpawns) &&
-    !result.didSendDeterministicApprovalPrompt
+    !result.didSendDeterministicApprovalPrompt &&
+    !result.payloads?.some((payload) => payload.isError)
   );
 }
 
@@ -218,49 +214,6 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   }
   const source = params.base.queuedFollowupReplyDisposition;
   if (source?.kind === "drop") {
-    return false;
-  }
-  if (params.result.payloads?.some((payload) => payload.isError)) {
-    // A tool failure can settle its parent normally without a successor. Preserve
-    // genuine waits above, but never leave this error reply advertising pursuit.
-    let pausedEntry: SessionEntry | undefined;
-    await patchSessionEntryCore(
-      { storePath: params.storePath, sessionKey: params.sessionKey },
-      (current) => {
-        if (
-          !eligible() ||
-          !isGoalContinuationCurrent(continuation, current) ||
-          current.goal?.updatedAt !== entry.goal?.updatedAt
-        ) {
-          return null;
-        }
-        return {
-          goal: buildUpdatedSessionGoalStatus(
-            current,
-            {
-              status: "paused",
-              note: "Paused after an error reply with no continuation. Review the error and Resume to continue.",
-            },
-            Date.now(),
-          ),
-        };
-      },
-      {
-        shouldCommit: eligible,
-        assertCommitAllowed: () => params.base.operatorAuthority?.assertCurrent(),
-        onCommitted: (current) => {
-          pausedEntry = current;
-        },
-      },
-    );
-    if (pausedEntry) {
-      await recordSessionGoalChanged({
-        sessionKey: params.sessionKey,
-        agentId: params.base.run.agentId,
-        entry: pausedEntry,
-        summary: "goal paused after an error reply without a continuation",
-      });
-    }
     return false;
   }
   const base = params.base;

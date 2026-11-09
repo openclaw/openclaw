@@ -1,2 +1,2 @@
-# Real Gateway collector/refused-launch disposition and conditional pause guards.
-447
+# Collector continuation via the existing Gateway fixture and completion-owner exclusion.
+32
