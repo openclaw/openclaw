@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { measureCronPagingPage } from "../../../scripts/perf/cron-paging-measure.ts";
 import type { CronJob } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
@@ -160,6 +161,49 @@ suite.define(() => {
         await instance.dispose();
       }
     });
+  });
+
+  it("preserves visible summary runs while native scrolling appends the next page", async () => {
+    await suite.withPage(
+      { ...contextOptions, viewport: { width: 1440, height: 1000 } },
+      async ({ page }) => {
+        const entries = Array.from({ length: 100 }, (_, index) => ({
+          ...run(Date.now() - index * 60_000, `workspace-${index}`, "Workspace check completed."),
+          jobName: `Workspace check ${index}`,
+          runId: `workspace-run-${index}`,
+          runAtMs: Date.now() - index * 60_000,
+          durationMs: 20,
+          deliveryStatus: "not-requested",
+        }));
+        const gateway = await installCronGateway(page, {
+          "cron.list": cronList([cronJob("workspace", "Workspace check")], "history-scroll"),
+          "cron.runs": {
+            cases: [
+              { match: { offset: 0 }, response: runsPage(entries.slice(0, 50), 100, 0, 50) },
+              { match: { offset: 50 }, response: runsPage(entries.slice(50), 100, 50) },
+            ],
+          },
+        });
+        const result = await measureCronPagingPage(
+          page,
+          `${suite.server.baseUrl}cron`,
+          "history",
+          100,
+        );
+        expect(result.appends).toHaveLength(1);
+        const append = result.appends[0]!;
+        const retained = append.settledCommon!;
+        expect(retained.length).toBeGreaterThan(1);
+        expect(retained.every((row) => row.retained)).toBe(true);
+        expect(Math.abs(append.settledScrollDelta!)).toBeLessThan(1);
+        expect(Math.max(...retained.map((row) => Math.abs(row.displacement!)))).toBeLessThan(1);
+        expect(
+          (await gateway.getRequests("cron.runs")).map(
+            ({ params }) => isRecord(params) && params.offset,
+          ),
+        ).toEqual([0, 50]);
+      },
+    );
   });
 
   it("keeps pending history on page zero and pages the settled query once near its end", async () => {

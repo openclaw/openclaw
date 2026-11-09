@@ -60,7 +60,6 @@ export function RunRows(
   };
   const publish = () => {
     setWindow({ items: virtualizer.getVirtualItems(), height: virtualizer.getTotalSize() });
-    loadNearEnd();
   };
   const virtualizer = new Virtualizer<HTMLElement, HTMLDivElement>({
     count: 0,
@@ -75,9 +74,8 @@ export function RunRows(
     },
     scrollToFn: elementScroll,
     overscan: 3,
-    anchorTo: "end",
-    followOnAppend: false,
-    useAnimationFrameWithResizeObserver: true,
+    // History pages extend the tail. Keep the reading position and measure
+    // newly visible summaries before paint instead of following their growth.
     onChange: publish,
   });
   const pinFocus = () => {
@@ -138,7 +136,7 @@ export function RunRows(
       hasMore: props.runsHasMore,
     }),
     (next) => {
-      // Resolve retained-key anchoring only after the new list height is committed.
+      // Update the observer only after the new list height is committed.
       if (next && next.window !== committedWindow) {
         committedWindow = next.window;
         const { _willUpdate: update } = virtualizer;
@@ -180,6 +178,14 @@ export function RunRows(
     onSettled(() => {
       elements.add(element);
       virtualizer.measureElement(element);
+      // Native scrolling defers measureElement to ResizeObserver. Measure a
+      // newly mounted row before admitting a page against estimated geometry.
+      if (virtualizer.isScrolling) {
+        virtualizer.resizeItem(
+          byKey().get(key())!.index,
+          virtualizer.options.measureElement(element, undefined, virtualizer),
+        );
+      }
       return () => {
         elements.delete(element);
         virtualizer.measureElement(null);
