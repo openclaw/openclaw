@@ -427,28 +427,14 @@ async function loadWorkerOwner() {
     return undefined;
   }
   const { resolveSharedVitestCompilerEnv } = await import("./lib/vitest-process-env.mts");
-  const [
-    worker,
-    processOwner,
-    {
-      selectVitestWorkerPreset,
-      areRuntimeOnlyVitestUnitFiles,
-      shouldUseRuntimeOnlyVitestWorkers,
-      areToolingOnlyVitestUnitFiles,
-      shouldUseToolingOnlyVitestWorkers,
-    },
-  ] = await Promise.all([
+  const [worker, processOwner, { resolveCiVitestWorkerPreset }] = await Promise.all([
     import("./lib/vitest-worker-run.mts"),
     import("./lib/vitest-process.mts"),
     import("./lib/vitest-runtime-selection.mts"),
   ]);
   return {
     createWorkerRun: worker.createVitestWorkerRun,
-    selectPreset: selectVitestWorkerPreset,
-    areRuntimeOnlyFiles: areRuntimeOnlyVitestUnitFiles,
-    areToolingOnlyFiles: areToolingOnlyVitestUnitFiles,
-    useToolingOnlyWorkers: shouldUseToolingOnlyVitestWorkers,
-    useRuntimeOnlyWorkers: shouldUseRuntimeOnlyVitestWorkers,
+    resolvePreset: resolveCiVitestWorkerPreset,
     resolveCompilerEnv: resolveSharedVitestCompilerEnv,
     spawn: processOwner.spawnOwnedVitestProcess,
     exitBySignal: processOwner.exitVitestBySignal,
@@ -465,34 +451,17 @@ function createWorkerContext(
   const compilerEnv = owner.resolveCompilerEnv(
     plans.length > 0 ? plans.map((plan) => prepareChildEnv(plan, env)) : [env],
   );
-  const supportsPreset = (
-    files: typeof owner.areRuntimeOnlyFiles,
-    selection: typeof owner.useRuntimeOnlyWorkers,
-  ) =>
-    !hasExtraArgs &&
-    plans.length > 0 &&
-    plans.every((entry) =>
-      entry.kind === "target"
-        ? files([entry.target])
-        : entry.plan.configs.length === 1 &&
-          Boolean(entry.plan.includePatterns?.length) &&
-          !entry.plan.requiresDist &&
-          entry.plan.pretestBuildMode === undefined &&
-          selection(
-            entry.plan.configs[0]!,
-            [],
-            prepareChildEnv(entry, env),
-            undefined,
-            entry.plan.includePatterns ?? undefined,
-          ),
-    );
   return {
     workerRun: owner.createWorkerRun(
       compilerEnv,
       undefined,
-      owner.selectPreset(
-        supportsPreset(owner.areRuntimeOnlyFiles, owner.useRuntimeOnlyWorkers),
-        supportsPreset(owner.areToolingOnlyFiles, owner.useToolingOnlyWorkers),
+      owner.resolvePreset(
+        plans.map((entry) =>
+          entry.kind === "target"
+            ? { target: entry.target }
+            : { ...entry.plan, env: prepareChildEnv(entry, env) },
+        ),
+        hasExtraArgs,
       ),
     ),
     normalCompletion: true,
