@@ -261,13 +261,13 @@ describe("OpenClaw rescue message", () => {
       .spyOn(runtimeProcess, "resolveRuntimeProcessEntrypointUrl")
       .mockImplementation((name) => (name === "doctor" ? pathToFileURL(fixture) : resolve(name)));
     try {
-      await expect(
-        runRescue(
-          "/openclaw doctor",
-          {},
-          commandContext({ surface: "telegram", channel: "telegram", channelId: "telegram" }),
-        ),
-      ).resolves.toContain("tailnet bind warning");
+      const reply = await runRescue(
+        "/openclaw doctor",
+        {},
+        commandContext({ surface: "telegram", channel: "telegram", channelId: "telegram" }),
+      );
+      expect(reply).toContain("tailnet bind warning");
+      expect(reply).not.toContain("SyntaxError");
     } finally {
       doctor.mockRestore();
     }
@@ -276,9 +276,7 @@ describe("OpenClaw rescue message", () => {
   it("propagates Doctor runner failures that happen before an exit result", async () => {
     const failure = new Error("Doctor runner setup failed");
     const doctorModule = await import("../commands/doctor.js");
-    const runDoctorProcess = vi
-      .spyOn(doctorModule, "runDoctorProcess")
-      .mockRejectedValue(failure);
+    const runDoctorProcess = vi.spyOn(doctorModule, "runDoctorProcess").mockRejectedValue(failure);
     try {
       await expect(runRescue("/openclaw doctor")).rejects.toBe(failure);
     } finally {
