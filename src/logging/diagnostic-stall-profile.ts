@@ -176,7 +176,9 @@ export function formatStallProfile(
         let cursor: number | undefined = id;
         while (cursor !== undefined) {
           const node = nodes.get(cursor);
-          if (!node) break;
+          if (!node) {
+            break;
+          }
           yield node.callFrame;
           cursor = parents.get(cursor);
         }

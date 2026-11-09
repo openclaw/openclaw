@@ -1,5 +1,6 @@
 import { writeSync } from "node:fs";
 import { open } from "node:fs/promises";
+import type { Runtime } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { performance } from "node:perf_hooks";
 import { workerData, type MessagePort } from "node:worker_threads";
@@ -188,12 +189,14 @@ async function sampleStack(beat: bigint, at: number) {
   const session = new Session();
   try {
     session.connectToMainThread();
-    const { result } = await session.post("Runtime.evaluate", {
+    // Node's inspector typings omit the documented disableBreaks parameter.
+    const params: Runtime.EvaluateParameterType & { disableBreaks: boolean } = {
       expression: 'globalThis[Symbol.for("openclaw.stallFlightRecorder.capture")]?.()',
       returnByValue: true,
       silent: true,
       disableBreaks: true,
-    });
+    };
+    const { result } = await session.post("Runtime.evaluate", params);
     // SAFETY: Only the recorder's private capture function supplies this snapshot.
     const snapshot = result.value as StallProfileSnapshot | undefined;
     const sample = snapshot?.stacks?.[0];

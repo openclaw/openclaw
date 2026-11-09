@@ -33,7 +33,9 @@ if (mode === "interrupt") {
   const warnings = [];
   const recorder = createStallFlightRecorder((message) => warnings.push(message));
   try {
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_000);
+    });
     for (let sample = 0; sample < Number(countText); sample++) {
       const before = process.memoryUsage();
       const cpu = process.cpuUsage();
@@ -58,7 +60,9 @@ if (mode === "interrupt") {
           report,
         }),
       );
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 300);
+      });
     }
   } finally {
     recorder.stop();
