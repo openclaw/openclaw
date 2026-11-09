@@ -172,26 +172,29 @@ async function inspectUpdateStatus(
   const databaseStatusPromise = inspect(
     "state database",
     () =>
-      withUpdateDatabaseEngine(process.env, () =>
-        Promise.all([
-          inspect<Awaited<ReturnType<typeof readUpdateRunStatus>>>(
-            "update history",
-            readUpdateRunStatus,
-            { runStatusError: "Update history inspection unavailable" },
-          ),
-          inspect<Awaited<ReturnType<typeof readUpdateRecoverySetStatus>>>(
-            "recovery sets",
-            () => readUpdateRecoverySetStatus(),
-            { recoverySetsError: "Recovery set inspection unavailable" },
-          ),
-          config.gateway?.mode === "remote"
-            ? undefined
-            : inspect(
-                "previous Gateway shutdown",
-                readGatewayLastInstallationReplacementAsync,
-                undefined,
-              ),
-        ]),
+      // Settle cold schema publications before recovery imports its PostgreSQL snapshot.
+      withUpdateDatabaseEngine(
+        process.env,
+        async () =>
+          [
+            await inspect<Awaited<ReturnType<typeof readUpdateRunStatus>>>(
+              "update history",
+              readUpdateRunStatus,
+              { runStatusError: "Update history inspection unavailable" },
+            ),
+            await inspect<Awaited<ReturnType<typeof readUpdateRecoverySetStatus>>>(
+              "recovery sets",
+              () => readUpdateRecoverySetStatus(),
+              { recoverySetsError: "Recovery set inspection unavailable" },
+            ),
+            config.gateway?.mode === "remote"
+              ? undefined
+              : await inspect(
+                  "previous Gateway shutdown",
+                  readGatewayLastInstallationReplacementAsync,
+                  undefined,
+                ),
+          ] as const,
       ).catch(async (error: unknown) => {
         const message = sanitizeTerminalText(
           redactSensitiveText(formatErrorMessage(error), { mode: "tools" }),
