@@ -1036,11 +1036,13 @@ internal fun rememberSessionBrowserSearchState(
   archived: Boolean,
 ): SessionBrowserSearchState {
   val normalizedQuery = query.trim()
+  val isConnected by viewModel.isConnected.collectAsState()
   var searchResults by remember { mutableStateOf<List<ChatSessionEntry>>(emptyList()) }
   var searchLoading by remember { mutableStateOf(false) }
 
-  // Keyed on the live list too: row mutations refresh sessions and re-run an active search.
-  LaunchedEffect(normalizedQuery, archived, sessions) {
+  // Reconnect must retry offline search even if the refreshed roster is unchanged.
+  // Row mutations still re-run the query through the live-list key.
+  LaunchedEffect(normalizedQuery, archived, sessions, isConnected) {
     if (normalizedQuery.isEmpty()) {
       searchResults = emptyList()
       searchLoading = false
