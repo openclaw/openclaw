@@ -45,6 +45,17 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor recovers interrupted legacy heartbeat runs through cron's startup
+recovery owner before converting them to automations, while holding offline
+maintenance custody. Live or unproved runtime ownership leaves the conversion and
+configuration pending with an update warning. Runs needing startup notifications
+are converted with their original run marker, history, and receipt intact so the
+Gateway can recover them and deliver their notifications without quarantining the
+retired payload. Conversion preserves pending execution facts even when it disables
+the monitor; startup still restores the recorded result without re-enabling it.
+The candidate must contain this fix; published updaters need no
+new marker or schema change.
+
 Standalone update admission pins the current handoff database before checking
 earlier Gateway custody. Ancestor path aliases that resolve to that same admitted
 store do not acquire a second fence. Distinct stores and live owners still block
