@@ -123,12 +123,15 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
     ],
     [-32602, "quote metadata invalid: unknown author", "quote metadata rejected (redacted)"],
     [-32602, "private +15550000001", "remote error"],
+    [-32602, undefined, "remote error"],
+    [-32602, ["quote metadata invalid"], "remote error"],
     [-32000, "quote metadata was rejected after an ambiguous send +15550000001", "remote error"],
   ] as const)("redacts RPC %s: %s", async (code, message, classification) => {
     const { baseUrl } = await serve((request, socket) =>
       socket.end(frame({ id: request.id, error: { code, message } })),
     );
     await expect(send(baseUrl)).rejects.toMatchObject({
+      code,
       message: `Signal RPC ${code}: ${classification}`,
     });
   });
