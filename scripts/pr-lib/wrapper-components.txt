@@ -731,6 +731,8 @@ src/config/schema.walk.ts
 src/config/sensitive-paths.ts
 src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
+src/config/sessions/main-session-key.ts
+src/config/sessions/main-session.ts
 src/config/sessions/session-worker-execution-source.ts
 src/config/sessions/transcript-file-names.ts
 src/config/sessions/auth-profile-override-provenance.ts
