@@ -37,6 +37,7 @@ import { capturePlacementStartupConnection } from "./session-placement-startup.t
 import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 const AGENT_ROSTER_REFRESH_DEBOUNCE_MS = 100;
+const PROFILE_APPEARANCE_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
 
 export type StoredOutboxScopeHost = {
   client: GatewayBrowserClient | null;
@@ -83,6 +84,9 @@ export class ShellGatewayOwner {
     profileId: string;
     runtimeConfig: ApplicationContext["runtimeConfig"];
     invalidationId: number;
+    failed: boolean;
+    retryAttempt: number;
+    retryTimer?: ReturnType<typeof globalThis.setTimeout>;
     promise: Promise<void>;
   } | null = null;
 
@@ -509,6 +513,7 @@ export class ShellGatewayOwner {
       this.runtimeConfigProfileId = null;
       this.runtimeConfigReady = null;
       this.preferenceGeneration += 1;
+      globalThis.clearTimeout(this.profileAppearanceSource?.retryTimer);
       this.profileAppearanceSource = null;
       return Promise.resolve();
     }
@@ -518,6 +523,13 @@ export class ShellGatewayOwner {
       this.runtimeConfigSource === runtimeConfig &&
       this.runtimeConfigProfileId === profileId
     ) {
+      // Config readiness must not turn an unsuccessful profile read into a cache hit.
+      if (this.host.context && this.profileAppearanceSource?.failed) {
+        this.runtimeConfigReady = Promise.all([
+          this.runtimeConfigReady,
+          this.refreshProfileAppearancePrefs(this.host.context),
+        ]).then(() => undefined);
+      }
       return this.runtimeConfigReady ?? Promise.resolve();
     }
     this.runtimeConfigClient = snapshot.client;
@@ -586,38 +598,43 @@ export class ShellGatewayOwner {
     }
   }
 
-  private refreshProfileAppearancePrefs(context: ApplicationContext, force = false): Promise<void> {
-    const snapshot = context.gateway.snapshot;
-    const profileId = snapshot?.selfUser?.id;
+  private refreshProfileAppearancePrefs(
+    context: ApplicationContext,
+    force = false,
+    retryAttempt = 0,
+  ): Promise<void> {
+    const { client, selfUser, phase, hello } = context.gateway.snapshot;
+    const profileId = selfUser?.id;
     if (!profileId) {
       return Promise.resolve();
     }
-    const client = snapshot.client;
-    if (snapshot.phase !== "connected" || !client) {
+    if (phase !== "connected" || !client) {
       return Promise.resolve();
     }
     const runtimeConfig = context.runtimeConfig;
     const previous = this.profileAppearanceSource;
-    if (
-      !force &&
+    const sameSource =
       previous?.client === client &&
       previous.profileId === profileId &&
       previous.runtimeConfig === runtimeConfig &&
-      previous.invalidationId === profilePreferencesState.invalidationId
-    ) {
+      previous.invalidationId === profilePreferencesState.invalidationId;
+    if (!force && sameSource && (!previous.failed || previous.retryTimer !== undefined)) {
       return previous.promise;
     }
+    // Exhaustion stops automatic retries, not a later genuine synchronization.
+    globalThis.clearTimeout(previous?.retryTimer);
     // Writes retire profile reads independently of the config snapshot's identity.
-    const source = {
+    const source: NonNullable<typeof this.profileAppearanceSource> = {
       client,
       profileId,
       runtimeConfig,
       invalidationId: profilePreferencesState.invalidationId,
+      failed: false,
+      retryAttempt: !force && sameSource ? previous.retryAttempt : retryAttempt,
       promise: Promise.resolve(),
     };
     this.profileAppearanceSource = source;
     const scope = context.gateway.connection.gatewayUrl;
-    const hello = snapshot.hello;
     const sourceClient = runtimeConfig.state.client;
     const generation = this.preferenceGeneration;
     const remainsCurrent = () =>
@@ -631,10 +648,18 @@ export class ShellGatewayOwner {
       context.gateway.connection.gatewayUrl === scope &&
       this.profileAppearanceSource === source &&
       this.preferenceGeneration === generation;
-    const reportError = (error: unknown) => {
-      if (remainsCurrent()) {
-        console.error("[gateway] profile preference refresh failed:", error);
+    const retry = () => {
+      source.failed = true;
+      const delay = PROFILE_APPEARANCE_RETRY_DELAYS_MS[source.retryAttempt];
+      if (delay === undefined || source.invalidationId !== profilePreferencesState.invalidationId) {
+        return;
       }
+      source.retryTimer = globalThis.setTimeout(() => {
+        source.retryTimer = undefined;
+        if (remainsCurrent()) {
+          void this.refreshProfileAppearancePrefs(context, true, source.retryAttempt + 1);
+        }
+      }, delay);
     };
     source.promise = import("./server-prefs-reconcile.ts")
       .then(async (runtime) => {
@@ -650,23 +675,24 @@ export class ShellGatewayOwner {
         if (!remainsCurrent()) {
           return;
         }
-        const applied =
-          loaded &&
-          runtime.applyServerUiPrefs(currentDisplayConfig(runtimeConfig.state), {
-            profileId,
-            scope,
-            navigationConfirmed: true,
-            onApplied: () => {
-              if (remainsCurrent()) {
-                context.theme.refresh({ notify: true });
-              }
-            },
-            onThemeChanged: (theme) => {
-              if (remainsCurrent()) {
-                context.theme.recordServerSelection(theme, scope);
-              }
-            },
-          });
+        if (!loaded) {
+          return retry();
+        }
+        const applied = runtime.applyServerUiPrefs(currentDisplayConfig(runtimeConfig.state), {
+          profileId,
+          scope,
+          navigationConfirmed: true,
+          onApplied: () => {
+            if (remainsCurrent()) {
+              context.theme.refresh({ notify: true });
+            }
+          },
+          onThemeChanged: (theme) => {
+            if (remainsCurrent()) {
+              context.theme.recordServerSelection(theme, scope);
+            }
+          },
+        });
         if (remainsCurrent()) {
           if (!applied) {
             context.theme.refresh({ notify: true });
@@ -676,7 +702,12 @@ export class ShellGatewayOwner {
           this.host.invalidate();
         }
       })
-      .catch(reportError);
+      .catch((error: unknown) => {
+        if (remainsCurrent()) {
+          console.error("[gateway] profile preference refresh failed:", error);
+          retry();
+        }
+      });
     return source.promise;
   }
 
@@ -690,6 +721,7 @@ export class ShellGatewayOwner {
     this.runtimeConfigClient = null;
     this.runtimeConfigSource = null;
     this.runtimeConfigProfileId = null;
+    globalThis.clearTimeout(this.profileAppearanceSource?.retryTimer);
     this.profileAppearanceSource = null;
     this.previousGatewayPhase = null;
     if (this.agentRosterRefreshTimer !== null) {

@@ -1,20 +1,16 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { prerelease as parseSemverPrerelease, valid as validSemver } from "semver";
 import {
-  parse as parseSemver,
-  prerelease as parseSemverPrerelease,
-  type SemVer,
-  valid as validSemver,
-} from "semver";
-import {
-  compareOpenClawSemver,
+  compareOpenClawReleaseVersions,
   compareValidSemver,
   isOpenClawCorrectionSemver,
   normalizeLegacyDotBetaVersion,
+  parseOpenClawReleaseVersion,
 } from "./semver.js";
 
+export { compareOpenClawReleaseVersions };
 export { resolveNpmJsonEntries } from "../../scripts/lib/npm-json-output.mts";
 
-const OPENCLAW_RELEASE_PREFIX_RE = /^\d{4}\./;
 const DIST_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
@@ -116,31 +112,6 @@ export function isExactSemverVersion(value: string): boolean {
   return validSemver(value.trim()) !== null;
 }
 
-/** Parses OpenClaw's monthly patch stable/alpha/beta/correction version format. */
-function parseOpenClawReleaseVersion(value: string): SemVer | null {
-  const trimmed = value.trim();
-  const parsed = OPENCLAW_RELEASE_PREFIX_RE.test(trimmed) ? parseSemver(trimmed) : null;
-  if (!parsed || parsed.build.length > 0) {
-    return null;
-  }
-  if (parsed.minor < 1 || parsed.minor > 12 || parsed.patch < 1) {
-    return null;
-  }
-
-  const [label, sequence] = parsed.prerelease;
-  const isStable = parsed.prerelease.length === 0;
-  const isCorrection = isOpenClawCorrectionSemver(parsed) && typeof label === "number" && label > 0;
-  const isPrerelease =
-    parsed.prerelease.length === 2 &&
-    (label === "alpha" || label === "beta") &&
-    typeof sequence === "number" &&
-    sequence > 0;
-  if (!isStable && !isCorrection && !isPrerelease) {
-    return null;
-  }
-  return parsed;
-}
-
 /** Returns whether a version is an OpenClaw monthly patch stable correction release. */
 function isOpenClawStableCorrectionVersion(value: string): boolean {
   const parsed = parseOpenClawReleaseVersion(value);
@@ -154,13 +125,6 @@ export function resolveOpenClawReleaseCohortVersion(value: string): string {
   return parsed && isOpenClawCorrectionSemver(parsed)
     ? `${parsed.major}.${parsed.minor}.${parsed.patch}`
     : trimmed;
-}
-
-/** Compares OpenClaw monthly patch release versions across alpha, beta, stable, and corrections. */
-export function compareOpenClawReleaseVersions(left: string, right: string): number | null {
-  const parsedLeft = parseOpenClawReleaseVersion(left);
-  const parsedRight = parseOpenClawReleaseVersion(right);
-  return parsedLeft && parsedRight ? compareOpenClawSemver(parsedLeft, parsedRight) : null;
 }
 
 /** Compares update versions, preserving monthly corrections and legacy dot-beta tags. */

@@ -7,7 +7,7 @@ import {
 } from "../../../config/sessions/transcript-target-binding.js";
 import {
   NESTED_TOOL_ACTIVITY_CUSTOM_TYPE,
-  readNestedToolActivity,
+  readOwnNestedToolActivity,
   type NestedToolActivity,
 } from "../../../sessions/nested-tool-activity.js";
 import type { SessionManager } from "../../sessions/session-manager.js";
@@ -72,7 +72,7 @@ export async function readAttemptNestedToolActivity(
     ) {
       return [];
     }
-    const activity = readNestedToolActivity(message);
+    const activity = readOwnNestedToolActivity(message);
     if (!activity) {
       throw new Error("Accepted nested tool activity is no longer valid");
     }

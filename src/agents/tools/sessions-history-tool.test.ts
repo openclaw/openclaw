@@ -608,9 +608,14 @@ it.each([
     );
 
     await tool.execute("owned-history", { sessionKey: requested });
+    // A qualified key implies its owner; repeating the same id would re-gate
+    // the read against the fixed-store owner (#164847).
     expect(requests).toContainEqual({
       method: "chat.history",
-      params: expect.objectContaining({ sessionKey: resolved, agentId }),
+      params:
+        requested === "current"
+          ? { sessionKey: resolved }
+          : expect.objectContaining({ sessionKey: resolved, agentId }),
     });
     if (requested === "current") {
       expect(requests.some((request) => request.method === "sessions.resolve")).toBe(false);

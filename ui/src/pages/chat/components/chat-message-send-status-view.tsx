@@ -111,10 +111,12 @@ export function ChatSteerNow(props: { input?: PendingSteer; onSend?: (runId: str
   // otherwise Steering… on the newest.
   const sendNow = () => Boolean(props.onSend && props.input?.sendNow);
   const label = () => props.input?.newest && !(props.onSend && props.input.deferToSendNow);
+  const queued = () => props.input?.queued && t("chat.queue.states.followup");
   return (
     <Show when={(sendNow() || label()) && props.input?.steerNow}>
       {(steerNow) => (
-        <div class="chat-steer-now chat-message-source">
+        <div class="chat-steer-now chat-message-source chat-send-status__part">
+          {sendNow() && queued() ? <span role="status">{queued()}</span> : null}
           {sendNow() ? (
             <button
               class="chat-send-status__action"
@@ -126,10 +128,10 @@ export function ChatSteerNow(props: { input?: PendingSteer; onSend?: (runId: str
           ) : (
             <span
               role="status"
-              title={describePendingSteerWait(steerNow())}
-              aria-label={describePendingSteerWait(steerNow())}
+              title={queued() || describePendingSteerWait(steerNow())}
+              aria-label={queued() || describePendingSteerWait(steerNow())}
             >
-              {t("chat.pendingInputs.steering")}
+              {queued() || t("chat.pendingInputs.steering")}
             </span>
           )}
         </div>

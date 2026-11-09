@@ -867,6 +867,31 @@ describe("ClawHub detached postpublish verification", () => {
     },
   );
 
+  it.each([false, true])(
+    "preserves deferred publication as incomplete (conflicting child=%s)",
+    async (conflict) => {
+      const f = retryFixture();
+      replaceJsonArtifact(f, f.dispatchArtifact, "dispatch.json", {
+        ...f.dispatch,
+        clawHubDeferred: true,
+        normalClawHubRunId: conflict ? f.dispatch.normalClawHubRunId : null,
+        normalClawHubRunAttempt: conflict ? f.dispatch.normalClawHubRunAttempt : null,
+      });
+      if (conflict) {
+        await expect(verifyClawHubPostpublish(f.options)).rejects.toThrow(
+          /dispatch record identity/u,
+        );
+      } else {
+        expect(await verifyClawHubPostpublish(f.options)).toMatchObject({
+          complete: false,
+          outcome: "clawhub-deferred",
+          packages: [],
+        });
+      }
+      expect(f.registryReads).toEqual([]);
+    },
+  );
+
   it("selects the retained producer among distinct historical dispatches", async () => {
     const f = retryFixture({ producerAttempt: 2 });
     const oldRun = { ...f.parent, run_attempt: 1, conclusion: "failure" };
