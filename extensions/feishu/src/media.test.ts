@@ -462,6 +462,34 @@ describe("saveMessageResourceFeishu", () => {
       response: { status },
     });
 
+  it.each([
+    ['attachment; filename="report.csv"', "report"],
+    ['attachment; filename="report; final.csv"', "report_final", "report; final.csv"],
+    ['attachment; filename="report\\; final.csv"', "report_final"],
+    ["attachment; filename=report.csv", "report"],
+    ["attachment; filename=literal%20name.csv", "literal_20name"],
+    ["attachment; filename=\"report; final.csv\"; filename*=UTF-8''preferred.csv", "preferred"],
+    ['attachment; filename="report; final.csv', "backup"],
+    ['attachment; x-filename="wrong.csv"', "backup"],
+  ])(
+    "saves the expected filename from %s",
+    async (disposition, savedBase, originalFilename?: string) => {
+      const data = "column,value\nprobe,17\n";
+      messageResourceGetMock.mockResolvedValueOnce(
+        resourceResponse(data, {
+          "content-type": "text/csv",
+          "content-disposition": disposition,
+        }),
+      );
+
+      const result = await downloadResource({ originalFilename: originalFilename ?? "backup.csv" });
+
+      expect(result.id).toMatch(new RegExp(`^${savedBase}---[a-f0-9-]{36}\\.csv$`));
+      expect(await fs.readFile(result.path)).toEqual(Buffer.from(data));
+      expect(messageResourceGetMock).toHaveBeenCalledOnce();
+    },
+  );
+
   it("retries file resources as media after HTTP 502", async () => {
     const originalError = httpStatusError(502);
     messageResourceGetMock.mockRejectedValueOnce(originalError).mockResolvedValueOnce(
