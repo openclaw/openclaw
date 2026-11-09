@@ -50,25 +50,34 @@ afterEach(async () => {
 
 describe("routed transcript prewarm", () => {
   it.each([
-    { viewport: 1000, wide: true, loads: 0 },
-    { viewport: 2200, wide: true, loads: 1 },
-    { viewport: 2200, wide: false, loads: 0 },
+    { viewport: 1000, wide: true, details: true, loads: 0 },
+    { viewport: 2200, wide: true, details: true, loads: 1 },
+    { viewport: 2200, wide: false, details: true, loads: 0 },
+    { viewport: 2200, wide: true, details: false, loads: 0 },
   ])("prewarms wide Details only in its saved viewport: $viewport/$wide", async (scenario) => {
     vi.stubGlobal("innerWidth", scenario.viewport);
+    const module = createDeferred<never>();
+    void module.promise.catch(() => undefined);
     const load = vi
       .spyOn(detailsLoader, "loadChatDetailsDesktopComposition")
-      .mockRejectedValue(new Error("Stopped at the module boundary"));
+      .mockReturnValue(module.promise);
     const writer = new snapshots.SessionSnapshotStore();
     const snapshot = {
       ...stored,
-      details: {
-        locale: "en",
-        docking: { layout: '[2200,224,false,"horizontal","main",null]', wide: scenario.wide },
-      },
+      details: scenario.details
+        ? {
+            locale: "en",
+            docking: { layout: '[2200,224,false,"horizontal","main",null]', wide: scenario.wide },
+          }
+        : undefined,
     };
     writeSnapshotFixture(writer, key, snapshot);
     await writer.flush();
     await prewarmChatSnapshot(key);
+    const admission = snapshots.waitForPrewarmedChatSnapshot(key);
+    expect(Boolean(admission)).toBe(scenario.loads > 0);
+    module.reject(new Error("Stopped at the module boundary"));
+    await admission;
     expect(load).toHaveBeenCalledTimes(scenario.loads);
     expect(await writer.read(key)).toEqual(snapshot);
   });

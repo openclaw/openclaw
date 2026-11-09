@@ -112,6 +112,11 @@ Gateway protocol; the native authentication path does not persist it in page sto
 
 The **This iPhone** or **This iPad** page contains appearance, notification
 delivery, camera access, keep-awake behavior, and optional Health summaries.
+QR scanning requests camera permission on first use. If access was denied, the
+scanner offers **Open Settings**; allow **Camera** for OpenClaw, then return to
+the scanner. Screen Time or device-management restrictions must be changed by
+the person who manages those restrictions.
+
 Its **Permissions** page shows notification, camera, microphone, speech, location,
 contacts, calendars, reminders, and photo access. Permission requests use native
 iOS prompts; Precise Location shows the system's current state and links to iOS
@@ -156,6 +161,12 @@ navigation chrome:
 These pages require the same connected `operator.admin` session as Settings.
 Without that access, they show the native Gateway connection guidance. Instances
 opens **Devices**, the Dashboard owner of paired nodes and connected clients.
+
+If the Gateway answers Settings or one of these pages with a plain-text or JSON
+HTTP error (for example `gateway.controlUi.enabled: false`, or while Control UI
+assets are being prepared), the app shows **Dashboard unavailable** with the
+HTTP status and **Reload** instead of the raw response. HTML error pages, such
+as a proxy's sign-in page, still load in the Dashboard.
 
 The native **New Thread** agent picker shows configured names or agent IDs as
 soon as the roster arrives. Resolved identities update each choice without
@@ -205,6 +216,12 @@ cannot connect, or open native Gateway settings to recover the connection. Acces
 sign-in alone does not grant operator admin access or replace Gateway pairing.
 The share extension asks you to send from OpenClaw for an Access-protected
 Gateway. Access credentials are not exported to Apple Watch or cloud workers.
+
+The share extension reuses the connected Gateway's approved TLS certificate pin
+and saved custom service headers. Header values stay in the shared Keychain,
+not App Group preferences. Reconnect the app after upgrading to refresh the
+extension's saved connection. The extension cannot approve a new certificate or
+complete browser sign-in; open OpenClaw to review changed trust or use Access.
 
 ## Share request admission
 
@@ -353,6 +370,19 @@ creation has a token or password auth path.
    limited for bearer-token safety. If it is limited, configure `wss://` or
    Tailscale Serve, scan a new full-access code from Control UI or `openclaw qr`,
    then reconnect to enable settings and upgrades.
+
+   Full-access connections also prepare the **OpenClaw Share** extension
+   automatically, so sharing a photo or link does not require a second device
+   approval. The extension keeps its own Gateway-scoped, node-only credential;
+   it does not receive the app's administrative credential. Existing Share
+   credentials are not automatically replaced, including after revocation.
+   After upgrading, reconnecting an already full-access app also prepares Share
+   if it has no credential yet. Existing identities and credentials are reused;
+   reconnecting does not restore revoked or removed Share access. To restore it,
+   set up the app again with a new full-access code; a revoked Share identity
+   then needs `openclaw devices approve`.
+   Limited connections still require separate Share approval. Cloudflare Access
+   Gateways continue to require sending from the foreground app.
 
 The Control UI button requires an already paired session with `operator.admin`.
 As a terminal fallback, pick a discovered Gateway in the iOS app (or enable

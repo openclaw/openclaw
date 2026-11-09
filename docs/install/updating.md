@@ -53,6 +53,11 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor repairs retained ISO-8601 session `endedAt` strings before
+canonical session admission, preserving the original database backup and updating
+indexed timing together. This repair must be present in the candidate Doctor;
+the installed updater needs no protocol or schema change.
+
 Engine identification reads the committed SQLite engine anchor in an isolated
 read-only transaction without copying a healthy live database. Hot rollback
 journals and incomplete WAL families retain private recovery, and unreadable or
@@ -667,6 +672,14 @@ managed restart, or settled run. Both recovery owners use this same decision. A 
 stopped by its operator stays stopped. A recorded named data risk prevents
 automatic startup. The repairing CLI must contain this fix; older managed-service
 activation records can establish the stop without a new stop-time receipt.
+
+Explicit repair also settles version-2 triage/repair leases left in `closing`
+after their owners die, even without recovery metadata. Native triage still
+requires proof that its systemd scope is closed. Repair warns when reclaiming a
+lease; if an owner, descendant, or scope remains live or unverified, it fails with
+the retained lease's owner, version, phase, last activity, and recovery guidance.
+The repairing CLI must contain this fix; a downloaded update candidate cannot
+repair an older updater's blocked admission.
 
 A successful foreground update hands completion to the replacement Gateway.
 Automatic history reconciliation preserves that handoff while startup verifies
@@ -1379,6 +1392,12 @@ maintenance custody within the existing update allowance. If that wait expires,
 contention alone preserves automatic Gateway recovery; an actual data-at-risk
 refusal still blocks recovery. Doctor publishes its completion result only after
 its maintenance resources have been released.
+
+Gateway process respawn and launchd restart scheduling respect active offline
+maintenance ownership. During Doctor restoration, a busy port still refuses an
+unverified listener, but the preserved LaunchAgent is reloaded so launchd can
+retry after that listener exits. This requires the Gateway and restoring CLI to
+contain the fix; an already scheduled restart helper is not cancelled by it.
 
 Source updates also admit build-artifact ownership and runtime staging access in
 the installed checkout before stopping the Gateway. A retained

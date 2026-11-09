@@ -14,6 +14,12 @@ ordinary system input asking the agent to inspect current state and continue.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution.
 
+During graceful shutdown, interrupted embedded runs have a short abort-settle
+budget (normally two seconds) to deliver their terminal partial reply before their
+writers close. Already accepted transcript writes still drain. A provider that
+ignores cancellation stops blocking the stream consumer after this grace, but
+unsettled underlying work remains retained until it actually closes.
+
 The recovery input stays intact in the agent transcript but is hidden from the
 Control UI chat feed, including queued, live, and reloaded history. The continued
 answer remains visible as its own turn. This is not the separate update outcome
@@ -127,6 +133,7 @@ heartbeat observer works independently of the optional V8 flight recorder.
 | Root session left unfinished in a pending crash-recovery interval | Receives the same single resume input at the next startup                       |
 | Accepted user input captured in that shutdown marker              | Runs after the resume input, in FIFO order, with its sender's current authority |
 | Running sub-agent                                                 | Stops quietly; its root requester receives the resume input                     |
+| Sub-agent parked in `sessions_yield waitFor:"message"`            | Keeps its recorded wait; no model request runs until its requester continues it |
 | Background process                                                | Ends with the old process; its root session receives the resume input           |
 | Already-produced outbound messages and media                      | Keep the existing delivery queue and delivery reconciliation                    |
 | Scheduled jobs                                                    | Keep cron's own scheduling, catch-up, and interruption policy                   |
@@ -143,8 +150,8 @@ ACP/external-harness sessions are excluded.
 
 The marker is a small private field on the existing session entry. It records the
 IDs of accepted user inputs still queued behind that session at shutdown. The
-Gateway writes one marker per running root session, batched by session store,
-before aborting work. It uses the existing session-entry JSON in SQLite and needs
+Gateway writes one marker per running root session or parked message wait,
+batched by session store, before aborting work. It uses the existing session-entry JSON in SQLite and needs
 no schema migration.
 Crash recovery uses the nonterminal run marker committed with accepted plain
 chat input, before dispatch hooks or runtime start. The same commit records its
@@ -214,8 +221,11 @@ missing previews.
 After marker persistence and cancellation, process-owned shutdown logs a warning
 when required connection cleanup exceeds five seconds, then keeps joining its
 accepted finalizers before releasing the Gateway lock and state admission. The
-existing process shutdown deadline still bounds this join. Embedded hosts also
-join those resources before reusing the runtime.
+existing process shutdown deadline still bounds this join. Session admissions and
+cron finalizers that settle after their grace warning still proceed through database
+retirement; the warning does not permanently abandon the close operation. Resume
+markers do not replace pending transcript or cron outcome writes. Embedded hosts
+also join those resources before reusing the runtime.
 
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.
@@ -555,6 +565,20 @@ Graceful shutdown marks the root requester of a running child, then cancels the
 child through the ordinary abort path. The child settles terminally without a
 shutdown completion announcement or a "subagent failed" notice to its parent.
 Children are not adopted or independently resumed at startup.
+
+A child that already ended its execution with `sessions_yield waitFor:"message"`
+keeps its paused task across restart. Shutdown marks that session directly;
+startup consumes the marker while preserving the registry's exact paused task,
+without replaying execution or restoring old tool or completion authority.
+The same registry fact protects a recorded message wait after an unclean stop.
+A fresh continuation from its controlling requester goes through ordinary
+admission and retains task-owned result delivery. If the requester finishes or
+is released without continuing it, the wait closes with a recorded outcome.
+Ordinary ownerless mid-turn runs still follow the orphan recovery rules above.
+
+A requester yielded for running children keeps the ordinary root recovery path:
+those executions stop during shutdown, and its resume input reconciles their
+recorded work. It is not re-parked waiting for completions from stopped executions.
 
 The parent's single resume input covers reconciliation of its children. It can
 inspect their transcripts and results with the existing sub-agent tools, then

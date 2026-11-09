@@ -319,6 +319,17 @@ describe("standing-intent admitted operations", () => {
     expect(predecessor.warn).not.toHaveBeenCalled();
   });
 
+  it("keeps learned deadlines across a service reload instead of sweeping every agent", async () => {
+    const predecessor = maintenance();
+    await predecessor.clock.wake();
+    await seed({ nowMs: 1_000, expiresAt: 5_000 });
+    await predecessor.clock.wake();
+    expect(predecessor.gateway.nextWakeAtMs).toBe(5_000);
+    predecessor.stop();
+    const reloaded = maintenance();
+    expect(reloaded.gateway.nextWakeAtMs).toBe(5_000);
+  });
+
   it("reuses service-owned absence without hiding a queued creation or another agent", async () => {
     const { clock, stop } = maintenance();
     await clock.wake();

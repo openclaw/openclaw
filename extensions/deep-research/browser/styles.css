@@ -25,8 +25,7 @@
 }
 .deep-research-pane button,
 .deep-research-pane select,
-.deep-research-pane textarea,
-.deep-research-accessory {
+.deep-research-pane textarea {
   font: inherit;
   color: var(--text);
   background: var(--bg-elevated);
@@ -154,10 +153,6 @@
   color: var(--accent);
   display: inline;
   font-size: inherit;
-}
-.deep-research-accessory {
-  font-size: 0.8rem;
-  white-space: normal;
 }
 .deep-research-pane [hidden] {
   display: none;

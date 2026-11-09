@@ -2,6 +2,7 @@
 // Uses their production HTTP server, synthetic Gateway, scenarios and assertions.
 // Long-tail sweep: --pages --engines chromium --cpu-throttle 4 --viewport both
 // Run Chromium at 1x and WebKit separately; --steps page-<route>-<phase> narrows follow-ups.
+// Continuous input: --steps gestures; --gesture-geometry adds diagnostic read stacks.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
@@ -14,6 +15,7 @@ import {
   firefox as firefoxEngine,
   webkit as webkitEngine,
   type Browser,
+  type JSHandle,
 } from "playwright";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
@@ -23,7 +25,6 @@ import { waitForControlUiInitialRoster } from "../ui/src/test-helpers/control-ui
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
-  installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { installNativePluginMockGateway } from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
@@ -46,6 +47,7 @@ import {
   type ColdLoadCpuProfile,
 } from "./lib/control-ui-cold-load-trace.ts";
 import { createControlUiCpuCensus } from "./lib/control-ui-cpu-census.ts";
+import { createEngineAccessibilityObservation } from "./lib/control-ui-engine-accessibility.ts";
 import { createEngineActionScenarios } from "./lib/control-ui-engine-action-scenarios.ts";
 import {
   createEngineActionTiming,
@@ -60,7 +62,15 @@ import {
   installEngineConfigurationObserver,
   readEngineConfigurationObservation,
 } from "./lib/control-ui-engine-configuration-observer.ts";
-import { resolveEngineConfigurations } from "./lib/control-ui-engine-configurations.ts";
+import {
+  resolveEngineConfigurations,
+  type EngineConfiguration,
+} from "./lib/control-ui-engine-configurations.ts";
+import {
+  createEngineEventLoadScenarios,
+  verifyEngineEventLoad,
+} from "./lib/control-ui-engine-event-load-scenarios.ts";
+import { createEngineGestureScenarios } from "./lib/control-ui-engine-gesture-scenarios.ts";
 import {
   createEngineIdleControls,
   createEngineIdleScenarios,
@@ -81,10 +91,23 @@ import {
   createEnginePageScenarios,
   enginePageCoverage,
   enginePageFixtureCounts,
+  createEngineRouteTransitionScenarios,
+  engineRouteTransitionCoverage,
+  type EngineRouteTransition,
 } from "./lib/control-ui-engine-page-scenarios.ts";
 import { createEnginePluginMemoryScenarios } from "./lib/control-ui-engine-plugin-memory-scenarios.ts";
+import { createEngineProfileReadinessScenarios } from "./lib/control-ui-engine-profile-readiness.ts";
+import { createEngineRapidNavigationScenarios } from "./lib/control-ui-engine-rapid-navigation-scenarios.ts";
+import { createEngineSettingsSearchScenarios } from "./lib/control-ui-engine-settings-search.ts";
 import { createEngineStreamingScenarios } from "./lib/control-ui-engine-streaming-scenarios.ts";
 import { createEngineStyleScenarios } from "./lib/control-ui-engine-style-scenarios.ts";
+import {
+  addControlUiGestureProbe,
+  startControlUiGestureProbe,
+  stopControlUiGestureProbe,
+  summarizeGestureTrace,
+  type GestureProbeResult,
+} from "./lib/control-ui-gesture-probe.ts";
 import { frames } from "./lib/control-ui-interaction-navigation.ts";
 import {
   createScenarioFixture,
@@ -99,6 +122,10 @@ import {
   type ControlUiLayerAudit,
 } from "./lib/control-ui-layer-audit.ts";
 import {
+  createControlUiLiveRegionAudit,
+  type ControlUiLiveRegionAudit,
+} from "./lib/control-ui-live-region-audit.ts";
+import {
   compareControlUiScreenshots,
   createControlUiMutationAudit,
   type ControlUiMutationAudit,
@@ -112,8 +139,14 @@ import {
   resetControlUiPageObserver,
   type ControlUiPageObservation,
 } from "./lib/control-ui-page-observer.ts";
+import {
+  createControlUiRemountAudit,
+  type ControlUiRemountAudit,
+} from "./lib/control-ui-remount-audit.ts";
+import { createEngineRemountScenarios } from "./lib/control-ui-remount-scenarios.ts";
 import { installControlUiResourceCounts } from "./lib/control-ui-resource-counts.ts";
 import { launchTalkObservationBrowser } from "./lib/control-ui-talk-fixture.ts";
+import { startTranscriptLayoutAudit } from "./lib/control-ui-transcript-layout-audit.ts";
 import {
   createWorkboardResourceFixture,
   prepareWorkboardResourceSource,
@@ -130,6 +163,8 @@ const { values } = parseArgs({
     output: { type: "string", default: ".artifacts/control-ui-engines" },
     engines: { type: "string", default: "chromium,webkit" },
     "network-profiles": { type: "string", default: "localhost" },
+    "rpc-delay-method": { type: "string" },
+    "rpc-delay-ms": { type: "string", default: "0" },
     configurations: { type: "string", default: "default" },
     viewport: { type: "string", default: "both" },
     steps: { type: "string" },
@@ -139,18 +174,52 @@ const { values } = parseArgs({
     pairs: { type: "string", default: "1" },
     trace: { type: "boolean", default: false },
     "observer-origins": { type: "boolean", default: false },
+    "gesture-geometry": { type: "boolean", default: false },
     "cpu-only": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "native-audit": { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     "mutation-audit": { type: "boolean", default: false },
+    "transcript-layout-audit": { type: "boolean", default: false },
+    "transcript-paint-marker": { type: "boolean", default: false },
+    "live-region-audit": { type: "boolean", default: false },
+    "remount-audit": { type: "boolean", default: false },
+    "route-transitions": { type: "boolean", default: false },
+    "transition-targets": { type: "string" },
     "cpu-throttle": { type: "string", default: "1" },
     "idle-warmup-ms": { type: "string" },
     "idle-duration-ms": { type: "string", default: "30000" },
+    "event-load-duration-ms": { type: "string", default: "240000" },
+    "event-load-tools": { type: "string", default: "200" },
+    "event-load-inventory": { type: "string", default: "1000" },
+    "event-load-interactions-only": { type: "boolean", default: false },
     "memory-soak-rounds": { type: "string", default: "10" },
   },
 });
 const pairs = Number(values.pairs);
+const eventLoadDurationMs = Number(values["event-load-duration-ms"]);
+const eventLoadTools = Number(values["event-load-tools"]);
+const eventLoadInventory = Number(values["event-load-inventory"]);
+if (
+  !Number.isInteger(eventLoadDurationMs) ||
+  eventLoadDurationMs < 1000 ||
+  !Number.isInteger(eventLoadTools) ||
+  eventLoadTools < 1 ||
+  !Number.isInteger(eventLoadInventory) ||
+  eventLoadInventory < 101
+) {
+  throw new Error(
+    "event-load-duration-ms must be >=1000 and event-load-tools must be positive integers; event-load-inventory must be >=101",
+  );
+}
+const rpcDelayMs = Number(values["rpc-delay-ms"]);
+if (
+  !Number.isFinite(rpcDelayMs) ||
+  rpcDelayMs < 0 ||
+  (rpcDelayMs > 0 && !values["rpc-delay-method"])
+) {
+  throw new Error("rpc-delay-ms must be nonnegative and needs rpc-delay-method when positive");
+}
 const configurations = resolveEngineConfigurations(values.configurations);
 const memorySoakRounds = Number(values["memory-soak-rounds"]);
 if (!Number.isInteger(memorySoakRounds) || memorySoakRounds < 1 || memorySoakRounds > 10) {
@@ -236,11 +305,27 @@ if (values["control-bundle-dir"]?.length && !values["compare-bundle-dir"]) {
 if (values.trace && values["cpu-only"]) {
   throw new Error("Choose --trace or --cpu-only; use separate untraced timing runs");
 }
+if (values["transcript-paint-marker"] && !values["transcript-layout-audit"]) {
+  throw new Error("--transcript-paint-marker requires --transcript-layout-audit");
+}
 if (
-  values["mutation-audit"] &&
+  values["transcript-layout-audit"] &&
+  (values.trace ||
+    values["cpu-only"] ||
+    values["cpu-profile"] ||
+    values["native-audit"] ||
+    values.allocations ||
+    values["mutation-audit"])
+) {
+  throw new Error("--transcript-layout-audit requires a separate diagnostic run");
+}
+if (
+  (values["mutation-audit"] || values["remount-audit"]) &&
   (values.trace || values["cpu-only"] || values["cpu-profile"] || values["native-audit"])
 ) {
-  throw new Error("--mutation-audit is diagnostic; collect profiles and timings in separate runs");
+  throw new Error(
+    "Mutation/remount audits are diagnostic; collect profiles and timings separately",
+  );
 }
 if (values["cpu-profile"] && (values.trace || values["cpu-only"] || engines.includes("webkit"))) {
   throw new Error("--cpu-profile requires Chromium and a separate run from --trace/--cpu-only");
@@ -278,12 +363,20 @@ const sourceRoots = [
   ...(values["control-source-root"] ?? []),
 ];
 const needsWorkboard =
+  values["route-transitions"] ||
   values.pages ||
   values.steps
     ?.split(",")
     .some(
       (id) =>
         id.startsWith("workboard-") ||
+        (id.startsWith("remount-from-") &&
+          (id === "remount-from-plugin" ||
+            id === "remount-from-workboard" ||
+            !values["transition-targets"] ||
+            values["transition-targets"]
+              .split(",")
+              .some((target) => /^\/(?:plugin|workboard)(?:[/?]|$)/u.test(target)))) ||
         id.startsWith("noop-workboard-") ||
         /^page-(?:workboard|plugin)-(?:visit|revisit|action|leave)$/u.test(id),
     );
@@ -297,14 +390,27 @@ const servers: Array<{
   workboardSource?: Awaited<ReturnType<typeof prepareWorkboardResourceSource>>;
   server: Awaited<ReturnType<typeof startControlUiBenchGatewayServer>>;
 }> = [];
-const browsers = new Map<ControlUiEngine, Browser>();
-const launchEngine = (engine: ControlUiEngine) =>
+const browsers = new Map<string, Browser>();
+const browserKey = (
+  engine: ControlUiEngine,
+  accessibility: EngineConfiguration["accessibility"],
+) => (accessibility === "default" ? engine : `${engine}:${accessibility}`);
+const launchEngine = (
+  engine: ControlUiEngine,
+  accessibility: EngineConfiguration["accessibility"],
+) =>
   engine === "webkit"
     ? webkitEngine.launch({ headless: true })
     : engine === "firefox"
       ? firefoxEngine.launch({ headless: true })
       : chromiumEngine.launch({
           headless: true,
+          args:
+            accessibility === "on"
+              ? ["--force-renderer-accessibility"]
+              : accessibility === "off"
+                ? ["--disable-renderer-accessibility"]
+                : [],
           executablePath: resolvePlaywrightChromiumExecutablePath(chromiumEngine.executablePath()),
         });
 
@@ -347,9 +453,18 @@ function processMemory(browser: Browser) {
 let planned = 0;
 type Observation = {
   configuration: string;
+  accessibility?: {
+    before?: Awaited<
+      ReturnType<Awaited<ReturnType<typeof createEngineAccessibilityObservation>>["snapshot"]>
+    >;
+    after?: Awaited<
+      ReturnType<Awaited<ReturnType<typeof createEngineAccessibilityObservation>>["finish"]>
+    >;
+  };
   configurationEvidence?: Awaited<ReturnType<typeof readEngineConfigurationObservation>>;
   engine: ControlUiEngine;
   networkProfile: NetworkProfile["name"];
+  appliedNetworkProfile: Pick<NetworkProfile, "httpLatencyMs" | "gatewayLatencyMs">;
   viewport: string;
   step: string;
   bundle: number;
@@ -366,12 +481,25 @@ type Observation = {
   hostLoadAverage: number[];
   metrics?: EngineMetrics;
   pageMetrics?: ControlUiPageObservation;
+  gesture?: GestureProbeResult;
+  gestureNative?: ReturnType<typeof summarizeGestureTrace>;
   native?: ReturnType<typeof summarizeControlUiNativeTrace>;
   allocations?: ReturnType<typeof summarizeControlUiAllocations> & {
     mappedFrames: number;
     unmappedFrames: number;
   };
   mutations?: ControlUiMutationAudit;
+  liveRegions?: ControlUiLiveRegionAudit;
+  remounts?: ControlUiRemountAudit;
+  transitions?: Array<
+    EngineRouteTransition & {
+      metrics?: EngineMetrics;
+      remounts?: ControlUiRemountAudit;
+      wallMs: number;
+      applicationMs?: number;
+      error?: string;
+    }
+  >;
   pixels?: Awaited<ReturnType<typeof compareControlUiScreenshots>>;
   computedTheme?: Record<string, string>;
   layers?: ControlUiLayerAudit;
@@ -437,7 +565,14 @@ try {
     });
   }
   for (const engine of engines) {
-    browsers.set(engine, await launchEngine(engine));
+    for (const accessibility of new Set(
+      configurations.map((configuration) => configuration.accessibility),
+    )) {
+      if (engine !== "chromium" && accessibility !== "default") {
+        continue;
+      }
+      browsers.set(browserKey(engine, accessibility), await launchEngine(engine, accessibility));
+    }
   }
   const requestedIds = values.steps?.split(",");
   const catalog: EngineScenario[] = [
@@ -452,10 +587,24 @@ try {
       Object.assign(scenario, { explicitOnly: true }),
     ),
     ...createEngineStyleScenarios(),
+    ...createEngineGestureScenarios(),
     ...createEngineMemoryScenarios(memorySoakRounds),
     ...createEnginePluginMemoryScenarios(),
+    ...createEngineProfileReadinessScenarios(servers[0]!.server.baseUrl),
+    ...createEngineRapidNavigationScenarios(),
     ...createEngineStreamingScenarios(),
+    ...createEngineEventLoadScenarios(
+      eventLoadDurationMs,
+      eventLoadTools,
+      eventLoadInventory,
+      values["event-load-interactions-only"],
+    ),
     ...createEnginePageScenarios(0, pageOrigin, servers[0]!.server.baseUrl),
+    ...createEngineSettingsSearchScenarios(servers[0]!.server.baseUrl),
+    ...createEngineRemountScenarios(),
+    ...createEngineRouteTransitionScenarios(async (_page, _transition, run) => {
+      await run();
+    }, values["transition-targets"]?.split(",")),
     ...interactionScenarios.filter(
       (scenario) =>
         requestedIds?.includes(scenario.id) ||
@@ -466,18 +615,35 @@ try {
     ),
   ];
   const ids = requestedIds?.flatMap((id) =>
-    id === "chat-actions"
+    id === "rapid-navigation"
       ? catalog
-          .filter((scenario) => scenario.id.startsWith("chat-actions-"))
+          .filter((scenario) => scenario.id.startsWith("rapid-"))
           .map((scenario) => scenario.id)
-      : [id],
+      : id === "gestures"
+        ? catalog
+            .filter((scenario) => scenario.id.startsWith("gesture-"))
+            .map((scenario) => scenario.id)
+        : id === "remount-interactions"
+          ? catalog
+              .filter(
+                (scenario) =>
+                  scenario.id.startsWith("remount-") && !scenario.id.startsWith("remount-from-"),
+              )
+              .map((scenario) => scenario.id)
+          : id === "chat-actions"
+            ? catalog
+                .filter((scenario) => scenario.id.startsWith("chat-actions-"))
+                .map((scenario) => scenario.id)
+            : [id],
   );
   const scenarios = catalog.filter(({ id, explicitOnly, memory }) =>
     ids
       ? ids.some((selected) => selected === id || (selected === "memory" && memory))
-      : values.pages
-        ? id.startsWith("page-") && pagePhases.some((phase) => id.endsWith(`-${phase}`))
-        : !explicitOnly,
+      : values["route-transitions"]
+        ? id.startsWith("remount-from-")
+        : values.pages
+          ? id.startsWith("page-") && pagePhases.some((phase) => id.endsWith(`-${phase}`))
+          : !explicitOnly,
   );
   if (
     !scenarios.length ||
@@ -488,6 +654,9 @@ try {
   if (pageOrigin === "chat" && scenarios.some((scenario) => scenario.fixture?.workboardResources)) {
     throw new Error("Workboard/plugin resource fixtures require --page-origin new-session");
   }
+  if (values["live-region-audit"] && scenarios.some((scenario) => scenario.navigation)) {
+    throw new Error("Live-region diagnostics require non-navigation scenarios");
+  }
   if (engines.includes("firefox") && scenarios.some((scenario) => scenario.memory)) {
     throw new Error(
       "Firefox does not expose forced GC or heap snapshots in this harness; select non-memory steps",
@@ -497,11 +666,15 @@ try {
     networkProfiles.some(({ name }) => name !== "localhost") &&
     scenarios.some(
       ({ id }) =>
-        id !== "cold-boot" && id !== "warm-boot" && !/^page-.+-(?:visit|revisit)$/u.test(id),
+        id !== "cold-boot" &&
+        id !== "warm-boot" &&
+        id !== "page-model-providers-refresh" &&
+        !id.startsWith("rapid-") &&
+        !/^page-.+-(?:visit|revisit)$/u.test(id),
     )
   ) {
     throw new Error(
-      "Nonlocal --network-profiles require cold-boot, warm-boot or page-<route>-visit/revisit steps",
+      "Nonlocal --network-profiles require cold-boot, warm-boot, rapid-*, page-<route>-visit/revisit or page-model-providers-refresh steps",
     );
   }
   planned =
@@ -519,9 +692,12 @@ try {
         [
           "./bench-control-ui-engines.ts",
           "./lib/control-ui-engine-metrics.ts",
+          "./lib/control-ui-engine-gesture-scenarios.ts",
+          "./lib/control-ui-gesture-probe.ts",
           "./lib/control-ui-layer-audit.ts",
           "./lib/control-ui-native-trace.ts",
           "./lib/control-ui-mutation-audit.ts",
+          "./lib/control-ui-live-region-audit.ts",
           "./lib/control-ui-cold-load-trace.ts",
           "./lib/control-ui-cpu-census.ts",
           "./lib/control-ui-allocation-profile.ts",
@@ -540,12 +716,16 @@ try {
           "./lib/control-ui-interaction-scenarios.ts",
           "./lib/control-ui-interaction-navigation.ts",
           "./lib/control-ui-engine-streaming-scenarios.ts",
+          "./lib/control-ui-engine-event-load-scenarios.ts",
+          "./lib/control-ui-event-load-producer.ts",
+          "./lib/control-ui-event-load-wire.ts",
           "./lib/control-ui-streaming-reply.ts",
           "./lib/control-ui-streaming-fixture.ts",
           "./lib/control-ui-streaming-statistics.ts",
           "./lib/control-ui-engine-memory.ts",
           "./lib/control-ui-engine-memory-scenarios.ts",
           "./lib/control-ui-engine-plugin-memory-scenarios.ts",
+          "./lib/control-ui-engine-rapid-navigation-scenarios.ts",
           "./lib/control-ui-engine-page-scenarios.ts",
           "./lib/control-ui-data-board-scenarios.ts",
           "./lib/control-ui-data-log-scenarios.ts",
@@ -554,6 +734,7 @@ try {
           "./lib/control-ui-bench-gateway-server.ts",
           "./lib/control-ui-bench-order.ts",
           "./lib/control-ui-engine-configurations.ts",
+          "./lib/control-ui-engine-accessibility.ts",
           "./lib/control-ui-engine-configuration-observer.ts",
         ].map(async (file) => [
           file,
@@ -566,6 +747,8 @@ try {
     browsers: Object.fromEntries(
       [...browsers].map(([engine, browser]) => [engine, browser.version()]),
     ),
+    accessibilityContract:
+      "Explicit on/off configurations use separate Chromium processes, with force/disable-renderer-accessibility respectively. On enables CDP Accessibility before navigation, requests the full tree before warm actions and after every interval, and counts requested-node update events. Full-tree reads are outside timing windows. Off never enables or queries AX. Default keeps ordinary launch flags. This proves browser accessibility data, not screen-reader speech. WebKit/Firefox explicit AX modes and native idle launchers are unsupported and skipped.",
     firefoxCapabilities: engines.includes("firefox")
       ? {
           applicationElapsed: true,
@@ -586,10 +769,14 @@ try {
     pairs,
     viewports,
     networkProfiles,
+    methodDelay: values["rpc-delay-method"]
+      ? { method: values["rpc-delay-method"], delayMs: rpcDelayMs }
+      : null,
     pageOrigin,
     configurations,
     trace: values.trace,
     observerOrigins: values["observer-origins"],
+    gestureGeometry: values["gesture-geometry"],
     cpuOnly: values["cpu-only"],
     cpuProfile: values["cpu-profile"],
     nativeAudit: values["native-audit"],
@@ -597,29 +784,46 @@ try {
     idleDurationMs,
     allocations: values.allocations,
     mutationAudit: values["mutation-audit"],
+    transcriptLayoutAudit: values["transcript-layout-audit"],
+    transcriptPaintMarker: values["transcript-paint-marker"],
+    liveRegionAudit: values["live-region-audit"],
+    remountAudit: values["remount-audit"],
+    routeTransitions: values["route-transitions"],
+    transitionTargets: values["transition-targets"]?.split(","),
+    routeTransitionCoverage: values["route-transitions"]
+      ? engineRouteTransitionCoverage
+      : undefined,
     cpuThrottle,
     memorySoakRounds,
-    collection: values.allocations
-      ? "V8 sampled allocations including major/minor-GC collected objects; diagnostic overhead, not timing proof"
-      : values["mutation-audit"]
-        ? "MutationObserver over document/open shadow roots and formatter wrappers; diagnostic overhead, not timing proof. Pixel differences include caret/animation changes. Child-content identity is sampled at observer delivery."
-        : values["native-audit"]
-          ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
-          : values["cpu-profile"]
-            ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
-            : values.trace
-              ? "Playwright tracing and engine Inspector/Profiler; overhead included"
-              : values["cpu-only"]
-                ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
-                : "Untraced wall and browser-local application time; Chromium CDP counters only, unavailable WebKit/Firefox counters are null",
+    collection: values["transcript-layout-audit"]
+      ? "Transcript frame geometry, mutation ancestry and all-engine screencast; diagnostic overhead, not timing proof"
+      : values["live-region-audit"]
+        ? "Live-region MutationObserver diagnostic; DOM update candidates, not screen-reader speech or timing proof"
+        : values.allocations
+          ? "V8 sampled allocations including major/minor-GC collected objects; diagnostic overhead, not timing proof"
+          : values["remount-audit"]
+            ? "DOM attachment census with synchronous removal snapshots; diagnostic overhead, not timing proof. DOM detach is not Solid disposal."
+            : values["mutation-audit"]
+              ? "MutationObserver over document/open shadow roots and formatter wrappers; diagnostic overhead, not timing proof. Pixel differences include caret/animation changes. Child-content identity is sampled at observer delivery."
+              : values["native-audit"]
+                ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
+                : values["cpu-profile"]
+                  ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
+                  : values.trace
+                    ? "Playwright tracing and engine Inspector/Profiler; overhead included"
+                    : values["cpu-only"]
+                      ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
+                      : "Untraced wall and browser-local application time; Chromium CDP counters only, unavailable WebKit/Firefox counters are null",
     order:
       "Serial network profiles alternate each pair; engine/configuration/bundle positions rotate and reverse across pairs; fresh browser context per observation",
     acceptance:
       "Census screens >1.3x engine/Chromium; confirm with ten rotated pairs plus A/A. Fix proof: twenty rotated pairs plus A/A; median regression <=5% and p95 no worse. Missing CPU clocks cannot certify CPU wins on a noisy host; >20% attributable regression blocks.",
+    rapidNavigationContract:
+      "Rapid scenarios pace input against browser-local deadlines without waiting for intermediate destinations. Their network profiles delay HTTP requests only; synthetic Gateway replies remain immediate. Actual event delivery and lateness remain visible; delivery includes driver overhead and application work, not just input queue delay. Final input to two correct frames measures settled application state, not paint. Route/history automation is marked non-native. Total interval CPU is not attributable to abandoned destinations. ResourceTiming counts completed chunks only; in-flight chunks and unsupported long tasks are unavailable.",
     frameCadence:
       "Prepare and settle frame intervals are consecutive requestAnimationFrame timestamp differences, not the full wait duration. scenarioMs includes driver input and scenario assertions; settleWaitMs measures the final two-frame wait. Their sum is wallMs. These are automation-to-assertion timings, not input-to-paint latency. Browser-local actionTiming splits the driver prefix, application elapsed to the last observed DOM commit (or native value edit), and the assertion/settle tail. These three sum to browserSpanMs, not Node wallMs. Focus work can occur in the prefix; compound input spans retain intermediate driver delays. Trace-only marks expose the same boundaries. Missing native input or an explicit Gateway-response mark, or a missing commit, makes action timing unavailable.",
     boundary:
-      "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Nonlocal profiles add the configured delay to every HTTP request and every incoming mock Gateway frame (including the connect challenge); RPC replies thus include a simulated round trip, with no added throughput cap. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
+      "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Nonlocal profiles add the configured delay to every HTTP request. Boot/page scenarios also delay incoming mock Gateway frames (including the connect challenge); rapid scenarios retain immediate synthetic Gateway replies. No added throughput cap. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
     memoryContract:
       "Opt-in memory-* scenes retain one document, drain 4.1 s retirement timers, clear synthetic request history, then force two collections at each named checkpoint. Compare warm and late checkpoints; heap/native categories/RSS and DOM wrapper/native counts have different engine-specific meanings. Memory-scene elapsed times include forced GC and snapshots and are not latency evidence.",
     idleContract: `Idle CPU spans a Node-side ${idleDurationMs} ms wait. Hidden idle defaults to 60000 ms of warmup after native visibility settles; visible idle defaults to 0 ms. An explicit idle-warmup-ms overrides either default; 0 measures the initial transition, which can include background memory reclamation. Each idle scenario records its resolved warmup. Counter/request endpoints also include measurement instrumentation setup/draining; reveal and clock recovery occur afterward. Blank/static controls retain shared observation instrumentation without loading the app or Gateway.`,
@@ -657,13 +861,21 @@ try {
           );
           for (const [position, { configuration, bundle, slot }] of configuredSlots.entries()) {
             slot.server.setAssetLatencyMs(networkProfile.httpLatencyMs);
-            const scenario =
+            let scenario =
               createEngineBootScenarios(slot.server.baseUrl, networkProfile.gatewayLatencyMs).find(
                 ({ id }) => id === item.id,
               ) ??
               createEngineCompletedRunScenarios(slot.server.baseUrl).find(
                 ({ id }) => id === item.id,
               ) ??
+              createEngineProfileReadinessScenarios(
+                slot.server.baseUrl,
+                networkProfile.gatewayLatencyMs,
+              ).find(({ id }) => id === item.id) ??
+              createEngineSettingsSearchScenarios(
+                slot.server.baseUrl,
+                networkProfile.gatewayLatencyMs,
+              ).find(({ id }) => id === item.id) ??
               (item.id.startsWith("page-")
                 ? createEnginePageScenarios(
                     networkProfile.gatewayLatencyMs,
@@ -679,6 +891,12 @@ try {
               configuration: configuration.name,
               engine,
               networkProfile: networkProfile.name,
+              appliedNetworkProfile: {
+                httpLatencyMs: networkProfile.httpLatencyMs,
+                gatewayLatencyMs: scenario.id.startsWith("rapid-")
+                  ? 0
+                  : networkProfile.gatewayLatencyMs,
+              },
               viewport: viewport.name,
               step: scenario.id,
               bundle,
@@ -689,6 +907,42 @@ try {
               hostLoadAverage: os.loadavg(),
               artifactPrefix,
             };
+            if (scenario.id.startsWith("remount-from-")) {
+              observation.transitions = [];
+              scenario = createEngineRouteTransitionScenarios(async (page, transition, run) => {
+                const row: NonNullable<Observation["transitions"]>[number] = {
+                  ...transition,
+                  wallMs: 0,
+                };
+                const started = performance.now();
+                if (values["remount-audit"]) {
+                  await page.evaluate(() => {
+                    window.openclawRemountAudit = window.openclawCreateRemountAudit!();
+                    window.openclawRemountAudit.start();
+                  });
+                }
+                const measurement = await startEngineMeasurement(page, engine, { trace: false });
+                try {
+                  row.applicationMs = await run();
+                } catch (error) {
+                  row.error = String(error);
+                  await page.screenshot({
+                    path: path.join(
+                      artifactDir,
+                      `${artifactPrefix}.transition-${observation.transitions!.length}-failed.png`,
+                    ),
+                  });
+                } finally {
+                  row.wallMs = performance.now() - started;
+                  row.metrics = (await measurement.stop()).metrics;
+                  if (values["remount-audit"]) {
+                    row.remounts = await page.evaluate(() => window.openclawRemountAudit!.finish());
+                  }
+                  observation.transitions!.push(row);
+                  await writeJson(`${artifactPrefix}.transitions.json`, observation.transitions);
+                }
+              }, values["transition-targets"]?.split(",")).find(({ id }) => id === scenario.id)!;
+            }
             if (scenario.viewports && !scenario.viewports.some((name) => name === viewport.name)) {
               observation.status = "skipped";
               observation.skipReason = "This control is unavailable at this viewport.";
@@ -703,9 +957,23 @@ try {
               await observationWriter.record(observation);
               continue;
             }
-            if (scenario.memory || !browsers.get(engine)!.isConnected()) {
-              await browsers.get(engine)!.close();
-              browsers.set(engine, await launchEngine(engine));
+            if (
+              configuration.accessibility !== "default" &&
+              (engine !== "chromium" ||
+                isEngineIdleScenario(scenario) ||
+                scenario.visibility === "hidden")
+            ) {
+              observation.status = "skipped";
+              observation.skipReason =
+                "Explicit accessibility modes require the Chromium Playwright launcher.";
+              observations.push(observation);
+              await observationWriter.record(observation);
+              continue;
+            }
+            const browserSlotKey = browserKey(engine, configuration.accessibility);
+            if (scenario.memory || !browsers.get(browserSlotKey)!.isConnected()) {
+              await browsers.get(browserSlotKey)!.close();
+              browsers.set(browserSlotKey, await launchEngine(engine, configuration.accessibility));
             }
             // Use the existing runner-owned full Chrome helper for both idle states.
             // Normal Playwright contexts force visibility even after minimization.
@@ -714,7 +982,7 @@ try {
               engine === "chromium"
                 ? await launchTalkObservationBrowser(artifactDir, false)
                 : undefined;
-            const observationBrowser = nativeBrowser?.browser ?? browsers.get(engine)!;
+            const observationBrowser = nativeBrowser?.browser ?? browsers.get(browserSlotKey)!;
             const context =
               nativeBrowser?.context ??
               (await observationBrowser.newContext({
@@ -741,14 +1009,28 @@ try {
               }
             });
             let tracingStarted = false;
+            let gestureRecording = false;
             let measurement: Awaited<ReturnType<typeof startEngineMeasurement>> | undefined;
             let cpuProfile: ColdLoadCpuProfile | undefined;
             let layerAudit: Awaited<ReturnType<typeof createControlUiLayerAudit>> | undefined;
+            let transcriptLayoutAudit:
+              | Awaited<ReturnType<typeof startTranscriptLayoutAudit>>
+              | undefined;
             let memory: Awaited<ReturnType<typeof createEngineMemoryCollector>> | undefined;
             let throttle: Awaited<ReturnType<typeof context.newCDPSession>> | undefined;
+            let accessibility:
+              | Awaited<ReturnType<typeof createEngineAccessibilityObservation>>
+              | undefined;
+            let liveRegionAudit:
+              | JSHandle<ReturnType<typeof createControlUiLiveRegionAudit>>
+              | undefined;
             let minimizedWindow: number | undefined;
             let idleRequests: Array<{ method: string }> | undefined;
             try {
+              if (configuration.accessibility === "on") {
+                accessibility = await createEngineAccessibilityObservation(page);
+                observation.accessibility = {};
+              }
               if (nativeBrowser) {
                 await page.setViewportSize(viewport);
                 await page.emulateMedia({
@@ -763,6 +1045,9 @@ try {
                   deviceScaleFactor: configuration.deviceScaleFactor,
                   mobile: viewport.name === "mobile",
                 });
+                if (viewport.name === "mobile") {
+                  await throttle.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+                }
                 await throttle.send("Emulation.setLocaleOverride", {
                   locale: configuration.locale,
                 });
@@ -776,6 +1061,16 @@ try {
                 await throttle.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
               }
               await page.addInitScript("globalThis.__name = (fn) => fn");
+              if (scenario.id.startsWith("gesture-")) {
+                await addControlUiGestureProbe(page, {
+                  geometryReadStacks: values["gesture-geometry"],
+                });
+              }
+              if (values["remount-audit"]) {
+                await page.addInitScript(
+                  `window.openclawCreateRemountAudit = ${createControlUiRemountAudit.toString()};${scenario.navigation ? "window.openclawRemountAudit = window.openclawCreateRemountAudit(); window.openclawRemountAudit.start();" : ""}`,
+                );
+              }
               if (values["mutation-audit"]) {
                 await page.addInitScript(
                   `window.openclawMutationAudit = (${createControlUiMutationAudit.toString()})();${scenario.navigation ? "window.openclawMutationAudit.start();" : ""}`,
@@ -846,7 +1141,7 @@ try {
                   },
                 );
               }
-              const fixture: ReturnType<typeof createScenarioFixture> = scenario.fixture
+              let fixture: ReturnType<typeof createScenarioFixture> = scenario.fixture
                 ?.workboardResources
                 ? createWorkboardResourceFixture(
                     slot.build.buildId,
@@ -854,6 +1149,38 @@ try {
                     slot.workboardSource!.root,
                   )
                 : createScenarioFixture(slot.build.buildId, slot.build.version, scenario);
+              if (scenario.fixture?.workboardResources && scenario.id.startsWith("remount-from-")) {
+                const broad = createScenarioFixture(
+                  slot.build.buildId,
+                  slot.build.version,
+                  scenario,
+                );
+                fixture = {
+                  ...broad,
+                  nativePlugins: fixture.nativePlugins,
+                  controlUiTabs: fixture.controlUiTabs,
+                  sessions: [
+                    ...new Map(
+                      [...broad.sessions, ...fixture.sessions].map((row) => [row.key, row]),
+                    ).values(),
+                  ],
+                  featureMethods: [
+                    ...new Set([
+                      ...(broad.featureMethods ?? []),
+                      ...(fixture.featureMethods ?? []),
+                    ]),
+                  ],
+                  methodResponses: {
+                    ...broad.methodResponses,
+                    ...fixture.methodResponses,
+                    "plugins.uiDescriptors": Object.assign(
+                      {},
+                      broad.methodResponses?.["plugins.uiDescriptors"],
+                      { controlUiTabs: fixture.controlUiTabs },
+                    ),
+                  },
+                };
+              }
               const configResponse = fixture.methodResponses?.["config.get"];
               if (isRecord(configResponse) && isRecord(configResponse.config)) {
                 const config = configResponse.config;
@@ -889,14 +1216,22 @@ try {
                   return sessions.list(params).result;
                 },
               };
-              const installGateway = scenario.fixture?.workboardResources
-                ? installNativePluginMockGateway
-                : installMockGateway;
               const gateway = idleControl
                 ? undefined
-                : await installGateway(
+                : await installNativePluginMockGateway(
                     page,
-                    { ...fixture, awaitInitialRoster: false },
+                    {
+                      ...fixture,
+                      awaitInitialRoster: false,
+                      ...(values["rpc-delay-method"]
+                        ? {
+                            methodDelays: {
+                              ...fixture.methodDelays,
+                              [values["rpc-delay-method"]]: rpcDelayMs,
+                            },
+                          }
+                        : {}),
+                    },
                     {
                       nativeAssetLatencyMs: networkProfile.httpLatencyMs,
                       requestHandlers: {
@@ -939,6 +1274,9 @@ try {
                 await page.evaluate(() => document.fonts.ready.then(() => undefined));
                 observation.prepareFrameIntervalMs = await frames(page);
               }
+              if (accessibility && scenario.navigation !== "measured") {
+                observation.accessibility!.before = await accessibility.snapshot();
+              }
               let before = (await gateway?.getRequests())?.length ?? 0;
               if (values.trace) {
                 // DOM snapshots execute injected script on each action and distort the profile.
@@ -974,6 +1312,16 @@ try {
                 : undefined;
               if (values["mutation-audit"] && !scenario.navigation) {
                 await page.evaluate(() => window.openclawMutationAudit!.start());
+              }
+              if (
+                values["remount-audit"] &&
+                !scenario.navigation &&
+                !scenario.id.startsWith("remount-from-")
+              ) {
+                await page.evaluate(() => {
+                  window.openclawRemountAudit = window.openclawCreateRemountAudit!();
+                  window.openclawRemountAudit.start();
+                });
               }
               if (values["native-audit"]) {
                 layerAudit = await createControlUiLayerAudit(page);
@@ -1033,6 +1381,11 @@ try {
                 nativeAudit: values["native-audit"],
                 allocations: values.allocations,
               });
+              if (values["live-region-audit"]) {
+                liveRegionAudit = await page.evaluateHandle(createControlUiLiveRegionAudit);
+                await liveRegionAudit.evaluate((audit) => audit.start());
+              }
+              accessibility?.reset();
               phase = "measurement";
               const start = performance.now();
               if (scenario.memory) {
@@ -1049,6 +1402,19 @@ try {
                 await page.evaluate((identity) => {
                   Reflect.set(window, "openclawMemoryDocumentIdentity", identity);
                 }, artifactPrefix);
+              }
+              if (values["transcript-layout-audit"]) {
+                transcriptLayoutAudit = await startTranscriptLayoutAudit(
+                  page,
+                  artifactDir,
+                  artifactPrefix,
+                  engine,
+                  values["transcript-paint-marker"],
+                );
+              }
+              if (scenario.id.startsWith("gesture-")) {
+                await startControlUiGestureProbe(page, scenario.id);
+                gestureRecording = true;
               }
               observation.evidence =
                 (isEngineIdleControl(scenario)
@@ -1099,6 +1465,10 @@ try {
                           }
                         : undefined,
                     )) ?? undefined;
+              if (scenario.id.startsWith("gesture-")) {
+                observation.gesture = await stopControlUiGestureProbe(page);
+                gestureRecording = false;
+              }
               if (actionTiming) {
                 await actionTiming.evaluate((timing) => timing.endScenario());
               }
@@ -1112,6 +1482,11 @@ try {
               if (!isEngineIdleScenario(scenario) && scenario.visibility !== "hidden") {
                 observation.settleFrameIntervalMs = await frames(page);
               }
+              if (transcriptLayoutAudit) {
+                const audit = transcriptLayoutAudit;
+                transcriptLayoutAudit = undefined;
+                await audit.finish();
+              }
               observation.wallMs = performance.now() - start;
               observation.settleWaitMs = observation.wallMs - observation.scenarioMs;
               if (actionTiming) {
@@ -1122,6 +1497,34 @@ try {
               measurement = undefined;
               const captured = await activeMeasurement.stop();
               observation.metrics = captured.metrics;
+              if (scenario.id.startsWith("event-load-")) {
+                observation.evidence = {
+                  ...observation.evidence,
+                  ...(await verifyEngineEventLoad(
+                    page,
+                    scenario.id === "event-load-unloaded"
+                      ? -1
+                      : Number(scenario.id.slice("event-load-".length)),
+                    eventLoadTools,
+                  )),
+                };
+              }
+              if (observation.gesture && captured.timeline) {
+                const inputs = observation.gesture.totals.inputs;
+                observation.gestureNative = summarizeGestureTrace(
+                  captured.timeline,
+                  engine,
+                  inputs.pointermove + inputs.wheel + inputs.touchmove + inputs.resize,
+                );
+              }
+              if (liveRegionAudit) {
+                observation.liveRegions = await liveRegionAudit.evaluate((audit) => audit.finish());
+                await liveRegionAudit.dispose();
+                liveRegionAudit = undefined;
+              }
+              if (accessibility) {
+                observation.accessibility!.after = await accessibility.finish();
+              }
               if (captured.allocations) {
                 const mapped = await mapControlUiAllocationProfile(captured.allocations, {
                   assetBaseUrl: `${slot.server.baseUrl}/assets/`,
@@ -1165,6 +1568,11 @@ try {
                   before: beforePixels!.toString("base64"),
                   after: afterPixels.toString("base64"),
                 });
+              }
+              if (values["remount-audit"] && !scenario.id.startsWith("remount-from-")) {
+                observation.remounts = await page.evaluate(() =>
+                  window.openclawRemountAudit!.finish(),
+                );
               }
               if (scenario.navigation) {
                 await page.waitForLoadState("networkidle");
@@ -1279,6 +1687,12 @@ try {
               if (errors.length) {
                 throw new Error(errors.map(({ message }) => message).join("\n"));
               }
+              const failedTransitions = observation.transitions?.filter((row) => row.error);
+              if (failedTransitions?.length) {
+                throw new Error(
+                  `${failedTransitions.length} transition(s) failed; see transitions.json`,
+                );
+              }
               if (
                 configuration.forcedColors === "active" &&
                 !observation.configurationEvidence.forcedColors
@@ -1294,6 +1708,10 @@ try {
               phase = "capture";
               observation.errorEvents = errors;
               try {
+                await transcriptLayoutAudit?.finish();
+                if (gestureRecording) {
+                  observation.gesture = await stopControlUiGestureProbe(page);
+                }
                 await layerAudit?.dispose();
                 await memory?.dispose();
                 if (values.trace || values["observer-origins"]) {
@@ -1302,11 +1720,22 @@ try {
                   );
                   await writeJson(`${artifactPrefix}.resize-errors.json`, resizeErrors);
                 }
-                if (measurement) {
-                  await writeJson(
-                    `${artifactPrefix}.interrupted-inspector.json`,
-                    await measurement.stop(),
+                if (scenario.id.startsWith("event-load-")) {
+                  const partial = await page.evaluate(() =>
+                    Reflect.get(window, "__eventLoadEvidence"),
                   );
+                  if (partial) {
+                    observation.evidence = { ...partial, ...observation.evidence };
+                  }
+                }
+                if (measurement) {
+                  const interruptedMeasurement = measurement;
+                  measurement = undefined;
+                  const interrupted = await interruptedMeasurement.stop();
+                  if (scenario.id.startsWith("event-load-")) {
+                    observation.metrics = interrupted.metrics;
+                  }
+                  await writeJson(`${artifactPrefix}.interrupted-inspector.json`, interrupted);
                 }
                 if (scenario.id.startsWith("streaming-")) {
                   const streaming = await page.evaluate(() =>
@@ -1335,6 +1764,7 @@ try {
                 observation.status = "failed";
               }
               try {
+                await accessibility?.dispose();
                 await throttle?.detach();
                 await context.close();
                 if (scenario.memory) {
@@ -1612,7 +2042,8 @@ await writeJson("summary.json", {
     .map((row) => {
       const baseline = summary.find(
         (candidate) =>
-          candidate.configuration === "default" &&
+          candidate.configuration ===
+            (row.configuration.startsWith("accessibility") ? "accessibility-off" : "default") &&
           candidate.engine === row.engine &&
           candidate.viewport === row.viewport &&
           candidate.step === row.step &&
@@ -1636,6 +2067,10 @@ await writeJson("summary.json", {
         bundle: row.bundle,
         networkProfile: row.networkProfile,
         metric,
+        taskCpuMedianRatio:
+          row.metrics.taskMs && baseline?.metrics.taskMs && baseline.metrics.taskMs.median > 0
+            ? row.metrics.taskMs.median / baseline.metrics.taskMs.median
+            : null,
         medianRatio:
           sample && control && control.median > 0 ? sample.median / control.median : null,
         p95Ratio: sample && control && control.p95 > 0 ? sample.p95 / control.p95 : null,
@@ -1696,8 +2131,46 @@ await writeFile(
       : []),
     "Firefox uses the pinned Playwright build. Its mobile cells emulate viewport and touch only (isMobile is unsupported). CPU/native traces/heap snapshots are unavailable; application elapsed time keeps the same browser-local boundaries. Layout Instability and Long Tasks support are detected per observation; missing entries remain null.",
     "",
+    ...(summary.some((row) => row.step.startsWith("rapid-"))
+      ? [
+          "## Interrupted navigation",
+          "",
+          "Input pacing does not wait for intermediate content. Delivery lateness includes driver overhead; it is not isolated input queue delay. Settlement is the final input to two consecutive correct animation-frame observations, not paint. Programmatic route/history actions are marked non-native in observations. CPU covers the whole interval, not individual abandoned owners. Completed chunk counts exclude in-flight requests. Compare rapid scenes with their direct controls and retain A/A noise before claiming a win.",
+          "",
+          "| Engine | Viewport | Scenario | Network | Bundle | Passed/failed | Final input → settled median/p95 ms | Total task CPU median ms | Longest task p95 ms | RPCs median | Retained panes median |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+          ...summary
+            .filter((row) => row.step.startsWith("rapid-"))
+            .map((row) => {
+              const number = (value: number | undefined) => value?.toFixed(2) ?? "unavailable";
+              const ready = row.evidence.finalInputToSettledMs;
+              return `| ${row.engine} | ${row.viewport} | ${row.step} | ${row.networkProfile} | ${row.bundle} | ${row.passed}/${row.failed} | ${number(ready?.median)}/${number(ready?.p95)} | ${number(row.metrics.taskMs?.median)} | ${number(row.evidence.longestTaskMs?.p95)} | ${number(row.evidence.rpcRequests?.median)} | ${number(row.evidence.retainedPanes?.median)} |`;
+            }),
+          "",
+        ]
+      : []),
     "ResizeObserver loop errors are counted in every run, including without tracing or observer-origin diagnostics. Any browser error fails its observation and the command; completed timing intervals do not waive the zero-error requirement.",
     "",
+    ...(observations.some((row) => row.gesture)
+      ? [
+          "## Continuous gestures",
+          "",
+          "Native requestAnimationFrame callback intervals during physical input, not presentation timestamps or CPU time. Input timestamps and per-frame ResizeObserver counts are retained in observations. WebKit uses this same browser-local rAF clock; its Inspector has no compositor frame clock. Geometry/trace diagnostics add overhead and must not be compared with untraced timings. Each row is one gesture, not one input sample. Unsupported native diagnostics remain null.",
+          "",
+          "| Engine | Viewport | Gesture | Bundle | Pair | Frames | Median / p95 ms | >16.7 / >33 ms | RO deliveries / entries | Outcome |",
+          "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+          ...observations.flatMap((row) => {
+            if (!row.gesture) {
+              return [];
+            }
+            const sample = row.gesture.activeFrameSummary;
+            return [
+              `| ${row.engine} | ${row.viewport} | ${row.step} | ${row.bundle} | ${row.pair + 1} | ${sample.count} | ${sample.medianMs?.toFixed(2) ?? "—"} / ${sample.p95Ms?.toFixed(2) ?? "—"} | ${sample.over16_7Ms} / ${sample.over33Ms} | ${row.gesture.totals.resizeObserverDeliveries} / ${row.gesture.totals.resizeObserverEntries} | ${row.status} |`,
+            ];
+          }),
+          "",
+        ]
+      : []),
     "| Configuration | Viewport | Scenario | Network | Bundle | Engine | ResizeObserver errors | Affected / attempted observations |",
     "| --- | --- | --- | --- | --- | --- | ---: | ---: |",
     ...summary.map(
@@ -1705,7 +2178,7 @@ await writeFile(
         `| ${row.configuration} | ${row.viewport} | ${row.step} | ${row.networkProfile} | ${row.bundle} | ${row.engine} | ${row.resizeErrorCount} | ${row.resizeErrorObservations} / ${row.passed + row.failed} |`,
     ),
     "",
-    `Network profiles: ${networkProfiles.map(({ name, httpLatencyMs, gatewayLatencyMs }) => `${name} (${httpLatencyMs} ms per HTTP request; ${gatewayLatencyMs} ms per incoming Gateway frame)`).join("; ")}. The Gateway probe retains event ordering and uses no extra frame gap or throughput cap.`,
+    `Network profiles: ${networkProfiles.map(({ name, httpLatencyMs, gatewayLatencyMs }) => `${name} (${httpLatencyMs} ms per HTTP request; ${gatewayLatencyMs} ms per incoming Gateway frame for boot/page scenarios, immediate replies for rapid scenarios)`).join("; ")}. The Gateway probe retains event ordering and uses no extra frame gap or throughput cap.`,
     "",
     "Application elapsed is first trusted native input (or an explicitly marked Gateway response delivery) to last observed DOM commit/native value edit before scenario return. Gateway marks run inside the page immediately before releasing the deferred response. It excludes the initial driver prefix and later assertion/settle tail, but includes intermediate driver gaps in compound actions; it is not CPU or paint latency. Navigation/memory and actions without both boundaries are unranked. The driver prefix may include application focus work. Browser-local phases do not include boundary RPC transport and do not sum to Node wall time.",
     "",

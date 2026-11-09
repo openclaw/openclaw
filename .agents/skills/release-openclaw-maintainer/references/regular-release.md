@@ -102,11 +102,16 @@ that can feed validation, run the integrated exact-HEAD gate:
 pnpm release:push
 ```
 
-This wrapper refreshes and pins `origin/main`, requires a clean canonical
+This wrapper refreshes and pins `origin/main` and release tags, requires a clean canonical
 `release/YYYY.M.PATCH` worktree, captures `HEAD`, verifies that it fast-forwards
 the remote release branch, and runs only a short `git diff --check` plus the
 dependency-free release-changelog layout check. It pushes that captured SHA
-only if the source branch, worktree, and HEAD remain unchanged. Do not use a
+only if the source branch, worktree, and HEAD remain unchanged. The first push
+compares against the newest stable release tag published on `origin` between the main audit merge base
+and the candidate, falling back to the audit merge base if none exists. Later
+pushes compare against the refreshed canonical release head. Already-shipped
+patch-file bytes are not new whitespace errors; changed whitespace and conflict
+markers still fail the same check. Do not use a
 separate `git push`: exact-SHA verification and push stay one operation. A
 failed preflight, concurrent commit, or non-fast-forward remote update blocks
 the push and FRV dispatch. Record the pushed SHA and comparison base in the
