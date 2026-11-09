@@ -6399,6 +6399,8 @@ describe("ci workflow guards", () => {
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
     const workflow = readCiWorkflow();
+    const twoCpu = "blacksmith-2vcpu-ubuntu-2404";
+    const fourCpu = "blacksmith-4vcpu-ubuntu-2404";
     const buildArtifactsTestbox = readBuildArtifactsTestboxWorkflow();
     const plannerRunner = workflow.jobs["check-plan"]["runs-on"];
     const plannerContext = {
@@ -6410,7 +6412,7 @@ describe("ci workflow guards", () => {
     };
     for (const eventName of ["pull_request", "push", "schedule"] as const) {
       expect(evaluateWorkflowExpression(plannerRunner, { ...plannerContext, eventName })).toBe(
-        eventName === "pull_request" ? "ubuntu-24.04" : "blacksmith-4vcpu-ubuntu-2404",
+        eventName === "pull_request" ? "ubuntu-24.04" : fourCpu,
       );
     }
     const typeRunner = workflow.jobs["check-test-types-hosted-core-shard"]["runs-on"];
@@ -6429,9 +6431,7 @@ describe("ci workflow guards", () => {
           override: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
         ) => evaluateWorkflowExpression(runner, { ...fork, ...override });
         for (const runner of [plannerRunner, typeRunner, lintRunner]) {
-          expect(route(runner)).toBe(
-            runner === typeRunner ? "blacksmith-2vcpu-ubuntu-2404" : "blacksmith-4vcpu-ubuntu-2404",
-          );
+          expect(route(runner)).toBe(runner === typeRunner ? twoCpu : fourCpu);
           for (const override of [
             { runnerBackend: "github" },
             { runAttempt: 2 },
@@ -6441,19 +6441,18 @@ describe("ci workflow guards", () => {
             expect(route(runner, override)).toBe("ubuntu-24.04");
           }
         }
-        const retainedTypeAllocations: Record<string, string>[] = [
-          { frozen_target: "" },
-          { compatibility_target: "true" },
-        ];
-        for (const preflightOutputs of retainedTypeAllocations) {
-          expect(route(typeRunner, { preflightOutputs })).toBe("blacksmith-4vcpu-ubuntu-2404");
+        for (const [key, value] of Object.entries({
+          frozen_target: "",
+          compatibility_target: "true",
+        })) {
+          expect(route(typeRunner, { preflightOutputs: { [key]: value } })).toBe(fourCpu);
         }
         // Frozen defaults retain their historical hosted route; hybrid owns its own layout.
         for (const runner of runnerBackend === "hybrid" ? [lintRunner] : [typeRunner, lintRunner]) {
           expect(route(runner, { frozenTarget: true })).toBe("ubuntu-24.04");
         }
         for (const stripe of [1, 2, 3, 4, 5]) {
-          expect(route(lintRunner, { matrix: { stripe } })).toBe("blacksmith-4vcpu-ubuntu-2404");
+          expect(route(lintRunner, { matrix: { stripe } })).toBe(fourCpu);
         }
       }
     }
@@ -6463,16 +6462,14 @@ describe("ci workflow guards", () => {
       preflightOutputs: { ci_qualification: "true", qualification_runner_backend: "hybrid" },
     };
     for (const runner of [plannerRunner, typeRunner]) {
-      expect(evaluateWorkflowExpression(runner, qualification)).toBe(
-        "blacksmith-4vcpu-ubuntu-2404",
-      );
+      expect(evaluateWorkflowExpression(runner, qualification)).toBe(fourCpu);
       expect(
         evaluateWorkflowExpression(runner, {
           ...qualification,
           dispatchId: "full-release-validation-test",
           releaseRunnerGroup: "test-group",
         }),
-      ).toEqual({ group: "test-group", labels: "blacksmith-4vcpu-ubuntu-2404" });
+      ).toEqual({ group: "test-group", labels: fourCpu });
     }
     for (const override of [
       { runnerBackend: "github" },
@@ -6507,7 +6504,7 @@ describe("ci workflow guards", () => {
           expect(
             runOn({ runnerBackend, eventName }),
             `build-artifacts: ${runnerBackend || "default"}/${eventName}/frozen=${frozenTarget}`,
-          ).toBe("blacksmith-4vcpu-ubuntu-2404");
+          ).toBe(fourCpu);
         }
       }
       expect(
@@ -6517,7 +6514,7 @@ describe("ci workflow guards", () => {
           headRepository: "fork/openclaw",
         }),
         "build-artifacts: untrusted fork first attempt",
-      ).toBe("blacksmith-4vcpu-ubuntu-2404");
+      ).toBe(fourCpu);
       for (const override of [
         { runnerBackend: "github" },
         { runnerBackend: "hybrid", runAttempt: 2 },
@@ -6561,9 +6558,7 @@ describe("ci workflow guards", () => {
     ).toBe(
       "${{ github.event_name == 'pull_request' && '--max-old-space-size=8192' || '--max-old-space-size=16384' }}",
     );
-    expect(workflow.jobs["checks-node-core-test-nondist-shard"]["runs-on"]).toContain(
-      "blacksmith-4vcpu-ubuntu-2404",
-    );
+    expect(workflow.jobs["checks-node-core-test-nondist-shard"]["runs-on"]).toContain(fourCpu);
     const fullCheckRows = evaluateWorkflow(workflow.jobs["check-shard"].strategy.matrix, {
       eventName: "workflow_dispatch",
       preflightOutputs: readFullCheckOutputs(),
@@ -6573,7 +6568,7 @@ describe("ci workflow guards", () => {
         check_name: `check-${task}`,
         task,
         runner: "blacksmith-16vcpu-ubuntu-2404",
-        runner_label: "blacksmith-4vcpu-ubuntu-2404",
+        runner_label: fourCpu,
       });
     }
     expect(workflow.jobs["check-additional-shard"]["runs-on"]).toContain("matrix.runner");
