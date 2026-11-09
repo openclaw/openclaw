@@ -19,7 +19,11 @@ import {
 } from "./jobs-tool-policy.js";
 import { publishCronRunReceiptMutation } from "./run-receipts.js";
 import { emit, type CronServiceState, type CronAddOptions } from "./state.js";
-import { persistCronJobMutation, type captureCronJobMutationSource } from "./store.js";
+import {
+  persistCronJobMutation,
+  warnCronJobDiagnostics,
+  type captureCronJobMutationSource,
+} from "./store.js";
 
 export async function persistUpdatedJob(params: {
   state: CronServiceState;
@@ -120,5 +124,8 @@ export async function persistUpdatedJob(params: {
       });
     },
   });
-  return findJobOrThrow(state, nextJob.id);
+  const committedJob = findJobOrThrow(state, nextJob.id);
+  // Startup skips jobs that cannot run, so an edit that revives one reports here.
+  warnCronJobDiagnostics(state, committedJob);
+  return committedJob;
 }

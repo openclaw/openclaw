@@ -432,6 +432,22 @@ export function computeJobPreviousRunAtOrBeforeMs(job: CronJob, nowMs: number): 
   return asDateTimestampMs(computeStaggeredCronPreviousRunAtOrBeforeMs(job, nowMs));
 }
 
+/** Whether a job can start again: event sources stay armed, time schedules need another slot. */
+export function canCronJobRunAgain(job: CronJob, nowMs: number): boolean {
+  if (!isJobEnabled(job)) {
+    return false;
+  }
+  if (!isTimeScheduledJob(job) || hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
+    return true;
+  }
+  try {
+    return computeJobNextRunAtMs(job, nowMs) !== undefined;
+  } catch {
+    // A malformed schedule never fires; schedule-error handling owns reporting it.
+    return false;
+  }
+}
+
 /** Maximum consecutive schedule errors before auto-disabling a job. */
 const MAX_SCHEDULE_ERRORS = 3;
 
