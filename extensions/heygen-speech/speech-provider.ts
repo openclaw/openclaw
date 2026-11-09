@@ -29,6 +29,7 @@ const DEFAULT_MODEL: HeyGenModel = "heygen-voice-1-turbo";
 // Public voice: Nadine.
 const DEFAULT_VOICE_ID = "83548de556df48ba8c09c42a57c51d85";
 const DEFAULT_TIMEOUT_MS = 120_000;
+const MISSING_API_KEY = "HeyGen API key missing: set HEYGEN_API_KEY or tts.providers.heygen.apiKey";
 
 const MP3_RESULT = { outputFormat: "mp3", fileExtension: ".mp3", voiceCompatible: false };
 
@@ -58,7 +59,8 @@ function normalizeProviderConfig(rawConfig: Record<string, unknown>) {
     }),
     baseUrl: normalizeBaseUrl(raw?.baseUrl),
     model: normalizeModel(raw?.modelId ?? raw?.model),
-    voiceId: trimToUndefined(raw?.speakerVoiceId ?? raw?.voiceId) ?? DEFAULT_VOICE_ID,
+    voiceId:
+      trimToUndefined(raw?.speakerVoice ?? raw?.speakerVoiceId ?? raw?.voiceId) ?? DEFAULT_VOICE_ID,
     language: trimToUndefined(raw?.language),
   };
 }
@@ -89,7 +91,7 @@ async function resolveSynthesisRequest(req: Omit<SpeechSynthesisRequest, "target
   const config = readProviderConfig(req.providerConfig);
   const apiKey = resolveApiKey(config.apiKey);
   if (!apiKey) {
-    throw new Error("HeyGen API key missing");
+    throw new Error(MISSING_API_KEY);
   }
   const overrides = req.providerOverrides ?? {};
   const { resolveGeneratedMediaMaxBytes } =
@@ -129,7 +131,7 @@ export function buildHeyGenSpeechProvider(): SpeechProviderPlugin {
       const config = readProviderConfig(req.providerConfig ?? {});
       const apiKey = resolveApiKey(trimToUndefined(req.apiKey) ?? config.apiKey);
       if (!apiKey) {
-        throw new Error("HeyGen API key missing");
+        throw new Error(MISSING_API_KEY);
       }
       return await listHeyGenVoices({
         apiKey,

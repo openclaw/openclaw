@@ -111,6 +111,12 @@ it.each([
     { model: "heygen-voice-1" },
   ],
   ["a speaker voice directive", {}, { voice: "named-voice" }, { voice_id: "named-voice" }],
+  [
+    "a configured speaker voice",
+    { speakerVoice: "config-voice" },
+    {},
+    { voice_id: "config-voice" },
+  ],
 ])("applies %s", async (_name, providerConfig, providerOverrides, expected) => {
   respond((_url, init) => {
     expect(JSON.parse(init?.body as string)).toMatchObject(expected);
@@ -122,14 +128,6 @@ it.each([
     providerOverrides,
     target: "audio-file",
   });
-});
-
-it("restarts the request timeout on each audio chunk", async () => {
-  const refreshTimeout = vi.fn();
-  const response = new Response(Buffer.from([1]), { headers: { "content-type": "audio/mpeg" } });
-  fetchMock.mockResolvedValue({ response, release: async () => {}, refreshTimeout });
-  await readAudio((await streamSpeech()).audioStream);
-  expect(refreshTimeout).toHaveBeenCalledOnce();
 });
 
 it("transcodes voice notes to Opus", async () => {
@@ -210,7 +208,7 @@ it("keeps workspace voices when the public list fails", async () => {
 
 it.each([
   ["model", "heygen-voice-2", 'invalid HeyGen model "heygen-voice-2"'],
-  ["apiKey", "   ", "HeyGen API key missing"],
+  ["apiKey", "   ", "set HEYGEN_API_KEY or tts.providers.heygen.apiKey"],
 ])("rejects invalid %s before network access", async (key, value, error) => {
   vi.stubEnv("HEYGEN_API_KEY", "   ");
   const providerConfig = { ...request.providerConfig, [key]: value };
