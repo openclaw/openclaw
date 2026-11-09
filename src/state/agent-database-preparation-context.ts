@@ -1,18 +1,25 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { AsyncContext } from "../shared/async-context.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 export type AgentDatabasePreparation = {
   readonly hasPendingAgents: boolean;
+  registerInputRecovery(
+    agentId: string,
+    recovery: { sessions: ReadonlyMap<string, Promise<void>>; completion: Promise<void> },
+  ): void;
   isAgentInputRecoveryPending(agentId: string): boolean;
   waitForAgentPreparation(
+    this: void,
     agentId: string,
     options?: {
       env?: NodeJS.ProcessEnv;
       signal?: AbortSignal;
       forWrite?: boolean;
       forInput?: boolean;
+      sessionKey?: string;
     },
   ): Promise<void> | undefined;
 };
@@ -85,6 +92,7 @@ export function waitForAgentInputAdmission(
     | { cfg: OpenClawConfig; storePath?: string }
     | { cfg?: undefined; storePath: string }
   ) & {
+    sessionKey?: string;
     env?: NodeJS.ProcessEnv;
     signal?: AbortSignal;
     owner?: AgentDatabasePreparation;
@@ -98,12 +106,13 @@ export function waitForAgentInputAdmission(
     (signal): signal is AbortSignal => signal !== undefined,
   );
   const signal = signals.length ? AbortSignal.any(signals) : undefined;
-  const wait = (selected: string) => {
+  const wait = (selected: string, sessionKey: string | undefined) => {
     const recovery = inputRecovery.getStore();
     return owner.waitForAgentPreparation(selected, {
       env: options.env,
       signal,
       forWrite: true,
+      sessionKey,
       forInput: !(
         recovery?.active &&
         recovery.owner === owner &&
@@ -112,9 +121,16 @@ export function waitForAgentInputAdmission(
     });
   };
   return (async () => {
+    let sessionKey = options.sessionKey
+      ? normalizeSessionKeyPreservingOpaquePeerIds(options.sessionKey)
+      : undefined;
+    if (sessionKey && options.cfg) {
+      const { canonicalizeMainSessionAlias } = await import("../config/sessions/main-session.js");
+      sessionKey = canonicalizeMainSessionAlias({ cfg: options.cfg, agentId, sessionKey });
+    }
     await owner.waitForAgentPreparation(agentId, { env: options.env, signal, forWrite: true });
     if (!owner.hasPendingAgents || (!options.storePath && !options.cfg?.session?.store)) {
-      await wait(agentId);
+      await wait(agentId, sessionKey);
       return;
     }
     const { isPerAgentSessionStoreConfig } =
@@ -141,6 +157,6 @@ export function waitForAgentInputAdmission(
       },
       signal,
     );
-    await wait(target.agentId ?? agentId);
+    await wait(target.agentId ?? agentId, sessionKey);
   })();
 }

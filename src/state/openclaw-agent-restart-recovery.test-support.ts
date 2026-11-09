@@ -48,6 +48,7 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
         outcome === "shared" ? path.join(env.OPENCLAW_STATE_DIR, "shared.sqlite") : undefined;
       const config: OpenClawConfig = {
         agents: { ownership: "explicit", entries: { main: {}, ready: {} } },
+        ...(outcome === "ready" ? { session: { mainKey: "restart-admission" } } : {}),
         ...(sharedStore ? { session: { store: sharedStore } } : {}),
         gateway: {
           roles: {
@@ -190,13 +191,14 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
                 const recoverInputs = migrated ? migrated.recoverInputs : undefined;
                 return {
                   // Advisory transcript maintenance is not part of recovery admission.
-                  recoverInputs:
-                    recoverInputs &&
-                    (async () => {
+                  recoverInputs: recoverInputs && {
+                    ...recoverInputs,
+                    run: async () => {
                       inputRecoveryEntered.resolve();
                       await inputRecoveryReady.promise;
-                      await recoverInputs();
-                    }),
+                      await recoverInputs.run();
+                    },
+                  },
                 };
               },
             }),
@@ -264,15 +266,30 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
               await import("./agent-database-preparation-context.js");
             const input = waitForAgentInputAdmission(sharedStore ? "ready" : "main", {
               ...(sharedStore ? { storePath: sharedStore } : { cfg: config }),
+              sessionKey:
+                outcome === "read-pending"
+                  ? undefined
+                  : outcome === "ready"
+                    ? "agent:MAIN:MAIN"
+                    : sharedStore
+                      ? readyScope.sessionKey
+                      : scope.sessionKey,
               owner: admission.observation,
               signal,
             });
             expect(input).toBeDefined();
             await withinTest(
               awaitGateBeforeSettlement(
-                readSessionEntryReadOnlyInWorker(readyScope),
+                Promise.resolve(
+                  waitForAgentInputAdmission(sharedStore ? "ready" : "main", {
+                    ...(sharedStore ? { storePath: sharedStore } : { cfg: config }),
+                    sessionKey: "agent:main:uninterrupted",
+                    owner: admission.observation,
+                    signal,
+                  }),
+                ),
                 input!,
-                "Fresh input overtook restart recovery",
+                "Unrelated session did not pass the retained input barrier independently",
               ),
               signal,
             );
