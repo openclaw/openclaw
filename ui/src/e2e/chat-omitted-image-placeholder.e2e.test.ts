@@ -13,16 +13,14 @@ const screenshotArgs = { action: "screenshot" };
 
 suite.define(() => {
   it.each(["history", "result-first", "receipt-first"] as const)(
-    "loads retained computer screenshots (%s)",
+    "loads retained computer screenshots from tool details (%s)",
     (delivery) =>
       suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
           const dataUrl = await page.evaluate(() => {
-            const canvas = Object.assign(document.createElement("canvas"), {
-              width: 1200,
-              height: 500,
-            });
+            const canvas = document.createElement("canvas");
+            Object.assign(canvas, { width: 1200, height: 500 });
             return canvas.toDataURL("image/png");
           });
           const artifactId = "artifact_transcript_image_fixture";
@@ -121,6 +119,7 @@ suite.define(() => {
               await result();
             }
           }
+          await page.locator(".chat-tool-msg-summary").click();
           const screenshot = page.locator("img.chat-message-image");
           await screenshot.waitFor({ state: "visible" });
           expect(
@@ -139,6 +138,7 @@ suite.define(() => {
             expect(await stop.isVisible()).toBe(true);
           } else {
             await page.reload();
+            await page.locator(".chat-tool-msg-summary").click();
             await page.locator("img.chat-message-image").waitFor({ state: "visible" });
             expect(await omitted.count()).toBe(0);
           }
