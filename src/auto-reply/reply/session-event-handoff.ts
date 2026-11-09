@@ -165,6 +165,8 @@ function enqueueSessionEventAttempt(
   let deliverySuppressionReason: NormalizeReplySkipReason | undefined;
   let summary: string | undefined;
   let failure: Error | string | undefined;
+  // Placeholder text; the operation's recorded cause is more actionable when present.
+  let genericFailure: string | undefined;
   let terminalOutcome: AgentRunTerminalOutcome | undefined;
   let nextCheckMs: number | undefined;
   let sourceDeliveryOutcome: SourceDeliveryOutcome | undefined;
@@ -344,7 +346,12 @@ function enqueueSessionEventAttempt(
       const failed = result?.kind === "failed";
       const aborted = result?.kind === "aborted";
       const terminalSignal = operation?.abortSignal.aborted ? operation.abortSignal : signal;
-      const terminalError = (failed ? result.cause : undefined) ?? failure;
+      const cause = failed ? result.cause : undefined;
+      const terminalError = cause ?? failure;
+      if (!failure && cause !== undefined) {
+        failure = cause instanceof Error ? cause : String(cause);
+      }
+      failure ??= genericFailure;
       // Frozen supersession records cancellation without aborting its signal.
       // Watchdog failures may abort the backend without being cancellation;
       // retain typed deadline facts ahead of the recorded cancellation defaults.
@@ -693,8 +700,12 @@ function enqueueSessionEventAttempt(
               runStartedAt: occurrence.ts,
               signal,
               assertCurrent: assertEffectCurrent,
-              onFailure: (error) => {
-                failure ??= error;
+              onFailure: (error, generic) => {
+                if (generic) {
+                  genericFailure ??= error;
+                } else {
+                  failure ??= error;
+                }
               },
               runId,
               deliveryEvidence,

@@ -57,6 +57,7 @@ it.for([
   { result: "progress" },
   { result: "no_change" },
   { result: "failed" },
+  { result: "thrown" },
   { result: "progress", notification: "none" },
   { result: "progress", notification: "conversation" },
   { result: "no_change", notification: "conversation" },
@@ -72,7 +73,7 @@ it.for([
   "settles automation $result ($notification/$messageTool/$alias) through its shared session owner",
   async (scenario, { signal }) => {
     const progress = scenario.result === "progress";
-    const failed = scenario.result === "failed";
+    const failed = scenario.result === "failed" || scenario.result === "thrown";
     const notification = "notification" in scenario ? scenario.notification : undefined;
     const nativeOnly = notification === "native-only";
     const otherConversation = notification === "other-conversation";
@@ -235,6 +236,9 @@ it.for([
               },
             });
           }
+          if (scenario.result === "thrown") {
+            throw new Error(failure);
+          }
           if (failed) {
             return {
               payloads: [{ text: failure, isError: true }],
@@ -268,7 +272,9 @@ it.for([
           expect(outcome, outcome.error).toMatchObject({
             status: failed ? "error" : "ok",
             executionStarted: true,
-            ...(failed ? { error: failure } : {}),
+            ...(failed
+              ? { error: scenario.result === "thrown" ? `Error: ${failure}` : failure }
+              : {}),
           });
           expect(outcome.result).toEqual(result);
           const settled = expectDefined(
@@ -337,7 +343,7 @@ it.for([
                 outcome.deliverySuppressionReason,
               ),
             ).toBe("succeeded");
-          } else {
+          } else if (scenario.result === "failed") {
             expect(sendText.mock.calls.some(([sent]) => sent.text.includes(failure))).toBe(true);
           }
         } finally {
