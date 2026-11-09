@@ -427,6 +427,18 @@ suite.define(() => {
         expect(size).toBeLessThanOrEqual(24);
       }
       await expect.poll(() => remove.isVisible()).toBe(true);
+      const padding = await page.locator(".new-session-page__composer").evaluate((element) => {
+        const native = getComputedStyle(element.querySelector("textarea")!);
+        const mirror = getComputedStyle(element.querySelector(".composer-mention-highlights")!);
+        return {
+          native: [native.paddingTop, native.paddingBottom],
+          mirror: [mirror.paddingTop, mirror.paddingBottom],
+        };
+      });
+      if (viewport.width === 390) {
+        await captureUiProof(suite, page, "new-chat-selected-mention-mobile.png");
+      }
+      expect(padding.mirror).toEqual(padding.native);
     }
 
     for (let line = 0; line < 24; line++) {
