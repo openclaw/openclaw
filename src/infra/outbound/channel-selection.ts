@@ -151,6 +151,7 @@ export async function resolveMessageChannelSelection(params: {
 }): Promise<{
   channel: string;
   plugin: ChannelPlugin;
+  source: "explicit" | "tool-context-fallback" | "single-configured";
 }> {
   const normalized = normalizeMessageChannel(params.channel);
   for (const field of ["channel", "fallbackChannel"] as const) {
@@ -168,7 +169,11 @@ export async function resolveMessageChannelSelection(params: {
       allowBootstrap: true,
     });
     if (selectedPlugin) {
-      return { channel: selectedPlugin.id, plugin: selectedPlugin };
+      return {
+        channel: selectedPlugin.id,
+        plugin: selectedPlugin,
+        source: field === "channel" ? "explicit" : "tool-context-fallback",
+      };
     }
   }
 
@@ -198,6 +203,7 @@ export async function resolveMessageChannelSelection(params: {
     return {
       channel: plugin.id,
       plugin,
+      source: "single-configured",
     };
   }
   if (configured.length === 0) {

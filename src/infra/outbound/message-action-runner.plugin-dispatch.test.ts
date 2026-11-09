@@ -114,6 +114,34 @@ describe("runMessageAction plugin dispatch", () => {
     setActivePluginRegistry(createTestRegistry([]));
     vi.clearAllMocks();
   });
+  it("rejects an inferred channel-only destination before provider normalization or dispatch", async () => {
+    const normalizeTarget = vi.fn((raw: string) => `@${raw}`);
+    const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+    setTestPlugin(
+      createActionPlugin("namespacechat", {
+        actions: ["edit"],
+        gatewayActions: [],
+        messaging: { normalizeTarget, targetResolver: { looksLikeId: () => true } },
+        handleAction,
+      }),
+      "namespacechat",
+    );
+
+    await expect(
+      runMessageAction({
+        cfg: createEnabledMessageActionConfig("namespacechat"),
+        action: "edit",
+        params: { to: "namespacechat", messageId: "message-1", message: "updated" },
+        conversationReadOrigin: "direct-operator",
+      }),
+    ).rejects.toMatchObject({
+      reasonCode: "message_target_missing",
+      policyRef: "message-target:destination-required",
+    });
+    expect(normalizeTarget).not.toHaveBeenCalled();
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
   describe("alias-based plugin action dispatch", () => {
     const { handleAction, plugin: actionHubPlugin } = useActionHubPluginFixture();
     const accountError = "requires the exact current conversation and account";
