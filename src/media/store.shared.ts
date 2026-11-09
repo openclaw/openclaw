@@ -1,3 +1,5 @@
+import path from "node:path";
+import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { formatByteSize } from "@openclaw/normalization-core";
 
 // Media files remain readable by sandbox container UIDs; the private media
@@ -11,6 +13,26 @@ export function formatMediaSize(bytes: number): string {
     separator: "",
     fractionDigits: (value) => (Number.isInteger(value) ? 0 : 2),
   });
+}
+
+/** Restores the caller-facing filename from media-store paths with embedded UUID suffixes. */
+export function extractOriginalFilename(filePath: string): string {
+  const basename = basenameFromAnyPath(filePath);
+  if (!basename) {
+    return "file.bin";
+  }
+
+  const ext = extnameFromAnyPath(basename);
+  const nameWithoutExt = path.basename(basename, ext);
+
+  const match = nameWithoutExt.match(
+    /^(.+)---[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i,
+  );
+  if (match?.[1]) {
+    return `${match[1]}${ext}`;
+  }
+
+  return basename;
 }
 
 /** Stable error categories for unsafe or failed source-file ingestion. */

@@ -10,6 +10,7 @@ import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { FsSafeError } from "../infra/fs-safe.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
+import { extractOriginalFilename } from "./store.shared.js";
 
 const binaryMime = "application/octet-stream";
 const streamDir = "stream-inbound";
@@ -149,7 +150,7 @@ describe("media store", () => {
       1024,
       original,
     );
-    expect(store.extractOriginalFilename(saved.path)).toBe(original);
+    expect(extractOriginalFilename(saved.path)).toBe(original);
     await expect(fs.readFile(saved.path)).resolves.toEqual(buffer);
   });
 

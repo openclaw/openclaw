@@ -14,7 +14,7 @@ import {
   replacePlaybackFileExtension,
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
-import { extractOriginalFilename } from "../media/store.js";
+import { extractOriginalFilename } from "../media/store.shared.js";
 import { resolveAvatarMime } from "../shared/avatar-policy.js";
 import { normalizeChatImageRenditionWidth } from "../shared/chat-image-renditions.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";

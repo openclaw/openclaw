@@ -8,7 +8,8 @@ import {
   STAGED_INPUT_MAX_BYTES,
   stagedInputDirectory,
 } from "../../media/staged-inputs.js";
-import { extractOriginalFilename, type SavedMedia } from "../../media/store.js";
+import type { SavedMedia } from "../../media/store.js";
+import { extractOriginalFilename } from "../../media/store.shared.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   formatGeneratedAttachmentLines,
