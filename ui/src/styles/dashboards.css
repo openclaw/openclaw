@@ -1,4 +1,4 @@
-/* Header tools sit on the shared 32px control height, like the toolbar icons on Sessions and Usage. */
+/* Header tools sit on the 32px control height, like the toolbar icons on Sessions and Usage. */
 .dashboards-header .hub-page-header__actions {
   min-height: var(--settings-control-height);
 }
@@ -35,7 +35,7 @@
   display: flex;
   align-items: center;
   width: min(280px, calc(100vw - 140px));
-  height: var(--settings-control-height);
+  height: 32px;
   padding-inline-end: 4px;
   border-radius: var(--field-radius);
   background: var(--field-bg);
@@ -46,7 +46,7 @@
 .dashboards-search__icon {
   display: grid;
   flex: none;
-  width: var(--settings-control-height);
+  width: 32px;
   place-items: center;
 }
 
@@ -73,15 +73,6 @@
 .dashboards-tools__trigger.active {
   background: var(--bg-hover);
   color: var(--text-strong);
-}
-
-/* Touch keeps the whole row on the taller control height, like the shared refresh button. */
-@media (pointer: coarse), (max-width: 640px) {
-  .dashboards-search-toggle > .oc-icon-button,
-  .dashboards-tools__trigger,
-  .dashboards-display__trigger {
-    --oc-icon-button-size: var(--settings-control-height);
-  }
 }
 
 .dashboards-authors {

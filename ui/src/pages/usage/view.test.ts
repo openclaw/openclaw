@@ -86,10 +86,7 @@ describe("renderUsage", () => {
       "Display",
       "Refresh",
     ]);
-    for (const button of actions) {
-      expect(button.classList.contains("oc-icon-button--32")).toBe(true);
-      expect(button.classList.contains("btn")).toBe(false);
-    }
+    expect(actions.every((button) => button.matches(".oc-icon-button--32:not(.btn)"))).toBe(true);
   });
 
   it("identifies each query removal action and removes only its named token", () => {

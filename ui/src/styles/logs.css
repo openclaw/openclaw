@@ -20,7 +20,7 @@ main.content:where(.content--logs-page) .content-header {
 }
 
 /* Export sits level with the 32px Refresh beside it instead of the taller default button. */
-main.content:where(.content--logs-page) .page-header-actions .btn {
+.content--logs-page .page-header-actions .btn {
   height: var(--settings-control-height);
   padding-block: 0;
 }
