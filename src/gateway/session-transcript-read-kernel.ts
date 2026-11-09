@@ -402,7 +402,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     scope: SessionTranscriptReadScope,
     query: SessionTranscriptSummaryQuery,
   ) {
-    const select = await prepareSessionTranscriptSummaryReader(query);
+    const select = await prepareSessionTranscriptSummaryReader(query, access.subagentCoordination);
     const target = await access.resolveTarget(scope);
     return access.readSnapshot(target, (projection) =>
       select((visit) => {

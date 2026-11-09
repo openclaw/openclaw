@@ -7,6 +7,7 @@ import type {
   ChatHistoryDeltaResult as ProtocolChatHistoryDeltaResult,
   ChatHistoryResetResult,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { createConversationSkillLoadCollector } from "../../../../src/chat/conversation-skills.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
@@ -34,6 +35,7 @@ import {
 import type { AgentEventPayload } from "./tool-stream-contract.ts";
 
 export type ChatHistoryResult = {
+  skillsUsed?: ChatHistoryState["skillsUsed"];
   stateRevision?: ChatHistoryState["stateRevision"];
   activity?: ChatHistoryActivity[];
   pendingInputs?: ChatPendingInputsPage;
@@ -258,6 +260,29 @@ export function commitCurrentChatHistorySnapshot(
     agentId,
   });
   const retained = previous?.sessionId === (state.currentSessionId ?? null) ? previous : undefined;
+  const metadata =
+    historyState === undefined ? retained?.historyState : (historyState ?? undefined);
+  const recorded = metadata?.skillsUsed;
+  const collector = createConversationSkillLoadCollector(recorded);
+  for (const message of state.chatMessages) {
+    collector.add(message);
+  }
+  // An authoritative snapshot can replace the leaf before stale live rows are retired.
+  if (historyState === undefined) {
+    for (const message of state.chatToolMessages) {
+      collector.add(message);
+    }
+  }
+  const loads = collector.finish();
+  const nextMetadata =
+    metadata || loads.length
+      ? {
+          ...(metadata ?? { stateRevision: {} }),
+          ...(recorded || loads.length
+            ? { skillsUsed: recorded?.length === loads.length ? recorded : loads }
+            : {}),
+        }
+      : undefined;
   cacheChatSessionSnapshot(
     state.chatMessagesBySession,
     state,
@@ -274,8 +299,7 @@ export function commitCurrentChatHistorySnapshot(
         ? projectChatSessionStateSnapshot(state, sessionInfo, retained?.sessionState)
         : retained?.sessionState,
       progressCard: retained?.progressCard,
-      historyState:
-        historyState === undefined ? retained?.historyState : (historyState ?? undefined),
+      historyState: nextMetadata,
       messages: state.chatMessages,
       pagination: state.chatHistoryPagination,
       sessionId: state.currentSessionId ?? null,

@@ -354,13 +354,15 @@ export async function requestChatSessionSnapshot(
       messages: visibleChatHistoryMessages(result.messages),
       pagination: resolveChatHistoryPagination(result),
       sessionId: historySessionId(result),
-      historyState: result.stateRevision
-        ? {
-            stateRevision: result.stateRevision,
-            pendingInputs: result.pendingInputs,
-            sessionInfo,
-          }
-        : undefined,
+      historyState:
+        result.stateRevision || result.skillsUsed
+          ? {
+              stateRevision: result.stateRevision ?? {},
+              skillsUsed: result.skillsUsed,
+              pendingInputs: result.pendingInputs,
+              sessionInfo,
+            }
+          : undefined,
     },
   };
 }

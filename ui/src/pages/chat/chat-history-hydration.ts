@@ -222,14 +222,22 @@ export async function hydrateChatHistory(
     const previousSessionId = state.currentSessionId ?? null;
     const previousDisplayedLeafEntryId = state.chatDisplayedLeafEntryId;
     const previousHistoryState = readChatHistoryState(state, readChatHistoryCursor(state));
+    // Append-only deltas retain the complete inventory; reset/full reads replace it.
+    const recordedSkills = !isHistoryCursor(response)
+      ? response.skillsUsed
+      : response.kind === "delta"
+        ? previousHistoryState?.skillsUsed
+        : undefined;
     // Preserve wire metadata before the display and roster owners derive their projections.
     const historyState =
-      !(isHistoryCursor(response) && response.kind === "reset") && response.stateRevision
+      !(isHistoryCursor(response) && response.kind === "reset") &&
+      (response.stateRevision || recordedSkills)
         ? {
+            skillsUsed: recordedSkills,
             stateRevision: {
               ...response.stateRevision,
               commands: response.metadata
-                ? response.stateRevision.commands
+                ? response.stateRevision?.commands
                 : previousHistoryState?.stateRevision.commands,
             },
             commands: response.metadata
