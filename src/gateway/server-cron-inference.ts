@@ -4,7 +4,6 @@ import {
   resolveAgentWorkspaceDir,
   tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
-import { resolveSessionAuthProfilePreference } from "../agents/auth-profiles/selection-preference.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { hasSyntheticLocalProviderAuthConfig } from "../agents/model-auth-provider-config.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
@@ -12,11 +11,10 @@ import { isConfiguredKeyAuthSource } from "../agents/provider-model-auth-source-
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
-import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import {
-  inspectCronCliInferenceAccount,
+  inspectCronInferenceAccount,
   prepareCronInferenceDiagnosticSession,
 } from "../cron/inference-diagnostics.js";
 import { resolveCronModelSelection } from "../cron/isolated-agent/model-selection.js";
@@ -57,7 +55,8 @@ async function describeCronInferenceMigration(
       signal,
     });
     if (session.initialSessionEntry?.modelSelectionLocked) {
-      throw new Error("Native runtime owns the session model");
+      // The owning native runtime's locked model is outside host account diagnostics.
+      return undefined;
     }
     signal?.throwIfAborted();
     const selection = await resolveCronModelSelection({
@@ -75,7 +74,7 @@ async function describeCronInferenceMigration(
       throw new Error(selection.error);
     }
     const cfg = selection.cfgWithAgentDefaults;
-    const cli = await inspectCronCliInferenceAccount({
+    const account = await inspectCronInferenceAccount({
       cfg,
       agentId,
       agentDir: selection.owner.agentDir,
@@ -87,8 +86,8 @@ async function describeCronInferenceMigration(
       signal,
     });
     signal?.throwIfAborted();
-    if (cli) {
-      return cli.warning ? `cron: ${cli.warning}` : undefined;
+    if (account.cliExecution) {
+      return account.warning ? `cron: ${account.warning}` : undefined;
     }
     const runtime =
       resolveSessionRuntimeOverrideForProvider({
@@ -112,20 +111,12 @@ async function describeCronInferenceMigration(
     ) {
       return undefined;
     }
-    const preference = resolveSessionAuthProfilePreference({
-      cfg,
-      agentId,
-      provider: selection.provider,
-      modelId: selection.model,
-      configuredProfileId: selection.configuredProfileId,
-      sessionProfileId: session.sessionEntry.authProfileOverride,
-      sessionProfileSource: resolveSessionAuthProfileOverrideSource(session.sessionEntry),
-    });
+    const preference = account.preference;
     const explicitProfileId = preference?.source === "user" ? preference.profileId : undefined;
     signal?.throwIfAborted();
-    const authProfileStore = await loadAuthProfileStoreWithoutExternalProfilesAsync(
-      selection.owner.agentDir,
-    );
+    const authProfileStore =
+      account.store ??
+      (await loadAuthProfileStoreWithoutExternalProfilesAsync(selection.owner.agentDir));
     signal?.throwIfAborted();
     const [attempt] = prepareAgentRuntimeAuth({
       config: cfg,

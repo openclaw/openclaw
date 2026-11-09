@@ -33,7 +33,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import type { CronInferenceBinding } from "../../../cron/inference-binding.js";
 import {
-  inspectCronCliInferenceAccount,
+  inspectCronInferenceAccount,
   prepareCronInferenceDiagnosticSession,
 } from "../../../cron/inference-diagnostics.js";
 import { resolveCronModelSelection } from "../../../cron/isolated-agent/model-selection.js";
@@ -151,7 +151,7 @@ export async function maybeRepairCronInferenceBindings(params: {
         }
         modelRef = `${selected.provider}/${selected.model}`;
         const cfg = captureConfig(selected.owner.config);
-        const cli = await inspectCronCliInferenceAccount({
+        const account = await inspectCronInferenceAccount({
           cfg: selected.cfgWithAgentDefaults,
           agentId,
           agentDir: selected.owner.agentDir,
@@ -161,9 +161,9 @@ export async function maybeRepairCronInferenceBindings(params: {
           configuredProfileId: selected.configuredProfileId,
           session,
         });
-        if (cli) {
-          if (cli.warning) {
-            warnings.push(cli.warning);
+        if (account.cliExecution) {
+          if (account.warning) {
+            warnings.push(account.warning);
           }
           continue;
         }

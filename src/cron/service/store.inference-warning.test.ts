@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import { createTestModelDefinition } from "../../commands/test-runtime-config-helpers.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createCronInferenceMigrationDiagnostic } from "../../gateway/server-cron-inference.js";
@@ -97,6 +98,24 @@ it("inspects stored CLI and selected configured-key sources once without rewriti
       job("key", "remote/model"),
       job("profile-key", "profile-key/model"),
     ];
+    for (const id of ["pinned-key", "locked-native"]) {
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: `agent:main:${id}` },
+        {
+          sessionId: id,
+          updatedAt: 1,
+          authProfileOverride: "anthropic:token",
+          authProfileOverrideSource: "user",
+          ...(id === "locked-native"
+            ? { modelSelectionLocked: true, agentRuntimeOverride: "claude-cli" }
+            : {}),
+        },
+      );
+      jobs.push({
+        ...job(id, id === "pinned-key" ? "remote/model" : model),
+        sessionTarget: `session:agent:main:${id}`,
+      });
+    }
     const storePath = state.statePath("cron", "jobs.json");
     await saveCronJobsStore(storePath, { version: 1, jobs });
     const { cron, clock, warn, describe } = service(storePath);
