@@ -133,7 +133,11 @@ class SidebarNavigationAccessibilityTest {
     composeRule.onNodeWithText("Recent").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
     pinned.performClick()
 
-    val menuCenter = composeRule.onNodeWithTag("sidebar-pages-menu").fetchSemanticsNode().boundsInRoot.center
+    val menuCenter =
+      composeRule
+        .onNodeWithTag("sidebar-pages-menu")
+        .fetchSemanticsNode()
+        .boundsInRoot.center
     // The pencil's left edge must open its menu, not collapse the neighboring Pages row.
     composeRule.onRoot().performTouchInput {
       click(menuCenter - Offset(23.dp.toPx(), 0f))
