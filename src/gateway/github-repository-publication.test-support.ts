@@ -401,6 +401,7 @@ export async function createRepositoryPublicationFixture(
   const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
   const coordinator = createTestGitHubPublicationCoordinator({ placements });
   return {
+    remote,
     git,
     baseCommit,
     baseTree,
