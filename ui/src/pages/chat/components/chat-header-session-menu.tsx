@@ -243,7 +243,7 @@ function ChatHeaderSessionMenuShell(
       panelClass="chat-header-session-menu__panel"
       placement="bottom-end"
       label={label()}
-      triggerClass={[iconButtonClass(), "chat-header-session-menu__trigger"]}
+      triggerClass={[iconButtonClass({ size: 28 }), "chat-header-session-menu__trigger"]}
       trigger={<Icon name="moreHorizontal" />}
       items={items}
       onSelect={(item, event) => handlers?.select(item, event)}

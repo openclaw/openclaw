@@ -1,6 +1,7 @@
 import type { Range, Virtualizer } from "@tanstack/virtual-core";
 import type { MarkdownPrewarmMode } from "../../../components/markdown.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
+import { createTranscriptEndSettlement } from "./chat-transcript-end-anchor.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 
 // A few viewports avoid repeat mounts without making every scroll restyle a
@@ -17,6 +18,9 @@ const INITIAL_PREWARM_ROW_LIMIT = 128;
 export class TranscriptInitialRange {
   pending = true;
   preparingEnd = false;
+  private endWork?: () => (() => void) | void;
+  private readonly queueEndWork = () =>
+    this.endWork && scheduleLayout(this, () => this.endWork?.());
   private tailRows: number;
   private rows: readonly TranscriptRow[] = [];
   private hasIdleDomRows = false;
@@ -134,9 +138,7 @@ export class TranscriptInitialRange {
           this.preparedRowKeys.delete(key);
         }
       }
-      const result = [...indexes];
-      result.sort((left, right) => left - right);
-      return result;
+      return [...indexes].toSorted((left, right) => left - right);
     }
     const count = Math.min(range.count, this.tailRows);
     return Array.from({ length: count }, (_, index) => range.count - count + index);
@@ -331,16 +333,36 @@ export class TranscriptInitialRange {
         this.invalidate();
         // A measurement can mount another row. Let the browser present before
         // its next pass instead of draining every correction in one task.
-        this.afterCommit(() => scheduleLayout(this, () => begin));
+        this.afterCommit(this.queueEndWork);
         return;
       }
-      this.finishEnd();
+      this.endWork = undefined;
       ready();
     };
+    this.endWork = () => begin;
     this.afterCommit(begin);
   };
 
+  // Keep the destination in flow until its real size and native endpoint agree.
+  readonly finishEndWhenSettled = (): void => {
+    if (!this.preparingEnd) {
+      this.preparingEnd = true;
+      this.refresh();
+      this.invalidate();
+    }
+    const endWork = createTranscriptEndSettlement(
+      this.virtualizer(),
+      () => this.canPrepare() && this.endWork === endWork,
+      this.rowsMeasured,
+      this.queueEndWork,
+      () => this.finishEnd(),
+    );
+    this.endWork = endWork;
+    this.queueEndWork();
+  };
+
   finishEnd(): void {
+    this.endWork = undefined;
     cancelLayout(this);
     if (this.preparingEnd) {
       this.preparingEnd = false;
@@ -427,6 +449,10 @@ export class TranscriptInitialRange {
   }
 
   didCommit(): void {
+    // Revealing a parked pane resumes its current end stage without hidden polling.
+    if (this.endWork && this.canPrepare()) {
+      this.queueEndWork();
+    }
     if (this.preparationIsIdle && this.isReaderMoving()) {
       this.cancelPreparation?.();
       this.cancelPreparation = undefined;
@@ -438,12 +464,12 @@ export class TranscriptInitialRange {
   recordReaderMovement(delta: number): void {
     this.idleStep = 1;
     this.idleMeasureStep = 1;
-    const now = performance.now();
     this.scrollSample = {
-      time: now,
+      time: performance.now(),
       distance: Math.abs(delta),
       direction: Math.sign(delta),
     };
+    this.finishEnd();
     this.finish();
     if (!this.hasRetainedRows || this.preparingEnd) {
       return;
@@ -451,7 +477,6 @@ export class TranscriptInitialRange {
     this.refresh();
     clearTimeout(this.forecastTimeout);
     this.forecastTimeout = setTimeout(() => {
-      this.forecastTimeout = undefined;
       this.refresh();
       this.invalidate();
     }, 100);
@@ -552,7 +577,7 @@ export class TranscriptInitialRange {
       }
     }
     const queueNext = () => this.queuePreparation(true);
-    const prepare = (deadline: number, prewarmRequested = false, warmOnlyRequested = false) => {
+    const prepare = (deadline: number, prewarmRequested = false, warmOnly = false) => {
       this.cancelPreparation = undefined;
       this.preparationIsIdle = false;
       if (performance.now() >= deadline) {
@@ -568,7 +593,7 @@ export class TranscriptInitialRange {
         !this.canPrepare() ||
         !range ||
         !virtualizer.scrollElement ||
-        (this.preparingRowKey && !warmOnlyRequested)
+        (this.preparingRowKey && !warmOnly)
       ) {
         return;
       }
@@ -584,9 +609,7 @@ export class TranscriptInitialRange {
       const moving = !inward && this.isReaderMoving();
       // Large steps need the arriving viewport, including its interior rows.
       // Retained rows already forecast their DOM; this queue warms ordinary Markdown.
-      const viewportStep = moving && this.scrollSample.distance >= viewport;
-      const prewarm = prewarmRequested || viewportStep;
-      const warmOnly = warmOnlyRequested;
+      const prewarm = prewarmRequested || (moving && this.scrollSample.distance >= viewport);
       // HTML warming is synchronous: predict one observed scroll step and walk
       // into that viewport, rather than beyond its leading edge.
       const distance = moving ? this.scrollSample.distance : 0;
@@ -767,7 +790,7 @@ export class TranscriptInitialRange {
 
   disconnect(): void {
     clearTimeout(this.forecastTimeout);
-    this.forecastTimeout = undefined;
+    this.endWork = undefined;
     cancelLayout(this);
     this.cancelPreparation?.();
     this.cancelPreparation = undefined;

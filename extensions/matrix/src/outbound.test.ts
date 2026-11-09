@@ -81,14 +81,12 @@ describe("matrixOutbound cfg threading", () => {
     mocks.sendPollMatrix.mockResolvedValue({ eventId: "$poll", roomId: "!room:example" });
   });
 
-  it("makes progress for fractional BMP and astral limits", () => {
-    const chunker = matrixOutbound.chunker;
-    if (!chunker) {
-      throw new Error("matrixOutbound.chunker missing");
-    }
-
+  it("makes progress for fractional limits and keeps a split fence balanced", () => {
+    const chunker = matrixOutbound.chunker!;
     expect(chunker("ABCD", 0.5)).toEqual(["A", "B", "C", "D"]);
     expect(chunker("😀😀", 1.5)).toEqual(["😀", "😀"]);
+    const fenced = "```py\n  a\n  b\n```\n\nend";
+    expect(chunker(fenced, 14)).toEqual(["```py\n  a\n```", "```py\n  b\n```", "end"]);
     expect(chunkTextForOutbound("ABCD", 0.5)).toEqual(["A", "B", "C", "D"]);
     expect(chunkTextForOutbound("😀😀", 1.5)).toEqual(["😀", "😀"]);
   });
