@@ -96,7 +96,9 @@ describe("before_agent_finalize on the settled-turn finalization answer", () => 
 
     expect(finalized.finalizationOutcome).toBe("answered");
     expect(hookMocks.runBeforeAgentFinalize).toHaveBeenCalledTimes(1);
-    const [event, ctx] = hookMocks.runBeforeAgentFinalize.mock.calls[0];
+    const call = hookMocks.runBeforeAgentFinalize.mock.calls[0];
+    assert(call, "Expected a before_agent_finalize call");
+    const [event, ctx] = call;
     expect(event).toMatchObject({
       runId: "run-settled",
       lastAssistantMessage: "Built: the plugin is ready.",
