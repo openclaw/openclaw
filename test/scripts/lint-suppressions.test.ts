@@ -206,6 +206,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/command-capture-pool-retention.ts|typescript/unbound-method|2",
         // The diagnostics probe restores Session.post and invokes it with its live receiver.
         "scripts/perf/diagnostic-profile-measure.ts|typescript/unbound-method|1",
+        // The heap probe forwards saved SQLite methods with their original native receivers.
+        "scripts/perf/doctor-transcript-heap-probe.cjs|typescript/unbound-method|3",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/gateway-runtime-exit-listeners-preload.mjs|unicorn/require-post-message-target-origin|1",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
@@ -253,6 +255,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/tools-catalog-copy-measure.ts|no-extend-native|2",
         // The SQLite probe restores both native methods and forwards their original receivers.
         "scripts/perf/trajectory-runtime-append.ts|typescript/unbound-method|2",
+        // The untimed SQL census preserves native statement receivers and restores all methods.
+        "scripts/perf/transcript-maintenance-measure.worker.ts|typescript/unbound-method|1",
         // The browser probe forwards IndexedDB writes with each store receiver and restores both methods.
         "scripts/perf/ui-streaming-render-measure.ts|typescript/unbound-method|2",
         // The pager probe forwards native prepare with its original receiver and restores it.

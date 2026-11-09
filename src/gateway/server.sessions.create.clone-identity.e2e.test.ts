@@ -9,6 +9,7 @@ import { requireGit } from "../agents/worktrees/git.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import * as gitTransport from "../infra/git-object-store-transport.js";
 import * as processExec from "../process/exec.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { getRpcSource } from "../sessions/session-controller.rpc-sources.js";
@@ -152,17 +153,24 @@ test.each(
         return result;
       });
     } else {
-      const mkdtemp = fs.mkdtemp;
-      vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
-        const result = await mkdtemp(prefix, options);
-        if (prefix.includes("openclaw-project-fetch-")) {
-          await revoke();
-        }
-        return result;
-      });
+      const transport = gitTransport.withGitObjectStoreTransport;
+      vi.spyOn(gitTransport, "withGitObjectStoreTransport").mockImplementation(
+        (cwd, command, run) =>
+          transport(cwd, command, async (staging, objects) => {
+            await revoke();
+            return await run(staging, objects);
+          }),
+      );
     }
     const created = await create(operation === "refresh");
-    expect(reachedBoundary).toBe(true);
+    expect(
+      reachedBoundary,
+      JSON.stringify({
+        errors: chatErrors(),
+        pending: created.entry?.pendingWorktree,
+        projectId: created.entry?.projectId,
+      }),
+    ).toBe(true);
     if (identity === "allowed") {
       expect(git.requests.length).toBeGreaterThan(0);
       expect(git.requests.every((authorization) => authorization === AUTHORIZATION)).toBe(true);

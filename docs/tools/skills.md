@@ -205,8 +205,13 @@ another. Enablement does not bypass agent allowlists, required binaries,
 operating-system restrictions, or other prerequisites.
 
 A managed bundle is limited to 256 files, 1 MiB per file, and 8 MiB total.
-Worker resource delivery also has an 8 MiB aggregate limit; narrow the session
-selection if its complete bundles exceed that limit. Published revisions are
+Worker resource delivery also has an 8 MiB aggregate limit. If the selected
+bundles exceed it, delivery omits supporting files and adds a notice to the
+delivered instructions. Complete instructions are retained when they fit;
+otherwise that skill receives an explicit unavailability notice, never partial
+instructions. The turn can continue with available tools. The notice explains
+how to request a missing resource or narrow the selection. Gateway logs identify
+each reduced skill, its size, and its largest file. Published revisions are
 retained, including revisions still selected by older sessions.
 
 ZIP imports allow up to 16 unfinished uploads per Gateway profile and 32
@@ -470,6 +475,10 @@ When the user asks to generate an image, use the `image_generate` tool...
   under [Gating](#gating) works. Use `{baseDir}` in the body to reference the
   skill folder path.
 </Note>
+
+The bundled skill-creator Python validator also works without PyYAML. In that
+mode, trailing comments on plain indented description lines are ignored; hashes
+inside quoted or block-scalar content remain literal.
 
 ### Optional frontmatter keys
 
@@ -948,6 +957,12 @@ Concurrent first searches share one build; cancelling a waiter does not cancel
 its owner. Later searches reuse the completed index for that prepared catalog
 and still check current run authority. Names and descriptions have twice the lexical
 weight of body text; exact names rank first.
+Fresh runs share metadata preparation from compact published skill revisions,
+without retaining another copy of every description in their lookup keys.
+Up to four catalog selections retain their current content-only indexes between
+runs, within a shared 64 MiB conservative byte budget. Oversized selections remain
+available to their active run but are not retained for later runs. Readers and permission checks remain run-specific. Local file bodies still
+pass file admission on each fresh run before their confirmed revisions reuse an index.
 
 Body indexing reads at most 1,024 skills in name order, four at a time. Each body
 contributes at most 16 KiB, reduced equally across the selected skills

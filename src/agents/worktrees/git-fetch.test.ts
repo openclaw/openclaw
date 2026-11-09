@@ -112,7 +112,12 @@ it.each(["dry-run", "option value"])("does not repair origin for %s", async (mod
   expect((await executeGitCommand(clone, ["cat-file", "-t", tip], { env })).code).not.toBe(0);
 });
 
-it.each(["worktree", "renamed project branch", "pinned project commit"] as const)(
+it.each([
+  "worktree",
+  "missing cached default",
+  "renamed project branch",
+  "pinned project commit",
+] as const)(
   "repairs commit-graph-only tips through %s without removing local branches or detached HEADs",
   async (entry) => {
     if (entry === "renamed project branch") {
@@ -120,7 +125,10 @@ it.each(["worktree", "renamed project branch", "pinned project commit"] as const
       await git(source, ["branch", "-D", "keep"]);
     }
     expectBrokenFetch(await executeGitCommand(clone, fetchArgs, { env }));
-    if (entry === "worktree") {
+    if (entry === "missing cached default") {
+      await fs.writeFile(path.join(clone, ".git/refs/remotes/origin/main"), `${tip}\n`);
+    }
+    if (entry === "worktree" || entry === "missing cached default") {
       expect(await resolveWorktreeBase(clone)).toMatchObject({ commit: tip, fetchSucceeded: true });
     } else if (entry === "renamed project branch") {
       await refresh();
@@ -132,19 +140,28 @@ it.each(["worktree", "renamed project branch", "pinned project commit"] as const
     expect(await ref(clone, "refs/heads/main")).toBe(base);
     expect(await ref(clone, "refs/heads/retained")).toBe(tip);
     expect(await ref(linked, "HEAD")).toBe(tip);
+    // Isolated default refresh need not inspect or prune unrelated broken tips.
+    expect(await trackingRefs(clone)).toBe(
+      entry === "worktree" || entry === "missing cached default"
+        ? "refs/remotes/origin/retired"
+        : "",
+    );
+    expect((await fetch("--prune")).code).toBe(0);
     expect(await trackingRefs(clone)).toBe("");
-    expect((await executeGitCommand(clone, fetchArgs, { env })).code).toBe(0);
   },
 );
 
-it("preserves custom tracking mappings while recovering missing tips", async () => {
-  await config(source, "uploadpack.allowAnySHA1InWant", "true");
-  await git(source, ["update-ref", "-d", "refs/heads/main"]);
-  await config(clone, "remote.origin.fetch", "+refs/heads/keep:refs/remotes/origin/main");
-  expect((await fetch()).code).toBe(0);
-  expect(await ref(clone, "refs/remotes/origin/main")).toBe(tip);
-  expect(await trackingRefs(clone)).toBe("refs/remotes/origin/retired");
-});
+it.each(["default", "negotiation tip"])(
+  "preserves custom tracking mappings with %s while recovering missing tips",
+  async (mode) => {
+    await config(source, "uploadpack.allowAnySHA1InWant", "true");
+    await git(source, ["update-ref", "-d", "refs/heads/main"]);
+    await config(clone, "remote.origin.fetch", "+refs/heads/keep:refs/remotes/origin/main");
+    expect((await fetch(...(mode === "default" ? [] : ["--negotiation-tip=HEAD"]))).code).toBe(0);
+    expect(await ref(clone, "refs/remotes/origin/main")).toBe(tip);
+    expect(await trackingRefs(clone)).toBe("refs/remotes/origin/retired");
+  },
+);
 
 it("repairs physical tips hidden by a replacement during project refresh", async () => {
   const replacement = `refs/replace/${tip}`;

@@ -4,7 +4,7 @@ import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js"
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { MemorySearchRequest } from "../../plugins/memory-provider-types.js";
+import type { MemorySearchRequest } from "../../plugins/memory-provider-runtime-types.js";
 import { getActiveMemoryProviderCore } from "../../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { hasMultipleResidentSessionSharingIdentities } from "../../state/user-profile-list.js";

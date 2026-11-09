@@ -1,6 +1,6 @@
 // Install the shared GitHub fixture before loading the registered action owners.
 // oxfmt-ignore
-import { interruptCanonicalWorkspaceAcceptance, bindFixtureRuntime, fixture, mocks } from "./github-pr-workspace-preparation.test-support.js";
+import { interruptCanonicalWorkspaceAcceptance, bindFixtureRuntime, fixture, mocks, observeManagedLayoutCaptures } from "./github-pr-workspace-preparation.test-support.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -457,6 +457,7 @@ describe("existing PR preparation through the registered agent action", () => {
       const create = vi
         .spyOn(sandboxBackend, "createSandboxBackend")
         .mockResolvedValue(f.sandbox.backend!);
+      using captures = observeManagedLayoutCaptures();
       let sandbox: Awaited<ReturnType<typeof resolveSandboxContext>> = null;
       try {
         sandbox = await resolveSandboxContext({
@@ -470,6 +471,7 @@ describe("existing PR preparation through the registered agent action", () => {
           },
         });
         expect(sandbox?.workspaceSource).toBe("managed-worktree");
+        expect(captures.observations).toEqual(["scan:canonical"]);
         if (contents === "authored directory") {
           await fs.mkdir(path.join(f.projection, "saved-empty"));
           await expect(f.invoke({}, sandbox)).rejects.toThrow(

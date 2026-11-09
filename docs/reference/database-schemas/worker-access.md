@@ -204,6 +204,13 @@ early awaited configuration and plugin metadata reads. Standalone CLI inspection
 keeps its one-shot reader retirement; failed reads and native cleanup still retire
 their workers. The existing two-reader limit and database authority checks remain.
 
+In the Gateway, authenticated Control UI requests for `themes.list`, `users.prefs.get`, and
+`agents.list` can use reserved shared-state reader queue headroom: two tasks per
+reader within the existing task limit. Other requests refuse admission before
+consuming that headroom. The request envelope owns this classification and drops
+it when the handler settles; agent and synthetic requests cannot inherit it.
+The reservation does not add workers, bypass byte limits, or preempt running reads.
+
 Agent creation and workspace mutations keep their recovery-hold recheck inside
 the existing synchronous engine admission; filesystem effects remain outside it.
 PostgreSQL cron-owner and schema inspection use the existing cron read worker,
@@ -1029,6 +1036,10 @@ facts; an unknown receipt falls back to the durable marker. Each new transcript
 read snapshot selects the indexed cold marker before consuming transcript rows.
 Repeated reads inside that snapshot reuse its local fact; a committed-write receipt
 captured before the snapshot cannot replace that initial marker read.
+A selected row with neither an inline nor compressed body is a cold navigation
+row and reports `TRANSCRIPT_COLD`. Malformed non-null compressed bodies report
+`TRANSCRIPT_CORRUPT` with the decode failure and recovery guidance. Pruning deletes
+rows; it does not leave bodyless tombstones.
 
 The session actor also publishes compact transcript projection metadata with its
 committed postimage. History requests carry that receipt to the existing worker,
@@ -6995,18 +7006,19 @@ the existing commit receipts. Manager ordering, live write authority, and commit
 view adoption remain unchanged. Released synchronous persistence methods retain
 their separate native adapter.
 
-Transcript hydration residency, rewrite preparation, and publication copy mutable view containers while
-retaining already-owned string values, so old tool results and image payloads do
-not require another full byte copy on the main thread. Prepared views remain
-independently mutable. Opaque structured-cloneable SDK data retains native snapshot
-semantics. Worker write ordering, atomic publication, and stored bytes are unchanged.
+The hydration owner freezes decoded transcript snapshots once, including navigation
+maps. Actor seeding, retained exact reads, and identical in-flight readers share the
+same snapshot; bounded selections own their navigation containers and share frozen
+payloads. Public SessionManager getters detach only the hydrated entries they expose, and
+extension context hooks retain writable copies. Rewrite preparation, publication,
+and rollback keep their separate writable snapshots. Opaque structured-cloneable
+SDK data retains native snapshot semantics. Worker ordering and stored bytes are unchanged.
 
-Initial model-context snapshots also reuse equal string values from the loaded
-SessionManager. The context reader still owns selection and admission; its projected
-fields, property order, and mutable containers remain authoritative. Resident SDK
-edits and accessors cannot change the returned context, and frozen resident payloads
-do not make the initial model view immutable. Fresh reader-owned message containers
-are reused in place; an admitted cohort still detaches the manager's mutable view.
+Initial model context owns its message array while sharing immutable transcript
+payloads. Internal cohort preparation reads the shared branch without invoking
+public mutable getters. Mutable SDK entries detach before internal publication,
+so later local edits cannot change the prepared context. Selection, admission,
+projected fields, property order, and prompt bytes remain under their existing owners.
 
 Append receipts read active identity, projection readiness, and the latest sequence
 in one transaction-local query. A clean latest message shares that result with

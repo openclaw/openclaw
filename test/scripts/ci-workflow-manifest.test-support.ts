@@ -315,6 +315,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
     if (options.changedCoreTestSupport) {
       copyFixtures([
         "scripts/changed-lanes.mts",
+        "scripts/lib/windows-test-targets.mts",
         "scripts/lib/changed-path-facts.mjs",
         "scripts/lib/release-changelog.mjs",
         "scripts/lib/arg-utils.mts",
@@ -504,6 +505,10 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       );
     }
     if (options.bundledPlanner) {
+      writeScript(
+        "vitest-runtime-selection.mts",
+        reexport("resolveCiVitestWorkerPreset", "scripts/lib/vitest-runtime-selection.mts"),
+      );
       writeScript(
         "ci-docker-seed-plan.mts",
         options.dockerSeedPlannerSource ??
