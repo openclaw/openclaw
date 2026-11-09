@@ -21,6 +21,7 @@ import { SessionWorkStartError } from "../../config/sessions/session-work-start.
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
 import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { execRequestAbortSignal } from "../../infra/exec-request-context.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.types.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
@@ -349,7 +350,7 @@ function enqueueSessionEventAttempt(
       const cause = failed ? result.cause : undefined;
       const terminalError = cause ?? failure;
       if (!failure && cause !== undefined) {
-        failure = cause instanceof Error ? cause : String(cause);
+        failure = cause instanceof Error ? cause : formatErrorMessage(cause);
       }
       failure ??= genericFailure;
       // Frozen supersession records cancellation without aborting its signal.
