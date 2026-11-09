@@ -149,8 +149,9 @@ If the root stops matching, kubelet can walk the volume again. CSI drivers that
 advertise `VOLUME_MOUNT_GROUP` handle permissions themselves, so this policy
 does not apply to them. See [Kubernetes volume permission policy](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#configure-volume-permission-and-ownership-change-policy-for-pods).
 
-The Gateway restores the private modes of the stores this installation owns
-before Doctor's recovery capture and before credential admission, so a remount
+Gateway startup and admitted Doctor repair restore the private modes of the
+stores this installation owns before credential admission and Doctor's recovery
+capture, so a remount
 that widens them no longer blocks startup. The restore covers the client
 credential store, the daemon runtime pin store, their SQLite sidecars, and the
 sibling `<stateDir>.update-captures` directory.
@@ -168,11 +169,6 @@ sets those. Every downstream admission check stays as strict as before:
 membership in the volume's group still does not grant private credential
 authority.
 
-Validated on OpenShift 4.21.16 (Kubernetes v1.34.7, RHCOS 9.6) with the
-`ebs.csi.aws.com` driver (`gp3`, `fsGroupPolicy: File`) and
-`fsGroupChangePolicy: Always`, against an existing PVC whose directories kubelet
-had left at mode `2770` and whose store files it had left at `0660`.
-
 Two cases still need the storage owner.
 
 A kubelet-created mount point stays owned by another UID, and `fsGroup` leaves it
@@ -185,10 +181,10 @@ provisioned with the Gateway's ownership before startup, as described below. The
 Gateway still starts and Doctor still completes; only the pre-repair recovery copy
 is unavailable.
 
-A state volume shared between workloads by group membership is not a supported
-layout for OpenClaw state: the Gateway requires its stores to be private to its
-own UID, so group sharing of the state volume has no supported configuration. Use
-a volume with a single writer.
+Sharing the same private state stores between workloads through group membership
+is not supported: the stores must remain private to their Gateway UID. A
+group-accessible PVC root can still contain separate UID-owned private subpaths
+for different workloads; sharing the PVC does not grant access to those stores.
 
 If startup still reports `Client credential directory is unsafe`, keep the
 Gateway stopped and have the storage owner inspect the state directory, its

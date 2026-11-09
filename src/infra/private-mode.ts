@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { chmodSync, fchmodSync, fstatSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { isErrno } from "./errno.js";
 
 const CHMOD_UNSUPPORTED_CODES = new Set(["ENOTSUP", "EOPNOTSUPP", "EINVAL"]);
 const PRIVATE_PROBE_FILE_MODE = 0o600;
@@ -27,7 +28,7 @@ function filesystemRejectsChmod(target: string): boolean {
     chmodSync(probePath, PRIVATE_PROBE_FILE_MODE);
     return false;
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
+    return isErrno(err) && err.code === "EPERM";
   } finally {
     try {
       unlinkSync(probePath);
@@ -72,7 +73,7 @@ export function applyPrivateModeSync(
     if (
       !canIgnorePrivateChmodError(
         target,
-        (err as NodeJS.ErrnoException).code,
+        isErrno(err) ? err.code : undefined,
         hasRestrictivePermissions(target),
       )
     ) {
@@ -107,7 +108,7 @@ export function applyPrivateModeToFdSync(
     if (
       !canIgnorePrivateChmodError(
         target,
-        (err as NodeJS.ErrnoException).code,
+        isErrno(err) ? err.code : undefined,
         (fstatSync(fd).mode & 0o077) === 0,
       )
     ) {

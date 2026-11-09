@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -45,6 +46,32 @@ function installation() {
 }
 
 describe.runIf(process.platform !== "win32")("restorePrivateStateStoreModes", () => {
+  it("skips a writerless FIFO sidecar without blocking startup", () => {
+    const { env, credentials } = installation();
+    const sidecar = credentials + "-wal";
+    expect(spawnSync("mkfifo", [sidecar], { timeout: 5_000 }).status).toBe(0);
+    const before = fs.lstatSync(sidecar, { bigint: true });
+    // Bound the synchronous open in a child: a regression must not strand the worker.
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "--input-type=module",
+        "-e",
+        'import { restorePrivateStateStoreModes } from "./src/state/openclaw-state-db-permissions.ts"; restorePrivateStateStoreModes({ OPENCLAW_STATE_DIR: process.argv[1] });',
+        env.OPENCLAW_STATE_DIR,
+      ],
+      { encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    const after = fs.lstatSync(sidecar, { bigint: true });
+    expect(after.isFIFO()).toBe(true);
+    expect(after.mode).toBe(before.mode);
+    expect(after.ctimeNs).toBe(before.ctimeNs);
+  }, 15_000);
+
   it("restores private modes an fsGroup remount broadened and preserves contents", () => {
     const { env, stateDir, credentials, runtimePins, captures } = installation();
     // A remount re-applies group permissions to every directory and file, and

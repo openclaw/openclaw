@@ -94,7 +94,9 @@ function bestEffortFchmodSync(fd: number, target: string, mode: number): void {
 /** Opens an enumerated store path, refusing a symlink standing in for it. */
 function openStorePathSync(target: string, directory: boolean): number | undefined {
   const flags =
-    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | (directory ? fsConstants.O_DIRECTORY : 0);
+    fsConstants.O_RDONLY |
+    fsConstants.O_NOFOLLOW |
+    (directory ? fsConstants.O_DIRECTORY : fsConstants.O_NONBLOCK);
   try {
     return openSync(target, flags);
   } catch (error) {
