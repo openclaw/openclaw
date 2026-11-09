@@ -618,15 +618,14 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   scrollToEnd({ source = "manual", behavior = "auto" }: ChatScrollToEndOptions = {}): boolean {
     // Hydration/resize follow cannot replace a saved reader. A new latest
     // command intentionally supersedes restoration.
-    const allowed =
-      source !== "auto" || (!this.offsetState.pendingScrollOffset && this.canAutoFollow());
-    // An accepted end command may still be measuring its destination.
-    if (!allowed || (source === "auto" && this.initialRange.preparingEnd)) {
-      return allowed;
-    }
     if (source !== "auto") {
       // End-follow must not let speculative history measurements move its target.
       this.initialRange.finish(true);
+    } else if (this.offsetState.pendingScrollOffset || !this.canAutoFollow()) {
+      return false;
+    } else if (this.initialRange.preparingEnd && this.offsetState.scrollCommand?.target === "end") {
+      // Preparation and native settling already own this destination.
+      return true;
     }
     scrollTranscriptToEnd(
       this.offsetState,
@@ -641,12 +640,13 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   }
 
   cancelScroll(preserveEnd = false): void {
-    this.initialRange.finishEnd();
     // Completing a smooth journey can reveal skipped row sizes. Retain its
     // resting edge before that measurement moves the end; reader input clears it.
     if (preserveEnd) {
+      this.initialRange.finishEndWhenSettled();
       this.endAnchor.capture(this.scrollElement);
     } else {
+      this.initialRange.finishEnd();
       this.endAnchor.clear();
       this.virtualizer.cancelScroll();
     }

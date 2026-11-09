@@ -83,6 +83,12 @@ Control UI frame can load them.
   with verified Cloudflare Access profiles and `gateway.roles`. The proxy must use
   `cf-access-authenticated-user-email` and require `cf-access-jwt-assertion`.
   Missing, deleted, merged, and shared-owner profiles are rejected.
+- `{ kind: "delegated-person", profileId, admission }` retains the approving
+  person's original sign-in admission in addition to the same profile and role
+  checks. Obtain it with `captureGatewayIngressPersonPrincipal(client)` from the
+  admitted Gateway caller and persist the returned principal verbatim. The
+  `admission` string is opaque, local authority metadata; do not construct it or
+  send it to a relay. Older hosts reject this principal kind.
 
 Unsupported authentication combinations return `unsupported-auth` with
 configuration guidance. A Team grant must never use the shared owner or the
@@ -122,6 +128,15 @@ prove current authority.
 Profile removal, identity rebinding or merging, role changes, and access-policy
 revocation fence existing authority. Reopen under current authority after the
 plugin verifies that its grant is still valid; closed operations do not revive.
+For approvals made through OpenClaw ID, the original member device listing,
+account, and role must remain current. Membership or approving-key removal,
+role changes, and disabling OpenClaw ID retire active bindings; removal and
+re-adding the same member or key does not restore the old approval. This also
+applies after restart and when an app approves another app. Independent approvals
+through other sign-in paths and local role assignments keep their own lifetimes.
+Existing approvals that did not record their sign-in source need revocation and
+reapproval to acquire this binding; core does not infer an origin from a profile.
+
 This does not continuously reauthenticate against Cloudflare: removing access
 only at the external identity provider does not itself revoke the plugin grant.
 

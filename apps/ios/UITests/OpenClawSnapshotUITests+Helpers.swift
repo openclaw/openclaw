@@ -346,6 +346,7 @@ extension OpenClawSnapshotUITests {
             initialTab: initialTab,
             initialDestination: initialDestination)
         XCTAssertTrue(app.staticTexts["You're connected"].waitForExistence(timeout: 45))
+        print("IOS_RELEASE_CHECKPOINT pairing-connected")
         app.buttons["Go to Chat"].tap()
         return app
     }
@@ -394,22 +395,31 @@ extension OpenClawSnapshotUITests {
             "--openclaw-initial-destination",
             initialDestination,
         ]
+        // Temporary pairing incident checkpoints; never include setup credentials or UI contents.
+        print("IOS_RELEASE_CHECKPOINT pairing-launching")
         app.launch()
         self.app = app
+        print("IOS_RELEASE_CHECKPOINT pairing-launched")
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
         app.tap()
+        print("IOS_RELEASE_CHECKPOINT pairing-continued")
         XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 8))
         app.buttons["Connect Manually"].tap()
+        print("IOS_RELEASE_CHECKPOINT pairing-manual")
 
         let setupCodeField = app.textFields["Enter setup code"]
         XCTAssertTrue(setupCodeField.waitForExistence(timeout: 5))
+        print("IOS_RELEASE_CHECKPOINT pairing-code-field")
         setupCodeField.tap()
         setupCodeField.press(forDuration: 1)
         XCTAssertTrue(app.menuItems["Paste"].waitForExistence(timeout: 3))
+        print("IOS_RELEASE_CHECKPOINT pairing-paste-menu")
         app.menuItems["Paste"].tap()
+        print("IOS_RELEASE_CHECKPOINT pairing-pasted")
         app.buttons["Apply"].tap()
+        print("IOS_RELEASE_CHECKPOINT pairing-applied")
         return app
     }
 
