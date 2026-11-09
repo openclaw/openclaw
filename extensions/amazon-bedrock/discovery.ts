@@ -97,6 +97,8 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "qwen.qwen3-coder-30b-a3b-v1:0": 256_000,
   "qwen.qwen3-32b-v1:0": 128_000,
   "qwen.qwen3-vl-235b-a22b": 128_000,
+  // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-6.html
+  "xai.grok-4.6": 500_000,
 };
 
 function resolveKnownContextWindow(modelId: string): number | undefined {
@@ -147,6 +149,16 @@ type BedrockDiscoveryCacheEntry = {
 };
 
 const discoveryCache = new Map<string, BedrockDiscoveryCacheEntry>();
+
+/**
+ * Bare foundation-model IDs only work through Converse when Bedrock reports
+ * ON_DEMAND. Profile-only and provisioned-only IDs fail at request time, so
+ * discovery lists their inference profiles instead. Missing metadata stays
+ * selectable because unknown does not mean non-invocable.
+ */
+function supportsOnDemandInference(inferenceTypes: readonly string[] | undefined): boolean {
+  return !inferenceTypes?.length || inferenceTypes.includes("ON_DEMAND");
+}
 
 /**
  * All pages must succeed before discovery can cache a complete catalog.
@@ -275,10 +287,15 @@ export async function discoverBedrockModels(params: {
           maxTokens: isClaude5BedrockModel({ id }) ? 128_000 : defaultMaxTokens,
           ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
         };
-        discovered.push(def);
         const normalizedId = normalizeLowercaseStringOrEmpty(def.id);
-        seenIds.add(normalizedId);
+        // Profiles inherit capabilities from every backing model, including
+        // ones that only Bedrock profiles or provisioned throughput can invoke.
         foundationModels.set(normalizedId, def);
+        if (!supportsOnDemandInference(summary.inferenceTypesSupported)) {
+          continue;
+        }
+        discovered.push(def);
+        seenIds.add(normalizedId);
       }
 
       for (const profile of profileSummaries) {

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-types.js";
+import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-catalog.types.js";
 import * as conversationToolPolicyPipeline from "../../agents/conversation-tool-policy-pipeline.js";
 import * as toolSchemaRuntime from "../../agents/embedded-agent-runner/tool-schema-runtime.js";
 import type { SandboxToolPolicy } from "../../agents/sandbox/types.js";

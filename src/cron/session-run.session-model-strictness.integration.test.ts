@@ -186,6 +186,8 @@ describe("stored session model selections in scheduled session turns", () => {
   const policyCases = [
     ["unrelated", "ok", 1, 1, 0],
     ["logging-only", "ok", 1, 1, 0],
+    ["unrelated-mcp", "ok", 1, 1, 0],
+    ["unrelated-mcp-hook", "ok", 1, 1, 1],
     ["unrelated-model-provider", "ok", 1, 1, 0],
     ["provider-setup-sequence", "ok", 1, 1, 0],
     ["selected-model-denied", "error", 0, 1, 0],
@@ -259,7 +261,7 @@ describe("stored session model selections in scheduled session turns", () => {
           vi.spyOn(hooks, "runBeforeAgentReply").mockImplementation(effect);
         }
       }
-      if (params.reload === "bootstrap-effect" || params.reload?.endsWith("auth-hook")) {
+      if (params.reload === "bootstrap-effect" || params.reload?.endsWith("-hook")) {
         registerInternalHook("agent:bootstrap", effect);
       }
       admission.beforeTargetPreparation = async (assertCurrent) => {
@@ -413,6 +415,11 @@ describe("stored session model selections in scheduled session turns", () => {
       const hotReloadConfigs: OpenClawConfig[] = [];
       if (params.reload === "logging-only") {
         hotReloadConfigs.push({ ...cfg, logging: { level: "debug" } });
+      } else if (params.reload?.startsWith("unrelated-mcp")) {
+        hotReloadConfigs.push({
+          ...cfg,
+          mcp: { servers: { sentry: { command: "unused-synthetic-server", enabled: false } } },
+        });
       } else if (params.reload === "unrelated-model-provider") {
         hotReloadConfigs.push({
           ...cfg,
@@ -723,7 +730,11 @@ describe("stored session model selections in scheduled session turns", () => {
       expect(hookEffects).toBe(effects ? "effect\n" : undefined);
       if (reload === "provider-setup-sequence" || reload === "selected-model-denied") {
         expect(publications).toBe(4);
-      } else if (reload === "logging-only" || reload === "unrelated-model-provider") {
+      } else if (
+        reload === "logging-only" ||
+        reload === "unrelated-model-provider" ||
+        reload.startsWith("unrelated-mcp")
+      ) {
         expect(publications).toBe(1);
       }
       expect(recoveryRequests).toBe(0);

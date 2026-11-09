@@ -77,6 +77,14 @@ function buildApprovedPairedDevice(params: {
   approvedVia: PairedDeviceApprovalKind;
   accessMetadata?: DevicePairingAccessMetadata;
 }): PairedDevice {
+  // A replaced installation does not inherit the old node key's role provenance.
+  if (
+    params.existing &&
+    params.existing.publicKey !== params.pending.publicKey &&
+    params.tokens.node
+  ) {
+    delete params.tokens.node.approval;
+  }
   return {
     deviceId: params.pending.deviceId,
     publicKey: params.pending.publicKey,

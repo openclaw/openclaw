@@ -14,8 +14,8 @@ enum PhotoLibraryAccess {
 }
 
 final class PhotoLibraryService: PhotosServicing {
-    // Keep the combined base64 payload within one Gateway WebSocket frame.
-    private static let maxTotalBase64Chars = 340 * 1024
+    /// Twenty photos stay below 6 MiB of base64, leaving room for the RPC envelope
+    /// within the native 16 MiB and Gateway 25 MiB WebSocket limits.
     private static let maxPerPhotoBase64Chars = 300 * 1024
 
     func latest(params: OpenClawPhotosLatestParams) async throws -> OpenClawPhotosLatestPayload {
@@ -33,23 +33,17 @@ final class PhotoLibraryService: PhotosServicing {
         let assets = PHAsset.fetchAssets(with: .image, options: fetchOptions)
 
         var results: [OpenClawPhotoPayload] = []
-        var remainingBudget = Self.maxTotalBase64Chars
         let maxWidth = params.maxWidth.flatMap { $0 > 0 ? $0 : nil } ?? 1600
         let quality = params.quality.map { max(0.1, min(1.0, $0)) } ?? 0.85
         let formatter = ISO8601DateFormatter()
 
-        assets.enumerateObjects { asset, _, stop in
+        assets.enumerateObjects { asset, _, _ in
             if let payload = try? Self.renderAsset(
                 asset,
                 maxWidth: maxWidth,
                 quality: quality,
                 formatter: formatter)
             {
-                if payload.base64.count > remainingBudget {
-                    stop.pointee = true
-                    return
-                }
-                remainingBudget -= payload.base64.count
                 results.append(payload)
             }
         }

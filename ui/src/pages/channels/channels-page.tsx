@@ -30,9 +30,10 @@ import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { showToast } from "../../lib/toast.ts";
 import {
   buildChannelConfigPatch,
-  channelConfigEditBase,
   dropConflictingChannelConfigEdits,
+  editChannelField,
   findChannelConfigConflicts,
+  keptChannelEdits,
   rebaseChannelConfigEdits,
 } from "./channel-config-draft.ts";
 import { createChannelPluginPresentation } from "./plugin-presentation-loader.ts";
@@ -150,7 +151,7 @@ export function ChannelsPage() {
       yield Promise.race([pending, retired]);
     } catch (error) {
       if (isCurrent(view)) {
-        showToast({ message: formatUiError(error) });
+        showToast({ severity: "error", message: formatUiError(error) });
       }
     }
   });
@@ -309,7 +310,8 @@ export function ChannelsPage() {
         const built = buildChannelConfigPatch({
           base: resolveChannelConfigValue(snapshot, channelId),
           channelId,
-          edits,
+          // A reference that arrived while editing is never written over, nor a secret emptied.
+          edits: keptChannelEdits(config, channelId, snapshot, edits),
           schema: config.configSchema,
         });
         return {
@@ -390,7 +392,7 @@ export function ChannelsPage() {
       buildChannelConfigPatch({
         base: resolveChannelConfigValue(saved, channelId),
         channelId,
-        edits,
+        edits: keptChannelEdits(config, channelId, saved, edits),
         schema: config.configSchema,
       }) === null;
     setSaveFeedback(landed ? null : { channelId, kind: "notSaved" });
@@ -444,11 +446,10 @@ export function ChannelsPage() {
 
   /** Resolves true once the channel has nothing unsaved; false keeps the user editing. */
   async function resolveUnsavedConfig(channelId: string) {
+    const channel = resolveChannelLabel(viewProps(), channelId);
     const choice = await showConfirmChoiceDialog({
-      title: t("channels.config.unsavedTitle"),
-      message: t("channels.config.unsavedMessage", {
-        channel: resolveChannelLabel(viewProps(), channelId),
-      }),
+      title: t("channels.config.unsavedTitle", { channel }),
+      message: t("channels.config.unsavedMessage", { channel }),
       confirmLabel: t("common.save"),
       alternativeLabel: t("channels.config.discard"),
       cancelLabel: t("channels.config.keepEditing"),
@@ -501,6 +502,8 @@ export function ChannelsPage() {
     const labels = channelIds.map((channelId) => resolveChannelLabel(props, channelId));
     const [only] = channelIds.length === 1 ? channelIds : [];
     showToast({
+      severity: "error",
+      actionPrimary: true,
       message:
         only !== undefined
           ? t("channels.config.unsavedOnLeave", { channel: resolveChannelLabel(props, only) })
@@ -686,12 +689,10 @@ export function ChannelsPage() {
       onShowAdvancedSettings: setShowAdvancedSettings,
       onConfigPatch: (channelId, path, value) => {
         setSavedChannel(null);
-        const saved = resolveEditableSnapshotConfig(context.runtimeConfig.state.configSnapshot);
-        channelCapability.editConfig(
-          channelId,
-          { path, value },
-          saved ? channelConfigEditBase(saved, path) : undefined,
-        );
+        editChannelField(channelCapability, context.runtimeConfig.state, channelId, {
+          path,
+          value,
+        });
       },
       onConfigSave: (channelId) => void runMutation("config", saveChannelConfig(channelId)),
       onConfigDiscard: (channelId) => void discardChannelConfig(channelId),
@@ -747,7 +748,7 @@ export function ChannelsPage() {
         title={t("tabs.channels")}
         subtitle={
           <>
-            {t("subtitles.channels")} <LearnMoreLink url={CHANNELS_DOCS_URL} />
+            <LearnMoreLink url={CHANNELS_DOCS_URL} />
           </>
         }
       />

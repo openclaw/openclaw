@@ -71,6 +71,14 @@ test -n "$CRABBOX"
 ```
 
 - Use consumer's trusted wrapper/install instructions.
+- Native Linux/WSL command-lifecycle and cancellation proof requires a complete
+  matching Crabbox distribution, or a verified runtime manifest selected with
+  `CRABBOX_RUNTIME_ARTIFACTS`. Match the companions to the frozen source and verify
+  that the manifest binds the exact selected controller. A development CLI without
+  a runtime pack uses legacy SSH supervision; `--version` alone does not establish
+  native supervision. Verify the selected pack before allocation; do not count
+  CLI-only proof as native lifecycle proof. Follow the upstream
+  [runtime artifact instructions](https://github.com/openclaw/crabbox/blob/main/scripts/runtime-artifacts/README.md).
 - Repairs: verify upstream; use clean task-owned checkout; preserve installed
   binary + unrelated source. Never trust sibling checkout merely by name.
 

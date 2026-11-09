@@ -57,8 +57,8 @@ export async function runTemplatesCreateCommand(
 ): Promise<void> {
   try {
     const result = await createTemplateProject(projectPath, {
-      ...(opts.name ? { name: opts.name } : {}),
-      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+      name: opts.name,
+      agentId: opts.agentId,
     });
     if (opts.json) {
       writeRuntimeJson(runtime, {
@@ -196,7 +196,7 @@ export async function runTemplatesDevCommand(
       diagnostics: result.diagnostics,
       context: {
         config,
-        ...(opts.agentId ? { agentId: opts.agentId } : {}),
+        agentId: opts.agentId,
         ...(opts.workspace ? { workspace: opts.workspace } : {}),
         existingAgentIds,
         existingWorkspacePaths: existingAgentIds.map((agentId) =>

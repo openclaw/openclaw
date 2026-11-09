@@ -1,5 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { activateWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
+
+// The skill-workshop plugin registers the Workshop section as its tool's prompt guidance.
+let resetPlugins: (() => void) | undefined;
+beforeAll(async () => {
+  resetPlugins = (await activateWorkshopPluginForTest()).reset;
+});
+afterAll(() => resetPlugins?.());
 
 describe("Workshop system prompt availability", () => {
   it("M1: contributes authoring and undo guidance only when Workshop is available", () => {

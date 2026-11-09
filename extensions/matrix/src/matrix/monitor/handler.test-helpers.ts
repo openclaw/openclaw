@@ -133,8 +133,8 @@ export function createMatrixIngressLifecycle() {
     admission: "exclusive",
     abortSignal: new AbortController().signal,
     onAdopted: vi.fn(async () => {}),
-    onDeferred: vi.fn(),
-    onAdoptionFinalizing: vi.fn(),
+    onDeferred: vi.fn<ChannelIngressMonitorLifecycle["onDeferred"]>(),
+    onAdoptionFinalizing: vi.fn<ChannelIngressMonitorLifecycle["onAdoptionFinalizing"]>(),
     onAbandoned: vi.fn(async () => {}),
   } satisfies ChannelIngressMonitorLifecycle;
 }

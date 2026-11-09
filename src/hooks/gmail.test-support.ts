@@ -4,7 +4,26 @@ import { vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-export const commandSuccess = { code: 0, stdout: "", stderr: "" };
+export const commandSuccess = {
+  code: 0,
+  stdout: "",
+  stderr: "",
+  signal: null,
+  termination: "exit" as const,
+};
+
+// Minimal independent projection of Gog's schema v1 command metadata.
+export function gogServeSchema(envFlags = ["token-env", "hook-token-env"]) {
+  return {
+    schema_version: 1,
+    command: {
+      type: "command",
+      name: "serve",
+      flags: ["token", "hook-token", ...envFlags].map((name) => ({ name, type: "string" })),
+    },
+  };
+}
+export const gogSchemaSuccess = { ...commandSuccess, stdout: JSON.stringify(gogServeSchema()) };
 
 export function commandGate(abortCode?: number | null) {
   const result = createDeferred<{ code: number | null; stdout: string; stderr: string }>();

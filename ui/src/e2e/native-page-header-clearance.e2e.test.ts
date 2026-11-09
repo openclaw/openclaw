@@ -163,7 +163,7 @@ suite.define(() => {
       if (native) {
         expect(heading.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
       }
-      const search = page.getByRole("searchbox", { name: "Search Templates", exact: true });
+      const search = page.getByRole("searchbox", { name: "Search templates", exact: true });
       const { box, introBox } = await search.evaluate((element) => {
         const bounds = (target: Element): Box => {
           const rect = target.getBoundingClientRect();
@@ -272,7 +272,7 @@ suite.define(() => {
       await page
         .locator(".shell-chrome-controls button, .shell-chrome-controls a")
         .evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))),
-    ).toEqual(["Expand sidebar", "Command palette"]);
+    ).toEqual(["Expand sidebar", "Search"]);
     expect(controls.y + controls.height).toBeGreaterThan(52);
     const header = page.locator(".content .content-header").first();
     await expectAligned(header.locator(".page-title"), 25, "y");

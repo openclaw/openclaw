@@ -105,7 +105,9 @@ class ChatRunPresentation<T extends object> {
       configurable: true,
       enumerable: true,
       get: () => this.frame,
-      set: (frame: number | null) => (this.frame = frame),
+      set: (frame: number | null) => {
+        this.frame = frame;
+      },
     });
   }
 

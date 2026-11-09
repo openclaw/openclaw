@@ -8,8 +8,17 @@ function freezeJsonSnapshot(value: unknown): unknown {
   if (value === null || typeof value !== "object") {
     return value;
   }
-  for (const nested of Array.isArray(value) ? value : Object.values(value)) {
-    freezeJsonSnapshot(nested);
+  if (Array.isArray(value)) {
+    for (const nested of value) {
+      freezeJsonSnapshot(nested);
+    }
+  } else {
+    // JSON decoding owns this graph; enumerate it without a values array per object.
+    for (const key in value) {
+      if (Object.hasOwn(value, key)) {
+        freezeJsonSnapshot(Reflect.get(value, key));
+      }
+    }
   }
   return Object.freeze(value);
 }

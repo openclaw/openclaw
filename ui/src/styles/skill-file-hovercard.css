@@ -87,7 +87,7 @@
   overflow: auto;
   overscroll-behavior: contain;
   background: var(--bg);
-  scrollbar-width: thin;
+  --scrollbar-size: var(--scrollbar-size-compact);
 }
 
 .skill-file-hovercard__line {

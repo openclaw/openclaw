@@ -14,6 +14,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   generateStoredDeviceIdentity,
   insertStoredDeviceIdentityIfAbsent,
@@ -583,47 +584,53 @@ it.each(["external-store", "cycle"] as const)(
 );
 
 it("copies external directory and file links under an aliased state root without traversing unrelated siblings", async () => {
-  const source = path.join(root, "source");
-  const plugin = path.join(source, "extensions", "demo");
-  const dependency = path.join(root, "dependency");
-  const fileLinks = process.platform !== "win32";
-  const file = fileLinks
-    ? path.join(root, "assets", "config.txt")
-    : path.join(dependency, "config.txt");
-  const physical = path.join(root, "physical-state");
-  const alias = path.join(root, "state-alias");
-  await fs.mkdir(physical);
-  await link(physical, alias);
-  await writeText(plugin, "package.json", '{"name":"demo"}');
-  await writeText(dependency, "package.json", '{"name":"dependency"}');
-  await writeText(path.dirname(file), path.basename(file), "source");
-  if (fileLinks) {
-    await link(path.join(root, "missing-unrelated-target"), path.join(root, "assets", "unrelated"));
-    await link(file, path.join(dependency, "config.txt"));
-  }
-  await link(dependency, path.join(plugin, "node_modules", "dependency"));
-  const params = {
-    config: pluginConfig([plugin]),
-    stateDir: source,
-    targetStateDir: path.join(alias, "candidate"),
-    candidateRoot: root,
-  } satisfies Parameters<typeof prepareUpdateCandidatePlugins>[0];
-  const paths = await copyUpdateCandidatePlugins(
-    await prepareUpdateCandidatePlugins(params),
-    params,
-  );
-  const copied = path.join(paths[plugin]!, "node_modules", "dependency", "config.txt");
-  expect((await fs.realpath(copied)).startsWith(physical + path.sep)).toBe(true);
-  expect(await fs.readFile(copied, "utf8")).toBe("source");
-  await fs.writeFile(copied, "private");
-  expect(await fs.readFile(file, "utf8")).toBe("source");
-  expect(await fs.realpath(path.join(plugin, "node_modules", "dependency"))).toBe(dependency);
-  if (fileLinks) {
-    expect(await fs.readlink(path.join(dependency, "config.txt"))).toBe(file);
-  }
-  const rehearsal = await rehearse(pluginConfig([plugin]));
-  expect(await readText(privateEntry(rehearsal), "node_modules/dependency/config.txt")).toBe(
-    "source",
+  // Standalone file links must stay outside the runner's package scope.
+  await withTestDir(
+    { prefix: "candidate-assets-", parentDir: process.platform === "win32" ? undefined : "/tmp" },
+    async (assets) => {
+      const source = path.join(root, "source");
+      const plugin = path.join(source, "extensions", "demo");
+      const dependency = path.join(root, "dependency");
+      const fileLinks = process.platform !== "win32";
+      const file = fileLinks
+        ? path.join(assets, "config.txt")
+        : path.join(dependency, "config.txt");
+      const physical = path.join(root, "physical-state");
+      const alias = path.join(root, "state-alias");
+      await fs.mkdir(physical);
+      await link(physical, alias);
+      await writeText(plugin, "package.json", '{"name":"demo"}');
+      await writeText(dependency, "package.json", '{"name":"dependency"}');
+      await writeText(path.dirname(file), path.basename(file), "source");
+      if (fileLinks) {
+        await link(path.join(root, "missing-unrelated-target"), path.join(assets, "unrelated"));
+        await link(file, path.join(dependency, "config.txt"));
+      }
+      await link(dependency, path.join(plugin, "node_modules", "dependency"));
+      const params = {
+        config: pluginConfig([plugin]),
+        stateDir: source,
+        targetStateDir: path.join(alias, "candidate"),
+        candidateRoot: root,
+      } satisfies Parameters<typeof prepareUpdateCandidatePlugins>[0];
+      const paths = await copyUpdateCandidatePlugins(
+        await prepareUpdateCandidatePlugins(params),
+        params,
+      );
+      const copied = path.join(paths[plugin]!, "node_modules", "dependency", "config.txt");
+      expect((await fs.realpath(copied)).startsWith(physical + path.sep)).toBe(true);
+      expect(await fs.readFile(copied, "utf8")).toBe("source");
+      await fs.writeFile(copied, "private");
+      expect(await fs.readFile(file, "utf8")).toBe("source");
+      expect(await fs.realpath(path.join(plugin, "node_modules", "dependency"))).toBe(dependency);
+      if (fileLinks) {
+        expect(await fs.readlink(path.join(dependency, "config.txt"))).toBe(file);
+      }
+      const rehearsal = await rehearse(pluginConfig([plugin]));
+      expect(await readText(privateEntry(rehearsal), "node_modules/dependency/config.txt")).toBe(
+        "source",
+      );
+    },
   );
 });
 

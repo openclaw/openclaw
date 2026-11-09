@@ -30,6 +30,8 @@ export type MuseRuntime = {
   host: SpawnedMspConnection;
   credentialIdentity: string;
   sessions: Map<string, Session>;
+  /** MSP usage notices are consumer-folded, not routed to turn handles. */
+  usageObservers: Map<string, (params: unknown) => void>;
   dead: boolean;
   closing: boolean;
   users: number;
@@ -256,12 +258,16 @@ export class MusePool {
     try {
       const host = await handshake.initialize({
         clientInfo: { name: "openclaw", version: musePackage.version },
+        // OpenClaw never presents or answers userInput/request, and MSP treats an
+        // absent flag as capable, so a Muse question would block the turn until timeout.
+        capabilities: { userInputDialogs: false },
       });
       signal.throwIfAborted();
       const runtime: MuseRuntime = {
         host,
         credentialIdentity,
         sessions: new Map(),
+        usageObservers: new Map(),
         users: 0,
         dead: false,
         closing: false,
@@ -273,13 +279,18 @@ export class MusePool {
       };
       host.connection.onNotification((event) => {
         const sessionId = event.params?.sessionId;
-        const session = typeof sessionId === "string" ? runtime.sessions.get(sessionId) : undefined;
-        if (session) {
-          session.apply(event);
-          // Muse runs follow-up work on its own (after background workflows) with
-          // no lease held; idle means no session activity, not no OpenClaw turn.
-          if (runtime.users === 0) {
-            runtime.idle?.();
+        if (typeof sessionId === "string") {
+          if (event.method === "session/tokenUsage") {
+            runtime.usageObservers.get(sessionId)?.(event.params);
+          }
+          const session = runtime.sessions.get(sessionId);
+          if (session) {
+            session.apply(event);
+            // Muse runs follow-up work on its own (after background workflows) with
+            // no lease held; idle means no session activity, not no OpenClaw turn.
+            if (runtime.users === 0) {
+              runtime.idle?.();
+            }
           }
         }
       });

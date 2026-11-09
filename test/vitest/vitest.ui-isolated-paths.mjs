@@ -38,6 +38,10 @@ export const uiIsolatedTestFiles = [
   "ui/src/components/tooltip-loading.test.ts",
   "ui/src/components/viewer-facepile.test.ts",
   "ui/src/pages/agents/memory/memory-panel.test.ts",
+  // Holds quota metrics before first open to prove the synchronous focus boundary.
+  "ui/src/pages/chat/chat-composer-context-retention.test.tsx",
+  // A failed optional icon import must not poison the shared module registry.
+  "ui/src/pages/chat/chat-provider-icon-lazy.test.tsx",
   // Holds the live dispatcher import before another chat suite can preload it.
   "ui/src/pages/chat/chat-live-events.test.ts",
   "ui/src/pages/chat/chat-outbox-recovery-owner.test.ts",
@@ -65,6 +69,7 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-pane-tool-icons.test.tsx",
   // Holds the editor import before first use; other comment suites load it eagerly.
   "ui/src/pages/chat/components/chat-annotation-lazy.test.ts",
+  "ui/src/pages/chat/components/chat-selection-popup-lazy.test.ts",
   // The cold widget placeholder proof holds the renderer import.
   "ui/src/pages/chat/components/chat-message-deferred.test.tsx",
   // Holds the rich-message import before first use by any other transcript suite.

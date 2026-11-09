@@ -15,8 +15,8 @@ export const PHASES = [
   "publish",
   "flip-github",
   "sync-beta",
-  "macos",
   "closeout",
+  "macos",
 ] as const;
 export const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -173,13 +173,6 @@ export const githubRelease = (draft: boolean) =>
 export const macosWait = (id: number, conclusion = "success", attempt = 1): FakeStep[] => [
   pendingGates(id, [], "openclaw/releases"),
   actionRun("openclaw/releases", id, conclusion, attempt),
-];
-
-export const compatibilityInventory = (version = RELEASE): FakeStep[] => [
-  fetchMain(),
-  jsonStep("git", ["show", "origin/main:scripts/lib/update-compat-inventory.json"], {
-    releases: [{ version }],
-  }),
 ];
 
 export const closeoutMain = (version = RELEASE, notes = `## ${RELEASE}\n`): FakeStep[] => [

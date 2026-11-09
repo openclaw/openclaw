@@ -15,6 +15,7 @@ import {
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -24,6 +25,7 @@ import {
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -295,8 +297,7 @@ export function SessionStorageSettings(props: SettingsProps) {
           control={<SettingsValue value={storageSize(totals().embedded)} />}
         />
         {inventoryProps.status.agents.length > 1 ? (
-          <details class="settings-row settings-row--stacked">
-            <summary>{t("configView.sessionStorage.byAgent")}</summary>
+          <SettingsDisclosure quiet title={t("configView.sessionStorage.byAgent")}>
             <For each={inventoryProps.status.agents} keyed={(agent) => agent.agentId}>
               {(agent) => (
                 <SettingsRow
@@ -312,7 +313,7 @@ export function SessionStorageSettings(props: SettingsProps) {
                 />
               )}
             </For>
-          </details>
+          </SettingsDisclosure>
         ) : undefined}
         <SettingsRow
           title={t("configView.sessionStorage.worker")}
@@ -387,8 +388,7 @@ export function SessionStorageSettings(props: SettingsProps) {
                       t("common.loading")
                     ) : (
                       <span role="alert">
-                        {formatUiError(error())}
-                        {t("configView.sessionStorage.refreshAfterError")}
+                        {formatUiError(error())} {t("configView.sessionStorage.refreshAfterError")}
                       </span>
                     )
                   }
@@ -402,15 +402,17 @@ export function SessionStorageSettings(props: SettingsProps) {
                 <Show
                   when={readStatus()?.status}
                   fallback={
-                    <SettingsEmpty
-                      message={t(
-                        client()
-                          ? "common.loading"
-                          : context.gateway.snapshot.phase === "connected"
+                    client() ? (
+                      <SettingsEmpty message={t("common.loading")} />
+                    ) : (
+                      <SettingsUnavailable
+                        message={t(
+                          context.gateway.snapshot.phase === "connected"
                             ? "configView.sessionStorage.adminRequired"
                             : "configView.sessionStorage.disconnected",
-                      )}
-                    />
+                        )}
+                      />
+                    )
                   }
                 >
                   {(currentStatus) => <StorageInventory status={currentStatus()} />}
@@ -518,12 +520,15 @@ export function SessionStorageSettings(props: SettingsProps) {
         </div>
       </SettingsPage>
       <ShellLayoutBoundary traits={{ settingsPage: true }}>
-        <details class="settings-page" open={props.advancedExpanded}>
-          <summary class="settings-section__heading">
-            {t("configView.sessionStorage.advanced")}
-          </summary>
-          {props.buildEditor?.()}
-        </details>
+        <div class="settings-page">
+          <SettingsDisclosure
+            sections
+            title={t("configView.sessionStorage.advanced")}
+            open={props.advancedExpanded}
+          >
+            {props.buildEditor?.()}
+          </SettingsDisclosure>
+        </div>
       </ShellLayoutBoundary>
     </openclaw-session-storage-settings>
   );

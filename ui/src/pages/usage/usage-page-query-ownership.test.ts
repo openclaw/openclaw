@@ -19,6 +19,79 @@ import {
 afterEach(cleanupUsagePageTest);
 
 describe("Usage query failure ownership", () => {
+  it.each(["sort", "page"] as const)(
+    "retains the selected analytics without rebuilding while a %s request settles",
+    async (change) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-08-07T12:00:00Z"));
+      focusDocument();
+      const snapshot = cacheSnapshot("fresh");
+      const date = "2026-08-07";
+      const original = {
+        ...snapshot.result,
+        sessions: Array.from({ length: 60 }, (_, index) => ({
+          key: `agent:main:retained-${index}`,
+          label: `Retained session ${index}`,
+          updatedAt: Date.now() - index * 1000,
+          usage: {
+            ...snapshot.result.totals,
+            activityDates: [date],
+            dailyBreakdown: [{ ...snapshot.result.totals, date, tokens: 100, cost: 1 }],
+          },
+        })),
+      };
+      const reply = deferred<typeof original>();
+      let pending = false;
+      const request = vi.fn(async (method: string) =>
+        method === "sessions.usage"
+          ? pending
+            ? reply.promise
+            : structuredClone(original)
+          : { updatedAt: Date.now(), providers: [] },
+      );
+      // SAFETY: The fixture exercises only the mocked request method.
+      const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+      await preloadUsage(page);
+      page.read().callbacks.filters.onSelectDay(date, false, [date]);
+      await vi.advanceTimersByTimeAsync(0);
+      await page.updateComplete;
+      const analytics = page.querySelector(".usage-overview-card")!;
+      expect(analytics).not.toBeNull();
+      const before = analytics.textContent;
+      let retiredAnalytics = 0;
+      const observer = new MutationObserver((records) => {
+        for (const record of records) {
+          for (const removed of record.removedNodes) {
+            if (removed === analytics || removed.contains(analytics)) {
+              retiredAnalytics++;
+            }
+          }
+        }
+      });
+      observer.observe(page.element, { childList: true, subtree: true });
+      pending = true;
+      if (change === "sort") {
+        page.read().callbacks.display.onChange({ sessionSort: "recent" });
+      } else {
+        page.read().callbacks.display.onPageChange(50);
+      }
+      await page.updateComplete;
+      expect(page.usageLoading).toBe(true);
+      expect(page.read().data.totals).toBeNull();
+      expect(page.read().filters.selectedDays).toEqual([date]);
+      expect(page.querySelector(".usage-overview-card")).toBe(analytics);
+      expect(analytics.textContent).toBe(before);
+      reply.resolve(structuredClone(original));
+      await vi.advanceTimersByTimeAsync(0);
+      await page.updateComplete;
+      observer.disconnect();
+      expect(retiredAnalytics).toBe(0);
+      expect(page.querySelector(".usage-overview-card")).toBe(analytics);
+      expect(analytics.textContent).toBe(before);
+      expect(page.read().data.sessions).toHaveLength(change === "page" ? 10 : 50);
+    },
+  );
+
   it("retains hidden analytics and model options while a text query settles", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-07T12:00:00Z"));

@@ -16,7 +16,7 @@ Unknown working-file bytes remain refused, even when empty. Explicitly authorize
 preserves one selected preimage and restores its journaled source without changing
 HEAD, the index, journal, or workflow binding. Ordinary replay still owns completion.
 
-For blobless partial clones, transition recovery prefetches missing target objects in batches of at most 1,024 through the canonical source transport. Fetches skip local-history negotiation and automatic maintenance, and leave refs and `FETCH_HEAD` unchanged. Worktree admission runs after prefetching, followed by one restore so file/directory replacements remain intact. A failed prefetch retains the transition journal for retry.
+For blobless partial clones, checkout first resolves its target without lazy fetching and explicitly fetches a missing commit through the canonical source transport, retaining the blob filter and normal history negotiation. Transition recovery then prefetches missing target blobs in batches of at most 1,024. Only those blob fetches skip local-history negotiation; both fetch paths skip automatic maintenance and leave refs and `FETCH_HEAD` unchanged. Worktree admission runs after prefetching, followed by one restore so file/directory replacements remain intact. Final checkout disables lazy fetching so a missing object fails visibly. A failed blob prefetch retains the transition journal for retry.
 
 - The default agent handoff leaves `OPENCLAW_PR_GATES_REMOTE` unset and uses `merge-run --auto-merge`; explicitly setting `OPENCLAW_PR_GATES_REMOTE=github` selects the same mode. Preparation records `github_pending` bound to the published head without successful-proof stamps. Merge requires completed local review, the exact prepared head, and the enforced `openclaw/ci-gate`; it rejects known failed required checks, accepts pending checks, and skips separate hosted workflow verification and its synchronous CI watcher. GitHub enforces required CI/security checks and reviews; the agent retains responsibility for follow-through. This mode replaces separate scheduled Testbox evidence with the PR's enforced gate; existing completed-evidence modes remain available. Accepted requests return pending, not completion. Follow the maintainer skill's polling cadence, investigate failures and conflicts, and reconcile through native recovery until merge and cleanup are verified. Preserve accepted or uncertain outcome records; never blindly re-arm a request. No implicit admin or REST fallback applies to pending-gate admission; explicitly authorized [prior-CI admin admission](/reference/scripts/prior-ci) is a separate mode.
 - Gate-mode validation for `prepare-run`, `prepare-gates`, and `prepare-push` happens before PR reads, lock acquisition, or preparation evidence retirement. Select one mode: the GitHub-pending invocation clears `OPENCLAW_TESTBOX`; completed hosted proof clears `OPENCLAW_PR_GATES_REMOTE`. Unknown or contradictory selectors must fail without replacing saved evidence. This validation does not block merge-outcome reconciliation, whose retained intent owns recovery.
@@ -50,9 +50,15 @@ baseline refresh that retired its active incoming-review copy. The existing
 signed baseline binding and its named retained archive. It keeps that historical
 lineage separate from the snapshot used to retire or recover current metadata.
 Missing original metadata is never reconstructed, and this route does not replay
-the old baseline review as current approval. A genuine fresh incoming NEEDS WORK
-review, the existing publication, signature and live-identity checks, and a new
-candidate READY review and gates are still required.
+the old baseline review as current approval. Continuation authenticates an existing
+native baseline binding and checks its baseline against the invocation's private
+canonical-main checkpoint before excluding inherited main history from signature
+verification; every other new commit, including task commits on side parents, still
+requires a valid signature. An ordinary merge of main without that signed native
+binding does not qualify for this exclusion. Recovery repeats the same verification
+from retained evidence. A genuine fresh incoming NEEDS WORK review, the existing
+publication and live-identity checks, and a new candidate READY review and gates
+are still required.
 
 ## Publish a candidate for required proof
 
@@ -113,6 +119,61 @@ review OID, and pending finding IDs alongside publication identity. It is not a
 qualified `prep.env`. Normal gates, push, sync, and merge still require a genuine
 READY correction review. After obtaining the enumerated proof, independently
 resolve those findings for the exact candidate and run ordinary qualification.
+
+## Refresh a retained candidate for pending proof
+
+When required proof prevents READY, explicitly use the existing baseline producer:
+
+```bash
+scripts/pr prepare-baseline-refresh <PR> --for-proof \
+  --expected-head <source-SHA> --expected-tree <source-tree-OID> \
+  --expected-review <source-review-OID> --source-review <source-review.json> \
+  --baseline <canonical-main-SHA>
+```
+
+This explicit producer invocation selects authenticated current official-main
+workflow code through the existing native selection descriptor and private
+qualification fetch. It does not replace the retained workflow binding. Land
+and independently review this capability first; an unlanded wrapper cannot admit
+itself, and developer-wrapper opt-in still grants no authority.
+
+The source review must be a fresh independent exact-source correction review with
+that same typed pending-proof authorization, incoming review, workflow source,
+workflow binding, and hosted lease. The default source-review file is
+`.local/correction-review.json`; an explicit file lets the reviewer supply new
+source-review bytes without overwriting an older correction review.
+
+For a previously published correction whose fresh incoming review has advanced
+but whose preparation context still names the earlier incoming head, also select
+`--incoming-head <hosted-SHA> --incoming-review <fresh-review-OID>
+--publication-receipt <push|sync> --publication-oid <receipt-OID>`. The existing
+continuation owner validates the complete retained receipt chain and derives the
+new incoming context. It installs nothing before baseline admission. Only history
+in the invocation's private canonical-main checkpoint is excluded from signature
+verification; every other task commit on every parent must verify. An ordinary
+unbound continuation still refuses inherited history it cannot authenticate.
+
+The existing materializer creates a new signed descendant, never modifies the
+retained source, and requires a unique fork and nonempty product delta. Its
+version-2, `purpose: "proof"` signed binding retains the exact source review,
+source/tree, incoming review, workflow, lease, canonical checkpoint, reconstructed
+tree, and historical preparation/receipt inventory. Context installation,
+evidence retirement, restoration, branch CAS, and recovery stay in the existing
+baseline transition journal. Superseded publication receipts stay historical
+when the incoming context advances. Repeat an interrupted operation with exactly
+the same selected identities; a different request cannot adopt its journal.
+
+The source review authorizes materialization only. The producer initializes a
+new, unapproved exact-candidate review through the existing correction-review
+owner while it still owns current-main execution. Complete that independent
+review for the new candidate; if the retained workflow predates this capability,
+use the existing exact-identity `prepare-workflow-successor --for-proof` operation
+to advance it to the authenticated current-main workflow named by that new review.
+Only that new exact-candidate typed NEEDS WORK authorization can use `prepare-publish-for-proof`. No successful gate
+or qualified preparation is created. Ordinary gates, push, sync, and merge still
+require READY. `--for-proof` does not select baseline succession or remote signing;
+those combinations, duplicate options, and unknown options refuse before locking.
+Qualified version-1 refresh, successor, and signing contracts are unchanged.
 
 ## Signing a baseline on another host
 

@@ -22,7 +22,7 @@ const PRE_SPLIT_PERSONAL_ACTIONS = [
   "rollback",
 ] as const;
 
-export function hasSkillLibraryToolSplitMigrationMarker(value: unknown): boolean {
+function hasSkillLibraryToolSplitMigrationMarker(value: unknown): boolean {
   return (
     isRecord(value) &&
     isRecord(value.meta) &&

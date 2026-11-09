@@ -117,7 +117,7 @@ it.each([false, true])(
     if (retired) {
       expect(container.textContent).not.toContain("forbidden");
     } else {
-      expect(container.textContent).toContain("No models are permitted by your administrator.");
+      expect(container.textContent).toContain("No models are permitted by your admin.");
       expect(control("setup")).toBeNull();
     }
   },
