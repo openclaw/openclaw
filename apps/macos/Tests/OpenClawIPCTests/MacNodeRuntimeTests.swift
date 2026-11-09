@@ -1,3 +1,4 @@
+import AppKit
 import CoreLocation
 import Dispatch
 import Foundation
@@ -8,6 +9,44 @@ import Testing
 
 @Suite(.testWaitLimit)
 struct MacNodeRuntimeTests {
+    @MainActor
+    @Test func `Simulator frame parser rejects a stale device image`() throws {
+        let bitmap = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 4, bitsPerPixel: 32))
+        bitmap.setColor(.red, atX: 0, y: 0)
+        let jpeg = try #require(bitmap.representation(using: .jpeg, properties: [:]))
+        var length = UInt32(jpeg.count).bigEndian
+        var bytes = Data()
+        withUnsafeBytes(of: &length) { bytes.append(contentsOf: $0) }
+        bytes.append(jpeg)
+        let frames = SimulatorFrameBuffer()
+        frames.append(Data(bytes.prefix(2)))
+        #expect(frames.latest == nil)
+        frames.append(Data(bytes.dropFirst(2)))
+        let frame = try #require(frames.latest)
+        #expect(frame.width == 1 && frame.height == 1 && frame.sequence == 1)
+        #expect(frame.isFresh(at: frame.receivedAt.addingTimeInterval(2)))
+        #expect(!frame.isFresh(at: frame.receivedAt.addingTimeInterval(4)))
+    }
+
+    @Test func `Simulator HID close waits for EOF beyond delayed cancel acknowledgments`() {
+        let readiness = SimulatorTouchReadiness()
+        readiness.append(Data("touch-helper ready".utf8))
+        #expect(readiness.ready)
+        #expect(readiness.cancelCount == 0)
+        #expect(!readiness.inputEOF)
+        readiness.appendAck(Data([1]))
+        #expect(readiness.cancelCount == 1)
+        // An old cancel can acknowledge after a newer cancel has been queued.
+        readiness.appendAck(Data([1]))
+        #expect(readiness.cancelCount == 2)
+        #expect(!readiness.inputEOF)
+        readiness.appendAck(Data([2]))
+        #expect(readiness.inputEOF)
+    }
+
     private actor ComputerProviderWorkerProbe: MacNodeHostWorking {
         private let commands: Set<String>
         private let supportsEntered: AsyncTestGate?
@@ -171,6 +210,59 @@ struct MacNodeRuntimeTests {
 
         var permissionStates: [Capability: OpenClawPermissionState] = [:]
 
+        var simulatorStarts = 0
+        var simulatorStops = 0
+        var simulatorInputCount = 0
+        var simulatorActive = false
+        var simulatorStopError: Error?
+        var actResultOk = true
+        var simulatorStartEntered: AsyncTestGate?
+        var releaseSimulatorStart: AsyncTestGate?
+
+        private func simulatorFrame() -> SimulatorCaptureService.Frame {
+            SimulatorCaptureService.Frame(
+                sessionId: "sim-session", sequence: 1, jpegBase64: nil,
+                width: 300, height: 600)
+        }
+
+        func startSimulatorCapture(executionId: String) async throws -> SimulatorCaptureService.Frame {
+            self.simulatorStarts += 1
+            self.simulatorActive = true
+            self.simulatorStartEntered?.open()
+            await self.releaseSimulatorStart?.wait()
+            return self.simulatorFrame()
+        }
+
+        func readSimulatorCapture(sessionId: String, after sequence: UInt64) async throws
+            -> SimulatorCaptureService.Frame
+        {
+            return self.simulatorFrame()
+        }
+
+        func stopSimulatorCapture(sessionId: String?) async throws {
+            self.simulatorStops += 1
+            self.simulatorActive = false
+            if let simulatorStopError { throw simulatorStopError }
+        }
+        func stopSimulatorCapture(forExecutionId executionId: String) async throws {
+            self.simulatorStops += 1
+            self.simulatorActive = false
+            if let simulatorStopError { throw simulatorStopError }
+        }
+
+        func simulatorInput(
+            sessionId: String, action: OpenClawComputerAction,
+            x: Double?, y: Double?, fromX: Double?, fromY: Double?,
+            text: String?, keys: String?, desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws
+        {
+            try self.desktopAvailability.validate(desktopPermit)
+            guard self.simulatorActive else { throw SimulatorCaptureService.CaptureError.staleSession }
+            self.simulatorInputCount += 1
+            if !self.actResultOk {
+                throw SimulatorCaptureService.CaptureError.unavailable("input could not be delivered")
+            }
+        }
+
         func missingPermissions(_ capabilities: [Capability], disabled: [Capability]) async -> OpenClawNodeError? {
             PermissionManager.missingPermission(capabilities.compactMap { capability in
                 if disabled.contains(capability) { return (capability, .disabledInOpenClaw) }
@@ -306,7 +398,7 @@ struct MacNodeRuntimeTests {
             if let actError {
                 throw actError
             }
-            return OpenClawComputerActResult(ok: true)
+            return OpenClawComputerActResult(ok: self.actResultOk)
         }
 
         func releaseExecutionInput(_ permit: MacDesktopAvailabilityCoordinator.Permit) async {
@@ -904,6 +996,167 @@ struct MacNodeRuntimeTests {
 }
 
 extension MacNodeRuntimeTests {
+    @MainActor
+    @Test func `Simulator start closed while capture suspends leaves no live execution`() async {
+        let services = MainActorServicesProbe()
+        let entered = AsyncTestGate()
+        let release = AsyncTestGate()
+        defer { release.open() }
+        services.simulatorStartEntered = entered
+        services.releaseSimulatorStart = release
+        let runtime = MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { .peekaboo })
+        let execution = "44444444-4444-4444-8444-444444444444"
+        let pending = Task {
+            await self.invoke(
+                runtime, "sim-slow-start", "simulator.capture",
+                "{\"action\":\"start\",\"executionId\":\"\(execution)\"}")
+        }
+        await entered.wait()
+        let closed = await self.invoke(
+            runtime, "sim-close", "computer.act",
+            "{\"action\":\"__close_execution\",\"executionId\":\"\(execution)\"}")
+        #expect(closed.ok)
+        release.open()
+        let result = await pending.value
+        #expect(!result.ok)
+        #expect(services.simulatorStops == 2)
+        #expect(services.desktopPlatform.assertions.isEmpty)
+    }
+
+    @MainActor
+    @Test func `Simulator capture and input obey lock revocation`() async {
+        let services = MainActorServicesProbe()
+        let runtime = MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { .peekaboo })
+        let execution = "11111111-1111-4111-8111-111111111111"
+        services.desktopPlatform.state = .locked
+        let blocked = await self.invoke(
+            runtime, "sim-locked", "simulator.capture",
+            "{\"action\":\"start\",\"executionId\":\"\(execution)\"}")
+        #expect(!blocked.ok)
+        #expect(services.simulatorStarts == 0)
+
+        services.desktopPlatform.state = .unlocked
+        let started = await self.invoke(
+            runtime, "sim-start", "simulator.capture",
+            "{\"action\":\"start\",\"executionId\":\"\(execution)\"}")
+        #expect(started.ok)
+        #expect(services.simulatorStarts == 1)
+        let input = await self.invoke(
+            runtime, "sim-tap", "simulator.act",
+            "{\"action\":\"left_click\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.5,\"y\":0.5}")
+        #expect(input.ok)
+        #expect(services.simulatorInputCount == 1)
+
+        var revoked: [MacDesktopAvailabilityCoordinator.Permit] = []
+        services.desktopAvailability.onExecutionsRevoked = { permits, _ in revoked.append(contentsOf: permits) }
+        services.desktopPlatform.state = .locked
+        services.desktopAvailability.refresh()
+        await runtime.revokeDesktopExecutions(revoked, reason: "desktop-locked")
+        #expect(services.simulatorStops > 0)
+        #expect(services.releasedExecutionScopes == revoked.map(\.inputScopeId))
+        let afterLock = await self.invoke(
+            runtime, "sim-after-lock", "simulator.act",
+            "{\"action\":\"left_click\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.5,\"y\":0.5}")
+        #expect(!afterLock.ok)
+        #expect(services.simulatorInputCount == 1)
+    }
+
+    @MainActor
+    @Test func `Simulator view only and failed input have visible outcomes`() async {
+        let services = MainActorServicesProbe()
+        let execution = "22222222-2222-4222-8222-222222222222"
+        let viewOnly = MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { false },
+            computerControlProvider: { .peekaboo })
+        #expect(await self.invoke(
+            viewOnly, "sim-view", "simulator.capture",
+            "{\"action\":\"start\",\"executionId\":\"\(execution)\"}").ok)
+        let denied = await self.invoke(
+            viewOnly, "sim-denied", "simulator.act",
+            "{\"action\":\"left_click\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.5,\"y\":0.5}")
+        #expect(!denied.ok)
+        #expect(services.simulatorInputCount == 0)
+
+        let controlledServices = MainActorServicesProbe()
+        let controlled = MacNodeRuntime(
+            desktopAvailability: controlledServices.desktopAvailability,
+            makeMainActorServices: { controlledServices },
+            computerControlEnabled: { true },
+            computerControlProvider: { .peekaboo })
+        controlledServices.actResultOk = false
+        #expect(await self.invoke(
+            controlled, "sim-controlled", "simulator.capture",
+            "{\"action\":\"start\",\"executionId\":\"\(execution)\"}").ok)
+        let failed = await self.invoke(
+            controlled, "sim-noop", "simulator.act",
+            "{\"action\":\"left_click\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.5,\"y\":0.5}")
+        #expect(!failed.ok)
+        #expect(failed.error?.message.contains("could not be delivered") == true)
+    }
+
+    @MainActor
+    @Test func `Simulator close ends input before capture`() async {
+        let services = MainActorServicesProbe()
+        let runtime = MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { .peekaboo })
+        let execution = "33333333-3333-4333-8333-333333333333"
+        #expect(await self.invoke(
+            runtime, "sim-start", "simulator.capture",
+            "{\"action\":\"start\",\"executionId\":\"\(execution)\"}").ok)
+        #expect(await self.invoke(
+            runtime, "sim-down", "simulator.act",
+            "{\"action\":\"left_click\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.5,\"y\":0.5}").ok)
+        let closed = await self.invoke(
+            runtime, "sim-close", "computer.act",
+            "{\"action\":\"__close_execution\",\"executionId\":\"\(execution)\"}")
+        #expect(closed.ok)
+        #expect(services.releasedExecutionScopes.count == 1)
+        #expect(services.simulatorStops == 1)
+        #expect(services.desktopPlatform.assertions.isEmpty)
+        let late = await self.invoke(
+            runtime, "sim-late", "simulator.act",
+            "{\"action\":\"mouse_move\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.6,\"y\":0.5}")
+        #expect(!late.ok)
+    }
+
+    @MainActor
+    @Test func `Simulator close reports pasteboard cleanup failure`() async {
+        let services = MainActorServicesProbe()
+        let runtime = MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { .peekaboo })
+        let execution = "33333333-3333-4333-8333-333333333333"
+        #expect(await self.invoke(
+            runtime, "sim-start", "simulator.capture",
+            "{\"action\":\"start\",\"executionId\":\"\(execution)\"}").ok)
+        services.simulatorStopError = SimulatorCaptureService.CaptureError.unavailable(
+            "device pasteboard could not be restored after typing")
+        let closed = await self.invoke(
+            runtime, "sim-close", "computer.act",
+            "{\"action\":\"__close_execution\",\"executionId\":\"\(execution)\"}")
+        #expect(!closed.ok)
+        #expect(closed.error?.message.contains("device pasteboard could not be restored") == true)
+        #expect(services.simulatorStops == 1)
+        #expect(!(await self.invoke(
+            runtime, "sim-late", "simulator.act",
+            "{\"action\":\"mouse_move\",\"sessionId\":\"sim-session\",\"executionId\":\"\(execution)\",\"x\":0.6,\"y\":0.5}")).ok)
+    }
+
     @Test(arguments: [MacDesktopAvailabilityCoordinator.State.locked, .unknown])
     @MainActor
     func `registered Computer capture refuses an unavailable desktop before CUA dispatch`(

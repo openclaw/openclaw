@@ -13,6 +13,8 @@ let package = Package(
         .library(name: "OpenClawDiscovery", targets: ["OpenClawDiscovery"]),
         .executable(name: "OpenClaw", targets: ["OpenClaw"]),
         .executable(name: "openclaw-mac", targets: ["OpenClawMacCLI"]),
+        .executable(name: "openclaw-simulator-touch", targets: ["OpenClawSimulatorTouch"]),
+        .executable(name: "openclaw-simulator-capture", targets: ["OpenClawSimulatorCapture"]),
     ],
     dependencies: [
         .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", exact: "3.1.0"),
@@ -26,6 +28,18 @@ let package = Package(
         .package(path: "../swabble"),
     ],
     targets: [
+        .executableTarget(
+            name: "OpenClawSimulatorTouch",
+            path: "ThirdParty/TapflowSimulator",
+            exclude: ["screencapture-helper.swift", "LICENSE", "LICENSE-APACHE-2.0", "NOTICE", "UPSTREAM.md"],
+            sources: ["touch-helper.swift"],
+            swiftSettings: [.unsafeFlags(["-swift-version", "5"])]),
+        .executableTarget(
+            name: "OpenClawSimulatorCapture",
+            path: "ThirdParty/TapflowSimulator",
+            exclude: ["touch-helper.swift", "LICENSE", "LICENSE-APACHE-2.0", "NOTICE", "UPSTREAM.md"],
+            sources: ["screencapture-helper.swift"],
+            swiftSettings: [.unsafeFlags(["-swift-version", "5"])]),
         .target(
             name: "OpenClawCameraPTZNative",
             path: "Sources/OpenClawCameraPTZNative",

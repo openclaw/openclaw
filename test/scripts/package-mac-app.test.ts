@@ -1953,6 +1953,8 @@ try {
             'package --scratch-path '*' unedit --force Peekaboo') operation=unedit ;;
             'build '*"--product OpenClaw "*) operation=app-build ;;
             'build '*"--product openclaw-mac "*) operation=cli-build ;;
+            'build '*"--product openclaw-simulator-touch "*) operation=simulator-touch-build ;;
+            'build '*"--product openclaw-simulator-capture "*) operation=simulator-capture-build ;;
             'build '*"--product openclaw-mlx-tts "*' --show-bin-path')
               operation=helper-products
               printf '%s\\n' "$ROOT_DIR/helper-products" ;;
@@ -1980,6 +1982,8 @@ try {
         "patch",
         "app-build",
         "cli-build",
+        "simulator-touch-build",
+        "simulator-capture-build",
         "compiled",
         "restore",
         "unedit",

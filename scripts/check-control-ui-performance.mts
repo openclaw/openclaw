@@ -79,8 +79,9 @@ const controlUiPerformanceBudgets = {
   largestCssGzipBytes: 58_315,
   // Retired selectors and supported-browser fallback removal: measured head plus 64 B.
   // Josh Lehman approved the OpenClaw ID account menu styles (#192352, 2026-11-06):
-  // measured 325,045 B gzip / 1,675,690 B raw; retain 64 B headroom.
-  totalCssGzipBytes: 325_109,
+  // measured 325,045 B gzip / 1,675,690 B raw. The Simulator portrait preview
+  // and controls measure 325,224 B gzip after removing redundant declarations.
+  totalCssGzipBytes: 325_224,
   totalCssRawBytes: 1_675_754,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);

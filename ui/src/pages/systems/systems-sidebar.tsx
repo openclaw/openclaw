@@ -149,6 +149,11 @@ function SystemsInventory(props: { controller: Systems }) {
         );
       });
   });
+  const simulator = createMemo(() =>
+    controller().state.rows.find(
+      (row) => row.node?.connected && row.node.commands?.includes("simulator.capture"),
+    ),
+  );
   const filterItem = (
     prefix: "sort" | "status",
     option: { value: string; labelKey: string },
@@ -198,9 +203,18 @@ function SystemsInventory(props: { controller: Systems }) {
         class="systems-machine"
         type="button"
         data-status={row.environment.status}
-        aria-pressed={row.environment.id === controller().state.selectedId ? "true" : "false"}
+        aria-pressed={
+          row.environment.id === controller().state.selectedId &&
+          (controller().state.preview === "desktop" ||
+            !row.node?.commands?.includes("simulator.capture"))
+            ? "true"
+            : "false"
+        }
         aria-description={platform ? `${status()} · ${platform}` : status()}
-        onClick={() => controller().select(row.environment.id)}
+        onClick={() => {
+          controller().select(row.environment.id);
+          controller().updatePresentation({ preview: "desktop" });
+        }}
       >
         <i class="systems-machine__dot" aria-hidden="true" />
         <span class="systems-machine__name">{systemName(row)}</span>
@@ -276,6 +290,28 @@ function SystemsInventory(props: { controller: Systems }) {
         )}
       </Show>
       <div class="systems-sidebar__list" aria-busy={inventoryRead.pending() ? "true" : "false"}>
+        <Show when={simulator()}>
+          {(row) => (
+            <button
+              class="systems-machine"
+              type="button"
+              aria-pressed={
+                controller().state.selectedId === row().environment.id &&
+                controller().state.preview === "simulator"
+                  ? "true"
+                  : "false"
+              }
+              onClick={() => {
+                controller().select(row().environment.id);
+                controller().updatePresentation({ preview: "simulator" });
+              }}
+            >
+              <i class="systems-machine__dot" aria-hidden="true" />
+              <span class="systems-machine__name">{t("systems.simulator.title")}</span>
+              <span class="systems-machine__meta">{systemName(row())}</span>
+            </button>
+          )}
+        </Show>
         {inventoryRead.pending() && !controller().state.inventory ? (
           <p class="systems-sidebar__empty" role="status">
             {t("systems.loading")}

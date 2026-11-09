@@ -14,6 +14,70 @@ openclaw-systems-page {
   overflow: hidden;
   background: var(--bg);
 }
+.simulator-preview {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.simulator-preview__header,
+.simulator-preview__footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.simulator-preview__header span {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.simulator-preview__footer {
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+  color: var(--muted);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.simulator-preview__text {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  min-width: min(100%, 240px);
+}
+.simulator-preview__text input {
+  flex: 1;
+  min-width: 0;
+}
+.simulator-preview__stage {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 12px;
+}
+.simulator-preview__stage img {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 12px;
+}
+.simulator-preview__interactive {
+  cursor: var(--cursor-action);
+  touch-action: none;
+}
+.simulator-preview__interactive:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
 /* Systems renders in the full-bleed chat content column: supply the page top inset
    other pages get from content padding, and inset the title to the toolbar heading.
    The selector outranks the shared hub-header insets. */
@@ -641,6 +705,12 @@ openclaw-systems-page {
   }
 }
 @media (max-width: 768px) {
+  .simulator-preview__header {
+    flex-wrap: wrap;
+  }
+  .systems-toolbar > .systems-text-button {
+    display: none;
+  }
   .systems-heading {
     display: none;
   }

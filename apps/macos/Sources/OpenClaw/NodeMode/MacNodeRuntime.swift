@@ -1,13 +1,17 @@
 import Foundation
 import OpenClawIPC
 import OpenClawKit
+import OSLog
 
 actor MacNodeRuntime {
+    private let logger = Logger(subsystem: "ai.openclaw", category: "simulator-preview")
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
     private static let maxInlineMediaRawBytes = (maxGatewayPayloadBytes / 4) * 3
-    private static let cuaOwnedCommands = Set([
+    private static let desktopOwnedCommands = Set([
         OpenClawScreenCommand.snapshot.rawValue,
         OpenClawComputerCommand.act.rawValue,
+        "simulator.capture",
+        "simulator.act",
     ])
     private let cameraCapture = CameraCaptureService()
     private let cameraPTZ: any CameraPTZServicing
@@ -84,7 +88,7 @@ actor MacNodeRuntime {
     /// One branch per advertised native command keeps command ownership explicit.
     func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let command = req.command
-        if Self.cuaOwnedCommands.contains(command) {
+        if Self.desktopOwnedCommands.contains(command) {
             return await self.handleDesktopInvoke(req)
         }
         if let rejection = Self.canvasCommandRejection(req) {
@@ -147,6 +151,8 @@ actor MacNodeRuntime {
         var action: String?
     }
 
+    // One desktop permit must cover admission, invoke, close, and revocation cleanup.
+    // swiftlint:disable:next cyclomatic_complexity
     private func handleDesktopInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let envelope: DesktopExecutionEnvelope
         do {
@@ -176,12 +182,22 @@ actor MacNodeRuntime {
                     return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: #"{"ok":true}"#)
                 }
                 await self.cancelDesktopInvokes(permits: [permit])
+                var simulatorCleanupError: Error?
+                do {
+                    try await self.cachedMainActorServices?.stopSimulatorCapture(forExecutionId: id)
+                } catch {
+                    simulatorCleanupError = error
+                }
                 let response: BridgeInvokeResponse = if self.computerControlProvider() == .cua, let nodeHostWorker {
                     await nodeHostWorker.invoke(req)
                 } else {
                     BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: #"{"ok":true}"#)
                 }
-                await desktop.finishClose(permit, succeeded: response.ok)
+                await desktop.finishClose(permit, succeeded: response.ok && simulatorCleanupError == nil)
+                if let simulatorCleanupError {
+                    return Self.errorResponse(
+                        req, code: .unavailable, message: simulatorCleanupError.localizedDescription)
+                }
                 return response
             }
             let permit = try await desktop.admit(executionId: envelope.executionId)
@@ -189,9 +205,17 @@ actor MacNodeRuntime {
             defer { self.activeDesktopInvokes.removeValue(forKey: req.id) }
             let services = await self.mainActorServices()
             let controlsComputer = req.command == OpenClawComputerCommand.act.rawValue ||
-                self.computerControlProvider() == .cua
-            let capabilities: [Capability] = controlsComputer
-                ? [.accessibility, .eventPosting, .screenRecording, .computerControl] : [.screenRecording]
+                req.command == "simulator.act" ||
+                (req.command == OpenClawScreenCommand.snapshot.rawValue && self.computerControlProvider() == .cua)
+            let capabilities: [Capability] = if req.command == "simulator.capture" {
+                []
+            } else if req.command == "simulator.act" {
+                [.computerControl]
+            } else if controlsComputer {
+                [.accessibility, .eventPosting, .screenRecording, .computerControl]
+            } else {
+                [.screenRecording]
+            }
             if let error = await services.missingPermissions(
                 capabilities,
                 disabled: controlsComputer && !self.computerControlEnabled() ? [.computerControl] : [])
@@ -205,9 +229,7 @@ actor MacNodeRuntime {
                 return Self.errorResponse(
                     req, code: .unavailable, message: "UNAVAILABLE: computer control lifecycle changed")
             }
-            if req.command == OpenClawComputerCommand.act.rawValue || self.computerControlProvider() == .cua,
-               !self.computerControlEnabled()
-            {
+            if controlsComputer, !self.computerControlEnabled() {
                 await desktop.invalidate(permit, reason: "computer-disabled")
                 await desktop.finishInvocation(permit)
                 return BridgeInvokeResponse(
@@ -223,7 +245,14 @@ actor MacNodeRuntime {
                     throw MacDesktopAvailabilityCoordinator.AvailabilityError.executionClosed
                 }
                 try Task.checkCancellation()
-                if self.computerControlProvider() == .cua {
+                if req.command == "simulator.capture" {
+                    try await desktop.validate(permit)
+                    response = try await self.handleSimulatorCaptureInvoke(req)
+                } else if req.command == "simulator.act" {
+                    try await desktop.validate(permit)
+                    response = try await self.handleSimulatorInputInvoke(
+                        req, desktopPermit: permit, lifecycleGeneration: generation)
+                } else if self.computerControlProvider() == .cua {
                     guard let nodeHostWorker, await nodeHostWorker.supports(req.command) else {
                         await desktop.finishInvocation(permit)
                         return Self.errorResponse(
@@ -249,6 +278,11 @@ actor MacNodeRuntime {
                 }
                 try await desktop.validate(permit)
             } catch {
+                if req.command == "simulator.capture", envelope.action == "start",
+                   let executionId = envelope.executionId
+                {
+                    try? await self.cachedMainActorServices?.stopSimulatorCapture(forExecutionId: executionId)
+                }
                 await desktop.finishInvocation(permit)
                 throw error
             }
@@ -276,6 +310,15 @@ actor MacNodeRuntime {
         _ permits: [MacDesktopAvailabilityCoordinator.Permit],
         reason: String) async
     {
+        let simulatorCleanupSucceeded: Bool
+        do {
+            try await self.cachedMainActorServices?.stopSimulatorCapture(sessionId: nil)
+            simulatorCleanupSucceeded = true
+        } catch {
+            simulatorCleanupSucceeded = false
+            self.logger
+                .error("Simulator pasteboard cleanup failed during desktop revocation; clear the Simulator clipboard")
+        }
         let desktop = if let desktopAvailability {
             desktopAvailability
         } else {
@@ -284,13 +327,13 @@ actor MacNodeRuntime {
         for permit in permits {
             guard await desktop.beginRevocationCleanup(permit) else { continue }
             await self.cancelDesktopInvokes(permits: [permit])
-            var succeeded = true
+            var succeeded = simulatorCleanupSucceeded
             if self.computerControlProvider() == .cua, let nodeHostWorker, let executionId = permit.executionId {
                 let params = ["action": "__close_execution", "executionId": executionId, "reason": reason]
                 if let json = try? Self.encodePayload(params) {
                     let response = await nodeHostWorker.invoke(BridgeInvokeRequest(
                         id: UUID().uuidString, command: OpenClawComputerCommand.act.rawValue, paramsJSON: json))
-                    succeeded = response.ok
+                    succeeded = succeeded && response.ok
                 } else {
                     succeeded = false
                 }
@@ -760,7 +803,7 @@ extension MacNodeRuntime {
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
-    private func mainActorServices() async -> any MacNodeRuntimeMainActorServices {
+    func mainActorServices() async -> any MacNodeRuntimeMainActorServices {
         if let cachedMainActorServices {
             return cachedMainActorServices
         }
@@ -790,9 +833,19 @@ extension MacNodeRuntime {
         let lifecycleGeneration = self.computerInputReleaseGeneration
         await self.cachedMainActorServices?.releaseHeldInput(
             lifecycleGeneration: lifecycleGeneration)
+        do {
+            try await self.cachedMainActorServices?.stopSimulatorCapture(sessionId: nil)
+        } catch {
+            self.logger.error("Simulator pasteboard cleanup failed during input release; clear the Simulator clipboard")
+        }
     }
 
     func shutdown() async {
+        do {
+            try await self.cachedMainActorServices?.stopSimulatorCapture(sessionId: nil)
+        } catch {
+            self.logger.error("Simulator pasteboard cleanup failed during shutdown; clear the Simulator clipboard")
+        }
         await self.codexThreadCatalogClient.shutdown()
         // Terminal stop settles computer actions through releaseHeldComputerInput
         // first, so no window observation can still write a capture.

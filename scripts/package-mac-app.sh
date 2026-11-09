@@ -413,6 +413,22 @@ fi
 chmod +x "$APP_ROOT/Contents/MacOS/openclaw-mac"
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/openclaw-mac" 2>/dev/null || true
 
+for simulator_product in openclaw-simulator-touch openclaw-simulator-capture; do
+  cp "$(simulator_bin_for_arch "$PRIMARY_ARCH" "$simulator_product")" "$APP_ROOT/Contents/MacOS/$simulator_product"
+  if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+    SIMULATOR_BIN_INPUTS=()
+    for arch in "${BUILD_ARCHS[@]}"; do
+      SIMULATOR_BIN_INPUTS+=("$(simulator_bin_for_arch "$arch" "$simulator_product")")
+    done
+    /usr/bin/lipo -create "${SIMULATOR_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/$simulator_product"
+  fi
+  chmod +x "$APP_ROOT/Contents/MacOS/$simulator_product"
+  /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$simulator_product" 2>/dev/null || true
+done
+mkdir -p "$APP_ROOT/Contents/Resources/TapflowSimulator"
+cp "$ROOT_DIR/apps/macos/ThirdParty/TapflowSimulator/"{LICENSE,LICENSE-APACHE-2.0,NOTICE,UPSTREAM.md} \
+  "$APP_ROOT/Contents/Resources/TapflowSimulator/"
+
 if [[ "$SKIP_MLX_TTS" == "1" ]]; then
   echo "🔇 Skipping MLX TTS helper copy (OPENCLAW_SKIP_MLX_TTS=1) — bundle omits Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
 else

@@ -21,6 +21,24 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
         fps: Double?,
         includeAudio: Bool?) async throws -> (path: String, durationMs: Int, fps: Double, hasAudio: Bool)
 
+    func startSimulatorCapture(executionId: String) async throws -> SimulatorCaptureService.Frame
+    func readSimulatorCapture(sessionId: String, after sequence: UInt64) async throws
+        -> SimulatorCaptureService.Frame
+    func stopSimulatorCapture(sessionId: String?) async throws
+    func stopSimulatorCapture(forExecutionId executionId: String) async throws
+    // Keep the Gateway input envelope and its desktop permit visible at this boundary.
+    // swiftlint:disable:next function_parameter_count
+    func simulatorInput(
+        sessionId: String,
+        action: OpenClawComputerAction,
+        x: Double?,
+        y: Double?,
+        fromX: Double?,
+        fromY: Double?,
+        text: String?,
+        keys: String?,
+        desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws
+
     func locationAuthorizationStatus() -> CLAuthorizationStatus
     func locationAccuracyAuthorization() -> CLAccuracyAuthorization
     func currentLocation(
@@ -41,6 +59,7 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
     let desktopAvailability = MacDesktopAvailabilityCoordinator.shared
     private let screenSnapshotter = ScreenSnapshotService()
     private let screenRecorder = ScreenRecordService()
+    private let simulatorCapture = SimulatorCaptureService()
     private let locationService = MacNodeLocationService()
     private let computerAction = ComputerActionService()
 
@@ -77,6 +96,51 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
             durationMs: durationMs,
             fps: fps,
             includeAudio: includeAudio)
+    }
+
+    func startSimulatorCapture(executionId: String) async throws -> SimulatorCaptureService.Frame {
+        try await self.simulatorCapture.start(executionId: executionId)
+    }
+
+    func readSimulatorCapture(sessionId: String, after sequence: UInt64) async throws
+        -> SimulatorCaptureService.Frame
+    {
+        try await self.simulatorCapture.read(sessionId: sessionId, after: sequence)
+    }
+
+    func stopSimulatorCapture(sessionId: String?) async throws {
+        try await self.simulatorCapture.stop(sessionId: sessionId)
+    }
+
+    func stopSimulatorCapture(forExecutionId executionId: String) async throws {
+        try await self.simulatorCapture.stop(forExecutionId: executionId)
+    }
+
+    // Keep the Gateway input envelope and its desktop permit visible at this boundary.
+    // swiftlint:disable:next function_parameter_count
+    func simulatorInput(
+        sessionId: String,
+        action: OpenClawComputerAction,
+        x: Double?,
+        y: Double?,
+        fromX: Double?,
+        fromY: Double?,
+        text: String?,
+        keys: String?,
+        desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws
+    {
+        try self.desktopAvailability.validate(desktopPermit)
+        try await self.simulatorCapture.input(
+            sessionId: sessionId,
+            action: action,
+            x: x,
+            y: y,
+            fromX: fromX,
+            fromY: fromY,
+            text: text,
+            keys: keys,
+            validate: { try self.desktopAvailability.validate(desktopPermit) })
+        try self.desktopAvailability.validate(desktopPermit)
     }
 
     func locationAuthorizationStatus() -> CLAuthorizationStatus {

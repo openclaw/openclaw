@@ -10,6 +10,7 @@ import {
   createMemo,
   createOptimistic,
   latest,
+  lazy,
   onSettled,
 } from "solid-js";
 import { hostDesktopSetupCopy } from "../../components/desktop/host-desktop-setup.ts";
@@ -37,6 +38,9 @@ import type { Systems } from "./systems-state.ts";
 import "../../styles/systems.css";
 
 registerEnglishCatalog(registerSystemsEnglish);
+const SimulatorPreview = lazy(() => import("./simulator-preview.tsx"), {
+  export: "SimulatorPreview",
+});
 
 export function SystemsPage(props: { controller: Systems; presented: boolean }) {
   let desktopPanel: HTMLElementTagNameMap["openclaw-desktop-panel"] | undefined;
@@ -327,6 +331,14 @@ function SystemsWorkspace(props: {
 }) {
   const controller = () => props.controller;
   const row = () => controller().selected();
+  const availableSimulator = () =>
+    controller().state.rows.find(
+      (entry) => entry.node?.connected && entry.node.commands?.includes("simulator.capture"),
+    );
+  const simulatorNode = () => {
+    const node = row()?.node;
+    return node?.connected && node.commands?.includes("simulator.capture") ? node : undefined;
+  };
   const readStatus = () => {
     latest(props.inventoryRead.read);
     return null;
@@ -338,7 +350,12 @@ function SystemsWorkspace(props: {
       controller().desktopAvailable() &&
       props.presented,
     );
-  const title = () => (row() ? systemName(row()!) : t("systems.select"));
+  const title = () =>
+    simulatorNode() && controller().state.preview === "simulator"
+      ? t("systems.simulator.title")
+      : row()
+        ? systemName(row()!)
+        : t("systems.select");
   const auxiliaryErrors = () => Object.values(controller().state.inventory?.errors ?? {});
   const emptyTitle = () =>
     !controller().connected()
@@ -412,39 +429,95 @@ function SystemsWorkspace(props: {
           class="settings-select systems-mobile-picker"
           aria-label={t("systems.select")}
           title={row() ? systemName(row()!) : undefined}
-          onChange={(event) => controller().select(event.currentTarget.value)}
+          onChange={(event) => {
+            const value = event.currentTarget.value;
+            if (value.startsWith("simulator:")) {
+              controller().select(value.slice("simulator:".length));
+              controller().updatePresentation({ preview: "simulator" });
+            } else {
+              controller().select(value);
+              controller().updatePresentation({ preview: "desktop" });
+            }
+          }}
         >
           <option value="" disabled selected={!row()}>
             {t("systems.select")}
           </option>
+          <Show when={availableSimulator()}>
+            {(entry) => (
+              <option
+                value={`simulator:${entry().environment.id}`}
+                selected={
+                  controller().state.preview === "simulator" &&
+                  controller().state.selectedId === entry().environment.id
+                }
+              >
+                {t("systems.simulator.title")}
+              </option>
+            )}
+          </Show>
           <For each={controller().state.rows}>
             {(entry) => (
               <option
                 value={entry.environment.id}
                 title={systemName(entry)}
-                selected={entry.environment.id === controller().state.selectedId}
+                selected={
+                  entry.environment.id === controller().state.selectedId &&
+                  (controller().state.preview === "desktop" ||
+                    !entry.node?.commands?.includes("simulator.capture"))
+                }
               >
                 {systemName(entry)}
               </option>
             )}
           </For>
         </select>
-        <button
-          class="systems-icon-button"
-          title={t(controller().statsVisible() ? "systems.hideStats" : "systems.stats")}
-          aria-label={t(controller().statsVisible() ? "systems.hideStats" : "systems.stats")}
-          aria-pressed={controller().statsVisible() ? "true" : "false"}
-          onClick={() => {
-            const show = !controller().statsVisible();
-            controller().updatePresentation({ showStats: show });
-            if (show) {
-              // Hidden stats aren't polled, so revealing them must not show an old sample.
-              void controller().refreshTelemetry();
-            }
-          }}
-        >
-          <Icon name="activity" />
-        </button>
+        <Show when={availableSimulator()}>
+          {(entry) => (
+            <button
+              class="systems-text-button"
+              aria-pressed={
+                controller().state.preview === "simulator" &&
+                controller().state.selectedId === entry().environment.id
+                  ? "true"
+                  : "false"
+              }
+              onClick={() => {
+                controller().select(entry().environment.id);
+                controller().updatePresentation({ preview: "simulator" });
+              }}
+            >
+              {t("systems.simulator.title")}
+            </button>
+          )}
+        </Show>
+        <Show when={simulatorNode() && canView()}>
+          <button
+            class="systems-text-button"
+            aria-pressed={controller().state.preview === "desktop" ? "true" : "false"}
+            onClick={() => controller().updatePresentation({ preview: "desktop" })}
+          >
+            {t("systems.desktop")}
+          </button>
+        </Show>
+        <Show when={!(simulatorNode() && controller().state.preview === "simulator")}>
+          <button
+            class="systems-icon-button"
+            title={t(controller().statsVisible() ? "systems.hideStats" : "systems.stats")}
+            aria-label={t(controller().statsVisible() ? "systems.hideStats" : "systems.stats")}
+            aria-pressed={controller().statsVisible() ? "true" : "false"}
+            onClick={() => {
+              const show = !controller().statsVisible();
+              controller().updatePresentation({ showStats: show });
+              if (show) {
+                // Hidden stats aren't polled, so revealing them must not show an old sample.
+                void controller().refreshTelemetry();
+              }
+            }}
+          >
+            <Icon name="activity" />
+          </button>
+        </Show>
         <button
           class="systems-icon-button"
           title={t("systems.details")}
@@ -457,120 +530,141 @@ function SystemsWorkspace(props: {
           <Icon name="panelRightOpen" />
         </button>
       </header>
-      <div
-        class={["systems-overview", { "systems-overview--compact": !controller().statsVisible() }]}
-        role="region"
-        aria-label={`${t("systems.telemetry")} / ${t("systems.backups.title")}`}
-        tabindex={0}
-      >
-        <Show when={props.inventoryRead.receipt()} keyed>
-          {(receipt) => (
-            <Errored
-              fallback={(error) => (
-                <div class="systems-callout systems-callout--error" role="alert">
-                  {formatUiError(error())}
-                  <button
-                    onClick={() => void controller().refresh("manual")}
-                    disabled={props.inventoryRead.pending()}
-                  >
-                    {t("common.retry")}
-                  </button>
-                </div>
-              )}
-            >
-              <Loading on={receipt}>{readStatus()}</Loading>
-            </Errored>
-          )}
-        </Show>
-        {!controller().connected() ? (
-          <div class="systems-callout" role="status">
-            {t("systems.offlineGateway")}
-          </div>
-        ) : null}
-        {auxiliaryErrors().length ? (
-          <details class="systems-callout">
-            <summary>{t("systems.errors")}</summary>
-            <For each={auxiliaryErrors()}>{(error) => <p>{error}</p>}</For>
-          </details>
-        ) : null}
-        {controller().statsVisible() ? (
-          <div class="systems-overview__telemetry">
-            <Show
-              when={row()}
-              fallback={
-                <Show when={props.inventoryRead.pending()}>
-                  <div class="systems-metrics" aria-hidden="true">
-                    <div class="systems-vitals">
-                      <Repeat count={3}>{() => <div class="systems-vital skeleton" />}</Repeat>
-                    </div>
+      {simulatorNode() && controller().state.preview === "simulator" ? null : (
+        <div
+          class={[
+            "systems-overview",
+            { "systems-overview--compact": !controller().statsVisible() },
+          ]}
+          role="region"
+          aria-label={`${t("systems.telemetry")} / ${t("systems.backups.title")}`}
+          tabindex={0}
+        >
+          <Show when={props.inventoryRead.receipt()} keyed>
+            {(receipt) => (
+              <Errored
+                fallback={(error) => (
+                  <div class="systems-callout systems-callout--error" role="alert">
+                    {formatUiError(error())}
+                    <button
+                      onClick={() => void controller().refresh("manual")}
+                      disabled={props.inventoryRead.pending()}
+                    >
+                      {t("common.retry")}
+                    </button>
                   </div>
-                </Show>
-              }
-            >
-              {(selected) => (
-                <SystemMeasurements
-                  row={selected()}
-                  controller={controller()}
-                  summary
-                  onDetails={() => controller().updatePresentation({ showDetails: true })}
-                />
-              )}
-            </Show>
-          </div>
-        ) : null}
-        {!row() || row()!.environment.id === "gateway" ? (
-          <SystemsBackups
-            controller={controller()}
-            onDetails={() => controller().updatePresentation({ showDetails: true })}
-          />
-        ) : null}
-      </div>
+                )}
+              >
+                <Loading on={receipt}>{readStatus()}</Loading>
+              </Errored>
+            )}
+          </Show>
+          {!controller().connected() ? (
+            <div class="systems-callout" role="status">
+              {t("systems.offlineGateway")}
+            </div>
+          ) : null}
+          {auxiliaryErrors().length ? (
+            <details class="systems-callout">
+              <summary>{t("systems.errors")}</summary>
+              <For each={auxiliaryErrors()}>{(error) => <p>{error}</p>}</For>
+            </details>
+          ) : null}
+          {controller().statsVisible() ? (
+            <div class="systems-overview__telemetry">
+              <Show
+                when={row()}
+                fallback={
+                  <Show when={props.inventoryRead.pending()}>
+                    <div class="systems-metrics" aria-hidden="true">
+                      <div class="systems-vitals">
+                        <Repeat count={3}>{() => <div class="systems-vital skeleton" />}</Repeat>
+                      </div>
+                    </div>
+                  </Show>
+                }
+              >
+                {(selected) => (
+                  <SystemMeasurements
+                    row={selected()}
+                    controller={controller()}
+                    summary
+                    onDetails={() => controller().updatePresentation({ showDetails: true })}
+                  />
+                )}
+              </Show>
+            </div>
+          ) : null}
+          {!row() || row()!.environment.id === "gateway" ? (
+            <SystemsBackups
+              controller={controller()}
+              onDetails={() => controller().updatePresentation({ showDetails: true })}
+            />
+          ) : null}
+        </div>
+      )}
       <div class="systems-body">
         <div class="systems-desktop">
-          {canView() && row() ? (
-            <Desktop />
-          ) : row()?.environment.id === "gateway" &&
-            controller().connected() &&
-            row()!.environment.status === "available" &&
-            (row()!.environment.desktopSetup ||
-              (row()!.environment.desktop &&
-                controller().hostDesktopEnabled() &&
-                controller().context.runtimeConfig.canPatch === true)) ? (
-            <HostDesktopSetup
-              controller={controller()}
-              row={row()!}
-              loading={props.inventoryRead.pending()}
-            />
-          ) : (
-            <div
-              class="systems-state"
-              role="status"
-              style={{
-                visibility:
-                  props.inventoryRead.pending() && !controller().state.inventory
-                    ? "hidden"
-                    : undefined,
-              }}
-            >
-              <span class="systems-state__icon" aria-hidden="true">
-                <Icon name="monitor" />
-              </span>
-              <h2>{emptyTitle()}</h2>
-              <p>{emptyHint()}</p>
-              {row() ? (
-                <button
-                  class="systems-text-button"
-                  onClick={() =>
-                    controller().updatePresentation({
-                      showDetails: !controller().state.showDetails,
-                    })
-                  }
+          <Show
+            when={Boolean(
+              simulatorNode() &&
+              controller().state.preview === "simulator" &&
+              controller().context.gateway.snapshot.client,
+            )}
+            fallback={
+              canView() && row() ? (
+                <Desktop />
+              ) : row()?.environment.id === "gateway" &&
+                controller().connected() &&
+                row()!.environment.status === "available" &&
+                (row()!.environment.desktopSetup ||
+                  (row()!.environment.desktop &&
+                    controller().hostDesktopEnabled() &&
+                    controller().context.runtimeConfig.canPatch === true)) ? (
+                <HostDesktopSetup
+                  controller={controller()}
+                  row={row()!}
+                  loading={props.inventoryRead.pending()}
+                />
+              ) : (
+                <div
+                  class="systems-state"
+                  role="status"
+                  style={{
+                    visibility:
+                      props.inventoryRead.pending() && !controller().state.inventory
+                        ? "hidden"
+                        : undefined,
+                  }}
                 >
-                  {t("systems.details")}
-                </button>
-              ) : null}
-            </div>
-          )}
+                  <span class="systems-state__icon" aria-hidden="true">
+                    <Icon name="monitor" />
+                  </span>
+                  <h2>{emptyTitle()}</h2>
+                  <p>{emptyHint()}</p>
+                  {row() ? (
+                    <button
+                      class="systems-text-button"
+                      onClick={() =>
+                        controller().updatePresentation({
+                          showDetails: !controller().state.showDetails,
+                        })
+                      }
+                    >
+                      {t("systems.details")}
+                    </button>
+                  ) : null}
+                </div>
+              )
+            }
+          >
+            <SimulatorPreview
+              nodeId={simulatorNode()!.nodeId}
+              client={controller().context.gateway.snapshot.client!}
+              presented={props.presented}
+              canControl={simulatorNode()!.commands?.includes("simulator.act") === true}
+            />
+          </Show>
         </div>
         {controller().state.showDetails ? (
           <SystemsDetails controller={controller()} row={row()} />
