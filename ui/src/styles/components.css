@@ -3240,11 +3240,6 @@ select.data-table-pagination__size {
   .sidebar-recent-session .session-action:disabled {
     opacity: 0.35;
   }
-
-  /* Keep the row link hit area clear of the always-tappable touch actions. */
-  .sidebar-recent-session .sidebar-recent-session__link {
-    margin-inline-end: var(--session-row-actions-reserve, 0px);
-  }
 }
 
 .session-row-host--pinned .session-action--pin svg {

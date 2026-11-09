@@ -2749,12 +2749,13 @@ a:is(
     inset: 50% 4px auto auto;
   }
 
-  .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__text {
-    padding-right: var(--session-row-actions-reserve);
+  /* Reserve touch actions outside the link, without charging its text twice. */
+  .sidebar-recent-session > .sidebar-recent-session__link {
+    margin-inline-end: var(--session-row-actions-reserve);
   }
 
-  .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__title-row {
-    padding-right: 0;
+  .sidebar-recent-session__text {
+    --session-row-actions-reserve: 0px;
   }
 }
 
