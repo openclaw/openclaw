@@ -145,10 +145,9 @@ export function sidebarPanelDefinitions(
     ...[...pluginPanels].map(([slot, entry]): SidebarPanelDefinition => ({
       slot,
       label: entry?.value.label ?? slot.slice("plugin:".length),
-      // SAFETY: the own-key check admits only names from the fixed icon registry.
       icon:
         entry?.value.icon && Object.hasOwn(iconData, entry.value.icon)
-          ? (entry.value.icon as IconName)
+          ? (entry.value.icon as IconName) // SAFETY: the own-key check admits only registry names.
           : "plug",
       iconSvg: entry?.panelIcon,
       available: entry !== undefined,
