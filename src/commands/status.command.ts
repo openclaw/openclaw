@@ -119,9 +119,15 @@ export async function statusCommand(
   if (health && "error" in health) {
     // Keep the machine output stable (the probe error alone) while the human output
     // names a concrete recovery step, matching the actionable-error contract.
+    // `gateway start` only applies to a stopped local managed service; a remote target
+    // is not recoverable from this CLI, so keep the hint target-neutral there.
+    const recoveryHint =
+      scan.gatewayMode === "local"
+        ? "Run `openclaw gateway start` to start a managed gateway."
+        : "Check that the configured remote gateway is running and reachable.";
     throw new ExpectedCliError({
       message: health.error,
-      humanOutput: `${health.error}\nRun \`openclaw gateway start\` to start a managed gateway.`,
+      humanOutput: `${health.error}\n${recoveryHint}`,
       machineOutput: health.error,
     });
   }

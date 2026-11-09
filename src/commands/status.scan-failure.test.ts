@@ -104,7 +104,7 @@ it.each([
 );
 
 describe("status --deep gateway health failures", () => {
-  function createUnreachableScan() {
+  function createUnreachableScan(gatewayMode: "local" | "remote" = "local") {
     return {
       cfg: { update: { channel: "stable" } },
       sourceConfig: {},
@@ -113,8 +113,11 @@ describe("status --deep gateway health failures", () => {
       update: { installKind: "npm", git: { tag: null, branch: null } },
       memory: null,
       memoryPlugin: null,
-      gatewayMode: "local",
-      gatewayConnection: { url: "ws://127.0.0.1:18789", urlSource: "config" },
+      gatewayMode,
+      gatewayConnection: {
+        url: gatewayMode === "local" ? "ws://127.0.0.1:18789" : "ws://gw.internal:18789",
+        urlSource: "config",
+      },
       remoteUrlMissing: false,
       gatewayReachable: false,
       gatewayProbe: null,
@@ -127,8 +130,7 @@ describe("status --deep gateway health failures", () => {
     };
   }
 
-  it("reports the gateway health reason instead of a generic CLI failure", async () => {
-    mocks.scan.mockResolvedValue(createUnreachableScan());
+  function runStatusDeep() {
     mocks.gateway.mockResolvedValue({
       installed: false,
       loadState: { status: "not-loaded" },
@@ -136,11 +138,34 @@ describe("status --deep gateway health failures", () => {
       command: null,
       env: {},
     });
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    return statusCommand({ deep: true }, { log: vi.fn(), error: vi.fn(), exit: vi.fn() });
+  }
 
-    await expect(statusCommand({ deep: true }, runtime)).rejects.toMatchObject({
+  it("reports the gateway health reason instead of a generic CLI failure", async () => {
+    mocks.scan.mockResolvedValue(createUnreachableScan());
+    await expect(runStatusDeep()).rejects.toMatchObject({
       name: "ExpectedCliError",
       message: "Gateway is unreachable",
+    });
+  });
+
+  it("recommends a local start only for a local gateway", async () => {
+    mocks.scan.mockResolvedValue(createUnreachableScan("local"));
+    await expect(runStatusDeep()).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: "Gateway is unreachable",
+      humanOutput:
+        "Gateway is unreachable\nRun `openclaw gateway start` to start a managed gateway.",
+    });
+  });
+
+  it("keeps the remote recovery hint target-neutral", async () => {
+    mocks.scan.mockResolvedValue(createUnreachableScan("remote"));
+    await expect(runStatusDeep()).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: "Gateway is unreachable",
+      humanOutput:
+        "Gateway is unreachable\nCheck that the configured remote gateway is running and reachable.",
     });
   });
 });
