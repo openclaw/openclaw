@@ -605,66 +605,59 @@ function SystemsWorkspace(props: {
       )}
       <div class="systems-body">
         <div class="systems-desktop">
-          <Show
-            when={Boolean(
-              simulatorNode() &&
-              controller().state.preview === "simulator" &&
-              controller().context.gateway.snapshot.client,
-            )}
-            fallback={
-              canView() && row() ? (
-                <Desktop />
-              ) : row()?.environment.id === "gateway" &&
-                controller().connected() &&
-                row()!.environment.status === "available" &&
-                (row()!.environment.desktopSetup ||
-                  (row()!.environment.desktop &&
-                    controller().hostDesktopEnabled() &&
-                    controller().context.runtimeConfig.canPatch === true)) ? (
-                <HostDesktopSetup
-                  controller={controller()}
-                  row={row()!}
-                  loading={props.inventoryRead.pending()}
-                />
-              ) : (
-                <div
-                  class="systems-state"
-                  role="status"
-                  style={{
-                    visibility:
-                      props.inventoryRead.pending() && !controller().state.inventory
-                        ? "hidden"
-                        : undefined,
-                  }}
-                >
-                  <span class="systems-state__icon" aria-hidden="true">
-                    <Icon name="monitor" />
-                  </span>
-                  <h2>{emptyTitle()}</h2>
-                  <p>{emptyHint()}</p>
-                  {row() ? (
-                    <button
-                      class="systems-text-button"
-                      onClick={() =>
-                        controller().updatePresentation({
-                          showDetails: !controller().state.showDetails,
-                        })
-                      }
-                    >
-                      {t("systems.details")}
-                    </button>
-                  ) : null}
-                </div>
-              )
-            }
-          >
+          {simulatorNode() &&
+          controller().state.preview === "simulator" &&
+          controller().context.gateway.snapshot.client ? (
             <SimulatorPreview
               nodeId={simulatorNode()!.nodeId}
               client={controller().context.gateway.snapshot.client!}
               presented={props.presented}
               canControl={simulatorNode()!.commands?.includes("simulator.act") === true}
             />
-          </Show>
+          ) : canView() && row() ? (
+            <Desktop />
+          ) : row()?.environment.id === "gateway" &&
+            controller().connected() &&
+            row()!.environment.status === "available" &&
+            (row()!.environment.desktopSetup ||
+              (row()!.environment.desktop &&
+                controller().hostDesktopEnabled() &&
+                controller().context.runtimeConfig.canPatch === true)) ? (
+            <HostDesktopSetup
+              controller={controller()}
+              row={row()!}
+              loading={props.inventoryRead.pending()}
+            />
+          ) : (
+            <div
+              class="systems-state"
+              role="status"
+              style={{
+                visibility:
+                  props.inventoryRead.pending() && !controller().state.inventory
+                    ? "hidden"
+                    : undefined,
+              }}
+            >
+              <span class="systems-state__icon" aria-hidden="true">
+                <Icon name="monitor" />
+              </span>
+              <h2>{emptyTitle()}</h2>
+              <p>{emptyHint()}</p>
+              {row() ? (
+                <button
+                  class="systems-text-button"
+                  onClick={() =>
+                    controller().updatePresentation({
+                      showDetails: !controller().state.showDetails,
+                    })
+                  }
+                >
+                  {t("systems.details")}
+                </button>
+              ) : null}
+            </div>
+          )}
         </div>
         {controller().state.showDetails ? (
           <SystemsDetails controller={controller()} row={row()} />
