@@ -7,12 +7,14 @@ import android.content.Context
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -45,9 +47,9 @@ class AndroidLicenseNoticesTest {
     try {
       bindNodeRuntimeTestFixture(app, runtime)
       val model = MainViewModel(app, prefs, SavedStateHandle()).also { models.put("settings", it) }
+
       // Seed external data only; selection, saving, restoration and Back use the real screens.
-      fun <T> summaryState(field: String): MutableStateFlow<GatewaySummaryState<T>> =
-        ReflectionHelpers.getField(ReflectionHelpers.getField<Any>(runtime, field), "mutableState")
+      fun <T> summaryState(field: String): MutableStateFlow<GatewaySummaryState<T>> = ReflectionHelpers.getField(ReflectionHelpers.getField<Any>(runtime, field), "mutableState")
 
       val skills = summaryState<GatewaySkillsSummary>("skillsSummary")
       skills.value =
@@ -112,7 +114,8 @@ class AndroidLicenseNoticesTest {
           }
           composeRule.runOnIdle { logs.value = logSummary }
         }
-        composeRule.onNodeWithContentDescription("Back").performScrollTo().performClick()
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
+        composeRule.onNodeWithContentDescription("Back").performClick()
         restoration.emulateSavedInstanceStateRestore()
         composeRule.onNodeWithText(detail, substring = true).assertDoesNotExist()
         composeRule.onNodeWithText(item).performScrollTo().assertIsDisplayed()
