@@ -203,6 +203,7 @@ type OffsetOwner = {
   onLayoutCorrection(before: number, after: number): void;
   invalidate(): void;
   onOffset(readerDelta: number): void;
+  onWheel?(delta: number): void;
   onReaderScroll(towardEnd?: boolean): void;
   onNativeScroll?(event: Event): void;
   onComposerLayout(changed: boolean): void;
@@ -408,6 +409,40 @@ export function observeTranscriptOffset(
       owner.endAnchor.capture(element);
     }
   };
+  const wheelForecastDelta = (event: WheelEvent): number => {
+    if (
+      !owner.onWheel ||
+      event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey ||
+      event.shiftKey ||
+      !event.deltaY ||
+      Math.abs(event.deltaX) > Math.abs(event.deltaY)
+    ) {
+      return 0;
+    }
+    for (const target of event.composedPath()) {
+      if (target === element) {
+        break;
+      }
+      if (!(target instanceof HTMLElement)) {
+        continue;
+      }
+      const style = getComputedStyle(target);
+      if (
+        /^(auto|scroll)$/.test(style.overflowY) &&
+        ((event.deltaY < 0
+          ? target.scrollTop > 0
+          : target.scrollTop + target.clientHeight < target.scrollHeight - 1) ||
+          style.overscrollBehaviorY === "contain" ||
+          style.overscrollBehaviorY === "none")
+      ) {
+        return 0;
+      }
+    }
+    return event.deltaY;
+  };
   const interrupt = (event: Event) => {
     if (
       event.defaultPrevented ||
@@ -434,6 +469,7 @@ export function observeTranscriptOffset(
       owner.state.touching = contactIds.size > 0;
       touchY = localTouchY(event);
     }
+    const wheelDelta = event instanceof WheelEvent ? wheelForecastDelta(event) : 0;
     owner.endAnchor.cancelComposerResize();
     owner.state.pendingInteractionAnchor = null;
     owner.state.maintenanceScrollOffset = null;
@@ -450,6 +486,7 @@ export function observeTranscriptOffset(
     ) {
       owner.cancelScroll();
     }
+    const beforeSync = nativeOffset;
     syncOffset();
     const towardEnd =
       (event instanceof WheelEvent && event.deltaY > 0) ||
@@ -457,6 +494,18 @@ export function observeTranscriptOffset(
         (["ArrowDown", "PageDown", "End"].includes(event.key) ||
           (event.key === " " && !event.shiftKey)));
     publishReaderIntent(towardEnd ? true : event instanceof KeyboardEvent ? false : undefined);
+    if (wheelDelta) {
+      // Native travel can precede this listener. It is not a wheel receipt;
+      // reduce speculation by same-direction travel without claiming a causal match.
+      const observed = nativeOffset - beforeSync;
+      const remaining =
+        Math.sign(observed) === Math.sign(wheelDelta)
+          ? Math.sign(wheelDelta) * Math.max(0, Math.abs(wheelDelta) - Math.abs(observed))
+          : wheelDelta;
+      if (remaining) {
+        owner.onWheel?.(remaining);
+      }
+    }
   };
   const moveTouch = (event: TouchEvent) => {
     const nextY = localTouchY(event);

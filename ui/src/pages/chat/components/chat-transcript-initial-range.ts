@@ -2,6 +2,7 @@ import type { Range, Virtualizer } from "@tanstack/virtual-core";
 import type { MarkdownPrewarmMode } from "../../../components/markdown.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { createTranscriptEndSettlement } from "./chat-transcript-end-anchor.ts";
+import * as forecast from "./chat-transcript-forecast.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 
 // A few viewports avoid repeat mounts without making every scroll restyle a
@@ -36,6 +37,7 @@ export class TranscriptInitialRange {
   private idleStep = 1;
   private idleMeasureStep = 1;
   private scrollSample = { time: 0, distance: 0, direction: -1 };
+  private pendingWheel?: { delta: number; time: number };
   private viewportOnly = false;
   private cachedWindow = false;
   private forecastTimeout?: ReturnType<typeof setTimeout>;
@@ -119,10 +121,18 @@ export class TranscriptInitialRange {
       for (const index of this.endIndexes()) {
         indexes.add(index);
       }
-      const limit = this.isReaderMoving()
-        ? Math.max(this.preparedRowLimit, indexes.size + this.scrollPrepareRowLimit)
-        : Infinity;
-      for (const index of this.forecastIndexes(range, indexes)) {
+      const limit =
+        this.isReaderMoving() || this.pendingWheelDelta() !== 0
+          ? Math.max(this.preparedRowLimit, indexes.size + this.scrollPrepareRowLimit)
+          : Infinity;
+      for (const index of forecast.indexes(
+        this.virtualizer(),
+        this.forecastViewport(),
+        range,
+        indexes,
+        this.rows,
+        this.scrollPrepareRowLimit,
+      )) {
         indexes.add(index);
         // Keep the forecast alive until arrival instead of remounting it a frame later.
         const key = this.rows[index]!.key;
@@ -182,32 +192,15 @@ export class TranscriptInitialRange {
       // A resumed reader can have a cached moving range without this predecessor.
       this.refresh();
     }
-    const forecastRowKeys = new Set<string>();
-    if (!this.viewportOnly && !this.preparingEnd && this.isReaderMoving() && virtualizer.range) {
-      const { direction, distance } = this.scrollSample;
-      const top = virtualizer.scrollOffset ?? 0;
-      const next = Math.max(0, top + direction * distance);
-      const height = virtualizer.scrollRect?.height ?? 600;
-      // Previous forecasts bridge the gap to the next viewport. Retaining their
-      // DOM preserves reversals, but only these two viewports need live layout.
-      for (const item of virtualizer.getVirtualItems()) {
-        const key = rows[item.index]!.key;
-        const approaching =
-          direction < 0
-            ? item.index < virtualizer.range.startIndex
-            : item.index > virtualizer.range.endIndex;
-        const coversViewport =
-          (item.end > top && item.start < top + height) ||
-          (item.end > next && item.start < next + height);
-        if (approaching && coversViewport && this.preparedRowKeys.has(key)) {
-          forecastRowKeys.add(key);
-        }
-      }
-    }
     return {
       activeRowKeys: new Set([...active, ...this.endIndexes()].map((index) => rows[index]!.key)),
       preparingRowKey: this.preparingRowKey,
-      forecastRowKeys,
+      forecastRowKeys: forecast.rowKeys(
+        virtualizer,
+        this.forecastViewport(),
+        rows,
+        this.preparedRowKeys,
+      ),
     };
   }
 
@@ -226,41 +219,25 @@ export class TranscriptInitialRange {
       : [];
   }
 
-  private forecastIndexes(
-    range: { startIndex: number; endIndex: number },
-    mounted: ReadonlySet<number>,
-  ): number[] {
-    if (this.viewportOnly || this.preparingEnd || !this.hasRetainedRows || !this.isReaderMoving()) {
-      return [];
+  private pendingWheelDelta(): number {
+    return this.pendingWheel && performance.now() - this.pendingWheel.time < 100
+      ? this.pendingWheel.delta
+      : 0;
+  }
+
+  private forecastViewport() {
+    if (this.viewportOnly || this.preparingEnd || !this.hasRetainedRows) {
+      return undefined;
     }
-    const virtualizer = this.virtualizer();
-    const viewport = virtualizer.scrollRect?.height ?? 600;
-    // Measurement latency can span several inputs. Multiplying it by velocity
-    // skips the arriving viewport and evicts rows that are still approaching.
-    const distance = this.scrollSample.distance;
-    const direction = this.scrollSample.direction;
-    const top = Math.max(0, (virtualizer.scrollOffset ?? 0) + direction * distance);
-    const first = virtualizer.getVirtualItemForOffset(top);
-    const last = virtualizer.getVirtualItemForOffset(top + viewport);
-    if (!first || !last) {
-      return [];
+    const pendingDelta = this.pendingWheelDelta();
+    if (!pendingDelta && !this.isReaderMoving()) {
+      return undefined;
     }
-    // A fling can skip whole viewports. Prepare its entering edge instead of
-    // laying out every row in a viewport that the next input may skip again.
-    for (
-      let index = direction < 0 ? last.index : first.index;
-      index >= first.index && index <= last.index;
-      index += direction
-    ) {
-      if (
-        (direction < 0 ? index < range.startIndex : index > range.endIndex) &&
-        !mounted.has(index) &&
-        this.rows[index]?.retainDom
-      ) {
-        return [index];
-      }
-    }
-    return [];
+    return forecast.viewport(
+      this.virtualizer(),
+      pendingDelta || this.scrollSample.direction * this.scrollSample.distance,
+      pendingDelta !== 0,
+    );
   }
 
   private normalIndexes(range: Range): number[] {
@@ -313,6 +290,7 @@ export class TranscriptInitialRange {
   }
 
   readonly prepareEnd = (ready: () => void, isCurrent: () => boolean, native: boolean): void => {
+    this.pendingWheel = undefined;
     if (native && this.pending) {
       ready();
       return;
@@ -345,6 +323,7 @@ export class TranscriptInitialRange {
 
   // Keep the destination in flow until its real size and native endpoint agree.
   readonly finishEndWhenSettled = (): void => {
+    this.pendingWheel = undefined;
     if (!this.preparingEnd) {
       this.preparingEnd = true;
       this.refresh();
@@ -427,6 +406,7 @@ export class TranscriptInitialRange {
   }
 
   updateRows(rows: readonly TranscriptRow[]): void {
+    this.pendingWheel = undefined;
     this.idleStep = 1;
     this.idleMeasureStep = 1;
     const indexes = this.rowIndexes;
@@ -462,6 +442,13 @@ export class TranscriptInitialRange {
   }
 
   recordReaderMovement(delta: number): void {
+    const pendingDelta = this.pendingWheelDelta();
+    if (this.pendingWheel) {
+      this.pendingWheel.delta =
+        Math.sign(delta) === Math.sign(pendingDelta)
+          ? Math.sign(pendingDelta) * Math.max(0, Math.abs(pendingDelta) - Math.abs(delta))
+          : 0;
+    }
     this.idleStep = 1;
     this.idleMeasureStep = 1;
     this.scrollSample = {
@@ -475,8 +462,30 @@ export class TranscriptInitialRange {
       return;
     }
     this.refresh();
+    this.scheduleForecastExpiry();
+  }
+
+  recordWheel(delta: number): void {
+    if (!this.reading || this.preparingEnd || !this.hasRetainedRows || !this.canPrepare()) {
+      return;
+    }
+    this.pendingWheel = {
+      delta: this.pendingWheelDelta() + delta,
+      time: performance.now(),
+    };
+    this.cancelPreparation?.();
+    this.cancelPreparation = undefined;
+    this.preparationIsIdle = false;
+    this.refresh();
+    this.invalidate();
+    this.scheduleForecastExpiry();
+  }
+
+  private scheduleForecastExpiry(): void {
     clearTimeout(this.forecastTimeout);
     this.forecastTimeout = setTimeout(() => {
+      this.forecastTimeout = undefined;
+      this.pendingWheel = undefined;
       this.refresh();
       this.invalidate();
     }, 100);
@@ -528,23 +537,19 @@ export class TranscriptInitialRange {
   }
 
   private retentionKeys(range: { startIndex: number; endIndex: number }): string[] {
-    const keys = [...this.preparedRowKeys];
-    keys.reverse();
-    if (this.isReaderMoving()) {
-      const direction = this.scrollSample.direction;
-      const edge = direction < 0 ? range.startIndex : range.endIndex;
-      const rank = (key: string) => {
-        const ahead = direction * (this.rowIndexes.get(key)! - edge);
-        return ahead > 0 ? ahead : this.rows.length;
-      };
-      keys.sort((left, right) => rank(left) - rank(right));
-    }
-    return keys;
+    return forecast.retainedKeys(
+      this.preparedRowKeys,
+      this.rowIndexes,
+      this.rows.length,
+      range,
+      this.pendingWheelDelta() || (this.isReaderMoving() ? this.scrollSample.direction : 0),
+    );
   }
 
   private queuePreparation(afterFrame = false): void {
     if (
       this.cancelPreparation ||
+      this.pendingWheelDelta() !== 0 ||
       !this.hasPrewarmRows ||
       (!this.hasRetainedRows && this.rows.at(-1)?.streaming) ||
       this.preparingEnd ||
@@ -613,26 +618,12 @@ export class TranscriptInitialRange {
       // HTML warming is synchronous: predict one observed scroll step and walk
       // into that viewport, rather than beyond its leading edge.
       const distance = moving ? this.scrollSample.distance : 0;
-      // At speed, prepare the next viewport rather than rows the reader skips.
-      // Virtual-core resolves this from cached sizes; no neighbor layout reads.
-      const predictedTop = Math.max(
-        0,
-        Math.min(
-          (virtualizer.scrollOffset ?? 0) + direction * distance,
-          Math.max(0, virtualizer.getTotalSize() - viewport),
-        ),
+      const { predictedTop, predicted, overscan, origin } = forecast.preparation(
+        virtualizer,
+        range,
+        direction,
+        distance,
       );
-      const predictedOffset = predictedTop + (direction < 0 ? viewport : 0);
-      const predicted = virtualizer.getVirtualItemForOffset(Math.max(0, predictedOffset));
-      // Ordinary rows mount with overscan. Warm those neighbours as well as
-      // the viewport so its first frame does not parse the cold edge rows.
-      const overscan = distance ? virtualizer.options.overscan : 0;
-      const origin =
-        distance && predicted
-          ? predicted.index - direction * (1 + overscan)
-          : direction > 0
-            ? range.endIndex
-            : range.startIndex;
       const rendered = new Set(virtualizer.getVirtualItems().map((row) => row.key));
       // Before reader navigation, keep warming out of the native scroll geometry.
       const nearGeometryPending =
@@ -782,6 +773,7 @@ export class TranscriptInitialRange {
   }
 
   releaseRows(): void {
+    this.pendingWheel = undefined;
     this.rows = [];
     this.hasIdleDomRows = false;
     this.hasRetainedRows = false;
@@ -790,6 +782,7 @@ export class TranscriptInitialRange {
 
   disconnect(): void {
     clearTimeout(this.forecastTimeout);
+    this.pendingWheel = undefined;
     this.endWork = undefined;
     cancelLayout(this);
     this.cancelPreparation?.();

@@ -23,6 +23,101 @@ function mockAnimationFrames() {
   };
 }
 
+function createPendingWheelRange(viewport = 300) {
+  const rows = Array.from({ length: 200 }, (_, index) => ({
+    kind: "item" as const,
+    key: String(index),
+    item: index,
+    retainDom: true,
+    prewarm: true,
+  }));
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: rows.length,
+    initialRect: { width: 800, height: viewport },
+    initialOffset: 6000,
+    getItemKey: (index) => String(index),
+    getScrollElement: () => null,
+    estimateSize: () => 120,
+    scrollToFn: () => {},
+    observeElementRect: () => () => {},
+    observeElementOffset: () => () => {},
+  });
+  const range = new TranscriptInitialRange(
+    0,
+    () => virtualizer,
+    defaultRangeExtractor,
+    () => {},
+    () => 0,
+    () => true,
+    () => 120,
+    queueMicrotask,
+    () => false,
+    () => true,
+  );
+  range.updateRows(rows);
+  virtualizer.setOptions({
+    ...virtualizer.options,
+    rangeExtractor: (window) => range.extract(window),
+  });
+  range.presentation(rows);
+  range.finish();
+  onTestFinished(() => range.disconnect());
+  return { range, virtualizer, present: () => range.presentation(rows) };
+}
+
+it.each([
+  { direction: 1, first: ["54", "55", "56"], accumulated: ["58", "59", "60"] },
+  { direction: -1, first: ["46", "47", "48"], accumulated: ["42", "43", "44"] },
+])(
+  "prepares pending wheel travel before offsets arrive ($direction)",
+  ({ direction, first, accumulated }) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let now = 1;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    });
+    const { range, virtualizer, present } = createPendingWheelRange();
+    const active = present().activeRowKeys;
+    range.recordWheel(direction * 480);
+    expect(present().forecastRowKeys).toEqual(new Set(first));
+    expect(present().activeRowKeys).toEqual(active);
+    expect(virtualizer.scrollOffset).toBe(6000);
+
+    range.recordWheel(direction * 480);
+    expect(present().forecastRowKeys).toEqual(new Set(accumulated));
+    range.recordReaderMovement(direction * 240);
+    virtualizer.scrollOffset = 6000 + direction * 240;
+    expect(present().forecastRowKeys).toEqual(new Set(accumulated));
+
+    // Opposite native motion retires the speculative destination.
+    range.recordReaderMovement(-direction * 120);
+    virtualizer.scrollOffset = 6000 + direction * 120;
+    for (const key of accumulated) {
+      expect(present().forecastRowKeys.has(key)).toBe(false);
+    }
+    range.recordWheel(direction * 480);
+    expect(present().forecastRowKeys.size).toBeGreaterThan(0);
+    now = 102;
+    vi.advanceTimersByTime(100);
+    expect(present().forecastRowKeys.size).toBe(0);
+  },
+);
+
+it.each([
+  { delta: 2400, expected: ["70", "71", "72", "73"] },
+  { delta: -2400, expected: ["39", "38", "37", "36"] },
+])("bounds a pending destination to the existing row allowance ($delta)", ({ delta, expected }) => {
+  const { range, virtualizer, present } = createPendingWheelRange(1200);
+  const activeCount = present().activeRowKeys.size;
+  range.recordWheel(delta);
+  expect(present().forecastRowKeys).toEqual(new Set(expected));
+  expect(virtualizer.getVirtualItems().length).toBeLessThanOrEqual(activeCount + 4);
+  range.disconnect();
+  expect(present().forecastRowKeys.size).toBe(0);
+});
+
 it("keeps following rows during a viewport-sized jump past shorter-than-estimated rows", () => {
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
     count: 20,

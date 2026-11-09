@@ -23,6 +23,119 @@ import {
   resizeObservers,
 } from "./chat-transcript.test-support.ts";
 
+function createWheelForecastObserver() {
+  const element = document.createElement("div");
+  Object.defineProperties(element, {
+    clientHeight: { value: 300 },
+    scrollHeight: { value: 5000 },
+  });
+  element.scrollTop = 1000;
+  const state = new TranscriptOffsetState();
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: 0,
+    getScrollElement: () => element,
+    estimateSize: () => 120,
+    scrollToFn: () => {},
+    observeElementRect: () => () => {},
+    observeElementOffset: () => () => {},
+  });
+  virtualizer.scrollElement = element;
+  virtualizer.scrollOffset = 1000;
+  virtualizer.targetWindow = window;
+  const onWheel = vi.fn();
+  const onOffset = vi.fn();
+  onTestFinished(
+    observeTranscriptOffset(
+      {
+        state,
+        getScrollElement: () => element,
+        endAnchor: new TranscriptEndAnchor(() => {}),
+        prependAnchor: new TranscriptPrependAnchor(
+          new Map(),
+          () => {},
+          () => false,
+        ),
+        canFollowEnd: () => false,
+        isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
+        cancelScroll: () => {},
+        onLayoutCorrection: () => {},
+        invalidate: () => {},
+        onOffset,
+        onWheel,
+        onReaderScroll: () => {},
+        onComposerLayout: () => {},
+      },
+      virtualizer,
+      (offset) => {
+        virtualizer.scrollOffset = offset;
+      },
+    ),
+  );
+  onWheel.mockClear();
+  onOffset.mockClear();
+  return { element, virtualizer, onWheel, onOffset };
+}
+
+it.each([
+  { name: "pixel", options: {}, expected: true },
+  { name: "horizontal", options: { deltaX: 300 }, expected: false },
+  { name: "line", options: { deltaMode: WheelEvent.DOM_DELTA_LINE }, expected: false },
+  { name: "page", options: { deltaMode: WheelEvent.DOM_DELTA_PAGE }, expected: false },
+  { name: "zoom", options: { ctrlKey: true }, expected: false },
+  { name: "meta", options: { metaKey: true }, expected: false },
+  { name: "alt", options: { altKey: true }, expected: false },
+  { name: "shift", options: { shiftKey: true }, expected: false },
+])("forecasts eligible $name wheel input without consuming it", ({ options, expected }) => {
+  const { element, virtualizer, onWheel } = createWheelForecastObserver();
+  const event = new WheelEvent("wheel", { deltaY: 240, cancelable: true, ...options });
+  element.dispatchEvent(event);
+  expect(onWheel.mock.calls).toEqual(expected ? [[240]] : []);
+  expect(event.defaultPrevented).toBe(false);
+  expect(element.scrollTop).toBe(1000);
+  expect(virtualizer.scrollOffset).toBe(1000);
+});
+
+it.each([
+  { name: "consumed", top: 50, behavior: "auto", cancelled: false, expected: false },
+  { name: "chained", top: 0, behavior: "auto", cancelled: false, expected: true },
+  { name: "contained", top: 0, behavior: "contain", cancelled: false, expected: false },
+  { name: "blocked", top: 0, behavior: "none", cancelled: false, expected: false },
+  { name: "cancelled", top: 0, behavior: "auto", cancelled: true, expected: false },
+])(
+  "forecasts only $name nested wheel movement that can reach the transcript",
+  ({ top, behavior, cancelled, expected }) => {
+    const { element, onWheel } = createWheelForecastObserver();
+    const nested = document.createElement("div");
+    nested.style.overflowY = "auto";
+    nested.style.overscrollBehaviorY = behavior;
+    Object.defineProperties(nested, {
+      clientHeight: { value: 100 },
+      scrollHeight: { value: 500 },
+    });
+    nested.scrollTop = top;
+    if (cancelled) {
+      nested.addEventListener("wheel", (event) => event.preventDefault(), { once: true });
+    }
+    element.append(nested);
+    nested.dispatchEvent(
+      new WheelEvent("wheel", { deltaY: -240, bubbles: true, cancelable: true }),
+    );
+    expect(onWheel.mock.calls).toEqual(expected ? [[-240]] : []);
+  },
+);
+
+it.each([1, -1])(
+  "discounts same-direction native travel observed before a wheel (%s)",
+  (direction) => {
+    const { element, virtualizer, onWheel, onOffset } = createWheelForecastObserver();
+    element.scrollTop += direction * 100;
+    element.dispatchEvent(new WheelEvent("wheel", { deltaY: direction * 240 }));
+    expect(onOffset).toHaveBeenCalledExactlyOnceWith(direction * 100);
+    expect(onWheel).toHaveBeenCalledExactlyOnceWith(direction * 140);
+    expect(virtualizer.scrollOffset).toBe(1000 + direction * 100);
+  },
+);
+
 it.each([false, true])(
   "classifies an idle or pending offset without layout (pending: %s)",
   (pending) => {
