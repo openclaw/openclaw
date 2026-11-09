@@ -1,0 +1,5 @@
+150
+# LOCAL 2026.11.8 row 13; source cbe182f49c4cac33f339c03a77b983f3d7a52ccc.
+# Actual persisted image replay preserves allowed roots, fresh-attempt delivery and unavailable notices; traversal controls retained.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
