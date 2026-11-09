@@ -10,6 +10,7 @@ import { createPluginCommandRuntime } from "openclaw/plugin-sdk/plugin-command-r
 import { matchPluginCommand, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { expect, it } from "vitest";
 import { buildPluginTelegramMenuCommands } from "./bot-native-command-menu.js";
+import { buildCommandsPaginationKeyboard, resolveCommandsPageAgentId } from "./command-ui.js";
 import { inputRichBlocksToPlainText } from "./rich-block-model.js";
 import { planTelegramTextDeliveryPages } from "./telegram-text-delivery.js";
 
@@ -86,4 +87,14 @@ it.each([false, true])("encodes delivered command names as code (rich=%s)", (ric
       );
     }
   });
+});
+
+it.each([4, 64])("round-trips /commands page buttons for a %i-char agent id", (length) => {
+  const id = "a".repeat(length);
+  const cfg = { agents: { entries: { [id]: {} } } };
+  for (const { callback_data: data } of buildCommandsPaginationKeyboard(99, 100, id)[0]!) {
+    expect(Buffer.byteLength(data)).toBeLessThanOrEqual(64);
+    expect(resolveCommandsPageAgentId(cfg, data.split(":")[1])).toBe(id);
+  }
+  expect(resolveCommandsPageAgentId(cfg, "~unknown")).toBeUndefined();
 });
