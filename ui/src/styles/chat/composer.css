@@ -2011,7 +2011,9 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .agent-chat__input .chat-controls__inline-select-trigger {
+  border-block: var(--chat-composer-chip-surface-inset, 0px) solid transparent;
   border-radius: var(--radius-full);
+  background-clip: padding-box;
 }
 
 .agent-chat__composer-lead .chat-controls__permission-trigger {

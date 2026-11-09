@@ -1248,7 +1248,7 @@ button.chat-reply-attribution__target {
   padding: 2px 3px;
   margin: -2px -3px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: none;
   color: inherit;
   font: inherit;
@@ -2254,7 +2254,7 @@ button.chat-reply-attribution__target:disabled {
   gap: 8px;
   min-height: 32px;
   padding-block: 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   list-style: none;
   cursor: default;
 }

@@ -235,8 +235,11 @@ div.chat-thread:where(.chat-thread--annotations) {
      their default proportion of that column. */
   --chat-message-column-max: min(var(--chat-message-max-width, 100%), 900px, 68%);
   --chat-run-block-gap: 8px;
+  /* Equal insets: the user's reserved avatar column on the trailing side
+     mirrors the assistant's on the leading side, so both sit the same distance
+     inside the composer's edges. */
   --chat-group-inset-start: 4px;
-  --chat-group-inset-end: 16px;
+  --chat-group-inset-end: 4px;
   display: flex;
   gap: var(--chat-avatar-gap);
   align-items: flex-start;

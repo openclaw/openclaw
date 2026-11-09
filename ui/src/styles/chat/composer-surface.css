@@ -176,8 +176,13 @@
      chip restating its own. They are peers describing the next turn, and a
      reader should not be able to tell which feature shipped which one. Consumers
      outside the composer keep the same values as fallbacks; the mobile block
-     raises the whole family to touch size by rewriting these four. */
-  --chat-composer-chip-height: 30px;
+     raises the whole family to touch size by rewriting these four.
+     The chip box is the icon buttons' box, so every control in the action row
+     shares one height and one centre line; the pill it paints sits on the
+     30px surface tier like the primary action's painted disc (the inset below
+     is the transparent block border that keeps the paint off the box edge). */
+  --chat-composer-chip-height: var(--chat-composer-send-size);
+  --chat-composer-chip-surface-inset: 1px;
   --chat-composer-chip-gap: 4px;
   --chat-composer-chip-padding-inline: 8px;
   --chat-composer-chip-text: calc(13px * var(--control-ui-text-scale));
