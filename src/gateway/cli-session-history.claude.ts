@@ -489,6 +489,9 @@ export async function resolveClaudeCliSessionFilePathAsync(
 
   const batchSize = 16;
   for (let offset = 0; offset < projectEntries.length; offset += batchSize) {
+    // The host channel permits one outstanding authorization request. Check the
+    // batch before starting its filesystem probes; none of their setup awaits.
+    await params.assertNativeHistoryAuthorized?.();
     const candidates = await Promise.all(
       projectEntries.slice(offset, offset + batchSize).map(async (entry) => {
         if (!entry.isDirectory()) {
@@ -501,7 +504,6 @@ export async function resolveClaudeCliSessionFilePathAsync(
         if (!candidate) {
           return undefined;
         }
-        await params.assertNativeHistoryAuthorized?.();
         try {
           await fs.promises.access(candidate);
           return candidate;

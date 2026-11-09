@@ -188,6 +188,22 @@ describe("Claude CLI history config directory", () => {
     },
   );
 
+  it("imports native history among multiple project directories through one worker channel", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const fixture = await createFixture(state, {
+        configDir: state.path("multi-project-profile"),
+      });
+      await fs.mkdir(path.join(fixture.projectsRoot, "unrelated-project"));
+      const page = await readFixture(fixture);
+      expect(page.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ content: "Imported answer" }),
+          expect.objectContaining({ content: "Canonical answer" }),
+        ]),
+      );
+    });
+  });
+
   it.each(
     ["explicit", "run", "workspace"].flatMap((source) =>
       ["relative profile", ""].map((configDir) => ({ source, configDir })),
