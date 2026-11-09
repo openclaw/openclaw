@@ -513,6 +513,16 @@ export function observeTranscriptOffset(
     if (!scrolling && owner.prependAnchor.hasPrepend) {
       owner.invalidate();
     }
+    // Firefox can report residual smooth motion after a measured end clamp.
+    // Finish the issued Latest command at idle; fresh reader input already cancels it.
+    if (
+      !scrolling &&
+      owner.state.scrollCommand?.target === "end" &&
+      owner.state.scrollCommand.offset !== undefined &&
+      !hasReachedIssuedEnd(owner.state, element, 1)
+    ) {
+      instance.scrollToEnd({ behavior: "instant" });
+    }
     // Retire a completed journey before delayed native idle can recapture a
     // reader who has since been resize-clamped to a different end. Completion
     // must not stop a smooth animation on its penultimate 1px frame; retain
