@@ -13,14 +13,20 @@ import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.Context
 import android.graphics.Bitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -98,6 +104,49 @@ class GatewaySettingsScreenTest {
       assertTrue(prefs.gatewayRegistry.rename("manual|127.0.0.1|18789", ""))
     }
     composeRule.onNodeWithText("OpenClaw Gateway").assertIsDisplayed()
+  }
+
+  @Test
+  fun savedGatewaySwitchesExposeTheirOwnNamesAndFollowRenames() {
+    showGateway(connected = true)
+    val otherId = "manual|127.0.0.2|18789"
+    composeRule.runOnIdle {
+      prefs.gatewayRegistry.upsert(
+        GatewayRegistryEntry(
+          stableId = otherId,
+          kind = GatewayRegistryEntryKind.MANUAL,
+          name = "Other QA Gateway",
+          host = "127.0.0.2",
+          port = 18789,
+          tls = false,
+        ),
+      )
+    }
+    val switchRole = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch)
+    composeRule
+      .onNode(switchRole and hasContentDescription("Local QA Gateway"))
+      .performScrollTo()
+      .assertIsOn()
+      .assertIsNotEnabled()
+    composeRule
+      .onNode(switchRole and hasContentDescription("Other QA Gateway"))
+      .performScrollTo()
+      .assertIsOff()
+      .assertIsEnabled()
+    // The row selects the foreground gateway; the trailing switch is a separate action.
+    composeRule
+      .onNode(hasText("Other QA Gateway") and hasClickAction())
+      .assertExists()
+
+    composeRule.runOnIdle { assertTrue(prefs.gatewayRegistry.rename(otherId, "Renamed QA Gateway")) }
+    composeRule
+      .onNode(switchRole and hasContentDescription("Other QA Gateway"))
+      .assertDoesNotExist()
+    composeRule
+      .onNode(switchRole and hasContentDescription("Renamed QA Gateway"))
+      .performScrollTo()
+      .assertIsOff()
+      .assertIsEnabled()
   }
 
   @Test

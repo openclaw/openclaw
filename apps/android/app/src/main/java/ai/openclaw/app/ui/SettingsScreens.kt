@@ -1757,6 +1757,7 @@ private fun GatewaySettingsScreen(
             },
             trailing = {
               Switch(
+                modifier = Modifier.semantics { contentDescription = entry.displayName },
                 checked = entry.stableId == activeGatewayStableId || entry.stableId in connectedGatewayStableIds,
                 onCheckedChange = { enabled ->
                   viewModel.setGatewayConnectionEnabled(entry.stableId, enabled)
