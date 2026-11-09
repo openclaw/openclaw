@@ -188,6 +188,10 @@ before they expire.
 
 This keeps media rendering compatible with browser-native media elements without putting reusable gateway credentials in visible media URLs.
 
+Local and uploaded SVG previews retain their image bytes, but cannot run scripts
+or load external subresources when opened as documents. This restriction applies
+inside allowed folders too; filesystem access does not make image markup trusted.
+
 Uploaded and local chat image previews rendered with native image elements keep an already-loaded image visible during temporary connection or metadata-renewal failures. That failure tolerance applies only to the mounted image; it does not extend its media ticket or authorize fresh reads. Scrolling can reuse a successfully decoded image from the bounded in-memory preview cache while its existing metadata and ticket remain valid, without another image download or loading placeholder. An explicit missing or access-denied response, or a change to the source, credentials, or access scope, clears the retained image. When the UI receives a sharing invalidation, a role-configuration change, or the connection close for a role reassignment, cached previews must pass fresh admission before remounting.
 
 If uploaded or local image bytes fail to load or decode after the availability check succeeds, the broken preview becomes an **Unavailable** card with **Retry**. Native image errors do not reveal the HTTP status, so the UI does not automatically repeat the byte request. **Retry** checks current availability and access before loading the image again; it does not grant an outside-folder allowance or extend an existing ticket.
