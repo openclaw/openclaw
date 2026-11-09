@@ -26,6 +26,7 @@ vi.mock("./bash-tools.exec-host-gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./bash-tools.exec-host-gateway.js")>()),
   processGatewayAllowlist: processGatewayAllowlistMock,
 }));
+// mock-isolation: keep remote node dispatch outside these local exec preflight tests.
 vi.mock("./bash-tools.exec-host-node.js", () => ({
   executeNodeHostCommand: nodeHostMock,
 }));
