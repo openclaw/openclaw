@@ -1,0 +1,4 @@
+# Unit test for readGatewayLockProcessNamespace on a kernel without PID namespaces (no
+# /proc/self/ns/pid): sentinel recorded, same-boot owner classifies as same, reboot as dead, plus the
+# EACCES and missing-/proc guards. Exact net growth for PR #195664.
+79

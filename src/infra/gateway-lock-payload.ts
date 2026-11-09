@@ -37,6 +37,7 @@ function readLinuxPidNamespaceInode(): string | undefined {
   try {
     return fs.readlinkSync("/proc/self/ns/pid").match(/^pid:\[(\d+)\]$/u)?.[1];
   } catch (error) {
+    // SAFETY: fs.readlinkSync rejects with a Node errno exception; code is read defensively.
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
     }
