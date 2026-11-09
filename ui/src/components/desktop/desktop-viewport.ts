@@ -3,7 +3,7 @@ import type { DesktopFocusRegion, DesktopSizingMode } from "./desktop-panel-stat
 
 /** noVNC creates and owns the canvas inside the retained desktop surface. */
 export function desktopCanvas(surface: HTMLElement | undefined): HTMLCanvasElement | null {
-  return surface?.querySelector<HTMLCanvasElement>("canvas") ?? null;
+  return surface?.getElementsByTagName("canvas").item(0) ?? null;
 }
 
 /** Connection-local geometry; noVNC still owns canvas scaling and input coordinates. */

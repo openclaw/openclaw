@@ -307,7 +307,7 @@ describe("gateway host desktop source", () => {
         });
         expect(observed.audio?.wsPath).toMatch(/^\/desktop\/audio\?token=/u);
         expect(observed.preauthenticated).toBe(true);
-        expect(observed.vncPassword).toBeUndefined();
+        expect(observed).not.toHaveProperty("vncPassword");
       } else {
         expect(observed.audio).toBeUndefined();
         expect(observed.audioUnavailableReason).toBe(reason ? "setup-unavailable" : undefined);

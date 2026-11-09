@@ -87,7 +87,7 @@ it.each(["connected", "access denied", "invalid security"] as const)(
       credentials: { username: "operator", password: "account-password" },
     });
     expect(observed.auth).toBe("ard-account");
-    expect(observed.vncPassword).toBeUndefined();
+    expect(observed).not.toHaveProperty("vncPassword");
 
     const gateway = await startObserveGateway(cleanups, registry);
     const { ws, nextFrame, closed } = await connectRfbObserver(
@@ -144,7 +144,7 @@ it("uses explicit VncAuth and forwards control input when ARD is offered first",
         socket.write(Buffer.alloc(16, 7));
         expect(await reader.readExactly(16)).toHaveLength(16);
         socket.write(Buffer.alloc(4));
-        expect(await reader.readExactly(1)).toEqual(Buffer.from([1]));
+        expect(await reader.readExactly(1)).toEqual(Buffer.from([0]));
         socket.write(Buffer.from("server-init", "ascii"));
         const pointer = Buffer.from([5, 1, 0, 40, 0, 50]);
         expect(await reader.readExactly(pointer.length)).toEqual(pointer);

@@ -25,7 +25,7 @@ const DesktopHostConfigSchema = z
       .optional()
       .register(configUiMetadata, {
         label: "Local VNC Password File",
-        help: "Absolute path to the VNC password file. When set, use VNC password authentication if the server offers it; otherwise fail with setup guidance. Omit on macOS to enter account credentials when opening the desktop viewer.",
+        help: "Absolute path to the VNC password file. Omit on macOS to enter account credentials when opening the desktop viewer.",
       }),
   })
   .register(configUiMetadata, {
