@@ -163,8 +163,30 @@ export function DashboardEntry(props: DashboardEntryProps) {
       )}
     </Show>
   );
-  const Content = () =>
-    props.variant === "row" ? (
+  const Content = () => (
+    <Show
+      when={props.variant === "row"}
+      fallback={
+        <>
+          <div class="dashboard-preview" aria-hidden="true" inert>
+            <div class="dashboard-preview__sheet">{preview()}</div>
+          </div>
+          <div class="dashboard-card__body">
+            <div class="dashboard-card__heading">
+              <h2>{titleText()}</h2>
+              {/* Reserved even while idle, so a run starting never shifts the title. */}
+              <span class="dashboard-card__status">
+                <Show when={running()}>{spinner()}</Show>
+              </span>
+            </div>
+            <div class="dashboard-card__meta">
+              <span class="dashboard-card__author">{authorLine()}</span>
+              <span class="dashboard-card__updated">{updated()}</span>
+            </div>
+          </div>
+        </>
+      }
+    >
       <>
         <div class="dashboard-row__thumb" aria-hidden="true" inert>
           <div class="dashboard-row__canvas">{preview()}</div>
@@ -177,26 +199,8 @@ export function DashboardEntry(props: DashboardEntryProps) {
         <div class="dashboard-row__author dashboard-card__author">{authorLine()}</div>
         <div class="dashboard-row__updated dashboard-card__updated">{updated()}</div>
       </>
-    ) : (
-      <>
-        <div class="dashboard-preview" aria-hidden="true" inert>
-          <div class="dashboard-preview__sheet">{preview()}</div>
-        </div>
-        <div class="dashboard-card__body">
-          <div class="dashboard-card__heading">
-            <h2>{titleText()}</h2>
-            {/* Reserved even while idle, so a run starting never shifts the title. */}
-            <span class="dashboard-card__status">
-              <Show when={running()}>{spinner()}</Show>
-            </span>
-          </div>
-          <div class="dashboard-card__meta">
-            <span class="dashboard-card__author">{authorLine()}</span>
-            <span class="dashboard-card__updated">{updated()}</span>
-          </div>
-        </div>
-      </>
-    );
+    </Show>
+  );
   return (
     <article
       ref={(element) => (entry = element)}

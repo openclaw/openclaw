@@ -249,54 +249,174 @@ suite.define(() => {
     );
   });
 
-  it("keeps the phone gallery geometry from skeleton to loaded", async () => {
-    const rows = [{ ...dashboardRows[0]!, hasBoard: true }];
-    await suite.withPage(
-      { colorScheme: "light", viewport: { width: 390, height: 844 } },
-      async ({ page }) => {
-        await page.route("**/dashboard-gallery-widget.html", (route) =>
-          route.fulfill({ contentType: "text/html; charset=utf-8", body: widgetMarkup }),
-        );
-        const gateway = await installMockGateway(page, {
-          sessions: rows,
-          featureMethods: ["board.get"],
-          deferredRequests: [{ method: "sessions.list", match: { hasBoard: true } }],
-          methodResponses: {
-            "board.get": boardSnapshots[0],
-            "sessions.list": {
-              cases: [
-                responseCase(
-                  { hasBoard: true },
-                  {
-                    ts: now,
-                    path: "",
-                    count: rows.length,
-                    defaults: { contextTokens: null, model: null, modelProvider: null },
-                    sessions: rows,
-                  },
-                ),
-              ],
+  it.each(["grid", "list"] as const)(
+    "keeps the phone %s geometry from skeleton to loaded",
+    async (view) => {
+      const rows = [{ ...dashboardRows[0]!, hasBoard: true }];
+      await suite.withPage(
+        { colorScheme: "light", viewport: { width: 390, height: 844 } },
+        async ({ page }) => {
+          await page.route("**/dashboard-gallery-widget.html", (route) =>
+            route.fulfill({ contentType: "text/html; charset=utf-8", body: widgetMarkup }),
+          );
+          await seedChatSettings(page, suite.server.baseUrl, {
+            dashboardsDisplay: { view, sort: "updated", group: "none" },
+          });
+          const gateway = await installMockGateway(page, {
+            sessions: rows,
+            featureMethods: ["board.get"],
+            deferredRequests: [{ method: "sessions.list", match: { hasBoard: true } }],
+            methodResponses: {
+              "board.get": boardSnapshots[0],
+              "sessions.list": {
+                cases: [
+                  responseCase(
+                    { hasBoard: true },
+                    {
+                      ts: now,
+                      path: "",
+                      count: rows.length,
+                      defaults: { contextTokens: null, model: null, modelProvider: null },
+                      sessions: rows,
+                    },
+                  ),
+                ],
+              },
             },
-          },
-        });
-        await page.goto(`${suite.server.baseUrl}dashboards`);
-        const gallery = page.locator("openclaw-dashboards-page");
-        const geometry = async () => {
-          const header = (await gallery.locator(".dashboards-header").boundingBox())!;
-          const card = (await gallery.locator(".dashboard-card").first().boundingBox())!;
-          return { headerHeight: header.height, cardY: card.y, cardHeight: card.height };
-        };
-        await gallery.locator(".dashboards-loading").waitFor();
-        const loading = await geometry();
-        await gateway.resolveDeferred("sessions.list");
-        await gallery.locator("[data-dashboard-session]").first().waitFor();
-        await gallery.locator("[data-dashboard-session]").waitFor();
-        const loaded = await geometry();
-        expect(loaded.headerHeight).toBeCloseTo(loading.headerHeight, 0);
-        expect(loaded.cardY).toBeCloseTo(loading.cardY, 0);
-        expect(loaded.cardHeight).toBeCloseTo(loading.cardHeight, 0);
+          });
+          await page.goto(`${suite.server.baseUrl}dashboards`);
+          const gallery = page.locator("openclaw-dashboards-page");
+          const geometry = async () => {
+            const header = (await gallery.locator(".dashboards-header").boundingBox())!;
+            const card = (await gallery
+              .locator(".dashboard-row, .dashboard-card")
+              .first()
+              .boundingBox())!;
+            return { headerHeight: header.height, cardY: card.y, cardHeight: card.height };
+          };
+          await gallery.locator(".dashboards-loading").waitFor();
+          const loading = await geometry();
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            await page.screenshot({
+              path: path.join(suite.artifactDir, `phone-${view}-loading.png`),
+            });
+          }
+          await gateway.resolveDeferred("sessions.list");
+          await gallery.locator("[data-dashboard-session]").first().waitFor();
+          await gallery.locator("[data-dashboard-session]").waitFor();
+          const loaded = await geometry();
+          console.log("phone gallery geometry", view, { loading, loaded });
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            await page.screenshot({
+              path: path.join(suite.artifactDir, `phone-${view}-loaded.png`),
+            });
+          }
+          expect(loaded.headerHeight).toBeCloseTo(loading.headerHeight, 0);
+          expect(loaded.cardY).toBeCloseTo(loading.cardY, 0);
+          expect(loaded.cardHeight).toBeCloseTo(loading.cardHeight, 0);
+        },
+      );
+    },
+  );
+
+  it("bounds mounted dashboards across list and small author groups", async () => {
+    const rows = Array.from({ length: 1_000 }, (_, index) => ({
+      ...dashboardRows[index % dashboardRows.length]!,
+      key: `agent:main:dashboard:volume-${index}`,
+      displayName: `Volume ${String(index).padStart(4, "0")}`,
+      hasBoard: true,
+      createdActor: {
+        type: "human",
+        id: `author-${Math.floor(index / 2)}`,
+        label: `Author ${Math.floor(index / 2)}`,
       },
-    );
+    }));
+    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      await installMockGateway(page, { sessions: rows });
+      await page.goto(`${suite.server.baseUrl}dashboards`);
+      const gallery = page.locator("openclaw-dashboards-page");
+      const entries = gallery.locator("[data-dashboard-session]");
+      await entries.first().waitFor();
+      const counts: number[] = [];
+      for (const [view, group] of [
+        ["Grid", "none"],
+        ["List", "none"],
+        ["List", "author"],
+        ["Grid", "author"],
+      ] as const) {
+        await gallery.getByRole("button", { name: "Display", exact: true }).click();
+        const menu = page.locator("#dashboards-display");
+        await menu.getByRole("button", { name: view, exact: true }).click();
+        await menu.getByLabel("Grouping").selectOption(group);
+        await menu.getByLabel("Ordering").selectOption("title");
+        await page.keyboard.press("Escape");
+        await menu.waitFor({ state: "hidden" });
+        await entries.first().waitFor();
+        await expect
+          .poll(() =>
+            entries
+              .first()
+              .locator(view === "List" ? ".dashboard-row__thumb" : ".dashboard-preview")
+              .count(),
+          )
+          .toBe(1);
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
+        counts.push(await entries.count());
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `volume-${view}-${group}.png`),
+          });
+        }
+        const second = gallery.locator(
+          '[data-dashboard-session="agent:main:dashboard:volume-1"] a',
+        );
+        const third = gallery.locator('[data-dashboard-session="agent:main:dashboard:volume-2"] a');
+        await second.focus();
+        await page.keyboard.press("Tab");
+        expect(await third.evaluate((element) => element.matches(":focus"))).toBe(true);
+        await page.keyboard.press("Shift+Tab");
+        expect(await second.evaluate((element) => element.matches(":focus"))).toBe(true);
+        await page.locator(".content").evaluate((element) => {
+          element.scrollTop = element.scrollHeight / 2;
+        });
+        await expect
+          .poll(() =>
+            entries.evaluateAll((elements) =>
+              elements.some((element) => {
+                const index = Number(
+                  element.getAttribute("data-dashboard-session")?.split("-").at(-1),
+                );
+                const box = element.getBoundingClientRect();
+                return index > 400 && index < 600 && box.top < innerHeight && box.bottom > 0;
+              }),
+            ),
+          )
+          .toBe(true);
+        const last = gallery.locator('[data-dashboard-session="agent:main:dashboard:volume-999"]');
+        await last.scrollIntoViewIfNeeded();
+        await expect
+          .poll(() =>
+            last.evaluate((element) => {
+              const box = element.getBoundingClientRect();
+              return box.top < innerHeight && box.bottom > 0;
+            }),
+          )
+          .toBe(true);
+        expect(await entries.count()).toBeLessThanOrEqual(100);
+        await page.locator(".content").evaluate((element) => {
+          element.scrollTop = 0;
+        });
+      }
+      console.log("mounted dashboards for grid, list, grouped list, grouped grid:", counts);
+      for (const count of counts) {
+        expect.soft(count).toBeLessThanOrEqual(100);
+      }
+    });
   });
 
   it("opens a responsive gallery card without restarting its retained dashboard widgets", async () => {
