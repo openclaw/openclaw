@@ -340,6 +340,7 @@ export async function runPluginUpdateAttempt(params: {
               installPluginFromClawHub({
                 spec,
                 baseUrl: params.record.clawhubUrl,
+                currentInstall: params.record,
                 ...commonInstallOptions,
               }),
             isRetryable: (attempt) => !attempt.ok && isUnavailableClawHubTarget(attempt),

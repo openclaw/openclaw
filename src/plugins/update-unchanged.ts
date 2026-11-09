@@ -1,13 +1,36 @@
+import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
-import { buildNpmResolutionInstallFields } from "./installs.js";
+import {
+  buildNpmResolutionInstallFields,
+  recordPluginInstall,
+  type PluginInstallUpdate,
+} from "./installs.js";
 import { formatNewerExactPinnedNpmDefaultLineMessage } from "./update-attempt.js";
 import {
   resolveNewerExactPinnedNpmDefaultLine,
   type PluginUpdateOutcome,
   type UpdatablePluginInstallRecord,
 } from "./update-source.js";
+
+export function recordPluginUpdate(
+  config: OpenClawConfig,
+  record: PluginInstallRecord,
+  update: PluginInstallUpdate,
+  unchanged: boolean,
+  acceptInstallRecord: (update: PluginInstallUpdate) => PluginInstallUpdate,
+): { config: OpenClawConfig; changed: boolean } {
+  if (unchanged) {
+    // No staged artifact means no new consent receipt; retain prior acceptance and timestamps.
+    const { pluginId, ...nextRecord } = { ...record, ...update };
+    return isDeepStrictEqual(record, nextRecord)
+      ? { config, changed: false }
+      : { config: recordPluginInstall(config, { pluginId, ...nextRecord }), changed: true };
+  }
+  return { config: recordPluginInstall(config, acceptInstallRecord(update)), changed: true };
+}
 
 export async function reconcileUnchangedUpdate(params: {
   config: OpenClawConfig;

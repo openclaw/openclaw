@@ -216,6 +216,39 @@ beforeEach(() => {
   );
 });
 
+it.each(["current", "different artifact", "missing entry"])(
+  "retains only a runnable identical ClawHub update: %s",
+  async (state) => {
+    const archive = await createClawHubArchive(DEMO_PLUGIN_ARCHIVE_ENTRIES);
+    const installPath = path.join(path.dirname(archive.archivePath), "installed");
+    await fs.mkdir(installPath);
+    for (const [file, bytes] of Object.entries(DEMO_PLUGIN_ARCHIVE_ENTRIES)) {
+      if (state !== "missing entry" || file !== "index.js") {
+        await fs.writeFile(path.join(installPath, file), bytes);
+      }
+    }
+    const result = await installDemo({
+      mode: "update",
+      expectedPluginId: "demo",
+      currentInstall: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        version: "2026.3.22",
+        installPath,
+        integrity: state === "different artifact" ? "sha256-other" : DEMO_ARCHIVE_INTEGRITY,
+      },
+    });
+    expect(result).toMatchObject({ ok: true });
+    expect(mocks.installArchive).toHaveBeenCalledTimes(state === "current" ? 0 : 1);
+    expect(mocks.download).toHaveBeenCalledTimes(state === "current" ? 0 : 1);
+    if (state === "current") {
+      expect(result).toMatchObject({ unchanged: true, targetDir: installPath });
+    }
+  },
+);
+
 it("does not publish a ClawHub plugin after authority closes during artifact review", async () => {
   const archive = await mockArchive({ entries: DEMO_PLUGIN_ARCHIVE_ENTRIES });
   const extensionsDir = await useRealInstaller(archive.archivePath);

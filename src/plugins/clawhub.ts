@@ -47,6 +47,12 @@ import {
   type ClawHubFileVerificationEntry,
 } from "./clawhub-archive-verification.js";
 import {
+  retainCurrentClawHubInstall,
+  resolveClawHubClawPackArtifactSha256,
+  resolveClawHubNpmPackArtifact,
+  type ClawHubArtifactResolverVersion,
+} from "./clawhub-artifact-identity.js";
+import {
   buildClawHubInstallFailure,
   CLAWHUB_INSTALL_ERROR_CODE,
   type ClawHubInstallFailure,
@@ -97,11 +103,7 @@ type ClawHubArchiveVerificationResolution =
     }
   | ClawHubInstallFailure;
 
-type ClawHubArtifactResolverVersion = NonNullable<
-  Exclude<ClawHubPackageArtifactResolverResponse["version"], string | null | undefined>
->;
-
-type ClawHubInstallArtifactDecision = {
+export type ClawHubInstallArtifactDecision = {
   version: string;
   compatibility?: ClawHubPackageCompatibility | null;
   verification: ClawHubArchiveVerification | null;
@@ -114,30 +116,6 @@ const CLAWHUB_ARCHIVE_LIMITS = {
   maxExtractedBytes: DEFAULT_MAX_EXTRACTED_BYTES,
   maxEntryBytes: DEFAULT_MAX_ENTRY_BYTES,
 };
-
-function resolveClawHubClawPackArtifactSha256(
-  clawpack: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null | undefined,
-): string | null {
-  const isNpmPackArtifact =
-    clawpack && "kind" in clawpack && normalizeOptionalString(clawpack.kind) === "npm-pack";
-  const isLegacyClawPack = clawpack && "available" in clawpack && clawpack.available;
-  if ((!isNpmPackArtifact && !isLegacyClawPack) || typeof clawpack.sha256 !== "string") {
-    return null;
-  }
-  return normalizeClawHubSha256Hex(clawpack.sha256);
-}
-
-function resolveClawHubNpmPackArtifact(
-  version: Pick<ClawHubArtifactResolverVersion, "artifact" | "clawpack">,
-): ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null {
-  if (version.artifact?.kind === "npm-pack") {
-    return version.artifact;
-  }
-  if (version.clawpack?.available === true) {
-    return version.clawpack;
-  }
-  return null;
-}
 
 type ClawHubResolvedArtifactWire = {
   artifactKind?: string | null;
@@ -493,6 +471,8 @@ export async function installPluginFromClawHub(
       confirmOnUpdate?: boolean;
       confirmInstall?: (warning?: string) => boolean | Promise<boolean>;
       requireClawHubTrust?: boolean;
+      /** Automatic updates may retain the recorded artifact after resolving current metadata. */
+      currentInstall?: import("../config/types.plugins.js").PluginInstallRecord;
     },
 ): Promise<
   | ({
@@ -501,6 +481,7 @@ export async function installPluginFromClawHub(
         clawhub: ClawHubPluginInstallRecordFields;
         packageName: string;
         warning?: string;
+        unchanged?: true;
       })
   | ClawHubInstallFailure
   | Extract<InstallPluginResult, { ok: false }>
@@ -691,6 +672,16 @@ export async function installPluginFromClawHub(
     );
   }
   const releaseLabel = formatClawHubReleaseLabel(canonicalPackageName, versionState.version);
+
+  const unchanged = await retainCurrentClawHubInstall(
+    params,
+    resolved,
+    expectedIntegrity,
+    trustResult?.warning,
+  );
+  if (unchanged) {
+    return unchanged;
+  }
 
   let archive;
   params.logger?.info?.(

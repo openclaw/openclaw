@@ -33,7 +33,7 @@ import {
   PLUGIN_INSTALL_ERROR_CODE,
   resolvePluginInstallDir,
 } from "./install.js";
-import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
+import { buildNpmResolutionInstallFields } from "./installs.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import type { PackageManifest } from "./manifest.js";
 import {
@@ -87,7 +87,7 @@ import {
   resolveRecordedClawHubPackage,
   runPluginUpdateWithClawHubLease,
 } from "./update-template-lifecycle.js";
-import { reconcileUnchangedUpdate } from "./update-unchanged.js";
+import { reconcileUnchangedUpdate, recordPluginUpdate } from "./update-unchanged.js";
 
 export async function updateNpmInstalledPlugins(
   params: UpdateInstalledPluginsParams,
@@ -670,16 +670,20 @@ async function runInstalledPluginUpdate(
         marketplacePlugin: record.marketplacePlugin,
       };
     }
-    next = recordPluginInstall(
+    const recorded = recordPluginUpdate(
       next,
-      capabilityConsent.acceptInstallRecord({
+      record,
+      {
         pluginId: resolvedPluginId,
         ...installRecord,
         installPath: result.targetDir,
         version: nextVersion,
-      }),
+      },
+      record.source === "clawhub" && (result as ClawHubPluginUpdateSuccess).unchanged === true,
+      capabilityConsent.acceptInstallRecord,
     );
-    changed = true;
+    next = recorded.config;
+    changed ||= recorded.changed;
     completedCanonicalUpdates.add(pluginId);
 
     outcomes.push(
