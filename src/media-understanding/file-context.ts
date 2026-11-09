@@ -201,7 +201,7 @@ export async function extractFileContext(params: {
     assertCurrent?.();
     return {
       outcome: resolveFileExtractionOutcome({
-        text: extracted?.text?.trim(),
+        text: attachment.origin === "paste" ? extracted?.text : extracted?.text?.trim(),
         images: extracted?.images,
         metadata: extracted?.metadata,
       }),
@@ -230,19 +230,28 @@ export async function extractFileContext(params: {
         })),
       );
     }
+    // A clipboard card is presentation for the sender's text, not a document
+    // trust boundary. Origin never changes binary/PDF or failed-extraction handling.
+    const userPaste =
+      attachment.origin === "paste" &&
+      mimeType !== "application/pdf" &&
+      outcome.kind === "extracted";
     const blockText = renderFileAttachmentOutcome(outcome, {
       selfServeLocalPath: params.selfServePathsEnabled ? undefined : false,
+      userPaste,
     });
     if (blockText === null) {
       continue;
     }
     const renderBlock = (content: string) =>
-      renderFileContextBlock({
-        filename,
-        fallbackName: `file-${attachment.index + 1}`,
-        mimeType,
-        content,
-      });
+      userPaste
+        ? content
+        : renderFileContextBlock({
+            filename,
+            fallbackName: `file-${attachment.index + 1}`,
+            mimeType,
+            content,
+          });
     const text = renderBlock(blockText);
     blocks.push({
       text,

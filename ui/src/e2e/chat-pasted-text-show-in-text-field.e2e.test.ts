@@ -270,7 +270,7 @@ suite.define(() => {
     { route: "chat", selector: ".agent-chat__composer-combobox textarea" },
     { route: "new", selector: ".new-session-page__message" },
   ])(
-    "sends long native pastes as user text from an empty or nonempty $route composer",
+    "keeps long native pastes inline when empty and restores compact cards in the $route composer",
     async ({ route, selector }) => {
       await suite.withPage(contextOptions, async ({ page }) => {
         const gateway = await installMockGateway(page);
@@ -289,20 +289,31 @@ suite.define(() => {
         const prefix = "Keep this draft\n\n";
         await composer.fill(prefix);
         await page.keyboard.press(nativePasteShortcut);
-        // Capture before the regression assertion, so the failing base retains comparable proof.
+        await button(page, pastedTextLabel).waitFor();
+        // Capture the real native paste, not a restored legacy fixture.
         const frame = await takeControlUiScreenshotFrame(page, composer, [composer], {
           animations: "disabled",
         });
         await writeFile(`${suite.artifactDir}/long-native-${route}-nonempty.png`, frame.png);
-        await expect.poll(() => composer.inputValue()).toBe(prefix + pastedText);
+        await expect.poll(() => composer.inputValue()).toBe(prefix);
         expect(
           await page.locator(".chat-attachments-preview openclaw-chat-pasted-text").count(),
-        ).toBe(0);
+        ).toBe(1);
+        await button(page, pastedTextLabel).click();
+        await expectPastedText(page.locator(".sidebar-attachment-preview"));
         const method = route === "new" ? "sessions.create" : "chat.send";
         await button(page, route === "new" ? "Start session" : "Send message").click();
         const { params } = await gateway.waitForRequest(method);
-        expect(params).toMatchObject({ message: prefix + pastedText });
-        expect(params).not.toHaveProperty("attachments");
+        expect(params).toMatchObject({
+          message: prefix.trim(),
+          attachments: [
+            {
+              origin: "paste",
+              mimeType: "text/plain",
+              content: Buffer.from(pastedText).toString("base64"),
+            },
+          ],
+        });
       });
     },
   );

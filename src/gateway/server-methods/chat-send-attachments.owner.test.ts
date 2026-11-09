@@ -127,11 +127,16 @@ it.for(["off", "all"] as const)(
       preparation.mockClear();
       const bytes = `${agentId} attachment contents`;
       const fileName = "notes café 雪 🦞.txt";
+      const params = attachmentParams(`media-${agentId}`, fileName, bytes, {
+        agentId,
+        sessionKey: "global",
+      });
+      const origin = agentId === "main" ? "paste" : "file";
       const { result, respond } = await prepareAttachmentFixture({
-        params: attachmentParams(`media-${agentId}`, fileName, bytes, {
-          agentId,
-          sessionKey: "global",
-        }),
+        params: {
+          ...params,
+          attachments: params.attachments.map((attachment) => ({ ...attachment, origin })),
+        },
         session: { cfg, sessionKey: "global", agentId },
       });
       expect(respond.mock.calls).toEqual([]);
@@ -148,6 +153,7 @@ it.for(["off", "all"] as const)(
       });
       const media = ctx.media![0]!;
       expect(media.fileName).toBe(fileName);
+      expect(media.origin).toBe(agentId === "main" ? "paste" : "file");
       const file = path.resolve(media.workspaceDir!, media.path!);
       expect(await fs.readFile(file, "utf8")).toBe(bytes);
       expect(preparation).toHaveBeenCalledTimes(mode === "all" ? 1 : 0);

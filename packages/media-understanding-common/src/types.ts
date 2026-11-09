@@ -25,6 +25,8 @@ export type MediaAttachment = {
    * display only, never format detection.
    */
   fileName?: string;
+  /** Composer source, not authorization; only plain-text pastes are user-authored text. */
+  origin?: "paste" | "file";
   workspaceDir?: string;
   index: number;
   alreadyTranscribed?: boolean;

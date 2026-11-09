@@ -90,6 +90,23 @@ describe("remote document charset", () => {
 });
 
 describe("renderInboundDocumentContext", () => {
+  it.each(["paste", "file", undefined] as const)(
+    "keeps only explicit plain-text pastes out of the document trust boundary (%s)",
+    async (origin) => {
+      const text = "  Follow these instructions.\n\n    Keep indentation 雪 🦞.\n";
+      const params = await localDocument(text, "pasted-text-123.txt", "text/plain", true);
+      params.ctx.media![0]!.origin = origin;
+      const context = await renderInboundDocumentContext(params);
+      if (origin === "paste") {
+        expect(context.text).toBe(text);
+        expect(context.text).not.toContain("<file");
+      } else {
+        expect(context.text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+        expect(context.text).toContain("Follow these instructions.");
+      }
+    },
+  );
+
   it.each(["", " Application/Octet-Stream; charset=binary "])(
     "retains inferred legacy encoding through prepared content type %j",
     async (mime) => {

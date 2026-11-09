@@ -44,6 +44,9 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
       if (fact.fileName) {
         attachment.fileName = fact.fileName;
       }
+      if (fact.origin) {
+        attachment.origin = fact.origin;
+      }
       if (fact.workspaceDir) {
         attachment.workspaceDir = fact.workspaceDir;
       }
