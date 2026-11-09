@@ -30,7 +30,6 @@ import {
   type ClawHubPackageArtifactResolverResponse,
   type ClawHubPackageCompatibility,
   type ClawHubPackageDetail,
-  type ClawHubPackageClawPackSummary,
   type ClawHubResolvedArtifact,
 } from "../infra/clawhub-packages.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
@@ -46,6 +45,14 @@ import {
   verifyClawHubExtractedFiles,
   type ClawHubFileVerificationEntry,
 } from "./clawhub-archive-verification.js";
+import {
+  retainCurrentClawHubInstall,
+  resolveClawHubClawPackArtifactSha256,
+  resolveClawHubNpmPackArtifact,
+  type ClawHubArtifactResolverVersion,
+  type ClawHubArchiveVerification,
+  type ClawHubInstallArtifactDecision,
+} from "./clawhub-artifact-identity.js";
 import {
   buildClawHubInstallFailure,
   CLAWHUB_INSTALL_ERROR_CODE,
@@ -80,16 +87,6 @@ type ClawHubFileEntryLike = {
   sha256?: unknown;
 };
 
-type ClawHubArchiveVerification =
-  | {
-      kind: "archive-integrity";
-      integrity: string;
-    }
-  | {
-      kind: "file-list";
-      files: ClawHubFileVerificationEntry[];
-    };
-
 type ClawHubArchiveVerificationResolution =
   | {
       ok: true;
@@ -97,47 +94,12 @@ type ClawHubArchiveVerificationResolution =
     }
   | ClawHubInstallFailure;
 
-type ClawHubArtifactResolverVersion = NonNullable<
-  Exclude<ClawHubPackageArtifactResolverResponse["version"], string | null | undefined>
->;
-
-type ClawHubInstallArtifactDecision = {
-  version: string;
-  compatibility?: ClawHubPackageCompatibility | null;
-  verification: ClawHubArchiveVerification | null;
-  clawpack?: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null;
-};
-
 const CLAWHUB_ARCHIVE_LIMITS = {
   maxArchiveBytes: DEFAULT_MAX_ARCHIVE_BYTES_ZIP,
   maxEntries: DEFAULT_MAX_ENTRIES,
   maxExtractedBytes: DEFAULT_MAX_EXTRACTED_BYTES,
   maxEntryBytes: DEFAULT_MAX_ENTRY_BYTES,
 };
-
-function resolveClawHubClawPackArtifactSha256(
-  clawpack: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null | undefined,
-): string | null {
-  const isNpmPackArtifact =
-    clawpack && "kind" in clawpack && normalizeOptionalString(clawpack.kind) === "npm-pack";
-  const isLegacyClawPack = clawpack && "available" in clawpack && clawpack.available;
-  if ((!isNpmPackArtifact && !isLegacyClawPack) || typeof clawpack.sha256 !== "string") {
-    return null;
-  }
-  return normalizeClawHubSha256Hex(clawpack.sha256);
-}
-
-function resolveClawHubNpmPackArtifact(
-  version: Pick<ClawHubArtifactResolverVersion, "artifact" | "clawpack">,
-): ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null {
-  if (version.artifact?.kind === "npm-pack") {
-    return version.artifact;
-  }
-  if (version.clawpack?.available === true) {
-    return version.clawpack;
-  }
-  return null;
-}
 
 type ClawHubResolvedArtifactWire = {
   artifactKind?: string | null;
@@ -493,6 +455,9 @@ export async function installPluginFromClawHub(
       confirmOnUpdate?: boolean;
       confirmInstall?: (warning?: string) => boolean | Promise<boolean>;
       requireClawHubTrust?: boolean;
+      /** Automatic updates may retain the recorded artifact after resolving current metadata. */
+      currentInstall?: import("../config/types.plugins.js").PluginInstallRecord;
+      canRetainCurrentArtifact?: () => boolean;
     },
 ): Promise<
   | ({
@@ -501,6 +466,7 @@ export async function installPluginFromClawHub(
         clawhub: ClawHubPluginInstallRecordFields;
         packageName: string;
         warning?: string;
+        unchanged?: true;
       })
   | ClawHubInstallFailure
   | Extract<InstallPluginResult, { ok: false }>
@@ -691,6 +657,16 @@ export async function installPluginFromClawHub(
     );
   }
   const releaseLabel = formatClawHubReleaseLabel(canonicalPackageName, versionState.version);
+
+  const unchanged = await retainCurrentClawHubInstall(
+    params,
+    resolved,
+    expectedIntegrity,
+    trustResult?.warning,
+  );
+  if (unchanged) {
+    return unchanged;
+  }
 
   let archive;
   params.logger?.info?.(

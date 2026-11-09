@@ -254,6 +254,7 @@ export function createManagedPluginArtifactConsentHandler(params: {
   updatingPluginIds?: readonly string[];
 }): {
   onBeforePluginArtifactCommit: PluginInstallArtifactConsentHandler;
+  canRetainCurrentArtifact: (pluginId: string) => boolean;
   applyAcceptedSurface: <T extends PluginInstallRecord>(pluginId: string, record: T) => T;
 } {
   const previousDeclaredByOwner = new Map<string, PluginAcceptedDeclaredSurface>();
@@ -279,7 +280,50 @@ export function createManagedPluginArtifactConsentHandler(params: {
       contextEngineIdsByPlugin: Record<string, string[]>;
     }
   >();
+  const enabled = () =>
+    !params.updatingPluginIds?.length ||
+    params.updatingPluginIds.some(
+      (id) =>
+        resolveEffectiveEnableState({
+          id,
+          origin: "global",
+          config: normalizePluginsConfig(params.config.plugins),
+          rootConfig: params.config,
+        }).enabled,
+    );
   return {
+    canRetainCurrentArtifact: (pluginId) => {
+      const record = params.previousRecords?.[pluginId];
+      if (params.requireCapabilityConsent || !record?.installPath) {
+        return false;
+      }
+      try {
+        const { declared, manifest, manifests } = inspectPluginCapabilityArtifact(
+          record.installPath,
+          params.env,
+          {
+            config: params.config,
+          },
+        );
+        if (!manifests.some((entry) => entry.id === pluginId)) {
+          return false;
+        }
+        return (
+          (isTrustedOfficialPluginInstallRecord({
+            pluginId,
+            packageName: manifest?.packageName,
+            record,
+          }) &&
+            !params.recordOfficialCapabilities) ||
+          !enabled() ||
+          (resolveAcceptedSurfaceCurrent(record, declared) &&
+            resolvePluginInstallRecordIntegrity(record) !== undefined)
+        );
+      } catch {
+        // A damaged prior manifest must reach the ordinary install/repair path.
+        return false;
+      }
+    },
     onBeforePluginArtifactCommit: async (
       artifact: PluginInstallArtifactConsentRequest,
     ): Promise<void> => {
@@ -324,17 +368,6 @@ export function createManagedPluginArtifactConsentHandler(params: {
         ? () => params.beforePersistentEffect?.(artifact)
         : undefined;
       const mode = artifact.mode;
-      const enabled =
-        !params.updatingPluginIds?.length ||
-        params.updatingPluginIds.some(
-          (id) =>
-            resolveEffectiveEnableState({
-              id,
-              origin: "global",
-              config: normalizePluginsConfig(params.config.plugins),
-              rootConfig: params.config,
-            }).enabled,
-        );
       const artifactContext = { config, currentArtifactDir };
       const { declared, manifest } = inspectPluginCapabilityArtifact(
         artifactDir,
@@ -375,7 +408,7 @@ export function createManagedPluginArtifactConsentHandler(params: {
       }
       const acknowledgment = requireCapabilityConsent
         ? await onCapabilityConsent?.(review)
-        : (official && !recordOfficialCapabilities) || !enabled || acceptanceCurrent
+        : (official && !recordOfficialCapabilities) || !enabled() || acceptanceCurrent
           ? { reviewToken: review.reviewToken }
           : (acknowledgeCapabilities ?? (await onCapabilityConsent?.(review)));
       // Review and staged-package rollback remain cancellable. Lock only when
@@ -406,7 +439,7 @@ export function createManagedPluginArtifactConsentHandler(params: {
       pendingPluginCapabilityReviews.delete(pluginId);
       // Provenance alone is not operator acceptance; an explicit review is.
       const acceptedSurface =
-        (!official || recordOfficialCapabilities) && (enabled || acceptanceCurrent)
+        (!official || recordOfficialCapabilities) && (enabled() || acceptanceCurrent)
           ? finalDeclared
           : undefined;
       pendingAcceptedSurfaces.set(artifact.pluginId, {

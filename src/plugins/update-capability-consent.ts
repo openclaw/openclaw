@@ -16,6 +16,7 @@ export function preparePluginUpdateCapabilityConsent(params: {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
 }): {
+  canRetainCurrentArtifact: () => boolean;
   onBeforePluginArtifactCommit: PluginInstallArtifactConsentHandler;
   acceptInstallRecord: <T extends PluginInstallRecord>(record: T) => T;
 } {
@@ -33,6 +34,7 @@ export function preparePluginUpdateCapabilityConsent(params: {
   });
   let reviewedPluginId = params.pluginId;
   return {
+    canRetainCurrentArtifact: () => consent.canRetainCurrentArtifact(params.pluginId),
     onBeforePluginArtifactCommit: async (artifact) => {
       reviewedPluginId = artifact.pluginId;
       await consent.onBeforePluginArtifactCommit({
