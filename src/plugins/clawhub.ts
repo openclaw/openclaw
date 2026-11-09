@@ -30,7 +30,6 @@ import {
   type ClawHubPackageArtifactResolverResponse,
   type ClawHubPackageCompatibility,
   type ClawHubPackageDetail,
-  type ClawHubPackageClawPackSummary,
   type ClawHubResolvedArtifact,
 } from "../infra/clawhub-packages.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
@@ -51,6 +50,8 @@ import {
   resolveClawHubClawPackArtifactSha256,
   resolveClawHubNpmPackArtifact,
   type ClawHubArtifactResolverVersion,
+  type ClawHubArchiveVerification,
+  type ClawHubInstallArtifactDecision,
 } from "./clawhub-artifact-identity.js";
 import {
   buildClawHubInstallFailure,
@@ -86,29 +87,12 @@ type ClawHubFileEntryLike = {
   sha256?: unknown;
 };
 
-type ClawHubArchiveVerification =
-  | {
-      kind: "archive-integrity";
-      integrity: string;
-    }
-  | {
-      kind: "file-list";
-      files: ClawHubFileVerificationEntry[];
-    };
-
 type ClawHubArchiveVerificationResolution =
   | {
       ok: true;
       verification: ClawHubArchiveVerification | null;
     }
   | ClawHubInstallFailure;
-
-export type ClawHubInstallArtifactDecision = {
-  version: string;
-  compatibility?: ClawHubPackageCompatibility | null;
-  verification: ClawHubArchiveVerification | null;
-  clawpack?: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null;
-};
 
 const CLAWHUB_ARCHIVE_LIMITS = {
   maxArchiveBytes: DEFAULT_MAX_ARCHIVE_BYTES_ZIP,
@@ -473,6 +457,7 @@ export async function installPluginFromClawHub(
       requireClawHubTrust?: boolean;
       /** Automatic updates may retain the recorded artifact after resolving current metadata. */
       currentInstall?: import("../config/types.plugins.js").PluginInstallRecord;
+      canRetainCurrentArtifact?: () => boolean;
     },
 ): Promise<
   | ({

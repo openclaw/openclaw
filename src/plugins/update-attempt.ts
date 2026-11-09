@@ -276,6 +276,7 @@ export async function runPluginUpdateAttempt(params: {
   workTimeoutMs?: number | null;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+  canRetainCurrentArtifact?: () => boolean;
   expectedIntegrity?: string;
   clawhubSpecs?: PluginUpdateSpecPlan;
   officialNpmFallback?: { installSpec: string; recordSpec: string; expectedIntegrity?: string };
@@ -341,6 +342,7 @@ export async function runPluginUpdateAttempt(params: {
                 spec,
                 baseUrl: params.record.clawhubUrl,
                 currentInstall: params.record,
+                canRetainCurrentArtifact: params.canRetainCurrentArtifact,
                 ...commonInstallOptions,
               }),
             isRetryable: (attempt) => !attempt.ok && isUnavailableClawHubTarget(attempt),

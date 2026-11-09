@@ -517,6 +517,7 @@ async function runInstalledPluginUpdate(
           timeoutMs: params.timeoutMs,
           workTimeoutMs: params.workTimeoutMs,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
+          canRetainCurrentArtifact: capabilityConsent.canRetainCurrentArtifact,
           onBeforePluginArtifactCommit: stableVersion.beforeCommit(
             capabilityConsent.onBeforePluginArtifactCommit,
           ),
@@ -679,7 +680,7 @@ async function runInstalledPluginUpdate(
         installPath: result.targetDir,
         version: nextVersion,
       },
-      record.source === "clawhub" && (result as ClawHubPluginUpdateSuccess).unchanged === true,
+      record.source === "clawhub" && "clawhub" in result && result.unchanged === true,
       capabilityConsent.acceptInstallRecord,
     );
     next = recorded.config;

@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
 import {
   normalizeClawHubSha256Hex,
@@ -9,14 +10,34 @@ import type {
   ClawHubPackageClawPackSummary,
   ClawHubPackageDetail,
   ClawHubPackageArtifactResolverResponse,
+  ClawHubPackageCompatibility,
 } from "../infra/clawhub-packages.js";
 import { readInstalledPackageManifest } from "../infra/package-update-utils.js";
 import { resolveUserPath } from "../utils.js";
+import type { ClawHubFileVerificationEntry } from "./clawhub-archive-verification.js";
 import { normalizeClawHubClawPackInstallFields } from "./clawhub-install-records.js";
-import type { ClawHubInstallArtifactDecision, installPluginFromClawHub } from "./clawhub.js";
-import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
+import type { ClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
+import type { InstallPluginResult } from "./install-types.js";
+import { resolvePackageExtensionEntries } from "./manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import { auditDeclaredOpenClawHostDependency } from "./plugin-peer-link.js";
+
+export type ClawHubArchiveVerification =
+  | {
+      kind: "archive-integrity";
+      integrity: string;
+    }
+  | {
+      kind: "file-list";
+      files: ClawHubFileVerificationEntry[];
+    };
+
+export type ClawHubInstallArtifactDecision = {
+  version: string;
+  compatibility?: ClawHubPackageCompatibility | null;
+  verification: ClawHubArchiveVerification | null;
+  clawpack?: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null;
+};
 
 export type ClawHubArtifactResolverVersion = NonNullable<
   Exclude<ClawHubPackageArtifactResolverResponse["version"], string | null | undefined>
@@ -47,7 +68,13 @@ export function resolveClawHubClawPackArtifactSha256(
 }
 
 export async function retainCurrentClawHubInstall(
-  params: Parameters<typeof installPluginFromClawHub>[0],
+  params: {
+    mode?: "install" | "update";
+    dryRun?: boolean;
+    baseUrl?: string;
+    currentInstall?: PluginInstallRecord;
+    canRetainCurrentArtifact?: () => boolean;
+  },
   resolved: {
     detail: ClawHubPackageDetail;
     versionState: ClawHubInstallArtifactDecision;
@@ -57,7 +84,13 @@ export async function retainCurrentClawHubInstall(
   expectedIntegrity: string | null | undefined,
   warning?: string,
 ): Promise<
-  Extract<Awaited<ReturnType<typeof installPluginFromClawHub>>, { ok: true }> | undefined
+  | (Extract<InstallPluginResult, { ok: true }> & {
+      packageName: string;
+      clawhub: ClawHubPluginInstallRecordFields;
+      unchanged: true;
+      warning?: string;
+    })
+  | undefined
 > {
   const { detail, versionState, expectedPluginId, clawhubFamily } = resolved;
   const expectedClawPackSha256 = resolveClawHubClawPackArtifactSha256(versionState.clawpack);
@@ -69,8 +102,7 @@ export async function retainCurrentClawHubInstall(
     : versionState.verification?.kind === "archive-integrity"
       ? versionState.verification.integrity
       : undefined;
-  // Match npm's unchanged-artifact policy: trust the install ledger's digest,
-  // check entrypoints and host links, and leave other file repair to explicit reinstall.
+  // Identity alone cannot retain damaged manifests or stale capability acceptance.
   if (
     params.mode === "update" &&
     !params.dryRun &&
@@ -89,7 +121,7 @@ export async function retainCurrentClawHubInstall(
     (!expectedIntegrity || expectedIntegrity === resolvedIntegrity)
   ) {
     const targetDir = resolveUserPath(current.installPath);
-    const manifest = readInstalledPackageManifest(targetDir) as PackageManifest | undefined;
+    const manifest = readInstalledPackageManifest(targetDir);
     const extensions = resolvePackageExtensionEntries(manifest);
     if (
       manifest?.name === canonicalPackageName &&
@@ -102,6 +134,7 @@ export async function retainCurrentClawHubInstall(
           manifest,
         })
       ).ok &&
+      params.canRetainCurrentArtifact?.() &&
       !(await auditDeclaredOpenClawHostDependency({
         packageDir: targetDir,
         packageName: canonicalPackageName,
