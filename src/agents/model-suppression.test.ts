@@ -64,17 +64,36 @@ describe("model suppression", () => {
     expect(mocks.buildManifestBuiltInModelSuppressionResolver).toHaveBeenCalledTimes(3);
   });
 
-  it("reuses the manifest owner for repeated model decisions", () => {
-    const resolver = vi.fn().mockReturnValueOnce({ suppress: true }).mockReturnValueOnce(undefined);
-    const config = {};
-    mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValueOnce(resolver);
+  it.each([false, true])(
+    "reuses the manifest owner for repeated decisions (prepared: %s)",
+    (prepared) => {
+      const resolver = vi
+        .fn()
+        .mockReturnValueOnce({ suppress: true })
+        .mockReturnValueOnce(undefined);
+      const config = {};
+      const params = {
+        config,
+        ...(prepared
+          ? {
+              metadataSnapshot: createPluginMetadataSnapshot({
+                config,
+                manifestRegistry: { plugins: [], diagnostics: [] },
+              }),
+              workspaceDir: "/tmp/model-suppression-workspace",
+              env: { OPENCLAW_STATE_DIR: "/tmp/model-suppression-state" },
+            }
+          : {}),
+      };
+      mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValueOnce(resolver);
 
-    const shouldSuppress = buildShouldSuppressBuiltInModelCore({ config });
+      const shouldSuppress = buildShouldSuppressBuiltInModelCore(params);
 
-    expect(shouldSuppress({ provider: "bedrock", id: "Claude-3" })).toBe(true);
-    expect(shouldSuppress({ provider: "aws-bedrock", id: "claude-4" })).toBe(false);
-    expect(mocks.buildManifestBuiltInModelSuppressionResolver.mock.calls).toEqual([
-      [{ config, env: process.env }],
-    ]);
-  });
+      expect(shouldSuppress({ provider: "bedrock", id: "Claude-3" })).toBe(true);
+      expect(shouldSuppress({ provider: "aws-bedrock", id: "claude-4" })).toBe(false);
+      expect(mocks.buildManifestBuiltInModelSuppressionResolver.mock.calls).toEqual([
+        [{ env: process.env, ...params }],
+      ]);
+    },
+  );
 });

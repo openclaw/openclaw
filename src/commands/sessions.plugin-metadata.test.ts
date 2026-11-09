@@ -16,6 +16,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
 
 const sessionMeta = await import("../acp/runtime/session-meta-readonly.js");
 const runtimeMetadata = await import("../agents/agent-runtime-metadata.js");
+const preparedCatalog = await import("../agents/prepared-model-catalog.js");
 const { sessionsCommand } = await import("./sessions.js");
 
 afterEach(() => {
@@ -50,6 +51,7 @@ it("loads one plugin metadata snapshot and enriches only the selected sessions",
   const store = await writeStore(entries, "sessions-plugin-metadata");
   const readAcpMetadata = vi.spyOn(sessionMeta, "readAcpSessionMetaForEntries");
   const resolveRuntime = vi.spyOn(runtimeMetadata, "resolveCurrentSessionAgentRuntimeMetadata");
+  const loadCatalog = vi.spyOn(preparedCatalog, "loadPreparedModelCatalogSnapshot");
 
   const payload = await runSessionsJson<{ sessions: SessionEntry[] }>(sessionsCommand, store, {
     limit: 1,
@@ -65,6 +67,11 @@ it("loads one plugin metadata snapshot and enriches only the selected sessions",
     entries: [{ sessionKey: "agent:main:fixture-0", agentId: "main", entry: expect.any(Object) }],
   });
   expect(resolveRuntime).toHaveBeenCalledTimes(1);
+  expect(loadCatalog).toHaveBeenCalledTimes(1);
+  await expect(loadCatalog.mock.results[0]?.value).resolves.toMatchObject({
+    entries: expect.any(Array),
+    routeVariants: expect.any(Array),
+  });
   expect(payload.sessions[0]).not.toHaveProperty("displayModelRef");
   expect(resolvePluginMetadataSnapshotMock).toHaveBeenCalledExactlyOnceWith({
     config,

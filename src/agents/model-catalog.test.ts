@@ -8,7 +8,7 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
-import { finalizePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   createPluginManifestRecordFixture,
@@ -126,6 +126,33 @@ const customRoute = {
 beforeEach(() => {
   mocks.augmentModelCatalogWithProviderPlugins.mockReset();
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([]);
+});
+
+it("keeps captured workspace suppression separate from the ambient generation", async () => {
+  const createSnapshot = (model: string) => ({
+    ...createManifestSnapshot("fixture", {
+      suppressions: [{ provider: "fixture", model }],
+    }),
+    workspaceDir: `/tmp/model-catalog-${model}`,
+  });
+  const captured = createSnapshot("first");
+  const ambient = createSnapshot("second");
+  using resolveMetadata = vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot");
+  const snapshot = await withPluginRuntimeGenerationScope({ metadataSnapshot: ambient }, () =>
+    buildPreparedModelCatalogSnapshot({
+      agentDir: "/tmp/model-catalog-test",
+      authCredentials: {},
+      config: {},
+      readOnly: true,
+      models: ["first", "second"].map((id) => row("fixture", id, { name: id })),
+      metadataSnapshot: captured,
+      workspaceDir: captured.workspaceDir,
+      env: { OPENCLAW_STATE_DIR: "/tmp/model-catalog-state" },
+    }),
+  );
+  expect(snapshot.entries.map(({ id }) => id)).toEqual(["second"]);
+  expect(snapshot.routeVariants.map(({ id }) => id)).toEqual(["second"]);
+  expect(resolveMetadata).not.toHaveBeenCalled();
 });
 
 it("keeps replace publication closed to a warm refreshable inventory", async () => {
@@ -700,7 +727,7 @@ describe("catalog declaration planning", () => {
   const normalize = vi.mocked(normalizeModelCatalogProviderRows);
   let config: OpenClawConfig;
   function catalog(discovery: "static" | "runtime", ...modelIds: string[]) {
-    const planningMetadata = finalizePluginMetadataSnapshot(
+    const planningMetadata = pluginMetadata.finalizePluginMetadataSnapshot(
       providerManifestSnapshot("catalog-fixture", discovery, modelIds),
     );
     const params = { config, metadataSnapshot: planningMetadata };
