@@ -51,7 +51,7 @@ describe("workspace bootstrap file UTF-8 validation", () => {
       workspaceDir,
     });
     expect(loaded).toMatchObject({ ok: false, reason: "validation" });
-    if (loaded.ok === false) {
+    if (!loaded.ok) {
       // The shared strict decoder owns the rejection; no parallel error hierarchy.
       expect(loaded.error).toBeInstanceOf(Utf8InputError);
       expect(loaded.error).toMatchObject({ code: "ERR_INVALID_UTF8" });
