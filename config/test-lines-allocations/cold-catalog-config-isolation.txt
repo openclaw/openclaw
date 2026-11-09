@@ -1,2 +1,0 @@
-# Preserve factory defaults, command authority, credential-writer coverage, and cold catalog isolation.
-156

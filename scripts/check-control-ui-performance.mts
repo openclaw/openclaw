@@ -70,9 +70,9 @@ const controlUiPerformanceBudgets = {
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
-  // Removing the Zod/config-runtime preload saves 47 B raw and 113 B served gzip;
-  // Vite preload-table recoding adds 145 B normalized gzip. Measured cap, no headroom.
-  largestJsGzipBytes: 564_610,
+  // Same snapshot-save repair, measured shared chunk plus 64 B.
+  // The same shared-chunk trade, measured plus 64 B.
+  largestJsGzipBytes: 564_484,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,

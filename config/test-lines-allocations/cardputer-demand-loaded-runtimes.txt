@@ -1,2 +1,0 @@
-# Guard cold runtime import boundaries and retain the shared frame mock contract.
-41

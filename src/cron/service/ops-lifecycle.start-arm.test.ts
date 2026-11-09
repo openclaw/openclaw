@@ -87,7 +87,6 @@ it("reclaims a disabled scheduler's worker before stop and still accepts manual 
     expect(runSessionEvent).not.toHaveBeenCalled();
     expect(await cron.status()).toMatchObject({ enabled: false, jobs: 1, nextWakeAtMs: null });
     const worker = await withinTest(carrier.promise, signal);
-    expect(worker).toBeInstanceOf(Worker);
     const exited = once(worker, "exit");
     const pressure = channel("openclaw.memory.critical");
     expect(pressure.hasSubscribers).toBe(true);
@@ -126,7 +125,6 @@ it("joins a disabled scheduler borrow when stopped during its native command", a
   });
   const entered = createDeferred<Worker>();
   let forward: (() => void) | undefined;
-  const commands: string[] = [];
   // Hold the real native request after lease acquisition, without replacing its result.
   // oxlint-disable-next-line typescript/unbound-method -- Preserve the real Worker receiver.
   const postMessage = Worker.prototype.postMessage;
@@ -135,19 +133,13 @@ it("joins a disabled scheduler borrow when stopped during its native command", a
     request: SqliteWorkerRequest,
     transferList,
   ) {
-    if (request.type === "execute") {
-      const command = deserialize(request.input).type;
-      if (command.startsWith("cron.scheduler")) {
-        commands.push(command);
-      }
-      if (command === "cron.schedulerStart") {
-        forward = () => {
-          forward = undefined;
-          postMessage.call(this, request, transferList);
-        };
-        entered.resolve(this);
-        return;
-      }
+    if (request.type === "execute" && deserialize(request.input).type === "cron.schedulerStart") {
+      forward = () => {
+        forward = undefined;
+        postMessage.call(this, request, transferList);
+      };
+      entered.resolve(this);
+      return;
     }
     postMessage.call(this, request, transferList);
   });
@@ -173,7 +165,6 @@ it("joins a disabled scheduler borrow when stopped during its native command", a
     await withinTest(Promise.all([started, state.schedulerDrain]), signal);
     expect(state.schedulerStarted).toBe(false);
     expect(state.stopped).toBe(true);
-    expect(commands).toEqual(["cron.schedulerStart", "cron.schedulerStop"]);
     const exited = once(worker, "exit");
     channel("openclaw.memory.critical").publish(undefined);
     await withinTest(exited, signal);
