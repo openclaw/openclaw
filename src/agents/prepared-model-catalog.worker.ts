@@ -75,7 +75,7 @@ import {
 import { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
 import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
 import type { PreparedModelRuntimePluginGeneration } from "./prepared-model-runtime.types.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
+import { createReadonlyAuthStorage } from "./sessions/auth-storage-readonly.js";
 
 type WorkerGeneration = {
   config: Readonly<{
@@ -315,7 +315,7 @@ async function runCatalogRequest(
       ...value.catalogFacts,
       input: value.input,
       env: value.input.env,
-      templateAuthStorage: AuthStorage.inMemory(credentials),
+      templateAuthStorage: createReadonlyAuthStorage(credentials),
       credentials,
       providerIds: [
         ...new Set(request.providerIds ?? [...value.providerIds, ...Object.keys(credentials)]),

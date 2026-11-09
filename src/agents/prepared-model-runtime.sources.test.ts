@@ -43,15 +43,16 @@ import {
   prepareWorkspaceBuildGroup,
   type PreparedConfiguredModelRegistries,
 } from "./prepared-model-runtime.facts.js";
-import {
-  createPreparedModelRuntimeSnapshot,
-  prepareCatalogPublicationFacts,
-  prepareFullCatalogFacts,
-} from "./prepared-model-runtime.full-catalog.js";
+import { prepareCatalogPublicationFacts } from "./prepared-model-runtime.full-catalog.js";
 import * as inboundRegistry from "./prepared-model-runtime.inbound-registry.js";
 import { discardPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
+import {
+  createPreparedModelRuntimeSnapshot,
+  prepareFullCatalogFacts,
+} from "./prepared-model-runtime.session.js";
 import { getAuthStorageOAuthProviderRegistry } from "./sessions/auth-storage-oauth-registry.js";
+import { createReadonlyAuthStorage } from "./sessions/auth-storage-readonly.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 
@@ -498,8 +499,26 @@ describe("prepared catalog source composition", () => {
     const normalizedEndpoint = "https://normalized.example.invalid/v1";
     const oauth = { access: "synthetic-access", refresh: "synthetic-refresh", expires: 9e15 };
     facts.configuredModelRefs = [{ provider: providerId, modelId: "completed" }];
+    const prepareReadOnlyPublication: typeof prepareCatalogPublicationFacts = (
+      sourceFacts,
+      ...rest
+    ) =>
+      prepareCatalogPublicationFacts(
+        {
+          ...sourceFacts,
+          templateAuthStorage: {
+            ...createReadonlyAuthStorage(sourceFacts.credentials),
+            getOAuthProviders: () => sourceFacts.templateAuthStorage.getOAuthProviders(),
+          },
+        },
+        ...rest,
+      );
     for (const kind of ["missing", "api_key", "oauth"] as const) {
-      for (const prepare of [prepareFullCatalogFacts, prepareCatalogPublicationFacts]) {
+      for (const prepare of [
+        prepareFullCatalogFacts,
+        prepareCatalogPublicationFacts,
+        prepareReadOnlyPublication,
+      ]) {
         facts.credentials =
           kind === "missing"
             ? {}
@@ -510,8 +529,10 @@ describe("prepared catalog source composition", () => {
                     : { type: kind, key: "synthetic-key" },
               };
         facts.templateAuthStorage = AuthStorage.inMemory(facts.credentials);
+        const siblingAuth = createReadonlyAuthStorage(facts.credentials);
         const modifyModels = vi.fn((models: Model[], credential: OAuthCredentials) => {
           expect(credential).toMatchObject(oauth);
+          credential.access = "callback-mutation";
           return models.map((row) => ({ ...row, name: `OAuth ${row.id}` }));
         });
         getAuthStorageOAuthProviderRegistry(facts.templateAuthStorage).register({
@@ -573,6 +594,10 @@ describe("prepared catalog source composition", () => {
           { provider: providerId, modelId: "completed", model: { ...expected, id: "completed" } },
         ]);
         expect(modifyModels).toHaveBeenCalledTimes(kind === "oauth" ? 1 : 0);
+        if (kind === "oauth") {
+          expect(facts.credentials[providerId]).toMatchObject(oauth);
+          expect(siblingAuth.get(providerId)).toMatchObject(oauth);
+        }
       }
     }
   });

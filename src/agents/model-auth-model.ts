@@ -1,11 +1,11 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   selectApplicableRuntimeConfig,
-} from "../config/config.js";
-import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
 import type { Model, ModelRequestHeaders } from "../llm/types.js";

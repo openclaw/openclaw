@@ -1,7 +1,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { getRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   pluginProviderAuthUnavailable,

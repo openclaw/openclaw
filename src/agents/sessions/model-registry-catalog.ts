@@ -25,7 +25,7 @@ import {
   type PersistedPluginModelCatalog,
   type PluginModelCatalogMetadataSnapshot,
 } from "../plugin-model-catalog.js";
-import type { AuthStorage } from "./auth-storage.js";
+import type { ReadonlyAuthStorage } from "./auth-storage-readonly.js";
 import { createRegistryRuntimeModel } from "./model-registry-runtime-model.js";
 import {
   formatValidationPath,
@@ -56,7 +56,7 @@ export type ModelRegistryCatalogOptions = {
 
 /** Compose inventory once; mutable session registries own their own baseline snapshots. */
 export function buildModelRegistryCatalog(
-  authStorage: AuthStorage,
+  authStorage: ReadonlyAuthStorage,
   modelsJsonPath: string | undefined,
   options: ModelRegistryCatalogOptions & {
     pluginCatalogReadError?: string;

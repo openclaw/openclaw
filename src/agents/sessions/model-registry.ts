@@ -13,13 +13,15 @@ import type {
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
 import {
+  getModelRegistryProviderRequestConfig,
+  hasModelRegistryConfiguredAuth,
+} from "./model-registry-availability.js";
+import {
   buildModelRegistryCatalog,
   type ModelRegistryCatalogOptions,
 } from "./model-registry-catalog.js";
 import {
-  getModelRegistryProviderRequestConfig,
   resolveModelRegistryRequestAuth,
-  hasModelRegistryConfiguredAuth,
   resolveModelRegistryProviderApiKey,
 } from "./model-registry-request-auth.js";
 import { createRegistryRuntimeModel } from "./model-registry-runtime-model.js";

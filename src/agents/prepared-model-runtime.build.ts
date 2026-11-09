@@ -36,10 +36,6 @@ import {
 } from "./prepared-model-runtime.facts.js";
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.fingerprint.js";
 import {
-  createPreparedModelRuntimeSnapshot,
-  prepareFullCatalogFacts,
-} from "./prepared-model-runtime.full-catalog.js";
-import {
   createPreparedInboundRegistryLoader,
   preparedModelRuntimeWorkspaceFactsKey,
 } from "./prepared-model-runtime.inbound-registry.js";
@@ -51,6 +47,10 @@ import {
 } from "./prepared-model-runtime.plugin-lifetime.js";
 import { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
 import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
+import {
+  createPreparedModelRuntimeSnapshot,
+  prepareFullCatalogFacts,
+} from "./prepared-model-runtime.session.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,

@@ -57,6 +57,7 @@ import {
   observeAuthTransactions,
   createSqliteAuthRefreshFixture,
 } from "./auth-storage.test-support.js";
+import { ModelRegistry } from "./model-registry.js";
 
 const providerOAuthMocks = {
   login: vi.fn<typeof providerRuntime.loginProviderOAuthWithPlugin>(),
@@ -623,6 +624,8 @@ describe("SQLite auth storage", () => {
   });
 
   it("initializes detached in-memory credentials without a legacy reload warning", () => {
+    expect(PublicAuthStorage).toBe(AuthStorage);
+    expect(PublicModelRegistry).toBe(ModelRegistry);
     const warn = vi.spyOn(sdkDeprecation, "warnPluginSdkDeprecation").mockImplementation(() => {});
     const credential = apiKey("synthetic-initial-key");
     const storage = PublicAuthStorage.inMemory({ fixture: credential });

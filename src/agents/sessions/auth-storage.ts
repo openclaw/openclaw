@@ -53,10 +53,7 @@ import type {
 } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";
 import { AuthStoragePersistenceError } from "./auth-storage-error.js";
-import {
-  isAuthStorageOAuthRefreshFence,
-  refreshAuthStorageOAuthCredential,
-} from "./auth-storage-oauth-refresh.js";
+import { refreshAuthStorageOAuthCredential } from "./auth-storage-oauth-refresh.js";
 import {
   getAuthStorageOAuthProviderRegistry,
   loginAuthStorageOAuthProvider,
@@ -68,6 +65,10 @@ import {
   materializeAuthStorageStore,
   projectAuthoritativeAuthStorageData,
 } from "./auth-storage-projection.js";
+import {
+  hasAuthStorageCredential,
+  isAuthStorageOAuthRefreshFence,
+} from "./auth-storage-readonly.js";
 import type {
   AuthCredential,
   AuthStorageBackend,
@@ -561,7 +562,7 @@ export class AuthStorage {
 
   get(provider: string): AuthCredential | undefined {
     const credential = this.data[provider];
-    return isAuthStorageOAuthRefreshFence(provider, credential) ? undefined : credential;
+    return isAuthStorageOAuthRefreshFence(credential) ? undefined : credential;
   }
 
   /** @deprecated Use setAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
@@ -586,7 +587,7 @@ export class AuthStorage {
 
   list(): string[] {
     return Object.keys(this.data).filter(
-      (provider) => !isAuthStorageOAuthRefreshFence(provider, this.data[provider]),
+      (provider) => !isAuthStorageOAuthRefreshFence(this.data[provider]),
     );
   }
 
@@ -601,8 +602,7 @@ export class AuthStorage {
   hasAuth(provider: string): boolean {
     return Boolean(
       this.runtimeOverrides.has(provider) ||
-      this.get(provider) ||
-      getEnvApiKey(provider) ||
+      hasAuthStorageCredential(provider, this.get(provider)) ||
       this.fallbackResolver?.(provider),
     );
   }
@@ -637,7 +637,7 @@ export class AuthStorage {
   getAll(): AuthStorageData {
     return Object.fromEntries(
       Object.entries(this.data).filter(
-        ([provider, credential]) => !isAuthStorageOAuthRefreshFence(provider, credential),
+        ([, credential]) => !isAuthStorageOAuthRefreshFence(credential),
       ),
     );
   }
@@ -736,7 +736,7 @@ export class AuthStorage {
     options?: { includeFallback?: boolean; baseUrl?: string },
   ): Promise<{ apiKey: string | undefined; source?: AuthProfileCredentialSource }> {
     let cred = this.data[providerId];
-    if (isAuthStorageOAuthRefreshFence(providerId, cred)) {
+    if (isAuthStorageOAuthRefreshFence(cred)) {
       await this.reloadAsync();
       cred = this.data[providerId];
       const normalizedFence =

@@ -1792,6 +1792,7 @@ src/plugins/provider-owner-index.ts
 src/plugins/provider-policy-owners.ts
 src/plugins/provider-policy-surface.ts
 src/plugins/provider-public-artifacts.ts
+src/plugins/provider-registration-projection.ts
 src/plugins/provider-registry-index.ts
 src/plugins/provider-registry-selection.ts
 src/plugins/provider-registry-shared.ts
