@@ -1,0 +1,4 @@
+# PR #177089: strict UTF-8 rejection for workspace bootstrap reads. Covers the malformed-byte
+# regression for the local fd reader, the remote-shell bridge parity update, malformed sandbox
+# seed skipping, and the valid-content controls (leading BOM + multibyte preserved byte-for-byte).
+89
