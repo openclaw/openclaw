@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
@@ -10,7 +10,7 @@ import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.t
 import { readOrCreateInstallationId } from "./database-engine/install-identity.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { acquireGatewayLock, type GatewayLockHandle } from "./gateway-lock.js";
-import { acquireGatewayPostgresOwner, gatewayOwnerLockKey } from "./gateway-postgres-owner.js";
+import { acquireConfiguredGatewayPostgresOwner } from "./gateway-postgres-owner.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -71,6 +71,15 @@ async function installSchemaExists(schemaPrefix: string) {
   return rows.length > 0;
 }
 
+async function acquireOwner(heartbeatMs?: number) {
+  const owner = await acquireConfiguredGatewayPostgresOwner(() => {}, { heartbeatMs });
+  if (!owner) {
+    throw new Error("Expected database.localStores none");
+  }
+  cleanup.push(owner.release);
+  return owner;
+}
+
 function escape(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -96,10 +105,12 @@ describe.skipIf(!connection)("Gateway ownership with database.localStores none",
 
   it("loses ownership when the session ends or the heartbeat fails, and releases the lock", async () => {
     const install = createInstall(true);
-    const terminated = await acquireGatewayPostgresOwner(install);
-    cleanup.push(terminated.release);
-    await expect(acquireGatewayPostgresOwner(install)).rejects.toThrow(/busy at PostgreSQL/);
-    const key = BigInt.asUintN(64, BigInt(gatewayOwnerLockKey(install.localStores.installationId)));
+    const terminated = await acquireOwner();
+    await expect(acquireOwner()).rejects.toThrow(/busy at PostgreSQL/);
+    const key = createHash("sha256")
+      .update(`openclaw.gateway-owner:${install.localStores.installationId}`)
+      .digest()
+      .readBigUInt64BE();
     const backends = await query(
       `SELECT pg_terminate_backend(pid) FROM pg_locks
        WHERE locktype = 'advisory' AND classid = $1 AND objid = $2 AND objsubid = 1`,
@@ -108,18 +119,16 @@ describe.skipIf(!connection)("Gateway ownership with database.localStores none",
     expect(backends).toHaveLength(1);
     await vi.waitFor(() => expect(terminated.assertCurrent).toThrow(/ownership was lost/));
 
-    const stalled = await acquireGatewayPostgresOwner(install, { heartbeatMs: 20 });
-    cleanup.push(stalled.release);
+    const stalled = await acquireOwner(20);
     await query(`DROP TABLE "${install.schemaPrefix}_install".gateway_owner`);
     await vi.waitFor(() => expect(stalled.assertCurrent).toThrow(/lost: heartbeat failed/));
 
-    const next = await acquireGatewayPostgresOwner(install);
+    const next = await acquireOwner();
     next.assertCurrent();
     await next.release();
     await next.release();
     expect(next.assertCurrent).toThrow(/was released/);
-    const after = await acquireGatewayPostgresOwner(install);
-    cleanup.push(after.release);
+    (await acquireOwner()).assertCurrent();
   });
 
   it("leaves the default mode on per-state-dir file ownership", async () => {

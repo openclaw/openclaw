@@ -29,7 +29,7 @@ function advisoryKey(scope: string): string {
 }
 
 /** Distinct from store writer locks, which hash the bare store UUID. */
-export function gatewayOwnerLockKey(installationId: string): string {
+function gatewayOwnerLockKey(installationId: string): string {
   return advisoryKey(`openclaw.gateway-owner:${installationId}`);
 }
 
@@ -80,7 +80,7 @@ async function readOwnerRow(client: Client, input: InstallInput) {
  * One dedicated session outside the pool holds the lock; PostgreSQL releases it when that
  * session ends, so a crashed owner leaves nothing to clean up. The owner row is diagnostic only.
  */
-export async function acquireGatewayPostgresOwner(
+async function acquireGatewayPostgresOwner(
   input: InstallInput,
   options: { heartbeatMs?: number } = {},
 ): Promise<GatewayPostgresOwner> {
@@ -155,7 +155,13 @@ export async function acquireGatewayPostgresOwner(
       .query(`UPDATE ${schema}.gateway_owner SET heartbeat_at = now() WHERE installation_id = $1`, [
         installationId,
       ])
-      .catch((error: Error) => lose(new Error(`heartbeat failed: ${error.message}`)));
+      .catch((error: unknown) =>
+        lose(
+          new Error(`heartbeat failed: ${error instanceof Error ? error.message : String(error)}`, {
+            cause: error,
+          }),
+        ),
+      );
   }, options.heartbeatMs ?? HEARTBEAT_MS);
   heartbeat.unref();
   return {
@@ -193,13 +199,14 @@ export async function acquireGatewayPostgresOwner(
  */
 export async function acquireConfiguredGatewayPostgresOwner(
   onContention: (target: string) => void,
+  options: { heartbeatMs?: number } = {},
 ): Promise<GatewayPostgresOwner | undefined> {
   const input = getDatabaseEngineInput("state");
   if (!isInstallOwnedInput(input)) {
     return undefined;
   }
   try {
-    const owner = await acquireGatewayPostgresOwner(input);
+    const owner = await acquireGatewayPostgresOwner(input, options);
     reportedHolder = undefined;
     return owner;
   } catch (error) {
