@@ -179,16 +179,22 @@ describe("gateway auth browser hardening", () => {
     });
   });
 
-  test("accepts trusted-proxy publicOrigin despite an unused redacted password", async () => {
+  test("advertises browser OAuth through a trusted-proxy publicOrigin despite an unused redacted password", async () => {
     await withTrustedProxyBrowserWs(
       ALLOWED_BROWSER_ORIGIN,
       async (ws) => {
         const payload = await connectOk(ws, {
-          client: TEST_OPERATOR_CLIENT,
-          device: null,
+          client: CONTROL_UI_CLIENT,
+          scopes: ["operator.admin"],
           skipDefaultAuth: true,
+          prePairDevice: true,
+          browserOrigin: ALLOWED_BROWSER_ORIGIN,
         });
-        expect(payload.type).toBe("hello-ok");
+        expect(payload).toMatchObject({
+          type: "hello-ok",
+          auth: { scopes: expect.arrayContaining(["operator.admin"]) },
+          features: { methods: expect.arrayContaining(["mcp.authLogin"]) },
+        });
       },
       REDACTED_SENTINEL,
     );

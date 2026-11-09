@@ -1,10 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { readRuntimeConfig } from "../config/runtime-snapshot.js";
 import { OAUTH_PAGE_CSP } from "../infra/oauth-page-csp.js";
 import type { ProviderAuthContext } from "../plugins/provider-authentication.types.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { renderOAuthPage } from "../shared/oauth-page.js";
+import { isGatewayAuthPolicyCurrent } from "./auth-policy.js";
+import type { GatewayAuthPolicy } from "./auth-policy.types.js";
 import { isLoopbackHost } from "./net.js";
 import { isGatewayHostBrowserOrigin } from "./origin-check.js";
 import type { GatewayWsBrowserOrigin } from "./server/ws-types.js";
@@ -53,16 +56,28 @@ export class ProviderBrowserSignInError extends Error {
 
 export function resolveBrowserAuthOrigin(
   browser: GatewayWsBrowserOrigin | undefined,
-  signal: AbortSignal = getGatewayRestartDrainSignal(),
+  {
+    signal = getGatewayRestartDrainSignal(),
+    authPolicy,
+  }: {
+    signal?: AbortSignal;
+    authPolicy?: GatewayAuthPolicy;
+  } = {},
 ) {
   const published = getTailscalePublishedOrigin();
   if (!browser || browser.origin === published?.origin) {
     return published;
   }
-  if (browser.origin && isGatewayHostBrowserOrigin(browser)) {
+  const config = authPolicy?.authMethod === "trusted-proxy" ? readRuntimeConfig() : null;
+  const isPublicProxyOrigin = Boolean(
+    config &&
+    browser.origin === config.gateway?.publicOrigin &&
+    isGatewayAuthPolicyCurrent(authPolicy, config),
+  );
+  if (browser.origin && (isGatewayHostBrowserOrigin(browser) || isPublicProxyOrigin)) {
     const url = new URL(browser.origin);
     // The authenticated browser connection already passed Gateway origin policy.
-    // Its served HTTPS origin also covers operator-managed reverse proxies.
+    // Only authenticated trusted proxies may use publicOrigin when Host was rewritten.
     if (
       url.protocol === "https:" ||
       (url.protocol === "http:" && browser.isLocalClient && isLoopbackHost(url.hostname))
@@ -77,12 +92,16 @@ export function createProviderBrowserAuthSession(params: {
   signal?: AbortSignal;
   openUrl: (url: string) => Promise<void>;
   browserOrigin?: GatewayWsBrowserOrigin;
+  authPolicy?: GatewayAuthPolicy;
   /** Bind account-link callbacks to the browser that initiated them. */
   browserBinding?: { cookieName: string; cookieValue: string };
 }) {
   const lifetime = new AbortController();
   const browserOriginSignal = params.browserOrigin
-    ? resolveBrowserAuthOrigin(params.browserOrigin, lifetime.signal)?.signal
+    ? resolveBrowserAuthOrigin(params.browserOrigin, {
+        signal: lifetime.signal,
+        authPolicy: params.authPolicy,
+      })?.signal
     : undefined;
   const signal = AbortSignal.any([
     lifetime.signal,
@@ -97,9 +116,17 @@ export function createProviderBrowserAuthSession(params: {
     lifetime.abort(
       new Error("Browser sign-in ended because the Gateway address changed. Retry /login."),
     );
+  const isOriginCurrent = () =>
+    !origin ||
+    resolveBrowserAuthOrigin(params.browserOrigin, { authPolicy: params.authPolicy })?.origin ===
+      origin.origin;
   const assertCurrent = () => {
     signal.throwIfAborted();
     origin?.signal.throwIfAborted();
+    if (!isOriginCurrent()) {
+      originClosed();
+      signal.throwIfAborted();
+    }
     if (expiresAt !== undefined && Date.now() >= expiresAt) {
       throw new ProviderBrowserSignInError("expired");
     }
@@ -117,7 +144,10 @@ export function createProviderBrowserAuthSession(params: {
       | Promise<{ state: string; authorizationUrl: string } | { result: Result }>;
   }): Promise<AuthorizationResult | Result> => {
     assertCurrent();
-    const published = resolveBrowserAuthOrigin(params.browserOrigin, lifetime.signal);
+    const published = resolveBrowserAuthOrigin(params.browserOrigin, {
+      signal: lifetime.signal,
+      authPolicy: params.authPolicy,
+    });
     if (!published) {
       throw new ProviderBrowserSignInUnavailableError();
     }
@@ -150,7 +180,10 @@ export function createProviderBrowserAuthSession(params: {
       accept: callback.resolve,
       reject: callback.reject,
       isCurrent: () =>
-        !requestSignal.aborted && Date.now() < callbackExpiresAt && !published.signal.aborted,
+        !requestSignal.aborted &&
+        Date.now() < callbackExpiresAt &&
+        !published.signal.aborted &&
+        isOriginCurrent(),
     };
     pendingAuthorizations.set(state, pending);
     requestSignal.addEventListener("abort", onAbort, { once: true });
@@ -186,7 +219,12 @@ export function createProviderBrowserAuthSession(params: {
     });
   return {
     get available() {
-      return Boolean(resolveBrowserAuthOrigin(params.browserOrigin, lifetime.signal));
+      return Boolean(
+        resolveBrowserAuthOrigin(params.browserOrigin, {
+          signal: lifetime.signal,
+          authPolicy: params.authPolicy,
+        }),
+      );
     },
     authorize,
     authorizePrepared,
