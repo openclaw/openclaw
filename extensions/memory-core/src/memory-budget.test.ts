@@ -403,6 +403,28 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     expect(result.compacted).not.toContain("(2026-04-20)");
   });
 
+  it.each(["", "### Global\n", "### Project: alpha\n"])(
+    "preserves a marker comment with subsection %s",
+    (subsection) => {
+      const existing = [
+        promotionSection("2026-04-10", 400),
+        "",
+        `${subsection}${PROMOTION_MARKER_LINE} <!-- USER-AUTHORED -->\n- handwritten bullet`,
+        "",
+        promotionSection("2026-04-20", 400),
+      ].join("\n");
+      const result = compactMemoryForBudget({
+        existingMemory: existing,
+        newSection: `\n${promotionSection("2026-04-29", 400)}`,
+        budgetChars: 900,
+      });
+      expect(result.droppedDates).toEqual(["2026-04-20"]);
+      expect(result.compacted).toContain("(2026-04-10)");
+      expect(result.compacted).toContain("<!-- USER-AUTHORED -->");
+      expect(result.compacted).not.toContain("(2026-04-20)");
+    },
+  );
+
   it("preserves a block with user text between generated entries", () => {
     const existing = [
       "## Promoted From Short-Term Memory (2026-04-10)",

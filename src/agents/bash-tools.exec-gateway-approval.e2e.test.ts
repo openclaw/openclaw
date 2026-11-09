@@ -3,11 +3,12 @@
  * Exercises a real gateway server approval flow, approval follow-up text, and
  * approval timeout behavior in an isolated temp config.
  */
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { resolveCommandExecApprovalRoute } from "../auto-reply/reply/commands-private-route.js";
 import type { HandleCommandsParams } from "../auto-reply/reply/commands-types.js";
@@ -320,6 +321,90 @@ describe("gateway-hosted exec approvals", () => {
       expect(routedOutcome.status).toBe("completed");
       expect(routedOutcome.exitCode).toBe(0);
       expect(routedOutcome.aggregated).toBe("device-bound-smoke");
+
+      if (process.platform !== "win32" && existsSync("/usr/bin/printf")) {
+        await fs.writeFile(path.join(workspaceDir, "proof.txt"), "fixture");
+        const previous = await operator.request<{ file: unknown }>("exec.approvals.get", {});
+        const setPredicatePolicy = async (
+          security: "allowlist" | "deny",
+          ask: "on-miss" | "off",
+        ) => {
+          const current = await operator.request<{ hash: string }>("exec.approvals.get", {});
+          await operator.request("exec.approvals.set", {
+            baseHash: current.hash,
+            file: {
+              version: 1,
+              defaults: { security, ask, askFallback: "deny" },
+              agents: { main: { allowlist: [{ pattern: "/usr/bin/printf" }] } },
+            },
+          });
+          const updated = await operator.request<{
+            file: { defaults: { security: string; ask: string } };
+          }>("exec.approvals.get", {});
+          expect(updated.file.defaults).toMatchObject({ security, ask });
+        };
+        const command = "test -e *.txt && /usr/bin/printf 'approved\\n'";
+        try {
+          await setPredicatePolicy("allowlist", "off");
+          const deniedTool = createExecTool({
+            host: "gateway",
+            security: "allowlist",
+            ask: "off",
+            safeBins: [],
+            cwd: workspaceDir,
+            agentId: "main",
+          });
+          await expect(
+            deniedTool.execute("dynamic-predicate-denied", { command, workdir: workspaceDir }),
+          ).rejects.toThrow("exec denied: allowlist miss");
+
+          for (const revoked of [false, true]) {
+            await setPredicatePolicy("allowlist", "on-miss");
+            const predicateTool = createExecTool({
+              host: "gateway",
+              security: "allowlist",
+              ask: "on-miss",
+              safeBins: [],
+              cwd: workspaceDir,
+              agentId: "main",
+            });
+            const running = predicateTool.execute("dynamic-predicate-approval", {
+              command,
+              workdir: workspaceDir,
+            });
+            let id: string | undefined;
+            await vi.waitFor(
+              async () => {
+                const pending = await operator.request<
+                  Array<{ id: string; request: { command?: string } }>
+                >("exec.approval.list", {});
+                id = pending.find((entry) => entry.request.command === command)?.id;
+                expect(id).toBeDefined();
+              },
+              { timeout: 15_000, interval: 100 },
+            );
+            if (revoked) {
+              await setPredicatePolicy("deny", "off");
+            }
+            await operator.request("exec.approval.resolve", { id, decision: "allow-once" });
+            if (revoked) {
+              await expect(running).rejects.toThrow("Exec approval changed before execution");
+            } else {
+              expect((await running).details).toMatchObject({
+                status: "completed",
+                exitCode: 0,
+                aggregated: "approved",
+              });
+            }
+          }
+        } finally {
+          const current = await operator.request<{ hash: string }>("exec.approvals.get", {});
+          await operator.request("exec.approvals.set", {
+            baseHash: current.hash,
+            file: previous.file,
+          });
+        }
+      }
     },
     EXEC_APPROVAL_E2E_TIMEOUT_MS,
   );

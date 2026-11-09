@@ -56,6 +56,7 @@ import {
 } from "./monitor/sanitize-outbound.js";
 import { withIMessageRemoteFile } from "./remote-file.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
+import { clearIMessageSendFailure, withIMessageSendFailureStatus } from "./send-status.js";
 import { requestIMessageRpcSend, type IMessageSendHandoff } from "./send-transport.js";
 import {
   formatIMessageChatTarget,
@@ -696,6 +697,19 @@ export async function sendMessageIMessage(
       cfg,
       accountId: opts.accountId,
     });
+  return await withIMessageSendFailureStatus(account.accountId, () =>
+    sendMessageIMessageForAccount(to, text, opts, cfg, account),
+  );
+}
+
+async function sendMessageIMessageForAccount(
+  to: string,
+  text: string,
+  opts: IMessageSendOpts,
+  cfg: OpenClawConfig,
+  account: ResolvedIMessageAccount,
+  clearSendFailure = true,
+): Promise<IMessageSendResult> {
   const cliPath = opts.cliPath?.trim() || account.config.cliPath?.trim() || "imsg";
   const dbPath = opts.dbPath?.trim() || account.config.dbPath?.trim();
   const remoteHost = await resolveIMessageRemoteHost({
@@ -853,6 +867,9 @@ export async function sendMessageIMessage(
     });
     if (attachmentResult) {
       if (!message.trim()) {
+        if (clearSendFailure && attachmentResult.messageId !== "unknown") {
+          clearIMessageSendFailure(account.accountId);
+        }
         return attachmentResult;
       }
       // Persist canonical provider facts before any later native send can run.
@@ -868,12 +885,20 @@ export async function sendMessageIMessage(
       });
       let captionResult: IMessageSendResult;
       try {
-        captionResult = await sendMessageIMessage(to, text, {
-          ...opts,
-          ...(opts.client ? { client: opts.client } : {}),
-          mediaUrl: undefined,
-          onDeliveryResult: undefined,
-        });
+        opts.assertDirectAdapterHandoff?.();
+        captionResult = await sendMessageIMessageForAccount(
+          to,
+          text,
+          {
+            ...opts,
+            ...(opts.client ? { client: opts.client } : {}),
+            mediaUrl: undefined,
+            onDeliveryResult: undefined,
+          },
+          cfg,
+          account,
+          false,
+        );
       } catch (error: unknown) {
         // Only the attachment was visible; never attribute the failed caption to it.
         throw createChannelPartialDeliveryError(error, {
@@ -886,6 +911,14 @@ export async function sendMessageIMessage(
       const messageId = isConcreteIMessageMessageId(attachmentResult.messageId)
         ? attachmentResult.messageId
         : captionResult.messageId;
+      // Neither a partial send nor an unconfirmed caption clears the account warning.
+      if (
+        clearSendFailure &&
+        attachmentResult.messageId !== "unknown" &&
+        captionResult.messageId !== "unknown"
+      ) {
+        clearIMessageSendFailure(account.accountId);
+      }
       return {
         messageId,
         ...((captionResult.guid ?? attachmentResult.guid)
@@ -1084,6 +1117,9 @@ export async function sendMessageIMessage(
         approvalKind: opts.approvalPrompt.approvalKind,
         allowedDecisions: opts.approvalPrompt.allowedDecisions,
       });
+    }
+    if (clearSendFailure && messageId !== "unknown") {
+      clearIMessageSendFailure(account.accountId);
     }
     return {
       messageId,

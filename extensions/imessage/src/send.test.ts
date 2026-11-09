@@ -6,7 +6,7 @@ import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbou
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { IMessageRpcClient } from "./client.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
 import {
@@ -139,6 +139,115 @@ describe("sendMessageIMessage receipts", () => {
     fs.writeFileSync(sourcePath, contents);
     return sourcePath;
   }
+
+  async function observeSendStatus(accountId = "default") {
+    const { getIMessageRuntime } = await import("./runtime.js");
+    const { registerIMessageSendStatus } = await import("./send-status.js");
+    let status = {
+      accountId,
+      lastError: "Messages automation failed with AppleScript error -1712." as string | null,
+    };
+    const patches: Array<typeof status> = [];
+    const controller = new AbortController();
+    const lease = registerIMessageSendStatus({
+      accountId,
+      channelRuntime: getIMessageRuntime().channel,
+      abortSignal: controller.signal,
+      getStatus: () => status,
+      setStatus: (next) => {
+        status = { ...status, ...next };
+        patches.push(status);
+      },
+    });
+    onTestFinished(() => lease?.dispose());
+    return {
+      patches,
+      controller,
+      lease,
+      status: () => status,
+      setError: (lastError: string) => {
+        status.lastError = lastError;
+      },
+    };
+  }
+
+  it.each([-1712, -1743])("reports RPC Automation %s without replacing the error", async (code) => {
+    const observed = await observeSendStatus("work");
+    const error = new Error("Messages automation failed with AppleScript error " + code + ".");
+    const client = createRejectingClient(error);
+    await expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: { channels: { imessage: { accounts: { Work: {} } } } },
+        accountId: "WORK",
+        client,
+      }),
+    ).rejects.toBe(error);
+    expect(observed.patches).toHaveLength(1);
+    expect(observed.status().lastError).toContain("Automation");
+    expect(observed.status().lastError).toContain(String(code));
+    expect(getClientMocks(client).request).toHaveBeenCalledOnce();
+    expect(getClientMocks(client).stop).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { media: false, caption: false, result: { guid: "confirmed" }, cleared: true },
+    { media: false, caption: false, result: { success: true }, cleared: true },
+    { media: false, caption: false, result: {}, cleared: false },
+    { media: true, caption: false, result: { success: true }, cleared: true },
+    { media: true, caption: false, result: {}, cleared: false },
+    { media: true, caption: true, result: { guid: "confirmed" }, cleared: true },
+    { media: true, caption: true, result: {}, cleared: false },
+  ])(
+    "clears only completed sends: media=$media caption=$caption cleared=$cleared",
+    async ({ media, caption, result, cleared }) => {
+      const observed = await observeSendStatus();
+      const client = createClient(result);
+      await sendMessageIMessage("chat_guid:fixture", media && !caption ? "" : "hello", {
+        config: IMESSAGE_TEST_CFG,
+        client,
+        ...(media
+          ? {
+              mediaUrl: "/tmp/image.png",
+              resolveAttachmentImpl: async () => ({
+                path: "/tmp/image.png",
+                contentType: "image/png",
+              }),
+              runCliJson: async () => (caption ? { guid: "attachment" } : result),
+            }
+          : {}),
+      });
+      expect(observed.patches).toHaveLength(cleared ? 1 : 0);
+      expect(observed.status().lastError === null).toBe(cleared);
+    },
+  );
+
+  it("keeps unrelated errors and retires status leases on abort and disposal", async () => {
+    const observed = await observeSendStatus();
+    observed.setError("unrelated monitor failure");
+    await sendMessageIMessage("chat_id:42", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client: createClient({ success: true }),
+    });
+    expect(observed.status().lastError).toBe("unrelated monitor failure");
+    observed.controller.abort();
+    const error = new Error("Messages automation failed with AppleScript error -1743.");
+    await expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: IMESSAGE_TEST_CFG,
+        client: createRejectingClient(error),
+      }),
+    ).rejects.toBe(error);
+    expect(observed.patches).toEqual([]);
+    const replacement = await observeSendStatus();
+    replacement.lease?.dispose();
+    await expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: IMESSAGE_TEST_CFG,
+        client: createRejectingClient(error),
+      }),
+    ).rejects.toBe(error);
+    expect(replacement.patches).toEqual([]);
+  });
 
   // Separate independent contracts so 81 RPC sends and the rejection corpus do not
   // share one deadline. Each case owns its executable logs and keeps the 30s limit.
@@ -1267,17 +1376,22 @@ describe("sendMessageIMessage receipts", () => {
     },
   );
 
-  it.each(["accepted", "rejected"] as const)(
+  it.each(["accepted", "rejected", "applescript", "auto"] as const)(
     "preserves the default CLI attachment %s outcome",
     async (outcome) => {
       const cliPath = openClawState.path("fake-attachment-cli");
       const logPath = openClawState.path("attachment-cli-argv.jsonl");
       const dbPath = openClawState.path("unused-chat.db");
       const mediaPath = createOutboundMediaFile("fixture.pdf", Buffer.from("%PDF-1.4\nsynthetic"));
+      const automation = outcome === "applescript" || outcome === "auto";
+      const observed = await observeSendStatus();
+      const detail = automation
+        ? "Messages automation failed with AppleScript error -1712."
+        : "synthetic CLI rejection";
       const response =
         outcome === "accepted"
           ? { success: true, messageGuid: "p:0/default-cli" }
-          : { success: false, error: "synthetic CLI rejection" };
+          : { success: false, error: detail };
       fs.writeFileSync(
         cliPath,
         [
@@ -1290,7 +1404,15 @@ describe("sendMessageIMessage receipts", () => {
       );
       const createRpc = vi.fn(async () => createClient({ guid: "unexpected-rpc" }));
       const sending = sendMessageIMessage("chat_guid:fixture-chat", "", {
-        config: { channels: { imessage: { accounts: { default: { cliPath, dbPath } } } } },
+        config: {
+          channels: {
+            imessage: {
+              accounts: {
+                default: { cliPath, dbPath, ...(automation ? { sendTransport: outcome } : {}) },
+              },
+            },
+          },
+        },
         mediaUrl: mediaPath,
         resolveAttachmentImpl: async () => ({ path: mediaPath, contentType: "application/pdf" }),
         createClient: createRpc,
@@ -1301,7 +1423,11 @@ describe("sendMessageIMessage receipts", () => {
           receipt: { platformMessageIds: ["p:0/default-cli"] },
         });
       } else {
-        await expect(sending).rejects.toThrow("synthetic CLI rejection");
+        await expect(sending).rejects.toMatchObject({ name: "Error", message: detail });
+        if (automation) {
+          expect(observed.status().lastError).toContain("Automation");
+          expect(observed.patches).toHaveLength(1);
+        }
       }
       expect(createRpc).not.toHaveBeenCalled();
       const calls = fs
@@ -1317,7 +1443,7 @@ describe("sendMessageIMessage receipts", () => {
           "--file",
           mediaPath,
           "--transport",
-          "auto",
+          automation ? outcome : "auto",
           "--db",
           dbPath,
           "--json",
@@ -2965,7 +3091,8 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("does not persist caption text when the caption follow-up send fails", async () => {
-    const captionError = new Error("caption failed");
+    const observed = await observeSendStatus();
+    const captionError = new Error("Messages automation failed with AppleScript error -1743.");
     const client = createRejectingClient(captionError);
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageGuid: "p:0/dm-media-guid" });
     const onDeliveryResult = vi.fn();
@@ -2985,6 +3112,8 @@ describe("sendMessageIMessage receipts", () => {
     }
 
     expect(isChannelPartialDeliveryError(observedError)).toBe(true);
+    expect(observed.patches).toHaveLength(1);
+    expect(observed.status().lastError).toContain("-1743");
     expect(observedError).toMatchObject({
       code: "CHANNEL_PARTIAL_DELIVERY",
       cause: captionError,

@@ -1,0 +1,3 @@
+# Predicate classification, shell quote tracking, real approval/revocation, and agent-turn regressions.
+# Release backport: actual adapted growth is 242 LF lines (17 + 85 + 47 + 25 + 68); no shared baseline change.
+242

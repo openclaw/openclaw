@@ -96,6 +96,17 @@ openclaw channels status --probe --channel imessage
 
   </Accordion>
 
+  <Accordion title="Replies fail after an app update with AppleScript -1712 or -1743">
+    A working inbound connection or successful read probe does not prove that Messages Automation is authorized. OpenClaw reports observed AppleScript Automation send failures in the account warning shown by `openclaw channels status`, including when inbound remains connected. During the current account run, the warning clears after a successful send, not a successful read probe. Restarting the Gateway resets this observed status; it does not transfer the grant.
+
+    On the Messages Mac, open **System Settings → Privacy & Security → Automation** and allow Messages for the process that runs `imsg`. For an app-managed background Gateway using bundled Bun, check the current `bun` entry. App updates use a new concrete runtime path, so a grant for an older `node` or `bun` runtime, Terminal, or OpenClaw.app may not cover the running service. Use `openclaw gateway status --deep` to inspect the service command.
+
+    AppleScript `-1712` is a timeout, not proof of a denied grant: also check for a hidden permission prompt or an unresponsive Messages.app. After restoring access, retry a send through the Gateway in the same user session. A terminal-only test can use a different permission identity. Review queued replies before manually sending replacements.
+
+    This recovery does not preserve or transfer macOS grants between runtime builds. See [macOS permissions](/platforms/mac/permissions).
+
+  </Accordion>
+
   <Accordion title="macOS permission prompts were missed">
     Re-run in an interactive GUI terminal in the same user/session context and approve prompts:
 

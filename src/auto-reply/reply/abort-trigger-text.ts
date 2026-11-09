@@ -46,7 +46,13 @@ const ABORT_TRIGGERS = new Set([
   "please stop",
   "stop please",
 ]);
-const TRAILING_ABORT_PUNCTUATION_RE = /[.!?！？…,，。;；:：'"’”)\]}]+$/u;
+const ABORT_PUNCTUATION = String.raw`[.!?！？…,，。;；:：'"’”)\]}]`;
+// Only the start of a punctuation run can begin the trailing match. Without the lookbehind,
+// a long run that is not at the end is rescanned from each of its characters.
+const TRAILING_ABORT_PUNCTUATION_RE = new RegExp(
+  `(?<!${ABORT_PUNCTUATION})${ABORT_PUNCTUATION}+$`,
+  "u",
+);
 
 export function normalizeAbortTriggerText(text: string): string {
   return normalizeLowercaseStringOrEmpty(text)

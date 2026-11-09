@@ -153,6 +153,23 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     );
   }
 
+  it("does not dispatch a dynamic predicate without approval", async () => {
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+      agents: {},
+    });
+    const review = reviewer();
+    await expect(
+      tool(review, "allowlist").execute("dynamic-predicate", {
+        command: String.raw`test $'\0\''?v benign`,
+      }),
+    ).rejects.toThrow("exec denied: allowlist miss");
+
+    expect(review).not.toHaveBeenCalled();
+    expect(boundary.spawn).not.toHaveBeenCalled();
+  });
+
   it.skipIf(!python3).each([
     { mode: "auto", command: "python probe.py *.txt", shadowed: true },
     { mode: "ask", command: "python probe.py approved.txt", shadowed: false },
