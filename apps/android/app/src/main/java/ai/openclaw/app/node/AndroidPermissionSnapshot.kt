@@ -6,6 +6,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.core.app.NotificationManagerCompat
 
 /**
  * Canonical Android authority snapshot shared by node approval and device.permissions.
@@ -76,8 +77,8 @@ internal fun readAndroidPermissionSnapshot(
     smsRead = smsEnabled && telephonyAvailable && context.hasPermission(Manifest.permission.READ_SMS),
     notificationListener = DeviceNotificationListenerService.isAccessEnabled(context),
     notifications =
-      Build.VERSION.SDK_INT < 33 ||
-        context.hasPermission(Manifest.permission.POST_NOTIFICATIONS),
+      (Build.VERSION.SDK_INT < 33 || context.hasPermission(Manifest.permission.POST_NOTIFICATIONS)) &&
+        NotificationManagerCompat.from(context).areNotificationsEnabled(),
     photos = photosEnabled && hasPhotoReadPermission(context),
     contactsRead = context.hasPermission(Manifest.permission.READ_CONTACTS),
     contactsWrite = context.hasPermission(Manifest.permission.WRITE_CONTACTS),
