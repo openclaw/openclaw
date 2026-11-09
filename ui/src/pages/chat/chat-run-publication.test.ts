@@ -59,6 +59,77 @@ afterEach(() => {
 });
 
 describe("chat run publication", () => {
+  it("coalesces independent presentation sources without publishing unchanged run state", async () => {
+    const { frames } = captureAnimationFrames();
+    const state = { chatRunId: "run", chatStream: "initial" };
+    const run = chatRunPresentation(state);
+    const activity = vi.fn();
+    const text = vi.fn();
+    onTestFinished(run.subscribeNonText(activity));
+    onTestFinished(run.subscribe(text));
+    const session = vi.fn();
+    const roster = vi.fn();
+    for (let index = 0; index < 3; index++) {
+      await Promise.resolve();
+      run.queuePresentation(session);
+      run.queuePresentation(roster);
+    }
+    expect(frames.size).toBe(1);
+    expect(session).not.toHaveBeenCalled();
+    run.flushPendingPresentation();
+    expect(session).toHaveBeenCalledOnce();
+    expect(roster).toHaveBeenCalledOnce();
+    expect(text).not.toHaveBeenCalled();
+    expect(activity).not.toHaveBeenCalled();
+
+    run.batch(() => (state.chatStream = "latest"), "animation-frame");
+    expect(state.chatStream).toBe("latest");
+    // Lifecycle adoption can be silent without discarding an already queued publication.
+    run.batch(() => {}, false);
+    run.flushPendingPresentation();
+    expect(text).toHaveBeenCalledOnce();
+    expect(activity).not.toHaveBeenCalled();
+    expect(session).toHaveBeenCalledOnce();
+    expect(roster).toHaveBeenCalledOnce();
+  });
+
+  it("flushes terminal presentation once and retires canceled subscribers and frames", () => {
+    const { frames } = captureAnimationFrames();
+    const state = { chatRunId: "run" as string | null };
+    const run = chatRunPresentation(state);
+    const observed: (string | null)[] = [];
+    const session = () => observed.push(state.chatRunId);
+    const canceled = vi.fn();
+    run.queuePresentation(session);
+    run.queuePresentation(canceled);
+    run.cancelPresentation(canceled);
+    const staleFrame = [...frames.values()][0]!;
+    run.batch(() => (state.chatRunId = null));
+    expect(observed).toEqual([null]);
+    expect(canceled).not.toHaveBeenCalled();
+    staleFrame(0);
+    expect(observed).toEqual([null]);
+    run.queuePresentation(session);
+    expect(observed).toEqual([null, null]);
+    state.chatRunId = "next run";
+    run.queuePresentation(session);
+    run.cancelFrame();
+    run.flushPendingPresentation();
+    expect(observed).toEqual([null, null]);
+  });
+
+  it.each(["hidden", "no animation frame"])("publishes immediately with %s", (condition) => {
+    if (condition === "hidden") {
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    } else {
+      vi.stubGlobal("requestAnimationFrame", undefined);
+    }
+    const run = chatRunPresentation({ chatRunId: "run" });
+    const notify = vi.fn();
+    run.queuePresentation(notify);
+    expect(notify).toHaveBeenCalledOnce();
+  });
+
   it("publishes a pending run projection when an unrelated pane commit consumes its frame", () => {
     const { frames } = captureAnimationFrames();
     const awaitDomCommit = vi.fn(async () => true);

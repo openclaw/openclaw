@@ -50,14 +50,58 @@ it("invalidates replaced blocks and messages without rebuilding unrelated bundle
   first.output.content = [{ ...first.output.content[0]!, text: '{"exitCode":1}' }];
   const replacedBlock = messages([...first.items(), ...second.items()]);
   expect(sameReferences(replacedBlock, initial)).toEqual([false, true]);
+  first.output.content[0] = { ...first.output.content[0]!, text: '{"exitCode":2}' };
+  const replacedInPlace = messages([...first.items(), ...second.items()]);
+  expect(sameReferences(replacedInPlace, replacedBlock)).toEqual([false, true]);
   const replacedMessage = messages([
     item({ ...first.call }, "call-first"),
     first.items()[1]!,
     ...second.items(),
   ]);
-  expect(sameReferences(replacedMessage, replacedBlock)).toEqual([false, true]);
+  expect(sameReferences(replacedMessage, replacedInPlace)).toEqual([false, true]);
   expect(extractToolCardsCached(initial[0])[0]?.exitCode).toBe(0);
   expect(extractToolCardsCached(replacedBlock[0])[0]?.exitCode).toBe(1);
+  expect(extractToolCardsCached(replacedInPlace[0])[0]?.exitCode).toBe(2);
+});
+
+it("reconsiders inferred run ownership when a cached result becomes ambiguous", () => {
+  const first = assistant([toolCall("shared")], { runId: "first" });
+  const second = assistant([toolCall("shared")], { runId: "second" });
+  const output = { role: "toolResult", content: [result("shared")] };
+  const initial = messages([item(first, "first"), item(output, "output")]);
+  expect(initial).toHaveLength(1);
+  expect(extractToolCardsCached(initial[0])[0]?.completed).toBe(true);
+
+  const ambiguous = messages([
+    item(first, "first"),
+    item(output, "output"),
+    item(second, "second"),
+  ]);
+  expect(ambiguous).toEqual([first, output, second]);
+  expect(
+    ambiguous.map((message) => Boolean(extractToolCardsCached(message)[0]?.completed)),
+  ).toEqual([false, true, false]);
+});
+
+it("keeps standalone result attachments across live reconciliation passes", () => {
+  const live = assistant([toolCall("active")], { __openclawToolStreamLive: true });
+  const image = { type: "image", source: { type: "url", url: "https://example.test/result.png" } };
+  const output = {
+    role: "toolResult",
+    toolCallId: "active",
+    toolName: "custom",
+    content: [{ type: "text", text: "complete" }, image],
+  };
+  for (let pass = 0; pass < 2; pass++) {
+    const rows = messages([item(live, "live"), item(output, "output")]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ content: [expect.anything(), expect.anything(), image] });
+    expect(extractToolCardsCached(rows[0])[0]).toMatchObject({
+      callId: "active",
+      completed: true,
+      outputText: "complete",
+    });
+  }
 });
 const activity = (status?: AgentActivityItem["status"]): AgentActivityItem => ({
   itemId: "tool:active",

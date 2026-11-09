@@ -632,9 +632,9 @@ export function createPageState(
       },
     });
   }
+  const source = chatRunPresentation(state);
   {
-    const source = chatRunPresentation(state);
-    const projection = projectOwner(source, (owner) => owner.values);
+    const projection = projectOwner(source, (owner) => owner.values.chatStream, Object.is);
     const nonText = projectSource(source, {
       read: (owner) => owner.values,
       subscribe: (owner, notify) => owner.subscribeNonText(notify),
@@ -680,11 +680,12 @@ export function createPageState(
           context.overlays?.snapshot?.approvalQueue,
         ),
       subscribe: (_owner, notify) => {
-        onChange = notify;
-        const stop = watchPresentation(context.sessions, notify);
+        onChange = () => source.queuePresentation(notify);
+        const stop = watchPresentation(context.sessions, onChange);
         return () => {
           onChange = undefined;
           stop();
+          source.cancelPresentation(notify);
         };
       },
       equality: Object.is,
@@ -701,11 +702,10 @@ export function createPageState(
           return value;
         },
         set(next: typeof value) {
-          if (Object.is(value, next)) {
-            return;
+          if (!Object.is(value, next)) {
+            value = next;
+            onChange?.();
           }
-          value = next;
-          onChange?.();
         },
       });
     }

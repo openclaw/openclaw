@@ -38,6 +38,7 @@ import { chatPanePropertyKeys } from "./chat-pane-inputs.ts";
 import { PaneLayout } from "./chat-pane-layout-view.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
@@ -284,7 +285,20 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         });
       const swarm = createMemo(() => {
         const hydrator = runtime.swarm.hydrator;
-        return hydrator ? projectOwner(hydrator, (owner) => owner) : undefined;
+        return hydrator && state
+          ? projectSource(hydrator, {
+              read: (owner) => owner,
+              subscribe: (owner, notify) => {
+                const run = chatRunPresentation(state);
+                const stop = owner.subscribe(() => run.queuePresentation(notify));
+                return () => {
+                  stop();
+                  run.cancelPresentation(notify);
+                };
+              },
+              equality: "revision",
+            })
+          : undefined;
       });
       const board = createMemo(() => {
         const provider = runtime.boardPresentation.provider;
