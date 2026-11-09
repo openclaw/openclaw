@@ -5,16 +5,13 @@ enum ComputerControlProvider: String, CaseIterable, Sendable {
     case peekaboo
     case cua
 
-    /// Peekaboo lives in this process; reading its advertisement does not restart the provider.
-    private static let peekabooGeneration = "peekaboo-v2:\(UUID().uuidString.lowercased())"
-
-    static var peekabooComputerUseDescriptor: OpenClawProtocol.AnyCodable {
+    static func peekabooComputerUseDescriptor(generation: UUID) -> OpenClawProtocol.AnyCodable {
         OpenClawProtocol.AnyCodable([
             "contractVersion": 2,
             "provider": [
                 "id": "peekaboo",
                 "label": "Peekaboo",
-                "generation": peekabooGeneration,
+                "generation": "peekaboo-v2:\(generation.uuidString.lowercased())",
             ],
             "actions": [
                 "screenshot",
