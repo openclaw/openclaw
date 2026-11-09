@@ -16,6 +16,7 @@ import {
   onSettled,
   Show,
 } from "solid-js";
+import { foldSearchCase } from "../../../../src/shared/search-case.js";
 import type { PanelRefreshStatus as RefreshStatus } from "../../components/panel-refresh-status-state.ts";
 import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -114,7 +115,7 @@ export function LogsView(props: LogsProps) {
     <PanelRefreshStatus status={props.status} className="logs-refresh-status" />
   );
   const needle = createMemo(() =>
-    normalizeLowercaseStringOrEmpty(props.filterText).normalize("NFC"),
+    foldSearchCase(normalizeLowercaseStringOrEmpty(props.filterText)).normalize("NFC"),
   );
   const filtered = createMemo(() => {
     const query = needle();
@@ -125,8 +126,10 @@ export function LogsView(props: LogsProps) {
         : (entry: LogRow) =>
             (!entry.level || props.levelFilters[entry.level]) &&
             (!query ||
-              normalizeLowercaseStringOrEmpty(
-                [entry.message, entry.subsystem, entry.raw].filter(Boolean).join(" "),
+              foldSearchCase(
+                normalizeLowercaseStringOrEmpty(
+                  [entry.message, entry.subsystem, entry.raw].filter(Boolean).join(" "),
+                ),
               )
                 .normalize("NFC")
                 .includes(query));

@@ -12,6 +12,7 @@ import {
   Show,
 } from "solid-js";
 import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
+import { foldSearchCase } from "../../../../src/shared/search-case.js";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MenuHeading } from "../../components/solid/menu-heading.tsx";
@@ -188,12 +189,13 @@ export function ProjectPickerContent(props: ProjectChipProps) {
   const localProjects = createMemo(() => {
     // Retired catalogs clear immediately; a live refresh keeps local filtering responsive.
     const accepted = !props.nativeTerminal && projectsReady() ? projects() : [];
-    const query = view().query.toLowerCase().normalize("NFC");
+    const query = foldSearchCase(view().query).normalize("NFC");
     // Search only the display name and the identity projected by the Gateway, never origins or paths.
     return query
       ? accepted.filter((project) =>
-          [project.displayName, project.repositoryIdentity].some((value) =>
-            value?.toLowerCase().normalize("NFC").includes(query),
+          [project.displayName, project.repositoryIdentity].some(
+            (value) =>
+              value !== undefined && foldSearchCase(value).normalize("NFC").includes(query),
           ),
         )
       : accepted;

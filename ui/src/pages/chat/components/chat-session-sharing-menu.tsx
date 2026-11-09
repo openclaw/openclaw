@@ -8,6 +8,7 @@ import {
   mapArray,
   Show,
 } from "solid-js";
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import { PersonAvatarLink, PersonName } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import { HeaderSearch } from "../../../components/solid/header-search.tsx";
@@ -62,12 +63,10 @@ export function useChatSessionSharingMenu(
     return "";
   });
   const matches = () => {
-    const terms = query().trim().toLocaleLowerCase().normalize("NFC").split(/\s+/u);
+    const terms = foldSearchCase(query().trim().toLocaleLowerCase()).normalize("NFC").split(/\s+/u);
     return people().filter(({ identity }) =>
       terms.every((term) =>
-        [identity.label, identity.id, identity.type]
-          .join(" ")
-          .toLocaleLowerCase()
+        foldSearchCase([identity.label, identity.id, identity.type].join(" ").toLocaleLowerCase())
           .normalize("NFC")
           .includes(term),
       ),
