@@ -522,7 +522,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
           config: cfg,
           attributes: chatSendTraceAttributes,
         },
-      ),
+      ).catch(dispatchErrorLifecycle.captureUnstartedFailure),
     )
     .then(async (dispatchResult) => {
       diagnostics.finish(dispatchDisposition);

@@ -1,3 +1,7 @@
+.dashboards-header .hub-page-header__actions {
+  min-height: max(36px, var(--settings-control-height));
+}
+
 .dashboards-gallery {
   width: 100%;
   padding-top: var(--space-6);
@@ -7,25 +11,12 @@
   pointer-events: none;
 }
 
-.dashboards-loading__control {
-  height: var(--settings-control-height);
-}
-
-.dashboards-loading__select {
-  min-width: 156px;
-}
-
 .dashboards-loading .dashboard-preview {
   background: var(--skeleton-base, var(--bg-muted));
 }
 
 .dashboards-loading .dashboard-card__meta .skeleton-line {
   width: 50%;
-}
-
-.dashboards-loading__label {
-  width: 80px;
-  height: calc(var(--control-ui-text-xs) * 1.5);
 }
 
 .dashboards-loading__title {
@@ -274,7 +265,7 @@
   min-width: 0;
 }
 
-.dashboards-grid__item > .dashboard-card {
+.dashboard-card {
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -384,6 +375,7 @@
 
 /* Titles never ellipsize: they fade, and loop on card hover when they overflow. */
 .dashboard-card__heading {
+  min-height: 22px;
   display: flex;
   align-items: center;
   gap: 10px;

@@ -209,6 +209,7 @@ export async function executeWorkspaceManifestComputation(
         command.input.root,
         command.input.ref,
         command.input.buildCacheInputs,
+        command.input.reconciliation,
       );
       const reconciliation = command.input.reconciliation;
       if (
@@ -259,6 +260,10 @@ export async function executeWorkspaceManifestComputation(
         readActualWorkspaceManifestImpl({
           ...input,
           includePaths: input.includePaths && new Set(input.includePaths),
+          gitIgnore: input.gitIgnore && {
+            paths: new Set(input.gitIgnore.paths),
+            retainedPaths: new Set(input.gitIgnore.retainedPaths),
+          },
           buildCacheInputs: input.buildCacheInputs && new Set(input.buildCacheInputs),
           preserveDirectories: input.preserveDirectories && new Set(input.preserveDirectories),
         }),
@@ -282,6 +287,18 @@ export async function executeWorkspaceManifestComputation(
       return await withHashes(input.hashes, () =>
         readWorkspaceFileSnapshotWithLimit(input.path, input.maxBytes, input.root),
       );
+    }
+    case "workspace.reconcile.diff": {
+      const { readWorkspacePatch } = await import("./workspace-reconcile-recovery.js");
+      return await readWorkspacePatch(
+        command.input.root,
+        command.input.baseTree,
+        command.input.currentTree,
+      );
+    }
+    case "workspace.reconcile.patch": {
+      const { createWorkspacePatch } = await import("./workspace-reconcile-recovery.js");
+      return await createWorkspacePatch(decodeManifestValue(command));
     }
     case "workspace.reconcile.preflight": {
       const { preflightWorkspaceApplyImpl } = await import("./workspace-reconcile-preflight.js");
