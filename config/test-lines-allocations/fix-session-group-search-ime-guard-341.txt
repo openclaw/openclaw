@@ -1,2 +1,0 @@
-# BUG-341: IME-composition guard in the personal session group search box skipped the Enter preventDefault, letting a half-typed Enter submit (save) the section. New regression test file personal-session-group-dialog.test.ts (3 cases: composition Enter, WebKit composition-end grace, composition Escape) for PR #.
-101

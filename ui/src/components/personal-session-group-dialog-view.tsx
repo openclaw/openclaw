@@ -352,16 +352,9 @@ export function PersonalSessionGroupDialogView(props: {
                   // Escape clears, then closes, search before the dialog treats it as cancel.
                   nativeListener("keydown", (event) => {
                     if (event.key === "Enter") {
-                      // Enter filters; it must not submit (save) the section. Keeping the
-                      // default prevented during IME composition is safe: candidate
-                      // selection is handled by the input method, not the form.
+                      // Enter filters, IME confirms too; it must not submit (save) the section.
                       event.preventDefault();
-                    } else if (event.key === "Escape") {
-                      // During composition Escape belongs to the input method (it can
-                      // cancel the pending text), so let it through instead of closing.
-                      if (isComposingKeyboardEvent(event)) {
-                        return;
-                      }
+                    } else if (event.key === "Escape" && !isComposingKeyboardEvent(event)) {
                       event.preventDefault();
                       event.stopPropagation();
                       if (query()) {
