@@ -99,8 +99,8 @@ it("yields between destination-size corrections and waits for a stable end befor
 });
 
 it.each([
-  { delta: 1200, expected: [40, 41, 42] },
-  { delta: -1200, expected: [20, 21, 22] },
+  { delta: 1200, expected: [40] },
+  { delta: -1200, expected: [22] },
 ])(
   "keeps approaching rows paintable until active admission during a $delta px fling",
   ({ delta, expected }) => {
@@ -148,8 +148,12 @@ it.each([
     });
     range.presentation(rows);
     range.finish();
+    const distantKey = delta > 0 ? "80" : "1";
+    range.preparedRowKeys.add(distantKey);
     range.recordReaderMovement(delta);
     const presentation = range.presentation(rows);
+    expect(virtualizer.getVirtualItems().some((item) => item.key === distantKey)).toBe(true);
+    expect(presentation.forecastRowKeys.has(distantKey)).toBe(false);
     expect(presentation.forecastRowKeys.size).toBe(expected.length);
     for (const index of expected) {
       expect(presentation.forecastRowKeys.has(String(index))).toBe(true);
@@ -181,5 +185,13 @@ it.each([
     now = 134;
     vi.advanceTimersByTime(100);
     expect(range.presentation(rows).forecastRowKeys.size).toBe(0);
+
+    if (delta < 0) {
+      // An upward fling can overshoot zero; extraction and painting share its clamped viewport.
+      now = 201;
+      virtualizer.scrollOffset = 600;
+      range.recordReaderMovement(delta);
+      expect(range.presentation(rows).forecastRowKeys).toContain("2");
+    }
   },
 );

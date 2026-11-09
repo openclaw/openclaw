@@ -25,14 +25,14 @@ import subprocess
 from pathlib import Path
 
 VERSION = 1
-BLANK_INK_PIXELS = 320
-MIN_C_TEXT_RECT_AREA = BLANK_INK_PIXELS
+MIN_C_TEXT_RECT_AREA = 320
 MASKS = [(488, 895, 1262, 990), (855, 849, 897, 891)]
 INK = bytes(1 if value < 180 else 0 for value in range(256))
 CLASSES = ("blank", "sparse", "populated")
 NOTES = [
     "Blank/sparse/populated describe captured pixels, not semantic correctness, staleness, or display-refresh counts.",
-    "Full-resolution gray<180 ink; blank<320 ink pixels; sparse vertical extent<55% or occupied scanlines<11%. A scanline is occupied with>4 ink pixels.",
+    "Full-resolution gray<180 ink; blank requires exactly zero ink pixels; any nonzero ink is sparse or populated. Sparse vertical extent<55% or occupied scanlines<11%. A scanline is occupied with>4 ink pixels.",
+    "This strict zero-ink definition supersedes the former <320-pixel low-ink cutoff; old blank counts can include visible partial text and are not directly comparable.",
     "Unmarked audits retain the same 120px left exclusion as marked audits; fixed controls are masked.",
     "Active windows match the reviewed classifier: first trusted wheel of each sign through the last>0.5px scroll movement or wheel, plus1/60s, bounded by the next direction.",
     "Capture timestamps are compared with performance.now via timeOrigin; Firefox/WebKit cross-clock membership is approximate.",
@@ -40,7 +40,7 @@ NOTES = [
 ]
 
 
-LABELS = {"a": "marker-associated row coverage gap", "b": "admission/visibility evidence",
+LABELS = {"a": "marker-associated range or legacy mounted-coverage gap", "b": "admission/visibility evidence",
           "c": "frame-associated DOM-ready mismatch", "d": "ambiguous or other"}
 CAVEATS = [
     "Pixel counts are captured images, not display refreshes or blank duration.",
@@ -48,7 +48,10 @@ CAVEATS = [
     "The next snapshot is recovery evidence, not a classification veto. Its timestamp may precede swap while its layers have not reached that captured compositor frame.",
     "C is DOM-ready-but-blank evidence, not a certified raster defect; descendant clipping/visibility not recorded by the probe remains unobserved.",
     "C requires zero captured ink and at least 320 square pixels from wholly visible text rectangles throughout the decoded offset interval. This excludes edge slivers but does not estimate glyph ink coverage.",
-    "A uses physical row bounds; only hidden prepared rows use model slots shifted by the first active row's origin. Raw model intersections are reported separately.",
+    "A requires absence of coverage from the stored virtual-range model, mounted models, physical rows and hidden slots. Legacy captures without range extents support only an observational mounted-coverage gap, not certified range lag.",
+    "Shifted mounted model or stored range overlap without physical coverage is D, not range lag. Raw model intersections conservatively use the full crop width and can include masked-edge/gutter ambiguity.",
+    "All model slots use the captured block-to-first-active-model origin; older captures derive it from the first active row. This accounts for shared header/scrollMargin/reader shifts, not cumulative per-row size differences. Missing origin is D when coverage cannot otherwise be established.",
+    "Stored range extents use the live virtualizer's cached first/last models without invoking its calculations. A common model-to-document offset is not itself a layout fault.",
     "Ruler scanlines implying offsets outside the observed transcript extent are absent/corrupt reference pixels, not valid competing offsets; intact lines must still agree independently.",
     "The synthetic-fixture crop and control masks are fixed; different viewports/fixtures require inspected masks.",
     "Cross-clock active-window membership is approximate outside Chromium. Marker IDs, not timestamps, select snapshots.",
@@ -145,14 +148,25 @@ def assess(sample, offset, crop):
         return {"cause": "d", "reason": "unmodeled ancestor clipping"}
     rows = sample["rows"]
     anchor = next((row for row in rows if not row["prepared"] and row.get("model")), None)
-    origin = anchor["top"] - anchor["model"]["start"] if anchor else None
+    origin = sample.get("modelOrigin")
+    origin_source = "captured-block" if origin is not None else None
+    if origin is None and anchor:
+        origin = anchor["top"] - anchor["model"]["start"]
+        origin_source = "derived-first-active-row"
+    range_model = sample.get("rangeModel")
+    range_coverage = None
+    if range_model and origin is not None:
+        viewport_height = sample["viewport"]["bottom"] - sample["viewport"]["top"]
+        range_coverage = (range_model["last"]["end"] + origin > offset[0]
+                          and range_model["first"]["start"] + origin < offset[1] + viewport_height)
     physical, intended, glyphs, raw_models, uncertain = [], [], [], [], []
     text_rect_area = 0
     whole_text_rect_area = 0
     for row in rows:
         key = row.get("key", str(row["index"]))
         model = row.get("model")
-        if model and unmasked(project((crop[0], model["start"], crop[2], model["end"]), sample, offset), crop):
+        if model and origin is not None and unmasked(project(
+                (crop[0], model["start"] + origin, crop[2], model["end"] + origin), sample, offset), crop):
             raw_models.append(row["index"])
         if hidden(row["style"]):
             if row["prepared"] and model and origin is not None:
@@ -188,6 +202,8 @@ def assess(sample, offset, crop):
                     whole_text_rect_area += area
     evidence = {"physicalRows": physical, "hiddenPreparedSlots": intended,
                 "glyphRows": sorted(set(key for key, _ in glyphs)), "rawModelRows": raw_models,
+                "rangeModel": range_model, "rangeModelCoverage": range_coverage,
+                "modelOrigin": origin, "modelOriginSource": origin_source,
                 "preparedSlotOrigin": origin, "textRectArea": text_rect_area,
                 "wholeTextRectArea": whole_text_rect_area}
     if uncertain:
@@ -203,7 +219,19 @@ def assess(sample, offset, crop):
         return {**evidence, "cause": "b", "reason": "hidden row or prepared intended slot covers the decoded offset interval",
                 "evidence": sorted(intended)}
     if not physical:
-        return {**evidence, "cause": "a", "reason": "no physical row or hidden prepared slot covers the decoded viewport"}
+        if origin is None:
+            return {**evidence, "cause": "d", "reason": "model-to-document origin unavailable"}
+        if raw_models:
+            return {**evidence, "cause": "d", "reason": "shifted mounted row model overlaps the decoded viewport without physical or hidden-slot coverage"}
+        if "rangeModel" not in sample:
+            return {**evidence, "cause": "a", "coverageScope": "legacy-mounted-only",
+                    "reason": "no mounted model, physical row or hidden slot covers the decoded viewport; legacy capture has no virtual range extent"}
+        if range_coverage is None:
+            return {**evidence, "cause": "d", "reason": "stored virtual range model extent unavailable"}
+        if range_coverage:
+            return {**evidence, "cause": "d", "reason": "shifted stored virtual range model overlaps the decoded viewport without physical or hidden-slot coverage"}
+        return {**evidence, "cause": "a", "coverageScope": "stored-range",
+                "reason": "stored virtual range model, mounted models, physical rows and hidden slots do not cover the decoded viewport"}
     return {**evidence, "cause": "d", "reason": "physical row coverage without proven visible glyph coverage"}
 
 
@@ -284,6 +312,8 @@ def attribute(data, audit, samples, calibration, crop, width, height, at):
             result["reason"] = "backward snapshot evidence changed"
         else:
             result.update(cause=candidate["cause"], reason=candidate["reason"])
+            if candidate["cause"] == "a":
+                result["coverageScope"] = candidate["coverageScope"]
     return result
 
 
@@ -407,7 +437,7 @@ def classify(path, metadata, classifier_hash):
                 if amount > 4:
                     occupied.append(y)
             extent = occupied[-1] - occupied[0] + 1 if occupied else 0
-            paint = "blank" if dark < BLANK_INK_PIXELS else "sparse" if extent < (crop[3] - crop[1]) * .55 or len(occupied) < (crop[3] - crop[1]) * .11 else "populated"
+            paint = "blank" if dark == 0 else "sparse" if extent < (crop[3] - crop[1]) * .55 or len(occupied) < (crop[3] - crop[1]) * .11 else "populated"
             at = image["timestamp"] * 1000 - audit["timeOrigin"]
             active = next((window for window in active_windows if window["startMs"] <= at < window["endMs"]), None)
             frame = {"index": index, "file": image["file"], "atMs": at, "active": bool(active),
@@ -415,8 +445,6 @@ def classify(path, metadata, classifier_hash):
                      "darkPixels": dark, "occupiedScanlines": len(occupied), "inkExtentRows": extent}
             if probe and paint == "blank":
                 frame.update(attribute(data, audit, samples, calibration, crop, width, height, at))
-                if frame["cause"] == "c" and dark:
-                    frame.update(cause="d", reason="nonzero ink below blank cutoff; not a zero-ink raster mismatch")
             frames.append(frame)
         errors = process.stderr.read().decode()
         if process.wait():

@@ -141,11 +141,18 @@ export function observeTranscriptPaint() {
       ? (Reflect.get(renderer, "committed") as Snapshot | undefined)
       : undefined;
     const view = snapshot?.virtualizer;
-    const ancestors = [
-      thread,
-      inner,
-      thread.querySelector<HTMLElement>(".chat-virtual-block")!,
-    ].map((element) => {
+    const range = view?.range;
+    const first = range ? view?.measurementsCache[range.startIndex] : undefined;
+    const last = range ? view?.measurementsCache[range.endIndex] : undefined;
+    const rangeModel =
+      first && last
+        ? {
+            first: { index: first.index, start: first.start, end: first.end },
+            last: { index: last.index, start: last.start, end: last.end },
+          }
+        : null;
+    const sampleBlock = thread.querySelector<HTMLElement>(".chat-virtual-block")!;
+    const ancestors = [thread, inner, sampleBlock].map((element) => {
       const style = getComputedStyle(element);
       return {
         className: element.className,
@@ -197,13 +204,13 @@ export function observeTranscriptPaint() {
             continue;
           }
           const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT),
-            range = document.createRange();
+            textRange = document.createRange();
           for (let node = walker.nextNode(); node; node = walker.nextNode()) {
             if (!node.textContent?.trim()) {
               continue;
             }
-            range.selectNodeContents(node);
-            for (const part of range.getClientRects()) {
+            textRange.selectNodeContents(node);
+            for (const part of textRange.getClientRects()) {
               if (part.width > 0 && part.height > 0) {
                 textRects.push([
                   part.left,
@@ -242,6 +249,10 @@ export function observeTranscriptPaint() {
         textHiddenBy,
       };
     });
+    const firstActiveModel = rows.find((row) => !row.prepared && row.model)?.model;
+    const modelOrigin = firstActiveModel
+      ? sampleBlock.getBoundingClientRect().top + offset - viewport.top - firstActiveModel.start
+      : null;
     const id = samples.length + 1;
     samples.push({
       id,
@@ -249,7 +260,9 @@ export function observeTranscriptPaint() {
       source,
       scrollTop: offset,
       scrollHeight: thread.scrollHeight,
-      range: view?.range ? { ...view.range } : null,
+      range: range ? { ...range } : null,
+      rangeModel,
+      modelOrigin,
       ownerOffset: view?.scrollOffset,
       activeKeys: snapshot ? [...snapshot.activeRowKeys] : null,
       preparingKey: snapshot?.preparingRowKey,

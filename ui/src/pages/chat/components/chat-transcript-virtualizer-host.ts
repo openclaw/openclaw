@@ -238,7 +238,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         this.acceptedRows?.[index]?.estimatedSize ?? CHAT_TRANSCRIPT_ESTIMATED_ROW_PX,
       initialRect: initialTranscriptRect(),
       initialOffset: initialOffset ?? Number.MAX_SAFE_INTEGER,
-      anchorTo: "end",
+      // Structural key changes opt into end anchoring in commitTranscriptRows.
+      // ReaderAnchor owns measurements; end-follow is explicitly managed below.
+      anchorTo: "start",
       scrollToFn: (...args) =>
         scrollTranscriptOffset(this.offsetState, this, this.headerHeight, ...args),
       observeElementRect: this.viewportRect.observe,

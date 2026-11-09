@@ -461,7 +461,7 @@ export async function startTranscriptLayoutAudit(
                 "calibrate" in audit ? audit.calibrate(top) : { scrollTop: 0 },
               offset,
             );
-            const file: string = `calibration-${paintCalibrations.length}.jpg`;
+            const file = `calibration-${paintCalibrations.length}.jpg`;
             await page.screenshot({
               path: path.join(frameDirectory, file),
               type: "jpeg",

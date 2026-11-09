@@ -29,7 +29,6 @@ export class TranscriptInitialRange {
   readonly rowIndexes = new Map<string, number>();
   private cancelPreparation?: () => void;
   private preparationIsIdle = false;
-  private prepareStarted = 0;
   private idleStep = 1;
   private idleMeasureStep = 1;
   private scrollSample = { time: 0, distance: 0, direction: -1 };
@@ -178,21 +177,27 @@ export class TranscriptInitialRange {
     if (predecessor !== undefined && this.preparingRowKey !== rows[predecessor]!.key) {
       // Incoming overscan takes priority over speculative background preparation.
       this.preparingRowKey = rows[predecessor]!.key;
-      this.prepareStarted = performance.now();
       // A resumed reader can have a cached moving range without this predecessor.
       this.refresh();
     }
     const forecastRowKeys = new Set<string>();
     if (!this.viewportOnly && !this.preparingEnd && this.isReaderMoving() && virtualizer.range) {
+      const { direction, distance } = this.scrollSample;
+      const top = virtualizer.scrollOffset ?? 0;
+      const next = Math.max(0, top + direction * distance);
+      const height = virtualizer.scrollRect?.height ?? 600;
       // Previous forecasts bridge the gap to the next viewport. Retaining their
-      // DOM but hiding it would recreate the blank before active admission.
+      // DOM preserves reversals, but only these two viewports need live layout.
       for (const item of virtualizer.getVirtualItems()) {
         const key = rows[item.index]!.key;
         const approaching =
-          this.scrollSample.direction < 0
+          direction < 0
             ? item.index < virtualizer.range.startIndex
             : item.index > virtualizer.range.endIndex;
-        if (approaching && this.preparedRowKeys.has(key)) {
+        const coversViewport =
+          (item.end > top && item.start < top + height) ||
+          (item.end > next && item.start < next + height);
+        if (approaching && coversViewport && this.preparedRowKeys.has(key)) {
           forecastRowKeys.add(key);
         }
       }
@@ -235,22 +240,21 @@ export class TranscriptInitialRange {
     if (!first || !last) {
       return [];
     }
-    const indexes: number[] = [];
-    // A fling can skip whole viewports. Spend the existing parked-row budget
-    // on its next viewport instead of laying out every skipped neighbour.
+    // A fling can skip whole viewports. Prepare its entering edge instead of
+    // laying out every row in a viewport that the next input may skip again.
     for (
       let index = direction < 0 ? last.index : first.index;
-      index >= first.index && index <= last.index && indexes.length < this.scrollPrepareRowLimit;
+      index >= first.index && index <= last.index;
       index += direction
     ) {
       if (
         (direction < 0 ? index < range.startIndex : index > range.endIndex) &&
         this.rows[index]?.retainDom
       ) {
-        indexes.push(index);
+        return [index];
       }
     }
-    return indexes;
+    return [];
   }
 
   private normalIndexes(range: Range): number[] {
@@ -410,7 +414,6 @@ export class TranscriptInitialRange {
     }
     if (this.preparingRowKey && !rows[indexes.get(this.preparingRowKey) ?? -1]?.retainDom) {
       this.preparingRowKey = undefined;
-      this.prepareStarted = 0;
     }
   }
 
@@ -461,7 +464,6 @@ export class TranscriptInitialRange {
       key === this.preparingRowKey &&
       (entry || !this.virtualizer().targetWindow?.ResizeObserver)
     ) {
-      this.prepareStarted = 0;
       queueMicrotask(() => {
         if (this.preparingRowKey === key) {
           this.preparingRowKey = undefined;
@@ -562,7 +564,7 @@ export class TranscriptInitialRange {
         !this.canPrepare() ||
         !range ||
         !virtualizer.scrollElement ||
-        (this.prepareStarted && !warmOnlyRequested)
+        (this.preparingRowKey && !warmOnlyRequested)
       ) {
         return;
       }
@@ -713,7 +715,6 @@ export class TranscriptInitialRange {
         }
       }
       if (admitted) {
-        this.prepareStarted = performance.now();
         this.refresh();
         this.invalidate();
         // Markdown can keep warming while the single admitted DOM row is measured.
@@ -767,7 +768,6 @@ export class TranscriptInitialRange {
     this.cancelPreparation?.();
     this.cancelPreparation = undefined;
     this.preparationIsIdle = false;
-    this.prepareStarted = 0;
     this.preparingRowKey = undefined;
     this.preparedRowKeys.clear();
     this.viewportOnly = false;
