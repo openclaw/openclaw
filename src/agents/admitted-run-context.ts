@@ -34,10 +34,8 @@ import {
   type OperationalRunInstanceRef,
 } from "./operational-run-instance.js";
 import { isOperatorAccessProgramAllowed } from "./operator-access-program.js";
-import {
-  intersectOperatorModelPolicies,
-  type PreparedOperatorModelPolicy,
-} from "./operator-model-policy.js";
+import { intersectOperatorModelPolicies } from "./operator-model-policy-state.js";
+import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
 type OperatorModelSelection = ModelRef & { cyberAccessProgram?: CyberAccessProgram };
 

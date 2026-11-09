@@ -1,6 +1,6 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
-import type { PreparedOperatorModelPolicy } from "../../agents/operator-model-policy.js";
+import type { PreparedOperatorModelPolicy } from "../../agents/operator-model-policy.types.js";
 import { scopePreparedModelRuntimeLease } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,

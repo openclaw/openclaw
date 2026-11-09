@@ -41,9 +41,9 @@ import { prepareSubagentSessionListReadCache } from "../subagents/registry/subag
 import { registerSubagentRun } from "../subagents/registry/subagent-registry.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../subagents/spawn/subagent-depth.js";
 import { terminateAcceptedCollectorRun } from "../subagents/spawn/subagent-spawn-cleanup.js";
+import { captureSubagentSpawnGatewayContext } from "../subagents/spawn/subagent-spawn-gateway-context.js";
 import {
   callNativeSubagentGateway,
-  captureSubagentSpawnGatewayContext,
   resolveSubagentAgentGatewayTimeoutMs,
 } from "../subagents/spawn/subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";

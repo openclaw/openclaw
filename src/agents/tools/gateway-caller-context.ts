@@ -53,7 +53,7 @@ type ReceiptAuthority = (() => boolean | void) &
 
 type GatewayToolCallerIdentity = {
   /** Restriction-only requester facts, independent of the source lease. */
-  modelPolicy?: import("../operator-model-policy.js").PreparedOperatorModelPolicy;
+  modelPolicy?: import("../operator-model-policy.types.js").PreparedOperatorModelPolicy;
   watchdogAttempt?: SessionControllerWatchdogAttempt;
   personalToolParticipants?: ReplyTurnParticipants;
   personalToolUser?: string;

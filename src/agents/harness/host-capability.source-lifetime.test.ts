@@ -14,10 +14,8 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
-import {
-  prepareOperatorModelPolicy,
-  type PreparedOperatorModelPolicy,
-} from "../operator-model-policy.js";
+import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
+import type { PreparedOperatorModelPolicy } from "../operator-model-policy.types.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,

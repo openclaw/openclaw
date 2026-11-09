@@ -205,7 +205,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   workspaceDir: string;
   task: string;
   requester?: PluginSubagentRequesterContext;
-  requesterModelPolicySnapshot: import("../../agents/operator-model-policy.js").RequesterModelPolicySnapshot;
+  requesterModelPolicySnapshot: import("../../agents/operator-model-policy.types.js").RequesterModelPolicySnapshot;
   pluginId?: string;
   gatewayContextResolver?: GatewayContextResolver;
   assertCurrent: () => SessionEntry | undefined;

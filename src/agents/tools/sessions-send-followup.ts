@@ -10,7 +10,7 @@ import type { FollowupRequest } from "../subagents/completion/session-followup-c
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
 import type { NewSubagentRunRegistration } from "../subagents/registry/subagent-registry-run-launch-record.js";
-import { captureSubagentSpawnGatewayContext } from "../subagents/spawn/subagent-spawn-gateway.js";
+import { captureSubagentSpawnGatewayContext } from "../subagents/spawn/subagent-spawn-gateway-context.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,

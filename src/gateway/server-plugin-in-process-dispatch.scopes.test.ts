@@ -2,9 +2,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   captureRequesterModelPolicySnapshot,
-  prepareOperatorModelPolicy,
   restoreRequesterModelPolicySnapshot,
-} from "../agents/operator-model-policy.js";
+} from "../agents/operator-model-policy-state.js";
+import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayTool,

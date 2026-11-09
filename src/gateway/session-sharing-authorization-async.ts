@@ -5,7 +5,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
-import { intersectOperatorModelPolicies } from "../agents/operator-model-policy.js";
+import { intersectOperatorModelPolicies } from "../agents/operator-model-policy-state.js";
 import {
   retainPreparedSessionSharingFacts,
   projectSessionSharingEntry,

@@ -10,7 +10,7 @@ import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "../../agents/model-visibility-policy.js";
-import type { PreparedOperatorModelPolicy } from "../../agents/operator-model-policy.js";
+import type { PreparedOperatorModelPolicy } from "../../agents/operator-model-policy.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { levenshteinDistance } from "../../shared/levenshtein-distance.js";
 import { resolveRuntimeNormalization } from "./model-runtime-normalization.js";

@@ -8,9 +8,11 @@ import {
   captureRequesterModelPolicySnapshot,
   intersectOperatorModelPolicies,
   restoreRequesterModelPolicySnapshot,
-  type PreparedOperatorModelPolicy,
-  type RequesterModelPolicySnapshot,
-} from "../agents/operator-model-policy.js";
+} from "../agents/operator-model-policy-state.js";
+import type {
+  PreparedOperatorModelPolicy,
+  RequesterModelPolicySnapshot,
+} from "../agents/operator-model-policy.types.js";
 import type {
   SubagentCompletionToolHandoffRegistration,
   TrustedSubagentCompletionHandoff,

@@ -6,7 +6,7 @@ import {
 import {
   intersectOperatorModelPolicies,
   restoreOperatorModelPolicySnapshot,
-} from "../agents/operator-model-policy.js";
+} from "../agents/operator-model-policy-state.js";
 import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";

@@ -155,7 +155,7 @@ type SubagentKillIntent = {
 
 export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "collectorCompletion"> & {
   /** Own requester execution ceiling; absence is unknown legacy state, never unrestricted. */
-  requesterModelPolicySnapshot?: import("../../operator-model-policy.js").RequesterModelPolicySnapshot;
+  requesterModelPolicySnapshot?: import("../../operator-model-policy.types.js").RequesterModelPolicySnapshot;
   /** Host-captured SDK spawn provenance; absence never establishes plugin ownership. */
   nativePluginOwner?: {
     version: 1;

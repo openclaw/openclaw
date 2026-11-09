@@ -59,10 +59,8 @@ import {
   resolveThinkingSelection,
 } from "../model-thinking-default.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
-import {
-  intersectOperatorModelPolicies,
-  resolveOperatorModelDefault,
-} from "../operator-model-policy.js";
+import { intersectOperatorModelPolicies } from "../operator-model-policy-state.js";
+import { resolveOperatorModelDefault } from "../operator-model-policy.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
 import {

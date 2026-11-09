@@ -68,7 +68,7 @@ export type RegisterSubagentRunParams = {
 
 /** Internal new-launch facts; missing serialized legacy facts remain unknown, never unbounded. */
 export type NewSubagentRunRegistration = RegisterSubagentRunParams & {
-  requesterModelPolicySnapshot: import("../../operator-model-policy.js").RequesterModelPolicySnapshot;
+  requesterModelPolicySnapshot: import("../../operator-model-policy.types.js").RequesterModelPolicySnapshot;
 };
 
 export function createSubagentRegistrationRecord(

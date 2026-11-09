@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { RequesterModelPolicySnapshot } from "../../agents/operator-model-policy.js";
+import type { RequesterModelPolicySnapshot } from "../../agents/operator-model-policy.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   normalizeDeliveryContext,

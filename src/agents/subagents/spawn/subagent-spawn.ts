@@ -48,11 +48,8 @@ import {
   buildSubagentExecutionSessionSpawnContext,
   withSubagentGatewayExecutionIdentity,
 } from "./subagent-spawn-execution-identity.js";
-import {
-  callNativeSubagentGateway,
-  captureSubagentSpawnGatewayContext,
-  readGatewayRunId,
-} from "./subagent-spawn-gateway.js";
+import { captureSubagentSpawnGatewayContext } from "./subagent-spawn-gateway-context.js";
+import { callNativeSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
 import {
   createSubagentSpawnLifecycleEmitter,

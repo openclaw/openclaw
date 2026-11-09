@@ -3,7 +3,7 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { captureRequesterModelPolicySnapshot } from "../../agents/operator-model-policy.js";
+import { captureRequesterModelPolicySnapshot } from "../../agents/operator-model-policy-state.js";
 import { scopeCommandTranscriptId } from "../../config/sessions/command-transcript.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";

@@ -12,10 +12,12 @@ import {
   captureRequesterModelPolicySnapshot,
   restoreRequesterModelPolicySnapshot,
   intersectOperatorModelPolicies,
-  prepareOperatorModelPolicy,
   readOperatorModelPolicyMembership,
-  resolveOperatorModelDefault,
   restoreOperatorModelPolicySnapshot,
+} from "./operator-model-policy-state.js";
+import {
+  prepareOperatorModelPolicy,
+  resolveOperatorModelDefault,
 } from "./operator-model-policy.js";
 
 const cfg: OpenClawConfig = {

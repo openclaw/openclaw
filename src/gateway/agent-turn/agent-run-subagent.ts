@@ -4,7 +4,7 @@ import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-ou
 import {
   intersectOperatorModelPolicies,
   restoreRequesterModelPolicySnapshot,
-} from "../../agents/operator-model-policy.js";
+} from "../../agents/operator-model-policy-state.js";
 import { resolveExactSubagentCompletionEvent } from "../../agents/subagents/announce/subagent-announce-handoff.js";
 import {
   readFollowupRequest,

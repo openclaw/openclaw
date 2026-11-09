@@ -68,14 +68,14 @@ import {
   type ModelFallbackDecisionParams,
 } from "./model-fallback-observation.js";
 import { prepareModelFallbackRateLimit } from "./model-fallback-rate-limit.js";
+import type { RunWithModelFallbackParams } from "./model-fallback-runner.types.js";
 import { takeStickyRateLimitFallback } from "./model-fallback-sticky.js";
 import {
   MODEL_FALLBACK_SKIPPED_CODE,
-  type RunWithModelFallbackParams,
   type FallbackAttempt,
   type ModelFallbackCandidate,
 } from "./model-fallback.types.js";
-import { intersectOperatorModelPolicies } from "./operator-model-policy.js";
+import { intersectOperatorModelPolicies } from "./operator-model-policy-state.js";
 import {
   resolveSessionSuspensionReason,
   suspendSession,

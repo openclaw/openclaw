@@ -47,7 +47,7 @@ export async function adoptSubagentRunForRequesterTurnInRuns(params: {
   requesterSessionKey: string;
   requesterAgentId: string;
   requesterTurnRunId: string;
-  requesterModelPolicySnapshot: import("../../operator-model-policy.js").RequesterModelPolicySnapshot;
+  requesterModelPolicySnapshot: import("../../operator-model-policy.types.js").RequesterModelPolicySnapshot;
   requesterRunInstance?: OperationalRunInstanceRef;
   assertCurrent: () => void;
   runs: Map<string, SubagentRunRecord>;

@@ -6,10 +6,10 @@ import {
 } from "../agents/admitted-run-context.js";
 import { bindSharedGatewayOwnerRunAuthority } from "../agents/harness/host-private-capabilities.js";
 import {
-  prepareOperatorModelPolicy,
   intersectOperatorModelPolicies,
   readOperatorModelPolicyMembership,
-} from "../agents/operator-model-policy.js";
+} from "../agents/operator-model-policy-state.js";
+import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";

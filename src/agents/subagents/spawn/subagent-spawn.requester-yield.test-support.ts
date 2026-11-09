@@ -16,7 +16,7 @@ import {
   getAdmittedRunDelegatedAuthority,
 } from "../../admitted-run-context.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
-import { restoreRequesterModelPolicySnapshot } from "../../operator-model-policy.js";
+import { restoreRequesterModelPolicySnapshot } from "../../operator-model-policy-state.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,

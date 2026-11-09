@@ -20,9 +20,9 @@ import {
   isOperatorAccessProgramAllowed,
   resolveAgentHarnessOperatorPolicyError,
 } from "../agents/operator-access-program.js";
+import { readOperatorModelPolicyMembership } from "../agents/operator-model-policy-state.js";
 import {
   prepareOperatorModelPolicy,
-  readOperatorModelPolicyMembership,
   resolveOperatorModelDefault,
 } from "../agents/operator-model-policy.js";
 import type { PreparedOperatorModelPolicy } from "../agents/operator-model-policy.types.js";

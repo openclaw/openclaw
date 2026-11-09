@@ -2,9 +2,9 @@ import { expect, it, vi } from "vitest";
 import { assertOperatorModelAllowed } from "../agents/admitted-run-context.js";
 import {
   captureRequesterModelPolicySnapshot,
-  prepareOperatorModelPolicy,
   restoreRequesterModelPolicySnapshot,
-} from "../agents/operator-model-policy.js";
+} from "../agents/operator-model-policy-state.js";
+import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {

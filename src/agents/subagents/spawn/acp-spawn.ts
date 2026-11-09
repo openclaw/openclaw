@@ -103,7 +103,8 @@ import {
 } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "./subagent-depth.js";
 import { withPreparedSessionCapabilityRead } from "./subagent-session-store.js";
-import { captureSubagentSpawnGatewayContext, readGatewayRunId } from "./subagent-spawn-gateway.js";
+import { captureSubagentSpawnGatewayContext } from "./subagent-spawn-gateway-context.js";
+import { readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
 

@@ -22,10 +22,8 @@ import {
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import { buildAgentInternalEventContext, type AgentInternalEvent } from "../../internal-events.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
-import {
-  prepareOperatorModelPolicy,
-  restoreRequesterModelPolicySnapshot,
-} from "../../operator-model-policy.js";
+import { restoreRequesterModelPolicySnapshot } from "../../operator-model-policy-state.js";
+import { prepareOperatorModelPolicy } from "../../operator-model-policy.js";
 import {
   captureGatewayToolCallerAssertion,
   createAdmittedGatewayToolCallerIdentity,
