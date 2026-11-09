@@ -210,6 +210,8 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       let forceCloseTimer: ReturnType<typeof setTimeout> | undefined;
       let timedOut = false;
       let aborted = false;
+      // The native turn reported completion; persistence and settlement are host-bounded work.
+      let settled = false;
       let abortPromise: Promise<void> | undefined;
       let failure: unknown;
       let activeAttachment: ReturnType<typeof setActiveEmbeddedRun> | undefined;
@@ -281,10 +283,12 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         queueMessage: async () => {
           throw new Error("Muse live steering is not supported; wait for the active turn.");
         },
-        isStreaming: () => !aborted,
+        isStreaming: () => !aborted && !settled,
         isAborted: () => aborted,
-        // Muse enforces this turn's own deadline, so the host's stall watchdog must not.
-        ownsLiveness: () => !aborted && !timedOut,
+        isStopped: () => settled || aborted,
+        // Only an open native turn owns liveness: Muse bounds it with this attempt's deadline, and an
+        // unlimited Gateway budget stays unlimited (as with Codex). Completion hands settlement back.
+        ownsLiveness: () => !aborted && !timedOut && !settled,
         isCompacting: () => false,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
         cancel: onAbort,
@@ -510,6 +514,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           messages.push(...group);
           assistantTranscriptOwned = finalKey !== undefined;
         });
+        settled = true;
         text = result.visibleText;
         lastToolError = result.lastToolError;
         if (result.outcome.kind !== "completed") {

@@ -32,7 +32,7 @@ const writes = vi.hoisted(() => ({
   publish: vi.fn(async () => undefined),
 }));
 const registeredRun = vi.hoisted(() => ({
-  handle: undefined as undefined | { ownsLiveness?: () => boolean },
+  handle: undefined as undefined | { ownsLiveness?: () => boolean; isStopped?: () => boolean },
 }));
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
   const original = await importOriginal<typeof AgentHarnessRuntime>();
@@ -413,20 +413,42 @@ describe("Muse native MSP harness", () => {
   });
 
   // The host's stalled-run watchdog spares a native turn only while its handle owns liveness.
-  it("owns its liveness while a native turn runs", async () => {
+  it.each([
+    ["bounded", 30 * 60_000],
+    ["unlimited", 2 ** 31],
+  ] as const)(
+    "owns its liveness past the stall watchdog while a %s native turn runs",
+    async (_budget, timeoutMs) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const { run } = setup();
+      const controller = new AbortController();
+      const observed: Array<boolean | undefined> = [];
+      await run({
+        prompt: "settle",
+        timeoutMs,
+        abortSignal: controller.signal,
+        onExecutionStarted: () => {
+          observed.push(registeredRun.handle?.ownsLiveness?.());
+          // Past the host's six-minute stalled-run window with the native turn still open.
+          vi.advanceTimersByTime(7 * 60_000);
+          observed.push(
+            registeredRun.handle?.ownsLiveness?.(),
+            registeredRun.handle?.isStopped?.(),
+          );
+          controller.abort();
+          observed.push(registeredRun.handle?.ownsLiveness?.());
+        },
+      });
+      expect(observed).toEqual([true, true, false, false]);
+    },
+  );
+
+  it("returns liveness to the host once the native turn completes", async () => {
     const { run } = setup();
-    const controller = new AbortController();
-    const observed: Array<boolean | undefined> = [];
-    await run({
-      prompt: "settle",
-      abortSignal: controller.signal,
-      onExecutionStarted: () => {
-        observed.push(registeredRun.handle?.ownsLiveness?.());
-        controller.abort();
-        observed.push(registeredRun.handle?.ownsLiveness?.());
-      },
-    });
-    expect(observed).toEqual([true, false]);
+    const result = await run({ prompt: "hello" });
+    expect(terminal(result).kind).not.toBe("failed");
+    expect(registeredRun.handle?.ownsLiveness?.()).toBe(false);
+    expect(registeredRun.handle?.isStopped?.()).toBe(true);
   });
 
   it.each(["callback", "transcript", "abort", "timeout", "approval"] as const)(
