@@ -135,7 +135,10 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_VITEST_WORKER_CACHE: "1"
-        run: node scripts/prepare-vitest-worker-cache.mts
+        run: |
+          node scripts/prepare-vitest-worker-cache.mts
+          # Narrow tooling jobs cannot reuse the full worker graph.
+          node --input-type=module -e "import { prepareVitestWorkerCache } from './scripts/prepare-vitest-worker-cache.mts'; await prepareVitestWorkerCache('tooling');"
 
       - name: Save compiled Vitest workers
         if: ${{ matrix.platform == 'linux' && steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.vitest-worker-cache-key != '' }}

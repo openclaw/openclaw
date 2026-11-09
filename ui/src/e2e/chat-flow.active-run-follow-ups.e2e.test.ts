@@ -207,7 +207,25 @@ suite.define(() => {
     await expectCount(user, 1);
     await expectCount(page.locator(".chat-queue__item"), 0);
     await link.waitFor();
+    await user.getByText("Queued behind the current turn", { exact: false }).waitFor();
     await stop.waitFor();
+    await gateway.setMethodResponse("chat.history", {
+      ...history,
+      pendingInputs: {
+        ...history.pendingInputs,
+        items: [{ ...input, queued: true, steerNow: undefined }],
+      },
+    });
+    await gateway.emitGatewayEvent("sessions.changed", {
+      ...history.sessionInfo,
+      sessionKey,
+      reason: "agent.input.settled",
+    });
+    const queued = page.locator(".chat-queue__item", { hasText: prompt });
+    await queued.getByText("Queued behind the current turn", { exact: true }).waitFor();
+    await expectCount(queued.getByRole("button", { name: "Steer queued message", exact: true }), 0);
+    await stop.waitFor();
+    await capture("followup-queue");
     await gateway.setMethodResponse("chat.history", {
       ...history,
       pendingInputs: {
@@ -219,10 +237,11 @@ suite.define(() => {
     await gateway.emitGatewayEvent("sessions.changed", settled);
     await user
       .getByRole("status", {
-        name: "Steering — sends when the current step finishes.",
+        name: "Queued behind the current turn",
         exact: true,
       })
       .waitFor();
+    await expectCount(queued, 0);
     await expectCount(link, 0);
     await gateway.setMethodResponse("chat.history", history);
     await gateway.emitGatewayEvent("sessions.changed", settled);

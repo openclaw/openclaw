@@ -11,15 +11,28 @@ export type TemplateAddStateWorkerOperations = {
     };
     output: WorkspaceSetupState;
   };
+  "templates.add.rollbackBootstrapSeed": {
+    input: {
+      workspaceDir: string;
+      bootstrapSeededAt: string;
+      leases?: readonly OpenClawStateLeaseIdentity[];
+    };
+    output: void;
+  };
 };
 
 export type TemplateAddStateCommand = {
-  type: "templates.add.mergeBootstrapSetupState";
-  input: TemplateAddStateWorkerOperations["templates.add.mergeBootstrapSetupState"]["input"];
-};
+  [Key in keyof TemplateAddStateWorkerOperations]: {
+    type: Key;
+    input: TemplateAddStateWorkerOperations[Key]["input"];
+  };
+}[keyof TemplateAddStateWorkerOperations];
 
 export function isTemplateAddStateCommand(command: {
   type: string;
 }): command is TemplateAddStateCommand {
-  return command.type === "templates.add.mergeBootstrapSetupState";
+  return (
+    command.type === "templates.add.mergeBootstrapSetupState" ||
+    command.type === "templates.add.rollbackBootstrapSeed"
+  );
 }

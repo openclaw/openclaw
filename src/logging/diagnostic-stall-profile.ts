@@ -1,3 +1,4 @@
+import type { Runtime } from "node:inspector";
 import { performance } from "node:perf_hooks";
 import { parseNativeCpuProfile, sanitizeDiagnosticProfileFrame } from "./diagnostic-profile.js";
 
@@ -6,15 +7,17 @@ export const MAX_SAMPLES = 1_024;
 export const MAX_PROFILE_BYTES = 1_048_576;
 const MAX_REPORT_BYTES = 2_048;
 export type StallProfileWindow = { json: string | undefined; endedAt: number };
+export type StallStackSample = { at: number; frames: Runtime.CallFrame[] };
 export type StallProfileSnapshot = {
   windows: StallProfileWindow[];
+  stacks?: StallStackSample[];
   endedAt: number;
   captureMs: number;
 };
 type StallProfileInterval = { startedAt: number; endedAt: number; task?: string };
 
-type SelfFrame = { frame: string; app: string | null; samples: number; timeUs: number };
-type SampledStack = { frames: string[]; samples: number; timeUs: number };
+type SelfFrame = { frame: string; app: string | null; samples: number; timeUs: number | null };
+type SampledStack = { frames: string[]; samples: number; timeUs: number | null };
 
 function formatStallFrames(
   header: string,
@@ -24,11 +27,16 @@ function formatStallFrames(
 ) {
   const inclusive = [...counts].toSorted((a, b) => b[1] - a[1]).slice(0, 8);
   const self = [...selfFrames.values()]
-    .toSorted((a, b) => b.timeUs - a.timeUs || b.samples - a.samples)
+    .toSorted((a, b) => (b.timeUs ?? 0) - (a.timeUs ?? 0) || b.samples - a.samples)
     .slice(0, 10)
-    .map(({ frame, samples, timeUs, app }) => [frame, samples, Math.round(timeUs / 100) / 10, app]);
+    .map(({ frame, samples, timeUs, app }) => [
+      frame,
+      samples,
+      timeUs === null ? null : Math.round(timeUs / 100) / 10,
+      app,
+    ]);
   const deepest: Array<[number, string[]]> = [...stacks.values()]
-    .toSorted((a, b) => b.timeUs - a.timeUs || b.samples - a.samples)
+    .toSorted((a, b) => (b.timeUs ?? 0) - (a.timeUs ?? 0) || b.samples - a.samples)
     .slice(0, 3)
     .map(({ samples, frames }) => [samples, frames]);
   let reportTruncated = false;
@@ -61,12 +69,77 @@ export function formatStallProfile(
   stall: StallProfileInterval,
   packageRoot: string | null,
   kernelSummary = "",
+  interruptSamples: StallStackSample[] = [],
 ) {
   const counts = new Map<string, number>();
   const selfFrames = new Map<string, SelfFrame>();
   const stacks = new Map<string, SampledStack>();
   let samples = 0;
   let truncated = windows.length === 0;
+  const recordStack = (
+    callFrames: Iterable<Runtime.CallFrame>,
+    cost: { samples: number; timeUs: number | null },
+  ) => {
+    const seen = new Set<string>();
+    const frames: string[] = [];
+    let leaf: string | undefined;
+    let app: string | null = null;
+    let first = true;
+    for (const rawFrame of callFrames) {
+      const { callFrame: frame, redacted } = sanitizeDiagnosticProfileFrame(rawFrame, packageRoot);
+      if (
+        frame.url ||
+        frame.functionName === "[native]" ||
+        frame.functionName === "(garbage collector)"
+      ) {
+        const label =
+          `${frame.functionName || "(anonymous)"}@${frame.url}:${frame.lineNumber + 1}`.slice(
+            0,
+            240,
+          );
+        if (!seen.has(label)) {
+          seen.add(label);
+          counts.set(label, (counts.get(label) ?? 0) + cost.samples);
+        }
+        frames.push(label);
+        if (first) {
+          leaf = label;
+        }
+        if (app === null && frame.url.startsWith("openclaw:")) {
+          app = label;
+        }
+      } else if (first && redacted) {
+        leaf = "[redacted]";
+        frames.push(leaf);
+      }
+      first = false;
+    }
+    if (leaf) {
+      const asyncTask =
+        app === null && stall.task && stall.task !== "unattributed"
+          ? `[async task:${stall.task.slice(0, 160)}]`
+          : null;
+      if (asyncTask) {
+        frames.push(asyncTask);
+        app = asyncTask;
+      }
+      const key = JSON.stringify([leaf, app]);
+      const total = selfFrames.get(key) ?? { frame: leaf, app, samples: 0, timeUs: 0 };
+      total.samples += cost.samples;
+      total.timeUs = cost.timeUs === null ? null : (total.timeUs ?? 0) + cost.timeUs;
+      selfFrames.set(key, total);
+      const tail = frames.slice(0, Math.min(16, app ? frames.indexOf(app) + 1 : 16));
+      if (app && tail.at(-1) !== app) {
+        tail.push("[...]", app);
+      }
+      tail.reverse();
+      const stackKey = JSON.stringify(tail);
+      const stack = stacks.get(stackKey) ?? { frames: tail, samples: 0, timeUs: 0 };
+      stack.samples += cost.samples;
+      stack.timeUs = cost.timeUs === null ? null : (stack.timeUs ?? 0) + cost.timeUs;
+      stacks.set(stackKey, stack);
+    }
+  };
   for (const window of windows) {
     if (window.json === undefined) {
       truncated = true;
@@ -99,77 +172,31 @@ export function formatStallProfile(
     }
     // Walk each sampled stack once, not once per sample in a long block.
     for (const [id, cost] of leaves) {
-      const seen = new Set<string>();
-      const frames: string[] = [];
-      let leaf: string | undefined;
-      let app: string | null = null;
-      let cursor: number | undefined = id;
-      while (cursor !== undefined) {
-        const node = nodes.get(cursor);
-        if (!node) {
-          break;
+      function* callFrames() {
+        let cursor: number | undefined = id;
+        while (cursor !== undefined) {
+          const node = nodes.get(cursor);
+          if (!node) {
+            break;
+          }
+          yield node.callFrame;
+          cursor = parents.get(cursor);
         }
-        const { callFrame: frame, redacted } = sanitizeDiagnosticProfileFrame(
-          node.callFrame,
-          packageRoot,
-        );
-        if (
-          frame.url ||
-          frame.functionName === "[native]" ||
-          frame.functionName === "(garbage collector)"
-        ) {
-          const label =
-            `${frame.functionName || "(anonymous)"}@${frame.url}:${frame.lineNumber + 1}`.slice(
-              0,
-              240,
-            );
-          if (!seen.has(label)) {
-            seen.add(label);
-            counts.set(label, (counts.get(label) ?? 0) + cost.samples);
-          }
-          frames.push(label);
-          if (cursor === id) {
-            leaf = label;
-          }
-          if (app === null && frame.url.startsWith("openclaw:")) {
-            app = label;
-          }
-        } else if (cursor === id && redacted) {
-          leaf = "[redacted]";
-          frames.push(leaf);
-        }
-        cursor = parents.get(cursor);
       }
-      if (leaf) {
-        const asyncTask =
-          app === null && stall.task && stall.task !== "unattributed"
-            ? `[async task:${stall.task.slice(0, 160)}]`
-            : null;
-        if (asyncTask) {
-          frames.push(asyncTask);
-          app = asyncTask;
-        }
-        const key = JSON.stringify([leaf, app]);
-        const total = selfFrames.get(key) ?? { frame: leaf, app, samples: 0, timeUs: 0 };
-        total.samples += cost.samples;
-        total.timeUs += cost.timeUs;
-        selfFrames.set(key, total);
-        const tail = frames.slice(0, Math.min(16, app ? frames.indexOf(app) + 1 : 16));
-        if (app && tail.at(-1) !== app) {
-          tail.push("[...]", app);
-        }
-        tail.reverse();
-        const stackKey = JSON.stringify(tail);
-        const stack = stacks.get(stackKey) ?? { frames: tail, samples: 0, timeUs: 0 };
-        stack.samples += cost.samples;
-        stack.timeUs += cost.timeUs;
-        stacks.set(stackKey, stack);
-      }
+      recordStack(callFrames(), cost);
     }
   }
-  const cpu = windows.length
-    ? `samples=${samples} intervalMs=${SAMPLE_MS}`
-    : "cpuProfile=unavailable";
+  for (const sample of interruptSamples) {
+    if (sample.at >= stall.startedAt && sample.at <= stall.endedAt) {
+      samples++;
+      recordStack(sample.frames, { samples: 1, timeUs: null });
+    }
+  }
+  const cpu = interruptSamples.length
+    ? `samples=${samples} sampleMode=interrupt`
+    : windows.length
+      ? `samples=${samples} intervalMs=${SAMPLE_MS}`
+      : "cpuProfile=unavailable";
   return formatStallFrames(
     `windowMs=${Math.round(stall.endedAt - stall.startedAt)} windowStartMs=${Math.round(performance.timeOrigin + stall.startedAt)} windowEndMs=${Math.round(performance.timeOrigin + stall.endedAt)} reportedAtMs=${Math.round(performance.timeOrigin + performance.now())} ${cpu} truncated=${truncated}${kernelSummary}`,
     counts,
