@@ -2229,6 +2229,7 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatTimeline.kt","kind":"ui-call","surface":"android","id":"native.android.4d150c3d62a99ab8","source":"The earlier conversation was cleared."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatTimeline.kt","kind":"ui-call","surface":"android","id":"native.android.7266713b09419328","source":"Turn interrupted by a gateway restart — asked the agent to resume and finish the response."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatTimeline.kt","kind":"ui-call","surface":"android","id":"native.android.11f86ea00b2e6de1","source":"saved $count tokens"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposerTextViewIOS.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.802abe23f229ab9d","source":"Message"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatReply.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.94506a32f403196f","source":"User"},
     {"path":"apps/macos/Sources/OpenClawMacCLI/DiscoverCommand.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.6786d246718e24da","source":" (local filtered)"},
     {"path":"apps/macos/Sources/OpenClawMacCLI/DiscoverCommand.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.3ac6ffc087132be1","source":"(none)"},

@@ -855,6 +855,8 @@ struct OpenClawChatComposer: View {
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, self.cleanFieldTextInset)
                     .padding(.vertical, self.composerChrome == .clean ? 0 : 4)
+                    // The editor carries its own accessible name; don't announce a second element.
+                    .accessibilityHidden(true)
             }
             #endif
 
