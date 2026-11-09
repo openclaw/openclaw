@@ -14,7 +14,7 @@ import {
 } from "../infra/worker-native-lifecycle.js";
 import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
-import { getPluginRuntimeExecutionFrame } from "../plugins/runtime/execution-frame.js";
+import { getPluginExecutionFrame } from "../plugins/plugin-instance-invocation.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import {
@@ -330,7 +330,7 @@ class StateReadTransport {
       const pool = readPool(this.source.state, this.source.ownsAdmission(), this.awaitedOnly);
       if (
         getDatabaseProcessRole() === "gateway" &&
-        !getPluginRuntimeExecutionFrame()?.gatewayScope?.canUseInteractiveStateReadCapacity?.()
+        !getPluginExecutionFrame()?.canUseInteractiveStateReadCapacity
       ) {
         const { pendingTasks, maxWorkers } = pool.pool.getSnapshot();
         // Leave two reads per worker for authenticated UI requests; the pool keeps its hard caps.
