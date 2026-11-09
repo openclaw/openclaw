@@ -9,21 +9,29 @@ struct CommandCenterTabSessionFilterTests {
         #expect(SessionStatusScope.available(isConnected: true) == [.active, .snoozed, .automations, .archived])
     }
 
-    @Test func `automation scope preserves selection without leaking archived sessions into active`() throws {
+    @Test @MainActor
+    func `automation scope preserves selection without leaking archived sessions into active`() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let entries = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data("""
         [
           {"key":"agent:main:cron:daily"},
           {"key":"agent:main:cron:archived","archived":true},
-          {"key":"conversation"}
+          {"key":"conversation"},
+          {"key":"agent:main:main"}
         ]
         """.utf8))
         func keys(_ scope: SessionStatusScope, selected: String? = nil) -> [String] {
-            entries.filter { scope.includes($0, at: now, currentSessionKey: selected) }.map(\.key)
+            let currentKey = ChatSessionSidebarModel.selectedSessionKey(
+                sessions: entries, currentSessionKey: selected ?? "", mainSessionKey: "main", activeAgentID: "main")
+            return entries.filter {
+                CommandCenterTab.isListedChatSession(
+                    $0.key, mainSessionKey: "agent:main:main", defaultSessionKey: "main") &&
+                    scope.includes($0, at: now, currentSessionKey: currentKey)
+            }.map(\.key)
         }
-        #expect(keys(.active) == ["conversation"])
-        #expect(keys(.active, selected: "agent:main:cron:daily") == ["agent:main:cron:daily", "conversation"])
-        #expect(keys(.active, selected: "agent:main:cron:archived") == ["conversation"])
+        #expect(keys(.active) == ["conversation", "agent:main:main"])
+        #expect(keys(.active, selected: "cron:daily") == ["agent:main:cron:daily", "conversation", "agent:main:main"])
+        #expect(keys(.active, selected: "agent:main:cron:archived") == ["conversation", "agent:main:main"])
         #expect(keys(.automations) == ["agent:main:cron:daily"])
         #expect(keys(.archived) == ["agent:main:cron:archived"])
     }
@@ -51,6 +59,66 @@ struct CommandCenterTabSessionFilterTests {
         #expect(sections.flatMap(\.entries).map(\.key).sorted() == ["awake", "boundary", "expired"])
         #expect(CommandCenterTab.sessionDetail(entries[1], now: now).hasPrefix("Wakes "))
         #expect(!CommandCenterTab.sessionDetail(entries[2], now: now).hasPrefix("Wakes "))
+    }
+
+    @Test(arguments: ["main", "work"], [false, true]) @MainActor
+    func `all sessions includes one existing main row without changing recent chats`(
+        base: String, qualifiedMain: Bool) throws
+    {
+        let mainKey = "agent:one:\(base)"
+        let configuredMain = qualifiedMain ? mainKey : base
+        var main = OpenClawChatSessionEntry(key: mainKey, label: "Original topic")
+        main.sessionId = "existing-main-history"
+        main.pinned = true
+        main.category = "Research"
+        let other = OpenClawChatSessionEntry(key: "agent:one:conversation", label: "Packing")
+        let sessions = [
+            main, other,
+            OpenClawChatSessionEntry(key: "agent:two:\(base)"),
+            OpenClawChatSessionEntry(key: "agent:one:\(base):thread:42"),
+            OpenClawChatSessionEntry(key: "agent:one:node-device"),
+        ] + (qualifiedMain ? [OpenClawChatSessionEntry(key: base)] : [])
+        // The configured canonical row wins over its bare alias when both are present.
+        let resolvedMain = ChatSessionSidebarModel.selectedSessionKey(
+            sessions: sessions, currentSessionKey: configuredMain, mainSessionKey: configuredMain,
+            activeAgentID: "one", sessionRoutingContract: "per-sender|\(base)|one")
+        let listed = sessions.filter {
+            CommandCenterTab.isListedChatSession(
+                $0.key, mainSessionKey: resolvedMain, defaultSessionKey: configuredMain)
+        }
+        #expect(listed.map(\.key) == [mainKey, other.key])
+        let row = try #require(listed.first { $0.key == resolvedMain })
+        #expect(row.sessionId == "existing-main-history")
+        #expect(row.label == "Original topic")
+        #expect(row.pinned == true)
+        #expect(row.category == "Research")
+        #expect(!CommandCenterTab.isRecentChatSession(row.key, defaultSessionKey: configuredMain))
+        #expect(!ChatSessionSidebarModel.canDeleteSession(key: row.key, mainSessionKey: resolvedMain))
+        #expect(!ChatSessionSidebarModel.canArchiveSession(row, mainSessionKey: resolvedMain))
+        #expect(ChatSessionSidebarModel.canDeleteSession(key: other.key, mainSessionKey: resolvedMain))
+        #expect(CommandCenterTab.sessionWorkItem(for: row, currentSessionKey: resolvedMain).state == "open")
+        #expect(CommandCenterTab.sessionTitle(main) == "Original topic")
+        #expect(CommandCenterTab.sessionTitle(other) == "Packing")
+    }
+
+    @Test(arguments: [true, false]) @MainActor
+    func `custom main filtering retains the configured base with an incomplete roster`(mainPresent: Bool) {
+        let main = OpenClawChatSessionEntry(key: "agent:one:work")
+        let other = OpenClawChatSessionEntry(key: "agent:one:conversation")
+        let sessions = (mainPresent ? [main] : []) + [
+            other, OpenClawChatSessionEntry(key: "agent:one:work:thread:42"),
+            OpenClawChatSessionEntry(key: "agent:two:work"),
+        ]
+        let resolvedMain = ChatSessionSidebarModel.selectedSessionKey(
+            sessions: sessions, currentSessionKey: main.key, mainSessionKey: main.key, activeAgentID: "one")
+        let listed = sessions.filter {
+            CommandCenterTab.isListedChatSession($0.key, mainSessionKey: resolvedMain, defaultSessionKey: main.key)
+        }
+        #expect(listed.map(\.key) == (mainPresent ? [main.key, other.key] : [other.key]))
+        let sidebar = RootSidebarModel.sections(
+            sessions: sessions, query: "", currentSessionKey: other.key, mainSessionKey: main.key,
+            activeAgentID: "one", groups: [], rosterIsComplete: mainPresent)
+        #expect(!sidebar.flatMap(\.nodes).contains { $0.session.key == main.key })
     }
 
     @Test func `hides direct agent device sessions`() {

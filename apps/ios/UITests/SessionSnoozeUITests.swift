@@ -53,6 +53,42 @@ final class SessionSnoozeUITests: XCTestCase {
         XCTAssertTrue(active.isHittable)
         XCTAssertFalse(snoozed.exists)
         self.capture(app, named: "after-sessions-active")
+        let main = app.buttons["SessionDashboard.Session.agent:main:main"]
+        XCTAssertTrue(main.waitForExistence(timeout: 10))
+        main.press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Rename…"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Archive"].exists)
+        XCTAssertFalse(app.buttons["Delete…"].exists)
+        XCTAssertFalse(app.buttons["Snooze"].exists)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.94)).tap()
+        XCTAssertTrue(app.buttons["Rename…"].waitForNonExistence(timeout: 5))
+
+        active.tap()
+        XCTAssertTrue(app.staticTexts["Your planning notes are ready."].waitForExistence(timeout: 15))
+        app.buttons["RootTabs.Sidebar.Show"].tap()
+        let home = app.buttons["RootTabs.Sidebar.Destination.chat"]
+        XCTAssertTrue(home.waitForExistence(timeout: 10))
+        XCTAssertEqual(home.label, "Home")
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", "Home")).count, 1)
+        for _ in 0..<5 where !sessions.isHittable { app.swipeUp() }
+        sessions.tap()
+        XCTAssertTrue(main.waitForExistence(timeout: 10))
+        main.tap()
+        XCTAssertTrue(app.staticTexts["Your research workspace is ready."].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["Your planning notes are ready."].waitForNonExistence(timeout: 5))
+        let (stateData, _) = try await URLSession.shared.data(from: fixture)
+        let state = try JSONDecoder().decode(FixtureState.self, from: stateData)
+        XCTAssertEqual(state.requests.last { $0.method == "chat.history" }?.sessionKey, "agent:main:main")
+        XCTAssertFalse(state.requests.contains {
+            ["sessions.create", "sessions.reset", "sessions.delete", "sessions.fork", "sessions.patch", "chat.send"]
+                .contains($0.method)
+        })
+        app.buttons["RootTabs.Sidebar.Show"].tap()
+        for _ in 0..<5 where !sessions.isHittable { app.swipeUp() }
+        sessions.tap()
+        XCTAssertTrue(active.waitForExistence(timeout: 10))
+        XCTAssertTrue(main.staticTexts["open"].exists)
+        XCTAssertTrue(active.staticTexts["recent"].exists)
         active.press(forDuration: 1)
         let snoozeMenu = app.buttons["Snooze"]
         XCTAssertTrue(snoozeMenu.waitForExistence(timeout: 5), app.debugDescription)
@@ -75,6 +111,15 @@ final class SessionSnoozeUITests: XCTestCase {
         let wake = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Wake session ·")).firstMatch
         XCTAssertTrue(wake.waitForExistence(timeout: 5), app.debugDescription)
         self.capture(app, named: "after-wake-menu")
+    }
+
+    private struct FixtureState: Decodable {
+        struct Request: Decodable {
+            let method: String
+            let sessionKey: String?
+        }
+
+        let requests: [Request]
     }
 
     private func sessionRow(_ title: String, in app: XCUIApplication) -> XCUIElement {

@@ -369,6 +369,7 @@ wss.on("connection", (ws) => {
             },
             {
               key: mainKey,
+              sessionId: "synthetic-main-session",
               displayName: "Home",
               label: "Home",
               kind: "direct",
@@ -400,11 +401,22 @@ wss.on("connection", (ws) => {
       case "chat.history":
         reply({
           sessionKey: params.sessionKey ?? mainKey,
-          sessionId: "synthetic-session",
+          sessionId:
+            params.sessionKey === "agent:main:snooze-active"
+              ? "synthetic-snooze-active"
+              : "synthetic-main-session",
           messages: [
             {
               role: "assistant",
-              content: [{ type: "text", text: "Your research workspace is ready." }],
+              content: [
+                {
+                  type: "text",
+                  text:
+                    params.sessionKey === "agent:main:snooze-active"
+                      ? "Your planning notes are ready."
+                      : "Your research workspace is ready.",
+                },
+              ],
               timestamp: created,
             },
           ],
