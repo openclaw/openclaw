@@ -10,6 +10,21 @@ title: "Managed worktrees"
 
 Managed worktrees give an agent task its own git branch and checkout without placing temporary directories inside the source repository. OpenClaw records them in the shared state database and snapshots their tracked and non-ignored untracked contents before ordinary removal. [Capacity eviction](#capacity-and-eviction) can purge unsaved data when a snapshot cannot be made.
 
+Projects cloned by OpenClaw always start new sessions in managed worktrees,
+including requests that omit `worktree` or set it to `false`. The shared clone is
+the maintenance-owned source for refreshes, Git objects, and templates. The
+project picker offers **New worktree** for these clones; explicitly registered
+folders and agent workspaces can still use **Current checkout**. Opening a
+repository URL also allocates a managed worktree.
+
+Keep disposable builds and temporary clones in the session's `.openclaw/tmp/`,
+which follows the [scratch cleanup policy](#snapshots-cleanup-and-restore). Save durable
+outputs outside that directory. Do not create task worktrees inside a shared
+project clone. Existing sessions retain their accepted working directories;
+start a new project session to leave a previously selected shared checkout.
+Unregistered nested Git worktrees are preserved because OpenClaw cannot prove
+their ownership or lossless removal from their path names alone.
+
 Branch pickers display the last recorded local refs while discovery refreshes in
 background. A refreshing indicator stays visible until the Gateway sends the
 updated options; slow Git keeps cached choices available. Discovery never fetches
