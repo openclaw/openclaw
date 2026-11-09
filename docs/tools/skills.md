@@ -963,6 +963,9 @@ Up to four catalog selections retain their current content-only indexes between
 runs, within a shared 64 MiB conservative byte budget. Oversized selections remain
 available to their active run but are not retained for later runs. Readers and permission checks remain run-specific. Local file bodies still
 pass file admission on each fresh run before their confirmed revisions reuse an index.
+Delivered instruction bodies reuse the same index when only companion files change.
+Prepared bodies share a 12 MiB cache, bounded to 2,048 revisions; byte limits and
+UTF-8 normalization are part of each prepared document's identity.
 
 Body indexing reads at most 1,024 skills in name order, four at a time. Each body
 contributes at most 16 KiB, reduced equally across the selected skills

@@ -16,6 +16,15 @@ import {
 import { createReleaseEvidenceReplay } from "../../scripts/lib/release-evidence-replay.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+// Keep promise-based retry sleeps on the same clock as the deadline assertions.
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: (delay: number) =>
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, delay);
+    }),
+}));
+
 const REPOSITORY = "openclaw/openclaw";
 const TOOLING = "a".repeat(40);
 const TARGET = "b".repeat(40);
@@ -23,6 +32,7 @@ const PUBLISHER = "Seal full release child evidence / Seal child receipt";
 const NOW = Date.parse("2026-09-23T12:00:00Z");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
@@ -228,39 +238,113 @@ async function fixture(
 }
 
 describe("independent release child reuse", () => {
-  it.each([502, 403])("handles HTTP %i at the child job listing boundary", async (status) => {
+  it.each([
+    { status: 502, failures: 1 },
+    { status: 502, failures: 4 },
+    { status: 403, failures: 1 },
+  ])(
+    "bounds metadata HTTP $status retries after $failures failures",
+    async ({ status, failures }) => {
+      const data = await fixture();
+      const selection = await discoverReusableReleaseChild(data.request, data.deps);
+      vi.useFakeTimers();
+      const started = Date.now();
+      let reads = 0;
+      const github = async (endpoint: string) => {
+        if (endpoint === "actions/runs/101" && reads++ < failures) {
+          throw Object.assign(new Error("private CLI output"), {
+            stderr: `gh: Server Error (HTTP ${status}) private response body`,
+          });
+        }
+        return data.deps.github(endpoint);
+      };
+      const verification = validateReusableReleaseChild(selection, data.request, {
+        ...data.deps,
+        github,
+      });
+      const succeeds = status === 502 && failures === 1;
+      const checked = succeeds
+        ? expect(verification).resolves.toMatchObject({ receipt: { jobs: data.receipt.jobs } })
+        : expect(verification).rejects.toMatchObject({
+            message: `Full release child evidence API GET repos/openclaw/openclaw/actions/runs/101 failed (HTTP ${status})`,
+          });
+      await vi.runAllTimersAsync();
+      await checked;
+      expect(reads).toBe(succeeds ? 3 : failures);
+      expect(Date.now() - started).toBe(status === 403 ? 0 : failures === 4 ? 14_000 : 2_000);
+    },
+  );
+
+  it("keeps job fallback and retry backoff within the shared deadline", async () => {
     const data = await fixture("normalCi", undefined, TOOLING, 261);
     const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    vi.useFakeTimers();
+    const started = Date.now();
     const jobReads: string[] = [];
     const github = async (endpoint: string) => {
-      if (!endpoint.includes("/jobs?")) {
-        return data.deps.github(endpoint);
-      }
-      jobReads.push(endpoint);
-      if (status === 403 || endpoint.includes("per_page=100&page=2")) {
-        throw new Error(`gh: Server Error (HTTP ${status})`);
+      if (endpoint.includes("/jobs?")) {
+        jobReads.push(endpoint);
+        if (!endpoint.includes("per_page=100&page=1")) {
+          vi.setSystemTime(started + 119_000);
+          throw new Error("gh: Server Error (HTTP 502)");
+        }
       }
       return data.deps.github(endpoint);
     };
-    const verified = validateReusableReleaseChild(selection, data.request, {
-      ...data.deps,
-      github,
-    });
-    if (status === 502) {
-      await expect(verified).resolves.toMatchObject({ receipt: { jobs: data.receipt.jobs } });
-      expect(jobReads).toEqual([
-        "actions/runs/101/attempts/1/jobs?per_page=100&page=1",
-        "actions/runs/101/attempts/1/jobs?per_page=100&page=2",
-        ...Array.from(
-          { length: 6 },
-          (_, index) => `actions/runs/101/attempts/1/jobs?per_page=50&page=${index + 1}`,
-        ),
-      ]);
-    } else {
-      await expect(verified).rejects.toThrow("HTTP 403");
-      expect(jobReads).toHaveLength(1);
-    }
+    await expect(
+      validateReusableReleaseChild(selection, data.request, {
+        ...data.deps,
+        github,
+        deadlineMs: started + 120_000,
+      }),
+    ).rejects.toThrow(/API GET .*per_page=30&page=1 exceeded its time budget/);
+    expect(jobReads).toEqual([
+      "actions/runs/101/attempts/1/jobs?per_page=100&page=1",
+      "actions/runs/101/attempts/1/jobs?per_page=100&page=2",
+      "actions/runs/101/attempts/1/jobs?per_page=50&page=1",
+      "actions/runs/101/attempts/1/jobs?per_page=30&page=1",
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
   });
+
+  it.each([502, 403, "header"])(
+    "handles HTTP %s at the child job listing boundary",
+    async (status) => {
+      const data = await fixture("normalCi", undefined, TOOLING, 261);
+      const selection = await discoverReusableReleaseChild(data.request, data.deps);
+      const jobReads: string[] = [];
+      const github = async (endpoint: string) => {
+        if (!endpoint.includes("/jobs?")) {
+          return data.deps.github(endpoint);
+        }
+        jobReads.push(endpoint);
+        if (status === 403 || endpoint.includes("per_page=100&page=2")) {
+          throw status === "header"
+            ? Object.assign(new Error("gh failed"), { stdout: "HTTP/2 502\nprivate response body" })
+            : new Error(`gh: Server Error (HTTP ${status})`);
+        }
+        return data.deps.github(endpoint);
+      };
+      const verified = validateReusableReleaseChild(selection, data.request, {
+        ...data.deps,
+        github,
+      });
+      if (status !== 403) {
+        await expect(verified).resolves.toMatchObject({ receipt: { jobs: data.receipt.jobs } });
+        expect(jobReads).toEqual([
+          "actions/runs/101/attempts/1/jobs?per_page=100&page=1",
+          "actions/runs/101/attempts/1/jobs?per_page=100&page=2",
+          ...Array.from(
+            { length: 6 },
+            (_, index) => `actions/runs/101/attempts/1/jobs?per_page=50&page=${index + 1}`,
+          ),
+        ]);
+      } else {
+        await expect(verified).rejects.toThrow("HTTP 403");
+        expect(jobReads).toHaveLength(1);
+      }
+    },
+  );
 
   it("replays exact raw child evidence but refuses fresh child and source-parent attempts", async () => {
     const data = await fixture();
