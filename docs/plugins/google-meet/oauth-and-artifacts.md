@@ -172,6 +172,7 @@ openclaw googlemeet attendance --today --format csv --output attendance.csv
 ```
 
 `--today` searches today's `primary` calendar for an event with a Meet link; `--event <query>` searches matching event text; `--calendar <id>` targets a non-primary calendar. `calendar-events` previews matching events and marks which one `latest`/`artifacts`/`attendance`/`export` will choose.
+Calendar listing and lookup follow all result pages, including empty pages with a continuation token, before selecting the best matching event.
 
 If you already know the conference record id, address it directly:
 
@@ -207,6 +208,11 @@ For `artifacts` and `attendance`, `--output <path>` writes the selected format, 
 `artifacts` returns conference record metadata plus participant, recording, transcript, structured transcript-entry, and smart-note resource metadata when Google exposes it. `--no-transcript-entries` skips entry lookup for large meetings. `attendance` expands participants into participant-session rows with first/last seen times, total session duration, late/early-leave flags, and duplicate participant resources merged by signed-in user or display name; `--no-merge-duplicates` keeps raw resources separate, `--late-after-minutes`/`--early-before-minutes` tune the thresholds.
 
 `export` writes a folder with `summary.md`, `attendance.csv`, `transcript.md`, `artifacts.json`, `attendance.json`, and `manifest.json`. `manifest.json` records the chosen input, export options, conference records, output files, counts, token source, any Calendar event used, and partial-retrieval warnings. `--zip` also writes a portable archive next to the folder. `--include-doc-bodies` exports linked transcript/smart-note Google Docs text through Drive `files.export` (requires the Drive Meet readonly scope); without it, exports include Meet metadata and structured transcript entries only. A partial artifact failure (smart-note listing, transcript-entry, or document-body error) keeps the warning in the summary/manifest instead of failing the whole export. `--dry-run` fetches the same data and prints the manifest JSON without creating the folder or ZIP.
+
+Document bodies requested with `--include-doc-bodies` remain in `transcript.md`
+when `--no-transcript-entries` is set or only smart notes are available.
+
+If Google repeats a pagination token, collection stops with an error instead of waiting indefinitely. Retry the request later. Smart-note and transcript-entry errors remain partial-retrieval warnings.
 
 For `export`, `--output <dir>` preserves the literal directory name, including leading or trailing spaces; quote such paths in the shell. A missing or all-whitespace value uses the generated default directory.
 

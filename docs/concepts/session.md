@@ -24,6 +24,19 @@ the Gateway returns a retryable `UNAVAILABLE` error instead of an empty branch
 list. Retry after database preparation finishes. Required integrity checks and
 already-admitted storage cleanup keep their own lifetimes.
 
+Compressed transcript archives are decoded directly from their source files;
+history, discovery, usage, and memory indexing do not create plaintext copies in
+the temporary directory. History retains navigation metadata and reads selected
+byte ranges through a bounded-memory stream. An archive that
+would expand past 4 GiB fails with a visible error and remains unchanged.
+Archive publication verifies compressed output against the original plaintext byte
+count, preserving compression and disk-budget retention.
+Doctor reports the size of read-cache directories left by older versions.
+`openclaw doctor --fix` (also run during updates) removes recognized cache files
+and the directory if empty, preserving unrelated entries. Cleanup is best effort:
+files still open on Windows may remain until a later run; current readers do not
+use them.
+
 To continue the same Gateway-owned session in the Control UI, terminal, or a
 coding harness, see [Session synchronization and attachment](/concepts/session-attachment).
 
@@ -212,6 +225,8 @@ context, and replies to the source room remain unchanged.
 
 Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread expires 24 hours after creation or when the Gateway restarts, whichever comes first. Finishing a turn does not close the thread, and activity does not extend its lifetime. Expiry stops active work and deletes the session and transcript without an archive. Incognito does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
 
+Incognito agent turns use the same in-memory session owner from command preparation through execution, so the first turn can produce a reply without switching to the durable session store.
+
 <Warning>
 On the Codex runtime, the Codex app-server still writes each message you submit to its own diagnostic log database (`logs_2.sqlite` in that agent's Codex home), including messages in incognito threads. Codex currently offers no setting that turns this log off, so OpenClaw cannot prevent it. For conversations that must not reach disk, use an agent on the OpenClaw runtime.
 </Warning>
@@ -326,9 +341,13 @@ cannot be admitted gets an ordinary failed send and can resend. New messages dur
 the resumed run use normal steering and queue rules; they do not wait behind a
 special recovery predecessor.
 
-A crash or `SIGKILL` writes no markers, so nothing resumes automatically. The
-transcript stays available and a new message can continue the work. The agent must
-inspect uncertain effects before repeating them. The Control UI shows the ordinary
+A crash or `SIGKILL` writes no shutdown markers. Startup uses the existing persisted
+nonterminal run identity to resume an eligible root whose execution owner is gone.
+Successful chat commands do not create a running marker or trigger a recovery turn.
+Queued turns publish their running marker when execution starts, so a crash during
+their execution resumes that work once.
+Both sources produce one resume input per session. The agent must inspect uncertain
+effects before repeating them. The Control UI shows the ordinary
 conversation and resume turn without restart banners or interrupted-input notices.
 There is no manual `sessions.recover` method.
 
@@ -356,6 +375,8 @@ timestamps:
 
 - `sessionStartedAt`: when the current `sessionId` began; daily reset uses this.
 - `lastInteractionAt`: last user/channel interaction that extends idle lifetime.
+  Finalized user voice transcripts update this only with a new committed entry;
+  replayed, assistant-only, and rejected transcripts do not.
 - `updatedAt`: last store-row mutation; useful for listing and pruning, but not
   authoritative for daily/idle reset freshness.
 

@@ -1,8 +1,10 @@
+import type { PluginsListResult } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { sanitizeTerminalText, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
+import { normalizePluginId } from "../plugins/config-state.js";
 import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
 import { createInstalledPluginOwnershipResolver } from "../plugins/installed-plugin-package-ownership.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
@@ -82,6 +84,19 @@ export async function runPluginsInspectCommand(
   };
   const loggerParams = opts.json ? { logger: quietPluginJsonLogger } : {};
   const runtimeInspect = opts.runtime === true;
+  let gatewayPlugins: PluginsListResult["plugins"] = [];
+  if (runtimeInspect) {
+    try {
+      const { resolvePluginLifecycleGateway } = await import("./plugins-lifecycle-client.js");
+      const gateway = await resolvePluginLifecycleGateway();
+      if (gateway) {
+        gatewayPlugins = (await gateway<PluginsListResult>("plugins.list", {})).plugins;
+      }
+    } catch (error) {
+      process.stderr.write(terminalText`Warning: Gateway status unavailable: ${String(error)}\n`);
+    }
+  }
+  const gatewayRuntime = new Map(gatewayPlugins.map((plugin) => [plugin.id, plugin.runtime]));
   const reportParams = { config: cfg, metadataSnapshot, ...loggerParams };
   const runtimeReportParams = {
     ...reportParams,
@@ -104,6 +119,10 @@ export async function runPluginsInspectCommand(
         const inspectAllWithInstall = inspectAll.map((inspect) => ({
           ...inspect,
           install: resolveInstallRecord(inspect.plugin.id),
+          inspectionScope: runtimeInspect ? "cli" : undefined,
+          gatewayRuntime: runtimeInspect
+            ? (gatewayRuntime.get(inspect.plugin.id) ?? null)
+            : undefined,
         }));
         return JSON.stringify(inspectAllWithInstall, null, 2);
       }
@@ -115,6 +134,7 @@ export async function runPluginsInspectCommand(
             ? terminalText`${inspect.plugin.id}`
             : "",
         Status: formatPluginStatus(inspect.plugin, runtimeInspect),
+        Gateway: gatewayRuntime.get(inspect.plugin.id)?.state ?? "unavailable",
         Shape: terminalText`${inspect.shape}`,
         Capabilities:
           inspect.capabilities.length > 0
@@ -143,7 +163,8 @@ export async function runPluginsInspectCommand(
         columns: [
           { key: "Name", header: "Name", minWidth: 14, flex: true },
           { key: "ID", header: "ID", minWidth: 10, flex: true },
-          { key: "Status", header: "Status", minWidth: 10 },
+          { key: "Status", header: runtimeInspect ? "CLI status" : "Status", minWidth: 10 },
+          ...(runtimeInspect ? [{ key: "Gateway", header: "Gateway", minWidth: 12 }] : []),
           { key: "Shape", header: "Shape", minWidth: 18 },
           { key: "Capabilities", header: "Capabilities", minWidth: 28, flex: true },
           { key: "Compatibility", header: "Compatibility", minWidth: 24, flex: true },
@@ -185,9 +206,11 @@ export async function runPluginsInspectCommand(
     () => buildPluginSnapshotReport(reportParams),
     { command: "inspect" },
   );
+  const canonicalId = metadataSnapshot.normalizePluginId(normalizePluginId(id));
   const targetPlugin =
     snapshotReport.plugins.find((entry) => entry.id === id) ??
-    snapshotReport.plugins.find((entry) => entry.name === id);
+    snapshotReport.plugins.find((entry) => entry.name === id) ??
+    snapshotReport.plugins.find((entry) => entry.id === canonicalId);
   if (!targetPlugin) {
     process.stderr.write(formatGlobalPluginDiagnostics(snapshotReport.diagnostics));
     failPluginInspect(formatMissingPluginMessage({ id, includeSearch: true }), opts.json);
@@ -203,10 +226,19 @@ export async function runPluginsInspectCommand(
     });
     if (inspect) {
       const install = resolveInstallRecord(inspect.plugin.id);
-      const inspectRuntime = opts.runtime === true;
-
       if (opts.json) {
-        return JSON.stringify({ ...inspect, install }, null, 2);
+        return JSON.stringify(
+          {
+            ...inspect,
+            install,
+            inspectionScope: runtimeInspect ? "cli" : undefined,
+            gatewayRuntime: runtimeInspect
+              ? (gatewayRuntime.get(inspect.plugin.id) ?? null)
+              : undefined,
+          },
+          null,
+          2,
+        );
       }
 
       const lines: string[] = [];
@@ -223,7 +255,14 @@ export async function runPluginsInspectCommand(
         lines.push(terminalText`${inspect.plugin.description}`);
       }
       lines.push("");
-      lines.push(`${theme.muted("Status:")} ${formatPluginStatus(inspect.plugin, inspectRuntime)}`);
+      lines.push(
+        `${theme.muted(runtimeInspect ? "CLI status:" : "Status:")} ${formatPluginStatus(inspect.plugin, runtimeInspect)}`,
+      );
+      if (runtimeInspect) {
+        lines.push(
+          `${theme.muted("Gateway status:")} ${gatewayRuntime.get(inspect.plugin.id)?.state ?? "unavailable"}`,
+        );
+      }
       if (inspect.plugin.failurePhase) {
         lines.push(
           `${theme.muted("Failure phase:")} ${terminalText`${inspect.plugin.failurePhase}`}`,

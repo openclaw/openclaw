@@ -108,6 +108,7 @@ function toolCall(args: Record<string, unknown> = {}, signature?: string, id = "
 }
 
 type GoogleFixtureOptions = {
+  context?: Context;
   options?: Parameters<typeof streamGoogle>[2];
   generateContentStream?: GoogleGenerateContentClient["models"]["generateContentStream"];
 };
@@ -124,11 +125,10 @@ async function runFixture(
   );
   const clock = vi.spyOn(Date, "now").mockReturnValue(123);
   try {
-    const stream = streamGoogle(
-      model,
-      { messages: [] },
-      { apiKey: "test-key", ...fixture.options },
-    );
+    const stream = streamGoogle(model, fixture.context ?? { messages: [] }, {
+      apiKey: "test-key",
+      ...fixture.options,
+    });
     const events: AssistantMessageEvent[] = [];
     for await (const event of stream) {
       events.push(event);
@@ -420,6 +420,101 @@ it("omits optional metadata from normalized Gemini function declarations", () =>
     properties: { message: { type: "string" }, timeout: { type: "number" } },
     required: ["message"],
   });
+});
+
+const keywordTool = {
+  name: "lookup",
+  description: "Look up a value",
+  parameters: {
+    type: "object",
+    properties: {
+      from: { type: "string" },
+      from_: { type: "string" },
+      from__: { type: "string" },
+      class: { type: "string" },
+      lambda: { type: "string" },
+      data: { type: "object" },
+    },
+    required: ["from", "class", "lambda"],
+  },
+};
+
+it("sends keyword parameters under distinct Python-safe names without changing the tool", () => {
+  const original = JSON.stringify(keywordTool);
+  const params = buildParams(model, { messages: [], tools: [keywordTool] });
+  expect(params.config?.tools).toEqual([
+    {
+      functionDeclarations: [
+        {
+          name: "lookup",
+          description: "Look up a value",
+          parametersJsonSchema: {
+            type: "object",
+            properties: {
+              from___: { type: "string" },
+              from_: { type: "string" },
+              from__: { type: "string" },
+              class_: { type: "string" },
+              lambda_: { type: "string" },
+              data: { type: "object" },
+            },
+            required: ["from___", "class_", "lambda_"],
+          },
+        },
+      ],
+    },
+  ]);
+  expect(JSON.stringify(keywordTool)).toBe(original);
+});
+
+it("restores keyword arguments for execution and encodes them again for signed history", async () => {
+  const wireArgs = {
+    from___: "source",
+    from_: "literal suffix",
+    from__: "another suffix",
+    class_: "first",
+    lambda_: "second",
+    data: { from___: "opaque", class: "opaque" },
+  };
+  const { output, events } = await runFixture([finished([lookupPart(wireArgs, signature1)])], {
+    context: { messages: [user("look it up")], tools: [keywordTool] },
+  });
+  const expected = {
+    type: "toolCall",
+    id: "call_1",
+    name: "lookup",
+    thoughtSignature: signature1,
+    arguments: {
+      from: "source",
+      from_: "literal suffix",
+      from__: "another suffix",
+      class: "first",
+      lambda: "second",
+      data: { from___: "opaque", class: "opaque" },
+    },
+  };
+  expect(output.stopReason).toBe("toolUse");
+  expect(output.content).toEqual([expected]);
+  expect(events.find((event) => event.type === "toolcall_end")).toMatchObject({
+    toolCall: expected,
+  });
+  expect(buildParams(model, { messages: [output, result], tools: [keywordTool] }).contents).toEqual(
+    [
+      {
+        role: "model",
+        parts: [
+          {
+            functionCall: { id: "call_1", name: "lookup", args: wireArgs },
+            thoughtSignature: signature1,
+          },
+        ],
+      },
+      {
+        role: "user",
+        parts: [{ functionResponse: { id: "call_1", name: "lookup", response: { output: "ok" } } }],
+      },
+    ],
+  );
 });
 
 it("preserves managed signature ownership with required signatures", () => {

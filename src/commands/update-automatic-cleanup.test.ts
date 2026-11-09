@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { automaticallyCleanUpdateRecovery } from "../cli/update-cli/automatic-cleanup.js";
@@ -44,8 +45,11 @@ import {
   completeDoctorMigrationBackups,
   recordDoctorMigrationBackups,
 } from "./doctor-migration-backup-artifacts.js";
+import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
+import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { useDoctorSessionSqliteTestFixture } from "./doctor-session-sqlite.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
+import { cleanupCompletedUpdateRecovery } from "./update-automatic-cleanup.js";
 import { createMissingConfigRecoveryManifest } from "./update-recovery-manifest.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -153,7 +157,7 @@ function originalBytes(fixture: Awaited<ReturnType<typeof recoveryFixture>>) {
 function expectOriginals(originals: Map<string, Buffer>) {
   for (const [file, contents] of originals) {
     expect(fs.existsSync(file), file).toBe(true);
-    expect(fs.readFileSync(file)).toEqual(contents);
+    expectBytesEqual(fs.readFileSync(file), contents, file);
   }
 }
 function warning(detail: string) {
@@ -181,7 +185,8 @@ async function migrationOriginal(deviceChanged = false) {
   const shared = resolveOpenClawStateSqlitePath(env);
   const source = deviceChanged ? path.join(stateDir, "destination.sqlite") : shared;
   if (deviceChanged) {
-    fs.copyFileSync(shared, source);
+    using database = new DatabaseSync(source);
+    database.exec("CREATE TABLE migrated(value TEXT); INSERT INTO migrated VALUES ('migrated')");
   }
   const backupId = randomUUID();
   const backup = `${source}.pre-startup-migration-${backupId}.bak`;
@@ -201,55 +206,139 @@ async function migrationOriginal(deviceChanged = false) {
     `startup-migration-${backupId}.json`,
   );
   if (deviceChanged) {
+    // Model a reboot that renumbered the volume: every recorded device differs from the live one.
     const manifest = readSessionSqliteMigrationManifest(manifestPath)!;
-    const identity = manifest.targets[0]!.databaseIdentity!;
-    identity.dev = String(BigInt(identity.dev) + 1n);
+    const target = manifest.targets[0]!;
+    for (const identity of [
+      target.databaseIdentity!,
+      ...[...target.plannedMoves, ...target.completedMoves].map((move) => move.artifact!.identity),
+    ]) {
+      identity.dev = String(BigInt(identity.dev) + 1n);
+    }
     writeSessionSqliteMigrationManifest({ manifestPath, manifest });
   }
   return { backup, source, manifestPath };
 }
+function writeAfterReboot(source: string) {
+  using database = new DatabaseSync(source);
+  database.exec("CREATE TABLE after_reboot(value TEXT); INSERT INTO after_reboot VALUES ('later')");
+}
+function interruptDisposal(
+  manifestPath: string,
+  backup: string,
+  phase: "intent" | "unlink-pending",
+) {
+  const manifest = readSessionSqliteMigrationManifest(manifestPath)!;
+  const target = manifest.targets[0]!;
+  const claimPath = path.join(path.dirname(backup), `.cleanup-${randomUUID()}`);
+  for (const move of [...target.plannedMoves, ...target.completedMoves]) {
+    move.artifact!.disposal = {
+      state: "pending-disposal",
+      intendedAt: new Date(now).toISOString(),
+      phase,
+      claimPath,
+    };
+  }
+  writeSessionSqliteMigrationManifest({ manifestPath, manifest });
+  fs.renameSync(backup, claimPath);
+  return claimPath;
+}
+async function cleanUp() {
+  await closeOpenClawStateDatabaseAsync();
+  const report = await retireSessionSqliteRecovery({
+    env,
+    preview: await inspectSessionSqliteRecovery({ cfg: {}, env }),
+    readConfig: async () => ({}),
+    confirm: async () => true,
+  });
+  return Object.assign((file: string) => report.artifacts.find((item) => item.path === file), {
+    report,
+  });
+}
 
-it.each([false, true])(
-  "verifies remounted recovery before retirement (different content: %s)",
-  async (differentContent) => {
-    const { runId: failed, directory: failedCapture } = failedRun(now - 240_000, [
-      "staging",
-      "validating",
-      "activating",
-    ]);
-    finishUpdateRun(failed, { status: "failed" }, { env });
-    const { runId: first, directory: firstCapture } = capturedRun(now - 120_000);
+it("retires remounted recovery after its Gateway writes the destination", async () => {
+  const { runId: failed, directory: failedCapture } = failedRun(now - 240_000, [
+    "staging",
+    "validating",
+    "activating",
+  ]);
+  finishUpdateRun(failed, { status: "failed" }, { env });
+  const { runId: first, directory: firstCapture } = capturedRun(now - 120_000);
+  const { backup, source, manifestPath } = await migrationOriginal(true);
+  writeAfterReboot(source);
+  await complete(first, now + 1_000);
+  expect(fs.existsSync(firstCapture)).toBe(true);
+  expect(fs.existsSync(backup)).toBe(true);
+  const doctors = [5, 4, 3, 2, 1].map((age) => capture(`doctor-${randomUUID()}`, true, age));
+  const orphan = capture("unmanifested");
+  const { runId: second, directory: secondCapture } = capturedRun(now + 60_000);
+  const result = await complete(second, now + 61_000);
+  expect(result.steps.at(-1)?.advisory).toBeUndefined();
+  const target = readSessionSqliteMigrationManifest(manifestPath)!.targets[0]!;
+  const live = fs.statSync(source, { bigint: true });
+  expect(target.databaseIdentity).toMatchObject({ dev: String(live.dev), ino: String(live.ino) });
+  expect(target.completedMoves[0]!.artifact!.disposal.state).toBe("disposed");
+  expect(fs.existsSync(firstCapture)).toBe(false);
+  expect(fs.existsSync(backup)).toBe(false);
+  expect([secondCapture, failedCapture, orphan].map(fs.existsSync)).toEqual([true, true, true]);
+  expect(doctors.map(fs.existsSync)).toEqual([false, false, true, true, true]);
+});
+
+it.each(["archive", "interrupted claim"] as const)(
+  "manual cleanup retires a pre-reboot original from its %s",
+  async (witness) => {
     const { backup, source, manifestPath } = await migrationOriginal(true);
-    const original = fs.readFileSync(backup);
-    if (differentContent) {
-      using database = new DatabaseSync(source);
-      database.exec(
-        "CREATE TABLE foreign_volume(value TEXT); INSERT INTO foreign_volume VALUES ('other volume')",
-      );
-    }
-    await complete(first, now + 1_000);
-    expect(fs.existsSync(firstCapture)).toBe(true);
-    expect(fs.existsSync(backup)).toBe(true);
-    const doctors = [5, 4, 3, 2, 1].map((age) => capture(`doctor-${randomUUID()}`, true, age));
-    const orphan = capture("unmanifested");
-    const { runId: second, directory: secondCapture } = capturedRun(now + 60_000);
-    const result = await complete(second, now + 61_000);
-    const identity =
-      readSessionSqliteMigrationManifest(manifestPath)!.targets[0]!.databaseIdentity!;
-    expect(identity.ino).toBe(String(fs.statSync(source, { bigint: true }).ino));
-    if (differentContent) {
-      expect(result.steps.at(-1)?.advisory?.message).toContain("destination device changed");
-      expect(fs.readFileSync(backup)).toEqual(original);
-    } else {
-      expect(identity.dev).toBe(String(fs.statSync(source, { bigint: true }).dev));
-      expect(identity.sha256).toBe(createHash("sha256").update(original).digest("hex"));
-    }
-    expect(fs.existsSync(firstCapture)).toBe(false);
-    expect(fs.existsSync(backup)).toBe(differentContent);
-    expect([secondCapture, failedCapture, orphan].map(fs.existsSync)).toEqual([true, true, true]);
-    expect(doctors.map(fs.existsSync)).toEqual([false, false, true, true, true]);
+    writeAfterReboot(source);
+    // An earlier run durably claimed the original, then stopped at the destination check.
+    const retained =
+      witness === "archive" ? backup : interruptDisposal(manifestPath, backup, "intent");
+    finishUpdateRun(start(now + 60_000), { status: "succeeded" }, { env });
+    const item = (await cleanUp())(backup);
+    expect(item, item?.detail).toMatchObject({ outcome: "removed" });
+    expect(fs.existsSync(retained)).toBe(false);
+    const target = readSessionSqliteMigrationManifest(manifestPath)!.targets[0]!;
+    expect(target.databaseIdentity!.dev).toBe(String(fs.statSync(source, { bigint: true }).dev));
+    expect(target.completedMoves[0]!.artifact!.disposal.state).toBe("disposed");
+    using database = new DatabaseSync(source, { readOnly: true });
+    expect(database.prepare("SELECT value FROM after_reboot").get()).toEqual({ value: "later" });
   },
 );
+
+it("keeps a pre-reboot original when its destination was restored as a new file", async () => {
+  const { backup, source, manifestPath } = await migrationOriginal(true);
+  const original = fs.readFileSync(backup);
+  // Identical bytes in a new inode are a restore, not the destination this original protects.
+  fs.copyFileSync(source, `${source}.restored`);
+  fs.renameSync(`${source}.restored`, source);
+  finishUpdateRun(start(now + 60_000), { status: "succeeded" }, { env });
+  expect((await cleanUp())(backup)).toMatchObject({
+    outcome: "blocked",
+    reason: "destination-verification-failed",
+  });
+  expectBytesEqual(fs.readFileSync(backup), original, backup);
+  const recorded = readSessionSqliteMigrationManifest(manifestPath)!.targets[0]!.databaseIdentity!;
+  expect(recorded.dev).not.toBe(String(fs.statSync(source, { bigint: true }).dev));
+});
+
+it("keeps an original when its destination reports another volume than the original beside it", async () => {
+  const { backup, source } = await migrationOriginal(true);
+  const original = fs.readFileSync(backup);
+  writeAfterReboot(source);
+  // Same path and inode, but on a different volume from its original: an inode collision.
+  const lstat = fs.lstatSync;
+  using foreignVolume = vi.spyOn(fs, "lstatSync");
+  foreignVolume.mockImplementation(((file: fs.PathLike, options?: fs.StatOptions) => {
+    const stat = lstat(file, options);
+    if (file === source && stat && options?.bigint) {
+      Object.defineProperty(stat, "dev", { value: (stat as fs.BigIntStats).dev + 2n });
+    }
+    return stat;
+  }) as typeof fs.lstatSync);
+  const { runId } = capturedRun(now + 60_000);
+  const result = await complete(runId, now + 61_000);
+  expect(result.steps.at(-1)?.advisory?.message).toContain("destination-verification-failed");
+  expectBytesEqual(fs.readFileSync(backup), original, backup);
+});
 
 it.each([true, false])(
   "keeps success and reports an actual retirement failure consistently (JSON: %s)",
@@ -388,9 +477,9 @@ it("allows its current Gateway owner to mutate a recovery destination during ret
       expect(fs.existsSync(file), file).toBe(false);
     }
     for (const [file, contents] of protectedOriginals) {
-      expect(fs.readFileSync(file), file).toEqual(contents);
+      expectBytesEqual(fs.readFileSync(file), contents, file);
     }
-    expect(fs.readFileSync(fixture.store.configPath)).toEqual(configBefore);
+    expectBytesEqual(fs.readFileSync(fixture.store.configPath), configBefore, "Gateway config");
     using database = new DatabaseSync(fixture.target.sqlitePath, { readOnly: true });
     expect(database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all()).toEqual(
       sessionsBefore,
@@ -401,6 +490,46 @@ it("allows its current Gateway owner to mutate a recovery destination during ret
     expect(database.prepare("SELECT value FROM live_gateway_write").get()).toEqual({
       value: "current owner",
     });
+  } finally {
+    owner.release();
+  }
+});
+
+it("keeps retiring when its current Gateway owner writes during a destination check", async () => {
+  const fixture = await recoveryFixture();
+  const originals = fixture.target.completedMoves
+    .filter((move) => move.artifact?.classification !== "protected")
+    .map((move) => move.archivePath);
+  const { runId } = capturedRun(now, "succeeded");
+  await closeOpenClawStateDatabaseAsync();
+  const owner = acquireGatewayStateOwner({
+    databasePath: resolveOpenClawStateSqlitePath(env),
+    payload: {
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      configPath: env.OPENCLAW_CONFIG_PATH!,
+      role: "gateway",
+      processNamespace: readGatewayLockProcessNamespace(),
+    },
+  });
+  // The live Gateway commits between the destination stat and anything read after it.
+  const lstat = fs.lstatSync;
+  let writes = 0;
+  vi.spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike, options?: fs.StatOptions) => {
+    const stat = lstat(file, options);
+    if (file === fixture.target.sqlitePath && options?.bigint) {
+      using database = new DatabaseSync(fixture.target.sqlitePath);
+      database.exec(`CREATE TABLE live_gateway_write_${++writes}(value TEXT)`);
+    }
+    return stat;
+  }) as typeof fs.lstatSync);
+  try {
+    const result = await cleanupCompletedUpdateRecovery(runId, env, () => {});
+    expect(writes).toBeGreaterThan(1);
+    expect(result?.advisory).toBeUndefined();
+    for (const file of originals) {
+      expect(fs.existsSync(file), file).toBe(false);
+    }
   } finally {
     owner.release();
   }
@@ -455,7 +584,7 @@ it("stops owned retirement when its recovery destination file is replaced", asyn
           ? disposal.claimPath
           : undefined;
       expect(retained, file).toBeDefined();
-      expect(fs.readFileSync(retained!)).toEqual(contents);
+      expectBytesEqual(fs.readFileSync(retained!), contents, file);
     }
   } finally {
     owner.release();
@@ -526,7 +655,7 @@ it.each(["before-first-effect", "claim-publication", "first-unlink"] as const)(
       const retained = remaining();
       expect(retained).toHaveLength(phase === "first-unlink" ? 1 : 2);
       for (const { original, retained: file } of retained) {
-        expect(fs.readFileSync(file)).toEqual(originals.get(original));
+        expectBytesEqual(fs.readFileSync(file), originals.get(original)!, file);
       }
       if (phase !== "first-unlink") {
         expectOriginals(originals);
@@ -579,8 +708,10 @@ it("does not retire artifacts when another process owns live state", async () =>
         throw new Error("Foreign owner exited before acquiring its lock");
       }),
     ]);
+    vi.spyOn(performance, "now").mockReturnValueOnce(5).mockReturnValue(29);
     const result = await automaticallyCleanUpdateRecovery(second, env);
     expect(result?.advisory?.message).toMatch(/owner|ownership|Gateway/);
+    expect(result?.durationMs).toBe(24);
     expect(fs.existsSync(original)).toBe(true);
     expect(getUpdateRun(second, { env })?.status).toBe("succeeded");
   } finally {
@@ -725,3 +856,27 @@ it("keeps Gateway completion warnings visible when cleanup diagnostics cannot be
     await lock?.release();
   }
 });
+
+it.each(["intent", "unlink-pending", "retained"] as const)(
+  "records a pre-reboot original that is already gone under a %s receipt",
+  async (state) => {
+    const { backup, source, manifestPath } = await migrationOriginal(true);
+    writeAfterReboot(source);
+    // A consented retirement recorded its receipt; the bytes were then lost outside cleanup.
+    fs.unlinkSync(state === "retained" ? backup : interruptDisposal(manifestPath, backup, state));
+    finishUpdateRun(start(now + 60_000), { status: "succeeded" }, { env });
+    const cleanup = await cleanUp();
+    const target = readSessionSqliteMigrationManifest(manifestPath)!.targets[0]!;
+    if (state === "retained") {
+      // Without consent, a lost original stays reported as missing rather than disposed.
+      expect(cleanup.report.missingOriginals).toBe(1);
+      expect(target.completedMoves[0]!.artifact!.disposal.state).toBe("retained");
+    } else {
+      expect(cleanup(backup)).toMatchObject({
+        outcome: "disposed",
+        reason: "completed-interrupted-disposal",
+      });
+      expect(target.completedMoves[0]!.artifact!.disposal.state).toBe("disposed");
+    }
+  },
+);

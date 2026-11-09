@@ -47,6 +47,11 @@ describe("resolveRunFailoverDecision", () => {
 
   it.each([
     [{ failoverReason: "tls_certificate", profileRotated: false }, fallback("tls_certificate")],
+    [{ failoverReason: "route_unavailable", profileRotated: false }, fallback("route_unavailable")],
+    [
+      { failoverReason: "route_unavailable", profileRotated: false, fallbackConfigured: false },
+      surface("route_unavailable"),
+    ],
     [
       { failoverCode: "cli_turn_stopped", failoverReason: "unknown", profileRotated: false },
       surface("unknown"),
@@ -90,6 +95,11 @@ describe("resolveRunFailoverDecision", () => {
     ],
     [{ failoverFailure: true, failoverReason: "format" }, surface("format")],
     [{ failoverFailure: true, failoverReason: "tls_certificate" }, fallback("tls_certificate")],
+    [{ failoverFailure: true, failoverReason: "route_unavailable" }, fallback("route_unavailable")],
+    [
+      { failoverFailure: true, failoverReason: "route_unavailable", fallbackConfigured: false },
+      surface("route_unavailable"),
+    ],
     // Tool execution must not trigger model/profile rotation (#52147).
     [{ terminal: timeout("tool_execution", "runtime") }, normal],
     [{ failoverFailure: true, failoverReason: "timeout", harnessOwnsTransport: true }, normal],

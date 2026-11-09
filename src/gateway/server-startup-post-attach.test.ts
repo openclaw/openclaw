@@ -368,6 +368,9 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   registerGatewayStartupReadinessTests({
+    startSidecars: startGatewaySidecars,
+    waitForState: waitForGatewayTestState,
+    acpMocks: hoisted,
     start: startGatewayPostAttachRuntime,
     createParams: createPostAttachParams,
     createRuntimeDeps: createPostAttachRuntimeDeps,
@@ -952,7 +955,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
     const gmailSidecars = onPostReadySidecars.mock.calls[0];
     const lifetimeSidecars = [...publishedGatewayLifetimeSidecars];
-    expect(gmailSidecars).toHaveLength(2);
+    expect(gmailSidecars).toHaveLength(3);
 
     await started.promise;
 
@@ -1691,8 +1694,8 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     sidecarStartReturned = true;
 
-    expect(result).toBe(2);
-    expect(publishedPostReadySidecars.size).toBe(2);
+    expect(result).toBe(3);
+    expect(publishedPostReadySidecars.size).toBe(3);
     expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
     expect(onPostReadySidecars).toHaveBeenCalledWith(...publishedPostReadySidecars);
 
@@ -1910,8 +1913,8 @@ describe("startGatewayPostAttachRuntime", () => {
       log,
     });
 
-    expect(result).toBe(2);
-    expect(publishedPostReadySidecars.size).toBe(2);
+    expect(result).toBe(3);
+    expect(publishedPostReadySidecars.size).toBe(3);
     await waitForGatewayTestState(() => {
       expect(log.warn).toHaveBeenCalledWith(
         "sidecars.gmail-watch failed after gateway ready: Error: boom",
@@ -1926,8 +1929,8 @@ describe("startGatewayPostAttachRuntime", () => {
       } as never,
     });
 
-    expect(result).toBe(2);
-    expect(publishedPostReadySidecars.size).toBe(2);
+    expect(result).toBe(3);
+    expect(publishedPostReadySidecars.size).toBe(3);
     const postReadySidecars = [...publishedPostReadySidecars];
     for (const sidecar of postReadySidecars) {
       await stopTrackedSidecar(sidecar);
@@ -2017,8 +2020,8 @@ describe("startGatewayPostAttachRuntime", () => {
       } as never,
     });
 
-    expect(result).toBe(2);
-    expect(publishedPostReadySidecars.size).toBe(2);
+    expect(result).toBe(3);
+    expect(publishedPostReadySidecars.size).toBe(3);
     expect(hoisted.loadModelCatalog).not.toHaveBeenCalled();
 
     await waitForGatewayTestState(() => {
@@ -2273,8 +2276,8 @@ describe("startGatewayPostAttachRuntime", () => {
       waitForPostReadyWork: () => postReadyWork,
     });
 
-    expect(result).toBe(2);
-    expect(publishedPostReadySidecars.size).toBe(2);
+    expect(result).toBe(3);
+    expect(publishedPostReadySidecars.size).toBe(3);
     const postReadySidecars = [...publishedPostReadySidecars];
     for (const sidecar of postReadySidecars) {
       await stopTrackedSidecar(sidecar);

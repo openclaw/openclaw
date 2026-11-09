@@ -1,4 +1,3 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { access } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -8,6 +7,7 @@ import * as tempPaths from "openclaw/plugin-sdk/temp-path";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setManagedCodexPluginRoot } from "./app-server/managed-binary.js";
+import type { CodexStdioChild } from "./app-server/stdio-worker.js";
 import * as transport from "./app-server/transport-stdio.js";
 import * as transportLifecycle from "./app-server/transport.js";
 import { createCodexNodeExecServerCommand } from "./node-exec-server.js";
@@ -44,8 +44,7 @@ async function startFixture(readyBeforeRegistrationReturns = false) {
     onInput: () => {},
     frames: { send, onMessage: receiver },
   } satisfies OpenClawPluginNodeHostCommandIo;
-  const { promise: childCreated, resolve: resolveChild } =
-    Promise.withResolvers<ChildProcessWithoutNullStreams>();
+  const { promise: childCreated, resolve: resolveChild } = Promise.withResolvers<CodexStdioChild>();
   let privateHome: string | undefined;
   const create = transport.createStdioTransport;
   vi.spyOn(transport, "createStdioTransport").mockImplementation(

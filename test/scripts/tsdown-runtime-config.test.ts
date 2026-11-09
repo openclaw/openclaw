@@ -208,6 +208,7 @@ describe("tsdown config", () => {
   });
 
   it.each([
+    ["infra/device-identity", "src/infra/device-identity.ts"],
     [
       "config/sessions/session-transcript-reconcile",
       "src/config/sessions/session-transcript-reconcile.ts",

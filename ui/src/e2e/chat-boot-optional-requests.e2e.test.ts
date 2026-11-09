@@ -94,6 +94,8 @@ suite.define(() => {
         await page.waitForLoadState("networkidle");
         expect(requested.filter((path) => activityPillsModule.test(path))).toEqual([]);
         expect(requested.filter((path) => subagentActivityModule.test(path))).toEqual([]);
+        // Above phone width, where the draft still has the top bar's brand image.
+        await page.setViewportSize({ width: 700, height: 900 });
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");

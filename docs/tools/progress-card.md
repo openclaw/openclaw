@@ -183,6 +183,9 @@ The Details, composer, and dashboard placements show the local time of the last 
 
 The saved checklist and live activity are separate. Ending the parent turn does not complete unfinished steps. The card shows active delegated work, current child failures and stops, and a short error when available. Exact child counts appear only after the session’s own child list has loaded. Connection loss or unavailable activity is labeled explicitly; these updates do not request a new agent turn. Without a matching terminal outcome, unfinished steps appear paused when there is no active work or the card predates a later run. The last-update time shows when the agent last revised the card; elapsed time alone does not expire a card belonging to an active run.
 
+Short error details keep their existing redaction and 240-unit display limit.
+Truncation preserves UTF-16 surrogate pairs rather than showing a broken glyph.
+
 ## Refresh current work status
 
 In the Control UI composer, select **Refresh task progress** beside the card’s timestamp to ask the agent to reconcile the card with its current work. The action remains available when the card is collapsed. It does not send a visible chat message.

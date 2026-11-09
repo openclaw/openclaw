@@ -14,6 +14,15 @@ let terminalRuntimePath = params.recoveryModulePath;
 let serviceStoppedAtMs, serviceDowntimeMs;
 let recoveryObservation;
 
+// Child JSON is untyped. Keep malformed supplied reasons reportable before
+// typed classification, sentinel publication, and terminal recording consume them.
+function parseManagedUpdateResult(output) {
+  let result;
+  try { result = JSON.parse(output); } catch { return null; }
+  if (Object.hasOwn(result ?? {}, "reason") && typeof result.reason !== "string") result.reason = "managed-service-handoff-failed";
+  return result;
+}
+
 async function observeUnrecordedRecovery() {
   if (!triageFailure || typeof triageFailure.restored === "boolean" || !ownsManagedUpdateLease()) return;
   const previous = closedUpdateResult?.steps?.findLast((step) => step.name === "gateway recovery verification");
@@ -97,8 +106,9 @@ async function finishManagedUpdateRun() {
   else {
     // Doctor may have advanced the schema. A new process loads the candidate's
     // entire module graph; a cache-busted import would retain old DB readers.
-    const payload = JSON.stringify([terminalRuntimePath, params.runId, terminalResult, [...runWarnings],
-      path.join(params.cwd, "runtime", ${JSON.stringify(MANAGED_HANDOFF_RUNTIME_ENTRY)}),
+    const leaseRuntime = path.join(params.cwd, "runtime", ${JSON.stringify(MANAGED_HANDOFF_RUNTIME_ENTRY)});
+    const payload = JSON.stringify([fs.existsSync(terminalRuntimePath) ? terminalRuntimePath : leaseRuntime, params.runId, terminalResult, [...runWarnings],
+      leaseRuntime,
       params.updateLeaseDatabaseIdentity, params.updateLeaseKey, params.handoffId, managedUpdateLease.helper]);
     // Child diagnostics can exceed argv limits. The private helper directory owns
     // this short-lived transfer file, which terminal cleanup removes with its inputs.
@@ -107,14 +117,9 @@ async function finishManagedUpdateRun() {
     const exit = await runOwnedUpdateCommand("finalize", [process.execPath, ...params.runtimeArgs, "--input-type=module", "-e",
       'import { readFileSync } from "node:fs"; import { pathToFileURL } from "node:url"; const [modulePath, runId, result, warnings, leaseRuntime, databaseIdentity, root, owner, helper] = JSON.parse(readFileSync(process.argv[1], "utf8")); const { finishUpdateRun, recordUpdateRunDiagnostic, recordUpdateRunStep } = await import(pathToFileURL(modulePath).href); const { createManagedHandoffLeaseStore } = await import(pathToFileURL(leaseRuntime).href); const store = createManagedHandoffLeaseStore({ databasePath: databaseIdentity.databasePath, existingIdentity: databaseIdentity }); const current = store.read(root); const lease = current.kind === "current" ? current.lease : null; if (!lease || lease.owner !== owner || lease.executor.pid !== process.pid || JSON.stringify(lease.helper) !== JSON.stringify(helper) || !(store.isProcessIdentityCurrent(lease.executor) || (process.connected && store.acceptParentBoundExecutor(lease)))) throw new Error("managed update terminal writer lost its current claim"); for (const [step, detail] of warnings) { try { if (recordUpdateRunDiagnostic) recordUpdateRunDiagnostic(runId, detail, undefined, step); else recordUpdateRunStep(runId, {step,status:"completed",detail,endedAtMs:Date.now()}); } catch {} } await finishUpdateRun(runId, result);',
       terminalPath], params.recoveryTimeoutMs);
-    if (exit.signal || exit.code !== 0) throw new Error("installed runtime could not finalize the update run");
+    if (exit.signal || exit.code !== 0) throw new Error("recovery runtime could not finalize the update run");
   }
   runOutcome = undefined;
-}
-
-function isFailedUpdateOutcome(status, reason) {
-  return status === "error" || (status === "skipped" &&
-    !params.nonFailureSkippedReasons.includes(reason));
 }
 
 async function captureManagedUpdateResult() {
@@ -182,4 +187,100 @@ async function recordManagedUpdateOutcome(reason, restored, completedStatus, exp
     return null;
   }
 }
+
+function stagedRuntimePath() {
+  return path.join(params.cwd, "runtime", ${JSON.stringify(MANAGED_HANDOFF_RUNTIME_ENTRY)});
+}
+
+function shouldRecoverInterruptedUpdater() {
+  if (!params.runId || params.foregroundOrigin) return false;
+  return restorationArmed || readManagedHandoffGatewayStop()?.runId === params.runId;
+}
+
+// Post-core repair may advance the state schema past this helper's staged reader.
+// A fresh process loads the installed candidate's whole module graph per call.
+function createInstalledRuntimeLedger(modulePath) {
+  const call = (name, args) => {
+    const out = require("node:child_process").spawnSync(process.execPath, [...params.runtimeArgs, "--input-type=module", "-e",
+      'import { pathToFileURL } from "node:url"; const [modulePath, name, args] = JSON.parse(process.argv[1]); const value = await (await import(pathToFileURL(modulePath).href))[name](...args); process.stdout.write(JSON.stringify(value ?? null));',
+      JSON.stringify([modulePath, name, args])], { encoding: "utf8", timeout: params.recoveryTimeoutMs, maxBuffer: 16 * 1024 * 1024 });
+    if (out.status !== 0) throw new Error("installed runtime ledger " + name + " failed: " + String(out.stderr || out.error || "").slice(-400));
+    return JSON.parse(out.stdout || "null") ?? undefined;
+  };
+  return Object.fromEntries(["adoptUpdateRun", "finishUpdateRun", "getUpdateRun", "listUpdateRuns", "recordUpdateRunStep", "recordUpdateRunVerification"]
+    .map((name) => [name, (...args) => call(name, args)]));
+}
+
+function readGatewayStop() {
+  // Only the installed-runtime ledger lists runs; before post-core repair the staged reader
+  // matches the schema. An older installed candidate may not export the listing.
+  if (!runLedger?.listUpdateRuns) return readManagedHandoffGatewayStop();
+  try { return findUpdateGatewayStop(runLedger.listUpdateRuns({ limit: 100 })); }
+  catch (error) {
+    appendLog("installed runtime could not list update history; using the staged reader: " + String(error));
+    return readManagedHandoffGatewayStop();
+  }
+}
+
+async function recoverInterruptedUpdater() {
+  const reason = "managed-service-handoff-interrupted";
+  terminalRuntimePath = stagedRuntimePath();
+  try {
+    const assertCurrent = () => {
+      if (!ownsManagedUpdateLease()) throw new Error("managed update recovery ownership was lost");
+    };
+    const updaterStopped = !restorationArmed;
+    if (updaterStopped) {
+      const stop = readGatewayStop();
+      if (stop?.runId !== params.runId || stop.started)
+        throw new Error("Gateway stop intent was superseded by a later running service");
+    }
+    const recovered = await recoverInterruptedManagedUpdate({
+      root: params.updateLeaseKey, runId: params.runId, owner: params.updateLeaseOwner,
+      databaseIdentity: params.updateLeaseDatabaseIdentity, original: params.recovery,
+      originalIdentity: originalInstallationIdentity, timeoutMs: params.recoveryTimeoutMs,
+      assertCurrent,
+      finalize: async () => {
+        const repair = await runOwnedUpdateCommand("repair", params.finalizeCommandArgv,
+          params.recoveryTimeoutMs, params.cwd, { ...process.env, OPENCLAW_UPDATE_RUN_HANDOFF: "1" });
+        let repaired;
+        try { repaired = JSON.parse(repair.updaterOutput); } catch {}
+        assertCurrent();
+        if (repair.signal || repair.code !== 0 || repaired?.coreUpdate !== "completed" ||
+          !["ok", "warning"].includes(repaired.status)) {
+          throw new Error("Interrupted update post-core repair did not complete");
+        }
+        runLedger = createInstalledRuntimeLedger(params.recoveryModulePath);
+        return runLedger.getUpdateRun(params.runId);
+      },
+    });
+    terminalRuntimePath = params.recoveryModulePath;
+    const restored = await restoreGatewayService(
+      recovered.status === "rolled-back" ? "managed-service-handoff-cancelled" : reason,
+      recovered.recovery, updaterStopped || recovered.status === "succeeded" ? "error" : undefined,
+      false, updaterStopped,
+    );
+    if (!restored) throw new Error("Recovered runtime could not restore Gateway readiness and identity");
+    runOutcome = { status: recovered.status, reason: recovered.status === "succeeded"
+      ? "managed-service-handoff-recovered" : reason,
+      after: { version: recovered.recovery.version, buildId: recovered.recovery.buildId } };
+    if (recovered.warning) {
+      appendLog(recovered.warning);
+      runWarnings.set("warning:plugin-cohort-recovery", recovered.warning);
+      runOutcome.nextAction = "openclaw update repair";
+    }
+    runLedger.recordUpdateRunStep(params.runId, { step: "managed-service-handoff-recovery", status: "completed",
+      detail: recovered.status === "succeeded" ? "Succeeded with recovery after the updater exited without a result." : "Cancelled activation; original Gateway restored.", endedAtMs: Date.now() });
+    triageFailure = undefined;
+    finalExitCode = recovered.status === "succeeded" ? 0 : 1;
+  } catch (error) {
+    const detail = String(error) + "; run openclaw update repair and openclaw gateway status --deep";
+    appendLog(detail);
+    runWarnings.set("warning:gateway-availability", detail);
+    await recordManagedUpdateOutcome(reason, false);
+    if (runOutcome) runOutcome.nextAction = "openclaw update repair; openclaw gateway status --deep";
+    finalExitCode = 1;
+  }
+}
+
 `;

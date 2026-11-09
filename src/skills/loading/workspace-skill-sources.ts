@@ -1,6 +1,6 @@
 import path from "node:path";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentDir, tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
+import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { isDefaultStateDir, resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -15,7 +15,11 @@ import {
   resolvePluginSkillRoots,
   resolvePluginSkillRootsFromMetadata,
 } from "./plugin-skills.js";
-import { resolvePluginSkillsDir, resolveSkillsUserHomeDir } from "./skill-paths.js";
+import {
+  resolveAgentSkillsRoot,
+  resolvePluginSkillsDir,
+  resolveSkillsUserHomeDir,
+} from "./skill-paths.js";
 import {
   resolveWorkspaceSkillDirectories,
   type ExecutionSkillWorkspace,
@@ -154,10 +158,9 @@ export function resolveWorkspaceSkillSourcePlan(
       }
     }
     if (opts?.config && opts.agentId) {
-      const agentDir = resolveAgentDir(opts.config, opts.agentId);
-      for (const name of agentSkillsDirs) {
+      for (const dirName of agentSkillsDirs) {
         roots.push({
-          dir: path.join(agentDir, name),
+          dir: resolveAgentSkillsRoot({ config: opts.config, agentId: opts.agentId, dirName }),
           source: "openclaw-workshop",
           tier: "workshop",
         });

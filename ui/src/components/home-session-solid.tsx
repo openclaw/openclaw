@@ -112,7 +112,7 @@ export function HomeSession(input: Partial<Props>) {
           </details>
           <button
             type="button"
-            class="rail-header__action"
+            class="oc-icon-button oc-icon-button--28 rail-header__action"
             aria-label={t("assistantPanel.removeContext")}
             onClick={() => setIncludeContext(false)}
           >
@@ -121,7 +121,7 @@ export function HomeSession(input: Partial<Props>) {
         </Show>
         <button
           type="button"
-          class="rail-header__action"
+          class="oc-icon-button oc-icon-button--28 rail-header__action"
           aria-label={t("assistantPanel.attachSelection")}
           disabled={!selectionAvailable()}
           title={t("assistantPanel.attachSelection")}

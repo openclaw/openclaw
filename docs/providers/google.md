@@ -565,21 +565,22 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
 
 <AccordionGroup>
   <Accordion title="Gemini Interactions API (stateless)">
-    Gemini Flash text models use the Interactions API by default on the API-key
+    Gemini text models use the Interactions API by default on the API-key
     `google` provider when the effective base URL is the official Google AI Studio
-    endpoint. Custom proxy URLs default to `google-generative-ai` (GenerateContent),
-    even when the model comes from the catalog rather than a configured model row.
-    The official-endpoint default includes Flash-Lite, `gemini-flash-latest`, and
-    forward-compatible Flash model IDs. Pro and other non-Flash models, including
-    the default `google/gemini-4-argon`, keep `google-generative-ai` (GenerateContent).
-    Vertex AI, Gemini CLI, image generation, speech, Live, embeddings, media
-    understanding, web search, and PDF processing keep their existing routes.
+    endpoint. This covers Flash, Flash-Lite, Pro, the default `google/gemini-4-argon`,
+    `-latest` aliases, and forward-compatible Gemini model IDs. Gemma models keep
+    `google-generative-ai` (GenerateContent). Custom proxy URLs default to
+    `google-generative-ai`, even when the model comes from the catalog rather than
+    a configured model row. Vertex AI, Gemini CLI, image generation, speech, Live,
+    embeddings, media understanding, web search, and PDF processing keep their
+    existing routes.
 
     GenerateContent, music, and video SDK clients explicitly use `v1beta` unless
     a configured base URL already includes an API version. Vertex AI keeps `v1`;
     Live and browser-token routes keep their existing versions.
 
-    To force GenerateContent for a Flash model, set its existing `api` override:
+    To force GenerateContent for a Gemini model, for example to keep explicit
+    `cachedContent` handles, set its existing `api` override:
 
     ```json5
     {

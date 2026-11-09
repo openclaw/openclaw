@@ -21,6 +21,7 @@ import { hasCanonicalPluginDistribution } from "../plugins/plugin-runtime-artifa
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "../plugins/registry.js";
 import { getPluginRegistryForContext } from "../plugins/runtime.js";
+import { isOpenClawIdPluginVisible } from "../shared/openclaw-id-policy.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import {
   controlUiPluginAssetPrefix,
@@ -89,6 +90,7 @@ function browserOwners(registry: PluginRegistry): PluginRecord[] {
   return registry.plugins
     .filter(
       (record) =>
+        isOpenClawIdPluginVisible(record.id, getRuntimeConfigSnapshot()) &&
         record.enabled &&
         record.status === "loaded" &&
         record.controlUi &&
@@ -158,7 +160,7 @@ async function snapshotBrowserBuild(
   if (!declaration || !record.rootDir || !isControlUiPluginAllowed(record)) {
     throw new Error("plugin is no longer active");
   }
-  const { entryName, styles, assets, bytes } = await readPluginControlUiAssets(
+  const { entryName, styles, assets, bytes, panelIcon } = await readPluginControlUiAssets(
     record.rootDir,
     declaration,
     {
@@ -168,7 +170,7 @@ async function snapshotBrowserBuild(
       }),
     },
   );
-  const revision = pluginControlUiRevision(declaration, uiCapabilities, assets);
+  const revision = pluginControlUiRevision(declaration, uiCapabilities, assets, panelIcon?.dataUrl);
   const basePath = getRuntimeConfigSnapshot()?.gateway?.controlUi?.basePath;
   const prefix = `${controlUiPluginAssetPrefix(record.id, basePath)}${revision}/`;
   const assetUrl = (name: string) =>
@@ -184,6 +186,7 @@ async function snapshotBrowserBuild(
       entryUrl: assetUrl(entryName),
       imports,
       styles: styles.map(assetUrl),
+      ...(panelIcon ? { panelIcon: panelIcon.dataUrl } : {}),
       ...(uiCapabilities !== undefined ? { uiCapabilities } : {}),
       ...(hasCanonicalPluginDistribution(record) && record.packageName && record.packageVersion
         ? {

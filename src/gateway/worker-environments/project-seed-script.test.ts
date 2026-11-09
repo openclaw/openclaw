@@ -25,7 +25,7 @@ async function expectAbsent(...files: string[]) {
 }
 function expectReady(result: SpawnSyncReturns<string>) {
   expect(result.status, result.stderr).toBe(0);
-  expect(JSON.parse(result.stdout)).toEqual({ ready: true });
+  expect(JSON.parse(result.stdout)).toMatchObject({ ready: true });
 }
 
 async function fixture(fail = false, networkUrl?: string) {

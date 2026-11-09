@@ -1,13 +1,4 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
-import type { RouteLocation } from "@openclaw/uirouter";
-import { sessionRefFromPath } from "../app-session-route-paths.ts";
-import {
-  buildAgentMainSessionKey,
-  isDashboardSessionKey,
-  parseAgentSessionKey,
-} from "../lib/sessions/session-key.ts";
-import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
-import { prewarmChatSnapshot } from "../pages/chat/session-snapshot-prewarm.ts";
 import {
   clearBootRecords,
   retirePendingBootRecord,
@@ -22,51 +13,6 @@ import {
 import type { ApplicationContext } from "./context.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { clearWarmBootState } from "./warm-boot-retirement.ts";
-
-export function prewarmBootChat(
-  record: BootRecord,
-  lastSessionKey: string,
-  location: RouteLocation,
-  basePath: string,
-): void {
-  const target = sessionRefFromPath(location.pathname, basePath, record.agents.mainKey);
-  const path = location.pathname.slice(basePath.length).replace(/\/$/u, "");
-  if (!target && path !== "" && path !== "/chat") {
-    return;
-  }
-  // Dashboard names are ambiguous until the roster resolves them. Warm one
-  // same-agent last-viewed candidate; only the route's exact key can consume it.
-  const savedDashboardCandidate =
-    target?.namespace === "dashboard" &&
-    target.kind === "literal" &&
-    target.slugCandidate &&
-    isDashboardSessionKey(lastSessionKey) &&
-    parseAgentSessionKey(lastSessionKey)?.agentId === target.agentId;
-  const sessionKey = savedDashboardCandidate
-    ? lastSessionKey
-    : target?.kind === "main"
-      ? buildAgentMainSessionKey({ agentId: target.agentId, mainKey: record.agents.mainKey })
-      : target?.kind === "literal"
-        ? target.sessionKey
-        : lastSessionKey;
-  if (target?.kind === "short" && parseAgentSessionKey(sessionKey)?.agentId !== target.agentId) {
-    return;
-  }
-  if (parseAgentSessionKey(sessionKey)) {
-    void prewarmChatSnapshot(
-      resolveChatSnapshotKey(
-        {
-          agentsList: record.agents,
-          hello: null,
-          assistantAgentId: null,
-          settings: { gatewayUrl: record.scope },
-          client: { offlineRecoveryScope: record.recoveryScope },
-        },
-        { sessionKey },
-      ),
-    );
-  }
-}
 
 export function subscribeWarmBootConnection(
   gateway: ApplicationGateway,
@@ -168,6 +114,11 @@ export function subscribeBootRecordPersistence(
   { gateway, agents, sessions }: Pick<ApplicationContext, "gateway" | "agents" | "sessions">,
   initialRecord: BootRecord | null,
 ) {
+  type RecordInputs = Omit<BootRecord, "savedAt" | "groups" | "sectionOrder"> & {
+    groups: readonly BootRecord["groups"][number][];
+    sectionOrder: readonly string[];
+  };
+  let lastInputs: RecordInputs | undefined;
   const connectionRevision = gateway.connectionRevision;
   let routingDefaults = initialRecord
     ? {
@@ -178,11 +129,13 @@ export function subscribeBootRecordPersistence(
     : null;
   const persistLiveBootRecord = () => {
     if (gateway.snapshot.phase !== "connected" || gateway.snapshot.client?.offlineRecoveryRetired) {
+      lastInputs = undefined;
       return;
     }
     const scope = gatewayCredentialScope(gateway.connection.gatewayUrl);
     const auth = resolveBootRecordAuth(gateway.snapshot.hello?.auth, gateway.connection.token);
     if (!auth) {
+      lastInputs = undefined;
       return;
     }
     const agentsList = agents.state.agentsList;
@@ -201,44 +154,46 @@ export function subscribeBootRecordPersistence(
       sessions.groupsStatus() === "ready" &&
       gateway.snapshot.selfUser !== undefined
     ) {
-      persistBootRecord({
+      const inputs: RecordInputs = {
         version: 2,
         recoveryScope: gateway.snapshot.client?.recoveryScopeReady
           ? gateway.snapshot.client.recoveryScope
           : gateway.snapshot.hello?.auth?.recoveryScope,
         ...auth,
-        savedAt: Date.now(),
         scope,
         profileId: gateway.snapshot.selfUser?.id ?? null,
         agents: agentsList,
-        groups: [...sessions.state.groupSettings],
-        sectionOrder: [...sessions.state.sectionOrder],
-      });
-    }
-  };
-  // Persist admitted owner snapshots independently of mounted views.
-  let lastGroupSettings: typeof sessions.state.groupSettings | undefined;
-  let lastSectionOrder: typeof sessions.state.sectionOrder | undefined;
-  let lastGroupsStatus: ReturnType<typeof sessions.groupsStatus> | undefined;
-  const stops = [
-    gateway.subscribe(persistLiveBootRecord),
-    agents.subscribe(persistLiveBootRecord),
-    sessions.subscribe((state) => {
-      const groupsStatus = sessions.groupsStatus();
-      // Row publications cannot change the boot catalog or postpone its pending write.
+        groups: sessions.state.groupSettings,
+        sectionOrder: sessions.state.sectionOrder,
+      };
+      // Only boot inputs may postpone the write, not row or unrelated Gateway publications.
       if (
-        lastGroupSettings === state.groupSettings &&
-        lastSectionOrder === state.sectionOrder &&
-        lastGroupsStatus === groupsStatus
+        lastInputs?.scope === inputs.scope &&
+        lastInputs.recoveryScope === inputs.recoveryScope &&
+        lastInputs.authMethod === inputs.authMethod &&
+        lastInputs.credential === inputs.credential &&
+        lastInputs.profileId === inputs.profileId &&
+        lastInputs.agents === inputs.agents &&
+        lastInputs.groups === inputs.groups &&
+        lastInputs.sectionOrder === inputs.sectionOrder
       ) {
         return;
       }
-      lastGroupSettings = state.groupSettings;
-      lastSectionOrder = state.sectionOrder;
-      lastGroupsStatus = groupsStatus;
-      persistLiveBootRecord();
-    }),
-  ];
+      lastInputs = inputs;
+      persistBootRecord({
+        ...inputs,
+        savedAt: Date.now(),
+        groups: [...inputs.groups],
+        sectionOrder: [...inputs.sectionOrder],
+      });
+    } else {
+      lastInputs = undefined;
+    }
+  };
+  // Persist admitted owner snapshots independently of mounted views.
+  const stops = [gateway, agents, sessions].map((capability) =>
+    capability.subscribe(persistLiveBootRecord),
+  );
   const readOfflineAgents = () => {
     const account = readOfflineStorageScope({ client: gateway.snapshot.client });
     return gateway.connectionRevision === connectionRevision &&

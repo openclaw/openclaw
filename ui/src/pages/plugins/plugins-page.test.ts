@@ -28,6 +28,7 @@ import {
   createPluginsRouteLocation,
   createResult,
   createRuntimeConfigHarness,
+  methodCalls,
   mountPage,
   resetPluginsPageTestState,
   settlePlugins,
@@ -103,10 +104,6 @@ function waitForText(page: HTMLElement, text: string, selector?: string) {
   );
 }
 
-function methodCalls(request: ReturnType<typeof createClient>["request"], name: string) {
-  return request.mock.calls.filter(([method]) => method === name);
-}
-
 function scriptedClient(handlers: Record<string, (params: unknown) => unknown>) {
   return createClient(async (method, params) => {
     if (method === "plugins.inspect" && !handlers[method]) {
@@ -137,6 +134,7 @@ async function mountInventory(
 }
 
 it("flushes a pending config draft before enabling and refreshes afterward", async () => {
+  await import("./settings-view.tsx");
   vi.useFakeTimers();
   let config: Record<string, unknown> = { pending: false };
   let hash = "hash-1";
@@ -650,8 +648,9 @@ it.each(["removed", "available", "navigated", "failed"] as const)(
       name: "Calendar",
       origin: outcome === "available" ? "official" : "global",
       removable: true,
+      catalogId: "local_Y2FsZW5kYXI",
     });
-    const other = createPlugin({ id: "other", name: "Other" });
+    const other = createPlugin({ id: "other", name: "Other", catalogId: "local_b3RoZXI" });
     const catalog = catalogFor(plugin, "local_Y2FsZW5kYXI", true);
     const otherCatalog = catalogFor(other, "local_b3RoZXI", true);
     const available = availablePlugin(plugin);
@@ -838,7 +837,7 @@ it("requires a fresh install-policy review after reconnect", async () => {
   harness.emit(client, false);
   harness.emit(client, true);
   await clickPluginAction(page, "Continue installation");
-  await waitForText(page, "request a fresh review");
+  await waitForText(page, "request a new review");
   expect(installCalls).toBe(1);
   await clickPluginAction(page, "Install");
   await waitForSolid(() => expect(installCalls).toBe(2));
@@ -853,7 +852,7 @@ it("requires a fresh install-policy review after reconnect", async () => {
   expect(showConfirmDialog).not.toHaveBeenCalled();
 });
 
-it.each(["settled", "navigated"] as const)(
+it.each(["settled", "navigated", "hub-adopted"] as const)(
   "restores removed-plugin focus for a %s catalog read",
   async (outcome) => {
     const plugin = createPlugin({
@@ -865,6 +864,7 @@ it.each(["settled", "navigated"] as const)(
     });
     const available = availablePlugin(plugin);
     const catalog = catalogFor(plugin, "catalog-calendar");
+    catalog.detail.readme = "# Calendar metadata";
     const refreshed = catalogFor(available, catalog.plugin.id);
     const other = createPlugin({ id: "other", name: "Other", installed: false });
     const otherCatalog = catalogFor(other, "catalog-other");
@@ -884,14 +884,26 @@ it.each(["settled", "navigated"] as const)(
         return removalResult(plugin.id);
       },
       "plugins.list": () => createResult(removed ? available : plugin),
+      "plugins.catalog.browse": () => ({ items: [], categories: [] }),
+      "plugins.catalog.categories": () => ({ categories: [] }),
     });
     const harness = createGateway(client);
+    const detailPath = pathForPluginCatalogEntry(catalog.plugin.id);
     const { page } = await mountPage(
       createContext(harness.gateway),
-      routeFor(harness.gateway, createResult(plugin), pathForPluginCatalogEntry(catalog.plugin.id)),
+      routeFor(
+        harness.gateway,
+        createResult(plugin),
+        outcome === "hub-adopted" ? "/plugins" : detailPath,
+      ),
     );
+    if (outcome === "hub-adopted") {
+      page.routeData = routeFor(harness.gateway, createResult(plugin), detailPath);
+    }
     const find = queryWithin(page);
     await waitForSolid(() => expect(find('[aria-label="Uninstall Calendar"]')).not.toBeNull());
+    await waitForText(page, "Calendar metadata");
+    await page.updateComplete;
     // SAFETY: waitForSolid above established the control exists before focus is exercised.
     const trigger = find<HTMLButtonElement>('[aria-label="Uninstall Calendar"]')!;
     const readsBefore = methodCalls(request, "plugins.catalog.get").length;

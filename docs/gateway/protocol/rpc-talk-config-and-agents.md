@@ -20,7 +20,7 @@ RPC method families for Talk and TTS, secrets, config, update, and wizard flows,
 - `talk.session.cancelOutput` stops assistant audio output, primarily for VAD-gated barge-in in gateway relay sessions. Send the `turnId` from the current audio event's `talkEvent`; the result is `applied`, `stale`, or `idle`.
 - `talk.session.submitToolResult` completes a provider tool call emitted by a gateway-owned realtime relay session. The request waits for any asynchronous completion signal exposed by the provider bridge; failed submissions keep the linked run active and do not emit a successful tool-result event. Pass `options: { willContinue: true }` for interim tool output or `options: { suppressResponse: true }` when the provider bridge advertises suppression support and the result should not start another response.
 - `talk.session.steer` sends active-run voice control into a gateway-owned agent-backed Talk session: `{ sessionId, text, mode? }`, where `mode` is `status`, `steer`, `cancel`, or `followup`; omitted mode is classified from the spoken text. It selects only work bound to that logical voice call, not another call sharing the connection and agent session.
-- `talk.session.close` closes a gateway-owned relay, transcription, or managed-room session and emits terminal Talk events. For realtime relays, `disposition: "detach"` closes the transport while accepted agent work continues and its answer remains in the conversation; `"abort"` (the default) cancels that work. Control UI, Android phone, iOS, and macOS failure cleanup detaches, and the Android phone app also detaches when it leaves the foreground; explicit Stop aborts. Detach preserves the original agent answer even if speech was already recorded, because speech carries no per-consult delivery receipt. Send `disposition` only when `hello-ok.features.capabilities` advertises `talk-session-close-disposition`; older Gateways reject unknown fields, so clients without that capability retain the legacy aborting close. For transcription, omitted or false `discard` finalizes captured audio; `discard: true` drops buffered audio and cancels pending finalization without publishing its transcript. A discard request can supersede a close that is still finalizing.
+- `talk.session.close` closes a gateway-owned relay, transcription, or managed-room session and emits terminal Talk events. For realtime relays, `disposition: "detach"` closes the transport while accepted agent work continues and its answer remains in the conversation; `"abort"` (the default) cancels that work. Control UI, Android phone, iOS, and macOS failure cleanup detaches. The Android phone app also detaches when it leaves the foreground or the user taps End Talk; canceling accepted work remains an explicit voice or chat run control. Other clients' explicit aborting Stop behavior is unchanged. Detach preserves the original agent answer even if speech was already recorded, because speech carries no per-consult delivery receipt. Send `disposition` only when `hello-ok.features.capabilities` advertises `talk-session-close-disposition`; older Gateways reject unknown fields, so clients without that capability retain the legacy aborting close. For transcription, omitted or false `discard` finalizes captured audio; `discard: true` drops buffered audio and cancels pending finalization without publishing its transcript. A discard request can supersede a close that is still finalizing.
 - `talk.mode` sets/broadcasts the current Talk mode state for WebChat/Control UI clients.
 - `talk.client.create` creates or resumes a client-owned realtime provider session using `webrtc` or `provider-websocket` while the gateway owns credentials, instructions, tool policy, and the returned `voiceSessionId`. Clients pass `sessionKey` and reuse `voiceSessionId` when replacing the provider transport during one call. Clients that negotiate `gateway-control-v1` keep WebRTC media direct but move the provider control channel and tool lifecycle to the Gateway.
 - `talk.client.transcript` appends one finalized `{ role, text }` item to the normal agent session. The required `entryId` prevents duplicate transcript messages when a request is retried within the same `voiceSessionId`.
@@ -72,6 +72,82 @@ providers ignore barge-in and end the session on an explicit output stop.
 - `update.status` refreshes and returns the latest update restart sentinel, including the post-restart running version when available.
 - `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the onboarding wizard over WS RPC.
   Each answered step uses the current `wizard.next` caller's authority through inference verification, including after progress replies. Device revocation still rejects the probe.
+
+### Reconcile a config write after a lost response
+
+A timeout or disconnected socket does not prove that `config.set`,
+`config.patch`, or `config.apply` failed before saving. Do not automatically replay
+the mutation. Reconnect to the same intended Gateway and reconcile its current
+saved and applied state through existing read and verification methods.
+
+`config.get` requires `operator.read`; config mutations and
+`openclaw.setup.verify` require `operator.admin`. Reconciliation does not bypass
+authentication, grant scopes, or authorize writing to a different Gateway.
+
+The revision fields have different purposes:
+
+| Field                           | Meaning                                                                                         | Safe comparison                                                   |
+| ------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `config.get.hash`               | Opaque authored revision, including root-file bytes and captured include identities and content | A mutation acknowledgment's `hash`, or a later write's `baseHash` |
+| `config.get.configRevisionHash` | Resolved revision of the current valid saved source config; `null` for invalid config           | `appliedConfigHash` from the same Gateway                         |
+| `config.get.appliedConfigHash`  | Resolved source revision accepted by the active runtime; `null` when unknown                    | `configRevisionHash` from the same Gateway                        |
+
+Authored and resolved tokens use separate, installation-keyed HMAC domains. Never
+compare `hash` directly with either resolved token, compute replacement tokens
+from config text, or transfer tokens between Gateway installations. Equality with
+an acknowledged authored hash identifies the currently saved revision; it is not
+a history of intervening writes. A fresh `hash` used as `baseHash` supplies a
+compare-and-swap guard for newly reconciled intent, not permission to replay stale
+intent.
+
+Clients can classify a successful read as follows. These are **client-side
+classifications**, not additional RPC fields or operation statuses:
+
+| Classification  | Condition                                                                    | Meaning                                                                                        |
+| --------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `applied`       | Config exists and is valid, and both resolved tokens are non-null and equal  | The current saved resolved revision is accepted by the runtime                                 |
+| `unapplied`     | Config exists and is valid, and both resolved tokens are non-null but differ | The saved revision is not fully applied; this does not distinguish reload, restart, or failure |
+| `indeterminate` | Config is missing or invalid, or either resolved token is `null`             | Application cannot be confirmed                                                                |
+| `unsupported`   | An older Gateway omits the revision fields or a required verification method | This reconciliation contract cannot be established; do not treat absence as success            |
+
+For example, after losing the response to a patch selecting a primary model:
+
+1. Retain the intended Gateway, agent, and exact selected model identity. Establish
+   a fresh authenticated connection to that same Gateway. Bind the new
+   [hello snapshot](/gateway/protocol/handshake) to this connection and discard
+   the previous connection's readiness observations. Its `appliedConfigHash` is a
+   connection-time observation, not a live application receipt.
+2. Call `config.get` with `{}`. Confirm that the saved settings still express the
+   intended agent/model selection, then classify the resolved tokens above. If an
+   acknowledgment was received before another deadline expired, its authored
+   `hash` can additionally be compared with the read's authored `hash`. Without
+   that acknowledgment, matching settings establish current state, not which
+   request wrote it.
+3. While `unapplied`, repeat reads within a bounded application/reconnect budget;
+   reconnect after a restart. On `indeterminate`, `unsupported`, conflicting
+   saved settings, or budget exhaustion, preserve the selection and report that
+   application is unconfirmed. Do not silently downgrade verification or
+   automatically retry the mutation or initiate a restart.
+4. Once the intended saved state is `applied`, call `openclaw.setup.verify` for
+   the intended `agentId` (omit `modelTarget` for primary-model verification).
+   Require its payload's `ok: true` and compare the returned `modelRef` with the
+   exact selected model identity before reporting model readiness. An RPC success
+   envelope alone is insufficient: the payload can be
+   `{ ok: false, status: "unavailable", error }`.
+
+Gateway setup verification checks that the saved source matches the applied
+revision, reload/restart work is settled, and the same runtime object and applied
+hash remain current **before and after** the live inference check. If these
+conditions change, it returns `unavailable` rather than false readiness. Verification
+is a point-in-time result, not a lease preventing subsequent config changes.
+
+Neither revision equality nor setup verification proves that a particular
+timed-out mutation committed. The internal config-application receipt is
+process-local, not a durable queryable operation record. After a Gateway process
+replacement, these methods inspect the successor's current state; they do not
+recover the old receipt or distinguish a historical failure from supersession.
+`config.get` also returns redacted config content, not just metadata: retain or log
+only the fields needed for reconciliation.
 
 ## Agent and workspace helpers
 

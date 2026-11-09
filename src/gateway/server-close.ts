@@ -584,9 +584,11 @@ async function closeGatewayResources(
     closeFailure = { error };
   }
   try {
-    // Keep shared databases alive when a model, tool, or cleanup owner outlives
-    // its grace. Only a fresh process may restart that retained generation.
-    await measureCloseStep("cleanup-work", () => cleanupWork.runWhenIdle(() => {}));
+    // Grace warnings must not strand retirement after accepted finalizers settle.
+    // The process deadline bounds this join; databases stay live until it completes.
+    await measureGatewayCloseStep("restart.close.cleanup-work", () =>
+      cleanupWork.runWhenIdle(() => {}),
+    );
     if (resourceCleanupErrors.length) {
       throw resourceCleanupErrors[0];
     }
@@ -641,14 +643,18 @@ async function closeGatewayResources(
                 await measureCloseStep("incognito-sessions", () =>
                   memorySessionActorOwners.reset(),
                 );
-                // Owned process trees get their normal TERM window before shared state retires.
-                await measureCloseStep(
+                const supervisorFailure = await measureCloseStep(
                   "process-supervisor",
-                  shutdownProcessSupervisor,
+                  () => shutdownProcessSupervisor().catch((error: unknown) => ({ error })),
                   GRACEFUL_CANCEL_TIMEOUT_MS + 1_000,
                 );
+                // A settled failure has joined owned runs; failed out-of-process trees own
+                // their own connections and leases. Pending cleanup still retains our handles.
                 // Releasing agent leases still writes shared state; keep its owner alive until then.
                 await measureCloseStep("agent-databases", closeOpenClawAgentDatabasesAsync);
+                if (supervisorFailure) {
+                  throw supervisorFailure.error;
+                }
                 await measureCloseStep("debug-proxy", () =>
                   finalizeActiveDebugProxyCaptures().catch(recordResourceCleanupFailure),
                 );

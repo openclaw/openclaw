@@ -398,22 +398,6 @@ async function resolveExecutionAuthFingerprint(
     if (kind !== "aws-sdk") {
       return undefined;
     }
-    const auth = await resolveApiKeyForProviderCore({
-      provider: route.provider,
-      cfg: route.runConfig,
-      agentDir: route.agentDir,
-      workspaceDir: resolveAgentWorkspaceDir(route.runConfig, route.agentId, process.env),
-      ...(authProfileId ? { profileId: authProfileId, lockedProfile: true as const } : {}),
-      secretSentinels: true,
-    });
-    if (authProfileId && auth.profileId !== authProfileId) {
-      return undefined;
-    }
-    return fingerprintAwsSdkRuntimeOwner({
-      provider: route.provider,
-      backendId: route.agentHarnessRuntimeOverride,
-      auth,
-    });
   }
   const { modelId, modelApi } = authBinding;
   if (route.runner === "cli") {
@@ -455,7 +439,7 @@ async function resolveExecutionAuthFingerprint(
   let materializedProfile:
     | { profileId: string; credential: AuthProfileStore["profiles"][string] }
     | undefined;
-  if (authProfileId) {
+  if (authProfileId && proofKind !== "runtime-owner") {
     store = await loadRouteAuthProfileStore(route);
     const credential = store.profiles[authProfileId];
     if (!credential) {
@@ -486,8 +470,8 @@ async function resolveExecutionAuthFingerprint(
       };
     }
   }
-  // Credential selection is transport-sensitive. Reuse the facts from the
-  // successful run so this authority hot path cannot pick a different owner.
+  // SDK and credential selection are transport-sensitive. Reuse the successful
+  // run's facts and profile selection so revalidation cannot pick another owner.
   if (!modelId || !modelApi) {
     return undefined;
   }
@@ -506,6 +490,13 @@ async function resolveExecutionAuthFingerprint(
   });
   if (authProfileId && auth.profileId !== authProfileId) {
     return undefined;
+  }
+  if (proofKind === "runtime-owner") {
+    return fingerprintAwsSdkRuntimeOwner({
+      provider: route.provider,
+      backendId: route.agentHarnessRuntimeOverride,
+      auth,
+    });
   }
   if (materializedProfile) {
     return auth.apiKey

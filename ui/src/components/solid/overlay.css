@@ -1,45 +1,79 @@
-/* Keep shadow-hosted resets, with separate ancestors for selector fast rejection. */
-:is(.oc-overlay, .oc-modal-dialog),
+/* Keep shadow-hosted resets, with separate ancestors for selector fast rejection.
+   The scrollbar rules mirror the canonical profile in styles/base.css, which
+   can't reach into shadow roots. */
+.oc-overlay,
+.oc-modal-dialog,
 .oc-overlay *,
 .oc-modal-dialog * {
   box-sizing: border-box;
-  scrollbar-width: thin;
 }
 
-:is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar,
+@supports not selector(::-webkit-scrollbar) {
+  .oc-overlay,
+  .oc-modal-dialog,
+  .oc-overlay *,
+  .oc-modal-dialog * {
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+    scrollbar-width: thin;
+  }
+
+  .oc-overlay:hover,
+  .oc-modal-dialog:hover,
+  .oc-overlay :hover,
+  .oc-modal-dialog :hover {
+    scrollbar-color: var(--scrollbar-thumb-near) transparent;
+  }
+}
+
+.oc-overlay::-webkit-scrollbar,
+.oc-modal-dialog::-webkit-scrollbar,
 .oc-overlay ::-webkit-scrollbar,
 .oc-modal-dialog ::-webkit-scrollbar {
   width: var(--scrollbar-size);
   height: var(--scrollbar-size);
 }
 
-:is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-track,
-:is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-corner,
-.oc-overlay ::-webkit-scrollbar-track,
-.oc-modal-dialog ::-webkit-scrollbar-track,
-.oc-overlay ::-webkit-scrollbar-corner,
-.oc-modal-dialog ::-webkit-scrollbar-corner {
-  background: transparent;
-}
+/* Separately keyed roots keep selector rejection cheap. Native nesting also keeps
+   shared declarations single in the inline copies used by shadow hosts. */
+.oc-overlay,
+.oc-modal-dialog {
+  &::-webkit-scrollbar-track,
+  &::-webkit-scrollbar-corner,
+  & ::-webkit-scrollbar-track,
+  & ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
 
-:is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-thumb,
-.oc-overlay ::-webkit-scrollbar-thumb,
-.oc-modal-dialog ::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  background-clip: content-box;
-  border: var(--scrollbar-thumb-inset) solid transparent;
-  border-radius: var(--radius-full);
-}
+  &::-webkit-scrollbar-thumb,
+  & ::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+    border-radius: var(--radius-full);
+    border: var(--scrollbar-thumb-inset, calc(var(--scrollbar-size) / 4)) solid transparent;
+    background-clip: content-box;
+  }
 
-:is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-thumb:hover,
-.oc-overlay ::-webkit-scrollbar-thumb:hover,
-.oc-modal-dialog ::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-thumb-hover);
-  background-clip: content-box;
+  &:hover,
+  & :hover {
+    --scrollbar-hover: 1;
+  }
+
+  &:hover::-webkit-scrollbar-thumb,
+  & :hover::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb-near);
+  }
+
+  &::-webkit-scrollbar-thumb:hover,
+  &::-webkit-scrollbar-thumb:active,
+  & ::-webkit-scrollbar-thumb:hover,
+  & ::-webkit-scrollbar-thumb:active {
+    background-color: var(--scrollbar-thumb-hover);
+  }
 }
 
 /* The anchor owner sets position-anchor; each surface keeps its own placement and size budget. */
 .oc-overlay {
+  --scrollbar-size: var(--scrollbar-size-compact);
+
   position: fixed;
   inset: auto;
   z-index: var(--z-dropdown);
@@ -279,6 +313,87 @@
   font-weight: var(--control-ui-font-weight-semibold);
 }
 
+/* One section label for every menu and popover. Calm, not shouty: small caps
+   in the muted ink with modest tracking. Its inline inset matches the row
+   content, so labels, rows and trailing slots share both edges. */
+.oc-menu-heading {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  margin: 0;
+  padding-inline: var(--oc-menu-item-padding-inline, 8px);
+}
+
+.oc-menu-heading__label {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.06em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Trailing slot: an action is a quiet text button that inks up on hover; a
+   value reads in full ink and never responds. */
+.oc-menu-heading__action,
+.oc-menu-heading__value {
+  flex: none;
+  font-family: var(--font-body);
+  font-size: var(--control-ui-text-sm);
+  font-weight: var(--control-ui-font-weight-normal);
+  line-height: 1.2;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.oc-menu-heading__action {
+  width: auto;
+  min-height: 0;
+  margin-inline-end: -6px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--muted);
+  text-decoration: none;
+  cursor: var(--cursor-action);
+}
+
+.oc-menu-heading__action:is(:hover, :focus-visible) {
+  background: var(--menu-hover);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.oc-menu-heading__value {
+  color: var(--text);
+  font-weight: var(--control-ui-font-weight-semibold);
+}
+
+/* An action that is also a menu row keeps the row's keyboard order, not its box. */
+.oc-menu-item.oc-menu-heading__action {
+  min-height: 0;
+  padding: 3px 6px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.2;
+}
+
+.oc-menu-item.oc-menu-heading__action:is(:hover, :focus-visible) {
+  background: var(--menu-hover);
+  color: var(--text);
+}
+
 .oc-popover {
   padding: var(--oc-popover-padding, 1.5rem);
 }
@@ -291,7 +406,7 @@
   gap: 6px;
   width: 100%;
   min-height: var(--menu-item-height);
-  padding: 5px var(--oc-menu-item-padding-inline, 8px);
+  padding: 4px var(--oc-menu-item-padding-inline, 8px);
   border: 0;
   border-radius: var(--menu-item-radius);
   background: transparent;
@@ -302,15 +417,47 @@
   cursor: var(--cursor-action);
 }
 
+/* Standalone rows retain their gap; the menu owner marks custom row wrappers.
+   Zero specificity lets a row's own margin win. */
+:where(.oc-menu-item) + :where(.oc-menu-item) {
+  margin-block-start: var(--menu-item-gap);
+}
+
+:where(.oc-menu) :where(.oc-menu-item, [data-menu-row-end]) + :where(.oc-menu-item),
+:where(.oc-menu) :where(.oc-menu-item, [data-menu-row-end]) + :where([data-menu-row-start]) {
+  margin-block-start: var(--menu-item-gap);
+}
+
 a.oc-menu-item[href] {
   cursor: pointer;
 }
 
-/* Hover, focus and an open submenu parent read as one state; the check alone marks selection. */
+/* Hover, focus and an open submenu parent read as one state. */
 .oc-menu-item:is(:hover, :focus-visible, [aria-expanded="true"]):not(:disabled):not(
     [aria-disabled="true"]
   ) {
   background: var(--surface-hover);
+}
+
+/* A chosen row carries its own fill; a row whose switch shows the state opts out. */
+.oc-menu-item[aria-checked="false"]:not(.oc-menu-item--switch):is(
+    :hover,
+    :focus-visible,
+    [aria-expanded="true"]
+  ):not(:disabled):not([aria-disabled="true"]) {
+  background: var(--menu-hover);
+}
+
+.oc-menu-item[aria-checked="true"]:not(.oc-menu-item--switch) {
+  background: var(--menu-selected);
+}
+
+.oc-menu-item[aria-checked="true"]:not(.oc-menu-item--switch):is(
+    :hover,
+    :focus-visible,
+    [aria-expanded="true"]
+  ):not(:disabled):not([aria-disabled="true"]) {
+  background: var(--surface-selected-hover);
 }
 
 .oc-menu-item:focus-visible {
@@ -340,6 +487,14 @@ a.oc-menu-item[href] {
   min-width: 0;
 }
 
+/* An icon-only trigger centers its glyph instead of sitting it on a text baseline. */
+@media (max-width: 640px) {
+  :where(.oc-menu-trigger) > .oc-menu-item__label:where(:has(> svg:only-child)) {
+    display: flex;
+    justify-content: center;
+  }
+}
+
 .oc-menu-item__label > :where(.session-menu__text) {
   display: block;
   overflow: hidden;
@@ -357,6 +512,14 @@ a.oc-menu-item[href] {
 
 .oc-menu-item--submenu > .oc-menu-item__label {
   display: contents;
+}
+
+/* On phones the larger trigger exposes the label's line box: center a lone glyph in the button. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  :where(.oc-menu-trigger) > .oc-menu-item__label:where(:has(> svg:only-child)) {
+    display: flex;
+    justify-content: center;
+  }
 }
 
 .oc-menu-item__icon,
@@ -455,8 +618,9 @@ a.oc-menu-item[href] {
   transform: scaleX(-1);
 }
 
-.oc-menu:popover-open:where(:not([data-phase="closing"])),
-.oc-popover:popover-open:where(:not([data-phase="closing"])) {
+/* Single-arm wrappers keep Lightning CSS from merging these back into an unindexed list. */
+:is(.oc-menu:popover-open:where(:not([data-phase="closing"]))),
+:is(.oc-popover:popover-open:where(:not([data-phase="closing"]))) {
   opacity: 1;
   scale: 1;
   transition-duration: var(--oc-overlay-show-duration, var(--menu-enter-duration));
@@ -470,20 +634,14 @@ a.oc-menu-item[href] {
 }
 
 @starting-style {
-  .oc-menu:popover-open,
-  .oc-popover:popover-open {
+  :is(.oc-menu:popover-open),
+  :is(.oc-popover:popover-open) {
     scale: 0.95;
     opacity: 0;
   }
 }
 
-/* Translucency needs a blur behind it to stay legible, and users can opt out of it. */
-@supports not (backdrop-filter: blur(8px)) {
-  :root {
-    --menu-surface: var(--popover);
-  }
-}
-
+/* Users can opt out of translucent surfaces. */
 @media (prefers-reduced-transparency: reduce) {
   :root {
     --menu-surface: var(--popover);
@@ -497,7 +655,44 @@ a.oc-menu-item[href] {
     corner-shape: superellipse(1.5);
   }
 
-  .oc-menu-item {
+  /* Every option row draws the same corner as its menu. corner-shape doesn't
+     inherit, so a fill drawn by a pseudo-element is listed with its row. */
+  .oc-menu-item,
+  .slash-menu-item,
+  .chat-reply-context-menu button,
+  .chat-selection-popup button,
+  .chat-controls__inline-select-option,
+  .chat-controls__access-option,
+  .chat-pr-menu--drill
+    :is(
+      .chat-pr-menu__fact,
+      .chat-pr__checks-row,
+      .chat-ci__automation-option--menu,
+      .chat-ci__job-summary,
+      .chat-ci__skipped > summary
+    ),
+  .chat-pr-mobile .chat-ci__automation-option--menu,
+  .chat-pane__sharing-access-option,
+  .chat-pane__sharing-person,
+  .cmd-palette__item,
+  .cron-job-menu__item,
+  .new-session-page__browser-entry,
+  .palette-session-settings__row,
+  .palette-session-settings__remember,
+  .picker-select__option,
+  .picker-select__option::before,
+  .multi-select__option,
+  .multi-select__option::before,
+  .session-actions-page__row,
+  .session-menu__communication-choice,
+  .session-menu__item,
+  .sidebar-session-filter-footer,
+  .sidebar-session-filter-panel .picker-select--submenu .picker-select__trigger,
+  .oc-menu-heading__action,
+  .sidebar-session-menu-row,
+  .sidebar-session-menu-switch,
+  .sidebar-session-sort-menu__item,
+  .usage-filter-option {
     corner-shape: superellipse(1.5);
   }
 }

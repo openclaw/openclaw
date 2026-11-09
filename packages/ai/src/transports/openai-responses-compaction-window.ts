@@ -1,7 +1,7 @@
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInputItem } from "openai/resources/responses/responses.js";
-import { getAiTransportHost } from "../host.js";
+import type { AiTransportHost } from "../host.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import type {
   ReplayableResponseCompactionItem,
@@ -11,7 +11,7 @@ import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
-import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
+import { sanitizeResponsesImageInput } from "./responses-image-input-sanitizer.js";
 
 // This is the host's response/storage ceiling, not a provider context-token limit.
 const COMPACTION_WINDOW_MAX_BYTES = 16 * 1024 * 1024;
@@ -30,8 +30,11 @@ export function getResponsesCompactionInputIdentity(item: object): object | unde
   return preparedCompactionInputs.get(item);
 }
 
-export function publishResponsesCompactionInput<T extends object[]>(source: object, input: T): T {
-  const immutable = getAiTransportHost().immutableData;
+export function publishResponsesCompactionInput<T extends object[]>(
+  source: object,
+  input: T,
+  immutable?: AiTransportHost["immutableData"],
+): T {
   if (!immutable?.isDeeplyFrozenPlainData(source)) {
     return input;
   }
@@ -176,7 +179,7 @@ export function getOpenAIResponsesCompactionOutputError(
   }
   // Storage accepts some image formats that Responses egress would replace.
   // A canonical window must survive that existing policy without any rewrite.
-  const payload = sanitizeResponsesImagePayload({ input: value });
+  const payload = { input: sanitizeResponsesImageInput(value) };
   if (model) {
     applyOpenAIResponsesPayloadPolicy(payload, resolveOpenAIResponsesPayloadPolicy(model));
   }
@@ -194,6 +197,7 @@ export function readOpenAIResponsesCompactionWindow(
     compactedWindow?: unknown;
   },
   model?: Model,
+  immutable?: AiTransportHost["immutableData"],
 ): OpenAIResponsesCompactionOutput | undefined {
   const window = replay.compactedWindow;
   if (!isRecord(window) || window.state !== "ready" || typeof window.output !== "string") {
@@ -237,7 +241,7 @@ export function readOpenAIResponsesCompactionWindow(
         delete message.id;
       }
     }
-    return publishResponsesCompactionInput(replay, output);
+    return publishResponsesCompactionInput(replay, output, immutable);
   } catch {
     return undefined;
   }

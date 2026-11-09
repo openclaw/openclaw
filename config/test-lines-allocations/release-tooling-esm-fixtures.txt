@@ -1,0 +1,3 @@
+# Module-scoped release-tooling fixtures need explicit CJS launchers and package-owned archive assets.
+# Exact net test-line growth against 155ac6884808627c964743a9ab7bcd6c2e524f51; no added test cases.
+16

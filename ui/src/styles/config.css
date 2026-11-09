@@ -25,6 +25,29 @@
   flex-shrink: 0;
 }
 
+.config-validity-warning {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.config-validity-warning__icon {
+  flex: none;
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
+}
+
+.config-validity-warning__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.config-validity-warning .btn {
+  flex: none;
+}
+
 .config-toolbar {
   display: flex;
   align-items: center;
@@ -42,31 +65,11 @@
   margin-bottom: var(--space-3);
 }
 
-.config-action-spinner {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-}
-
-.config-action-spinner svg {
-  width: 14px;
-  height: 14px;
-  animation: btn-spinner-spin 0.7s linear infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .config-action-spinner svg {
-    animation: none;
-  }
-}
-
 .config-diff {
-  margin: 12px 20px 0;
-  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  margin: 12px 0 0;
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--accent-subtle);
+  background: var(--bg-elevated);
   overflow: hidden;
 }
 
@@ -77,7 +80,7 @@
   padding: 10px 16px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--text-strong);
   list-style: none;
 }
 
@@ -103,16 +106,13 @@
 .config-diff__content {
   padding: 0 16px 16px;
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .config-diff__item {
   display: flex;
   align-items: baseline;
   gap: 12px;
-  padding: 8px 12px;
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
   font-size: 11.5px;
   font-family: var(--mono);
 }
@@ -144,10 +144,11 @@
   color: var(--ok);
 }
 
+/* The settings page inside owns the column and its inset, as on every other page. */
 .config-content {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 22px;
+  padding-block: 20px;
   min-width: 0;
   scroll-behavior: smooth;
 }
@@ -174,6 +175,11 @@
   padding-top: 0;
 }
 
+/* Keep Setup from painting above its final position while form sections append. */
+.config-content > .settings-page[aria-busy="true"] + .settings-page {
+  visibility: hidden;
+}
+
 .config-content-callout .callout {
   display: flex;
   align-items: center;
@@ -188,74 +194,120 @@
 }
 
 .settings-theme-grid {
+  --settings-theme-tile: calc(96px * var(--control-ui-text-scale));
+
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--settings-theme-tile), 100%), 1fr));
+  gap: var(--space-4) var(--space-3);
   width: 100%;
 }
 
-.settings-theme-card,
-.settings-text-scale__btn {
-  display: grid;
-  border: 1px solid var(--border);
-  color: var(--text);
-  text-align: left;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
-}
-
+/* A theme is picked by its look, so the swatch is the control and the label sits
+   under it. Selection is the same in every theme: a ring and check in the theme's
+   strongest text color, never its accent, which can match the surface. */
 .settings-theme-card {
-  position: relative;
-  /* minmax(0, 1fr): a plain 1fr floors at the label's min-content width, so a
-     long theme name (imported tweakcn labels) overflowed the card's border. */
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  min-height: 64px;
-  padding: 14px 16px;
+  /* stylelint-disable-next-line color-no-hex */
+  --theme-chip-ink: #fff;
+
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0;
+  border: none;
   border-radius: var(--radius-lg);
-  background: var(--bg);
+  background: none;
+  color: var(--muted-strong);
+  text-align: left;
+  cursor: var(--cursor-action);
 }
 
-.settings-theme-card:hover {
-  border-color: var(--border-strong);
+:root[data-theme-mode="light"] .settings-theme-card {
+  /* stylelint-disable-next-line color-no-hex */
+  --theme-chip-ink: #000;
+}
+
+.settings-theme-card__swatch {
+  position: relative;
+  display: grid;
+  height: calc(56px * var(--control-ui-text-scale));
+  padding: 10px;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--theme-chip-bg, var(--bg-hover));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent);
+  transition: box-shadow var(--duration-fast) ease;
+}
+
+/* The import slot has no palette until an imported theme is active. */
+.settings-theme-card:has(.settings-theme-card__icon) .settings-theme-card__swatch {
+  place-items: center;
   background: var(--bg-hover);
 }
 
-/* Selection is carried by this skin alone (aria-pressed owns the semantics),
-   so it stays stronger than the hover state at every accent. */
-.settings-theme-card--active {
-  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+.settings-theme-card:hover .settings-theme-card__swatch {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 40%, transparent);
 }
 
-.settings-theme-card--active:hover {
-  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
-  background: color-mix(in srgb, var(--accent) 16%, var(--bg-elevated));
+.settings-theme-card--active .settings-theme-card__swatch,
+.settings-theme-card--active:hover .settings-theme-card__swatch {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--text-strong);
+}
+
+.settings-theme-card:focus-visible {
+  outline: none;
+}
+
+.settings-theme-card:focus-visible .settings-theme-card__swatch {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--ring);
 }
 
 .settings-theme-card__icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  color: var(--accent);
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
 }
 
-.settings-theme-card__icon svg,
+.settings-theme-card__icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.settings-theme-card__check {
+  position: absolute;
+  inset-block-start: 6px;
+  inset-inline-end: 6px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: var(--text-strong);
+  color: var(--bg);
+}
+
+.settings-theme-card__check svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 3px;
+}
+
 .settings-accent-swatch__check svg {
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
 }
 
 .settings-theme-card__label {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
   overflow: hidden;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+  line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -264,28 +316,46 @@
   color: var(--text-strong);
 }
 
-/* Real-palette preview chips. Colors mirror the :root[data-theme] blocks in
-   base.css (claw = the default :root palette); keep both in sync when
-   retuning a theme. The custom card reads the live variables instead — it is
-   only rendered with chips while the imported theme is active. */
+/* Real-palette previews. Colors mirror the :root[data-theme] blocks in base.css
+   (claw = the default :root palette); keep both in sync when retuning a theme.
+   The custom card reads the live variables instead: it is only rendered with a
+   palette while the imported theme is active. */
 .settings-theme-card__palette {
+  display: grid;
+  align-content: space-between;
+  justify-items: start;
+  grid-template-rows: auto auto 1fr;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-theme-card__line {
+  width: 62%;
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--theme-chip-ink) 45%, transparent);
+}
+
+.settings-theme-card__line--short {
+  width: 38%;
+  background: color-mix(in srgb, var(--theme-chip-ink) 22%, transparent);
+}
+
+.settings-theme-card__chips {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  align-self: end;
+  gap: 4px;
 }
 
 .settings-theme-card__chip {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
-}
-
-.settings-theme-card__chip--bg {
-  background: var(--theme-chip-bg);
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
 }
 
 .settings-theme-card__chip--accent {
+  width: 18px;
   background: var(--theme-chip-accent);
 }
 
@@ -460,28 +530,18 @@
 }
 
 .settings-accent-swatches {
+  --settings-accent-swatch-size: 28px;
+
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-}
-
-.settings-accent-status {
-  min-height: 3em;
-}
-
-.settings-accent-status__scope {
-  opacity: 0.72;
-}
-
-.settings-accent-status__scope::before {
-  content: " ·\00a0";
+  gap: var(--space-2);
 }
 
 .settings-accent-swatch {
   display: inline-flex;
-  width: 36px;
-  height: 36px;
+  flex: none;
+  width: var(--settings-accent-swatch-size);
+  height: var(--settings-accent-swatch-size);
   align-items: center;
   justify-content: center;
   padding: 0;
@@ -493,15 +553,28 @@
 
 .settings-accent-swatch--active {
   box-shadow:
-    0 0 0 2px var(--bg-elevated),
-    0 0 0 4px var(--accent);
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--text-strong);
 }
 
 .settings-accent-swatch__check {
   display: inline-flex;
-  width: 18px;
-  height: 18px;
-  color: var(--accent-foreground);
+  width: 15px;
+  height: 15px;
+  color: var(--settings-accent-swatch-ink, var(--accent-foreground));
+}
+
+/* Six across, five under: two even rows instead of one orphan on a phone. */
+@media (max-width: 768px) {
+  .settings-accent-swatches {
+    --settings-accent-swatch-size: 36px;
+
+    display: grid;
+    grid-template-columns: repeat(6, var(--settings-accent-swatch-size));
+    justify-content: space-between;
+    gap: var(--space-3) 0;
+    width: 100%;
+  }
 }
 
 .settings-accent-swatch--custom {
@@ -541,15 +614,14 @@
 
 .settings-accent-swatch__reset {
   display: inline-flex;
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   color: var(--theme-chip-bg);
 }
 
-.settings-accent-swatch__reset svg,
-.config-accordion-group__icon svg {
-  width: 16px;
-  height: 16px;
+.settings-accent-swatch__reset svg {
+  width: 15px;
+  height: 15px;
 }
 
 @media (forced-colors: active) {
@@ -565,172 +637,78 @@
 
 .settings-theme-import {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
   width: 100%;
+  min-width: 0;
 }
 
-.settings-theme-import__copy,
-.settings-theme-import__meta {
-  display: grid;
-  gap: 4px;
+.settings-theme-import__head,
+.settings-theme-import__meta,
+.settings-theme-import__field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
 }
 
-.settings-theme-import__title {
-  font-size: 13px;
-  font-weight: 650;
-  color: var(--text-strong);
-}
-
-.settings-theme-import__hint {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--muted);
+.settings-theme-import__head {
+  align-items: flex-start;
 }
 
 .settings-theme-import__external {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  width: max-content;
-  max-width: 100%;
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.settings-theme-import__external:hover {
-  color: var(--accent-hover);
-  text-decoration: underline;
+  flex: none;
+  gap: var(--space-1);
+  white-space: nowrap;
 }
 
 .settings-theme-import__external svg {
   width: 14px;
   height: 14px;
-  flex: 0 0 auto;
+  flex: none;
 }
 
-.settings-theme-import__inline-hint {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--muted);
-}
-
-.settings-theme-import__inline-hint strong {
-  color: var(--text);
-}
-
-.settings-theme-import__field {
-  display: grid;
-  gap: 6px;
-}
-
-.settings-theme-import__label,
-.settings-theme-import__meta-label {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-}
-
-.settings-theme-import__input {
-  width: 100%;
+.settings-theme-import__field .settings-theme-import__input {
+  flex: 1 1 auto;
   min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  color: var(--text);
-  font: inherit;
 }
 
-.settings-theme-import__input::placeholder {
-  color: var(--muted);
-}
-
-.settings-theme-import__input:focus-visible {
-  outline: none;
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  box-shadow: var(--focus-ring);
-}
-
-.settings-theme-import__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.settings-theme-import__field .btn {
+  flex: none;
 }
 
 .settings-theme-import__meta-value {
-  font-size: 12px;
-  color: var(--text);
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.settings-theme-import__message {
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  font-size: 12px;
-  line-height: 1.45;
+.settings-theme-import__meta .btn {
+  flex: none;
 }
 
-.settings-theme-import__message--success {
-  background: var(--ok-subtle);
-  color: var(--text);
+.settings-theme-import__message {
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  color: var(--muted);
 }
 
 .settings-theme-import__message--error {
-  background: var(--danger-subtle);
-  color: var(--text);
+  color: var(--danger);
 }
 
-.settings-text-scale,
+@media (max-width: 640px) {
+  .settings-theme-import__head,
+  .settings-theme-import__meta,
+  .settings-theme-import__field {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
 .cfg-collection-draft__controls {
   display: grid;
   gap: 8px;
   width: 100%;
-}
-
-.settings-text-scale__options {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
-  gap: 8px;
-}
-
-.settings-text-scale__btn {
-  gap: 4px;
-  justify-items: start;
-  min-height: 58px;
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  background: var(--card);
-}
-
-.settings-text-scale__btn:hover {
-  border-color: var(--border-strong);
-  background: var(--bg-elevated);
-}
-
-.settings-text-scale__btn.active {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-}
-
-.settings-text-scale__sample {
-  font-weight: 650;
-  font-size: 13px;
-  line-height: 1.2;
-}
-
-.settings-text-scale__label {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.2;
-}
-
-.settings-text-scale__btn.active .settings-text-scale__label {
-  color: var(--accent);
 }
 
 .config-raw-field textarea {
@@ -758,12 +736,8 @@
 }
 
 .config-loading__spinner {
-  width: 32px;
-  height: 32px;
-  border: 2.5px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: var(--radius-full);
-  animation: btn-spinner-spin 0.7s linear infinite;
+  width: 20px;
+  height: 20px;
 }
 
 .cfg-field__error {
@@ -796,6 +770,127 @@
   width: auto;
 }
 
+/* A list of plain values is one row per value: the field, then its remove button. */
+.cfg-array__item--row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--list-row-padding);
+  padding-inline-start: var(--space-7);
+
+  > .cfg-array__value {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  > .cfg-array__value > .settings-row {
+    min-height: 0;
+    padding: 0;
+  }
+
+  /* A list value is required by being in the list. */
+  .settings-row__control > .settings-row__desc[aria-hidden="true"] {
+    display: none;
+  }
+}
+
+/* A collection's head and entry rows hold one small action, which stays beside its text. */
+@media (max-width: 640px) {
+  .cfg-collection-row {
+    flex-wrap: nowrap;
+
+    > .settings-row__control {
+      flex: 0 0 auto;
+      flex-wrap: nowrap;
+      width: auto;
+      max-width: none;
+    }
+  }
+}
+
+/* A number and its step buttons are one control, on the input's own surface. */
+.cfg-stepper {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
+  height: var(--settings-control-height);
+  background: var(--field-bg);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+}
+
+.cfg-stepper:focus-within {
+  border-color: var(--ring);
+}
+
+.settings-row .cfg-stepper > .settings-input,
+.settings-row .cfg-stepper > input[type="number"].settings-input {
+  flex: 0 1 72px;
+  width: 72px;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  padding-inline: var(--space-1);
+  text-align: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  appearance: textfield;
+}
+
+.cfg-stepper > .settings-input:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.cfg-stepper > .settings-input::-webkit-inner-spin-button,
+.cfg-stepper > .settings-input::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+/* On a phone a number sits under its label like every other field, at the same width. */
+@media (max-width: 640px) {
+  .cfg-stepper {
+    width: 100%;
+  }
+
+  .settings-row .cfg-stepper > .settings-input,
+  .settings-row .cfg-stepper > input[type="number"].settings-input {
+    flex: 1 1 auto;
+    width: auto;
+  }
+}
+
+.cfg-stepper__button {
+  flex: 0 0 auto;
+  width: 30px;
+  min-width: 30px;
+  padding: 0;
+  color: var(--muted);
+  font: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: var(--field-radius);
+  cursor: var(--cursor-action);
+}
+
+.cfg-stepper__button:hover:not(:disabled) {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+.cfg-stepper__button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.cfg-stepper__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .cfg-collection-draft__actions {
   display: flex;
   justify-content: flex-end;
@@ -825,6 +920,20 @@
   background: var(--bg-hover);
 }
 
+/* A closed group on a curated page is one line; its help arrives with its settings. */
+.cfg-object--quiet:not([open]) > .cfg-object__summary .settings-row__desc {
+  display: none;
+}
+
+/* The curated rows and the schema editor read as one column of sections. */
+.security-page > .settings-page {
+  padding-bottom: 0;
+}
+
+.security-page > .config-content {
+  padding-top: var(--space-8);
+}
+
 @media (hover: none) and (pointer: coarse) {
   .settings-theme-import__input,
   .config-raw-field textarea {
@@ -832,13 +941,14 @@
   }
 }
 
-.mcp-page,
 .memory-page__panel {
   display: grid;
   gap: 14px;
 }
 
 .mcp-page {
+  display: grid;
+  gap: var(--space-8);
   margin-top: 12px;
 }
 
@@ -854,201 +964,279 @@
   scrollbar-gutter: stable;
 }
 
-/* Overview and Memories render a .settings-page descendant, while Dreams does
-   not. Keep the shared header on the settings-page padding rhythm regardless
-   of which tab is active so its title and actions do not jump by one space. */
-.shell--settings .content.content--memory-page .content-header.hub-page-header {
-  max-width: 1120px;
-  padding-inline: var(--settings-header-inline-padding, var(--space-4));
+.memory-page__nav-row {
+  text-decoration: none;
 }
 
-.memory-page__panel .settings-page,
-.memory-page__panel .config-lead,
-.memory-page__panel .config-content-callout {
-  margin-inline: 0;
+.curated-settings__disclosure svg {
+  transition: transform 140ms ease;
 }
 
-.memory-page__link {
-  color: var(--accent);
-  font-size: 12.5px;
+.curated-settings__disclosure[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.curated-settings__details {
+  padding-inline-start: var(--space-4);
+}
+
+/* One server: the line says what it is and whether it works; the panel holds the rest. */
+.mcp-server-row__head {
+  display: flex;
+  align-items: center;
+  padding-inline-end: var(--space-4);
+}
+
+.mcp-server-row__head:has(.mcp-server-row__summary:hover) {
+  background: var(--surface-hover);
+}
+
+.mcp-server-row__summary {
+  display: grid;
+  flex: 1 1 0;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "name status chevron"
+    "target target chevron";
+  align-items: center;
+  column-gap: var(--space-3);
+  min-width: 0;
+  min-height: var(--list-row-min-height);
+  padding: var(--list-row-padding);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.mcp-server-row__summary:focus-visible {
+  outline: 2px solid var(--oc-focus-ring);
+  outline-offset: -2px;
+}
+
+.mcp-server-row__name {
+  grid-area: name;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  font-weight: var(--list-row-title-weight);
+  line-height: 1.35;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.mcp-command-card__grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  width: 100%;
+.mcp-server-row--off .mcp-server-row__name {
+  color: var(--muted);
 }
 
-.mcp-command-card__grid code,
-.mcp-server-row .settings-row__control code {
+.mcp-server-row__status {
+  display: flex;
+  grid-area: status;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+
+.mcp-server-row__target {
+  grid-area: target;
   min-width: 0;
-  padding: 7px 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  color: var(--text);
+  overflow: hidden;
+  color: var(--muted);
   font-family: var(--mono);
-  font-size: 11.5px;
-  overflow-wrap: anywhere;
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.mcp-server-row__launch {
-  font-family: var(--mono);
+.mcp-server-row__chevron {
+  grid-area: chevron;
+  inline-size: var(--list-row-icon-size);
+  block-size: var(--list-row-icon-size);
+  opacity: 0.7;
+  transition: transform var(--oc-duration-fast, 140ms) var(--oc-ease-out, ease-out);
 }
 
-/* Shared inline form stays in config.css because the app-wide stylesheet
- * serves both the MCP settings page and the Plugins inventory. */
-.mcp-server-form {
+.mcp-server-row--open .mcp-server-row__chevron {
+  transform: rotate(180deg);
+}
+
+/* Inset like an open tool in the Agents catalog, so it's clear where a server ends. */
+.mcp-server-row__detail {
   display: grid;
-  grid-template-columns: minmax(140px, 220px) minmax(150px, 190px) minmax(0, 1fr) auto;
-  gap: var(--space-2);
-  align-items: end;
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  gap: var(--space-3);
+  min-width: 0;
+  padding-block: var(--space-1) var(--space-5);
+  padding-inline-start: calc(var(--list-row-icon-size) + var(--space-2));
 }
 
-.mcp-server-form label {
-  display: grid;
-  gap: 5px;
+.mcp-server-row__detail > :not(.mcp-server-editor) {
+  margin-inline: var(--space-4);
+}
+
+.mcp-server-row__facts:empty {
+  display: none;
+}
+
+.mcp-server-row__note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
   min-width: 0;
 }
 
-.mcp-server-form label span {
+.mcp-server-row__note .mcp-server-row__note-error {
+  color: var(--danger);
+}
+
+.mcp-server-row__label {
+  margin: 0 0 var(--space-1);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   font-weight: 580;
 }
 
-div.mcp-server-form__actions {
-  display: flex;
+.mcp-server-tools__list {
+  display: grid;
   gap: var(--space-2);
+  max-height: 16rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
 }
 
-.mcp-server-form > .mcp-server-message {
-  grid-column: 1 / -1;
+.mcp-server-tools__list li {
+  display: grid;
+  min-width: 0;
 }
 
-.mcp-server-message {
-  margin: var(--space-3) var(--space-4);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-md);
-  background: var(--ok-subtle);
-  color: var(--ok);
+.mcp-server-tools__list code,
+.mcp-command code {
+  min-width: 0;
+  color: var(--text);
+  font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
-  line-height: 1.45;
-  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-.mcp-server-message--error {
-  background: var(--danger-subtle);
-  color: var(--danger);
+/* The panel is already a surface; its fields sit on it without a second card. */
+.mcp-server-editor .settings-group {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.mcp-server-editor .settings-row__title {
+  color: var(--muted-strong);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 400;
+}
+
+.mcp-server-editor .settings-row__control input.settings-input:not(.picker-select__search) {
+  text-align: start;
+}
+
+.mcp-server-row__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+}
+
+/* A ghost button's label lines up with the text above it. */
+.mcp-server-row__footer > .btn--ghost {
+  margin-inline-start: calc(var(--space-3) * -1);
+}
+
+.mcp-command {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.mcp-page .settings-page {
+  padding-block: 0;
+}
+
+/* No description sits under the heading here, so its actions share its line at every width. */
+.mcp-page .mcp-server-list .settings-section__header {
+  flex-direction: row;
+  align-items: center;
+}
+
+.mcp-page .mcp-server-list .settings-section__header .settings-section__actions {
+  align-self: center;
+}
+
+/* The "?" sits at the page edge here, so its touch area stops at the page's padding. */
+.mcp-page .settings-section__help-button::after {
+  inset-inline-end: calc(var(--space-3) * -1);
+}
+
+/* Disclosures closing a page read as one list, not separate sections. */
+.mcp-page .mcp-page__commands {
+  margin-top: calc(var(--space-3) - var(--space-8));
+}
+
+.shell--settings .mcp-page .config-content {
+  padding-block: 0;
+}
+
+/* The shared summary stacks at phone width, which orphans its chevron on a line of its own. */
+.mcp-page .cfg-object__summary.settings-row {
+  flex-wrap: nowrap;
+}
+
+.mcp-page .cfg-object__summary.settings-row > .settings-row__control {
+  width: auto;
 }
 
 .config-accordion-nav {
   margin-bottom: 20px;
 }
 
-.config-accordion-group {
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: var(--radius-md);
-  margin-bottom: 4px;
-  overflow: hidden;
-  transition: border-color var(--duration-fast) var(--ease-out);
-}
-
-.config-accordion-group:hover {
-  border-color: var(--border);
-}
-
-.config-accordion-group__header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 12px 16px;
-  font-size: 0.8125rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  color: var(--text-strong);
-  background: color-mix(in srgb, var(--bg-elevated) 50%, var(--card) 50%);
-  border: none;
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.config-accordion-group__header:hover,
-.config-accordion-group__header--active {
-  background: var(--bg-hover);
-}
-
-.config-accordion-group__icon {
-  display: flex;
-  align-items: center;
-  color: var(--accent);
-  opacity: 0.7;
-}
-
-.config-accordion-group__chevron {
-  margin-left: auto;
-  opacity: 0.35;
+.config-accordion-group__header .settings-row__chevron {
   transition: transform var(--duration-normal) var(--ease-out);
 }
 
-.config-accordion-group__chevron--open {
+.config-accordion-group__header[aria-expanded="true"] .settings-row__chevron {
   transform: rotate(90deg);
 }
 
 .config-accordion-group__items {
-  border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-  padding: 4px 0;
-  background: var(--card);
+  padding-block-end: var(--space-2);
 }
 
-.config-accordion-group__item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 9px 16px 9px 40px;
-  font-size: 0.8125rem;
-  font-weight: 450;
+/* Sections are children of their category: inset under its title, with the
+   sidebar's rounded row and selected fill so square themes stay square. */
+.config-accordion-nav .config-accordion-group__item {
+  width: calc(100% - 2 * var(--space-4));
+  min-height: 36px;
+  margin-inline: var(--space-4);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
+}
+
+.config-accordion-nav .config-accordion-group__item .settings-row__title {
   color: var(--muted);
-  background: none;
-  border: none;
-  transition:
-    background var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out);
+  font-weight: 400;
 }
 
-.config-accordion-group__item:hover {
-  background: var(--bg-hover);
-  color: var(--text);
+.config-accordion-nav .config-accordion-group__item--active {
+  background: var(--surface-selected);
 }
 
-.config-accordion-group__item--active {
-  color: var(--accent);
-  font-weight: 600;
+.config-accordion-nav .config-accordion-group__item--active:hover {
+  background: var(--surface-selected-hover);
 }
 
-.config-accordion-group__item-icon {
-  display: flex;
-  align-items: center;
-  opacity: 0.45;
-}
-
-.config-accordion-group__item-icon svg {
-  width: 14px;
-  height: 14px;
-}
-
-@media (max-width: 900px) {
-  .mcp-command-card__grid {
-    grid-template-columns: 1fr;
-  }
-
-  .mcp-server-form {
-    grid-template-columns: minmax(0, 1fr);
-    align-items: stretch;
-  }
+.config-accordion-nav .config-accordion-group__item--active .settings-row__title {
+  color: var(--text-strong);
 }

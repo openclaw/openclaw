@@ -1,10 +1,12 @@
 import { createMemo, createSignal, For, latest, Loading, onSettled } from "solid-js";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
+import { SwitchIndicator } from "../../components/solid/switch.tsx";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -104,7 +106,10 @@ export function PaletteSessionSettingsView(properties: {
         .composedPath()
         .some(
           (node) =>
-            node instanceof Element && node.matches('[role="menu"], [aria-haspopup="menu"]'),
+            node instanceof Element &&
+            node.matches(
+              '[role="menu"], [role="listbox"], [aria-haspopup="menu"], [aria-haspopup="listbox"]',
+            ),
         )
     ) {
       return;
@@ -344,7 +349,8 @@ export function PaletteSessionSettingsView(properties: {
                 place().selectAgentId(id);
                 properties.options.onChange();
               },
-              onOpenChange: properties.options.onAgentPickerOpen,
+              identityTargetsRef: properties.options.identityTargetsRef,
+              onIdentityTargetsChange: properties.options.onIdentityTargetsChange,
             }}
           />
         </div>
@@ -407,7 +413,9 @@ export function PaletteSessionSettingsView(properties: {
                   <Icon name="gitBranch" />
                 </span>
                 <span>{t("newSession.checkoutWorktree")}</span>
-                <span class="palette-session-settings__switch" aria-hidden="true" />
+                <span class="palette-session-settings__switch">
+                  <SwitchIndicator checked={place().worktree} size="sm" />
+                </span>
               </button>
             ) : undefined}
           </>
@@ -445,8 +453,7 @@ export function PaletteSessionSettingsView(properties: {
                     : undefined
                 }
               >
-                <input
-                  type="checkbox"
+                <Checkbox
                   ref={[controlRef()]}
                   checked={properties.options.preferences.remember}
                   disabled={view().locked || !properties.options.preferences.available}

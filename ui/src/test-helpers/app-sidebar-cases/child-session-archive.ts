@@ -7,6 +7,7 @@ import {
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
 import { createGatewayHarness, mountSidebar, type SidebarLifecycleState } from "../app-sidebar.ts";
+import { closeArchiveUndoToast } from "../archive-undo-window.ts";
 import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-client.ts";
 import {
   answerConfirmDialog,
@@ -89,7 +90,7 @@ describe("AppSidebar child session archives", () => {
         query('[value="toggle-archived"]')!.dispatchEvent(new Event("click", { bubbles: true }));
       }
       const actions = await waitForConfirmDialogActions();
-      expect(document.body.textContent).toContain('"Parent task" has 1 directly nested session.');
+      expect(document.body.textContent).toContain("“Parent task” has 1 directly nested session.");
       expect(actions.textContent).toContain("Archive only this session");
       expect(actions.textContent).toContain("Archive all (2)");
       answerConfirmDialog(actions, "cancel");
@@ -149,10 +150,11 @@ describe("AppSidebar child session archives", () => {
     await waitForChild(sidebar);
     const archiveSession = vi.spyOn(sidebar.sessionOrganizer, "archiveSessionWithUndo");
     childButton(sidebar).click();
-    // Await the organizer's mutation and reconciliation, not just rendering.
     await archiveSession.mock.results[0]!.value;
-    await sidebar.updateComplete;
-    expect(query("[data-child-session-toggle]")).toBeNull();
+    await closeArchiveUndoToast();
+    // Await the committed archive and its reconciliation, not just rendering.
+    await waitForFast(() => expect(archived).toBe(true));
+    await waitForFast(() => expect(query("[data-child-session-toggle]")).toBeNull());
     expect(query(childSelector)).toBeNull();
     await activateSessionMenuValue(sidebar, "status:all");
     await waitForChild(sidebar);

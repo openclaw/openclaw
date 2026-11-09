@@ -9,6 +9,12 @@ import {
 import { listen } from "../../lib/reactive/listener.ts";
 import * as json from "../../lib/snapshot-json.ts";
 import {
+  consumePrewarmedChatSnapshot,
+  discardPrewarmedChatSnapshot,
+  peekPrewarmedChatSnapshot,
+  type PrewarmedSnapshot,
+} from "./chat-snapshot-prewarm.ts";
+import {
   getSessionCacheValue,
   MAX_CACHED_CHAT_SESSIONS,
   setSessionCacheValue,
@@ -23,6 +29,7 @@ import {
 import {
   accessSidebarSnapshot,
   sidebarRecordBytes,
+  SIDEBAR_SNAPSHOT_PROJECTION_VERSION,
   type SidebarRecord,
 } from "./session-sidebar-snapshot.ts";
 import {
@@ -44,12 +51,6 @@ import {
 } from "./session-snapshot-invalidation-events.ts";
 import { deleteStoredChatSnapshot } from "./session-snapshot-invalidation.ts";
 import {
-  consumePrewarmedChatSnapshot,
-  discardPrewarmedChatSnapshot,
-  peekPrewarmedChatSnapshot,
-  readSharedPrewarm,
-} from "./session-snapshot-prewarm.ts";
-import {
   CHAT_SNAPSHOT_PROJECTION_VERSION,
   createSnapshotRecord,
   metadataRecordsSchema,
@@ -68,6 +69,42 @@ type SnapshotReadScope = {
 };
 
 const activeStores = new Set<SessionSnapshotStore>();
+
+function readSharedPrewarm(
+  entry: PrewarmedSnapshot,
+  read: () => Promise<ChatSessionSnapshot | null>,
+) {
+  const prepared: NonNullable<PrewarmedSnapshot["prepared"]> = (entry.prepared ??= {
+    promise: read().then((snapshot) => {
+      prepared.snapshot = snapshot;
+      return snapshot;
+    }),
+  });
+  return prepared;
+}
+
+export function waitForPrewarmedChatSnapshot(cacheKey: string): Promise<void> | undefined {
+  const entry = peekPrewarmedChatSnapshot();
+  if (entry?.cacheKey !== cacheKey || entry.cancelled) {
+    return undefined;
+  }
+  if (entry.prepared?.snapshot !== undefined) {
+    return entry.prepared.snapshot ? entry.detailsReady : undefined;
+  }
+  // Only this pane waits: an unavailable cache must never hold first mount indefinitely.
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  return (
+    Promise.race([
+      entry.ready,
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, 100);
+      }),
+    ])
+      .finally(() => clearTimeout(timeout))
+      // Cached wide Details must join the first pane frame, even after the data read has settled.
+      .then(() => (entry.prepared?.snapshot ? entry.detailsReady : undefined))
+  );
+}
 
 async function readSnapshotRecord(
   sessionKey: string,
@@ -309,7 +346,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       const record: SidebarRecord = {
         sessionKey: key,
         savedAt: Date.now(),
-        projectionVersion: 3,
+        projectionVersion: SIDEBAR_SNAPSHOT_PROJECTION_VERSION,
         model: structuredClone(model),
       };
       if (sidebarRecordBytes(record) > 512 * 1024) {

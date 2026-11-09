@@ -117,6 +117,25 @@ describe("mobile publication review", () => {
     expect(onRefresh).toHaveBeenCalledOnce();
   });
 
+  it("shows the Gateway-supplied account image and falls back to initials", () => {
+    const avatarUrl = "https://avatars.githubusercontent.com/u/1?v=4";
+    render({
+      publication: publication({
+        onSelect: vi.fn(),
+        options: { ...publicationOptions, avatarUrls: { shared: avatarUrl } },
+      }),
+    });
+    const avatar = () =>
+      query(".github-publication-mobile__account-row .github-publication-mobile__avatar")!;
+    const image = avatar().querySelector("img")!;
+    expect(image.getAttribute("src")).toBe(avatarUrl);
+    expect(image.getAttribute("referrerpolicy")).toBe("no-referrer");
+    image.dispatchEvent(new Event("error"));
+    flush();
+    expect(avatar().querySelector("img")).toBeNull();
+    expect(avatar().textContent).toBe("S");
+  });
+
   it("links to the exact published receipt with native navigation", () => {
     const result = {
       status: "published" as const,

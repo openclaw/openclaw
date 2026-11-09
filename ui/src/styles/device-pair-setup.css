@@ -1,44 +1,6 @@
-.device-pair-setup__header p.device-pair-setup__get-apps {
-  margin-top: 2px;
-  font-size: 13px;
-}
-
-.device-pair-setup__phone {
-  display: grid;
-  width: 44px;
-  height: 44px;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
-  border-radius: var(--radius-lg);
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
-.device-pair-setup__phone svg {
-  width: 22px;
-  height: 22px;
-  stroke-width: 1.5px;
-}
-
-.device-pair-setup__close {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-}
-
-.device-pair-setup__body {
-  display: grid;
-  min-height: 0;
-  overflow-y: auto;
-  grid-template-columns: minmax(0, 1fr);
-  justify-items: center;
-  gap: 15px;
-  padding: 0 28px 24px;
-}
-
 .device-pair-setup__access {
   display: grid;
-  width: min(440px, 100%);
+  width: 100%;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin: 0;
@@ -47,19 +9,18 @@
 }
 
 .device-pair-setup__access legend {
-  margin: 0 auto 8px;
+  margin: 0 0 8px;
+  padding: 0;
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: var(--control-ui-text-sm);
 }
 
 .device-pair-setup__access label {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 8px;
-  padding: 10px;
+  align-items: start;
+  gap: 10px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
@@ -67,8 +28,7 @@
 }
 
 .device-pair-setup__access label:has(input:checked) {
-  border-color: color-mix(in srgb, var(--accent) 65%, var(--border));
-  background: var(--accent-subtle);
+  background: var(--surface-selected);
 }
 
 .device-pair-setup__access:disabled label {
@@ -76,8 +36,8 @@
   opacity: 0.7;
 }
 
-.device-pair-setup__access input {
-  margin-top: 2px;
+.device-pair-setup__access .oc-radio {
+  margin-top: 1px;
 }
 
 .device-pair-setup__access span {
@@ -96,9 +56,10 @@
   line-height: 1.35;
 }
 
+/* Holds the code's place, so the dialog doesn't collapse while a new one is minted. */
 .device-pair-setup__loading {
   display: flex;
-  min-height: 260px;
+  min-height: 320px;
   align-items: center;
   justify-content: center;
   gap: 10px;
@@ -109,8 +70,9 @@
 .device-pair-setup__spinner {
   width: 18px;
   height: 18px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--accent);
+  color: var(--accent);
+  background: currentColor;
+  mask: var(--spinner-mask);
   border-radius: 50%;
   animation: btn-spinner-spin 0.8s linear infinite;
 }
@@ -131,10 +93,6 @@
   overflow-wrap: anywhere;
 }
 
-.device-pair-setup__access-warning {
-  width: min(440px, 100%);
-}
-
 .device-pair-setup__access-warning span {
   display: block;
   margin-top: 4px;
@@ -142,14 +100,15 @@
 
 .device-pair-setup__qr-frame {
   display: grid;
-  width: min(320px, 100%);
+  width: min(280px, 100%);
+  flex: none;
+  justify-self: center;
   aspect-ratio: 1;
   place-items: center;
-  padding: 18px;
+  padding: 16px;
   border: 1px solid var(--border);
-  border-radius: 22px;
+  border-radius: max(0px, calc(var(--overlay-modal-radius) - 3px));
   background: var(--qr-bg);
-  box-shadow: var(--shadow-lg);
 }
 
 .device-pair-setup__qr {
@@ -170,10 +129,8 @@
 
 .device-pair-setup__command {
   display: grid;
-  width: min(540px, 100%);
   min-width: 0;
-  max-width: 100%;
-  gap: 10px;
+  gap: var(--space-2);
 }
 
 .device-pair-setup .login-gate__command {
@@ -187,49 +144,80 @@
 }
 
 .device-pair-setup__meta {
-  display: flex;
-  max-width: 100%;
-  align-items: center;
-  gap: 9px;
+  display: grid;
+  min-width: 0;
+  justify-items: center;
+  gap: 2px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  text-align: center;
 }
 
 .device-pair-setup__gateway {
-  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
-  color: var(--muted);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.device-pair-setup__gateways {
-  display: flex;
+/* The button stays beside the summary while the opened code takes the full width below. */
+.device-pair-setup__code {
+  position: relative;
   min-width: 0;
-  flex-direction: column;
-  gap: 2px;
+}
+
+/* Both share the row height, so their labels sit on one line at every width. */
+.device-pair-setup__code > .btn {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: -10px;
+}
+
+.device-pair-setup__code > .btn.btn--sm {
+  height: var(--menu-item-height);
+  min-height: var(--menu-item-height);
 }
 
 .device-pair-setup__fallback {
-  width: min(420px, 100%);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
-.device-pair-setup__fallback summary {
+.device-pair-setup__code > .device-pair-setup__fallback > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
   width: fit-content;
-  margin: 0 auto;
+  min-height: var(--menu-item-height);
+  list-style: none;
+  cursor: var(--cursor-action);
+}
+
+.device-pair-setup__fallback summary::-webkit-details-marker {
+  display: none;
+}
+
+.device-pair-setup__fallback summary svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  transition: transform var(--duration-fast, 120ms) ease;
+}
+
+.device-pair-setup__fallback[open] summary svg {
+  transform: rotate(90deg);
 }
 
 .device-pair-setup__fallback code {
   display: block;
   max-height: 110px;
-  margin-top: 10px;
+  margin-top: var(--space-2);
   padding: 10px;
   overflow: auto;
-  border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--bg);
+  background: var(--bg-hover);
   color: var(--text);
   overflow-wrap: anywhere;
   white-space: normal;
@@ -242,8 +230,15 @@
 .device-pair-setup__waiting {
   margin: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--control-ui-text-sm);
   text-align: center;
+  text-wrap: balance;
+}
+
+/* The inline link keeps the sentence's line height instead of a touch-sized button row. */
+.device-pair-setup__waiting .device-pair-setup__link {
+  min-height: 0;
+  line-height: inherit;
 }
 
 .device-pair-setup__state {
@@ -260,15 +255,13 @@
   width: 48px;
   height: 48px;
   place-items: center;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
+  border-radius: 50%;
+  background: var(--bg-hover);
   color: var(--muted);
 }
 
 .device-pair-setup__state-icon--success {
-  border-color: color-mix(in srgb, var(--ok) 32%, var(--border));
-  background: color-mix(in srgb, var(--ok) 10%, var(--bg-elevated));
+  background: var(--ok-subtle);
   color: var(--ok);
 }
 
@@ -293,45 +286,8 @@
   font-size: 13px;
 }
 
-.device-pair-setup__footer a {
-  display: inline-flex;
-  min-height: 40px;
-  align-items: center;
-  gap: 4px;
-  border-radius: 4px;
-  color: var(--muted);
-  text-underline-offset: 2px;
-}
-
-.device-pair-setup__footer a:hover {
-  color: var(--text);
-}
-
-.device-pair-setup__footer a:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  color: var(--text);
-}
-
-.device-pair-setup__external-icon {
-  display: inline-flex;
-}
-
 @media (max-width: 640px) {
-  .device-pair-setup__body {
-    padding: 0 18px 20px;
-  }
-
-  .device-pair-setup__qr-frame {
-    width: min(300px, 100%);
-    padding: 14px;
-  }
-
   .device-pair-setup__access {
     grid-template-columns: 1fr;
-  }
-
-  .device-pair-setup__footer a {
-    min-height: 44px;
   }
 }

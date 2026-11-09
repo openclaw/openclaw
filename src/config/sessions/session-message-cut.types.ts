@@ -29,6 +29,12 @@ export type SessionMessageCutIntent = {
   expectedState: SessionMessageCutExpectedState | undefined;
   mode: "fork" | "rewind" | "switch";
   repositoryWorkspaceId?: string;
+  settledLocalWorkspace?: {
+    worktreeId: string;
+    sessionId: string;
+    lifecycleRevision: string | null;
+    projectionRevision: number;
+  };
   sourceKey: string;
   targetKey: string;
 };

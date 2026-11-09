@@ -367,6 +367,7 @@ suite.define(() => {
     });
     await publish({ ...pullRequest, checks: undefined });
     await openDesktopPullRequestPage(page.locator(".chat-pr").first(), "monitoring");
+    await page.getByText("You need admin access to change automations.", { exact: true }).waitFor();
     const autoMerge = page.getByRole("switch", { name: "Auto-merge when ready" });
     await expect.poll(() => autoMerge.isChecked()).toBe(true);
     expect(await autoMerge.isDisabled()).toBe(true);
@@ -424,6 +425,11 @@ suite.define(() => {
       menu = await openDesktopPullRequestPage(page.locator(".chat-pr").first(), "checks");
     }
     await expandLinuxJob(page);
+    if (mode === "running") {
+      expect(
+        await menu.locator('.chat-ci__status[data-state="running"] .btn__spinner').count(),
+      ).toBeGreaterThan(0);
+    }
     // Step text can appear before Floating UI finishes positioning the expanded popup.
     await expect
       .poll(() =>

@@ -1,12 +1,11 @@
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
   resetDecisionTestRuntime,
   activateDecisionRegistry,
   decisionOptions,
+  prepareDecisionRuntime,
 } from "../agents/decision-inference.test-support.js";
-import { acquireAgentRunPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listDecisionModels } from "../gateway/server-methods/models-list-capabilities.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
@@ -121,22 +120,21 @@ it.each(["default", "per-agent"])(
             const evaluate = (agentId = "main") =>
               evaluateDecisionV2InRegistry(batch, decisionOptions({ agentId }), registry, config);
             try {
-              await using prepared = await acquireAgentRunPreparedModelRuntime(
-                {
-                  config,
-                  agentId: "main",
-                  agentDir: resolveAgentDir(config, "main"),
-                  workspaceDir: config.agents.defaults.workspace,
-                  loadRuntimePlugins: true,
-                  runtimePluginSelections: [
-                    { provider: "clawrouter", modelId: "openai/gpt-6-luna", agentId: "main" },
-                  ],
-                },
-                { catalogMode: "static" },
+              // Compile the lazy core executor before the caller's operation deadline starts.
+              await import("../agents/decision-inference.js");
+              await using prepared = await prepareDecisionRuntime(
+                config,
+                "clawrouter",
+                "openai/gpt-6-luna",
+                "main",
               );
               const outcome = await evaluate();
               expect(
-                listDecisionModels({ config, snapshot: prepared.snapshot.metadataSnapshot }),
+                listDecisionModels({
+                  config,
+                  snapshot: prepared.snapshot.metadataSnapshot,
+                  catalog: prepared.snapshot.modelCatalog.entries,
+                }),
               ).toContainEqual(
                 expect.objectContaining({
                   provider: "clawrouter",
@@ -144,7 +142,12 @@ it.each(["default", "per-agent"])(
                   pluginId: "clawrouter",
                 }),
               );
-              expect(outcome).toMatchObject({
+              expect(
+                outcome,
+                outcome.status === "unavailable"
+                  ? `Decision unavailable: ${outcome.reason}`
+                  : undefined,
+              ).toMatchObject({
                 status: "ok",
                 result: {
                   model: "gpt-6-luna",

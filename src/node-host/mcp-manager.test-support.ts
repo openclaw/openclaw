@@ -56,6 +56,7 @@ export function startNodeHostMcpManager(
     });
     return {
       ...client,
+      getServerCapabilities: () => ({ tools: {} }),
       get onclose() {
         return client.onclose;
       },

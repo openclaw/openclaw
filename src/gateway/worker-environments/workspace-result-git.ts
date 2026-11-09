@@ -109,13 +109,14 @@ export async function requireWorkspaceResultGit(
 export async function withWorkspaceResultRefMutation<T>(
   root: string,
   operation: (baseEnv: NodeJS.ProcessEnv) => Promise<T>,
+  prepared?: { commonDir?: string; baseEnv: NodeJS.ProcessEnv },
 ): Promise<T> {
   // Git environment can redirect discovery or a queued writer; bind both to
   // the same snapshot while keeping the worker's timeout and byte contracts.
-  const baseEnv = { ...process.env };
-  const common = await requireWorkspaceResultGit(root, ["rev-parse", "--git-common-dir"], {
-    baseEnv,
-  });
+  const baseEnv = prepared?.baseEnv ?? { ...process.env };
+  const common =
+    prepared?.commonDir ??
+    (await requireWorkspaceResultGit(root, ["rev-parse", "--git-common-dir"], { baseEnv }));
   return await enqueueGitRefMutation(root, common, async () => {
     // Clear lookup only: admitted reads keep their outcome, but later readers must
     // observe the ref mutation, including aliases and partially failed writes.
