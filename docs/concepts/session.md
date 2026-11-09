@@ -17,6 +17,12 @@ metadata once. Continued changes temporarily use the configured model metadata
 for that row while other sessions remain available. The next list read retries
 its native metadata.
 
+Conversation branch listing (`sessions.branches.list`) has a ten-second request
+deadline, including access checks and cold-transcript restoration. If it expires,
+the Gateway returns a retryable `UNAVAILABLE` error instead of an empty branch
+list. Retry after database preparation finishes. Required integrity checks and
+already-admitted storage cleanup keep their own lifetimes.
+
 To continue the same Gateway-owned session in the Control UI, terminal, or a
 coding harness, see [Session synchronization and attachment](/concepts/session-attachment).
 

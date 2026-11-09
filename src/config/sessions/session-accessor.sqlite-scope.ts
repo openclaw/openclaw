@@ -514,8 +514,9 @@ export function resolveSqliteWriteAdmissionScope(
 /** Writers resolve physical ownership in the existing read worker inside exact-path admission. */
 export async function prepareSqliteScope(
   scope: SqliteScopeInput & { sessionKey: string },
+  signal?: AbortSignal,
 ): Promise<ResolvedSqliteScope> {
-  return resolveSqliteScope(scope, undefined, await prepareSqliteScopeTarget(scope));
+  return resolveSqliteScope(scope, undefined, await prepareSqliteScopeTarget(scope, signal));
 }
 
 async function prepareSqliteScopeTarget(scope: SqliteScopeInput, signal?: AbortSignal) {

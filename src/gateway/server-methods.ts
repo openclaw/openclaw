@@ -571,5 +571,6 @@ export async function handleGatewayRequest(
         respondCancelled(false, undefined, error);
       }
     },
+    req.method === "sessions.branches.list" ? 10_000 : undefined,
   );
 }
