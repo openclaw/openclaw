@@ -109,8 +109,8 @@ export const devicePairingOperations = {
     (input: Parameters<typeof tokens.ensureDeviceTokenInWorker>[0], { database }) => {
       const token = tokens.ensureDeviceTokenInWorker(input);
       if (token?.role === "node" && token.approval) {
-        // Same transaction as issuance: explicit removal must not restore automatic eligibility.
-        consumeOpenClawIdNodePairingInWorker(database.db, token.approval.peerKey);
+        // Same transaction as issuance: explicit removal must not restore this listing's eligibility.
+        consumeOpenClawIdNodePairingInWorker(database.db, token.approval);
       }
       return token;
     },
