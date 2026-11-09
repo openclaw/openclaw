@@ -142,7 +142,13 @@ export function assignPostgresConformanceShards(
   count: number,
   estimate: (targets: readonly string[]) => number,
 ): string[][] {
-  const shards = Array.from({ length: count }, () => ({ targets: new Array<string>(), weight: 0 }));
+  // PR row 1 also pays ~140s for the PG16 smoke, including worker preparation.
+  // Keep one deterministic plan for every caller, reserving service lifecycle headroom too.
+  const shards = Array.from({ length: count }, (_, index) => ({
+    targets: new Array<string>(),
+    overhead: index === 0 ? 150 : 0,
+    weight: 0,
+  }));
   const ordered = targets
     .map((target) => ({ target, weight: estimate([target]) }))
     .toSorted((a, b) => b.weight - a.weight || a.target.localeCompare(b.target));
@@ -155,7 +161,9 @@ export function assignPostgresConformanceShards(
     let bestTotal = Infinity;
     for (const shard of shards) {
       const next = estimate([...shard.targets, target]);
-      const candidate = shards.map((other) => (other === shard ? next : other.weight));
+      const candidate = shards.map(
+        (other) => other.overhead + (other === shard ? next : other.weight),
+      );
       const tail = Math.max(...candidate);
       const total = candidate.reduce((sum, weight) => sum + weight, 0);
       if (tail < bestTail || (tail === bestTail && total < bestTotal)) {

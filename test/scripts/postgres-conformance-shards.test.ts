@@ -34,6 +34,14 @@ describe("PostgreSQL conformance cost model", () => {
     );
   });
 
+  it("reserves the first shard's PG16 smoke while balancing PG17 work", () => {
+    const targets = Array.from({ length: 12 }, (_, index) => `test-${index}`);
+    const estimateWork = (selected: readonly string[]) => selected.length * 50;
+    const shards = assignPostgresConformanceShards(targets, 3, estimateWork);
+    expect(shards.map(estimateWork)).toEqual([100, 250, 250]);
+    expect(shards.flat().toSorted()).toEqual(targets.toSorted());
+  });
+
   it("prices the cold file-size order instead of optimistically running slow files first", () => {
     const model = createPostgresConformanceEstimator(
       {
