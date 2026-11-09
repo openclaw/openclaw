@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveGatewayLockDir } from "../config/paths.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 
@@ -72,26 +73,42 @@ function runTemplates(root: string, args: string[]) {
 }
 
 describe("Template authoring process state", () => {
-  it("leaves migration-pending operator state unchanged for templates dev", async () => {
-    const root = tempDirs.make("openclaw-templates-dev-state-");
-    const external = tempDirs.make("openclaw-templates-dev-external-");
-    const project = path.join(external, "project");
-    const workspace = path.join(external, "dev-workspace");
-    await fs.mkdir(path.join(root, "config"), { recursive: true });
-    await fs.mkdir(path.join(root, "state"), { recursive: true });
-    await fs.writeFile(path.join(root, "config", "openclaw.json"), "{}\n");
-    await fs.writeFile(
-      path.join(root, "state", "restart-sentinel.json"),
-      JSON.stringify({ version: 1, payload: { kind: "restart", status: "ok", ts: 1 } }),
-    );
-    await writeProject(project);
-    const before = await snapshotTree(root);
+  it.for(["dev", "add"])(
+    "leaves migration-pending operator state unchanged for templates %s",
+    { timeout: 120_000 },
+    async (command) => {
+      const root = tempDirs.make("openclaw-templates-dev-state-");
+      const external = tempDirs.make("openclaw-templates-dev-external-");
+      const project = path.join(external, "project");
+      const workspace = path.join(external, "dev-workspace");
+      await fs.mkdir(path.join(root, "config"), { recursive: true });
+      await fs.mkdir(path.join(root, "state"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "config", "openclaw.json"),
+        JSON.stringify({ gateway: { controlUi: { experimental: { templates: true } } } }),
+      );
+      await fs.writeFile(
+        path.join(root, "state", "restart-sentinel.json"),
+        JSON.stringify({ version: 1, payload: { kind: "restart", status: "ok", ts: 1 } }),
+      );
+      await writeProject(project);
+      // Offline admission uses temporary locks; provision their empty coordination parent before the data snapshot.
+      await fs.mkdir(resolveGatewayLockDir(path.join(root, "state")), { recursive: true });
+      const before = await snapshotTree(root);
 
-    const result = runTemplates(root, ["dev", project, "--workspace", workspace, "--json"]);
+      const result = runTemplates(root, [
+        command,
+        project,
+        ...(command === "add" ? ["--dry-run"] : []),
+        "--workspace",
+        workspace,
+        "--json",
+      ]);
 
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toBeTruthy();
-    expect(await snapshotTree(root)).toEqual(before);
-  }, 120_000);
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toBeTruthy();
+      expect(await snapshotTree(root)).toEqual(before);
+    },
+  );
 });
