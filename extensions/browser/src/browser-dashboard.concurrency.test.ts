@@ -5,6 +5,7 @@ import {
   interceptStoreActions,
   useBrowserDashboardTestHarness,
 } from "./browser-dashboard.test-harness.js";
+import { BrowserTabCrashedError } from "./browser/errors.js";
 import { closePageByTargetIdViaPlaywright } from "./browser/pw-session-actions.js";
 import { closePageViaPlaywright } from "./browser/pw-tools-core.snapshot.js";
 import {
@@ -20,6 +21,7 @@ const browser = vi.hoisted(() => ({
   ownership: vi.fn(),
   closeOwned: vi.fn(),
   page: vi.fn(),
+  connect: vi.fn(),
 }));
 vi.mock("./browser/client.js", () => ({
   browserOpenTab: browser.open,
@@ -36,6 +38,7 @@ vi.mock("./browser/pw-session-page-target.js", async (importOriginal) => ({
 vi.mock("./browser/pw-session-connection.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./browser/pw-session-connection.js")>()),
   getPageForTargetId: browser.page,
+  connectBrowser: browser.connect,
 }));
 
 import {
@@ -44,6 +47,7 @@ import {
   stopBrowserDashboard,
 } from "./browser-dashboard.js";
 import {
+  type BrowserSessionTabRecord,
   getBrowserSessionTabStore,
   readBrowserDashboardTabs,
 } from "./browser/session-tab-store.js";
@@ -67,12 +71,13 @@ function barrier() {
 
 describe("Browser dashboard operation ordering", () => {
   const fixture = useBrowserDashboardTestHarness(browser, sessionKey);
-  const trackTab = (targetId: string) =>
+  const trackTab = (targetId: string, dashboard?: BrowserSessionTabRecord["dashboard"]) =>
     trackSessionBrowserTab({
       sessionKey,
       targetId,
       profile: "openclaw",
       ownership: durableOwnership(targetId),
+      ...(dashboard ? { dashboard } : {}),
     });
 
   it.each([
@@ -196,6 +201,71 @@ describe("Browser dashboard operation ordering", () => {
         await Promise.allSettled([closing, opening]);
         observer.mockRestore();
       }
+    },
+  );
+
+  it("closes a crashed target through the browser after admission", async () => {
+    await trackTab("target-1");
+    const send = vi.fn(async () => ({ success: true }));
+    const detach = vi.fn(async () => {});
+    browser.page.mockRejectedValueOnce(new BrowserTabCrashedError());
+    browser.connect.mockResolvedValueOnce({
+      browser: { newBrowserCDPSession: vi.fn(async () => ({ send, detach })) },
+    });
+
+    await closePageByTargetIdViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "target-1",
+    });
+
+    expect(send).toHaveBeenCalledWith("Target.closeTarget", { targetId: "target-1" });
+    expect(detach).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { change: "dashboard retention", targetRetained: true },
+    { change: "runtime ownership", targetRetained: false },
+  ] as const)(
+    "rejects crashed-target closure before CDP I/O when $change changes during session preparation",
+    async ({ targetRetained }) => {
+      const sessionPrepared = createDeferred<void>();
+      const releaseSession = createDeferred<void>();
+      const send = vi.fn(async () => ({ success: true }));
+      const detach = vi.fn(async () => {});
+      browser.page.mockRejectedValueOnce(new BrowserTabCrashedError());
+      browser.connect.mockResolvedValueOnce({
+        browser: {
+          newBrowserCDPSession: async () => {
+            sessionPrepared.resolve();
+            await releaseSession.promise;
+            return { send, detach };
+          },
+        },
+      });
+
+      const closing = closePageByTargetIdViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "target-1",
+      });
+      await sessionPrepared.promise;
+      if (targetRetained) {
+        await trackTab("target-1", {
+          name: "service",
+          sessionKey,
+          instanceId: "instance-one",
+          url: "http://service.example/",
+          state: "active",
+        });
+      } else {
+        await fixture.installRuntime();
+      }
+      releaseSession.resolve();
+
+      await expect(closing).rejects.toThrow(
+        targetRetained ? /belongs to dashboard service/ : /store owner changed/,
+      );
+      expect(send).not.toHaveBeenCalled();
+      expect(detach).toHaveBeenCalledOnce();
     },
   );
 

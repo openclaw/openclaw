@@ -3,6 +3,10 @@ import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { Browser, Page, Response } from "playwright-core";
+import {
+  assertBrowserStateRuntimeCurrent,
+  getOptionalBrowserStateRuntime,
+} from "../browser-runtime-state.js";
 import { resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
 import {
@@ -674,20 +678,34 @@ export async function closePageByTargetIdViaPlaywright(opts: {
     if (!(error instanceof BrowserTabCrashedError)) {
       throw error;
     }
+    const runtime = getOptionalBrowserStateRuntime();
     const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
-    // Cold-crashed targets have no Playwright Page; the browser still owns their closure.
-    await dispatchBrowserTabClose(opts.targetId, undefined, async () => {
-      const session = await browser.newBrowserCDPSession();
-      try {
-        opts.signal?.throwIfAborted();
-        const { success } = await session.send("Target.closeTarget", { targetId: opts.targetId });
-        if (!success) {
-          throw new BrowserActionError("Browser did not close the crashed tab.");
-        }
-      } finally {
-        await session.detach().catch(() => {});
-      }
-    });
+    // Prepare the session before admission so retention or runtime changes during
+    // preparation still reject the close instead of executing on stale authority.
+    const session = await browser.newBrowserCDPSession();
+    try {
+      // Cold-crashed targets have no Playwright Page; the browser still owns their closure.
+      // Dispatch the close synchronously so it starts while admission still holds authority.
+      await dispatchBrowserTabClose(
+        opts.targetId,
+        undefined,
+        () => {
+          opts.signal?.throwIfAborted();
+          return session
+            .send("Target.closeTarget", { targetId: opts.targetId })
+            .then(({ success }) => {
+              if (!success) {
+                throw new BrowserActionError("Browser did not close the crashed tab.");
+              }
+            });
+        },
+        {
+          assertCurrent: () => assertBrowserStateRuntimeCurrent(runtime),
+        },
+      );
+    } finally {
+      await session.detach().catch(() => {});
+    }
     return;
   }
   await closeResolvedPageViaPlaywright(page, opts);
