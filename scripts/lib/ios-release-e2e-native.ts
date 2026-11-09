@@ -158,7 +158,7 @@ export async function createNativeDependencies(options: {
               if (operation === "native-test") {
                 const checkpoint = [
                   ...stdout.matchAll(
-                    /IOS_RELEASE_CHECKPOINT (paired|first|second|relaunched|relaunch|overview)\b/gu,
+                    /IOS_RELEASE_CHECKPOINT (pairing-(?:launching|launched|continued|manual|code-field|paste-menu|pasted|applied|connected)|paired|first|second|relaunched|relaunch|overview)\b/gu,
                   ),
                 ].at(-1)?.[1];
                 const activePhase = phases.findLast((entry) => entry.operation === "native-test");
