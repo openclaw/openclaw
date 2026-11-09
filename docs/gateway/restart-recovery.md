@@ -232,6 +232,10 @@ retirement; the warning does not permanently abandon the close operation. Resume
 markers do not replace pending transcript or cron outcome writes. Embedded hosts
 also join those resources before reusing the runtime.
 
+Plugin-origin finalizers retain shared-state admission through this drain so
+worktree run leases and subagent settle records can persist before SDK retirement.
+Final cleanup failures are reported as shutdown failures, not startup failures.
+
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.
 Managed update handoffs keep their own stop handling.

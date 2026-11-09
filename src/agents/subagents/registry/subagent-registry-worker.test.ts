@@ -13,10 +13,13 @@ import {
   weak,
   weakControl,
 } from "../../../gateway/session-collection.test-support.js";
+import { GatewayScheduler } from "../../../infra/gateway-scheduler.js";
 import * as snapshotSource from "../../../infra/sqlite-snapshot-source.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
+import { LegacyPluginSdkResourceHost } from "../../../plugins/legacy-sdk-resource-host.js";
+import { createOwnedTestInstance } from "../../../plugins/plugin-instance.test-support.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -555,7 +558,11 @@ it("serializes opposite multi-row orders without a lock-order deadlock", async (
   ]);
 });
 
-it("settles a requester cohort and killed-child cleanup after shutdown closes admission", async () => {
+it("settles a plugin-origin requester cohort and killed-child cleanup during shutdown drain", async () => {
+  const host = new LegacyPluginSdkResourceHost();
+  const scheduler = new GatewayScheduler();
+  host.bindScheduler(scheduler);
+  const instance = createOwnedTestInstance("shutdown-settle");
   const children = Array.from({ length: 18 }, (_, index) =>
     entry(`child-${index}`, {
       completion: { required: true },
@@ -601,22 +608,31 @@ it("settles a requester cohort and killed-child cleanup after shutdown closes ad
       },
     }),
   );
-  const settlement = Promise.all(wakes).then(() =>
-    mutateRequesterCompletionBatch({
-      entries: [...subagentRuns.values()].filter(({ runId }) => runId !== stopped.runId),
-      context,
-      operation: { kind: "settle", outcome: { delivered: true, path: "direct" } },
-      assertCurrent: () => {},
-    }),
+  const settlement = host.run(() =>
+    instance.run(() =>
+      Promise.all(wakes).then(() =>
+        mutateRequesterCompletionBatch({
+          entries: [...subagentRuns.values()].filter(({ runId }) => runId !== stopped.runId),
+          context,
+          operation: { kind: "settle", outcome: { delivered: true, path: "direct" } },
+          assertCurrent: () => {},
+        }),
+      ),
+    ),
   );
   gatewayAdmission.markGatewayRestartDraining("stop (SIGTERM)");
+  scheduler.beginClose();
   const killed = manager.markSubagentRunTerminated({
     runId: stopped.runId,
     reason: "synthetic kill",
     suppressTaskDelivery: true,
   });
   const results = await Promise.allSettled([...completions, settlement, killed]).finally(
-    gatewayAdmission.resetGatewayWorkAdmission,
+    async () => {
+      gatewayAdmission.resetGatewayWorkAdmission();
+      await host.close();
+      await scheduler.stop();
+    },
   );
   expect(results.filter((result) => result.status === "rejected")).toEqual([]);
   await expect(fs.stat(attachmentDir)).rejects.toMatchObject({ code: "ENOENT" });
