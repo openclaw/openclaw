@@ -6,6 +6,7 @@ type SimulatorCommand = "simulator.capture" | "simulator.act";
 type Lease = {
   nodeId: string;
   client: GatewayClient;
+  connectionSignal: AbortSignal;
   connId: string;
   pairingGeneration: string;
   executionId: string;
@@ -26,7 +27,7 @@ function release(lease: Lease): void {
   }
   leases.delete(lease.nodeId);
   clearTimeout(lease.timer);
-  lease.client.connectionSignal.removeEventListener("abort", lease.onAbort);
+  lease.connectionSignal.removeEventListener("abort", lease.onAbort);
   lease.cleanup(lease);
 }
 
@@ -35,7 +36,7 @@ function current(lease: Lease, connId: string, pairingGeneration: string): boole
     leases.get(lease.nodeId) === lease &&
     lease.connId === connId &&
     lease.pairingGeneration === pairingGeneration &&
-    !lease.client.connectionSignal.aborted &&
+    !lease.connectionSignal.aborted &&
     lease.client.invalidated !== true &&
     lease.isClientCurrent()
   );
@@ -76,7 +77,13 @@ export function admitSimulatorInvoke(params: {
   if (typeof executionId !== "string" || !/^[\da-f-]{36}$/iu.test(executionId)) {
     return { error: "Simulator executionId must be a UUID" };
   }
-  if (!params.client || params.client.connectionSignal.aborted || !params.isClientCurrent()) {
+  const connectionSignal = params.client?.connectionSignal;
+  if (
+    !params.client ||
+    !connectionSignal ||
+    connectionSignal.aborted ||
+    !params.isClientCurrent()
+  ) {
     return { error: "Simulator viewer connection ended; reconnect and reopen the preview" };
   }
   const existing = leases.get(params.nodeId);
@@ -94,6 +101,7 @@ export function admitSimulatorInvoke(params: {
     const lease: Lease = {
       nodeId: params.nodeId,
       client,
+      connectionSignal,
       connId: params.connId,
       pairingGeneration: params.pairingGeneration,
       executionId,
@@ -102,7 +110,7 @@ export function admitSimulatorInvoke(params: {
       onAbort: () => release(lease),
     };
     leases.set(params.nodeId, lease);
-    client.connectionSignal.addEventListener("abort", lease.onAbort, { once: true });
+    connectionSignal.addEventListener("abort", lease.onAbort, { once: true });
     arm(lease);
     return { lease, started: true };
   }

@@ -439,7 +439,7 @@ function SystemsWorkspace(props: {
         <Show when={simulatorNode()}>
           <button
             class="systems-text-button"
-            aria-pressed={showSimulator()}
+            aria-pressed={showSimulator() ? "true" : "false"}
             onClick={() => setShowSimulator(true)}
           >
             {t("systems.simulator.title")}
@@ -447,7 +447,7 @@ function SystemsWorkspace(props: {
           <Show when={canView()}>
             <button
               class="systems-text-button"
-              aria-pressed={!showSimulator()}
+              aria-pressed={!showSimulator() ? "true" : "false"}
               onClick={() => setShowSimulator(false)}
             >
               {t("systems.desktop")}

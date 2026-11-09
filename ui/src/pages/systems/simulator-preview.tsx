@@ -94,7 +94,8 @@ export function SimulatorPreview(props: {
   };
 
   const point = (event: PointerEvent) => {
-    const rect = event.currentTarget.getBoundingClientRect();
+    // SAFETY: only the preview image pointer handlers call this mapper.
+    const rect = (event.currentTarget as HTMLImageElement).getBoundingClientRect();
     return {
       x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
       y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
