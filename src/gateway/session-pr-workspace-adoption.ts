@@ -73,47 +73,52 @@ export async function adoptUnboundPullRequestWorkspace(params: {
     params.assertCurrent();
     assertWorkspaceCurrent();
     // The handoff holds queued follow-ups; only competing execution blocks adoption.
-    const busy =
-      isCompetingSessionControllerWorkActive(target.storePath, identities, target.agentId) ||
-      isCompetingSessionControllerWorkActive(
-        `agent:${target.agentId}`,
-        identities,
-        target.agentId,
-      ) ||
-      listExecSessionsForCancellation().some(
-        (process) =>
-          process.agentId === target.agentId &&
-          (process.sessionKey === target.sessionKey || process.scopeKey === target.sessionKey) &&
-          (!process.exited ||
-            process.finalizing ||
-            process.cleanupUncertain ||
-            process.finalizationFailed ||
-            (process.backgrounded && !process.terminalPollObserved && !process.requestCancelled)),
-      ) ||
-      listSubagentRunsForRequester(target.sessionKey, {
-        requesterSessionId: entry.sessionId,
-        requesterLifecycleRevision: entry.lifecycleRevision,
-        requesterAgentId: target.agentId,
-        requesterStorePath: target.storePath,
-      }).some(
-        (child) =>
-          child.execution.endedAt === undefined ||
-          child.killReconciliation ||
-          child.requesterSettleWake ||
-          child.delivery?.status === "pending" ||
-          child.delivery?.status === "in_progress",
-      ) ||
-      Boolean(
-        context.terminalSessions?.listAgent({
-          kind: "agent",
-          agentId: target.agentId,
-          agentSessionKey: target.sessionKey,
-          agentSessionId: entry.sessionId,
-        }).length,
-      );
-    if (busy) {
+    // An exited, finalized process cannot compete, and its output stays readable
+    // through process log, so an unread result (including a requested stop) is not busy.
+    const process = listExecSessionsForCancellation().find(
+      (candidate) =>
+        candidate.agentId === target.agentId &&
+        (candidate.sessionKey === target.sessionKey || candidate.scopeKey === target.sessionKey) &&
+        (!candidate.exited ||
+          candidate.finalizing ||
+          candidate.cleanupUncertain ||
+          candidate.finalizationFailed),
+    );
+    const child = listSubagentRunsForRequester(target.sessionKey, {
+      requesterSessionId: entry.sessionId,
+      requesterLifecycleRevision: entry.lifecycleRevision,
+      requesterAgentId: target.agentId,
+      requesterStorePath: target.storePath,
+    }).find(
+      (run) =>
+        run.execution.endedAt === undefined ||
+        run.killReconciliation ||
+        run.requesterSettleWake ||
+        run.delivery?.status === "pending" ||
+        run.delivery?.status === "in_progress",
+    );
+    const blocker = process
+      ? `background exec ${process.id} ${process.exited ? "is still cleaning up" : "is still running"}; poll or kill it`
+      : child
+        ? `child ${child.childSessionKey} has not finished or delivered its result`
+        : context.terminalSessions?.listAgent({
+              kind: "agent",
+              agentId: target.agentId,
+              agentSessionKey: target.sessionKey,
+              agentSessionId: entry.sessionId,
+            }).length
+          ? "a terminal is still open for this conversation"
+          : isCompetingSessionControllerWorkActive(target.storePath, identities, target.agentId) ||
+              isCompetingSessionControllerWorkActive(
+                `agent:${target.agentId}`,
+                identities,
+                target.agentId,
+              )
+            ? "another run of this conversation is still active"
+            : undefined;
+    if (blocker) {
       throw new Error(
-        "This conversation still has background work, a child or a terminal. Finish or observe that work, then retry workspace preparation; nothing was stopped or moved.",
+        `This conversation still has background work, a child or a terminal: ${blocker}. Finish that work, then retry workspace preparation; nothing was stopped or moved.`,
       );
     }
   };
