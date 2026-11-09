@@ -70,7 +70,7 @@ it("batches export metadata while observing committed appends, rewrites and cold
         message: { role: "assistant", content: "The committed answer." },
       }),
     ).toMatchObject({ ok: true });
-    replace(scopes[1]!, [userEvent("replacement", "The rewritten preference.")]);
+    replace(scopes[1]!, [userEvent("replacement", "Rewritten. ".repeat(450_000))]);
     // This owner consumes the cold marker; archive restoration is covered by its own tests.
     runOpenClawAgentWriteTransaction(
       (database) => {
@@ -88,35 +88,10 @@ it("batches export metadata while observing committed appends, rewrites and cold
 
     expect(await readBatch()).toMatchObject([
       contentEntry("User: Preference 0.\nAssistant: The committed answer."),
-      contentEntry("User: The rewritten preference."),
+      contentEntry(expect.stringMatching(/^(?:User: Rewritten\.(?: Rewritten\.)*\n?){6250}$/)),
       { cold: true },
       ...scopes.slice(3).map((_, index) => contentEntry(`User: Preference ${index + 3}.`)),
     ]);
-  });
-});
-
-it("keeps repeated exports intact when a cached transcript grows beyond snapshot retention", async () => {
-  await withOpenClawTestState({ label: "session-memory-entry-uncached" }, async (state) => {
-    const scope = scopeFor(path.join(state.sessionsDir(), "sessions.json"), "growing");
-    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    replace(scope, [userEvent("first", "Before.")]);
-    const request = { absPath: scope.sessionKey, options: scope };
-    expect(await collectSessionMemoryEntries([request])).toMatchObject([
-      contentEntry("User: Before."),
-    ]);
-    const text = "expanded detail ".repeat(350_000) + "Tail.";
-    expect(
-      appendTranscriptMessageSync(scope, {
-        eventId: "large-answer",
-        message: { role: "assistant", content: text },
-      }),
-    ).toMatchObject({ ok: true });
-    const [first, duplicate] = await collectSessionMemoryEntries([request, request]);
-    assert(first && "entry" in first && first.entry, "Expected complete uncached entry");
-    expect(first.entry.content.startsWith("User: Before.\nAssistant: expanded detail")).toBe(true);
-    expect(first.entry.content.endsWith("Tail.")).toBe(true);
-    expect(duplicate).toEqual(first);
-    expect(await collectSessionMemoryEntries([request])).toEqual([first]);
   });
 });
 

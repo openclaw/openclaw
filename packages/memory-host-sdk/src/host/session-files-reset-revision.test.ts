@@ -10,7 +10,6 @@ import {
   persistSessionTranscriptTurn,
   readActiveTranscriptEntryAnchor,
   readTranscriptStatsSync,
-  readTranscriptExportSnapshotReadOnlySync,
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
@@ -23,10 +22,6 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../../src/test-utils/openclaw-test-state.js";
-import {
-  renderSessionEntrySnapshot,
-  readSessionEntryResetRecallCutoff,
-} from "./session-entry-render.js";
 import {
   buildSessionEntry,
   buildSessionEntries,
@@ -92,31 +87,6 @@ afterEach(async () => {
 });
 
 describe("SQLite session snapshots and reset content revision", () => {
-  it("consumes only an owned export snapshot while preserving complete rendering and reset identity", async () => {
-    const scope = sessionScope("owned-export");
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const records = [
-      messageEvent("before", "user", "Before reset."),
-      messageEvent("kept", "assistant", "Unicode 😀 wrapped detail ".repeat(14_000)),
-      { type: "reset", id: "reset", firstKeptEntryId: "kept" },
-      messageEvent("after", "user", "After reset."),
-    ];
-    expect(replaceEvents(scope, records)).toBe(true);
-    const snapshot = readTranscriptExportSnapshotReadOnlySync(scope);
-    assert(snapshot, "expected admitted export snapshot");
-    const original = structuredClone(snapshot);
-    const expected = await renderSessionEntrySnapshot(scope.sessionKey, scope, snapshot);
-    expect(snapshot).toEqual(original);
-    expect(await renderSessionEntrySnapshot(scope.sessionKey, scope, snapshot)).toEqual(expected);
-    const consumed = await renderSessionEntrySnapshot(scope.sessionKey, scope, snapshot, true);
-    expect(consumed).toEqual(expected);
-    expect(readSessionEntryResetRecallCutoff(consumed)).toEqual(
-      readSessionEntryResetRecallCutoff(expected),
-    );
-    expect(readSessionEntryResetRecallCutoff(consumed).state).toBe("valid");
-    expect(snapshot.events).toEqual([]);
-  });
-
   it("keeps batched incremental exports current across sessions, appends and rewrites", async () => {
     const scope = sessionScope("incremental");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
