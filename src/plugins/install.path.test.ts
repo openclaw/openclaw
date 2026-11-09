@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, expect, it } from "vitest";
 import {
   requestDeferredPluginInstall,
-  resolvePluginInstallTransaction,
+  takePluginInstallTransaction,
 } from "./install-transaction.js";
 import type { PluginInstallArtifactConsentRequest } from "./install-types.js";
 import { installPluginFromPath, PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
@@ -74,7 +74,7 @@ it.each(["directory", "archive"] as const)(
 
     expect(result.ok).toBe(true);
     expect(reviewed).toBe(true);
-    const transaction = resolvePluginInstallTransaction(result);
+    const transaction = takePluginInstallTransaction(result);
     expect(transaction).toBeDefined();
     expect(exists(extensionsDir, "symlink-plugin", "package.json")).toBe(true);
     await transaction!.rollback();

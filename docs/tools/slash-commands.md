@@ -73,7 +73,9 @@ command handling is enabled for the surface.
 Command replies delivered through the shared dispatcher are part of the conversation
 on every channel. Native command menus and button selections on Discord and
 Telegram, Slack argument menus, and Mattermost model pickers are also retained after delivery.
-These exchanges appear in session history and later model context.
+These exchanges appear in session history and later model context, except read-only
+`/status` replies: their command and reply remain visible in history but do not enter
+model context or interrupt an active turn.
 Login codes, pairing codes,
 login URLs, and sensitive `/config set` or `/debug set` values are redacted in the
 recorded copy; delivered instructions and command execution are unchanged.
@@ -81,6 +83,33 @@ recorded copy; delivered instructions and command execution are unchanged.
 without changing the old transcript. `/stop` records the command with its abort
 notice. `/btw` and `/side` remain ephemeral; ordinary message edits and deletions
 do not rewrite transcript history.
+
+## Fork a conversation
+
+Use /fork [title] in a Telegram forum topic to create a sibling topic in the
+same supergroup. Thread bindings must be enabled and the bot needs **Manage
+Topics**. DMs, channel-direct topics, and unthreaded groups are not supported.
+The original topic keeps its session; future replies in the new topic use the
+copied session. The new topic has the same supergroup audience.
+
+The new topic starts with a literal recap of the last three available visible
+text messages. This recap is not the context limit: the session fork inherits the
+existing conversation snapshot. Hidden reasoning and tool output are not posted.
+Links and mentions in copied excerpts do not notify people or expand previews.
+A busy source forks through its last completed turn, not an in-flight partial
+answer. A fork does not clone the workspace or undo file and external effects.
+
+In the Control UI, typed `/fork [title]` uses the same operation as **Fork
+conversation** and selects the new session. Inherited messages already appear in
+history, so the UI does not insert a duplicate recap. **Fork from here** remains
+the separate message-level action that cuts before the selected user message.
+
+Session ancestry and the exact inherited history cut use the existing session
+fork records. Channel setup and recap delivery can fail independently: the
+command reports whether the copied session, native thread, and recap were
+confirmed. A known copied session or created thread is retained after a later
+failure. Check that outcome and the thread list before retrying; do not assume a
+failed acknowledgment means nothing was created.
 
 <a id="config" />
 
@@ -237,6 +266,7 @@ plugins, and installed skills.
     | `/new [model]` | Archive the current session and start a fresh one |
     | `/reset [soft [message]]` | Reset the current session in place. `soft` keeps the transcript, drops reused CLI backend session ids, and reruns startup |
     | `/name <title>` | Name or rename the current session. Omit the title to see the current name and a suggestion |
+    | `/fork [title]` | Copy the current conversation into an independent session; supported channel threads create a sibling thread |
     | `/compact [instructions]` | Compact the session context. See [Compaction](/concepts/compaction) |
     | `/stop` | Abort the current run |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |
@@ -310,7 +340,7 @@ plugins, and installed skills.
         | Update the global default | `/model <model> -g` (or `--global`) | Changes this session and requests an update for `agents.defaults.model` |
         | Use the configured default again | `/model default -s` | Clears this session's model selection without writing defaults; compatible auth pins remain and incompatible pins clear |
 
-        With `modelSelectionScope` unset, `/model <model>` changes only the current session, including for owners/admins. Without owner/admin authority, bare commands remain session-only and explicit `-a` and `-g` requests are rejected. Selecting the effective configured default clears the session model pin, but agent/global scope still requests the configured-default write. Immutable configuration stays unchanged. Asynchronous write errors do not revert the session selection.
+        With `modelSelectionScope` unset, `/model <model>` changes only the current session, including for owners/admins. Without owner/admin authority, bare commands remain session-only and explicit `-a` and `-g` requests are rejected. Selecting the effective configured default clears the session model pin, but agent/global scope still requests the configured-default write. Immutable configuration stays unchanged. Requested default updates continue after the command reply; asynchronous write errors do not revert the session selection.
 
         - If the agent is idle, the next run uses it right away.
         - If a run is active, the switch is marked pending and applied at the next clean retry point.
@@ -376,14 +406,22 @@ list of requirements reaches the agent complete.
     | `/plugins list\|inspect\|show\|get\|install\|enable\|disable` | `commands.plugins: true` | Inspect or mutate plugin state. Owner-only for writes. Alias: `/plugin` |
     | `/debug show\|set\|unset\|reset` | `commands.debug: true` | Runtime-only config overrides. Owner-only |
     | `/restart` | `commands.restart: true` (default) | Restart OpenClaw |
-    | `/update` | `commands.restart: true` (default), owner | Update OpenClaw using its configured update channel; works with default tool profiles and sends a completion or failure notice in the same chat |
+    | `/update` | `commands.restart: true` (default), owner | Update OpenClaw using its configured update channel; works with default tool profiles. See notice delivery rules below |
     | `/send on\|off\|inherit` | owner | Set send policy |
 
     Natural-language update requests use the `gateway` tool's `update.run`
     action. `/update` provides the same update operation without requiring a
     functioning model or access to that tool. Both use the Gateway update
     handler, also used by the Control UI. Chat access alone does not grant
-    permission to update. See
+    permission to update.
+
+    External update notices go only to destinations listed in
+    `commands.ownerAllowFrom` or a linked administrator's direct conversation,
+    and require the destination account's `actions.sendMessage` policy to allow
+    sends. Group and channel chats do not inherit a person's owner authority.
+    If a notice is skipped, the outcome stays in the update run record and
+    Control UI; the notice is not redirected to another chat. Internal sessions
+    can receive notices in their transcript. See
     [Updating from chat](/install/updating#from-chat).
 
   </Accordion>

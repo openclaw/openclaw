@@ -25,6 +25,7 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "./hook-before-agent-start.types.js";
 import type { PluginHookBeforeToolCallResult } from "./hook-before-tool-call-result.js";
+import type { PluginHookChannelPairingRequestedHandler } from "./hook-channel-pairing.types.js";
 import type { InputGateDecision } from "./hook-decision-types.js";
 import type {
   PluginHookCronChangedEvent,
@@ -42,6 +43,7 @@ import type {
   PluginHookInboundClaimEvent,
 } from "./hook-message.types.js";
 import type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
+import type { PluginHookRunStoppedHandler } from "./hook-run-stopped.types.js";
 import type { PluginHookSkillChangedEvent, PluginHookSkillContext } from "./hook-skill.types.js";
 import type {
   PluginHookToolKind,
@@ -156,6 +158,7 @@ export const PLUGIN_HOOK_METADATA: Readonly<Record<PluginHookName, PluginHookMet
   before_message_write: {},
   session_start: {},
   session_end: {},
+  run_stopped: {},
   subagent_delivery_target: {},
   subagent_spawned: {},
   subagent_progress: {},
@@ -173,25 +176,6 @@ export const PLUGIN_HOOK_METADATA: Readonly<Record<PluginHookName, PluginHookMet
   before_install: { modifyingTimeoutMs: 15_000 },
   before_agent_run: { conversationAccess: true, modifyingTimeoutMs: 15_000 },
   resolve_exec_env: { modifyingTimeoutMs: 15_000 },
-};
-
-type PluginHookChannelPairingRequestedEvent = {
-  /** Channel that created the pending pairing request. */
-  channel: string;
-  /** Provider account ID for multi-account channel setups. */
-  accountId?: string;
-  /** Channel-scoped sender ID awaiting operator approval. */
-  senderId: string;
-  /** Short-lived code accepted by `openclaw pairing approve`. */
-  code: string;
-  /** Sender-supplied channel metadata for operator notification/audit. Treat as untrusted. */
-  metadata?: Record<string, string | undefined>;
-};
-
-type PluginHookChannelPairingContext = {
-  channelId: string;
-  accountId?: string;
-  senderId: string;
 };
 
 export const isPluginHookName = (hookName: unknown): hookName is PluginHookName =>
@@ -824,10 +808,7 @@ export type PluginHookHandlerMap = PluginMessageHookHandlerMap & {
     PluginHookInboundClaimContext,
     PluginHookInboundClaimResult
   >;
-  channel_pairing_requested: AsyncPluginHook<
-    PluginHookChannelPairingRequestedEvent,
-    PluginHookChannelPairingContext
-  >;
+  channel_pairing_requested: PluginHookChannelPairingRequestedHandler;
   before_dispatch: AsyncPluginHook<
     PluginHookBeforeDispatchEvent,
     PluginHookBeforeDispatchContext,
@@ -859,6 +840,7 @@ export type PluginHookHandlerMap = PluginMessageHookHandlerMap & {
   ) => PluginHookBeforeMessageWriteResult | void;
   session_start: AsyncPluginHook<PluginHookSessionStartEvent, PluginHookSessionContext>;
   session_end: AsyncPluginHook<PluginHookSessionEndEvent, PluginHookSessionContext>;
+  run_stopped: PluginHookRunStoppedHandler;
   subagent_delivery_target: AsyncPluginHook<
     PluginHookSubagentDeliveryTargetEvent,
     PluginHookSubagentContext,

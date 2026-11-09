@@ -419,13 +419,12 @@ export function cronJobMatchesCallerScope(params: {
   const effectiveAgentId = tryResolveCronJobEffectiveAgentId(params.job, params.defaultAgentId);
   const policy = params.job.scheduledToolPolicy;
   // A signed scheduled-run claim restores only the cron tool's historical
-  // current-job surface. Callers must opt in per read/self-remove operation.
+  // current-job surface. Its delivery account need not be its creator account.
+  // Callers must opt in per read/self-remove operation.
   if (
     params.allowCurrentJob === true &&
     params.callerScope.currentJobId === params.job.id &&
-    effectiveAgentId === params.callerScope.agentId &&
-    (policy?.mode !== "account" ||
-      normalizeAccountId(policy.ownerAccountId) === params.callerScope.accountId)
+    effectiveAgentId === params.callerScope.agentId
   ) {
     return true;
   }

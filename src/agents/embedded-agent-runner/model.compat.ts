@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
+import type { ModelDataMediaInputConfig as ModelMediaInputConfig } from "../../../packages/llm-core/src/model-data.js";
+import type { ModelCompatConfig } from "../../config/zod-schema.model-compat.js";
 import { isVllmQwenThinkingCompat } from "../model-compat-catalog.js";
 
 export function mergeModelMediaInput(

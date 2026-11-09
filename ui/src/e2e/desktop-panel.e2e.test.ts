@@ -49,7 +49,7 @@ const environmentSource = { kind: "environment", environmentId: "worker-desktop-
 const hostEnvironment = { id: "gateway", type: "local", status: "available", desktop: true };
 const noSourcePicker = async (panel: Locator) => {
   expect(await text(panel, "Desktop sources").count()).toBe(0);
-  expect(await text(panel, "This machine").count()).toBe(0);
+  expect(await text(panel, "This computer").count()).toBe(0);
 };
 const expectObservation = (params: unknown, control = false) =>
   expect(params).toEqual({ source: environmentSource, control });
@@ -715,7 +715,7 @@ suite.define(() => {
         });
         const panel = await openDesktopPanel(page, suite.server.baseUrl);
         await gateway.waitForRequest("environments.list");
-        await text(panel, isHost ? "This machine" : "node:paired-node").waitFor();
+        await text(panel, isHost ? "This computer" : "node:paired-node").waitFor();
         expect(await text(panel, isHost ? "legacy-nested-worker" : "node:plain-node").count()).toBe(
           0,
         );
@@ -726,7 +726,7 @@ suite.define(() => {
             source,
             control: false,
           });
-          await text(panel, "Enter the VNC password for this machine.").waitFor();
+          await text(panel, "Enter the VNC password for this device.").waitFor();
           expect(await panel.getAttribute("data-connect-count")).toBeNull();
         }
         await panel.getByLabel("VNC password", { exact: true }).fill(password);

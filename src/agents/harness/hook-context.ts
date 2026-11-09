@@ -51,6 +51,14 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.channel ? { channel: params.channel } : {}),
     ...(params.trigger ? { trigger: params.trigger } : {}),
     ...(params.toolNames ? { toolNames: Object.freeze([...params.toolNames]) } : {}),
+    ...(params.completedTurn
+      ? {
+          completedTurn: Object.freeze({
+            sessionId: params.completedTurn.sessionId,
+            entryId: params.completedTurn.entryId,
+          }),
+        }
+      : {}),
     ...(params.inputProvenance ? { inputProvenance: params.inputProvenance } : {}),
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.contextTokenBudget ? { contextTokenBudget: params.contextTokenBudget } : {}),

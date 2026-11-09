@@ -482,11 +482,11 @@ async function writeDirectTelegramTranscriptContext(params: {
     isGroup: false,
     senderId: params.senderId,
   };
-  const { route } = await resolveTelegramConversationRoute({
+  const { route, bindingMode } = await resolveTelegramConversationRoute({
     ...conversation,
     threadSpec: { scope: "none" },
   });
-  const sessionKey = resolveTelegramTargetSession({ ...conversation, route });
+  const sessionKey = resolveTelegramTargetSession({ ...conversation, route, bindingMode });
   await upsertSessionEntry({
     storePath: params.storePath,
     sessionKey,

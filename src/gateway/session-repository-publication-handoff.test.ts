@@ -309,6 +309,9 @@ it.each([
         getConfig: () => cfg,
         environments: {
           get: () => undefined,
+          ensureRetainedRunning: async () => {
+            throw new Error("Unexpected retained wake for checkpoint fixture");
+          },
           startTunnel: async () => {
             throw new Error("Unexpected worker tunnel for retained checkpoint fixture");
           },

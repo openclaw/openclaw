@@ -189,7 +189,12 @@ export async function sendMessageMSTeams(
   } = params;
   const tableMode = resolveMSTeamsMarkdownTableMode(cfg, accountId);
   const messageText = formatMSTeamsMarkdown(text ?? "", tableMode);
-  const ctx = await resolveMSTeamsSendContext({ cfg, accountId, to });
+  const ctx = await resolveMSTeamsSendContext({
+    cfg,
+    accountId,
+    to,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+  });
   const { conversationId, conversationType, tokenProvider, sharePointSiteId } = ctx;
 
   if (mediaUrl) {
@@ -428,6 +433,7 @@ export async function sendPollMSTeams(params: SendMSTeamsPollParams) {
     cfg,
     accountId,
     to,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
   const { conversationId } = ctx;
 
@@ -463,6 +469,7 @@ export async function sendAdaptiveCardMSTeams(
     cfg,
     accountId,
     to,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
   const { conversationId } = ctx;
 

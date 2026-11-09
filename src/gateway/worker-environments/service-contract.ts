@@ -196,6 +196,9 @@ export type WorkerEnvironmentServiceContract = {
     requester?: DesktopObserveRequester;
   }): Promise<WorkerDesktopObserveResult>;
   launchDesktopApp(request: WorkerDesktopLaunchParams): Promise<WorkerDesktopLaunchResult>;
+  ensureRetainedRunning(
+    request: import("./provider-retained-lifecycle.js").WorkerRetainedRequest,
+  ): Promise<void>;
   startTunnel(request: WorkerTunnelRequest): Promise<WorkerTunnelHandle>;
   stopTunnel(environmentId: string, ownerEpoch?: number): Promise<void>;
 };

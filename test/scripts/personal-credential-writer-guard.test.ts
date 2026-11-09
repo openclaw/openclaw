@@ -473,6 +473,45 @@ it("guards publication mutation entry paths and the existing repeated factory ca
   );
 });
 
+it("admits only the personal restart owner and its selected registry export", () => {
+  const personal = "src/gateway/github-personal-publication-store.worker.ts";
+  const registry = "src/state/openclaw-state-worker-registry.ts";
+  const writer = "requirePersonalGitHubPublicationConfirmationInDatabase";
+  const message = "unreviewed GitHub publication writer reference";
+  const reject = allowedGraph({
+    [personal]: `
+      export function ${writer}() {}
+      export const personalPublicationRestartOperations = {
+        'githubPublications.personalRestart': () => ${writer}(),
+      };
+    `,
+    [registry]: `
+      export const loaders = {
+        'githubPublications.personalRestart': () =>
+          import('../gateway/github-personal-publication-store.worker.js').then(
+            ({ personalPublicationRestartOperations }) => personalPublicationRestartOperations,
+          ),
+      };
+    `,
+  });
+  reject(
+    personal,
+    (source) => source.replace("githubPublications.personalRestart", "githubPublications.bypass"),
+    message,
+  );
+  reject(
+    publicationWorker,
+    `import { ${writer} } from '../gateway/github-personal-publication-store.worker.js';
+     function personalMutation() { ${writer}(); }`,
+    message,
+  );
+  reject(
+    registry,
+    (source) => source.replaceAll("personalPublicationRestartOperations", writer),
+    message,
+  );
+});
+
 it("counts the receipt deletion loop and lifecycle deletion as two reviewed sinks", () => {
   const file = "src/state/github-personal-publication-lifecycle.ts";
   const source = `export function deletePersonalGitHubSessionReceiptsInDatabase() {
@@ -993,10 +1032,19 @@ it.each([
 it("keeps session membership writes with the worker and canonical entry owners", () => {
   const members = "src/config/sessions/session-sharing-store.native.ts";
   const reject = allowedGraph({
-    [members]: `export function addSessionMember() { db.insertInto('session_members'); }`,
+    [members]: `
+      export function addSessionMember() { addSessionMemberInTransaction(); }
+      export function addSessionMemberInTransaction() { db.insertInto('session_members'); }
+    `,
     "src/config/sessions/session-sharing-store.worker.ts": `
       import { addSessionMember } from './session-sharing-store.native.js';
       function bindSqliteWorkerBackend() { return { execute() { addSessionMember(); } }; }
+    `,
+    "src/config/sessions/session-accessor.sqlite-involvement.worker.ts": `
+      import { addSessionMemberInTransaction } from './session-sharing-store.native.js';
+      export function updateSessionProfileInvolvementInTransaction() {
+        addSessionMemberInTransaction();
+      }
     `,
     "src/config/sessions/session-accessor.sqlite-node-artifacts.ts": `
       export function clearSessionCollaborationForKey() {
@@ -1013,14 +1061,21 @@ it("keeps session membership writes with the worker and canonical entry owners",
     `,
   });
 
-  reject(
-    "src/new-writer.ts",
-    `
-        import { addSessionMember } from './config/sessions/session-sharing-store.native.js';
-        addSessionMember();
+  for (const writer of ["addSessionMember", "addSessionMemberInTransaction"]) {
+    reject(
+      "src/new-writer.ts",
+      `
+        import { ${writer} } from './config/sessions/session-sharing-store.native.js';
+        ${writer}();
         db.exec('DELETE FROM session_members');
       `,
-    ["unreviewed session membership writer reference", "raw authority-table write"],
+      ["unreviewed session membership writer reference", "raw authority-table write"],
+    );
+  }
+  reject(
+    "src/config/sessions/session-accessor.sqlite-involvement.worker.ts",
+    (source) => source.replace("updateSessionProfileInvolvementInTransaction", "unreviewedWriter"),
+    "unreviewed session membership writer reference",
   );
 });
 

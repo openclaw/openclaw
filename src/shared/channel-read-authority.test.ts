@@ -138,9 +138,5 @@ it("leaves calls without a read scope unchanged", async () => {
     "direct result",
   );
   const error = new Error("direct error");
-  await expect(
-    withAuthority(undefined, async () => {
-      throw error;
-    }),
-  ).rejects.toBe(error);
+  await expect(withAuthority(undefined, () => Promise.reject(error))).rejects.toBe(error);
 });

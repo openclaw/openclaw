@@ -4,10 +4,13 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../src/config/sessions/types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import { generateTeamShapeFixture, parseTeamShapeOptions } from "./team-shape-fixture.ts";
+import { teamShapeRootSessionCount } from "./team-shape-sessions.ts";
 import type { startWarmReloadAdmission } from "./warm-reload-admission.ts";
+import { seedWarmReloadPlugins } from "./warm-reload-plugins.ts";
 
 type RequestGateway = (method: string, params: Record<string, unknown>) => Promise<unknown>;
 
@@ -17,6 +20,13 @@ export type WarmReloadFixtureOptions = {
   uiRoot?: string;
   sessions?: number;
   transcriptLatePaint?: boolean;
+  dashboardEndAnchor?: boolean;
+  dashboardPaneChrome?: boolean;
+  pluginActivation?: boolean;
+  detailsSessionFacts?: boolean;
+  detailsSubagentActivity?: number;
+  activeTargets?: boolean;
+  composerControls?: boolean;
   admission?: Pick<
     Awaited<ReturnType<typeof startWarmReloadAdmission>>,
     "origin" | "gatewayAuth" | "viewerEmail" | "peerSessions"
@@ -29,6 +39,8 @@ function transcript(
   imageBlocks: readonly unknown[],
   agentId: string,
   longMarkdown = false,
+  endAnchor = false,
+  activityTail = false,
 ) {
   const events: unknown[] = [];
   let parentId: string | null = null;
@@ -45,7 +57,8 @@ function transcript(
     });
     parentId = id;
   };
-  for (let row = 0; row < 9; row++) {
+  const lastRow = endAnchor ? 32 : 8;
+  for (let row = 0; row <= lastRow; row++) {
     const runId = `warm-proof-run-${session}-${row}`;
     append(
       {
@@ -64,7 +77,16 @@ function transcript(
       },
       `user-${row}`,
     );
-    if (row === 8) {
+    if (activityTail && row === 0) {
+      events.push({
+        type: "message",
+        id: `warm-proof-${session}-alternative`,
+        parentId,
+        timestamp: new Date(now - 60_000).toISOString(),
+        message: { role: "assistant", content: "Synthetic alternative version." },
+      });
+    }
+    if (row === lastRow) {
       append(
         {
           role: "assistant",
@@ -135,27 +157,35 @@ function transcript(
         content: [
           {
             type: "text",
-            text: [
-              `### Synthetic milestone ${row + 1}`,
-              "This is synthetic reload-proof data. The checks below exercise tall rows, tables, code, and retained layout while live authority reconnects.",
-              table,
-              code,
-              ...(longMarkdown
+            text: endAnchor
+              ? row === lastRow
                 ? Array.from(
-                    { length: 24 },
+                    { length: 18 },
                     (_, index) =>
-                      `- **Verification ${index + 1}** retains the complete synthetic result.\n  - The nested item links to [fixture evidence](https://example.invalid/verification/${index + 1}) and preserves its layout on reload.`,
-                  )
-                : []),
-              `[Related fixture session](/chat/${agentId}/team-shape-session-2) · [Synthetic pull request](https://github.com/openclaw-fixture/reload-proof/pull/248)`,
-            ].join("\n\n"),
+                      `Synthetic paragraph ${index + 1}. The isolated dashboard retains this complete reply while reconnecting. Each checkpoint records its result in place, preserves the reader's position, and keeps the final paragraph visible from the first cached frame.`,
+                  ).join("\n\n")
+                : `Synthetic checkpoint ${row + 1} is complete.`
+              : [
+                  `### Synthetic milestone ${row + 1}`,
+                  "This is synthetic reload-proof data. The checks below exercise tall rows, tables, code, and retained layout while live authority reconnects.",
+                  table,
+                  code,
+                  ...(longMarkdown
+                    ? Array.from(
+                        { length: 24 },
+                        (_, index) =>
+                          `- **Verification ${index + 1}** retains the complete synthetic result.\n  - The nested item links to [fixture evidence](https://example.invalid/verification/${index + 1}) and preserves its layout on reload.`,
+                      )
+                    : []),
+                  `[Related fixture session](/chat/${agentId}/team-shape-session-2) · [Synthetic pull request](https://github.com/openclaw-fixture/reload-proof/pull/248)`,
+                ].join("\n\n"),
           },
-          ...(row === 8 ? imageBlocks : []),
+          ...(!endAnchor && row === 8 ? imageBlocks : []),
         ],
       },
       `assistant-${row}`,
     );
-    if (row === 7) {
+    if (!endAnchor && row === 7) {
       const id = `warm-proof-${session}-notice`;
       events.push({
         type: "custom_message",
@@ -170,6 +200,40 @@ function transcript(
       parentId = id;
     }
   }
+  if (endAnchor) {
+    for (let index = 0; index < 12; index++) {
+      append(
+        {
+          role: "custom",
+          customType: "synthetic-hidden",
+          content: "Synthetic bookkeeping",
+          display: false,
+        },
+        `hidden-${index}`,
+      );
+    }
+  }
+  if (activityTail) {
+    for (let index = 0; index < 160; index++) {
+      const id = `warm-proof-activity-${index}`;
+      append(
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id, name: "read", arguments: { path: "fixture.md" } }],
+        },
+        `activity-call-${index}`,
+      );
+      append(
+        {
+          role: "toolResult",
+          toolCallId: id,
+          toolName: "read",
+          content: [{ type: "text", text: "Synthetic checkpoint verified." }],
+        },
+        `activity-result-${index}`,
+      );
+    }
+  }
   return events;
 }
 
@@ -181,6 +245,9 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
   const sessions = options.sessions ?? 3000;
   if (!Number.isSafeInteger(sessions) || sessions < 2000) {
     throw new Error("Warm-reload fixture requires at least 2000 sessions");
+  }
+  if (options.detailsSubagentActivity && !options.activeTargets) {
+    throw new Error("Ordinary child activity requires active warm-reload targets");
   }
   const stateDir = path.resolve(options.stateDir);
   const agentId = "reviewer";
@@ -274,6 +341,14 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
     };
     config.models = { ...config.models, catalogRefresh: { enabled: false } };
     config.plugins = { enabled: true, allow: ["openai"], entries: { openai: { enabled: true } } };
+    const pluginFixture = options.pluginActivation ? seedWarmReloadPlugins(stateDir) : undefined;
+    if (pluginFixture) {
+      config.plugins.allow!.push(...pluginFixture.ids);
+      config.plugins.load = { paths: pluginFixture.roots };
+      for (const id of pluginFixture.ids) {
+        config.plugins.entries![id] = { enabled: true };
+      }
+    }
     config.agents = {
       ...config.agents,
       defaults: {
@@ -290,6 +365,17 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
         },
       },
     };
+    if (options.composerControls) {
+      config.plugins.allow!.push("anthropic");
+      config.plugins.entries!.anthropic = { enabled: true };
+      // A mock endpoint would withdraw the catalog's window and thinking facts.
+      config.models.providers!.anthropic = {
+        baseUrl: "https://api.anthropic.com",
+        apiKey: "synthetic-loopback-provider-key",
+        models: [],
+      };
+      config.agents.defaults!.modelPolicy = { allow: ["openai/*", "anthropic/*"] };
+    }
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
     const [
       agentDb,
@@ -330,6 +416,13 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       id: `team-shape-session-${index}`,
       label: index === 0 ? "Warm reload verification" : "Reload proof dashboard",
     }));
+    const ordinaryChildren = options.detailsSubagentActivity
+      ? Array.from({ length: options.detailsSubagentActivity - 1 }, (_, index) => ({
+          key: `agent:${agentId}:chat:cd000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+          id: `warm-proof-child-${index}`,
+          label: `Synthetic child review ${index + 1}`,
+        }))
+      : [];
     let assignedToOperator = 0;
     let activeAssignedToOperator = 0;
     try {
@@ -401,6 +494,8 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
         { env },
       );
       for (const [index, target] of targets.entries()) {
+        const targetNow =
+          options.dashboardPaneChrome && index === 1 ? now - 7 * 86_400_000 : now - index;
         agentDb.runOpenClawAgentWriteTransaction((owner) => {
           const old = entries.readExactSessionEntryRow(owner, target.key);
           if (!old) {
@@ -411,14 +506,34 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
             target.key,
             {
               ...old.entry,
+              ...(options.composerControls
+                ? {
+                    providerOverride: "anthropic",
+                    modelOverride: "claude-haiku-5-5",
+                    modelOverrideSource: "user",
+                    thinkingLevel: "high",
+                    contextWindow: "200k",
+                  }
+                : {}),
               label: target.label,
               displayName: target.label,
-              archivedAt: now - 1000,
-              pinnedAt: now - index,
-              updatedAt: now - index,
-              lastActivityAt: now - index,
+              ...(options.detailsSessionFacts
+                ? {
+                    worktree: { id: `proof-tree-${index}`, branch: "main", repoRoot: workspaceDir },
+                  }
+                : {}),
+              archivedAt: options.activeTargets ? undefined : targetNow - 1000,
+              pinnedAt: options.dashboardPaneChrome && index === 1 ? undefined : now - index,
+              updatedAt: targetNow,
+              lastActivityAt: targetNow,
+              lastInteractionAt: targetNow,
               boardFace: index === 1 ? "dashboard" : "chat",
               status: "done",
+              contextTokens: 96_000,
+              contextTokensSource: "runtime-configured",
+              totalTokens: 1800,
+              totalTokensFresh: true,
+              totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
             },
             { canonicalPreviousEntry: old.entry, canonicalPreviousRow: old.row },
           );
@@ -444,7 +559,15 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               sessionKey: target.key,
               sessionId: target.id,
             },
-            transcript(index, now, imageBlocks, agentId, options.transcriptLatePaint),
+            transcript(
+              index,
+              targetNow,
+              imageBlocks,
+              agentId,
+              options.transcriptLatePaint,
+              options.dashboardEndAnchor,
+              options.dashboardPaneChrome && index === 1,
+            ),
           );
           reactions.setSessionReactionInDatabase(owner, target.key, {
             expectedSessionId: target.id,
@@ -463,10 +586,38 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
           });
         }, database);
       }
+      if (ordinaryChildren.length) {
+        agentDb.runOpenClawAgentWriteTransaction((owner) => {
+          for (const [index, child] of ordinaryChildren.entries()) {
+            entries.writeSessionEntry(owner, child.key, {
+              sessionId: child.id,
+              label: child.label,
+              displayName: child.label,
+              parentSessionKey: targets[0]!.key,
+              parentSessionId: targets[0]!.id,
+              spawnedBy: targets[0]!.key,
+              createdAt: now - 60_000 + index,
+              startedAt: now - 60_000 + index,
+              endedAt: now - 30_000 + index,
+              updatedAt: now - 30_000 + index,
+              status: "done",
+            });
+          }
+        }, database);
+      }
       const targetKeys = new Set(targets.map((target) => target.key));
       const inventory = Object.entries(
         entries.readSessionEntryStore(agentDb.openOpenClawAgentDatabase(database)),
       );
+      if (options.detailsSubagentActivity) {
+        // The base fixture already retains its first ordinary child under this target.
+        const key = `agent:${agentId}:team-shape-session-${teamShapeRootSessionCount(sessions)}`;
+        const child = inventory.find(([sessionKey]) => sessionKey === key)?.[1];
+        if (!child?.label || child.parentSessionKey !== targets[0]!.key) {
+          throw new Error("Missing retained ordinary child in the warm-reload fixture");
+        }
+        ordinaryChildren.push({ key, id: child.sessionId, label: child.label });
+      }
       pinKeys = inventory.slice(2, 4).map(([key]) => key);
       const retainedParents = new Map<string, string[]>();
       for (const [key, entry] of inventory) {
@@ -514,10 +665,11 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               { canonicalPreviousEntry: old.entry, canonicalPreviousRow: old.row },
             );
             if (
-              index % 10 === 0 &&
-              !targetKeys.has(key) &&
-              !parentKeys.has(key) &&
-              !childKeys.has(key)
+              (options.dashboardPaneChrome && key === targets[1]!.key) ||
+              (index % 10 === 0 &&
+                !targetKeys.has(key) &&
+                !parentKeys.has(key) &&
+                !childKeys.has(key))
             ) {
               continue;
             }
@@ -535,7 +687,10 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       }
       const pinned = await preferences.setCanonicalUserPreferences(
         viewer.id,
-        { "ui.railShortcuts": pinKeys.map((key) => `session:${key}`) },
+        {
+          "ui.railShortcuts": pinKeys.map((key) => `session:${key}`),
+          ...(options.dashboardEndAnchor ? { "ui.fontChat": "lora" } : {}),
+        },
         { env },
       );
       if (!pinned?.ok) {
@@ -552,16 +707,21 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       assignedToOperator,
       activeAssignedToOperator,
       workspaceGitBranch: "main",
-      assistantRowsPerRoute: 9,
-      largestTableRows: 42,
-      largestCodeLines: 28,
-      managedImagePerRoute: 1,
+      assistantRowsPerRoute: options.dashboardEndAnchor ? 33 : 9,
+      largestTableRows: options.dashboardEndAnchor ? 0 : 42,
+      largestCodeLines: options.dashboardEndAnchor ? 0 : 28,
+      managedImagePerRoute: options.dashboardEndAnchor ? 0 : 1,
       reactionsPerRoute: 1,
-      noticeRowsPerRoute: 1,
+      noticeRowsPerRoute: options.dashboardEndAnchor ? 0 : 1,
       mockProvider: "QA loopback OpenAI Responses",
       admission: options.admission ? "signed-in" : "token",
       otherViewers: options.admission?.peerSessions.length ?? 0,
       targets,
+      ordinaryChildren,
+      dashboardEndAnchor: options.dashboardEndAnchor ?? false,
+      dashboardPaneChrome: options.dashboardPaneChrome ?? false,
+      dashboardOutsideOperatorRoster: options.dashboardPaneChrome ?? false,
+      pluginActivation: pluginFixture?.ids ?? [],
       viewerId,
       pinKeys,
       sidebarParents,
@@ -576,14 +736,14 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
         collapsed: 5,
         emptyGroups: "always",
         preview: false,
-        archivedTargets: true,
+        archivedTargets: !options.activeTargets,
         nonArchivedPins: 2,
         expandedRetainedParents: sidebarParents.length,
       },
       ...(options.transcriptLatePaint
         ? {
             transcriptLatePaint: {
-              archivedTargets: true,
+              archivedTargets: !options.activeTargets,
               groups: sidebarGroups,
               sectionOrder: sidebarSectionOrder,
               collapsedSections: sidebarGroups.slice(0, 5).map((name) => `category:${name}`),
@@ -635,6 +795,24 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
             html: "<!doctype html><html><head><style>body{font:18px system-ui;background:#10262c;color:#edf8f6;padding:36px}section{display:flex;gap:24px}article{background:#1d4248;border-radius:12px;padding:28px;flex:1}strong{font-size:48px;display:block}</style></head><body><h1>Synthetic reload dashboard</h1><p>Isolated Gateway • synthetic Team-shaped state</p><section><article><strong>3,000</strong>retained sessions</article><article><strong>9</strong>complete assistant rows</article><article><strong>11</strong>warm reload samples</article></section><h2>Verification queue</h2><p>Cache the full page, reconnect live authority, and update facts in place.</p><script>document.fonts.ready.then(() => requestAnimationFrame(() => requestAnimationFrame(() => window.top.postMessage({type: 'warm-reload-proof:dashboard-content-ready'}, '*'))));</script></body></html>",
           },
         });
+        if (options.dashboardPaneChrome && options.pluginActivation) {
+          await request("workboard.boards.upsert", {
+            id: "warm-reload-proof",
+            name: "Synthetic reload verification",
+            kind: "cards",
+          });
+          await request("workboard.cards.create", {
+            boardId: "warm-reload-proof",
+            title: "Inspect synthetic pane chrome",
+            status: "backlog",
+          });
+          await request("board.widget.put", {
+            sessionKey: targets[1]!.key,
+            name: "warm-reload-workboard",
+            title: "Synthetic Workboard summary",
+            content: { kind: "plugin", pluginKind: "workboard:mini" },
+          });
+        }
       },
       async close() {
         await stopMock?.();

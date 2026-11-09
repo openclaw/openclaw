@@ -96,7 +96,7 @@ struct GatewayServiceRuntimeTests {
                 launchAgentExists: exists,
                 replaceRuntime: replace)
             let expected = ["install", "--force", "--port", "29871", "--allow-unconfigured"]
-                + (expectedPin ? ["--runtime", "bun", "--runtime-path", "/profile/runtime/build-two/bin/bun"] : [])
+                + (expectedPin ? ["--runtime", "bun", "--runtime-path", "/profile/runtime/service/bun"] : [])
             #expect(arguments == expected)
         }
         #expect(GatewayLaunchAgentManager.installArguments(

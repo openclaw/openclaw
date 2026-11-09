@@ -7,6 +7,7 @@ import { readTranscriptStorageRows } from "../config/sessions/session-accessor.s
 import { replaceTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as fileDescriptor from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as agentDatabase from "../state/openclaw-agent-db.js";
 import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
@@ -224,17 +225,19 @@ describe("doctor SQLite session transcript header repair", () => {
   it("leaves retained history unchanged when its recovery copy cannot be saved", async () => {
     await seedTranscript([message("retained history")]);
     const before = rows();
-    const copyFile = fs.copyFileSync;
-    vi.spyOn(fs, "copyFileSync").mockImplementation((source, destination, mode) => {
-      if (String(destination).includes("openclaw-transcript-headers-recovery-")) {
-        throw new Error("recovery copy: disk full");
-      }
-      return copyFile(source, destination, mode);
-    });
+    const copy = vi
+      .spyOn(fileDescriptor, "copyFileHandle")
+      .mockRejectedValueOnce(new Error("recovery copy: disk full"));
 
     await expect(health()).resolves.toEqual({ found: 1, repaired: 0 });
+    expect(copy).toHaveBeenCalledOnce();
     expect(rows()).toEqual(before);
     expectNote(expect.stringContaining("recovery copy: disk full"));
+    expect(
+      fs
+        .readdirSync(path.dirname(database().path))
+        .filter((name) => name.startsWith("openclaw-transcript-headers-recovery-")),
+    ).toEqual([]);
   });
 
   it("rejects a row timestamp change between detection and header repair", async () => {

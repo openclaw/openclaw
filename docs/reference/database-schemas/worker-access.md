@@ -54,6 +54,13 @@ decoded rows even when a caller retains the inactive handle. Predicate compariso
 baselines last only until release; a late acknowledgement cannot restore them.
 Active authorities retain their existing publication and final-effect checks.
 
+Prepared entry-only session guards consume the retained database admission's
+identity and live publication instead of polling its path. Source preparation
+still validates aliases and physical replacement before a guarded write. Missing
+stores and cross-store conversation guards retain their existing discovery checks.
+Profile authority readers retain shared-cell views, never a cached allow decision;
+each use checks the exact lifetime, generation, and mutation publication.
+
 Host file writes prepare retained session-generation authority at their final
 effect boundary, after overwrite rollback capture. The existing session worker
 validates physical sources and refreshes facts after committed native mutations;
@@ -91,6 +98,11 @@ Actor-backed session managers serialize append preparation and committed view
 adoption on their manager queue. Only each actor storage command reserves the
 agent database writer, so unrelated sessions can write between commands. Native
 maintenance and unbound SDK managers retain their existing storage admission.
+Durable actor acquisition prepares cold storage through that writer and transfers
+the retained execution into the actor. Attempt and pending-input callers consume
+its admitted physical identity instead of resolving the pathname again. Warm
+write reservations retain the schema-admitted generation through settlement;
+unknown files and unhosted workers keep their physical admission checks.
 Slow direct-reservation warnings label session-manager, actor-command, and selected
 history-read callers. The `openclaw.agent-database.reservation` diagnostic channel
 publishes holder timing without paths, session identities, or message content.
@@ -107,8 +119,11 @@ Active accounting uses the independent history reader without reserving the
 agent database writer. Byte totals advance with actor appends and travel in its
 existing receipts, including when the full transcript is not resident. A reader
 borrows those totals only when the transcript version matches its native SQL
-snapshot; cold or changed snapshots retain their own accounting. Usage reads
-stay bounded and never expand to the complete active history.
+snapshot; cold or changed snapshots retain their own accounting. Actor readmission
+also reuses the admitted connection's exact-version totals when its prior resident
+state is absent. Metadata rewrites advance that version, and uncommitted writes
+still compute their own totals. Usage reads stay bounded and never expand to the
+complete active history.
 
 Entry reclamation derives each surviving row's transcript references once per
 synchronous deletion, even when several retained generations need a new owner.
@@ -174,18 +189,27 @@ still refuses dispatch. The task retains its admission turn through the identity
 check and rechecks live authority after that wait; no successful check is cached
 across requests.
 
-Local workspace reconciliation releases the shared state reader after capturing
-its database snapshot. Immutable record JSON crosses the worker boundary without
-first expanding a tree in the shared reader. The computation pool decodes it once
-and releases the transferred text before scanning files. The existing pool
-prepares manifest results from that compressed snapshot; the Gateway forwards it
-without expanding the tree. The reconciliation lease still checks authority before
-accepting results, and the state writer retains atomic manifest publication.
+Local workspace reconciliation asks its computation worker to prepare the read.
+Each worker retains one decoded baseline tree, scoped to the physical database and
+worktree. The shared state reader always checks the current projection revision
+and reads live metadata; it omits immutable records when the worker already holds
+the committed tree root. A different root or worker reloads the compressed records.
+Scans still observe live files, and their resulting tree can serve the next accepted
+revision. Failed computation drops the retained tree; repair reads never reuse it.
+The Gateway forwards snapshots without expanding them. Filesystem discovery stays
+off shared readers, and reconciliation custody and atomic publication are unchanged.
 
 Long-lived Gateway and local TUI processes reuse the shared-state reader pool for
 early awaited configuration and plugin metadata reads. Standalone CLI inspection
 keeps its one-shot reader retirement; failed reads and native cleanup still retire
 their workers. The existing two-reader limit and database authority checks remain.
+
+In the Gateway, authenticated Control UI requests for `themes.list`, `users.prefs.get`, and
+`agents.list` can use reserved shared-state reader queue headroom: two tasks per
+reader within the existing task limit. Other requests refuse admission before
+consuming that headroom. The request envelope owns this classification and drops
+it when the handler settles; agent and synthetic requests cannot inherit it.
+The reservation does not add workers, bypass byte limits, or preempt running reads.
 
 Agent creation and workspace mutations keep their recovery-hold recheck inside
 the existing synchronous engine admission; filesystem effects remain outside it.
@@ -226,8 +250,10 @@ share a brief backoff retry for at most one second, bounded by the caller's
 deadline and cancellation. Transaction retries require a completed rollback;
 feature-schema ensures only replay their own schema work. Each retry asks the
 owner for current facts, even if physical facts arrived before version facts;
-ordinary reads do not poll. A longer publication gap
-still fails visibly. Readers never replay caller work or refresh an imported
+ordinary reads do not poll. A longer publication gap fails with the original
+PostgreSQL admission error, including when the final facts exchange exhausts
+the retry deadline. Cancellation and earlier transport failures remain distinct.
+Readers never replay caller work or refresh an imported
 snapshot, and fragment checks inside a caller's transaction do not retry.
 Schema validation and live ownership checks remain in force.
 
@@ -336,6 +362,14 @@ Ordinary auth helpers supply a native read-only opener to the auth reader pool.
 The artifact-preserving opener is imported on demand for inspection reads, keeping
 parent-side snapshot orchestration out of ordinary auth loading. Handle admission,
 reuse, and retirement remain owned by the pool.
+
+Artifact-preserving SQLite inspection snapshots copy bytes without reflinks or
+copy offload. Cloning a live database can hold its source inode lock and add
+shared extents that make later writes more expensive. Both inspection copy
+drivers retain their source-identity, coherence, private-recovery, and cleanup
+checks. Byte copying still incurs full-image I/O and temporary disk usage; it
+does not repair existing fragmentation. Verified offline snapshot publication
+retains its clone-first transfer and byte-copy space admission.
 
 Generic scoped SQLite reads share at most four process slots, matched by captured
 runtime generation, environment, working directory, and spawn-broker owner.
@@ -3252,9 +3286,12 @@ Independent lease heartbeats for the same physical state database share one
 worker, native connection, and earliest-deadline timer. Due renewals update their
 exact owners in one statement, retaining each lease's own expiry and cleanup.
 Matching renewal intervals share a deadline; joining one may renew a lease early.
-The Gateway SQL owner renews every 30 seconds: one third of its 90-second stale
-heartbeat bound, which is shorter than its 300-second lease TTL. The separate
-filesystem owner still renews every 15 seconds. Startup identity repair and
+State leases renew at one third of their TTL without a fixed 30-second cap.
+The Gateway SQL owner renews every 100 seconds for its 300-second lease TTL;
+heartbeat age is diagnostic and never proves that an owner stopped. The separate
+filesystem owner still renews every 15 seconds. Renewal keeps its FULL commit
+durability: an in-progress commit can still hold SQLite's single writer lock.
+Startup identity repair and
 explicit verification retain their current checks. Closing one lease leaves its siblings running;
 closing the last joins native worker exit. Renewal remains independent of the
 Gateway event loop, including during concurrent worktree creation.

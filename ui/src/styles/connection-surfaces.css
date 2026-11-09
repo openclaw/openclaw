@@ -6,7 +6,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 100vh;
   height: 100dvh;
   max-height: 100%;
   overflow-y: auto;
@@ -51,8 +50,7 @@
   gap: 20px;
 }
 
-.login-gate__status-icon,
-.gateway-switch__icon {
+.login-gate__status-icon {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -60,9 +58,6 @@
   width: 40px;
   height: 40px;
   border-radius: var(--radius-full);
-}
-
-.login-gate__status-icon {
   color: var(--login-gate-tone, var(--accent));
   background: color-mix(in srgb, var(--login-gate-tone, var(--accent)) 12%, transparent);
 }
@@ -350,70 +345,26 @@
 /* A link pointed this browser at another Gateway. Show where it goes and what
    travels with it; the guard is honest, not alarmed. */
 
-.gateway-switch {
-  display: grid;
-  gap: 18px;
-  width: min(520px, 100%);
-  padding: 22px 24px 24px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
-}
-
-.login-gate__status-head,
-.gateway-switch__head {
+.login-gate__status-head {
   display: flex;
   align-items: flex-start;
   gap: 14px;
 }
 
-.gateway-switch__icon {
-  color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
-}
-
-.login-gate__status-icon svg,
-.gateway-switch__icon svg {
+.login-gate__status-icon svg {
   width: 20px;
   height: 20px;
 }
 
-.gateway-switch__title {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1.25;
-  letter-spacing: -0.01em;
-  color: var(--text-strong);
-}
-
-.gateway-switch__summary {
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--muted);
-}
-
 .gateway-switch__hosts {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
+  gap: var(--space-3);
 }
 
 .gateway-switch__host {
   display: grid;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-accent);
-}
-
-.gateway-switch__host--next {
-  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
 }
 
 .login-gate__hero-label,
@@ -433,36 +384,9 @@
   overflow-wrap: anywhere;
 }
 
-.gateway-switch__arrow {
-  display: inline-flex;
-  color: var(--muted);
-}
-
-.gateway-switch__arrow svg {
-  width: 18px;
-  height: 18px;
-}
-
 .gateway-switch__note {
   margin: 0;
   font-size: 13px;
   line-height: 1.5;
   color: var(--text);
-}
-
-@media (max-width: 560px) {
-  .gateway-switch__hosts {
-    grid-template-columns: 1fr;
-  }
-
-  .gateway-switch__arrow {
-    justify-self: center;
-    transform: rotate(90deg);
-  }
-}
-
-.gateway-switch__text {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
 }

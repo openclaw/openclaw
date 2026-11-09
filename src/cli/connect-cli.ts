@@ -14,6 +14,7 @@ import {
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { captureRuntimeConfigAsyncReader, mutateConfigFileWithRetry } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import { formatErrorMessage, readErrorCause } from "../infra/errors.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
@@ -135,7 +136,15 @@ async function fetchJoinPayload(
     if (error instanceof Error && error.message.startsWith("Gateway ")) {
       throw error;
     }
-    throw new Error("Could not fetch the Gateway join payload securely.", { cause: error });
+    // fetch rejects with a bare "fetch failed"; the cause names the network failure.
+    const reason =
+      error instanceof TypeError && error.message === "fetch failed"
+        ? (readErrorCause(error) ?? error)
+        : error;
+    throw new Error(
+      `Could not fetch the Gateway join payload securely: ${formatErrorMessage(reason)}`,
+      { cause: error },
+    );
   } finally {
     await release();
   }

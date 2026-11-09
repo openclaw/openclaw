@@ -370,8 +370,8 @@ they appear instantly, exactly like inline chat widgets, and their network acces
 is fully disabled.
 
 Widgets that want **reach** must declare it. An explicit [session permission mode](/gateway/permission-modes)
-decides what happens: **Full access** grants immediately; **Workspace** uses an
-AI reviewer and rejects anything it does not allow; **Guarded** shows an
+decides what happens: **Full access** grants immediately; **Auto-review** uses an
+AI reviewer and rejects anything it does not allow; **Ask me** shows an
 **Allow** / **Reject** card; **Read only** rejects the request. Without an
 explicit session mode, the equivalent configured exec approval policy applies.
 

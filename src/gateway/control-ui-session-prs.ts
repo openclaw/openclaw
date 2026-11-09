@@ -5,6 +5,7 @@ import type {
   GitMergedPullHead as MergedPullHead,
 } from "../infra/git-read-operations.js";
 import { createRetainedCache } from "../infra/retained-cache.js";
+import { monotonicDeadlineAfter, monotonicNow } from "../shared/monotonic-time.js";
 import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
@@ -18,6 +19,7 @@ import {
   readSessionPullRequestDisplay,
   stateOnlyPullRequestChip,
   readSessionPullRequestMetadata,
+  withCachedPullRequestStates,
 } from "./control-ui-session-pr-metadata.js";
 import type { ControlUiSessionPrReadContext } from "./control-ui-session-pr-read.js";
 import {
@@ -315,7 +317,7 @@ async function refreshBranchPullRequests(
         } catch (error) {
           read.assertCurrent();
           if (entry.lastGood === lastGood) {
-            entry.expiresAt = Date.now() + FAILURE_CACHE_MS;
+            entry.expiresAt = monotonicDeadlineAfter(FAILURE_CACHE_MS);
             entry.lastGood = previous;
           }
           if (previous) {
@@ -326,7 +328,7 @@ async function refreshBranchPullRequests(
         // An older display completion must not replace a newer branch observation.
         if (entry.lastGood === lastGood) {
           if (result.rateLimited) {
-            entry.expiresAt = Date.now() + RATE_LIMIT_CACHE_MS;
+            entry.expiresAt = monotonicDeadlineAfter(RATE_LIMIT_CACHE_MS);
           }
           entry.lastGood = { ...lastGood, pullRequests: result.pullRequests };
         }
@@ -338,7 +340,7 @@ async function refreshBranchPullRequests(
     read.assertCurrent();
     const rateLimited =
       error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429;
-    entry.expiresAt = Date.now() + (rateLimited ? RATE_LIMIT_CACHE_MS : FAILURE_CACHE_MS);
+    entry.expiresAt = monotonicDeadlineAfter(rateLimited ? RATE_LIMIT_CACHE_MS : FAILURE_CACHE_MS);
     if (rateLimited) {
       return {
         pullRequests: [],
@@ -406,7 +408,7 @@ export async function loadControlUiSessionPullRequests(
     recordSessionPrDiagnostic("load-returned", deps.read.target);
     return {
       ...branch,
-      taskPullRequests: task.taskPullRequests,
+      taskPullRequests: withCachedPullRequestStates(task.taskPullRequests, deps.read),
       taskPullRequestCount: task.taskPullRequestCount,
       ...(deps.read.branchSnapshot ? { pullRequestCount: task.pullRequestCount } : {}),
       branchRead: false,
@@ -644,7 +646,7 @@ function trackBranchRefresh(
 ): Promise<BranchPullRequestsSnapshot> {
   // Publish the replacement promise before any awaited work so later callers
   // cannot overtake a queued forced refresh with an older normal result.
-  entry.expiresAt = Date.now() + SUCCESS_CACHE_MS;
+  entry.expiresAt = monotonicDeadlineAfter(SUCCESS_CACHE_MS);
   entry.refreshMode = mode;
   const trackedPromise = load().finally(() => {
     if (entry.promise === trackedPromise) {
@@ -686,7 +688,7 @@ async function cachedBranchPullRequests(
     }),
     refreshMode: null,
   };
-  const reusable = entry.expiresAt > Date.now() && !entry.access.signal.aborted;
+  const reusable = entry.expiresAt > monotonicNow() && !entry.access.signal.aborted;
   if (entry.access.signal.aborted) {
     entry.access = createGitHubReadGroup();
   }

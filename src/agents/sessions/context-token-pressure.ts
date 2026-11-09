@@ -4,6 +4,10 @@ import {
   estimateStringTokenPressure,
 } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isDeeplyFrozenPlainData,
+  memoizeFrozenPlainDataProjection,
+} from "../../shared/immutable-data.js";
 import { SAFETY_MARGIN } from "../compaction-planning.js";
 import type { AgentMessage, BashExecutionMessage } from "../runtime/index.js";
 import {
@@ -18,6 +22,45 @@ import {
 const JSON_PAYLOAD_CHARS_PER_TOKEN = 3;
 const MESSAGE_BOUNDARY_OVERHEAD_TOKENS = 12;
 const CONTENT_BLOCK_OVERHEAD_TOKENS = 6;
+type ToolSchema = { name: string; description: string; parameters: unknown };
+export type FixedRequestTokenPressure = Readonly<{ systemTokens: number; toolTokens: number }>;
+type FixedRequest = { systemPrompt?: string; tools?: readonly ToolSchema[] };
+
+/** One sequential attempt owns its fixed request facts, including replacement tool surfaces. */
+export function createFixedRequestTokenEstimator() {
+  let systemPrompt: string | undefined;
+  let systemTokens = 0;
+  let definitions: ToolSchema[] | undefined;
+  let toolTokens = 0;
+  return (request: FixedRequest): FixedRequestTokenPressure => {
+    if (systemPrompt !== request.systemPrompt) {
+      systemPrompt = request.systemPrompt;
+      systemTokens = systemPrompt?.trim()
+        ? MESSAGE_BOUNDARY_OVERHEAD_TOKENS + estimateStringTokenPressure(systemPrompt)
+        : 0;
+    }
+    const tools = request.tools ?? [];
+    if (
+      !definitions ||
+      definitions.length !== tools.length ||
+      !tools.every((tool, index) => {
+        const saved = definitions![index]!;
+        return (
+          tool.name === saved.name &&
+          tool.description === saved.description &&
+          tool.parameters === saved.parameters
+        );
+      })
+    ) {
+      toolTokens = estimateToolSchemaTokens(tools);
+      // Parameter publications are immutable; descriptions can change on a retained descriptor.
+      definitions = tools.every(({ parameters }) => isDeeplyFrozenPlainData(parameters))
+        ? tools.map(({ name, description, parameters }) => ({ name, description, parameters }))
+        : undefined;
+    }
+    return { systemTokens, toolTokens };
+  };
+}
 
 export function estimateJsonPayloadTokenPressure(
   value: unknown,
@@ -34,9 +77,7 @@ export function estimateJsonPayloadTokenPressure(
 }
 
 /** Count model-facing definitions; runtime output schemas and metadata never reach the provider. */
-export function estimateToolSchemaTokens(
-  tools: readonly { name: string; description: string; parameters: unknown }[] | undefined,
-): number {
+export function estimateToolSchemaTokens(tools: readonly ToolSchema[] | undefined): number {
   return tools?.length
     ? estimateJsonPayloadTokenPressure(
         tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
@@ -90,12 +131,27 @@ function estimateAssistantToolCallTokenPressure(block: Record<string, unknown>):
   );
 }
 
+const estimateContentArrayTokenPressure = memoizeFrozenPlainDataProjection((content: unknown[]) =>
+  content.reduce<number>((sum, block) => sum + estimateContentBlockTokenPressure(block), 0),
+);
+const estimateAssistantContentTokenPressure = memoizeFrozenPlainDataProjection(
+  (content: unknown[]) =>
+    content.reduce<number>(
+      (sum, block) =>
+        sum +
+        (isRecord(block) && (block.type === "toolCall" || block.type === "tool_use")
+          ? estimateAssistantToolCallTokenPressure(block)
+          : estimateContentBlockTokenPressure(block)),
+      0,
+    ),
+);
+
 function estimateContentTokenPressure(content: unknown): number {
   if (typeof content === "string") {
     return estimateStringTokenPressure(content);
   }
   if (Array.isArray(content)) {
-    return content.reduce((sum, block) => sum + estimateContentBlockTokenPressure(block), 0);
+    return estimateContentArrayTokenPressure(content);
   }
   if (content !== undefined) {
     return estimateJsonPayloadTokenPressure(content);
@@ -103,66 +159,59 @@ function estimateContentTokenPressure(content: unknown): number {
   return 0;
 }
 
-export function estimateMessageTokenPressure(message: AgentMessage): number {
-  if ("excludeFromContext" in message && message.excludeFromContext === true) {
-    return 0;
-  }
-  // Provider replay can carry legacy aliases outside the canonical AgentMessage union.
-  const legacy: Record<string, unknown> = isRecord(message) ? message : {};
-  let tokens = MESSAGE_BOUNDARY_OVERHEAD_TOKENS;
+export const estimateMessageTokenPressure = memoizeFrozenPlainDataProjection(
+  (message: AgentMessage): number => {
+    if ("excludeFromContext" in message && message.excludeFromContext === true) {
+      return 0;
+    }
+    // Provider replay can carry legacy aliases outside the canonical AgentMessage union.
+    const legacy: Record<string, unknown> = isRecord(message) ? message : {};
+    let tokens = MESSAGE_BOUNDARY_OVERHEAD_TOKENS;
 
-  if (message.role === "toolResult" || legacy.role === "tool" || legacy.type === "toolResult") {
-    const content = message.role === "toolResult" ? message.content : legacy.content;
-    const toolName = message.role === "toolResult" ? message.toolName : legacy.toolName;
-    tokens += estimateContentTokenPressure(content);
-    tokens += estimateIdentifierTokenPressure(toolName ?? legacy.tool_name);
-    return tokens;
-  }
+    if (message.role === "toolResult" || legacy.role === "tool" || legacy.type === "toolResult") {
+      const content = message.role === "toolResult" ? message.content : legacy.content;
+      const toolName = message.role === "toolResult" ? message.toolName : legacy.toolName;
+      tokens += estimateContentTokenPressure(content);
+      tokens += estimateIdentifierTokenPressure(toolName ?? legacy.tool_name);
+      return tokens;
+    }
 
-  if (message.role === "bashExecution") {
-    const bashMessage: BashExecutionMessage = message;
-    tokens += estimateStringTokenPressure(bashExecutionToText(bashMessage));
-    return tokens;
-  }
+    if (message.role === "bashExecution") {
+      const bashMessage: BashExecutionMessage = message;
+      tokens += estimateStringTokenPressure(bashExecutionToText(bashMessage));
+      return tokens;
+    }
 
-  if (message.role === "branchSummary" || message.role === "compactionSummary") {
-    const [prefix, suffix] =
-      message.role === "branchSummary"
-        ? [BRANCH_SUMMARY_PREFIX, BRANCH_SUMMARY_SUFFIX]
-        : [COMPACTION_SUMMARY_PREFIX, COMPACTION_SUMMARY_SUFFIX];
-    return tokens + estimateStringTokenPressure(prefix + message.summary + suffix);
-  }
+    if (message.role === "branchSummary" || message.role === "compactionSummary") {
+      const [prefix, suffix] =
+        message.role === "branchSummary"
+          ? [BRANCH_SUMMARY_PREFIX, BRANCH_SUMMARY_SUFFIX]
+          : [COMPACTION_SUMMARY_PREFIX, COMPACTION_SUMMARY_SUFFIX];
+      return tokens + estimateStringTokenPressure(prefix + message.summary + suffix);
+    }
 
-  if (message.role === "assistant") {
-    if (Array.isArray(message.content)) {
-      for (const block of message.content) {
-        if (isRecord(block)) {
-          const blockType: unknown = block.type;
-          if (blockType === "toolCall" || blockType === "tool_use") {
-            tokens += estimateAssistantToolCallTokenPressure(block);
-            continue;
-          }
+    if (message.role === "assistant") {
+      if (Array.isArray(message.content)) {
+        tokens += estimateAssistantContentTokenPressure(message.content);
+      } else {
+        tokens += estimateContentTokenPressure(message.content);
+      }
+
+      const toolCalls = legacy.toolCalls ?? legacy.tool_calls;
+      if (Array.isArray(toolCalls)) {
+        for (const toolCall of toolCalls) {
+          tokens += isRecord(toolCall)
+            ? estimateAssistantToolCallTokenPressure(toolCall)
+            : estimateJsonPayloadTokenPressure(toolCall);
         }
-        tokens += estimateContentBlockTokenPressure(block);
       }
-    } else {
-      tokens += estimateContentTokenPressure(message.content);
+      return tokens;
     }
 
-    const toolCalls = legacy.toolCalls ?? legacy.tool_calls;
-    if (Array.isArray(toolCalls)) {
-      for (const toolCall of toolCalls) {
-        tokens += isRecord(toolCall)
-          ? estimateAssistantToolCallTokenPressure(toolCall)
-          : estimateJsonPayloadTokenPressure(toolCall);
-      }
-    }
+    tokens += estimateContentTokenPressure(legacy.content);
     return tokens;
-  }
-
-  tokens += estimateContentTokenPressure(legacy.content);
-  return tokens;
-}
+  },
+);
 
 export function estimateRenderedPromptTokens(params: {
   systemPrompt?: string;
@@ -182,13 +231,14 @@ export function createFreshLlmBoundaryTokenEstimator(params: {
   tools?: readonly { name: string; description: string; parameters: unknown }[];
   retainCompletionUsage?: boolean;
   safetyMargin?: number;
+  fixedTokenPressure?: FixedRequestTokenPressure;
 }) {
   const safetyMargin = params.safetyMargin ?? SAFETY_MARGIN;
-  const toolTokens = estimateToolSchemaTokens(params.tools);
-  const fixedPromptTokens = estimateRenderedPromptTokens({
-    systemPrompt: params.systemPrompt,
-    prompt: "",
-  });
+  const toolTokens =
+    params.fixedTokenPressure?.toolTokens ?? estimateToolSchemaTokens(params.tools);
+  const fixedPromptTokens = params.fixedTokenPressure
+    ? params.fixedTokenPressure.systemTokens + MESSAGE_BOUNDARY_OVERHEAD_TOKENS
+    : estimateRenderedPromptTokens({ systemPrompt: params.systemPrompt, prompt: "" });
   // Apply the safety margin once to the complete request before provider tokenization.
   return (request: { messages: AgentMessage[]; prompt: string; imageCount?: number }): number => {
     let messageTokens = 0;

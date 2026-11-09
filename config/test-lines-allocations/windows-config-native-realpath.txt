@@ -1,0 +1,2 @@
+# Windows directory casing must preserve root and include-backed config writes.
+45

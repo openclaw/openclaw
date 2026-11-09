@@ -338,10 +338,10 @@ export const en = {
       laneQuickHint: "Find AI access, choose a connection to verify, then open the web dashboard.",
       laneCustomLabel: "Custom setup",
       laneCustomHint: "Walk through every setup option.",
+      quickstartKeepRunningQuestion: "Keep OpenClaw running in the background?",
       quickstartDashboard: "Dashboard: {url}",
       quickstartForeground: "Gateway is running in the foreground. Press Ctrl+C to stop.",
-      quickstartBackground:
-        "To keep the Gateway running in the background later: openclaw gateway install",
+      quickstartBackground: "To keep the Gateway running in the background later: {command}",
       quickstartReopen:
         "Run openclaw to open the TUI, or openclaw dashboard to reopen the web dashboard.",
       quickstartBrowserUnavailable:

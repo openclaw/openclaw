@@ -1,9 +1,7 @@
 import type { CronJob } from "../api/types.ts";
 import { createBoardWidget } from "../lib/board/widget.test-support.ts";
-import {
-  createControlUiChatHistoryMessage as chatHistoryMessage,
-  createControlUiMockSessionRow as sessionRow,
-} from "./control-ui-session-fixtures.ts";
+import { createControlUiChatHistoryMessage as chatHistoryMessage } from "./control-ui-chat-history-fixtures.ts";
+import { createControlUiMockSessionRow as sessionRow } from "./control-ui-session-fixtures.ts";
 import { buildWorkboardProgressResponses } from "./control-ui-workboard-progress-fixtures.ts";
 import {
   buildWorkboardStateCells,

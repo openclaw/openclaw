@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import {
   loadExactSessionEntry as readEntry,
@@ -13,7 +14,10 @@ import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-
 import {
   closeOpenClawAgentDatabasesForTest as closeDatabases,
   openOpenClawAgentDatabase,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { OPENCLAW_AGENT_SCHEMA_V25_SQL } from "../state/openclaw-agent-schema-v25.test-support.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
@@ -103,6 +107,53 @@ async function expectHeldSelections(
 }
 
 describe("runDoctorSessionSqlite", () => {
+  it.each([25, OPENCLAW_AGENT_SCHEMA_VERSION + 1])(
+    "all-agent import defers schema 25 but refuses newer schema (version %s)",
+    async (version) => {
+      const store = createLegacyStore();
+      // Existing installations have authoritative deletion history before store inspection.
+      runOpenClawStateWriteTransaction(() => undefined, { env: store.env });
+      const deferredPath = resolveOpenClawAgentSqlitePath({
+        agentId: "deferred",
+        env: store.env,
+      });
+      fs.mkdirSync(path.dirname(deferredPath), { recursive: true });
+      {
+        using database = new DatabaseSync(deferredPath);
+        database.exec(OPENCLAW_AGENT_SCHEMA_V25_SQL);
+        database.exec(`PRAGMA user_version = ${version}`);
+        database
+          .prepare(
+            "INSERT INTO schema_meta VALUES ('primary', 'agent', ?, 'deferred', '2026.10.9', 1, 1)",
+          )
+          .run(version);
+      }
+      const original = fs.readFileSync(deferredPath);
+      const sources = sourceSnapshot(store);
+      const imported = runDoctorSessionSqlite({
+        cfg: { agents: { ownership: "explicit", entries: { deferred: {}, main: {} } } },
+        env: store.env,
+        mode: "import",
+        allAgents: true,
+      });
+      if (version === 25) {
+        const report = await imported;
+        expect(report.targets.map((target) => target.agentId)).toEqual(["main"]);
+        expect(report.totals).toMatchObject({ importedEntries: 1, issues: 0 });
+        expect(readEntry(sessionScope(store))?.entry.sessionId).toBe("session-1");
+      } else {
+        await expect(imported).rejects.toMatchObject({
+          stepReceipts: [
+            { warnings: [expect.stringContaining(`uses newer schema version ${version}`)] },
+          ],
+        });
+        expect(sourceSnapshot(store)).toEqual(sources);
+        expectMissing(databasePath(store));
+      }
+      expectFiles(original, deferredPath);
+    },
+  );
+
   it.each(["destination", "shared-state"] as const)(
     "preserves legacy sources and orphaned WAL for an unavailable %s database",
     async (owner) => {
@@ -249,7 +300,7 @@ describe("runDoctorSessionSqlite", () => {
       expect(entry("work")?.entry.sessionId).toBe("work-session");
       expectMissing(file("main-session"), file("work-session"), file("orphan"));
       closeDatabases();
-      const preview = inspectSessionSqliteRecovery({ cfg, env });
+      const preview = await inspectSessionSqliteRecovery({ cfg, env });
       const cleanup = await retireSessionSqliteRecovery({
         env,
         preview,

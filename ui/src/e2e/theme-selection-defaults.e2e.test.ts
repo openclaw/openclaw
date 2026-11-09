@@ -96,7 +96,7 @@ suite.define(() => {
           await page.locator(".settings-accent-swatch--custom").getAttribute("class"),
         ).not.toContain("--active");
         expect(await page.locator("#settings-accent-status").textContent()).toContain(
-          "Using theme accent",
+          "Theme default",
         );
         expect(await page.locator("[data-accent-custom]").inputValue()).toMatch(/^#[0-9a-f]{6}$/u);
 

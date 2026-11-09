@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { flushLogger, getLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -94,11 +95,42 @@ function insertIntentRow(
 describe("gateway restart intent", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
+    await flushLogger();
+    resetLogger();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { force: true, recursive: true });
     }
+  });
+
+  it("warns with the storage error and keeps cleanup nonthrowing when deletion fails", () => {
+    const env = createIntentEnv();
+    expect(writeGatewayRestartIntentSync({ env, targetPid: process.pid })).toBe(true);
+    const { db } = openOpenClawStateDatabase({ env });
+    // An unexpected trigger makes existing-state schema admission refuse cleanup.
+    db.exec(`CREATE TRIGGER deny_intent_cleanup BEFORE DELETE ON gateway_restart_intent
+      BEGIN SELECT RAISE(ABORT, 'restart intent cleanup denied'); END`);
+    const pending = readIntentRow(env);
+    const records: unknown[] = [];
+    setLoggerOverride({
+      level: "warn",
+      file: path.join(env.OPENCLAW_STATE_DIR ?? "", "restart.log"),
+    });
+    getLogger().attachTransport((record) => {
+      records.push(record);
+    });
+
+    expect(() => clearGatewayRestartIntentSync(env)).not.toThrow();
+
+    expect(readIntentRow(env)).toEqual(pending);
+    expect(records).toHaveLength(1);
+    expect(JSON.stringify(records)).toContain("failed to clear gateway restart intent");
+    expect(JSON.stringify(records)).toContain("unexpected trigger deny_intent_cleanup");
+    db.exec("DROP TRIGGER deny_intent_cleanup");
+    clearGatewayRestartIntentSync(env);
+    expect(readIntentRow(env)).toBeUndefined();
+    expect(records).toHaveLength(1);
   });
 
   it("consumes a fresh intent for the current process", async () => {

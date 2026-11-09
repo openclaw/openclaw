@@ -54,6 +54,7 @@ describe("subagent registry query regressions", () => {
     const index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap([parent, child]) });
     const root = parent.requesterSessionKey;
     index.listDescendantRunsForRequester(root);
+    index.countActiveDescendantRuns(root);
     const iterate = Array.prototype[Symbol.iterator];
     let iterations = 0;
     // eslint-disable-next-line no-extend-native -- Measure native iterator work; restore synchronously below.
@@ -74,11 +75,13 @@ describe("subagent registry query regressions", () => {
     expect(pending).toBe(2);
     expect(iterations).toBe(0);
     using clears = vi.spyOn(Set.prototype, "clear");
+    using writes = vi.spyOn(Map.prototype, "set");
     for (let window = 0; window < 10; window++) {
       expect(index.atTime(Date.now()).countActiveDescendantRuns(root)).toBe(0);
     }
     // Clearing an empty dirty set replaces its backing store on every warm read.
     expect(clears).not.toHaveBeenCalled();
+    expect(writes).not.toHaveBeenCalled();
   });
 
   it.each([50, 150, 500])("repairs active descendants without reading %i siblings", (size) => {
@@ -104,6 +107,22 @@ describe("subagent registry query regressions", () => {
       expect(index.hasUnendedRuns(root)).toBe(event % 2 === 1);
       expect(index.hasUnendedRuns(child.childSessionKey)).toBe(event % 2 === 1);
     }
+  });
+
+  it("refreshes a wide expiry batch without repeatedly scanning its boundary minima", () => {
+    const now = Date.UTC(2026, 9, 25);
+    const children = Array.from({ length: 100 }, (_, i) =>
+      makeRun(`expiry-${i}`, { createdAt: now + i, startedAt: now + i }),
+    );
+    const root = children[0]!.requesterSessionKey;
+    const index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap(children), now });
+    expect(index.countActiveDescendantRuns(root)).toBe(100);
+    using scans = vi.spyOn(Map.prototype, "values");
+    const expired = index.atTime(now + STALE_UNENDED_SUBAGENT_RUN_MS + 100);
+    expect(expired.countActiveDescendantRuns(root)).toBe(0);
+    expect(expired.nextChangeAt(root)).toBe(Infinity);
+    // A batch advances the root minimum once, rather than once per expired child.
+    expect(scans.mock.calls.length).toBeLessThanOrEqual(1);
   });
 
   it.each([undefined, 0, -1, Number.NaN, Infinity, -Infinity])(
