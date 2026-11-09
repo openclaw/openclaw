@@ -23,7 +23,7 @@ import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
-import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { renderSessionOwnerChip } from "../../components/solid/session-presentation.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerDashboardsEnglish } from "../../i18n/locales/en-dashboards.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -32,10 +32,12 @@ import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import type { SessionCreatedActor } from "../../lib/session-owner.ts";
 import {
   isSessionKeyAddressable,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import { HoverMarquee } from "../../lib/solid/hover-marquee.tsx";
 import "../../styles/dashboards.css";
 import { DashboardFilterPopover } from "./dashboard-filter-popover.tsx";
 import { DashboardPreview } from "./dashboard-preview.tsx";
@@ -57,7 +59,12 @@ type DashboardRow = SessionsListResult["sessions"][number];
 function dashboardAuthor(row: DashboardRow, fallbackAgentId: string) {
   const actor = row.createdActor ?? row.owner?.actor;
   const id = actor?.id?.trim() || row.agentId?.trim() || fallbackAgentId;
-  return { id, label: actor?.label?.trim() || id };
+  const label = actor?.label?.trim() || id;
+  // Without an actor id the author is the session's agent, drawn with its agent avatar.
+  const avatar: SessionCreatedActor = actor?.id?.trim()
+    ? actor
+    : { type: "agent", id, label, identity: { type: "agent", id } };
+  return { id, label, avatar };
 }
 
 function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalleryFilters) {
@@ -128,48 +135,77 @@ function DashboardGrid(props: {
         : null,
     );
     const author = () => dashboardAuthor(childProps.row, props.data.fallbackAgentId);
+    const authorName = () =>
+      author().id === props.gatewaySnapshot?.selfUser?.id
+        ? t("dashboardsPage.you")
+        : author().label;
     const title = createMemo(() => resolveSessionDisplayName(childProps.row.key, childProps.row));
+    let card!: HTMLElement;
     const Content = () => (
       <>
         <div class="dashboard-preview" aria-hidden="true" inert>
-          <DashboardPreview
-            gatewaySnapshot={props.gatewaySnapshot}
-            sessionKey={childProps.row.key}
-            agentId={childProps.row.agentId}
-          />
+          <div class="dashboard-preview__sheet">
+            <DashboardPreview
+              gatewaySnapshot={props.gatewaySnapshot}
+              sessionKey={childProps.row.key}
+              agentId={childProps.row.agentId}
+            />
+          </div>
         </div>
         <div class="dashboard-card__body">
           <div class="dashboard-card__heading">
-            <h2>{title()}</h2>
-            <Show when={childProps.row.status === "running"}>
-              <SettingsStatus kind="running" label={t("dashboardsPage.live")} />
-            </Show>
-          </div>
-          <div class="dashboard-card__author">
-            <span class="dashboard-card__avatar" aria-hidden="true">
-              {author().label.trim().charAt(0).toLocaleUpperCase() || "?"}
+            <h2>
+              <HoverMarquee
+                content={title()}
+                class="dashboard-card__title"
+                options={{ loop: true, host: () => card }}
+              />
+            </h2>
+            {/* Reserved even while idle, so a run starting never shifts the title. */}
+            <span class="dashboard-card__status">
+              <Show when={childProps.row.status === "running"}>
+                <span
+                  class="session-run-spinner"
+                  role="img"
+                  aria-label={t("dashboardsPage.running")}
+                  title={t("dashboardsPage.running")}
+                />
+              </Show>
             </span>
-            <span>{t("dashboardsPage.byAuthor", { author: author().label })}</span>
+          </div>
+          <div class="dashboard-card__meta">
+            <span class="dashboard-card__author">
+              {renderSessionOwnerChip(author().avatar, "row")}
+              <HoverMarquee
+                content={authorName()}
+                class="dashboard-card__author-name"
+                options={{ stationary: true, host: () => card }}
+              />
+            </span>
+            <span class="dashboard-card__updated">
+              <Show when={childProps.row.updatedAt} fallback={t("dashboardsPage.updatedUnknown")}>
+                {(updatedAt) => (
+                  <>
+                    <span class="dashboard-card__updated-label">
+                      {t("dashboardsPage.updatedLabel")}
+                    </span>{" "}
+                    <span class="dashboard-card__updated-time">
+                      {formatRelativeTimestamp(updatedAt())}
+                    </span>
+                  </>
+                )}
+              </Show>
+            </span>
           </div>
         </div>
-        <footer class="dashboard-card__footer">
-          <span>
-            {childProps.row.updatedAt
-              ? t("dashboardsPage.updated", {
-                  time: formatRelativeTimestamp(childProps.row.updatedAt),
-                })
-              : t("dashboardsPage.updatedUnknown")}
-          </span>
-          <Show when={target()}>
-            <span class="dashboard-card__open" aria-hidden="true">
-              <Icon name="arrowUpRight" />
-            </span>
-          </Show>
-        </footer>
       </>
     );
     return (
-      <article class="dashboard-card" data-dashboard-session={childProps.row.key}>
+      <article
+        ref={(element) => (card = element)}
+        class="dashboard-card"
+        data-dashboard-session={childProps.row.key}
+      >
         <Show
           when={target()}
           fallback={
@@ -544,16 +580,16 @@ function DashboardGallerySkeleton() {
           <For each={[0, 1, 2, 3, 4, 5]}>
             {() => (
               <div class="dashboard-card">
-                <div class="dashboard-preview skeleton" />
-                <div class="dashboard-card__body">
-                  <div class="skeleton skeleton-line skeleton-line--long dashboards-loading__title" />
-                  <div class="dashboard-card__author">
-                    <div class="dashboard-card__avatar skeleton" />
-                    <div class="skeleton skeleton-line skeleton-line--medium" />
+                <div class="dashboard-card__main">
+                  <div class="dashboard-preview skeleton" />
+                  <div class="dashboard-card__body">
+                    <div class="dashboard-card__heading">
+                      <div class="skeleton skeleton-line skeleton-line--long dashboards-loading__title" />
+                    </div>
+                    <div class="dashboard-card__meta">
+                      <div class="skeleton skeleton-line skeleton-line--medium" />
+                    </div>
                   </div>
-                </div>
-                <div class="dashboard-card__footer">
-                  <div class="skeleton skeleton-line skeleton-line--medium" />
                 </div>
               </div>
             )}

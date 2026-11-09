@@ -390,6 +390,10 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     const { sidebar, role, query, choose } = await mountFilters(width);
     await role("button", /^Filter & sort · /).click();
     const menu = query(".sidebar-session-sort-menu");
+    // The entering phone sheet can move a picker between pointerdown and pointerup.
+    await expect
+      .element(query(".sidebar-session-filter-panel"))
+      .toHaveAttribute("data-phase", "open");
     for (const [label, choice, defaultValue] of [
       ["Group by", "Person", "Custom groups"],
       ["Sort by", "Last updated", "Created"],
