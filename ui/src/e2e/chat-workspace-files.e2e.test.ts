@@ -534,14 +534,14 @@ suite.define(() => {
       await expect.poll(() => tiles.count()).toBe(9);
       // Untitled transcript images show their pixels without a generic caption; files keep names.
       const untitled = tiles.nth(1);
-      await untitled.locator("img.workspace-desktop__tile-image").waitFor();
-      expect(await untitled.locator(".workspace-desktop__tile-name").count()).toBe(0);
+      await untitled.locator("img.workspace-desktop__tile-media").waitFor();
+      expect(await untitled.locator(".workspace-desktop__filename").count()).toBe(0);
       await expect
         .poll(() =>
           untitled.locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth > 0),
         )
         .toBe(true);
-      expect(await tiles.nth(3).locator(".workspace-desktop__tile-name").textContent()).toBe(
+      expect(await tiles.nth(3).locator(".workspace-desktop__filename").textContent()).toBe(
         "Back_Isometric_on_Black.jpg",
       );
       const tileBoxes = await Promise.all(

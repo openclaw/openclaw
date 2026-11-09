@@ -63,31 +63,26 @@ function WorkspaceGroup(props: {
   class?: string;
   animate?: boolean;
   active?: boolean;
-  /** Controls beside the heading that do not toggle the group. */
-  actions?: JSX.Element;
   contentRef?: (element: HTMLElement) => void;
 }) {
   const [instant, setInstant] = createSignal(true);
   return (
     <section class={props.class} ref={(element) => props.contentRef?.(element)}>
       <Show when={props.label}>
-        <div class="workspace-desktop__heading-row">
-          <button
-            class="workspace-desktop__heading"
-            type="button"
-            aria-expanded={props.expanded ? "true" : "false"}
-            onClick={(event) => {
-              setInstant(event.detail === 0);
-              props.onToggle();
-            }}
-          >
-            <span ref={createTextOverflow(() => props.label)} title={props.label}>
-              {props.label}
-            </span>
-            <Icon name={props.expanded ? "chevronDown" : "chevronRight"} />
-          </button>
-          {props.actions}
-        </div>
+        <button
+          class="workspace-desktop__heading"
+          type="button"
+          aria-expanded={props.expanded ? "true" : "false"}
+          onClick={(event) => {
+            setInstant(event.detail === 0);
+            props.onToggle();
+          }}
+        >
+          <span ref={createTextOverflow(() => props.label)} title={props.label}>
+            {props.label}
+          </span>
+          <Icon name={props.expanded ? "chevronDown" : "chevronRight"} />
+        </button>
       </Show>
       <Show
         when={props.animate}
@@ -217,9 +212,8 @@ function SessionFilesDisplayMenu(props: {
     <Menu
       id={`workspace-session-display-${id}`}
       label={t("chat.workspaceFiles.display.label")}
-      class="workspace-desktop__display-menu"
       panelClass="workspace-desktop__menu"
-      triggerClass="workspace-desktop__display-trigger"
+      triggerClass="session-panel-rail__button"
       triggerAttributes={{ title: t("chat.workspaceFiles.display.label") }}
       trigger={<Icon name={props.display.view === "grid" ? "layoutGrid" : "list"} />}
       items={items()}
@@ -446,12 +440,6 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
                 props.workspace.onSessionExpandedChange?.(navigation()?.sessionExpanded === false)
               }
               class="workspace-desktop__session"
-              actions={
-                <SessionFilesDisplayMenu
-                  display={sessionDisplay()}
-                  onChange={(display) => props.workspace.onSessionFilesDisplayChange?.(display)}
-                />
-              }
             >
               <div
                 class={[
@@ -493,17 +481,17 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
                     </Show>
                   )}
                 </For>
-                <Show when={sessionAttachments.notice()}>
-                  {(message) => (
-                    <div
-                      role={sessionAttachments.source()?.error ? "alert" : "status"}
-                      class="workspace-desktop__notice"
-                    >
-                      {message()}
-                    </div>
-                  )}
-                </Show>
               </div>
+              <Show when={sessionAttachments.notice()}>
+                {(message) => (
+                  <div
+                    role={sessionAttachments.source()?.error ? "alert" : "status"}
+                    class="workspace-desktop__notice"
+                  >
+                    {message()}
+                  </div>
+                )}
+              </Show>
             </WorkspaceGroup>
           </Show>
           <Show when={projectVisible()}>
@@ -634,6 +622,20 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
           </button>
         </label>
         <ActivityMenu workspace={props.workspace} filters={filters()} filter={filter()} />
+        <Show
+          when={
+            !props.workspace.folderView &&
+            !navigation()?.searchOpen &&
+            (sessionFiles().length > 0 || attachmentsVisible())
+          }
+        >
+          <div class="session-panel-rail__group">
+            <SessionFilesDisplayMenu
+              display={sessionDisplay()}
+              onChange={(display) => props.workspace.onSessionFilesDisplayChange?.(display)}
+            />
+          </div>
+        </Show>
       </div>
       <Loading on={scope()} fallback={<WorkspaceLoading />}>
         <Errored

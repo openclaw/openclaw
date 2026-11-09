@@ -59,21 +59,12 @@ export function WorkspaceFilename(props: { name: string }) {
   );
 }
 
-/** Keep the end of a long stem visible: "ClawCon_Shenzhen_Iso…cept_11.pdf", like a Finder tile. */
-export function splitWorkspaceTileName(name: string): { head: string; tail: string } {
-  const { stem, extension } = splitWorkspaceFilename(name);
-  const keep = stem.length > 12 ? 6 : 0;
-  return {
-    head: stem.slice(0, stem.length - keep),
-    tail: `${stem.slice(stem.length - keep)}${extension}`,
-  };
-}
-
 /** Shared tile face: admitted image pixels or the large file icon, with an optional name. */
 export function WorkspaceTileBody(props: {
   name: string;
   mimeType?: string;
   previewUrl?: string;
+  pending?: boolean;
   caption: boolean;
   activity?: string;
   changed?: boolean;
@@ -82,44 +73,43 @@ export function WorkspaceTileBody(props: {
   const [failedUrl, setFailedUrl] = createSignal<string>();
   const previewUrl = () =>
     props.previewUrl && props.previewUrl !== failedUrl() ? props.previewUrl : undefined;
-  const parts = createMemo(() => splitWorkspaceTileName(props.name));
   return (
     <>
-      <span class="workspace-desktop__tile-media">
-        <Show
-          when={previewUrl()}
-          fallback={
+      <Show
+        when={previewUrl()}
+        fallback={
+          <span class="workspace-desktop__tile-media">
             <AttachmentFileIcon
               filename={props.name}
               mimeType={props.mimeType}
               mode="large-placeholder"
+              loading={props.pending}
             />
-          }
-        >
-          {(url) => (
-            <img
-              class="workspace-desktop__tile-image"
-              src={url()}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              referrerpolicy="no-referrer"
-              onError={() => setFailedUrl(url())}
-            />
-          )}
-        </Show>
-        <Show when={props.activity}>
-          <span
-            class={["workspace-desktop__activity", { "is-changed": props.changed }]}
-            role="img"
-            aria-label={props.activity}
+          </span>
+        }
+      >
+        {(url) => (
+          <img
+            class="workspace-desktop__tile-media"
+            src={url()}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            referrerpolicy="no-referrer"
+            onError={() => setFailedUrl(url())}
           />
-        </Show>
-      </span>
+        )}
+      </Show>
       <Show when={props.caption}>
-        <span class="workspace-desktop__tile-name">
-          <span class="workspace-desktop__tile-name-head">{parts().head}</span>
-          <span>{parts().tail}</span>
+        <span class="workspace-desktop__name-line">
+          <WorkspaceFilename name={props.name} />
+          <Show when={props.activity}>
+            <span
+              class={["workspace-desktop__activity", { "is-changed": props.changed }]}
+              role="img"
+              aria-label={props.activity}
+            />
+          </Show>
         </span>
       </Show>
     </>
@@ -242,10 +232,10 @@ export function RailRow(props: {
         </div>
       }
     >
-      <div role="listitem" class="workspace-desktop__tile-item">
+      <div role="listitem" class="workspace-desktop__item">
         <button
           type="button"
-          class={["workspace-desktop__tile", { "is-active": selected() }]}
+          class={["workspace-desktop__row workspace-desktop__tile", { "is-active": selected() }]}
           title={props.file.name}
           aria-label={props.file.path}
           aria-description={activity()}

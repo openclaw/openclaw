@@ -900,9 +900,9 @@ it("desktop lists session files and transcript attachments together, sorted and 
     expect(tiles).toHaveLength(4);
     // Inline image bytes render immediately; the untitled image shows pixels, not a generic caption.
     const untitled = tiles[2]!;
-    expect(untitled.querySelector("img.workspace-desktop__tile-image")).not.toBeNull();
-    expect(untitled.querySelector(".workspace-desktop__tile-name")).toBeNull();
-    expect(tiles[1]!.querySelector(".workspace-desktop__tile-name")?.textContent).toBe("beta.png");
+    expect(untitled.querySelector("img.workspace-desktop__tile-media")).not.toBeNull();
+    expect(untitled.querySelector(".workspace-desktop__filename")).toBeNull();
+    expect(tiles[1]!.querySelector(".workspace-desktop__filename")?.textContent).toBe("beta.png");
     expect(tiles[0]!.querySelector(".chat-attachment-file-icon")?.getAttribute("data-mode")).toBe(
       "large-placeholder",
     );

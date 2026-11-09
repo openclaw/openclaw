@@ -174,13 +174,7 @@ export function TranscriptAttachmentRow(props: {
     return (
       <div
         role="listitem"
-        class={
-          mobile()
-            ? "chat-workspace-mobile__item"
-            : grid()
-              ? "workspace-desktop__tile-item"
-              : "workspace-desktop__item"
-        }
+        class={mobile() ? "chat-workspace-mobile__item" : "workspace-desktop__item"}
       >
         <button
           type="button"
@@ -188,7 +182,7 @@ export function TranscriptAttachmentRow(props: {
             mobile()
               ? "chat-workspace-mobile__row"
               : grid()
-                ? "workspace-desktop__tile"
+                ? "workspace-desktop__row workspace-desktop__tile"
                 : "workspace-desktop__row"
           }
           ref={(element) => childProps.action().observeElement?.(element)}
@@ -263,6 +257,7 @@ export function TranscriptAttachmentRow(props: {
                 props.entry.mimeType ?? (props.entry.kind === "image" ? "image/png" : undefined)
               }
               previewUrl={childProps.action().previewUrl}
+              pending={childProps.action().pending}
               caption={captioned()}
             />
           </Show>
