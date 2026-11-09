@@ -40,6 +40,9 @@ import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import org.junit.After
@@ -55,6 +58,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadow.api.Shadow
+import org.robolectric.shadows.ShadowDialog
 import org.robolectric.shadows.ShadowViewRootImpl
 import org.robolectric.util.ReflectionHelpers
 import java.io.ByteArrayOutputStream
@@ -74,6 +78,44 @@ class ChatImagePreviewTest {
 
   @After fun restoreFontScale() {
     RuntimeEnvironment.setFontScale(previousFontScale)
+  }
+
+  @Test
+  fun imageAndControlsStayInsideDialogInsetsWithoutShiftingGestureCoordinates() {
+    openManagedImage()
+    val image = composeRule.onNodeWithContentDescription("Image preview")
+    val close = composeRule.onNodeWithContentDescription("Close image preview")
+    val zoom = composeRule.onNodeWithContentDescription("Zoom in")
+    val originalImage = image.fetchSemanticsNode().boundsInRoot
+    val originalClose = close.fetchSemanticsNode().boundsInRoot
+    val originalZoom = zoom.fetchSemanticsNode().boundsInRoot
+    composeRule.runOnIdle {
+      val decor = checkNotNull(checkNotNull(ShadowDialog.getLatestDialog()).window).decorView
+      ViewCompat.dispatchApplyWindowInsets(
+        decor,
+        WindowInsetsCompat
+          .Builder()
+          .setInsets(WindowInsetsCompat.Type.statusBars(), Insets.of(0, 32, 0, 0))
+          .setInsets(WindowInsetsCompat.Type.navigationBars(), Insets.of(0, 0, 0, 40))
+          .setInsets(WindowInsetsCompat.Type.displayCutout(), Insets.of(24, 0, 36, 0))
+          .build(),
+      )
+    }
+    composeRule.waitForIdle()
+    val insetImage = image.fetchSemanticsNode().boundsInRoot
+    val insetClose = close.fetchSemanticsNode().boundsInRoot
+    val insetZoom = zoom.fetchSemanticsNode().boundsInRoot
+    assertEquals(originalImage.left + 24f, insetImage.left, 1f)
+    assertEquals(originalImage.top + 32f, insetImage.top, 1f)
+    assertEquals(originalImage.right - 36f, insetImage.right, 1f)
+    assertEquals(originalImage.bottom - 40f, insetImage.bottom, 1f)
+    assertEquals(originalClose.top + 32f, insetClose.top, 1f)
+    assertEquals(originalClose.right - 36f, insetClose.right, 1f)
+    assertEquals(originalZoom.bottom - 40f, insetZoom.bottom, 1f)
+    image.performTouchInput { doubleClick(Offset(width - 2f, center.y)) }
+    composeRule.onNodeWithText("250%").assertIsDisplayed()
+    close.performClick()
+    composeRule.onNode(isDialog()).assertDoesNotExist()
   }
 
   @Test

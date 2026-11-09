@@ -12,10 +12,13 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -68,6 +71,7 @@ internal fun ChatImageViewer(
         Modifier
           .fillMaxSize()
           .background(Color.Black.copy(alpha = 0.96f))
+          .windowInsetsPadding(WindowInsets.safeDrawing)
           .pointerInput(transform, onDismiss, stageOrigin) {
             var lastTap: Offset? = null
             var lastTapTime = 0L
