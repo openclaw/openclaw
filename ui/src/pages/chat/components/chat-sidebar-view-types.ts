@@ -33,6 +33,8 @@ type SessionWorkspaceOptionalKey =
   | "onSearchOpenChange"
   | "onTreeVisibleChange"
   | "onSessionExpandedChange"
+  | "sessionFilesDisplay"
+  | "onSessionFilesDisplayChange"
   | "onNavigationScroll"
   | "connectionEpoch"
   | "onDownloadFile"

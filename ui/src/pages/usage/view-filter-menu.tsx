@@ -1,6 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { For, Show, createMemo } from "solid-js";
 import type { extractQueryTerms } from "../../../../src/shared/usage-query.js";
+import { iconButtonClass } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   Menu,
@@ -259,7 +260,7 @@ export function UsageFilterMenu(props: { model: UsageFilterFields; loading: bool
       label={t("usage.filters.title")}
       class="usage-filter-menu"
       panelClass="usage-filter-menu__panel"
-      triggerClass="btn btn--sm btn--icon usage-filter-menu__trigger"
+      triggerClass={[iconButtonClass(), "usage-filter-menu__trigger"]}
       triggerAttributes={{ title: t("usage.filters.title") }}
       placement="bottom-end"
       controls={controls}
