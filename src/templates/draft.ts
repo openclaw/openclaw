@@ -180,10 +180,10 @@ export async function prepareTemplateDraft(params: {
   }
   for (const pkg of templateDependencyInventory(draftManifest)) {
     add({
-      id: `package:${pkg.kind}:${pkg.ref}`,
+      id: `package:${pkg.kind}:${pkg.source === "bundled" ? pkg.path : pkg.ref}`,
       kind: pkg.kind === "skill" ? "skill" : "plugin",
-      label: pkg.ref,
-      detail: `${pkg.source} · ${pkg.version}`,
+      label: pkg.source === "bundled" ? pkg.path : pkg.ref,
+      detail: pkg.source === "bundled" ? "bundled folder" : `${pkg.source} · ${pkg.version}`,
     });
   }
   for (const [name, server] of Object.entries(draftManifest.mcpServers)) {
@@ -225,10 +225,10 @@ export async function prepareTemplateDraft(params: {
     }
   }
   draftManifest.skills = draftManifest.skills.filter(
-    (pkg) => !excluded.has(`package:skill:${pkg.ref}`),
+    (pkg) => !excluded.has(`package:skill:${"path" in pkg ? pkg.path : pkg.ref}`),
   );
   draftManifest.plugins = draftManifest.plugins.filter(
-    (pkg) => !excluded.has(`package:plugin:${pkg.ref}`),
+    (pkg) => !excluded.has(`package:plugin:${"path" in pkg ? pkg.path : pkg.ref}`),
   );
   for (const key of Object.keys(draftManifest.mcpServers)) {
     if (excluded.has(`mcp:${key}`)) {
@@ -238,7 +238,23 @@ export async function prepareTemplateDraft(params: {
   draftManifest.automations = draftManifest.automations.filter(
     (job) => !excluded.has(`cron:${job.id}`),
   );
-  const selectedFiles = authored.files.filter((file) => !excluded.has(`file:${file.path}`));
+  const excludedBundles = templateDependencyInventory(
+    manifestFromDraft(authored.manifest).manifest,
+  ).filter((pkg) => pkg.source === "bundled" && excluded.has(`package:${pkg.kind}:${pkg.path}`));
+  const retainedWorkspaceSources = new Set([
+    ...draftManifest.workspace.files.map((file) => file.source),
+    ...Object.values(draftManifest.workspace.bootstrapFiles).flatMap((file) =>
+      file ? [file.source] : [],
+    ),
+  ]);
+  const selectedFiles = authored.files.filter(
+    (file) =>
+      !excluded.has(`file:${file.path}`) &&
+      (retainedWorkspaceSources.has(file.path) ||
+        !excludedBundles.some(
+          (pkg) => pkg.source === "bundled" && file.path.startsWith(`${pkg.path}/`),
+        )),
+  );
   const proposal = {
     ...authored,
     name: draftName,

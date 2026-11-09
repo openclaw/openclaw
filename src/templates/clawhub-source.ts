@@ -25,6 +25,7 @@ import {
   type ClawHubPackageListItem,
 } from "../infra/clawhub-packages.js";
 import { withExtractedArchiveRoot } from "../infra/install-flow.js";
+import { projectTemplateCatalogDependencies } from "./catalog-dependencies.js";
 import { parseTemplateManifestSummary } from "./clawhub-manifest-summary.js";
 import {
   readClawHubCatalogPreview,
@@ -492,14 +493,10 @@ async function readClawHubTemplateContents(
         ) {
           instructions.push({ name: "SOUL.md", source: "CLAW.md#body" });
         }
-        const skills = templateDependencyInventory(manifest)
-          .filter((pkg) => pkg.kind === "skill")
-          .map((pkg) => ({
-            name: pkg.ref,
-            source: pkg.source,
-            ref: pkg.ref,
-            version: pkg.version,
-          }));
+        const { skills, integrations } = projectTemplateCatalogDependencies(
+          manifest,
+          verified.snapshot.bundledSources,
+        );
         const [describedInstructions, describedSkills] = requestedPreview
           ? [instructions, skills]
           : await Promise.all([
@@ -548,21 +545,7 @@ async function readClawHubTemplateContents(
             contents: {
               instructions: describedInstructions,
               skills: describedSkills,
-              integrations: [
-                ...templateDependencyInventory(manifest)
-                  .filter((pkg) => pkg.kind === "plugin")
-                  .map((pkg) => ({
-                    name: pkg.ref,
-                    source: pkg.source,
-                    ref: pkg.ref,
-                    kind: "plugin" as const,
-                    version: pkg.version,
-                  })),
-                ...Object.keys(manifest.mcpServers).map((name) => ({
-                  name,
-                  kind: "mcpServer" as const,
-                })),
-              ],
+              integrations,
               automations: manifest.automations.map((job) => ({
                 name: job.name || job.id,
                 enabled: job.enabled ?? true,

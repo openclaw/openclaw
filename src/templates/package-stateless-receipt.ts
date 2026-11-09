@@ -25,7 +25,9 @@ export function createStatelessTemplatePackageReceipt(
   pkg: ResolvedTemplatePackage | PlannedTemplateBundledDependency,
   options: TemplatePackageReceiptOptions,
 ): TemplatePackageReceipt {
-  if (pkg.source === "bundled") return createBundledTemplatePackageReceipt(plan, pkg, options);
+  if (pkg.source === "bundled") {
+    return createBundledTemplatePackageReceipt(plan, pkg, options);
+  }
   const nowMs = options.nowMs ?? Date.now();
   return {
     schemaVersion: TEMPLATE_PACKAGE_REF_SCHEMA_VERSION,

@@ -20,7 +20,7 @@ export function bindTemplateSkillWarningConsent(
   const firstWarning = reviews[0];
   if (options.directInstall && acknowledgements === undefined && firstWarning) {
     throw new TemplateSkillConsentError(
-      `Skill ${firstWarning.ref} needs approval before this Template can be installed.`,
+      `Skill ${"path" in firstWarning ? firstWarning.name : firstWarning.ref} needs approval before this Template can be installed.`,
     );
   }
   const received = acknowledgements ?? [];
@@ -40,7 +40,9 @@ export function bindTemplateSkillWarningConsent(
     if (
       !review ||
       acknowledged.has(entry.actionId) ||
-      entry.ref !== review.ref ||
+      ("path" in entry
+        ? !("path" in review) || entry.path !== review.path || entry.digest !== review.digest
+        : !("ref" in review) || entry.ref !== review.ref) ||
       entry.reviewToken !== review.reviewToken ||
       !entry.acknowledgeRiskWarning
     ) {
@@ -54,11 +56,19 @@ export function bindTemplateSkillWarningConsent(
   return {
     assertApproved: (pkg) => {
       assertCurrent();
-      const review = byActionId.get(`skill:${pkg.ref}`);
+      const review = byActionId.get(
+        "path" in pkg ? `skill:bundled:${pkg.path}` : `skill:${pkg.ref}`,
+      );
       if (
         !review ||
-        review.version !== pkg.version ||
-        review.integrity !== pkg.integrity ||
+        ("path" in pkg
+          ? !("path" in review) ||
+            review.path !== pkg.path ||
+            review.name !== pkg.name ||
+            review.digest !== pkg.digest
+          : !("ref" in review) ||
+            review.version !== pkg.version ||
+            review.integrity !== pkg.integrity) ||
         review.riskWarning !== pkg.riskWarning
       ) {
         throw new TemplateSkillConsentError(

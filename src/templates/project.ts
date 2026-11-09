@@ -370,6 +370,9 @@ export async function validateTemplateProject(
     ...(license ? ["LICENSE"] : []),
     ...(template.packageBootstrap ? ["BOOTSTRAP.md"] : []),
     ...template.snapshot.workspaceSources.map((source) => source.sourcePath),
+    ...(template.snapshot.bundledSources ?? []).flatMap((source) =>
+      source.snapshot.files.map((file) => `${source.path}/${file.path}`),
+    ),
   ];
   const portableSelectedPaths = new Map<string, string>();
   for (const path of selectedPathList) {

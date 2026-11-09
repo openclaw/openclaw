@@ -36,6 +36,7 @@ Use `workspace.bootstrapFiles` for supported startup files and `workspace.files`
 
 ```yaml
 skills:
+  - path: skills/portable-checklist
   - ref: "@publisher/skill-name"
     version: 1.2.3
 plugins:
@@ -43,6 +44,6 @@ plugins:
     version: 2.0.0
 ```
 
-These package entries reference ClawHub versions. They do not copy skill or plugin code into the Template archive. Keep tokens, credentials, personal accounts, and runtime-specific model choices out of the draft. The review service rejects unsafe paths and credential-like contents before publication.
+Each entry is either `{ path }` for a newly authored bundled folder, or `{ ref, version }` for an exact ClawHub release. For the bundled skill example, include `skills/portable-checklist/SKILL.md` and its supporting text files in `files`; the builder selects them automatically. A skill folder needs a valid root `SKILL.md` with a description. Never invent a registry reference or version for local content. Referenced releases do not copy code into the archive. Keep tokens, credentials, personal accounts, and runtime-specific model choices out of the draft. The review service rejects unsafe paths and credential-like contents before publication.
 
 Put supported native settings such as tools, sandbox, memory, heartbeat, groupChat, and humanDelay directly under `agent`. `CLAW.md` owns all configuration; keep `schemaVersion: 1` and use the top-level `skills` and `plugins` lists for dependencies.

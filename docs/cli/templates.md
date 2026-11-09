@@ -146,7 +146,9 @@ catalog discovery; the receiving registry decides which category names it
 accepts. Categories do not change the agent's runtime behavior.
 
 `CLAW.md` is the sole configuration entry point. Put native agent settings
-under `agent`, and exact ClawHub dependencies in `skills` and `plugins`.
+under `agent`, and dependencies in `skills` and `plugins`. Each entry selects
+either a bundled package-relative folder with `path`, or an exact ClawHub release
+with `ref` and `version`; do not combine those forms.
 The retired `packages`, `profiles`, and `metadata.openclaw.config` declarations
 are rejected with migration guidance. Remove the profile directory after moving
 its supported settings into `agent`; retain `schemaVersion: 1`.
@@ -170,6 +172,7 @@ MCP servers, and scheduled automations:
 
 ```yaml
 skills:
+  - path: skills/incident-checklist
   - ref: incident-triage
     version: 1.0.0
 plugins:
@@ -188,6 +191,22 @@ automations:
     session: isolated
     message: Summarize active incidents.
 ```
+
+A bundled skill folder must contain a valid root `SKILL.md`. Add installs that
+folder under the new agent's ordinary workspace `skills/` directory, using its
+native skill identity. Supporting files are included automatically, including
+binary assets. Declare only folders you intend to share; undeclared skill
+folders are not installed or counted as dependencies. Bundled contents show their
+name and package-relative path; they have no invented registry version or
+standalone ClawHub verification claim.
+
+Bundled skill and plugin folders use the same bounded selection: regular files
+only, at most 1 MiB per file, 20 MiB across bundled dependencies, 4,096 entries
+per folder, 4,096 selected bundled files in total, and 16 directory levels. `.git` and `node_modules` directories are
+excluded regardless of case. Links, nonregular files, unsafe portable paths,
+overlapping bundled directories, and conflicting skill identities or workspace
+destinations are rejected. Build and Add reject changed source bytes or folder
+membership after review. File modes follow ordinary Template packaging.
 
 Use `automations` for scheduled work. The retired `cronJobs` key is rejected;
 move its declarations to `automations` and remove `cronJobs`.

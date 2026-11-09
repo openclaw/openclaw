@@ -6,6 +6,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
+import { inspectTemplateBundledSkill } from "./bundled-skill.js";
+import { snapshotTemplateDependencyDirectory } from "./dependency-directory.js";
+import { templateDependencyInventory } from "./dependency-inventory.js";
 import { digestTemplateBytes } from "./digest.js";
 import {
   isCanonicalClawHubPackageName,
@@ -16,11 +19,14 @@ import { templateManifestWorkspaceConflictsWithPath, parseTemplateManifest } fro
 import { templateWorkspaceSourceFailure } from "./source-diagnostics.js";
 import {
   MAX_TEMPLATE_MANIFEST_BYTES,
+  MAX_TEMPLATE_DIRECTORY_BYTES,
+  MAX_TEMPLATE_DIRECTORY_ENTRIES,
   MAX_MANAGED_FILE_BYTES,
   MAX_MANAGED_WORKSPACE_BYTES,
 } from "./source-limits.js";
 import type {
   TemplateDiagnostic,
+  TemplateBundledSourceSnapshot,
   TemplateReadResult,
   TemplateSourceIdentity,
   TemplateWorkspaceSourceSnapshot,
@@ -439,6 +445,46 @@ export async function readTemplateManifestFile(path: string): Promise<TemplateRe
   } finally {
     await Promise.all(openedSources.map(({ opened }) => opened[Symbol.asyncDispose]()));
   }
+  const bundledSources: TemplateBundledSourceSnapshot[] = [];
+  let bundledByteLength = 0;
+  let bundledFileCount = 0;
+  for (const dependency of templateDependencyInventory(parsed.manifest)) {
+    if (dependency.source !== "bundled") {
+      continue;
+    }
+    try {
+      const snapshot = await snapshotTemplateDependencyDirectory({
+        rootDir: resolvedSource.packageRoot,
+        path: dependency.path,
+      });
+      const identity =
+        dependency.kind === "skill"
+          ? inspectTemplateBundledSkill(resolvedSource.packageRoot, dependency.path, snapshot)
+          : undefined;
+      bundledSources.push({
+        kind: dependency.kind,
+        path: dependency.path,
+        snapshot,
+        ...(identity ? { name: identity.name } : {}),
+      });
+      add(`bundled:${dependency.path}`, Buffer.from(snapshot.digest));
+      byteLength += snapshot.byteLength;
+      bundledByteLength += snapshot.byteLength;
+      bundledFileCount += snapshot.files.length;
+      if (bundledFileCount > MAX_TEMPLATE_DIRECTORY_ENTRIES) {
+        throw new Error("Bundled dependencies exceed their aggregate file limit.");
+      }
+      if (bundledByteLength > MAX_TEMPLATE_DIRECTORY_BYTES) {
+        throw new Error("Bundled dependencies exceed their aggregate byte limit.");
+      }
+    } catch (error) {
+      return fileFailure(
+        "bundled_dependency_invalid",
+        error instanceof Error ? error.message : String(error),
+        dependency.kind === "skill" ? "$.skills" : "$.plugins",
+      );
+    }
+  }
   const source: TemplateSourceIdentity = {
     kind: resolvedSource.kind,
     name: resolvedSource.name,
@@ -457,6 +503,7 @@ export async function readTemplateManifestFile(path: string): Promise<TemplateRe
     source,
     snapshot: {
       manifest: manifestSnapshot,
+      bundledSources,
       workspaceSources,
       ...(packageBootstrap ? { packageBootstrap } : {}),
     },

@@ -536,7 +536,7 @@ describe("buildTemplateAddPlan", () => {
           ok: true,
           action: "install",
           integrity: `sha256:${(pkg.kind === "skill" ? "a" : "b").repeat(64)}`,
-          warning: `Review ${pkg.ref} before installation.`,
+          warning: `Review ${pkg.source === "bundled" ? pkg.path : pkg.ref} before installation.`,
           ...(pkg.kind === "plugin"
             ? {
                 installId: "github",

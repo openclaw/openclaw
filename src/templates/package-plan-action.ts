@@ -95,11 +95,13 @@ export function bundledDependencyFromAction(
     typeof details.name !== "string" ||
     typeof details.installId !== "string" ||
     (details.ownerAction !== "install" && details.ownerAction !== "reuse")
-  )
+  ) {
     throw new Error("Bundled dependency action has incomplete source identity.");
+  }
   const snapshot = details.snapshot;
-  if (!snapshot || snapshot.digest !== action.digest)
+  if (!snapshot || snapshot.digest !== action.digest) {
     throw new Error("Bundled dependency action has no reviewed directory snapshot.");
+  }
   return {
     kind: details.kind,
     source: "bundled",

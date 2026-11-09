@@ -37,6 +37,7 @@ import {
   rollbackStatelessTemplateMcpServers,
   type PersistedTemplateMcpServerRef,
 } from "./mcp.js";
+import type { TemplatePackageReceipt } from "./package-stateless-receipt.js";
 import {
   TemplatePackageInstallError,
   installTemplatePackages,
@@ -45,7 +46,6 @@ import {
   type TemplateSkillInstallConsent,
 } from "./packages.js";
 import type { TemplatePluginRuntimeOptions } from "./plugin-runtime.js";
-import type { PersistedTemplatePackageRef } from "./provenance.js";
 import type { TemplateMutationStateOptions } from "./state-mutation-options.js";
 import { TEMPLATE_OUTPUT_STABILITY, type TemplateAddPlan } from "./types.js";
 import { createTemplateWorkspaceFiles, type PersistedTemplateWorkspaceFile } from "./workspace.js";
@@ -87,7 +87,7 @@ export type StatelessTemplateAddResult = {
   workspaceCreated: boolean;
   configCommitted: boolean;
   workspaceFiles: PersistedTemplateWorkspaceFile[];
-  packages: PersistedTemplatePackageRef[];
+  packages: TemplatePackageReceipt[];
   mcpServers: PersistedTemplateMcpServerRef[];
   cronJobs: PersistedTemplateCronRef[];
   error?: { code: string; message: string };
@@ -205,7 +205,7 @@ export async function stageTemplateAddHostRequirementsStateless(
   let configCommitAttempted = false;
   let workspaceFiles: PersistedTemplateWorkspaceFile[] = [];
   let bootstrapSeededAt: string | undefined;
-  let packages: PersistedTemplatePackageRef[] = [];
+  let packages: TemplatePackageReceipt[] = [];
   const mcpServers: PersistedTemplateMcpServerRef[] = [];
   let cronJobs: PersistedTemplateCronRef[] = [];
   let continued = false;

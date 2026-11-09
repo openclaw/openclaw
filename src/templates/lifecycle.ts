@@ -6,10 +6,12 @@ import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { parseRequestedClawHubSkillRef } from "../skills/lifecycle/clawhub-store.js";
 import { resolveUserPath } from "../utils.js";
 import { templateAgentCopyNumber, selectNextTemplateAgentId } from "./add-agent-id.js";
 import { templateOwnedAgentConfig } from "./agent-config-ownership.js";
 import { templateAddCapabilityChange, templateAgentCapabilityChange } from "./application-plan.js";
+import { planBundledTemplateDependency } from "./bundled-dependency-plan.js";
 import { templateDependencyInventory } from "./dependency-inventory.js";
 import { digestTemplateBytes, digestTemplateValue } from "./digest.js";
 import { digestTemplateMcpServer } from "./mcp.js";
@@ -32,6 +34,7 @@ import {
   type TemplatePackagePreflightResult,
   type TemplateSourceIdentity,
   type TemplateWorkspaceSourceSnapshot,
+  type TemplateBundledSourceSnapshot,
 } from "./types.js";
 
 const AGENT_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -72,6 +75,7 @@ export async function buildTemplateAddPlan(params: {
   manifest: TemplateManifest;
   templateMarkdownBody?: Buffer;
   packageBootstrap?: TemplateWorkspaceSourceSnapshot;
+  bundledSources?: TemplateBundledSourceSnapshot[];
   source: TemplateSourceIdentity;
   diagnostics?: TemplateDiagnostic[];
   context?: TemplateAddPlanContext;
@@ -399,12 +403,49 @@ export async function buildTemplateAddPlan(params: {
     }
   }
 
+  const referencedSkillTargets = new Set(
+    templateDependencyInventory(params.manifest).flatMap((dependency) =>
+      dependency.kind === "skill" && dependency.source === "clawhub"
+        ? [parseRequestedClawHubSkillRef(dependency.ref).slug.toLowerCase()]
+        : [],
+    ),
+  );
+  const bundledSkillNames = new Set<string>();
+  const bundledSkillTargets = new Set<string>();
   for (const pkg of templateDependencyInventory(params.manifest)) {
     const collection = pkg.kind === "skill" ? "skills" : "plugins";
-    const index = params.manifest[collection].findIndex((entry) => entry.ref === pkg.ref);
+    const index = params.manifest[collection].findIndex((entry) =>
+      pkg.source === "bundled"
+        ? "path" in entry && entry.path === pkg.path
+        : "ref" in entry && entry.ref === pkg.ref,
+    );
     const declarationPath = `$.${collection}[${index}]`;
+    if (pkg.source === "bundled") {
+      const planned = await planBundledTemplateDependency({
+        dependency: pkg,
+        manifest: params.manifest,
+        declarationPath,
+        packageRoot,
+        workspace,
+        snapshot: params.bundledSources?.find(
+          (bundledSource) => bundledSource.kind === pkg.kind && bundledSource.path === pkg.path,
+        )?.snapshot,
+        config: context.config,
+        packagePreflight: context.packagePreflight,
+        skillNames: bundledSkillNames,
+        skillTargets: bundledSkillTargets,
+        referencedSkillTargets,
+      });
+      actions.push(planned.action);
+      capabilityChanges.push(planned.capabilityChange);
+      if (planned.diagnostic) {
+        blockers.push(planned.diagnostic);
+      }
+      readinessRequirements.push(...planned.requirements);
+      continue;
+    }
     const preflight: TemplatePackagePreflightResult = context.packagePreflight
-      ? await context.packagePreflight(pkg, workspace)
+      ? await context.packagePreflight(pkg, workspace, { packageRoot })
       : {
           ok: false,
           code: "package_install_unavailable",

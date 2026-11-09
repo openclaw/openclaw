@@ -440,6 +440,38 @@ describe("public ClawHub Template catalog", () => {
     });
   });
 
+  it("discloses and previews bundled skills only from the verified artifact", async () => {
+    const skill = path.join(fixtureRoot, "skills", "local-checklist");
+    await fs.mkdir(skill, { recursive: true });
+    const content =
+      "---\nname: local-checklist\ndescription: Follow the local checklist.\n---\n# Local checklist\nRead references/checklist.bin.\n";
+    await fs.writeFile(path.join(skill, "SKILL.md"), content);
+    await fs.mkdir(path.join(skill, "references"));
+    await fs.writeFile(path.join(skill, "references", "checklist.bin"), Buffer.from([0, 255, 128]));
+    await fs.mkdir(path.join(fixtureRoot, "undeclared"));
+    await fs.writeFile(
+      path.join(fixtureRoot, "undeclared", "SKILL.md"),
+      "---\nname: undeclared\ndescription: Not a dependency.\n---\n",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "CLAW.md"),
+      `---\n${JSON.stringify({ ...emptyManifest, skills: [{ path: "skills/local-checklist" }] })}\n---\n`,
+    );
+    const detail = await readClawHubTemplateDetail({ packageName });
+    expect(validateTemplatesCatalogDetailResult({ detail })).toBe(true);
+    expect(detail.skills).toBe(1);
+    expect(detail.contents.skills).toEqual([
+      {
+        name: "local-checklist",
+        source: "bundled",
+        path: "skills/local-checklist",
+        excerpt: "Local checklist Read references/checklist.bin.",
+      },
+    ]);
+    await expectPreview("skill", "local-checklist", content);
+    expect(mocks.skillCard).not.toHaveBeenCalled();
+  });
+
   it("keeps the detail available when a skill card cannot be fetched", async () => {
     mocks.skillCard.mockRejectedValueOnce(new Error("Skill card unavailable"));
 

@@ -4,6 +4,7 @@ import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import * as tar from "tar";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { snapshotTemplateDependencyDirectory } from "./dependency-directory.js";
 import { digestTemplateBytes } from "./digest.js";
 import {
   TEMPLATE_PROJECT_RESULT_SCHEMA_VERSION,
@@ -120,6 +121,25 @@ export async function buildTemplateProject(projectPath: string, outputPath: stri
       const bytes = await readSelectedProjectFile(project.root, source.sourcePath);
       assertValidatedBytes(source.sourcePath, bytes, source);
       files.set(source.sourcePath, bytes);
+    }
+
+    for (const source of project.template.snapshot.bundledSources ?? []) {
+      const current = await snapshotTemplateDependencyDirectory({
+        rootDir: project.root,
+        path: source.path,
+      });
+      if (current.digest !== source.snapshot.digest) {
+        throw new TemplateProjectError(
+          "project_changed_during_build",
+          "Bundled dependency changed after validation.",
+        );
+      }
+      for (const file of source.snapshot.files) {
+        const path = `${source.path}/${file.path}`;
+        const bytes = await readSelectedProjectFile(project.root, path);
+        assertValidatedBytes(path, bytes, file);
+        files.set(path, bytes);
+      }
     }
 
     const fileNames = [...files.keys()].toSorted((left, right) =>
