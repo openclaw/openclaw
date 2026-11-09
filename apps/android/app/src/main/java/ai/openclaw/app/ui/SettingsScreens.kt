@@ -105,6 +105,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -2109,11 +2110,14 @@ private fun AppearanceThemeFamilyCard(
         .clip(shape)
         .background(if (selected) ClawTheme.colors.surfacePressed else ClawTheme.colors.surface)
         .border(1.dp, if (selected) ClawTheme.colors.primary else ClawTheme.colors.borderStrong, shape)
-        .clickable(onClick = onClick)
+        .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
         .padding(ClawTheme.spacing.xs),
     verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
   ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(
+      modifier = Modifier.clearAndSetSemantics {},
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
       Row(
         modifier = Modifier.weight(1f),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
