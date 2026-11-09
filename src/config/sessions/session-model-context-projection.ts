@@ -269,11 +269,15 @@ export function projectModelContextNavigationSql(
     const type =
       entryType ??
       /* kysely-allow-raw: Discriminant lookup from the once-parsed event. */ sql`${source} ->> 'type'`;
-    return /* kysely-allow-raw: Parse the event once and keep navigation intermediates native. */ sql<string>`(
-      WITH nav_input AS MATERIALIZED (SELECT ${event}::jsonb AS event),
+    // Rows JSONB cannot decode reach their JavaScript readers as the original entry. Bound
+    // writer inputs are plan-time constants, so the cast itself must stay behind the guard.
+    const native = jsonNativeFieldsValid(db, event);
+    return /* kysely-allow-raw: Parse the event once and keep navigation intermediates native. */ sql<string>`CASE WHEN ${native} THEN (
+      WITH nav_input AS MATERIALIZED (SELECT (CASE WHEN ${native} THEN ${event} END)::jsonb AS event),
       nav_parts AS MATERIALIZED (SELECT event, event -> 'message' AS message,
         event #> '{message,content}' AS content FROM nav_input)
-      SELECT ${postgresModelNavigationSql(source, message, content, type)}::text FROM nav_parts)`;
+      SELECT ${postgresModelNavigationSql(source, message, content, type)}::text FROM nav_parts)
+      ELSE ${event} END`;
   }
   const sqliteEntryType = entryType ?? jsonPathValue(db, event, sql.lit("$.type"));
   const entry = jsonPickObject(db, event, MODEL_CONTEXT_NAVIGATION_KEYS);

@@ -2,7 +2,11 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
-import { jsonArrayElements, jsonPathValue } from "../../infra/database-engine/json-values.js";
+import {
+  jsonArrayElements,
+  jsonNativeFieldsValid,
+  jsonPathValue,
+} from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -455,13 +459,15 @@ export function readSessionTranscriptBoundedActiveContextCore(
         truncated = true;
       }
     }
-    const dependencyField = <T = string | null>(path: string) =>
-      jsonPathValue<T>(
-        projection.database.db,
-        /* kysely-allow-raw: fixed materialized navigation column shared by dependency predicates. */
-        sql.ref("dependency.navigation_json"),
-        sql.val(path),
+    const dependencyNavigation =
+      /* kysely-allow-raw: fixed materialized navigation column shared by dependency predicates. */ sql.ref<string>(
+        "dependency.navigation_json",
       );
+    // Rows native fields cannot decode reach the JavaScript classifier below unfiltered.
+    const dependencyNative = jsonNativeFieldsValid(projection.database.db, dependencyNavigation);
+    const dependencyField = <T = string | null>(path: string) =>
+      /* kysely-allow-raw: CASE fences native decoding of escapes JSONB rejects. */
+      sql<T>`CASE WHEN ${dependencyNative} THEN ${jsonPathValue<T>(projection.database.db, dependencyNavigation, sql.val(path))} END`;
     const dependencyCandidates = Array.from(
       iterateSqliteQuerySync(
         projection.database.db,
@@ -510,6 +516,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
           .select(["event_seq", "navigation_json", "serialized_bytes"])
           .where((eb) =>
             eb.or([
+              eb.not(dependencyNative),
               eb.and([
                 eb("context_eligible", "=", 0),
                 eb(

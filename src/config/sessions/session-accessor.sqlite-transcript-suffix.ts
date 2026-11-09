@@ -38,6 +38,7 @@ import { scheduleTranscriptProjectionReconcile } from "./session-transcript-reco
 import {
   projectTranscriptRetainedDataSql,
   stageRetainedTranscriptData,
+  withoutRetainedCustomData,
 } from "./session-transcript-retained-data.js";
 import {
   prepareFullTranscriptSuffixMutation,
@@ -93,7 +94,11 @@ function readTranscriptSuffixStorageRows(
       .where("seq", ">=", startSeq)
       .orderBy("seq", "asc")
       .limit(expectedRows + 1),
-  ).rows.map((row) => ({ createdAt: row.created_at, eventJson: row.event_json, seq: row.seq }));
+  ).rows.map((row) => ({
+    createdAt: row.created_at,
+    eventJson: withoutRetainedCustomData(row.event_json, retainedCustomDataIds),
+    seq: row.seq,
+  }));
 }
 
 function prepareIncrementalTranscriptSuffixMutation(

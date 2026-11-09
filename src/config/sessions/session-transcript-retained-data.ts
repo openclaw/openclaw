@@ -2,18 +2,22 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql, type AliasableExpression } from "kysely";
 import {
+  jsonNativeFieldsValid,
   jsonPathValue,
   jsonRemovePaths,
   jsonSetPath,
-  jsonValid,
 } from "../../infra/database-engine/json-values.js";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
+import { scanJsonObjectFields } from "../../state/json-predicate-fields.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { SqliteTranscriptStorageRow } from "./session-accessor.sqlite-read.js";
@@ -36,14 +40,17 @@ export function transcriptRetainedDataBytesSql(
     return transcriptEventReadBytesSql();
   }
   const event = transcriptEventNavigationSql(database);
-  return /* kysely-allow-raw: mirror the retained-data projection's SQLite-first member matching. */ sql<number>`CASE WHEN ${jsonValid(database, event)} THEN
+  return /* kysely-allow-raw: mirror the retained-data projection's SQLite-first member matching. */ sql<number>`CASE WHEN ${jsonNativeFieldsValid(database, event)} THEN
     CASE WHEN ${jsonPathValue(database, event, sql.lit("$.type"))} = 'custom'
       AND ${jsonPathValue(database, event, sql.lit("$.id"))} IN (${sql.join(retainedIds)})
       THEN ${transcriptEventWithoutCustomDataBytesSql(database)} ELSE ${transcriptEventReadBytesSql()} END
     ELSE ${transcriptEventReadBytesSql()} END`;
 }
 
-/** Custom data is opaque to topology and indexing; cleanup keeps it in SQLite. */
+/**
+ * Custom data is opaque to topology and indexing; cleanup keeps it in SQLite.
+ * Rows native fields cannot decode keep their data here; withoutRetainedCustomData drops it.
+ */
 export function projectTranscriptRetainedDataSql(
   database: EngineConnection,
   event: AliasableExpression<string>,
@@ -51,11 +58,36 @@ export function projectTranscriptRetainedDataSql(
 ): AliasableExpression<string> {
   return retainedIds.length === 0
     ? event
-    : /* kysely-allow-raw: bound cleanup planning to navigation while retaining opaque custom data in its original row. */ sql<string>`CASE WHEN ${jsonValid(database, event)} THEN
+    : /* kysely-allow-raw: bound cleanup planning to navigation while retaining opaque custom data in its original row. */ sql<string>`CASE WHEN ${jsonNativeFieldsValid(database, event)} THEN
         CASE WHEN ${jsonPathValue(database, event, sql.lit("$.type"))} = 'custom'
           AND ${jsonPathValue(database, event, sql.lit("$.id"))} IN (${sql.join(retainedIds)})
         THEN ${jsonRemovePaths(database, event, [sql.lit("$.data")])} ELSE ${event} END
       ELSE ${event} END`;
+}
+
+/** JavaScript half of projectTranscriptRetainedDataSql for rows native fields cannot decode. */
+export function withoutRetainedCustomData(
+  eventJson: string,
+  retainedIds: readonly string[],
+): string {
+  if (retainedIds.length === 0) {
+    return eventJson;
+  }
+  const fields = scanJsonObjectFields(eventJson, ["data"]);
+  if (!fields.valid || !fields.first.has("data")) {
+    return eventJson;
+  }
+  const event: unknown = JSON.parse(eventJson);
+  if (
+    !isRecord(event) ||
+    event.type !== "custom" ||
+    typeof event.id !== "string" ||
+    !retainedIds.includes(event.id)
+  ) {
+    return eventJson;
+  }
+  const { data: _data, ...projected } = event;
+  return JSON.stringify(projected);
 }
 
 /** Stage opaque payloads inside the same transaction before their old suffix rows are removed. */
@@ -130,6 +162,24 @@ export function copyRetainedTranscriptPayload(
   parentId?: string | null,
 ): void {
   const db = getSessionKysely(database.db);
+  // Parent repair of a row native fields cannot decode happens in JavaScript.
+  const exceptionalJson =
+    parentId === undefined
+      ? undefined
+      : executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("transcript_events")
+            .select(
+              /* kysely-allow-raw: only rows JSONB rejects are materialized in JavaScript. */
+              sql<
+                string | null
+              >`CASE WHEN ${jsonNativeFieldsValid(database.db, transcriptEventJsonSql(database.db))}
+                THEN NULL ELSE ${transcriptEventJsonSql(database.db)} END`.as("event_json"),
+            )
+            .where("session_id", "=", sessionId)
+            .where("seq", "=", sourceSeq),
+        )?.event_json;
   const copied = withSqliteDatabaseWriteScope(
     database.db,
     [sqliteSessionIdWriteScope(sessionId)],
@@ -146,12 +196,14 @@ export function copyRetainedTranscriptPayload(
                 const eventJson: AliasableExpression<string | null> =
                   parentId === undefined
                     ? eb.ref("event_json")
-                    : jsonSetPath(
-                        database.db,
-                        transcriptEventJsonSql(database.db),
-                        sql.lit("$.parentId"),
-                        sql.val(parentId),
-                      );
+                    : typeof exceptionalJson === "string"
+                      ? /* kysely-allow-raw: bound JavaScript-repaired JSON text. */ sql<string>`CAST(${JSON.stringify(Object.assign(JSON.parse(exceptionalJson), { parentId }))} AS TEXT)`
+                      : jsonSetPath(
+                          database.db,
+                          transcriptEventJsonSql(database.db),
+                          sql.lit("$.parentId"),
+                          sql.val(parentId),
+                        );
                 return [
                   eb.val(sessionId).as("session_id"),
                   eb.val(destinationSeq).as("seq"),

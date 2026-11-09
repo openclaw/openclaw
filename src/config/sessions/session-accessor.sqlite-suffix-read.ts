@@ -26,6 +26,7 @@ import {
 import {
   projectTranscriptRetainedDataSql,
   transcriptRetainedDataBytesSql,
+  withoutRetainedCustomData,
 } from "./session-transcript-retained-data.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 
@@ -131,7 +132,12 @@ export function loadTranscriptSuffixEventsBoundedFromDatabase(
           .orderBy("seq", "asc"),
       ).rows;
       // SAFETY: Raw transcript rows are parsed through the persisted transcript event union.
-      return rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+      return rows.map(
+        (row) =>
+          JSON.parse(
+            withoutRetainedCustomData(row.event_json, limits.retainedCustomDataIds ?? []),
+          ) as TranscriptEvent,
+      );
     },
     {
       databaseLabel: database.path,
