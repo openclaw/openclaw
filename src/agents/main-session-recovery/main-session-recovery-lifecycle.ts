@@ -133,7 +133,7 @@ export function projectMainSessionRecoveryLifecycle(params: {
     | (Partial<MainRecoveryStateFields> &
         Pick<
           Partial<SessionEntry>,
-          "restartRecoveryDeliveryRunId" | "restartRecoveryTerminalRunIds"
+          "restartRecoveryDeliveryRunId" | "restartRecoveryTerminalRunIds" | "lifecycleRunId"
         >)
     | null;
   event: MainRecoveryLifecycleEvent;
@@ -159,10 +159,20 @@ export function projectMainSessionRecoveryLifecycle(params: {
   const runId = params.event.runId?.trim();
   const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
   const runs = params.entry?.restartRecoveryRuns;
+  // Cancellation can beat the start refresh. Only the current lifecycle owner
+  // may settle its own run's older-generation fence, never a replacement's.
+  const currentOwnerTerminalFence =
+    settlesRecovery &&
+    lifecycleGeneration === params.currentLifecycleGeneration &&
+    params.entry?.lifecycleRunId === runId;
   const matchesFence = Boolean(
     runId &&
     lifecycleGeneration &&
-    runs?.some((run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration),
+    runs?.some(
+      (run) =>
+        run.runId === runId &&
+        (run.lifecycleGeneration === lifecycleGeneration || currentOwnerTerminalFence),
+    ),
   );
   // The current owner retires stale generations of its own run id. An older
   // delayed event consumes only its matching fence and cannot settle its replacement.
@@ -200,6 +210,7 @@ export function projectMainSessionRecoveryLifecycle(params: {
     );
     if (
       params.entry?.abortedLastRun === true &&
+      !currentOwnerTerminalFence &&
       !foreground.claimId &&
       !foreground.hasCurrentOwner &&
       buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase, data: params.event.data }).reason !==

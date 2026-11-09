@@ -30,6 +30,8 @@ import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js
 import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveAgentIdentity } from "../identity.js";
+import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
+import { isCliProvider } from "../model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSpawnedWorkspaceInheritance, type SpawnedToolContext } from "../spawned-context.js";
 import {
@@ -47,6 +49,7 @@ import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
+  splitModelRef,
 } from "../subagents/spawn/subagent-spawn-plan.js";
 import { readRequesterPreferences } from "../subagents/spawn/subagent-spawn-requester-prefs.js";
 import { buildSubagentTaskMessage } from "../subagents/spawn/subagent-system-prompt.js";
@@ -355,6 +358,28 @@ export async function maybeSpawnVisibleSession(params: {
   }
   const { resolvedModel, inheritedModel, initialSessionPatch } = modelPlan;
   const { authProfileOverride } = initialSessionPatch;
+  // Recheck after model selection, before child creation. The final run seam
+  // also guards fallback candidates and later runtime overrides.
+  if (childRuntimeSandboxed) {
+    const { provider, model } = splitModelRef(resolvedModel);
+    const cliExecutionProvider =
+      resolveCliRuntimeExecutionProvider({
+        cfg,
+        provider: provider ?? "",
+        modelId: model,
+        agentId: targetAgentId,
+        authProfileId: authProfileOverride,
+      }) ??
+      provider ??
+      "";
+    if (isCliProvider(cliExecutionProvider, cfg)) {
+      const error = `This spawn targets a sandboxed child, but model "${resolvedModel}" runs on host-executed CLI backend "${cliExecutionProvider}" and cannot honor the sandbox. Choose a sandbox-compatible (embedded/API) model for the child, or change the agent's sandbox policy explicitly.`;
+      return {
+        status: "forbidden",
+        error,
+      };
+    }
+  }
   const resolvedModelRef = authProfileOverride
     ? `${resolvedModel}@${authProfileOverride}`
     : resolvedModel;

@@ -1,16 +1,25 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   InternalSessionEntry as SessionEntry,
   MainRestartRecoveryState,
 } from "../../config/sessions.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import {
+  beginSessionWorkAdmission,
+  isSessionWorkAdmissionActive,
+  type SessionWorkAdmissionLease,
+} from "../../sessions/session-lifecycle-admission.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
-import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-restart-recovery-marking.js";
+import {
+  markOrphanedMainSessionForRecovery,
+  markStartupOrphanedMainSessionsForRecovery,
+} from "./main-session-restart-recovery-marking.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
 
 // Regression coverage for #118873: a terminal-only mainRestartRecovery
@@ -233,5 +242,220 @@ describe("main session recovery terminal-only residue", () => {
     });
 
     expect(result).toMatchObject({ kind: "observed", view: { status: "blocked" } });
+  });
+  it.each([false, true])(
+    "releases ownerless killed fences before foreground admission (aborted=%s)",
+    async (abortedLastRun) => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-killed-admission-"));
+      const storePath = path.join(tempDir, "sessions.json");
+      try {
+        await replaceSessionEntry(
+          { sessionKey, storePath },
+          settledEntry({
+            status: "killed",
+            abortedLastRun,
+            mainRestartRecovery: undefined,
+            restartRecoveryTerminalRunIds: [],
+          }),
+        );
+        await expect(
+          markOrphanedMainSessionForRecovery({
+            target: { agentId: "main", sessionKey, storePath },
+            expectedSessionId: "session-1",
+          }),
+        ).resolves.toMatchObject({ marked: 0, skipped: 1 });
+        const entry = loadSessionEntry({ readConsistency: "latest", sessionKey, storePath });
+        expect(entry).toMatchObject({ status: "killed", abortedLastRun: false });
+        expect(entry?.restartRecoveryRuns).toBeUndefined();
+        expect(entry?.mainRestartRecovery).toBeUndefined();
+      } finally {
+        await cleanupSessionStateForTest({ stateDir: tempDir });
+        await fs.rm(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it("finds killed-only stores at startup without clearing live, delivery, reservation or tombstone owners", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-killed-startup-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    let admission: SessionWorkAdmissionLease | undefined;
+    const entries: Record<string, SessionEntry> = {
+      released: settledEntry({
+        status: "killed",
+        abortedLastRun: true,
+        mainRestartRecovery: undefined,
+        restartRecoveryTerminalRunIds: [],
+      }),
+      live: settledEntry({
+        sessionId: "live-session",
+        status: "killed",
+        mainRestartRecovery: undefined,
+        restartRecoveryTerminalRunIds: [],
+      }),
+      pending: settledEntry({
+        status: "killed",
+        pendingFinalDelivery: { kind: "replayable", text: "pending", createdAt: 1 },
+      }),
+      delivery: settledEntry({ status: "killed", restartRecoveryDeliveryRunId: "delivery-owner" }),
+      harness: settledEntry({
+        status: "killed",
+        restartRecoveryHarnessCompletion: {
+          taskId: "task",
+          taskStatus: "succeeded",
+          taskRunId: "task-run",
+          sourceRunId: "source",
+          requesterSessionKey: "agent:main:harness",
+          requesterAgentId: "main",
+          sessionId: "session-1",
+        },
+      }),
+      reserved: settledEntry({
+        status: "killed",
+        mainRestartRecovery: recoveryState({
+          reservation: { lifecycleGeneration: "current", runId: "reserved", attempt: 1 },
+        }),
+      }),
+      foreground: settledEntry({
+        status: "killed",
+        mainRestartRecovery: recoveryState({
+          foregroundClaims: { lifecycleGeneration: "current", tokens: ["owner"] },
+        }),
+      }),
+      tombstone: settledEntry({
+        status: "killed",
+        mainRestartRecovery: recoveryState({ tombstone: { reason: "exhausted" } }),
+      }),
+    };
+    try {
+      for (const [name, entry] of Object.entries(entries)) {
+        entry.restartRecoveryTerminalRunIds = [];
+        await replaceSessionEntry({ sessionKey: "agent:main:" + name, storePath }, entry);
+      }
+      // A real session lease can outlive agent/embedded registration.
+      admission = await beginSessionWorkAdmission({
+        scope: storePath,
+        identities: ["agent:main:live", "live-session"],
+        assertAllowed: () => {},
+      });
+      expect(isSessionWorkAdmissionActive(storePath, ["agent:main:live", "live-session"])).toBe(
+        true,
+      );
+      await expect(
+        markStartupOrphanedMainSessionsForRecovery({
+          cfg: { session: { store: storePath } },
+          stateDir: tempDir,
+          activeSessionIds: [],
+          activeSessionKeys: [],
+        }),
+      ).resolves.toMatchObject({ marked: 0, skipped: 1 });
+      for (const [name, original] of Object.entries(entries)) {
+        const entry = loadSessionEntry({
+          readConsistency: "latest",
+          sessionKey: "agent:main:" + name,
+          storePath,
+        });
+        if (name === "released") {
+          expect(entry?.status).toBe("killed");
+          expect(entry?.restartRecoveryRuns).toBeUndefined();
+          expect(entry?.mainRestartRecovery).toBeUndefined();
+        } else {
+          expect(entry?.status).toBe(original.status);
+          expect(entry?.abortedLastRun).toBe(original.abortedLastRun);
+          expect(entry?.restartRecoveryRuns).toEqual(original.restartRecoveryRuns);
+          expect(entry?.mainRestartRecovery).toEqual(original.mainRestartRecovery);
+          expect(entry?.pendingFinalDelivery).toEqual(original.pendingFinalDelivery);
+          expect(entry?.restartRecoveryDeliveryRunId).toBe(original.restartRecoveryDeliveryRunId);
+          expect(entry?.restartRecoveryHarnessCompletion).toEqual(
+            original.restartRecoveryHarnessCompletion,
+          );
+        }
+      }
+      admission.release();
+      expect(isSessionWorkAdmissionActive(storePath, ["agent:main:live", "live-session"])).toBe(
+        false,
+      );
+      await expect(
+        markOrphanedMainSessionForRecovery({
+          target: { agentId: "main", sessionKey: "agent:main:live", storePath },
+          expectedSessionId: "live-session",
+        }),
+      ).resolves.toEqual({ marked: 0, skipped: 1 });
+      const released = loadSessionEntry({
+        readConsistency: "latest",
+        sessionKey: "agent:main:live",
+        storePath,
+      });
+      expect(released?.status).toBe("killed");
+      expect(released?.restartRecoveryRuns).toBeUndefined();
+      expect(released?.mainRestartRecovery).toBeUndefined();
+    } finally {
+      admission?.release();
+      await cleanupSessionStateForTest({ stateDir: tempDir });
+      await fs.rm(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("rechecks a real session work lease acquired after killed-fence planning", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-killed-lease-commit-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    let admission: SessionWorkAdmissionLease | undefined;
+    const apply = sessionAccessor.applySessionEntryReplacements;
+    let restoreSpy = () => {};
+    try {
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        settledEntry({
+          status: "killed",
+          abortedLastRun: true,
+          mainRestartRecovery: undefined,
+          restartRecoveryTerminalRunIds: [],
+        }),
+      );
+      const before = loadSessionEntry({ readConsistency: "latest", sessionKey, storePath });
+      const spy = vi
+        .spyOn(sessionAccessor, "applySessionEntryReplacements")
+        .mockImplementationOnce((params) =>
+          apply({
+            ...params,
+            update: async (entries) => {
+              const prepared = await params.update(entries);
+              // No agent or embedded run exists: only this actual admission owns the session.
+              // Acquire by session ID alone to exercise the second durable identity.
+              admission = await beginSessionWorkAdmission({
+                scope: storePath,
+                identities: ["session-1"],
+                assertAllowed: () => {},
+              });
+              return prepared;
+            },
+          }),
+        );
+      restoreSpy = () => spy.mockRestore();
+      const reconcile = () =>
+        markOrphanedMainSessionForRecovery({
+          target: { agentId: "main", sessionKey, storePath },
+          expectedSessionId: "session-1",
+        });
+      await expect(reconcile()).rejects.toThrow(
+        "Startup orphan acquired a live owner before recovery commit",
+      );
+      expect(isSessionWorkAdmissionActive(storePath, [sessionKey, "session-1"])).toBe(true);
+      expect(loadSessionEntry({ readConsistency: "latest", sessionKey, storePath })).toEqual(
+        before,
+      );
+      restoreSpy();
+      admission?.release();
+      expect(isSessionWorkAdmissionActive(storePath, [sessionKey, "session-1"])).toBe(false);
+      await expect(reconcile()).resolves.toEqual({ marked: 0, skipped: 1 });
+      const released = loadSessionEntry({ readConsistency: "latest", sessionKey, storePath });
+      expect(released?.status).toBe("killed");
+      expect(released?.restartRecoveryRuns).toBeUndefined();
+      expect(released?.mainRestartRecovery).toBeUndefined();
+    } finally {
+      restoreSpy();
+      admission?.release();
+      await cleanupSessionStateForTest({ stateDir: tempDir });
+      await fs.rm(tempDir, { force: true, recursive: true });
+    }
   });
 });

@@ -89,6 +89,7 @@ import {
   resolveFallbackRetryPrompt,
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
+import { assertSandboxedDelegatedChildNotCli } from "./attempt-sandbox-cli-admission.js";
 import {
   consumeCliSessionForkInStore,
   persistCliSessionForkSuccessorInStore,
@@ -318,6 +319,15 @@ export function runAgentAttempt(params: {
   const isCliExecutionProvider = sessionRuntimeOverride
     ? sessionCliRuntime !== undefined
     : isCliProvider(cliExecutionProvider, params.cfg);
+  // Spawn admission cannot see fallback candidates or later runtime overrides.
+  assertSandboxedDelegatedChildNotCli({
+    useCliExecution: !isRawModelRun && isCliExecutionProvider,
+    cliExecutionProvider,
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    sessionAgentId: params.sessionAgentId,
+    sessionEntry: params.sessionEntry,
+  });
   assertCliRestartSafeToolSupport(isCliExecutionProvider, params.opts.forceRestartSafeTools);
   const completionRetainsRequesterTools =
     trustedSubagentAnnounceHandoff &&

@@ -73,6 +73,7 @@ import {
   type RunAgentAttemptParams,
 } from "./attempt-execution.cli.test-support.js";
 import { runAgentAttempt as runAgentAttemptImpl } from "./attempt-execution.js";
+import { registerSandboxedDelegatedCliTests } from "./attempt-execution.sandbox-cli.test-support.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import { resolveEmbeddedModelSelection } from "./model-selection.js";
 import { persistAcpTurnTranscript, persistCliTurnTranscript } from "./transcript-persistence.js";
@@ -453,6 +454,14 @@ describe("CLI attempt execution", () => {
   ) {
     return runAgentAttempt({ workspaceDir: tmpDir, agentDir, storePath, ...overrides });
   }
+
+  registerSandboxedDelegatedCliTests({
+    runStoredAttempt,
+    seedSessionStore,
+    runEmbeddedAgentMock,
+    runCliAgentMock,
+    makeCliResult,
+  });
 
   function readSessionStore(): Record<string, SessionEntry> {
     return Object.fromEntries(

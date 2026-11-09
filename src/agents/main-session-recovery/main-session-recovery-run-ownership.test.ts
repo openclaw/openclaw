@@ -130,6 +130,50 @@ describe("main-session recovery run ownership", () => {
     });
   });
 
+  it.each(["end", "error"] as const)(
+    "settles the current run's %s when cancellation preceded its fence refresh",
+    (phase) => {
+      const entry = recoveryEntry();
+      entry.lifecycleRunId = "recovery";
+      entry.abortedLastRun = true;
+      entry.restartRecoveryRuns = [{ runId: "recovery", lifecycleGeneration: "generation-old" }];
+      const result = projectMainSessionRecoveryLifecycle({
+        currentLifecycleGeneration: "generation-current",
+        entry,
+        event: {
+          runId: "recovery",
+          lifecycleGeneration: "generation-current",
+          data: { phase, stopReason: "rpc" },
+        },
+        snapshotPatch: { status: "killed", abortedLastRun: true },
+      });
+      expect(result).toMatchObject({ action: "apply", patch: { status: "killed" } });
+      if (result.action === "apply") {
+        Object.assign(entry, result.patch);
+      }
+      expect(entry.restartRecoveryRuns).toBeUndefined();
+      expect(entry.mainRestartRecovery).toBeUndefined();
+    },
+  );
+
+  it("does not settle an old fence for another current lifecycle owner", () => {
+    const entry = recoveryEntry();
+    entry.lifecycleRunId = "replacement";
+    entry.restartRecoveryRuns = [{ runId: "recovery", lifecycleGeneration: "generation-old" }];
+    expect(
+      projectMainSessionRecoveryLifecycle({
+        currentLifecycleGeneration: "generation-current",
+        entry,
+        event: {
+          runId: "recovery",
+          lifecycleGeneration: "generation-current",
+          data: { phase: "end" },
+        },
+        snapshotPatch: { status: "done", abortedLastRun: false },
+      }),
+    ).toEqual({ action: "suppress" });
+  });
+
   it("suppresses a duplicate older terminal after its fence has been consumed", () => {
     const entry = recoveryEntry({ ownsDelivery: true });
     entry.restartRecoveryRuns = [{ runId: "recovery", lifecycleGeneration: "generation-current" }];
