@@ -1,0 +1,2 @@
+# Covers the four regression cases for successful empty PowerShell listener results.
+60

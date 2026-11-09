@@ -61,7 +61,9 @@ export function readWindowsListeningPidsResultSync(
 ): WindowsListeningPidsResult {
   assertAppContainerSpawnSupported();
   const powershellPids = readListeningPidsViaPowerShell(port, timeoutMs);
-  if (powershellPids != null) {
+  // CIM can return an empty successful query while a listener is still present.
+  // Corroborate absence with netstat before callers treat the port as free.
+  if (powershellPids?.length) {
     return { ok: true, pids: powershellPids };
   }
   const netstat = spawnSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
