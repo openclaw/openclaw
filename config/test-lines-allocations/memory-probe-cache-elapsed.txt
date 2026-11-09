@@ -1,0 +1,3 @@
+# Memory embedding probe cache expires on the monotonic clock while reported
+# timestamps stay wall-clock epochs; adds rollback and wire-semantics regressions.
+52
