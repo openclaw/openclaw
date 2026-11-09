@@ -1,6 +1,7 @@
 import type { PluginSourceCustodyFork } from "./plugin-generation-source-lookup.js";
 import type { PluginSourceSnapshotFacts } from "./plugin-generation-source.types.js";
 import type { PluginModuleCapture } from "./plugin-package-metadata-capture.js";
+import type { AcquiredPluginSharedSourceSnapshot } from "./plugin-source-snapshot-shared.js";
 
 /** Captured source custody and module lookup operations owned by one generation. */
 export type PluginGenerationArtifact = {
@@ -11,6 +12,7 @@ export type PluginGenerationArtifact = {
   sourceDigest: string;
   sourceSnapshotFacts?: PluginSourceSnapshotFacts;
   frozenSource?: true;
+  sharedSnapshot?: AcquiredPluginSharedSourceSnapshot;
   assertFrozenModule?: (filename: string) => void;
   sharedModule?: (importer: string, specifier: string) => string | undefined;
   linkHost: (hostRoot: string) => void;

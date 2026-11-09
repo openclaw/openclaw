@@ -116,6 +116,15 @@ export const pluginSourceIdentityChangedOnlyByCtime = (
 ): boolean =>
   previous.slice(0, previous.lastIndexOf(":")) === current.slice(0, current.lastIndexOf(":"));
 
+/** Native batch reads own their closer; ordinary pinned reads keep Node's descriptor owner. */
+export function closePluginSourceFile(opened: { fd: number; close?: () => void }): void {
+  if (opened.close) {
+    opened.close();
+  } else {
+    fs.closeSync(opened.fd);
+  }
+}
+
 function withPluginSourceFile<T>(
   source: string,
   boundary: string,
@@ -140,7 +149,7 @@ function withPluginSourceFile<T>(
   try {
     return acquirePluginSource(() => read(opened.fd), false);
   } finally {
-    acquirePluginSource(() => fs.closeSync(opened.fd), false);
+    acquirePluginSource(() => closePluginSourceFile(opened), false);
   }
 }
 

@@ -1,7 +1,14 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import type { PluginHookHandlerMap } from "../plugins/hook-types.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
+import {
+  registerPluginSnapshotScrub,
+  type PluginSnapshotScrubOutcome,
+} from "../plugins/plugin-source-snapshot-scrub.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createPluginRegistryOwner, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
 import { tryBeginGatewaySuspendAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredWorkTracker } from "../shared/async-work-scope.test-support.js";
@@ -27,6 +34,89 @@ export function registerGatewayStartupAdmissionTests(params: {
   startupModuleRestorers: Array<() => void>;
   stopSidecar: (sidecar: GatewayPostReadySidecarHandle) => Promise<void>;
 }): void {
+  it("starts registered snapshot scrubs after startup and joins cancellation at shutdown", async () => {
+    const postReady = createDeferred();
+    const started = createDeferred();
+    const completion = createDeferred<PluginSnapshotScrubOutcome>();
+    const sidecars: GatewayPostReadySidecarHandle[] = [];
+    const startup = params.createParams({
+      waitForPostReadyWork: () => postReady.promise,
+      onGatewayLifetimeSidecars: (...entries) => sidecars.push(...entries),
+    });
+    setActivePluginRegistry(startup.pluginRegistry);
+    const owner = createPluginRegistryOwner(startup.pluginRegistry);
+    startup.sourceSnapshotScrubs = owner.sourceSnapshotScrubs;
+    const start = vi.fn(() => {
+      started.resolve();
+      return completion.promise;
+    });
+    const cancel = vi.fn(async () => {
+      completion.resolve({ status: "cancelled" });
+      await completion.promise;
+    });
+    const record = createPluginRecord({ id: "startup-snapshot-scrub" });
+    startup.pluginRegistry.plugins.push(record);
+    const instance = new PluginInstance(record.id, {
+      record,
+      registry: startup.pluginRegistry,
+    });
+    const remove = registerPluginSnapshotScrub(instance, start, cancel);
+    try {
+      const runtime = await params.start(startup, params.createRuntimeDeps());
+      await runtime.startupSettled;
+      const sidecar = sidecars.find((entry) => entry.name === "sidecars.plugin-source-scrub");
+      expect(sidecar).toBeDefined();
+      await nextEventLoopTurn();
+      expect(start).not.toHaveBeenCalled();
+      postReady.resolve();
+      await started.promise;
+      expect(start).toHaveBeenCalledOnce();
+      await params.stopSidecar(sidecar!);
+      expect(cancel).toHaveBeenCalledOnce();
+      await expect(completion.promise).resolves.toEqual({ status: "cancelled" });
+    } finally {
+      postReady.resolve();
+      completion.resolve({ status: "cancelled" });
+      remove();
+      await owner.close();
+    }
+  });
+
+  it("keeps ignored deferred sidecar failure handled for direct callers", async () => {
+    const startupError = new Error("deferred sidecar startup failed");
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      const startup = params.createParams({
+        sidecarStartup: "defer",
+        refreshChatMetadata: async () => {
+          throw startupError;
+        },
+      });
+      const runtime = await params.start(startup, params.createRuntimeDeps());
+
+      await vi.waitFor(
+        () => {
+          expect(startup.log.warn).toHaveBeenCalledWith(
+            `gateway sidecars failed to start: ${String(startupError)}`,
+          );
+        },
+        { interval: 1 },
+      );
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(unhandledRejections).toStrictEqual([]);
+      await expect(runtime.startupSettled).rejects.toBe(startupError);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
   it("keeps channel and external input closed until retained inputs have acquired queue custody", async () => {
     const resume = createStartupGate();
     const unlocked = createDeferred();

@@ -48,7 +48,15 @@ import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-
 import { resolvePluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import { createPluginSourceCaptureRoot } from "./plugin-source-capture-directory.js";
 import { subscribePluginNativeLoads } from "./plugin-source-capture-native-loads.js";
-import { PluginSourceSnapshotValidationError } from "./plugin-source-snapshot-artifact.js";
+import {
+  PluginSourceSnapshotValidationError,
+  PluginSourceSnapshotIncompatibleError,
+} from "./plugin-source-snapshot-artifact.js";
+import {
+  createPluginSnapshotScrub,
+  waitForPluginPreparationIdle,
+} from "./plugin-source-snapshot-scrub.js";
+import type { PluginSourceSnapshotScrubReport } from "./plugin-source-snapshot-shared.js";
 import type {
   PluginSourceSnapshotBinding,
   PluginSourceSnapshotDescriptor,
@@ -57,13 +65,18 @@ import type {
 export type PreparedPluginGenerationArtifact = {
   artifact: PluginGenerationArtifact;
   attachModuleSource(callback: (filename: string) => string): void;
+  startScrub?: (
+    onFailure: (error: unknown) => Promise<void>,
+  ) => Promise<import("./plugin-source-snapshot-scrub.js").PluginSnapshotScrubOutcome>;
+  cancelScrub?: () => Promise<void>;
+  onInvalidSnapshot?: (error: unknown) => Promise<void>;
 };
 type PreparationParameters = {
   rootDir: string;
   source: string | readonly string[];
   standalone?: boolean;
   bundledReload?: boolean;
-  sourceSnapshot?: { descriptor: PluginSourceSnapshotDescriptor; stateDir: string };
+  sourceSnapshot?: { descriptor: PluginSourceSnapshotDescriptor; stateDir: string; shared?: true };
 };
 export type PreparedPluginSourceSnapshot = {
   contentDigest: string;
@@ -75,8 +88,7 @@ export type PreparedPluginSourceSnapshot = {
   disposeAsync(): Promise<void>;
 };
 type CaptureCommand = Extract<GenerationWorkerInput, { operation: "capture" }>;
-type OwnedPreparationParameters = PreparationParameters &
-  Pick<
+type OwnedPreparationParameters = PreparationParameters & { backgroundSignal?: AbortSignal } & Pick<
     CaptureCommand,
     | "retainSourceCustody"
     | "sourceCustodyId"
@@ -127,13 +139,23 @@ function createPreparationPool(nativeSource: RetainedNativeWorkerSource) {
   );
   type Task = ReturnType<typeof pool.startTask>;
   const tasks = new Set<Task>();
+  const idleWaiters = new Set<() => void>();
   const releases = new WeakMap<Task, ReturnType<Task["release"]>>();
   const release = (task: Task) => {
     let released = releases.get(task);
     if (!released) {
       released = task.release();
       releases.set(task, released);
-      void released.result.finally(() => tasks.delete(task)).catch(() => {});
+      void released.result
+        .finally(() => {
+          tasks.delete(task);
+          if (!tasks.size) {
+            for (const notify of idleWaiters) {
+              notify();
+            }
+          }
+        })
+        .catch(() => {});
     }
     return released;
   };
@@ -158,6 +180,14 @@ function createPreparationPool(nativeSource: RetainedNativeWorkerSource) {
       return task;
     },
     release,
+    async waitForIdle(signal: AbortSignal) {
+      await waitForPluginPreparationIdle({
+        signal,
+        idleWaiters,
+        isRetired: () => retired,
+        isIdle: () => !tasks.size,
+      });
+    },
     service() {
       for (const client of clients.values()) {
         client.service();
@@ -208,24 +238,29 @@ export async function preparePluginGenerationArtifact(
   const admission = nativeAdmissionStateFor();
   const rootDir = path.resolve(params.rootDir);
   // Published snapshots already own immutable bytes; rebuild their runtime owner independently.
-  const source = params.sourceSnapshot
-    ? undefined
-    : await retainPreparedPluginGenerationSource(
-        owner,
-        JSON.stringify([
-          rootDir,
-          params.standalone ? params.source : undefined,
-          params.bundledReload,
-          admission.viewKey,
-          admission.owners.get(rootDir),
-        ]),
-        async () => {
-          const seed = await prepareOwnedPluginGeneration({ ...params, retainSourceCustody: true });
-          // SAFETY: A seed capture returns only its retained source digest.
-          const { sourceDigest } = seed.value as { sourceDigest: string };
-          return { captureId: seed.captureId, sourceDigest, disposeAsync: seed.close };
-        },
-      );
+  const source =
+    params.sourceSnapshot && !params.sourceSnapshot.shared
+      ? undefined
+      : await retainPreparedPluginGenerationSource(
+          owner,
+          JSON.stringify([
+            rootDir,
+            params.standalone ? params.source : undefined,
+            params.bundledReload,
+            admission.viewKey,
+            admission.owners.get(rootDir),
+            params.sourceSnapshot,
+          ]),
+          async () => {
+            const seed = await prepareOwnedPluginGeneration({
+              ...params,
+              retainSourceCustody: true,
+            });
+            // SAFETY: A seed capture returns only its retained source digest.
+            const { sourceDigest } = seed.value as { sourceDigest: string };
+            return { captureId: seed.captureId, sourceDigest, disposeAsync: seed.close };
+          },
+        );
   const prepared = await prepareOwnedPluginGeneration({
     ...params,
     sourceCustodyId: source?.captureId,
@@ -235,6 +270,8 @@ export async function preparePluginGenerationArtifact(
     // SAFETY: A successful ordinary capture reply encodes PluginGenerationArtifact.
     artifact: prepared.value as PluginGenerationArtifact,
     attachModuleSource: prepared.attachModuleSource,
+    startScrub: prepared.startScrub,
+    cancelScrub: prepared.cancelScrub,
   };
 }
 
@@ -242,12 +279,16 @@ export async function preparePluginGenerationArtifact(
 export async function preparePluginSourceSnapshot(params: {
   rootDir: string;
   stateDir: string;
+  shared?: true;
+  backgroundSignal?: AbortSignal;
 }): Promise<PreparedPluginSourceSnapshot> {
   const prepared = await prepareOwnedPluginGeneration({
     rootDir: params.rootDir,
     source: params.rootDir,
+    backgroundSignal: params.backgroundSignal,
     snapshotPublication: {
       stateDir: params.stateDir,
+      shared: params.shared,
     },
   });
   const { bindPluginSnapshotPublication } = await import("./plugin-source-snapshot-publication.js");
@@ -255,6 +296,7 @@ export async function preparePluginSourceSnapshot(params: {
     // SAFETY: The source-only command returns the worker's owned staging handle.
     prepared.value as Parameters<typeof bindPluginSnapshotPublication>[0],
     params.stateDir,
+    params.backgroundSignal,
   );
 }
 
@@ -335,6 +377,7 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
   let pending = 0;
   let drained: ReturnType<typeof createDeferredCore<void>> | undefined;
   let closing: Promise<void> | undefined;
+  let scrub: ReturnType<typeof createPluginSnapshotScrub> | undefined;
   const pendingNativeLoads = new Set<string>();
   const waitSignal = new Int32Array(new SharedArrayBuffer(4));
   const stopObserving = subscribePluginNativeLoads((filename) => {
@@ -396,6 +439,7 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
     (closing ??= (async () => {
       stopObserving();
       try {
+        const scrubResults = await Promise.allSettled([scrub?.cancel()]);
         if (pending) {
           await (drained ??= createDeferredCore()).promise;
         }
@@ -412,6 +456,7 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
           await pool.close();
         }
         owner.clients.delete(close);
+        throwSettledAggregate(scrubResults, "Plugin snapshot scrub cleanup failed");
       } finally {
         port1.close();
       }
@@ -430,7 +475,9 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
         asynchronous,
         args: codec.encodeArguments(args),
       };
-      return asynchronous ? request(command, sourceCapture) : requestSync(command, sourceCapture);
+      return asynchronous
+        ? request(command, sourceCapture, !disposal)
+        : requestSync(command, sourceCapture);
     },
     {
       exportRoot: () => {
@@ -461,12 +508,15 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
                   reply.error.artifactPath,
                   reply.error.message,
                 )
-              : reply.error.name === "PluginSnapshotDependencyError" &&
-                  reply.error.modulePath !== undefined
-                ? new PluginSnapshotDependencyError(reply.error.modulePath)
-                : reply.error.name === "SyntaxError"
-                  ? new SyntaxError(reply.error.message)
-                  : new Error(reply.error.message);
+              : reply.error.name === "PluginSourceSnapshotIncompatibleError" &&
+                  reply.error.artifactPath !== undefined
+                ? new PluginSourceSnapshotIncompatibleError(reply.error.artifactPath, 1)
+                : reply.error.name === "PluginSnapshotDependencyError" &&
+                    reply.error.modulePath !== undefined
+                  ? new PluginSnapshotDependencyError(reply.error.modulePath)
+                  : reply.error.name === "SyntaxError"
+                    ? new SyntaxError(reply.error.message)
+                    : new Error(reply.error.message);
       Object.assign(error, reply.error);
       throw reply.sourceAcquisitionFailure ? markPluginSourceAcquisitionError(error) : error;
     }
@@ -480,7 +530,15 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
     }
     return codec.decode(reply.value);
   }
-  async function request(command: GenerationWorkerInput, sourceCapture = false): Promise<unknown> {
+  async function request(
+    command: GenerationWorkerInput,
+    sourceCapture = false,
+    background = true,
+  ): Promise<unknown> {
+    if (background && params.backgroundSignal) {
+      await shared.waitForIdle(params.backgroundSignal);
+      params.backgroundSignal.throwIfAborted();
+    }
     if (closing) {
       throw new Error("Plugin preparation worker has closed");
     }
@@ -635,6 +693,37 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
       close,
       attachModuleSource: (mapper: (filename: string) => string) => {
         moduleSource = mapper;
+      },
+      startScrub: params.sourceSnapshot?.shared
+        ? (onFailure: (error: unknown) => Promise<void>) => {
+            scrub ??= createPluginSnapshotScrub({
+              waitForIdle: (signal) => shared.waitForIdle(signal),
+              onFailure,
+              create: () => ({
+                step: async (limits) =>
+                  (await request({
+                    operation: "scrub",
+                    captureId,
+                    maxFiles: limits.maxFiles,
+                    maxBytes: limits.maxBytes,
+                    // SAFETY: The matching worker returns its scrub cursor report for this operation.
+                  })) as PluginSourceSnapshotScrubReport,
+                dispose: async () => {
+                  await request({
+                    operation: "scrub",
+                    captureId,
+                    dispose: true,
+                    maxFiles: 1,
+                    maxBytes: 1,
+                  });
+                },
+              }),
+            });
+            return scrub.start();
+          }
+        : undefined,
+      cancelScrub: async () => {
+        await scrub?.cancel();
       },
     };
   } catch (error) {

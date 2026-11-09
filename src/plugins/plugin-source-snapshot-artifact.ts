@@ -5,7 +5,6 @@ import path from "node:path";
 import { createFileSync, createRootFileOpenBatchSync } from "@openclaw/fs-safe/advanced";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { isPathInside } from "../infra/path-guards.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { createPrivateSqliteTempDirectorySync } from "../infra/sqlite-private-directory.js";
@@ -23,174 +22,62 @@ import {
   PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX,
   resolvePluginSourceCapturesDirectory,
 } from "./plugin-source-capture-path.js";
-import { hashPluginSourceFile, pluginSourceStatIdentity } from "./plugin-source-file.js";
+import { closePluginSourceFile, pluginSourceStatIdentity } from "./plugin-source-file.js";
+import {
+  fail,
+  ownerIdentity,
+  privateEntry,
+  relativeMember,
+  scanPayload,
+  tokenIdentity,
+  PluginSourceSnapshotValidationError,
+  PluginSourceSnapshotIncompatibleError,
+  type PluginSourceSnapshotManifest,
+  type SnapshotStagingParameters,
+  type SnapshotAcquisitionParameters,
+} from "./plugin-source-snapshot-entries.js";
+import { collectPluginSnapshotMetadata } from "./plugin-source-snapshot-metadata.js";
+import { resolvePluginSnapshotTsconfigPaths } from "./plugin-source-snapshot-options.js";
 import {
   capturePluginSnapshotPayload,
   digestPluginSnapshotClosure,
   resolvePluginSnapshotLink,
 } from "./plugin-source-snapshot-payload.js";
-import type {
-  PluginSourceSnapshotBinding,
-  PluginSourceSnapshotDescriptor,
-} from "./plugin-source-snapshot.types.js";
+import {
+  freezePluginSnapshotTree,
+  makePluginSnapshotTreeRemovable,
+} from "./plugin-source-snapshot-permissions.js";
+import {
+  createPluginSharedSnapshotView,
+  type AcquiredPluginSharedSourceSnapshot,
+} from "./plugin-source-snapshot-shared.js";
+import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.types.js";
+
+export {
+  PluginSourceSnapshotValidationError,
+  PluginSourceSnapshotIncompatibleError,
+} from "./plugin-source-snapshot-entries.js";
+export type {
+  PluginSourceSnapshotEntry,
+  PluginSourceSnapshotManifest,
+} from "./plugin-source-snapshot-entries.js";
 
 const PLUGIN_SOURCE_SNAPSHOT_FORMAT = 1;
 const MANIFEST = "manifest.json";
 const PAYLOAD = "payload";
 const MAX_MANIFEST_BYTES = 64 * 1024 * 1024;
-type Entry = { path: string; identity: string } & (
-  | { kind: "directory" }
-  | { kind: "file"; contentHash: string; sizeBytes: number; mode: number }
-  | { kind: "link"; target: string }
-);
-type Manifest = PluginSourceSnapshotBinding & {
-  formatVersion: number;
-  generation: string;
-  sourceRoot: string;
-  root: string;
-  aliases: Record<string, string>;
-  sourceDigest: string;
-  payloadIdentity: string;
-  tokenIdentity: string;
-  hardlinks: string[];
-  platform: string;
-  arch: string;
-  abi: string;
-  entries: Entry[];
-};
+type Manifest = PluginSourceSnapshotManifest;
+export type {
+  AcquiredPluginSharedSourceSnapshot,
+  PluginSourceSnapshotScrub,
+  PluginSourceSnapshotScrubReport,
+} from "./plugin-source-snapshot-shared.js";
+
 const readers = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginSourceSnapshotReaders"),
   () => new Map<string, { token: SqliteStagingToken; tokenIdentity: string; references: number }>(),
 );
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
-const ownerIdentity = (stat: fs.BigIntStats) =>
-  `${stat.dev}:${stat.ino}:${stat.uid}:${stat.gid}:${stat.mode}`;
-
-export class PluginSourceSnapshotValidationError extends Error {
-  readonly code = "PLUGIN_SOURCE_SNAPSHOT_INVALID";
-  constructor(
-    readonly artifactPath: string,
-    detail: string,
-    options?: ErrorOptions,
-  ) {
-    super(`Installed plugin source snapshot is invalid at ${artifactPath}: ${detail}`, options);
-    this.name = "PluginSourceSnapshotValidationError";
-  }
-}
-
-function fail(root: string, detail: string): never {
-  throw new PluginSourceSnapshotValidationError(root, detail);
-}
-
-function tokenIdentity(root: string): string {
-  const tokenPath = path.join(root, SQLITE_STAGING_TOKEN_FILES[0]);
-  const stat = fs.lstatSync(tokenPath, { bigint: true });
-  if (
-    !stat.isFile() ||
-    stat.nlink !== 1n ||
-    (process.getuid && stat.uid !== BigInt(process.getuid())) ||
-    (process.platform !== "win32" && (stat.mode & 0o022n) !== 0n)
-  ) {
-    fail(root, `unsafe token ownership or permissions: ${tokenPath}`);
-  }
-  return ownerIdentity(stat);
-}
-
-function privateEntry(file: string, root: string, kind: "directory" | "file" | "link") {
-  const stat = fs.lstatSync(file, { bigint: true });
-  if (
-    !(kind === "directory"
-      ? stat.isDirectory()
-      : kind === "file"
-        ? stat.isFile()
-        : stat.isSymbolicLink()) ||
-    (process.getuid && stat.uid !== BigInt(process.getuid())) ||
-    (kind !== "link" && process.platform !== "win32" && (stat.mode & 0o077n) !== 0n) ||
-    (kind === "file" && stat.nlink !== 1n) ||
-    (process.platform === "win32" && (stat.dev === 0n || stat.ino === 0n))
-  ) {
-    fail(root, `unsafe ${kind} ownership, permissions or identity: ${file}`);
-  }
-  return stat;
-}
-
-function relativeMember(root: string, member: string): string {
-  const relative = path.relative(root, member);
-  if (!relative || !isPathInside(root, member)) {
-    fail(root, `member leaves its payload: ${member}`);
-  }
-  return relative;
-}
-
-function scanPayload(
-  root: string,
-  opened: ReturnType<typeof createRootFileOpenBatchSync>,
-  publishedPayload = root,
-): Entry[] {
-  const entries: Entry[] = [];
-  const visit = (directory: string) => {
-    const before = privateEntry(directory, root, "directory");
-    for (const name of fs.readdirSync(directory).toSorted()) {
-      const file = path.join(directory, name);
-      const stat = fs.lstatSync(file, { bigint: true });
-      const relative = relativeMember(root, file);
-      if (stat.isSymbolicLink()) {
-        privateEntry(file, root, "link");
-        const target = resolvePluginSnapshotLink(root, file, publishedPayload, (detail) =>
-          fail(root, detail),
-        );
-        if (
-          pluginSourceStatIdentity(stat) !==
-          pluginSourceStatIdentity(privateEntry(file, root, "link"))
-        ) {
-          fail(root, `dependency link changed while validating: ${file}`);
-        }
-        entries.push({
-          path: relative,
-          kind: "link",
-          target: relativeMember(root, target),
-          identity: pluginSourceStatIdentity(stat),
-        });
-      } else if (stat.isDirectory()) {
-        privateEntry(file, root, "directory");
-        entries.push({
-          path: relative,
-          kind: "directory",
-          identity: pluginSourceStatIdentity(stat),
-        });
-        visit(file);
-      } else {
-        privateEntry(file, root, "file");
-        const content = hashPluginSourceFile(
-          file,
-          root,
-          undefined,
-          undefined,
-          opened.openFile.bind(opened),
-        );
-        const after = privateEntry(file, root, "file");
-        if (pluginSourceStatIdentity(stat) !== pluginSourceStatIdentity(after)) {
-          fail(root, `file changed while validating: ${file}`);
-        }
-        entries.push({
-          path: relative,
-          kind: "file",
-          identity: pluginSourceStatIdentity(after),
-          ...content,
-          mode: Number(after.mode & 0o777n),
-        });
-      }
-    }
-    if (
-      pluginSourceStatIdentity(before) !==
-      pluginSourceStatIdentity(privateEntry(directory, root, "directory"))
-    ) {
-      fail(root, `directory changed while validating: ${directory}`);
-    }
-  };
-  visit(root);
-  return entries;
-}
 
 /** Logical closure facts exclude ephemeral capture paths and inode identities. */
 export function pluginSourceSnapshotClosureDigest(capture: PluginGenerationArtifact): string {
@@ -198,12 +85,14 @@ export function pluginSourceSnapshotClosureDigest(capture: PluginGenerationArtif
 }
 
 /** Publish completed immutable source before making its descriptor reachable from the index. */
-export async function stagePluginSourceSnapshot(params: {
-  stateDir: string;
-  capture: PluginGenerationArtifact;
-  binding: PluginSourceSnapshotBinding;
-  assertCurrent: () => void | Promise<void>;
-}) {
+
+export function stagePluginSourceSnapshot(params: SnapshotStagingParameters) {
+  return stageSnapshot(params, 1);
+}
+export function stagePluginSharedSourceSnapshot(params: SnapshotStagingParameters) {
+  return stageSnapshot(params, 2);
+}
+async function stageSnapshot(params: SnapshotStagingParameters, formatVersion: 1 | 2) {
   await params.assertCurrent();
   if (
     params.binding.contentDigest !== params.capture.sourceDigest ||
@@ -239,6 +128,7 @@ export async function stagePluginSourceSnapshot(params: {
       const cleanupRoot = published ? root : stage;
       const current = fs.lstatSync(cleanupRoot, { bigint: true, throwIfNoEntry: false });
       if (current && ownerIdentity(current) === stagingIdentity) {
+        makePluginSnapshotTreeRemovable(cleanupRoot, (detail) => fail(cleanupRoot, detail));
         await fsPromises.rm(cleanupRoot, { recursive: true, force: true });
       }
     } finally {
@@ -254,7 +144,7 @@ export async function stagePluginSourceSnapshot(params: {
       fail(stage, detail),
     );
     using opened = createRootFileOpenBatchSync();
-    const entries = scanPayload(payload, opened, publishedPayload);
+    let entries = scanPayload(payload, opened, publishedPayload);
     const expected = params.capture.sourceSnapshotFacts;
     if (
       !expected ||
@@ -280,9 +170,62 @@ export async function stagePluginSourceSnapshot(params: {
         "source changed after its installation receipt was captured",
       );
     }
+    let resolution: Record<string, string> = {};
+    let configuration: Record<string, string> = {};
+    if (formatVersion === 2) {
+      const configured = resolvePluginSnapshotTsconfigPaths();
+      const extraConfiguration =
+        typeof configured === "string"
+          ? relativeMember(
+              params.capture.boundaryRoot,
+              params.capture.resolve(path.resolve(configured)),
+            )
+          : undefined;
+      ({ resolution, configuration } = collectPluginSnapshotMetadata(
+        entries,
+        (entry) => {
+          const pinned = opened.openFile({
+            absolutePath: path.join(payload, entry.path),
+            rootPath: payload,
+            boundaryLabel: "snapshot resolution metadata",
+            rejectHardlinks: true,
+          });
+          if (!pinned.ok) {
+            fail(stage, `metadata failed guarded open: ${entry.path}`);
+          }
+          let text: string;
+          try {
+            text = readFileDescriptorBoundedSync(pinned.fd, MAX_MANIFEST_BYTES).toString("utf8");
+          } finally {
+            closePluginSourceFile(pinned);
+          }
+          if (digest(text) !== entry.contentHash) {
+            fail(stage, `metadata changed while sealing: ${entry.path}`);
+          }
+          return text;
+        },
+        extraConfiguration,
+      ));
+      const sourceModes = new Map(
+        entries.flatMap((entry) =>
+          entry.kind === "file" ? [[entry.path, entry.mode] as const] : [],
+        ),
+      );
+      freezePluginSnapshotTree(payload, (detail) => fail(stage, detail));
+      entries = scanPayload(payload, opened, publishedPayload).map((entry) => {
+        const owner = ownerIdentity(
+          privateEntry(path.join(payload, entry.path), stage, entry.kind),
+        );
+        return Object.assign(
+          entry,
+          { owner },
+          entry.kind === "file" ? { sourceMode: sourceModes.get(entry.path) } : {},
+        );
+      });
+    }
     const manifest: Manifest = {
       ...params.binding,
-      formatVersion: PLUGIN_SOURCE_SNAPSHOT_FORMAT,
+      formatVersion,
       generation,
       sourceRoot: params.capture.sourceRoot,
       root: relativeMember(params.capture.boundaryRoot, params.capture.rootDir),
@@ -300,6 +243,7 @@ export async function stagePluginSourceSnapshot(params: {
       arch: process.arch,
       abi: process.versions.modules ?? "",
       entries,
+      ...(formatVersion === 2 ? { resolution, configuration } : {}),
     };
     const bytes = JSON.stringify(manifest);
     {
@@ -309,7 +253,7 @@ export async function stagePluginSourceSnapshot(params: {
     }
     const descriptor = {
       ...params.binding,
-      formatVersion: PLUGIN_SOURCE_SNAPSHOT_FORMAT,
+      formatVersion,
       generation,
       platform: manifest.platform,
       arch: manifest.arch,
@@ -379,11 +323,15 @@ function assertArtifactPath(stateDir: string, artifactPath: string) {
   privateEntry(parent, artifactPath, "directory");
 }
 
-function validateSnapshot(stateDir: string, descriptor: PluginSourceSnapshotDescriptor): Manifest {
+function validateSnapshot(
+  stateDir: string,
+  descriptor: PluginSourceSnapshotDescriptor,
+  shared = false,
+): Manifest {
   const root = descriptor.artifact.path;
   assertArtifactPath(stateDir, root);
   if (
-    descriptor.formatVersion !== PLUGIN_SOURCE_SNAPSHOT_FORMAT ||
+    ![PLUGIN_SOURCE_SNAPSHOT_FORMAT, 2].includes(descriptor.formatVersion) ||
     descriptor.platform !== process.platform ||
     descriptor.arch !== process.arch ||
     descriptor.abi !== (process.versions.modules ?? "")
@@ -417,7 +365,7 @@ function validateSnapshot(stateDir: string, descriptor: PluginSourceSnapshotDesc
   try {
     bytes = readFileDescriptorBoundedSync(pinned.fd, MAX_MANIFEST_BYTES).toString("utf8");
   } finally {
-    fs.closeSync(pinned.fd);
+    closePluginSourceFile(pinned);
   }
   if (digest(bytes) !== descriptor.artifact.manifestDigest) {
     fail(root, "manifest content digest changed");
@@ -447,8 +395,21 @@ function validateSnapshot(stateDir: string, descriptor: PluginSourceSnapshotDesc
     fail(root, "manifest token identity does not match installation");
   }
   const payload = path.join(root, PAYLOAD);
-  const observed = scanPayload(payload, opened);
-  if (JSON.stringify(observed) !== JSON.stringify(manifest.entries)) {
+  const observed = shared ? undefined : scanPayload(payload, opened);
+  if (
+    observed &&
+    (observed.length !== manifest.entries.length ||
+      observed.some((entry, index) => {
+        const expected = manifest.entries[index];
+        return (
+          !expected ||
+          Object.entries(entry).some(([key, value]) => Reflect.get(expected, key) !== value) ||
+          (expected.owner !== undefined &&
+            ownerIdentity(privateEntry(path.join(payload, entry.path), root, entry.kind)) !==
+              expected.owner)
+        );
+      }))
+  ) {
     fail(root, "payload content, identity or membership changed");
   }
   const allowed = new Set<string>([MANIFEST, PAYLOAD, ...SQLITE_STAGING_TOKEN_FILES]);
@@ -476,6 +437,7 @@ function assertSnapshotIdentities(
   descriptor: Pick<PluginSourceSnapshotDescriptor, "artifact">,
   manifest: Manifest,
   publishedPayload = path.join(descriptor.artifact.path, PAYLOAD),
+  rootsOnly = false,
 ): void {
   const root = descriptor.artifact.path;
   if (tokenIdentity(root) !== descriptor.artifact.tokenIdentity) {
@@ -493,6 +455,9 @@ function assertSnapshotIdentities(
     pluginSourceStatIdentity(privateEntry(payload, root, "directory")) !== manifest.payloadIdentity
   ) {
     fail(root, "payload root changed after source validation");
+  }
+  if (rootsOnly) {
+    return;
   }
   for (const entry of manifest.entries) {
     if (
@@ -525,13 +490,53 @@ function assertSnapshotIdentities(
 }
 
 /** Reader custody lasts until every runtime instance derived from this source has released it. */
-export async function acquirePluginSourceSnapshot(params: {
-  stateDir: string;
-  descriptor: PluginSourceSnapshotDescriptor;
-  assertCurrent: () => void | Promise<void>;
-}) {
+
+export function acquirePluginSourceSnapshot(params: SnapshotAcquisitionParameters) {
+  return acquireSnapshot(params, false);
+}
+export function acquirePluginSharedSourceSnapshot(
+  params: SnapshotAcquisitionParameters,
+): Promise<AcquiredPluginSharedSourceSnapshot> {
+  // SAFETY: shared=true selects createPluginSharedSnapshotView in the acquisition generator.
+  return acquireSnapshot(params, true) as Promise<AcquiredPluginSharedSourceSnapshot>;
+}
+/** Installs the verified loader for the supported child bootstrap. */
+export function acquirePluginSharedSourceSnapshotSync(
+  params: Omit<SnapshotAcquisitionParameters, "assertCurrent"> & { assertCurrent: () => void },
+): AcquiredPluginSharedSourceSnapshot {
+  const operation = acquireSnapshotSteps(params, true);
+  let step = operation.next();
+  while (!step.done) {
+    try {
+      params.assertCurrent();
+    } catch (error) {
+      operation.throw(error);
+    }
+    step = operation.next();
+  }
+  // SAFETY: The shared acquisition generator completed after each authority checkpoint above.
+  return step.value as AcquiredPluginSharedSourceSnapshot;
+}
+async function acquireSnapshot(params: SnapshotAcquisitionParameters, shared: boolean) {
+  const operation = acquireSnapshotSteps(params, shared);
+  let step = operation.next();
+  while (!step.done) {
+    try {
+      await params.assertCurrent();
+    } catch (error) {
+      operation.throw(error);
+    }
+    step = operation.next();
+  }
+  return step.value;
+}
+/** Yield only at authority checks; the sealed-unit and reader-custody path is shared. */
+function* acquireSnapshotSteps(params: SnapshotAcquisitionParameters, shared: boolean) {
   const root = params.descriptor.artifact.path;
-  await params.assertCurrent();
+  if (shared && params.descriptor.formatVersion !== 2) {
+    throw new PluginSourceSnapshotIncompatibleError(root, params.descriptor.formatVersion);
+  }
+  yield;
   let held = readers.get(root);
   let acquired = false;
   let checkingAuthority = false;
@@ -555,12 +560,12 @@ export async function acquirePluginSourceSnapshot(params: {
       }
     };
     assertReader();
-    const manifest = validateSnapshot(params.stateDir, params.descriptor);
+    const manifest = validateSnapshot(params.stateDir, params.descriptor, shared);
     checkingAuthority = true;
-    await params.assertCurrent();
+    yield;
     checkingAuthority = false;
     assertReader();
-    assertSnapshotIdentities(params.descriptor, manifest);
+    assertSnapshotIdentities(params.descriptor, manifest, undefined, shared);
     let released = false;
     const release = () => {
       if (released) {
@@ -573,12 +578,12 @@ export async function acquirePluginSourceSnapshot(params: {
       }
     };
     const payload = path.join(root, PAYLOAD);
-    return {
+    const source = {
       rootDir: path.join(payload, manifest.root),
       sourceRoot: manifest.sourceRoot,
       sourceAliases: Object.fromEntries(
-        Object.entries(manifest.aliases).map(([source, relative]) => [
-          source,
+        Object.entries(manifest.aliases).map(([original, relative]) => [
+          original,
           path.join(payload, relative),
         ]),
       ),
@@ -586,7 +591,7 @@ export async function acquirePluginSourceSnapshot(params: {
       assertCurrent: () => {
         try {
           assertReader();
-          assertSnapshotIdentities(params.descriptor, manifest);
+          assertSnapshotIdentities(params.descriptor, manifest, undefined, shared);
         } catch (error) {
           if (error instanceof PluginSourceSnapshotValidationError && error.artifactPath === root) {
             throw error;
@@ -610,6 +615,27 @@ export async function acquirePluginSourceSnapshot(params: {
       release,
       releaseAsync: async () => release(),
     };
+    if (!shared) {
+      return source;
+    }
+    return createPluginSharedSnapshotView({
+      source,
+      manifest,
+      descriptor: params.descriptor,
+      stateDir: params.stateDir,
+      assertCurrent: source.assertCurrent,
+      fail: (detail) => fail(root, detail),
+      retain: () => {
+        assertReader();
+        reader.references++;
+      },
+      release: () => {
+        if (--reader.references === 0) {
+          readers.delete(root);
+          reader.token();
+        }
+      },
+    });
   } catch (error) {
     if (held && acquired && --held.references === 0) {
       readers.delete(root);
@@ -669,6 +695,8 @@ export async function collectPluginSourceSnapshots<
       assertRetiredIdentity();
       token(true);
       token = undefined;
+      makePluginSnapshotTreeRemovable(root, (detail) => fail(root, detail));
+      assertRetiredIdentity();
       await fsPromises.rm(root, { recursive: true, force: true });
       removed.push(root);
       removedSnapshots.push(descriptor);

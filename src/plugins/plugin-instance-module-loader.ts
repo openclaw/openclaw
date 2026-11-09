@@ -40,6 +40,7 @@ import {
 import { bindNativePluginInstanceModuleLoader } from "./plugin-native-module-loader.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import { bindSharedPluginModuleLoader } from "./plugin-shared-module-loader.js";
+import { bindPluginSharedSnapshotModuleLoader } from "./plugin-shared-snapshot-module-loader.js";
 import {
   buildPluginTypeScriptSource,
   PLUGIN_SOURCE_RESOLVE_PREFIX,
@@ -102,12 +103,8 @@ type RetainedNativeEsmTarget = Pick<
 > & { registry: PluginRegistry | undefined };
 
 function retainedNativeEsmLocation(target: RetainedNativeEsmTarget) {
-  // Bundled modules use the shared host loader; embedded entries may have no disk file.
-  if (target.origin === "bundled") {
-    return undefined;
-  }
-  // Explicit recovery keeps its own source custody and must not join an installed entry.
-  if (target.nativeRecovery || target.recoverySourceMap) {
+  // Bundled loading and explicit recovery retain their own code custody.
+  if (target.origin === "bundled" || target.nativeRecovery || target.recoverySourceMap) {
     return undefined;
   }
   const retention = isMainThread ? target.inspectionRetention : undefined;
@@ -232,15 +229,13 @@ function ownsNativeEsmResolution(
   return requested === instance;
 }
 
-// These callbacks retain code custody, never the generation that first captured it.
-function retainedNativeEsmExecution(retained: RetainedNativeEsm) {
-  return <T>(run: () => T): T => retainedNativeEsmOwner(retained).run(run);
-}
-
 /** Runtime and setup share code identity policy while keeping separate instance authority. */
 export function bindPluginInstanceModuleLoader(input: PluginInstanceModuleLoaderParams): void {
   const params = withBundledPluginReloadSource(input);
   const cache = getPluginCache();
+  if (bindPluginSharedSnapshotModuleLoader(params, bindPluginInstanceModuleLoader)) {
+    return;
+  }
   if (params.origin === "bundled" && !params.reloadBundledCode) {
     if (params.expectedSourceDigest !== undefined) {
       throw new Error("Source digest validation is not applicable to core-bundled runtime modules");
@@ -303,7 +298,9 @@ export function bindPluginInstanceModuleLoader(input: PluginInstanceModuleLoader
       params.preparedArtifact?.artifact ??
       capturePluginGenerationArtifact(
         ...bundledPluginCaptureInputs(params),
-        retained ? retainedNativeEsmExecution(retained) : (run) => params.instance.run(run),
+        retained
+          ? (run) => retainedNativeEsmOwner(retained).run(run)
+          : (run) => params.instance.run(run),
         moduleSource,
         params.nativeRecovery,
         undefined,
@@ -471,7 +468,6 @@ export function bindPluginInstanceModuleLoader(input: PluginInstanceModuleLoader
       return build.resolve(filename, mode, nativeFormat);
     });
   };
-  // Captured sources and compiled outputs share this instance's private namespace.
   const boundaryUrl = pathToFileURL(artifact.boundaryRoot + path.sep).href;
   const unregister = registerPluginInstanceModuleResolver(boundaryUrl, {
     instance: params.instance,

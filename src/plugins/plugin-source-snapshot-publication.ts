@@ -12,7 +12,11 @@ type CapturedSource = {
 };
 
 /** Durable cleanup custody precedes final rename, under the installation's lifecycle lease. */
-export function bindPluginSnapshotPublication(source: CapturedSource, stateDir: string) {
+export function bindPluginSnapshotPublication(
+  source: CapturedSource,
+  stateDir: string,
+  signal?: AbortSignal,
+) {
   return {
     contentDigest: source.contentDigest,
     dependencyClosureDigest: source.dependencyClosureDigest,
@@ -20,10 +24,11 @@ export function bindPluginSnapshotPublication(source: CapturedSource, stateDir: 
     disposeAsync: () => source.disposeAsync(),
     publish: (binding: PluginSourceSnapshotBinding) =>
       withPluginLifecycleLeaseAsync(
-        { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+        { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, signal },
         async (lease) => {
           const staged = await source.stage(binding);
           try {
+            signal?.throwIfAborted();
             await updatePluginSnapshotCandidates({
               stateDir,
               lease,
@@ -31,6 +36,7 @@ export function bindPluginSnapshotPublication(source: CapturedSource, stateDir: 
               candidates: [staged.descriptor],
             });
             await lease.assertOwned();
+            signal?.throwIfAborted();
             return await staged.publish();
           } finally {
             await staged.disposeAsync();

@@ -26,8 +26,10 @@ import {
 import type { PluginDirectoryEntry } from "./plugin-cache-files.types.js";
 import {
   cachePluginSdkAliases,
+  capturePluginLoaderAliasContext,
   getPluginSdkAliasFacts,
   getPluginSdkHostFacts,
+  type PluginLoaderAliasContext,
   type PluginRuntimeModuleResolution,
   type PluginSdkPackageJson,
   type WorkspacePackageAliasEntry,
@@ -559,7 +561,7 @@ function resolveBundledPluginPublicSurfaceAliasTarget(params: {
   packageRoot: string;
   dirName: string;
   basename: string;
-  orderedKinds: PluginSdkAliasCandidateKind[];
+  orderedKinds: readonly PluginSdkAliasCandidateKind[];
 }): string | null {
   for (const kind of params.orderedKinds) {
     const root = path.join(
@@ -577,14 +579,6 @@ function resolveBundledPluginPublicSurfaceAliasTarget(params: {
   }
   return null;
 }
-
-type PluginLoaderAliasContext = {
-  packageRoot: string | null;
-  orderedKinds: PluginSdkAliasCandidateKind[];
-  includePrivateQa: boolean;
-  trustedPrivateOwners: string[];
-  bundledPlugin: boolean;
-};
 
 function resolveBundledPluginPackagePublicSurfaceAliasMap(
   context: PluginLoaderAliasContext,
@@ -889,8 +883,14 @@ export function preparePluginLoaderAliases(
       ? isBundledPluginModulePath({ packageRoot: ownerPackageRoot, modulePath })
       : false,
   };
+  return preparePluginLoaderAliasesFromContext(context);
+}
+
+/** Descendants reuse the parent's selected host authority, independent of their env and cwd. */
+export function preparePluginLoaderAliasesFromContext(captured: PluginLoaderAliasContext) {
+  const { context, cacheKey } = capturePluginLoaderAliasContext(captured);
+  const { packageRoot } = context;
   const cache = getPluginCache();
-  const cacheKey = JSON.stringify(context);
   const cached = cache.sdk.contexts.get(cacheKey);
   if (cached) {
     return cached;
@@ -918,6 +918,7 @@ export function preparePluginLoaderAliases(
         }),
     );
   const prepared = {
+    context,
     packageRoot,
     // These are all inputs to the three map builders; installed artifacts stay
     // stable for the loader lifecycle. Key the captured authority, not raw hints.

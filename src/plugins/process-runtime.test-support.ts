@@ -11,7 +11,12 @@ export const pluginProcessRuntimeEntrypoints = {
   installedPluginIndexWrite: entrypoint("installed-plugin-index-store-write"),
   sourceSnapshot: entrypoint("plugin-source-snapshot-artifact"),
   sourceCapture: entrypoint("plugin-generation-capture"),
+  sourceCaptureContext: entrypoint("plugin-source-capture-context"),
+  sharedSnapshotNative: entrypoint("plugin-source-snapshot-native"),
+  sharedSnapshotLoader: entrypoint("plugin-source-snapshot-loader"),
   snapshotPreparation: entrypoint("plugin-generation-worker"),
+  snapshotWorkerOptions: entrypoint("plugin-preparation-exec-argv.test-support"),
+  nativeResolution: entrypoint("plugin-native-resolution"),
   directoryInventory: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../infra/directory-walk",

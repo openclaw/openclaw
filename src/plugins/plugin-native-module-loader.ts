@@ -13,7 +13,7 @@ import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import { withPluginCache, type PluginCache } from "./plugin-cache.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import type { PluginModuleLoaderOwner } from "./plugin-instance.types.js";
-import { getPluginBunConditions } from "./plugin-native-resolution.js";
+import { getPluginRuntimeConditions } from "./plugin-native-resolution.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { resolvePluginNativeAliasForParent } from "./plugin-sdk-native-resolver.js";
 import {
@@ -130,7 +130,7 @@ export function bindNativePluginInstanceModuleLoader(
           }
           let target: string | undefined;
           const requireMode = kind === "require-call" || kind === "require-resolve";
-          const conditions = [...getPluginBunConditions(requireMode)];
+          const conditions = [...getPluginRuntimeConditions(requireMode)];
           if (
             source === parent &&
             !path.isAbsolute(request) &&

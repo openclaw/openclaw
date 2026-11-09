@@ -10,6 +10,7 @@ import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
+import type { createPluginSnapshotScrubOwner } from "../plugins/plugin-source-snapshot-scrub.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { getPluginRegistryVersion } from "../plugins/runtime-state.js";
 import { getGatewayContextLifetime } from "../plugins/runtime/gateway-request-scope.js";
@@ -88,6 +89,7 @@ export async function startGatewayPostAttachRuntime(params: {
     retireGatewayRuntimeBindings?: () => void;
   }) => Awaitable<boolean>;
   getCurrentPluginRegistry?: () => PluginRegistry;
+  sourceSnapshotScrubs: Pick<ReturnType<typeof createPluginSnapshotScrubOwner>, "start" | "stop">;
   shouldStartPluginServices?: () => boolean;
   getCronService?: () => PluginServiceCronHost | null | undefined;
   onChannelsStarted?: () => void;
@@ -490,6 +492,24 @@ export async function startGatewayPostAttachRuntime(params: {
   // Direct callers may ignore this handle; only the managed run loop observes it.
   // Pre-handle so an ignored deferred sidecar failure never becomes an unhandled rejection.
   void startupSettled.catch(() => {});
+
+  if (!params.minimalTestGateway && !candidateCanary) {
+    params.onGatewayLifetimeSidecars(
+      schedulePostReadySidecarTask({
+        name: "sidecars.plugin-source-scrub",
+        log: params.log,
+        waitForPostReadyWork: async () => {
+          await startupSettled;
+          await params.waitForPostReadyWork?.();
+        },
+        shouldRun: () => params.isClosing?.() !== true,
+        run: async () => {
+          await params.sourceSnapshotScrubs.start();
+        },
+        stop: () => params.sourceSnapshotScrubs.stop(),
+      }),
+    );
+  }
 
   return {
     stopGatewayUpdateCheck: updateCheck.stop,

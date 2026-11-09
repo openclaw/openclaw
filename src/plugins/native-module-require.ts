@@ -59,7 +59,7 @@ export type BunPluginRuntime = {
   main: string;
   resolveSync?: (specifier: string, parent: string) => string;
   Transpiler: new (options: {
-    loader: "jsx" | "tsx";
+    loader: "ts" | "jsx" | "tsx";
     tsconfig: {
       compilerOptions: {
         jsx: "react";

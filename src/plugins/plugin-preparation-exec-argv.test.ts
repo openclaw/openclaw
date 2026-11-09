@@ -5,8 +5,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerThreadExecArgv,
+  resolveRuntimeWorkerUrl,
 } from "../infra/runtime-worker-url.js";
 import { resolvePluginPreparationExecArgv } from "./plugin-preparation-exec-argv.js";
+import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
 
 const original = process.execArgv;
 const temp = useAutoCleanupTempDirTracker(afterEach);
@@ -32,21 +34,34 @@ it("preserves selected resolution flags alongside the preparation preload", () =
     "--conditions=custom",
     "--conditions=literal,condition",
     "--no-addons",
+    ...(process.versions.bun ? [] : ["--experimental-require-module"]),
     "--preserve-symlinks",
   ]);
 });
 
-it("publishes and loads the selected closure with the caller's real worker conditions", () => {
+function runScenario({
+  nodeOptions,
+  flags,
+  ...expected
+}: {
+  nodeOptions?: string;
+  flags: string[];
+  publication: boolean;
+  shared: boolean;
+  addons: number;
+  sync: number;
+  environment: number;
+}) {
   const home = temp.make("plugin-snapshot-worker-options-");
-  const support = new URL("./plugin-preparation-exec-argv.test-support.ts", import.meta.url);
+  const support = resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.snapshotWorkerOptions);
   const result = spawnSync(
     process.execPath,
     [
-      "--conditions=snapshot-custom",
-      "--no-addons",
+      ...flags,
       ...resolveRuntimeWorkerArgv(support),
       "--snapshot-worker-options",
       home,
+      JSON.stringify(expected),
     ],
     {
       cwd: process.cwd(),
@@ -59,9 +74,40 @@ it("publishes and loads the selected closure with the caller's real worker condi
         USERPROFILE: home,
         TMPDIR: home,
         OPENCLAW_STATE_DIR: path.join(home, "state"),
+        NODE_OPTIONS: nodeOptions,
       },
     },
   );
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
+}
+
+it("matches actual NODE_OPTIONS and CLI flag precedence in the host and preparation worker", () => {
+  runScenario({
+    publication: false,
+    shared: false,
+    nodeOptions: '--conditions="snapshot env" --no-addons --no-experimental-require-module',
+    flags: ["--conditions=snapshot-custom", "--addons"],
+    addons: process.versions.bun ? 7 : 99,
+    sync: process.versions.bun ? 11 : 3,
+    environment: 23,
+  });
+});
+
+it.each([
+  { shared: false, nodeOptions: undefined, sync: 11, environment: 1 },
+  {
+    shared: true,
+    nodeOptions: '--conditions="snapshot env"',
+    sync: 11,
+    environment: 23,
+  },
+])("publishes and loads the selected closure with real worker conditions: %j", (scenario) => {
+  // Darwin private snapshot creation itself requires addons; disabled-addon policy is proven above.
+  runScenario({
+    publication: true,
+    ...scenario,
+    flags: ["--conditions=snapshot-custom"],
+    addons: 99,
+  });
 });
