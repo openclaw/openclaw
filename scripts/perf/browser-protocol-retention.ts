@@ -12,13 +12,16 @@
  * Owner baselines can replace modules via --state-owner and --wait-owner.
  * --gateway-entry /checkout/src/entry.ts instead boots a real isolated Gateway,
  * drives browser.request over WebSocket, and captures its main isolate via IPC.
+ * Timing/allocation modes measure the Gateway main thread through IPC, excluding GC.
+ * The comparison runner uses --controlled for interleaved batches, fixed navigation
+ * cadence, and warm/measured/closed heaps; --warmup separates startup from samples.
  * Gateway baselines require a checkout at the baseline revision, since plugins
  * evaluate generation captures. The preload records both loaded owner hashes.
  */
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
+import { once, on } from "node:events";
 import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { Session } from "node:inspector/promises";
@@ -52,26 +55,35 @@ const { values } = parseArgs({
     "state-owner": { type: "string" },
     "wait-owner": { type: "string" },
     "gateway-entry": { type: "string" },
+    controlled: { type: "boolean", default: false },
+    warmup: { type: "string", default: "1" },
   },
 });
 assert(globalThis.gc, "Run with --expose-gc");
 assert(values.output, "--output must name a new directory");
 assert(["mixed", "console", "wait", "requests"].includes(values.mode));
 assert(["heap", "timing", "allocation"].includes(values.measure));
-assert(
-  !values["gateway-entry"] || values.measure === "heap",
-  "Gateway mode captures heap only; owner mode measures CPU/allocation",
-);
+assert(!values.controlled || (values["gateway-entry"] && typeof process.send === "function"));
+const controlAbort = new AbortController();
+const stopControlled = () => controlAbort.abort();
+if (values.controlled) {
+  process.on("SIGTERM", stopControlled);
+  process.once("disconnect", stopControlled);
+}
+const commands = values.controlled
+  ? on(process, "message", { signal: controlAbort.signal })
+  : undefined;
 assert(
   !values["gateway-entry"] || (!values["state-owner"] && !values["wait-owner"]),
   "Gateway baselines require an actual baseline checkout",
 );
-const integer = (name: "steps" | "rounds" | "batch" | "port", fallback: number) =>
+const integer = (name: "steps" | "rounds" | "batch" | "port" | "warmup", fallback: number) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min: 1, fallback });
 const steps = integer("steps", 200);
 const rounds = integer("rounds", 3);
 const batch = integer("batch", 20);
 const port = integer("port", 43841);
+const warmup = integer("warmup", 1);
 assert(port >= 40000 && port < 65535);
 const output = path.resolve(values.output);
 mkdirSync(output, { recursive: false, mode: 0o700 });
@@ -168,47 +180,53 @@ type Heap = {
   nodes: number[];
   strings: string[];
 };
+async function gatewayRequest(request: Record<string, unknown>) {
+  const child = gateway;
+  assert(child);
+  return await new Promise<Record<string, unknown>>((resolve, reject) => {
+    const id = randomUUID();
+    const timeout = setTimeout(() => {
+      child.off("message", onMessage);
+      child.off("exit", onExit);
+      reject(new Error("Gateway measurement timed out"));
+    }, 120_000);
+    const onExit = () => {
+      clearTimeout(timeout);
+      child.off("message", onMessage);
+      reject(new Error("Gateway exited during measurement"));
+    };
+    const onMessage = (message: unknown) => {
+      if (
+        !isRecord(message) ||
+        message.channel !== "browser-protocol-retention" ||
+        message.id !== id
+      ) {
+        return;
+      }
+      clearTimeout(timeout);
+      child.off("message", onMessage);
+      child.off("exit", onExit);
+      if (typeof message.error === "string") {
+        reject(new Error(message.error));
+        return;
+      }
+      resolve(message);
+    };
+    child.on("message", onMessage);
+    child.once("exit", onExit);
+    child.send({ channel: "browser-protocol-retention", id, ...request });
+  });
+}
+
 async function snapshot(label: string) {
   globalThis.gc?.();
   let memory = process.memoryUsage();
   const filename = path.join(output, `${label}.heapsnapshot`);
   let sources: unknown;
   if (gateway) {
-    const child = gateway;
-    memory = await new Promise<NodeJS.MemoryUsage>((resolve, reject) => {
-      const id = randomUUID();
-      const timeout = setTimeout(() => {
-        child.off("message", onMessage);
-        child.off("exit", onExit);
-        reject(new Error("Gateway heap snapshot timed out"));
-      }, 120_000);
-      const onExit = () => {
-        clearTimeout(timeout);
-        child.off("message", onMessage);
-        reject(new Error("Gateway exited during heap snapshot"));
-      };
-      const onMessage = (message: unknown) => {
-        if (
-          !isRecord(message) ||
-          message.channel !== "browser-protocol-retention" ||
-          message.id !== id
-        ) {
-          return;
-        }
-        clearTimeout(timeout);
-        child.off("message", onMessage);
-        child.off("exit", onExit);
-        if (typeof message.error === "string") {
-          reject(new Error(message.error));
-          return;
-        }
-        sources = message.sources;
-        resolve(message.memory as NodeJS.MemoryUsage);
-      };
-      child.on("message", onMessage);
-      child.once("exit", onExit);
-      child.send({ channel: "browser-protocol-retention", id, filename });
-    });
+    const result = await gatewayRequest({ action: "snapshot", filename });
+    sources = result.sources;
+    memory = result.memory as NodeJS.MemoryUsage;
   } else {
     writeHeapSnapshot(filename);
   }
@@ -255,7 +273,7 @@ const server = createServer((req, res) => {
 });
 const inspector = new Session();
 const snapshots: Awaited<ReturnType<typeof snapshot>>[] = [];
-const measurements: Array<{ wallMs: number; cpuMs: number; allocatedBytes?: number }> = [];
+const measurements: Array<Record<string, unknown>> = [];
 try {
   if (values["gateway-entry"]) {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -365,33 +383,56 @@ try {
       await call("POST", "/navigate", { targetId, url: `${url}?step=${index}` });
     }
   }
-  await step(-1);
-  if (values.measure === "heap") {
+  for (let index = 0; index < warmup; index++) {
+    await step(warmup === 1 ? -1 : index);
+  }
+  if (values.measure === "heap" || values.controlled) {
     snapshots.push(await snapshot("warm"));
   }
+  process.send?.({ ready: true });
   const hostLoadBefore = loadavg();
   for (let round = 0; round < rounds; round++) {
+    const command = commands ? (await commands.next()).value?.[0] : undefined;
+    const measure = commands && isRecord(command) ? command.measure : values.measure;
+    assert(measure === "heap" || measure === "timing" || measure === "allocation");
+    const roundLoadBefore = loadavg();
     globalThis.gc();
-    if (values.measure === "allocation") {
+    if (gateway) {
+      await gatewayRequest({ action: "start", measure });
+    } else if (measure === "allocation") {
       await startCollectedHeapSampling(inspector, 32768);
     }
     const cpu = process.threadCpuUsage();
     const started = performance.now();
     for (let index = 0; index < steps; index++) {
-      await step(round * steps + index);
+      await step(values.controlled ? index : round * steps + index);
     }
-    const wallMs = performance.now() - started;
+    const driverWallMs = performance.now() - started;
     const used = process.threadCpuUsage(cpu);
-    let allocatedBytes: number | undefined;
-    if (values.measure === "allocation") {
-      const { profile } = await inspector.post("HeapProfiler.stopSampling");
-      allocatedBytes = sumSampledHeapBytes(profile.head);
-      inspector.disconnect();
+    let measured: Record<string, unknown>;
+    if (gateway) {
+      measured = await gatewayRequest({ action: "stop" });
+    } else {
+      let allocatedBytes: number | undefined;
+      if (measure === "allocation") {
+        const { profile } = await inspector.post("HeapProfiler.stopSampling");
+        allocatedBytes = sumSampledHeapBytes(profile.head);
+        inspector.disconnect();
+      }
+      measured = { wallMs: driverWallMs, cpuMs: (used.user + used.system) / 1000, allocatedBytes };
     }
-    measurements.push({ wallMs, cpuMs: (used.user + used.system) / 1000, allocatedBytes });
-    if (values.measure === "heap") {
+    measurements.push({
+      ...measured,
+      measure,
+      steps,
+      driverWallMs,
+      hostLoadBefore: roundLoadBefore,
+      hostLoadAfter: loadavg(),
+    });
+    if (measure === "heap") {
       snapshots.push(await snapshot(`round-${round + 1}`));
     }
+    process.send?.({ measured: measurements.at(-1) });
     console.log(
       JSON.stringify({
         round: round + 1,
@@ -401,6 +442,11 @@ try {
       }),
     );
   }
+  if (values.controlled) {
+    const finish = (await commands?.next())?.value?.[0];
+    assert(isRecord(finish) && finish.finish === true);
+    snapshots.push(await snapshot("measured"));
+  }
   const requests = await call("GET", "/requests", { targetId });
   assert(Array.isArray(requests.requests));
   if (requestCode) {
@@ -409,7 +455,7 @@ try {
         (request) => request.url.includes("/data") && request.status === 200 && request.ok === true,
       ),
     );
-    assert.equal(received, (1 + rounds * steps) * batch);
+    assert.equal(received, (warmup + rounds * steps) * batch);
   }
   const consoleMessages = await call("GET", "/console", { targetId });
   assert(Array.isArray(consoleMessages.messages));
@@ -421,7 +467,7 @@ try {
     );
   }
   await call("DELETE", `/tabs/${targetId}`);
-  if (values.measure === "heap") {
+  if (values.measure === "heap" || values.controlled) {
     snapshots.push(await snapshot("closed"));
   }
   assert(
@@ -442,6 +488,7 @@ try {
   };
   writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));
 } finally {
+  await commands?.return?.();
   inspector.disconnect();
   try {
     await call("POST", "/stop");
@@ -456,6 +503,8 @@ try {
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
+      process.off("SIGTERM", stopControlled);
+      process.off("disconnect", stopControlled);
     }
   }
 }

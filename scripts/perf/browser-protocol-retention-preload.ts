@@ -6,6 +6,8 @@ import { Session } from "node:inspector/promises";
 import { fileURLToPath } from "node:url";
 import { writeHeapSnapshot } from "node:v8";
 import { isMainThread } from "node:worker_threads";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 if (isMainThread && process.send) {
   const sources: Array<{ path: string; sha256?: string }> = [];
@@ -25,26 +27,84 @@ if (isMainThread && process.send) {
   });
   await inspector.post("Debugger.enable");
   let observing = true;
-  const capture = async (message: { channel?: string; id?: string; filename?: string }) => {
-    if (message.channel !== "browser-protocol-retention") {
+  const sampler = new Session();
+  let measurement:
+    | {
+        started: number;
+        cpu: NodeJS.CpuUsage;
+        processCpu: NodeJS.CpuUsage;
+        memoryBefore: NodeJS.MemoryUsage;
+        allocation: boolean;
+      }
+    | undefined;
+  const capture = async (message: unknown) => {
+    if (!isRecord(message) || message.channel !== "browser-protocol-retention") {
       return;
     }
+    const reply = (result: Record<string, unknown>) =>
+      process.send?.({ channel: message.channel, id: message.id, ...result });
     try {
+      assert(typeof message.id === "string");
       if (observing) {
         await inspector.post("Debugger.disable");
         inspector.disconnect();
         observing = false;
       }
-      assert(globalThis.gc && message.filename);
-      globalThis.gc();
-      const memory = process.memoryUsage();
-      writeHeapSnapshot(message.filename);
-      process.send?.({ channel: message.channel, id: message.id, memory, sources });
+      assert(globalThis.gc);
+      if (message.action === "start") {
+        assert(!measurement);
+        globalThis.gc();
+        globalThis.gc();
+        const memoryBefore = process.memoryUsage();
+        const allocation = message.measure === "allocation";
+        if (allocation) {
+          await startCollectedHeapSampling(sampler, 32768);
+        }
+        measurement = {
+          started: performance.now(),
+          cpu: process.threadCpuUsage(),
+          processCpu: process.cpuUsage(),
+          memoryBefore,
+          allocation,
+        };
+        reply({});
+      } else if (message.action === "stop") {
+        assert(measurement);
+        const wallMs = performance.now() - measurement.started;
+        const cpu = process.threadCpuUsage(measurement.cpu);
+        const processCpu = process.cpuUsage(measurement.processCpu);
+        const memoryBeforeGC = process.memoryUsage();
+        let allocatedBytes: number | undefined;
+        if (measurement.allocation) {
+          const { profile } = await sampler.post("HeapProfiler.stopSampling");
+          allocatedBytes = sumSampledHeapBytes(profile.head);
+          sampler.disconnect();
+        }
+        globalThis.gc();
+        globalThis.gc();
+        reply({
+          wallMs,
+          cpuMs: (cpu.user + cpu.system) / 1000,
+          processCpuMs: (processCpu.user + processCpu.system) / 1000,
+          allocatedBytes,
+          memoryBefore: measurement.memoryBefore,
+          memoryBeforeGC,
+          memoryAfterGC: process.memoryUsage(),
+        });
+        measurement = undefined;
+      } else {
+        assert(message.action === "snapshot" && typeof message.filename === "string");
+        globalThis.gc();
+        globalThis.gc();
+        const memory = process.memoryUsage();
+        writeHeapSnapshot(message.filename);
+        reply({ memory, sources });
+      }
     } catch (error) {
-      process.send?.({ channel: message.channel, id: message.id, error: String(error) });
+      reply({ error: String(error) });
     }
   };
-  process.on("message", (message) => {
+  process.on("message", (message: unknown) => {
     void capture(message);
   });
   process.channel?.unref();

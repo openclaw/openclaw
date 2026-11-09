@@ -63,6 +63,7 @@ const repositoryScriptEntries = [
   "scripts/perf/backup-verify-measure.mjs!",
   "scripts/perf/board-read-admission-measure.ts!",
   "scripts/perf/browser-protocol-retention.ts!",
+  "scripts/perf/browser-protocol-comparison.ts!",
   "scripts/perf/browser-protocol-retention-preload.ts!",
   "scripts/perf/fswatcher-retention-preload.mjs!",
   "scripts/perf/podman-exec-measure.ts!",
