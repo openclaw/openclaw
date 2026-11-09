@@ -78,6 +78,7 @@ import {
   createWithWorktreeAllocation,
   reserveOwnedWorktree,
   prepareWorktreeDestination,
+  prepareWorktreeRepository,
   readWorktreeGitInventory,
   findWorktreeByName,
   rebindLiveWorktreeRepository,
@@ -234,8 +235,7 @@ export class ManagedWorktreeService {
   ): Promise<ManagedWorktreeCreationOutcome & { sourceRoot: string }> {
     return withWorktreePreparationTiming("managed", () =>
       withWorktreeRunEnd(this.env, async () => {
-        params.signal?.throwIfAborted();
-        const repository = await resolveRepository(params.repoRoot);
+        const repository = await prepareWorktreeRepository(params, this.env);
         const outcome = await withWorktreeBasePreparation(repository, async (prepareBase) =>
           createWithWorktreeAllocation(
             { ...params, env: this.env },
@@ -827,7 +827,7 @@ export class ManagedWorktreeService {
       }
       let failure = error;
       try {
-        const reason = await removalDeferralReason(error);
+        const reason = removalDeferralReason(error);
         if (timing && reason) {
           const deferred = await deferFailedWorktreeRemoval({
             env: this.env,

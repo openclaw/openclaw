@@ -1443,7 +1443,6 @@
     height: 56px;
     min-width: 0;
     max-width: min(216px, 100%);
-    border-color: var(--border);
   }
 
   .chat-selection-annotations__chip .chat-attachment-file {
@@ -1459,7 +1458,7 @@
     height: 40px;
     border-radius: max(0px, calc(var(--chat-attachment-radius) - 8px));
     corner-shape: inherit;
-    background: color-mix(in srgb, var(--text) 4%, transparent);
+    background: transparent;
     color: var(--muted);
   }
 
@@ -1528,10 +1527,10 @@
   flex: 0 0 auto;
   width: 56px;
   height: 56px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--chat-attachment-radius);
   corner-shape: superellipse(1.5);
-  background: var(--chat-composer-surface, var(--popover));
+  background: var(--card-highlight);
 }
 
 .chat-attachment-file {
@@ -1696,7 +1695,7 @@
   padding: 0;
   border-radius: max(0px, calc(var(--chat-attachment-radius) - 8px));
   corner-shape: inherit;
-  background: color-mix(in srgb, var(--text) 4%, transparent);
+  background: transparent;
   color: var(--muted);
 }
 
@@ -1711,6 +1710,11 @@
   font-size: 12px;
   font-weight: 500;
   line-height: 16px;
+}
+
+.chat-attachments-preview .chat-attachment-file__type,
+.chat-attachments-preview .chat-browser-annotation-card__meta {
+  color: var(--text);
 }
 
 .chat-attachment-file__type,
@@ -1811,12 +1815,16 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   corner-shape: round;
-  background: var(--chat-composer-surface, var(--popover));
+  background:
+    linear-gradient(var(--card-highlight), var(--card-highlight)),
+    var(--chat-composer-surface, var(--popover));
   box-shadow: var(--shadow-sm);
 }
 
 .chat-attachment-remove:hover:not(:disabled)::before {
-  background: color-mix(in srgb, var(--text) 6%, var(--chat-composer-surface, var(--popover)));
+  background:
+    linear-gradient(var(--surface-hover), var(--surface-hover)),
+    var(--chat-composer-surface, var(--popover));
 }
 
 .chat-attachment-remove:disabled {

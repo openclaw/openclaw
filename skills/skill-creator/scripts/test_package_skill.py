@@ -84,20 +84,20 @@ class TestPackageSkillSecurity(TestCase):
     def test_failed_write_preserves_output_and_cleans_staging(self):
         skill_dir = self.create_skill("failed-skill")
         for existing in (False, True):
-            with self.subTest(existing=existing):
-                out_dir = self.temp_dir / str(existing)
-                out_dir.mkdir()
-                archive = out_dir / "failed-skill.skill"
-                if existing:
-                    self.assertIsNotNone(package_skill(str(skill_dir), str(out_dir)))
-                    original = archive.read_bytes()
+            out_dir = self.temp_dir / str(existing)
+            out_dir.mkdir()
+            archive = out_dir / "failed-skill.skill"
+            if existing:
+                self.assertIsNotNone(package_skill(str(skill_dir), str(out_dir)))
+                original = archive.read_bytes()
 
-                with patch.object(zipfile.ZipFile, "write", side_effect=OSError("disk full")):
-                    self.assertIsNone(package_skill(str(skill_dir), str(out_dir)))
-
-                self.assertEqual(list(out_dir.iterdir()), [archive] if existing else [])
-                if existing:
-                    self.assertEqual(archive.read_bytes(), original)
+            for operation in ("zipfile.ZipFile.write", "os.walk"):
+                with self.subTest(existing=existing, operation=operation):
+                    with patch(operation, side_effect=OSError("fixture I/O failure")):
+                        self.assertIsNone(package_skill(str(skill_dir), str(out_dir)))
+                    self.assertEqual(list(out_dir.iterdir()), [archive] if existing else [])
+                    if existing:
+                        self.assertEqual(archive.read_bytes(), original)
 
     def test_skips_external_symlinks(self):
         for directory in (False, True):
@@ -145,7 +145,7 @@ class TestPackageSkillSecurity(TestCase):
     def test_archive_entry_order_is_deterministic(self):
         skill_dir = self.create_skill("order-skill")
         # Files across multiple levels, created in non-sorted order, so the
-        # filesystem/rglob enumeration order differs from a lexicographic sort.
+        # filesystem walk order differs from a lexicographic sort.
         for name, content in (
             ("zeta.md", "z\n"), ("yankee.txt", "y\n"),
             ("alpha/delta.txt", "d\n"), ("alpha/bravo.txt", "b\n"),

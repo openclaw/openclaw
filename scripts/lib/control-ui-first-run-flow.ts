@@ -157,7 +157,19 @@ export async function runControlUiFirstRunFlow(
   page.on("websocket", observeSocket);
   const submit = () =>
     page.locator(wizard).getByRole("button", { name: "Submit", exact: true }).click();
-  const wait = (selector: string) => page.locator(selector).first().waitFor({ state: "visible" });
+  const wait = (selector: string) =>
+    page.waitForFunction(
+      (target) => {
+        const element = document.querySelector(target);
+        if (!element || getComputedStyle(element).visibility === "hidden") {
+          return false;
+        }
+        const bounds = element.getBoundingClientRect();
+        return bounds.width > 0 && bounds.height > 0;
+      },
+      selector,
+      { polling: "raf" },
+    );
   try {
     const choice = 'openclaw-model-setup-page [data-auth-choice="custom-api-key"] button';
     await measure(
@@ -411,38 +423,42 @@ export async function runControlUiFirstRunFlow(
       "first-message-reply",
       async () => {
         await page.locator(send).click();
-        await page
-          .locator(reply)
-          .getByText("Synthetic first-run reply.", { exact: true })
-          .waitFor();
+        await wait(`${reply} p`);
+        assert.equal(await page.locator(`${reply} p`).textContent(), "Synthetic first-run reply.");
         await wait(`${composer}:not([disabled])`);
       },
-      `${reply} p`,
+      `body:has(${reply} p) ${composer}:not([disabled])`,
     );
 
     const assistantGroup = ".chat-pane-cache__pane--active .chat-group.assistant";
-    const previousReplies = await page.locator(assistantGroup).evaluateAll((groups) =>
-      groups.map((group) => {
-        const key = group.getAttribute("data-chat-row-key");
-        if (!key) {
-          throw new Error("Assistant reply must have a transcript row key");
-        }
-        return key;
-      }),
-    );
-    const nextReply = `${assistantGroup}${previousReplies.map((key) => `:not([data-chat-row-key=${JSON.stringify(key)}])`).join("")} .chat-text p`;
-    await page.locator(composer).fill("Say hello again in one short sentence.");
-    await wait(`${send}:not([disabled])`);
-    await measure(
-      "second-message-reply",
-      async () => {
-        await page.locator(send).click();
-        await page.locator(nextReply).waitFor();
-        assert.equal(await page.locator(nextReply).textContent(), "Synthetic first-run reply.");
-        await wait(`${composer}:not([disabled])`);
-      },
-      nextReply,
-    );
+    for (const [name, message] of [
+      ["second-message-reply", "Say hello again in one short sentence."],
+      ["later-message-reply", "Say hello a third time in one short sentence."],
+    ] as const) {
+      const previousReplies = await page.locator(assistantGroup).evaluateAll((groups) =>
+        groups.map((group) => {
+          const key = group.getAttribute("data-chat-row-key");
+          if (!key) {
+            throw new Error("Assistant reply must have a transcript row key");
+          }
+          return key;
+        }),
+      );
+      // Streaming groups can still contain a working placeholder beside the answer.
+      const nextReply = `${assistantGroup}:not([data-chat-streaming="true"]):not(.chat-group--working)${previousReplies.map((key) => `:not([data-chat-row-key=${JSON.stringify(key)}])`).join("")} .chat-text p`;
+      await page.locator(composer).fill(message);
+      await wait(`${send}:not([disabled])`);
+      await measure(
+        name,
+        async () => {
+          await page.locator(send).click();
+          await wait(nextReply);
+          assert.equal(await page.locator(nextReply).textContent(), "Synthetic first-run reply.");
+          await wait(`${composer}:not([disabled])`);
+        },
+        `body:has(${nextReply}) ${composer}:not([disabled])`,
+      );
+    }
 
     return {
       onboarding,
