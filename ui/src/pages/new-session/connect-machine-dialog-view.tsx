@@ -2,7 +2,6 @@ import { Errored, lazy, Loading, Show } from "solid-js";
 import "../../components/modal-dialog.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
-import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 
@@ -35,7 +34,9 @@ export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState[
             <Loading
               fallback={
                 <div class="oc-dialog__body connect-machine-dialog__body">
-                  <LoadingState />
+                  <p class="connect-machine-dialog__status" role="status">
+                    {t("newSession.connectMachineGenerating")}
+                  </p>
                 </div>
               }
             >
