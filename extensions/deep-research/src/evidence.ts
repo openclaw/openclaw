@@ -63,18 +63,14 @@ export function evidenceProblem(
   return undefined;
 }
 
-function normalizeResearchText(value: string): string {
+/** Finding identity keeps the whole statement: the display cap must not merge two findings. */
+export function researchFindingKey(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
 
 /** Bound untrusted labels before prompts; source passages remain byte-for-byte evidence. */
 export function researchPlainText(value: string, maxLength = 1_000): string {
-  return truncateUtf16Safe(normalizeResearchText(value), maxLength);
-}
-
-/** Finding identity keeps the whole statement: the display cap must not merge two findings. */
-export function researchFindingKey(statement: string): string {
-  return normalizeResearchText(statement);
+  return truncateUtf16Safe(researchFindingKey(value), maxLength);
 }
 
 /** Only the renderer may emit citation markers or Markdown structure. */

@@ -360,42 +360,16 @@ describe("portable research", () => {
     },
   );
 
-  it("bounds page titles before they enter extraction and audit prompts", async () => {
-    const { io } = fixture();
-    io.fetch = async (url) => ({
-      url,
-      title: "Malicious\nHeading" + "x".repeat(1_000),
-      text: "The measured river length is 12 km.",
-    });
+  it("cuts titles on whole characters and keeps findings sharing a display prefix", async () => {
+    const { io, evidence, verdict } = fixture();
+    const head = `Malicious\nHeading${"x".repeat(238)}\u{1f600}${"x".repeat(743)}`;
+    io.fetch = async (url) => ({ url, title: head, text: evidence.quote });
+    const findings = ["b", "c"].map((end) => ({ statement: head + end, evidence: [evidence] }));
+    const audit = { verdicts: [verdict, { ...verdict, index: 1 }], unanswered: [] };
+    const replies = [{ questions: ["q"] }, { findings, gaps: [], queries: [] }, audit];
+    io.complete = vi.fn(async () => ({ text: JSON.stringify(replies.shift()) }));
     const result = await runPortableResearch({ question: "River length" }, io);
-    expect(result.sources[0]?.title).toHaveLength(256);
-    expect(result.sources[0]?.title).not.toContain("\n");
-    expect(vi.mocked(io.complete).mock.calls[1]?.[0]).not.toContain("x".repeat(257));
-  });
-
-  it("keeps findings that differ only past the display cap as separate candidates", async () => {
-    const { io, evidence } = fixture();
-    const prefix = "a".repeat(999);
-    // Both statements are schema-valid; they diverge where display truncation stops.
-    const statements = [prefix, `${prefix}\u{1f600}`];
-    const responses = [
-      { questions: ["river length"] },
-      {
-        findings: statements.map((statement) => ({ statement, evidence: [evidence] })),
-        gaps: [],
-        queries: [],
-      },
-      {
-        verdicts: statements.map((_statement, index) => ({
-          index,
-          verdict: "supported",
-          reason: "Direct evidence",
-        })),
-        unanswered: [],
-      },
-    ];
-    io.complete = vi.fn(async () => ({ text: JSON.stringify(responses.shift()) }));
-    const result = await runPortableResearch({ question: "River length" }, io);
-    expect(result.findings.map((finding) => finding.statement)).toEqual(statements);
+    expect(result.sources[0]?.title).toBe(`Malicious Heading${"x".repeat(238)}`);
+    expect(result.findings).toMatchObject(findings);
   });
 });
