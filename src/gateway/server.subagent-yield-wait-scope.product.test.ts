@@ -33,7 +33,6 @@ const HANDOFF = "Handoff: middle runner\nPending: leaf check";
 const PAUSE_NOTICE = "A child is paused awaiting a continuation";
 const FOLLOWUP = "Continue with the follow-up check after requester completion.";
 const CLAIM = "Wait for a message from the middle runner.";
-const RESUME = "Finish the middle task without sending the leaf another message.";
 
 function promptStrings(value: unknown): string[] {
   if (typeof value === "string") {
@@ -136,10 +135,6 @@ async function startModelServer(completion: "children" | "direct" | "successor" 
     }
     if (raw.includes(middleTask)) {
       if (completion === "successor") {
-        if (raw.includes(RESUME)) {
-          reply(MIDDLE_DONE, "requester_successor_done");
-          return;
-        }
         if (!calls.includes("sessions_spawn")) {
           writeToolCall(response, "sessions_spawn", { task: leafTask, context: "isolated" });
           return;
@@ -172,7 +167,7 @@ async function startModelServer(completion: "children" | "direct" | "successor" 
           writeToolCall(response, "sessions_yield", {});
           return;
         }
-        reply("NO_REPLY", "requester_pause_notice");
+        reply(MIDDLE_DONE, "requester_successor_done");
         return;
       }
       if (completion === "direct") {
@@ -457,7 +452,6 @@ it("closes a claimed child's message wait when its requester task finishes throu
   let successor: { runId: string } | undefined;
   const requesterParked = createDeferred();
   const childParked = createDeferred();
-  const noticeCommitted = createDeferred();
   const successorCommitted = createDeferred();
   const closed = createDeferred();
   const observeRows = () => {
@@ -479,10 +473,9 @@ it("closes a claimed child's message wait when its requester task finishes throu
     if (entry?.status !== "done" || !entry.lastRunId) {
       return;
     }
-    if (successor && entry.lastRunId === successor.runId) {
+    if (!successor && entry.lastRunId !== requester.runId) {
+      successor = { runId: entry.lastRunId };
       successorCommitted.resolve();
-    } else if (!successor && entry.lastRunId !== requester.runId) {
-      noticeCommitted.resolve();
     }
   };
   const stopRows = subscribeSubagentRunChanges("persistence", observeRows);
@@ -521,31 +514,20 @@ it("closes a claimed child's message wait when its requester task finishes throu
     child = await within(model.claimed, 30_000, () => "requester never claimed the leaf follow-up");
     observeRows();
     await within(requesterParked.promise, 30_000, () => "requester never yielded behind its child");
-    model.allowMessageWait();
-    await within(childParked.promise, 30_000, () => "claimed child never parked for a message");
     const binding = () =>
       subagentRuns.getRequesterRunInstance(getSubagentRunByRunId(child!.runId)!);
     expect(binding()?.runId).toBe(requester.runId);
-    await within(noticeCommitted.promise, 30_000, () => "requester pause notice never committed");
-    expect(getSubagentRunByRunId(child.runId)?.pauseReason).toBe("sessions_yield");
-    expect(binding()?.runId).toBe(requester.runId);
-
-    successor = await gateway.client.request<{ runId: string }>("chat.send", {
-      sessionKey: requester.childSessionKey,
-      message: RESUME,
-      idempotencyKey: `successor-resume-${randomUUID()}`,
-      deliver: false,
-    });
-    await expect(
-      gateway.client.request("agent.wait", { runId: successor.runId, timeoutMs: 30_000 }),
-    ).resolves.toMatchObject({ status: "ok" });
-    expect(getSubagentRunByRunId(successor.runId)?.taskRunId).toBe(requester.runId);
-    await observeRequester();
+    // The child's pause wakes its yielded requester through the real settlement
+    // path, which adopts the original task before the model finishes it.
+    model.allowMessageWait();
+    await within(childParked.promise, 30_000, () => "claimed child never parked for a message");
     await within(
       successorCommitted.promise,
-      5_000,
-      () => "requester successor never committed completion",
+      30_000,
+      () => "requester continuation never committed completion",
     );
+    expect(successor).toBeDefined();
+    expect(getSubagentRunByRunId(successor!.runId)?.taskRunId).toBe(requester.runId);
     await testing.sweepOnceForTests();
     await within(
       closed.promise,
