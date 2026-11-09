@@ -2,7 +2,6 @@ import { isProxy } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
 import { stripCompactionReplayCheckpointInPlace } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
-import type { CacheTtlProjectionPrefix } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { bindCacheTtlProjectionPrefixes } from "../../config/sessions/session-cache-ttl-prefix.js";
 import {
   isIndexedSessionEntry,
@@ -68,14 +67,10 @@ export function prepareSessionManagerEntries(entries: readonly unknown[]) {
   ) {
     ownSessionTranscriptEntries(partitioned.fileEntries, pendingWritableTranscriptEntries);
   }
-  return {
-    ...partitioned,
-    opaqueFileEntries: partitioned.opaqueEntries.map(({ index, record }) => ({
-      index,
-      record: ownEnvelope(record),
-    })),
-    pendingWritableTranscriptEntries,
-  };
+  for (const entry of partitioned.opaqueEntries) {
+    entry.record = ownEnvelope(entry.record);
+  }
+  return { ...partitioned, pendingWritableTranscriptEntries };
 }
 
 export function ownSessionTranscriptEntries(
@@ -98,7 +93,6 @@ export function prepareSessionManagerBoundedIndexes(
   entriesByOriginalIndex: readonly (FileEntry | undefined)[],
   readBranch: () => readonly SessionEntry[],
   byId: ReadonlyMap<string, SessionEntry>,
-  pending: Set<object>,
 ) {
   const boundedFirstKeptById = new Map<string, string>();
   for (const [boundaryId, range] of bounded.firstKeptRanges) {
@@ -116,15 +110,7 @@ export function prepareSessionManagerBoundedIndexes(
   const cacheTtlProjectionPrefixes = bindCacheTtlProjectionPrefixes(bounded, {
     getBranch: readBranch,
     getEntry: (id) => byId.get(id),
-  })?.map((prefix) =>
-    Object.assign({}, prefix, {
-      entries: prefix.entries.map((entry) => {
-        const envelope = Object.assign({}, entry);
-        pending.add(envelope);
-        return envelope;
-      }),
-    }),
-  );
+  });
   return { boundedFirstKeptById, cacheTtlProjectionPrefixes };
 }
 
@@ -157,19 +143,6 @@ export function clampOpaqueSessionEntryIndexes(
     entry.index = Math.max(previous, Math.min(entry.index, length));
     previous = entry.index;
   }
-}
-
-export function retainAnchoredSessionPrefix(
-  prefix: CacheTtlProjectionPrefix,
-  pending: Set<object>,
-): boolean {
-  if (prefix.anchorIds.length) {
-    return true;
-  }
-  for (const entry of prefix.entries) {
-    pending.delete(entry);
-  }
-  return false;
 }
 
 export function collectSessionEntryChildren(

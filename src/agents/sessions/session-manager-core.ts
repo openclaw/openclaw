@@ -293,7 +293,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     this.persistenceHeaderPending = false;
     this.persistenceTarget = target ? captureSessionTranscriptTargetBinding(target) : undefined;
     this.fileEntries = partitioned.fileEntries;
-    this.opaqueFileEntries = partitioned.opaqueFileEntries;
+    this.opaqueFileEntries = partitioned.opaqueEntries;
     this.pendingWritableTranscriptEntries = partitioned.pendingWritableTranscriptEntries;
     this.sessionId = header?.id ?? target?.sessionId ?? createManagedSessionId();
     this.migrated = migrateToCurrentVersion(
@@ -314,7 +314,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
           partitioned.fileEntriesByOriginalIndex,
           () => this[sessionManagerReadTranscriptBranch](),
           this.byId,
-          this.pendingWritableTranscriptEntries,
         ),
       );
     }

@@ -463,9 +463,6 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     const adoptPrepared = (version?: typeof this.transcriptVersion) => {
       // Publish the detached tree before later post-commit observers can append through this manager.
       this.fileEntries = prepared.fileEntries.map(restoreCustomData);
-      this.ownTranscriptEntries(
-        this.cacheTtlProjectionPrefixes?.flatMap((prefix) => prefix.entries) ?? [],
-      );
       this.pendingWritableTranscriptEntries = prepared.pendingWritableTranscriptEntries;
       this.opaqueFileEntries = prepared.opaqueFileEntries;
       this.buildIndex();

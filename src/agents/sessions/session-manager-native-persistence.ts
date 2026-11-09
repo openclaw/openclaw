@@ -19,11 +19,7 @@ import type { EngineConnection } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { getSessionCompactionPersistence } from "./session-compaction-persistence.js";
-import {
-  isIndexedSessionEntry,
-  parseOpaqueLeafEntry,
-  retainAnchoredSessionPrefix,
-} from "./session-manager-codec.js";
+import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
 import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
 import {
@@ -45,8 +41,8 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
 
   protected recordTranscriptNavigationChange(): void {
     this.#navigationEpoch++;
-    this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter((prefix) =>
-      retainAnchoredSessionPrefix(prefix, this.pendingWritableTranscriptEntries),
+    this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter(
+      (prefix) => prefix.anchorIds.length,
     );
   }
 

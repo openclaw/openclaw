@@ -496,9 +496,6 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
             return [prefix];
           }
           if (canonicalEntry.type === "reset" || canonicalEntry.type === "branch_summary") {
-            for (const entry of prefix.entries) {
-              this.pendingWritableTranscriptEntries.delete(entry);
-            }
             return [];
           }
           return [{ ...prefix, anchorIds: [canonicalEntry.id] }];

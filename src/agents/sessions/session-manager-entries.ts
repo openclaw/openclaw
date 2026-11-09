@@ -1,4 +1,5 @@
 import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
+import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   getOwnedSessionTranscriptActor,
@@ -14,7 +15,6 @@ import {
 } from "./model-prompt-projection-append.js";
 import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionManagerAppend } from "./session-manager-append.js";
-import { retainAnchoredSessionPrefix } from "./session-manager-codec.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
 import { SessionManagerActorCommittedError } from "./session-manager-persistence-error.js";
@@ -329,8 +329,8 @@ export class SessionManagerEntries extends SessionManagerAppend {
     this.appendParentId = params.appendParentId;
     this.appendMode = params.appendMode;
     this.pendingDeliberateAppend = false;
-    this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter((prefix) =>
-      retainAnchoredSessionPrefix(prefix, this.pendingWritableTranscriptEntries),
+    this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter(
+      (prefix) => prefix.anchorIds.length,
     );
   }
 
@@ -367,8 +367,14 @@ export class SessionManagerEntries extends SessionManagerAppend {
   /** Omitted projection metadata follows its retained branch anchors, outside model history. */
   getToolResultProjectionEntries() {
     this.getBranch();
-    this.ownTranscriptEntries(
-      this.cacheTtlProjectionPrefixes?.flatMap((prefix) => prefix.entries) ?? [],
+    // Prefix arrays come from the frozen hydration owner; detach only on SDK exposure.
+    this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.map((prefix) =>
+      Object.isFrozen(prefix.entries)
+        ? {
+            ...prefix,
+            entries: cloneTranscriptView(prefix.entries, { shareImmutablePayloads: false }),
+          }
+        : prefix,
     );
     return this[sessionManagerReadToolResultProjectionEntries]();
   }

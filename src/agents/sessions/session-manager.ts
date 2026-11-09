@@ -379,11 +379,12 @@ export class SessionManager extends SessionManagerBranching {
             throw new Error("Transcript rewrite source is not in the loaded view");
           }
           sources.set(destination, source);
-          for (const prefix of publication.cacheTtlProjectionPrefixes ?? []) {
-            if (prefix.anchorIds.includes(sourceId)) {
-              prefix.anchorIds = [...prefix.anchorIds, destination];
-            }
-          }
+          publication.cacheTtlProjectionPrefixes = publication.cacheTtlProjectionPrefixes?.map(
+            (prefix) =>
+              prefix.anchorIds.includes(sourceId)
+                ? { ...prefix, anchorIds: [...prefix.anchorIds, destination] }
+                : prefix,
+          );
         }
         const first = entries[0];
         const source = first && sources.get(first.id);
@@ -609,9 +610,6 @@ export class SessionManager extends SessionManagerBranching {
     const detached = SessionManager.fromSelectedEntries(
       [source.getHeader(), ...source.getBranch()],
       source.getCwd(),
-    );
-    source.ownTranscriptEntries(
-      source.cacheTtlProjectionPrefixes?.flatMap((prefix) => prefix.entries) ?? [],
     );
     detached.cacheTtlProjectionPrefixes = source.cacheTtlProjectionPrefixes;
     return detached;

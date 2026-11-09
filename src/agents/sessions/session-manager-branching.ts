@@ -201,9 +201,6 @@ export class SessionManagerBranching extends SessionManagerMetadata {
         version?: SessionTranscriptContextVersion,
       ) => {
         this.fileEntries = branch.fileEntries;
-        this.ownTranscriptEntries(
-          this.cacheTtlProjectionPrefixes?.flatMap((prefix) => prefix.entries) ?? [],
-        );
         this.pendingWritableTranscriptEntries = branch.pendingWritableTranscriptEntries;
         this.opaqueFileEntries = branch.opaqueFileEntries;
         this.sessionId = newSessionId;
