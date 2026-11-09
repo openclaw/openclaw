@@ -68,14 +68,19 @@ export async function fetchRemoteDefault(
       "--no-auto-maintenance",
       "--no-recurse-submodules",
       "--no-tags",
+      "--refmap=",
       ...(cachedCommit ? [`--negotiation-tip=${cachedCommit}`] : []),
       "origin",
       `+refs/heads/${branch}:${remoteRef}`,
     ];
     const fetchOptions = { ...options, timeoutMs: 60_000 };
-    const fetched = cachedCommit
-      ? await fetchDefaultWithIsolatedRefs(repoRoot, remoteRef, cachedCommit, args, fetchOptions)
-      : await runGit(repoRoot, args, fetchOptions);
+    const fetched = await fetchDefaultWithIsolatedRefs(
+      repoRoot,
+      remoteRef,
+      cachedCommit,
+      args,
+      fetchOptions,
+    );
     if (fetched.cleanup === "uncertain") {
       throw new CommandProcessCleanupError();
     }
@@ -124,7 +129,7 @@ export async function fetchRemoteDefault(
 async function fetchDefaultWithIsolatedRefs(
   repoRoot: string,
   remoteRef: string,
-  previous: string,
+  previous: string | undefined,
   args: string[],
   options: NonNullable<Parameters<typeof runGit>[2]>,
 ) {
@@ -139,10 +144,12 @@ async function fetchDefaultWithIsolatedRefs(
     }
     entries.push([key, separator < 0 ? "true" : field.slice(separator + 1)]);
   }
-  const mappings = entries.filter(([key]) => key === "remote.origin.fetch");
-  if (mappings.length !== 1 || mappings[0]?.[1] !== "+refs/heads/*:refs/remotes/origin/*") {
-    // Custom mappings may publish additional destinations; let Git own those writes.
-    return await runGit(repoRoot, args, options);
+  if (!entries.some(([key]) => key === "remote.origin.url")) {
+    // Legacy remote files belong to the source metadata, not the temporary transport.
+    entries.push([
+      "remote.origin.url",
+      await requireGit(repoRoot, ["ls-remote", "--get-url", "origin"], options),
+    ]);
   }
   return await withGitObjectStoreTransport(
     repoRoot,
@@ -174,8 +181,12 @@ async function fetchDefaultWithIsolatedRefs(
         return fetched;
       }
       const commit = await requireGit(repoRoot, ["rev-parse", "--verify", remoteRef], transport);
-      // Fetch may observe a newer tip than ls-remote. Publish its actual result, with CAS.
-      return await runGit(repoRoot, ["update-ref", remoteRef, commit, previous], options);
+      // Fetch may observe a newer tip than ls-remote. Retain CAS when a cached tip was known.
+      return await runGit(
+        repoRoot,
+        ["update-ref", remoteRef, commit, ...(previous ? [previous] : [])],
+        options,
+      );
     },
   );
 }

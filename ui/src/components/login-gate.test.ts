@@ -273,7 +273,7 @@ describe("login gate failure recovery", () => {
     const element = await mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
     const replace = vi.fn();
     vi.stubGlobal("window", { location: { href: "https://gateway.example/chat", replace } });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response()));
 
     const failure = part(element, 'failure[data-kind="protocol-mismatch"]');
     const refresh = part(failure, "failure-refresh");

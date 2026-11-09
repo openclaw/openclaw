@@ -17,6 +17,7 @@ import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
 import { resetConfigRuntimeState } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CronJob } from "../cron/types.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { migrateLegacyDesktopStreamOptOuts } from "../infra/device-pairing-node-desktop-migration.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
@@ -325,12 +326,15 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
     }));
 
   it(
-    "keeps a completed retained one-shot disabled after its Gateway process is killed",
+    "recovers completed and interrupted one-shots after their Gateway process is killed",
     { timeout: 90_000 },
     async ({ signal }) => {
       await using resources = new AsyncDisposableStack();
       const prompt = "Report the retained one-shot result.";
       const summary = "Retained one-shot completed.";
+      const unfinishedPrompt = "Report the unfinished one-shot result.";
+      const accepted = createDeferred();
+      let holdUnfinished = true;
       const requests: string[] = [];
       const providerServer = createServer((request, response) => {
         void (async () => {
@@ -338,7 +342,14 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
             response.writeHead(404).end();
             return;
           }
-          requests.push(await readRequestText(request));
+          const body = await readRequestText(request);
+          requests.push(body);
+          if (holdUnfinished && body.includes(unfinishedPrompt)) {
+            holdUnfinished = false;
+            // Leave the accepted response open; a duplicate must finish so replay fails visibly.
+            accepted.resolve();
+            return;
+          }
           writeOpenAiResponsesText(response, {
             text: summary,
             messageId: "retained-one-shot-message",
@@ -458,6 +469,52 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       const owners = await readOwner();
       expect(owners).toHaveLength(1);
       expect(JSON.parse(owners[0]!.payload_json)).toMatchObject({ owner: { pid: firstChild.pid } });
+      const unfinishedJob = await gateway.request<{ id: string }>("cron.add", {
+        name: "unfinished-one-shot",
+        agentId: "main",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: unfinishedPrompt },
+        delivery: { mode: "none" },
+        failureAlert: { after: 1, cooldownMs: 0 },
+      });
+      // Omit the completion wait: the process must die with accepted, unfinished work.
+      const unfinishedRun = await gateway.request<{ runId: string }>("cron.run", {
+        id: unfinishedJob.id,
+        mode: "force",
+      });
+      expect(unfinishedRun).toMatchObject({ enqueued: true, runId: expect.any(String) });
+      await withinTest(accepted.promise, signal);
+      const activeJob = await gateway.request<CronJob>("cron.get", { id: unfinishedJob.id });
+      expect(activeJob).toMatchObject({
+        enabled: true,
+        state: { runningAtMs: expect.any(Number) },
+      });
+      const readUnfinishedReceipt = () =>
+        queryRows<{
+          receipt_id: string;
+          request_run_id: string;
+          status: string;
+          state_json: string;
+        }>(
+          `SELECT r.receipt_id, r.request_run_id, r.status, j.state_json FROM ${quoteIdentifier(anchor.namespace)}.cron_run_receipts r JOIN ${quoteIdentifier(anchor.namespace)}.cron_jobs j ON j.store_key = r.store_key AND j.job_id = r.job_id WHERE r.job_id = $1`,
+          [unfinishedJob.id],
+        );
+      const activeReceipts = await readUnfinishedReceipt();
+      expect(activeReceipts).toHaveLength(1);
+      const receipt = {
+        receipt_id: activeReceipts[0]!.receipt_id,
+        request_run_id: unfinishedRun.runId,
+      };
+      expect(activeReceipts[0]).toMatchObject({ ...receipt, status: "running" });
+      // Public RPCs hide receipt IDs; bind the private marker and receipt in one SQL snapshot.
+      expect(JSON.parse(activeReceipts[0]!.state_json)).toMatchObject({
+        runningAtMs: activeJob.state.runningAtMs,
+        runningReceiptId: receipt.receipt_id,
+      });
       await instance.crashGateway();
       expect(firstChild.signalCode).toBe("SIGKILL");
       await disconnectGatewayClient(gateway);
@@ -537,10 +594,49 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       expect(history.entries).toEqual([
         expect.objectContaining({ runId: run.runId, status: "ok", completionStatus: "succeeded" }),
       ]);
+      const interruptedError = "cron: job interrupted by gateway restart";
+      const recovered = await restarted.request<CronJob>("cron.get", { id: unfinishedJob.id });
+      expect(recovered).toMatchObject({
+        enabled: false,
+        state: {
+          lastRunStatus: "error",
+          lastStatus: "error",
+          lastError: interruptedError,
+          lastDelivered: false,
+          lastDeliveryStatus: "unknown",
+          lastFailureNotificationDeliveryStatus: "not-requested",
+        },
+      });
+      expect(recovered.state.runningAtMs).toBeUndefined();
+      expect(recovered.state.nextRunAtMs).toBeUndefined();
+      expect(recovered.state.consecutiveErrors).toBe(activeJob.state.consecutiveErrors);
+      const interruptedHistory = await restarted.request<{ entries: unknown[] }>("cron.runs", {
+        id: unfinishedJob.id,
+        limit: 10,
+      });
+      expect(interruptedHistory.entries).toEqual([
+        expect.objectContaining({
+          runId: unfinishedRun.runId,
+          status: "error",
+          completionStatus: "failed",
+          error: interruptedError,
+          delivered: false,
+          deliveryStatus: "unknown",
+        }),
+      ]);
+      const recoveredReceipts = await readUnfinishedReceipt();
+      expect(recoveredReceipts).toEqual([
+        { ...receipt, status: "interrupted", state_json: expect.any(String) },
+      ]);
+      const privateState = JSON.parse(recoveredReceipts[0]!.state_json);
+      expect(privateState.runningReceiptId).toBeUndefined();
+      expect(privateState.runningScheduleChangeId).toBeUndefined();
+      expect(privateState.failureAlertIncident).toBeUndefined();
       await disconnectGatewayClient(restarted);
       await instance.stopGateway();
       expect(await readAnchor(current)).toEqual(anchor);
       expect(requests.filter((body) => body.includes(prompt))).toHaveLength(1);
+      expect(requests.filter((body) => body.includes(unfinishedPrompt))).toHaveLength(1);
       expect(requests.filter((body) => body.includes(probePrompt))).toHaveLength(1);
       const jobs = await queryRows<{ enabled: string; job_json: string }>(
         `SELECT enabled, job_json FROM ${quoteIdentifier(anchor.namespace)}.cron_jobs WHERE job_id = $1`,
@@ -561,6 +657,15 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         { status: "succeeded", terminal_summary: summary, detail_json: expect.any(String) },
       ]);
       expect(JSON.parse(runs[0]!.detail_json)).toMatchObject({ runId: run.runId });
+      const interruptedRuns = await queryRows<{ status: string; detail_json: string }>(
+        `SELECT status, detail_json FROM ${quoteIdentifier(anchor.namespace)}.task_runs WHERE runtime = 'cron' AND source_id = $1`,
+        [unfinishedJob.id],
+      );
+      expect(interruptedRuns).toEqual([{ status: "failed", detail_json: expect.any(String) }]);
+      expect(JSON.parse(interruptedRuns[0]!.detail_json)).toMatchObject({
+        runId: unfinishedRun.runId,
+        error: interruptedError,
+      });
     },
   );
 

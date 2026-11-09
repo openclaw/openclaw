@@ -12,6 +12,7 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -588,7 +589,7 @@ describe("worktree Git maintenance", () => {
     expect(await packNames(repo)).toHaveLength(1);
   });
 
-  it("defers a pass whose checkout lease expires instead of suspending repository maintenance", async () => {
+  it("defers a pass whose maintenance lease expires instead of suspending repository maintenance", async () => {
     const repo = await initRepo(tempDirs.make("worktree-lost-lease-maintenance-"));
     const { objects } = await packBlobs(repo, ["lost-a", "lost-b", "lost-c"]);
     await git(repo, "prune-packed");
@@ -622,7 +623,7 @@ describe("worktree Git maintenance", () => {
     expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
   });
 
-  it("admits ref mutations while packs are rewritten", async () => {
+  it("admits foreground checkout preparation while packs are rewritten", async () => {
     const repo = await initRepo(tempDirs.make("worktree-pack-ref-queue-"));
     const { objects } = await packBlobs(repo, ["queue-a", "queue-b", "queue-c"]);
     await git(repo, "prune-packed");
@@ -632,13 +633,97 @@ describe("worktree Git maintenance", () => {
       // A base-ref fetch must not wait for the whole verification and rewrite.
       const signal = AbortSignal.timeout(5_000);
       if (args.at(-1) === "openclaw-consolidate") {
-        await gitExec.enqueueGitRefMutation(repo, ".git", async () => {}, signal);
+        const peer = new WorktreeGcProgress();
+        await createWorktreeGitMaintenance(env)({ progress: peer });
+        expect(peer.result.issues).toEqual([
+          expect.objectContaining({ stage: "git-maintenance", outcome: "deferred" }),
+        ]);
+        await withProjectCheckoutLifecycle(repo, { env, signal, waitMs: 0 }, async (lease) => {
+          await requireGit(
+            repo,
+            ["worktree", "add", "-b", "foreground", path.join(repo, "foreground")],
+            {
+              signal: lease.signal,
+              beforeRun: () => lease.assertCurrent(),
+            },
+          );
+        });
       }
       return await execute(cwd, args, options);
     });
     const progress = new WorktreeGcProgress();
     await createWorktreeGitMaintenance(env)({ progress });
     expect(progress.result.gitMaintenance).toMatchObject({ stage: "completed", packsAfter: 1 });
+    expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
+    expect(await git(path.join(repo, "foreground"), "rev-parse", "HEAD")).toBe(
+      await git(repo, "rev-parse", "HEAD"),
+    );
+  });
+
+  it("defers pack retirement to foreground preparation and retries without suspending", async () => {
+    const repo = await initRepo(tempDirs.make("worktree-retirement-yield-"));
+    const { objects } = await packBlobs(repo, ["yield-a", "yield-b", "yield-c"]);
+    await git(repo, "prune-packed");
+    await register(repo, "retirement-yield", { branch: "main" });
+    const entered = createDeferred();
+    const release = createDeferred();
+    const execute = gitExec.executeGitCommand;
+    let foreground: Promise<void> | undefined;
+    const commands = vi
+      .spyOn(gitExec, "executeGitCommand")
+      .mockImplementation(async (cwd, args, options) => {
+        const result = await execute(cwd, args, options);
+        if (args.at(-1) === "openclaw-consolidate") {
+          foreground = withProjectCheckoutLifecycle(repo, { env, waitMs: 0 }, async () => {
+            entered.resolve();
+            await release.promise;
+          });
+          await Promise.race([entered.promise, foreground]);
+        }
+        return result;
+      });
+    const maintain = createWorktreeGitMaintenance(env);
+    const progress = new WorktreeGcProgress();
+    try {
+      await maintain({ progress });
+      expect(progress.result.issues).toEqual([
+        expect.objectContaining({ stage: "git-maintenance", outcome: "deferred" }),
+      ]);
+      expect(await packNames(repo)).toHaveLength(4);
+      expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
+    } finally {
+      release.resolve();
+      await foreground;
+      commands.mockRestore();
+    }
+    await maintain({});
+    expect(await packNames(repo)).toHaveLength(1);
+    expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
+  });
+
+  it("bounds retirement while finishing the current pack's sidecars", async () => {
+    const repo = await initRepo(tempDirs.make("worktree-retirement-budget-"));
+    const { objects } = await packBlobs(repo, ["bounded-a", "bounded-b", "bounded-c"]);
+    await git(repo, "prune-packed");
+    await register(repo, "retirement-budget", { branch: "main" });
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const remove = fs.rm;
+    let retired: string | undefined;
+    vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      await remove(target, options);
+      if (String(target).startsWith(packsPath(repo)) && String(target).endsWith(".idx")) {
+        retired = String(target).slice(0, -4);
+        now += 251;
+      }
+    });
+    const progress = new WorktreeGcProgress();
+    await createWorktreeGitMaintenance(env)({ progress });
+    expect(progress.result.gitMaintenance).toMatchObject({ stage: "completed", packsAfter: 3 });
+    expect(retired).toBeDefined();
+    for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
+      await expect(fs.access(`${retired}.${extension}`)).rejects.toHaveProperty("code", "ENOENT");
+    }
     expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
   });
 
