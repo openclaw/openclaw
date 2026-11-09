@@ -11,7 +11,7 @@ import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 const { resolveApiKeyMock } = vi.hoisted(() => ({ resolveApiKeyMock: vi.fn() }));
 
 // mock-isolation: Credential fallback is fixture-owned; never read real provider credentials.
-vi.mock("./config-api.js", () => ({
+vi.mock("./credential-resolution.js", () => ({
   resolveElevenLabsApiKeyWithProfileFallback: resolveApiKeyMock,
 }));
 

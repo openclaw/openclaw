@@ -9,7 +9,7 @@ const fetchMock = vi.hoisted(() =>
   vi.fn<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>(),
 );
 
-vi.mock("./config-api.js", () => ({
+vi.mock("./credential-resolution.js", () => ({
   resolveElevenLabsApiKeyWithProfileFallback: () => null,
 }));
 
