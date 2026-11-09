@@ -6,10 +6,10 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { storageTargetForComposer } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { dispatchChatSlashCommand } from "./chat-commands.ts";
-import { admitChatHistoryPages } from "./chat-history-snapshot.ts";
 import { readChatHistoryStartCapability } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { admitChatHistoryPages } from "./chat-pane-history-packets.runtime.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import {

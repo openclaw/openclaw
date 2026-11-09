@@ -6,7 +6,8 @@ import { t } from "../../i18n/index.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import "./chat-pane.tsx";
 import * as historyBudget from "./chat-history-request-budget.ts";
-import { admitChatHistoryPages, type ChatHistoryResult } from "./chat-history-snapshot.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { admitChatHistoryPages } from "./chat-pane-history-packets.runtime.ts";
 import {
   createStagedPrefetchPane,
   nativeHistoryMessage,

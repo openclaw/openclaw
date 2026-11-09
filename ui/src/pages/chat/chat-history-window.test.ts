@@ -5,12 +5,7 @@ import { nativeHistoryMessageSourceIdentity } from "../../lib/chat/history-messa
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
-import {
-  admitChatHistoryPages,
-  prepareChatHistoryPages,
-  resolveChatHistoryPagination,
-  reopenChatHistoryBoundary,
-} from "./chat-history-snapshot.ts";
+import { prepareChatHistoryPages, resolveChatHistoryPagination } from "./chat-history-snapshot.ts";
 import {
   extendChatHistoryWindow,
   prepareChatHistorySegment,
@@ -20,6 +15,10 @@ import {
   boundChatLocalOutput,
 } from "./chat-history-window.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import {
+  admitChatHistoryPages,
+  reopenChatHistoryBoundary,
+} from "./chat-pane-history-packets.runtime.ts";
 import {
   getChatSessionProjection,
   publishChatSessionProjection,

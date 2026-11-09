@@ -3,7 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { admitChatHistoryPages } from "../chat-history-snapshot.ts";
+import { admitChatHistoryPages } from "../chat-pane-history-packets.runtime.ts";
 import { createRefreshChatPane } from "../chat-pane-history.test-support.ts";
 import * as transcriptResidency from "../chat-pane-transcript-residency.ts";
 import {

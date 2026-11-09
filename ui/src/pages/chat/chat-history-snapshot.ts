@@ -1,8 +1,4 @@
-import {
-  readSessionMessageIdentity,
-  reduceSessionProjection,
-  type SessionProjectionEntry,
-} from "@openclaw/gateway-client/browser";
+import type { SessionProjectionEntry } from "@openclaw/gateway-client/browser";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type {
@@ -14,7 +10,6 @@ import type {
   ChatHistoryResetResult,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "../../api/types.ts";
-import { t } from "../../i18n/index.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
 import {
   nativeHistoryMessageIdentity,
@@ -25,13 +20,8 @@ import {
   isUiSelectedGlobalSessionKey,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
+import type { ChatHistoryPagination, ChatHistorySegment } from "./chat-history-pagination.ts";
 import {
-  advanceChatHistoryNavigation,
-  type ChatHistoryPagination,
-  type ChatHistorySegment,
-} from "./chat-history-pagination.ts";
-import {
-  chatHistoryWindowBoundary,
   invalidateChatHistoryPacketSources,
   extendChatHistoryWindow,
   prepareChatHistorySegment,
@@ -42,10 +32,6 @@ import { projectChatSessionStateSnapshot } from "./chat-session-state-snapshot.t
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import {
-  getChatSessionProjection,
-  readChatSessionProjection,
-  publishChatSessionProjection,
-  publishChatSessionProjectionMessages,
   readChatLocalOutputEntries,
   prepareChatHistoryProjectionMessages,
 } from "./history-merge.ts";
@@ -284,26 +270,6 @@ export function reconcileHistoryTail(options: {
   };
 }
 
-export function reopenChatHistoryBoundary(
-  state: ChatState,
-  boundary: string,
-  pagination: ChatHistoryPagination,
-  direction: "older" | "newer" = "older",
-): void {
-  const held = chatHistoryWindowBoundary(
-    state.chatMessages,
-    state.chatHistoryPagination,
-    direction,
-  );
-  if (nativeHistoryMessageSourceIdentity(held) !== boundary) {
-    throw new Error(t("chat.thread.earlierInterrupted"));
-  }
-  const previous = state.chatHistoryPagination;
-  // Reopening advances the traversal edge without changing the held wire packet.
-  state.chatHistoryPagination = advanceChatHistoryNavigation(previous, pagination, direction);
-  commitCurrentChatHistorySnapshot(state);
-}
-
 /** Prepare packet coverage without acquiring producer observations or publishing. */
 export function prepareChatHistoryPages(
   state: Pick<ChatState, "chatMessages" | "chatHistoryPagination" | "readTranscriptReaderSnapshot">,
@@ -403,147 +369,6 @@ export function prepareChatHistoryPages(
       [...required].every((source) => retained.has(source)) &&
       resident.withinBudget,
   };
-}
-
-/** Accept all admitted producer receipts before the one resident publication. */
-export function admitChatHistoryPages(
-  state: ChatState,
-  results: readonly ChatHistoryResult[],
-  direction: "older" | "newer" | "around",
-): "messages" | "coverage" | false {
-  const projection = getChatSessionProjection(state);
-  const localEntries = readChatLocalOutputEntries(state);
-  const prepared = prepareChatHistoryPages(state, results, direction, localEntries);
-  if (!prepared.fits) {
-    // Around navigation cannot retire a required target after accepting its
-    // coverage or receipts; its existing caller surfaces this capacity reason.
-    if (direction === "around") {
-      throw new Error(t("chat.thread.historyCapacity"));
-    }
-    return false;
-  }
-  return commitPreparedChatHistoryPages(
-    state,
-    results,
-    direction,
-    projection,
-    localEntries,
-    prepared,
-  );
-}
-
-/** Fit and commit one contiguous prefix without exporting prepared authority. */
-export function admitChatHistoryPagePrefix(
-  state: ChatState,
-  results: readonly ChatHistoryResult[],
-  direction: "older" | "newer",
-): { acceptedCount: number; change: "messages" | "coverage" | false } {
-  const previousProjection = readChatSessionProjection(state);
-  let localEntries = readChatLocalOutputEntries(state);
-  let accepted = results;
-  const fit = () => {
-    while (accepted.length) {
-      const candidate = prepareChatHistoryPages(state, accepted, direction, localEntries);
-      if (candidate.fits) {
-        return candidate;
-      }
-      accepted = accepted.slice(0, -1);
-    }
-    return undefined;
-  };
-  let prepared = fit();
-  if (!prepared) {
-    return { acceptedCount: 0, change: false };
-  }
-  const projection = getChatSessionProjection(state);
-  // Initialization or scope binding can publish different resident/local custody.
-  // Only an unchanged projection permits reuse of this same-stack fit.
-  if (projection !== previousProjection) {
-    localEntries = readChatLocalOutputEntries(state);
-    prepared = fit();
-    if (!prepared) {
-      return { acceptedCount: 0, change: false };
-    }
-  }
-  return {
-    acceptedCount: accepted.length,
-    change: commitPreparedChatHistoryPages(
-      state,
-      accepted,
-      direction,
-      projection,
-      localEntries,
-      prepared,
-    ),
-  };
-}
-
-function commitPreparedChatHistoryPages(
-  state: ChatState,
-  results: readonly ChatHistoryResult[],
-  direction: "older" | "newer" | "around",
-  projection: ReturnType<typeof getChatSessionProjection>,
-  localEntries: readonly SessionProjectionEntry[],
-  prepared: ReturnType<typeof prepareChatHistoryPages>,
-): "messages" | "coverage" | false {
-  const messages = results.flatMap((result) => result.messages ?? []);
-  let acceptedRunIds: ReadonlySet<string> | undefined;
-  const pendingRunIds = projection.entries.flatMap((entry) =>
-    entry.pending && entry.identity?.role === "user" && entry.pendingRunId
-      ? [entry.pendingRunId]
-      : [],
-  );
-  if (pendingRunIds.length) {
-    const adopted = reduceSessionProjection(projection, {
-      type: "snapshotLoaded",
-      scope: projection.scope,
-      messages: messages.filter((message) => {
-        const identity = readSessionMessageIdentity(message);
-        return (
-          identity?.role === "user" &&
-          !identity.isImported &&
-          (identity.id !== null || identity.sequence !== null)
-        );
-      }),
-    });
-    const remaining = new Set(
-      adopted.entries.filter((entry) => entry.pending).map((entry) => entry.pendingRunId),
-    );
-    acceptedRunIds = new Set(pendingRunIds.filter((runId) => !remaining.has(runId)));
-  }
-  const previous = state.chatMessages;
-  const previousPagination = state.chatHistoryPagination;
-  const localOutputs = localEntries.map((entry) => entry.message);
-  state.chatHistoryPagination = prepared.pagination;
-  if (direction === "around") {
-    publishChatSessionProjection(
-      state,
-      reduceSessionProjection(projection, {
-        type: "residencyChanged",
-        messages: [...prepared.messages, ...localOutputs],
-      }),
-      { acceptedRunIds },
-    );
-  } else {
-    publishChatSessionProjectionMessages(state, prepared.messages, { acceptedRunIds });
-  }
-  commitCurrentChatHistorySnapshot(state);
-  if (state.chatMessages.some((message) => !previous.includes(message))) {
-    return "messages";
-  }
-  const admitted = state.chatHistoryPagination;
-  // Rejected pages cannot advance navigation. Hidden pages can still certify
-  // a new edge, even when no displayed body enters the resident window.
-  return admitted.hasMore !== previousPagination.hasMore ||
-    (admitted.hasMore &&
-      previousPagination.hasMore &&
-      (admitted.olderCursor !== previousPagination.olderCursor ||
-        admitted.needsBoundary !== previousPagination.needsBoundary)) ||
-    admitted.hasNewer !== previousPagination.hasNewer ||
-    admitted.newerCursor !== previousPagination.newerCursor ||
-    admitted.needsNewerBoundary !== previousPagination.needsNewerBoundary
-    ? "coverage"
-    : false;
 }
 
 export function commitCurrentChatHistorySnapshot(

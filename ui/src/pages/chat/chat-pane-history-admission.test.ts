@@ -4,13 +4,12 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import * as historyIdentity from "../../lib/chat/history-message-identity.ts";
 import { chatOutboxDeliveryKey } from "../../lib/chat/outbox-store.ts";
 import "./chat-pane.tsx";
+import { prepareChatHistoryPages, type ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
 import {
   admitChatHistoryPagePrefix,
   admitChatHistoryPages,
-  prepareChatHistoryPages,
-  type ChatHistoryResult,
-} from "./chat-history-snapshot.ts";
-import { makeChatHost } from "./chat-host.test-support.ts";
+} from "./chat-pane-history-packets.runtime.ts";
 import {
   createStagedPrefetchPane,
   nativeHistoryMessage,

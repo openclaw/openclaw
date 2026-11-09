@@ -7,7 +7,7 @@ import {
 import { createInitializationContext } from "./chat-application-context.test-support.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { StagedOlderHistoryPage } from "./chat-history-request.ts";
-import { admitChatHistoryPages, type ChatHistoryResult } from "./chat-history-snapshot.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   createRenderTestChatPane,
   createTestChatPane as createBaseTestChatPane,
@@ -150,42 +150,6 @@ export function historyPage(seqs = [1, 2], extra: HistoryPageOverrides = {}) {
     messages: seqs.map((seq) => nativeHistoryMessage(seq)),
     ...pagination(),
     ...extra,
-  };
-}
-
-export function packetHistoryPane(total = 480) {
-  const packet = (start: number, end: number): ChatHistoryResult => ({
-    messages: Array.from({ length: end - start + 1 }, (_, index) =>
-      nativeHistoryMessage(start + index),
-    ),
-    hasMore: start > 1,
-    ...(start > 1 ? { olderCursor: `older-${start - 1}` } : {}),
-    ...(end < total ? { newerCursor: `newer-${end + 1}` } : {}),
-    totalMessages: total,
-  });
-  const request = vi.fn(async (_method: string, params: { cursor: string }) => {
-    const [direction, raw] = params.cursor.split("-");
-    const edge = Number(raw);
-    return direction === "older"
-      ? packet(Math.max(1, edge - 79), edge)
-      : packet(edge, Math.min(total, edge + 79));
-  });
-  const { pane, state } = createTestChatPane({
-    client: { request } as unknown as GatewayBrowserClient,
-  });
-  admitChatHistoryPages(state, [packet(total - 79, total)], "around");
-  let reader = `seq:${total - 40}`;
-  state.readTranscriptReaderSnapshot = () => ({
-    anchor: reader,
-    visibleSources: reader ? [reader] : [],
-  });
-  return {
-    pane,
-    state,
-    request,
-    moveReader: (seq: number) => {
-      reader = `seq:${seq}`;
-    },
   };
 }
 

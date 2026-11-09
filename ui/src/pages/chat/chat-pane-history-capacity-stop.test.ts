@@ -2,7 +2,8 @@
 
 import { expect, it, vi } from "vitest";
 import "./chat-pane.tsx";
-import { admitChatHistoryPages, type ChatHistoryResult } from "./chat-history-snapshot.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { admitChatHistoryPages } from "./chat-pane-history-packets.runtime.ts";
 import {
   createStagedPrefetchPane,
   nativeHistoryMessage,

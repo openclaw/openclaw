@@ -2,18 +2,20 @@
 
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import "./chat-pane.tsx";
-import { admitChatHistoryPages, type ChatHistoryResult } from "./chat-history-snapshot.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { prepareChatHistoryPacket } from "./chat-history-window.ts";
+import { admitChatHistoryPages } from "./chat-pane-history-packets.runtime.ts";
 import {
   createStagedPrefetchPane,
+  createTestChatPane,
   historyPage,
   nativeHistoryMessage,
   nativeHistorySeq,
   expectNativeHistoryRange,
-  packetHistoryPane,
   pagination,
   sparsePrefetchRequest,
   stagedPagesRequest,
@@ -24,6 +26,42 @@ import {
   publishChatSessionProjection,
   reduceChatSessionProjection,
 } from "./history-merge.ts";
+
+function packetHistoryPane(total = 480) {
+  const packet = (start: number, end: number): ChatHistoryResult => ({
+    messages: Array.from({ length: end - start + 1 }, (_, index) =>
+      nativeHistoryMessage(start + index),
+    ),
+    hasMore: start > 1,
+    ...(start > 1 ? { olderCursor: `older-${start - 1}` } : {}),
+    ...(end < total ? { newerCursor: `newer-${end + 1}` } : {}),
+    totalMessages: total,
+  });
+  const request = vi.fn(async (_method: string, params: { cursor: string }) => {
+    const [direction, raw] = params.cursor.split("-");
+    const edge = Number(raw);
+    return direction === "older"
+      ? packet(Math.max(1, edge - 79), edge)
+      : packet(edge, Math.min(total, edge + 79));
+  });
+  const { pane, state } = createTestChatPane({
+    client: { request } as unknown as GatewayBrowserClient,
+  });
+  admitChatHistoryPages(state, [packet(total - 79, total)], "around");
+  let reader = `seq:${total - 40}`;
+  state.readTranscriptReaderSnapshot = () => ({
+    anchor: reader,
+    visibleSources: reader ? [reader] : [],
+  });
+  return {
+    pane,
+    state,
+    request,
+    moveReader: (seq: number) => {
+      reader = `seq:${seq}`;
+    },
+  };
+}
 
 function pendingInput(
   state: Parameters<typeof reduceChatSessionProjection>[0],
@@ -119,33 +157,26 @@ it("settles a filled chain and reverses through its opaque edge without source I
   expectNativeHistoryRange(state.chatMessages, 81, 400);
   expect(state.chatHistoryPagination.hasNewer).toBeUndefined();
   expect(pane.stagedHistory.page).toBeNull();
+  const wireBytes = (first: number, count: number) =>
+    JSON.stringify(Array.from({ length: count }, (_, index) => nativeHistoryMessage(first + index)))
+      .length;
   expect(request.mock.calls.map(([, params]) => params)).toEqual([
     ...[40, 120, 200, 280].map((count) => ({
       sessionKey: state.sessionKey,
       toolResultMaxChars: 2_000,
       cursor: `older-${440 - count}`,
       limit: 400 - count,
-      maxBytes:
-        3 * 1024 * 1024 -
-        JSON.stringify(
-          Array.from({ length: count }, (_, index) => nativeHistoryMessage(441 - count + index)),
-        ).length,
+      maxBytes: 3 * 1024 * 1024 - wireBytes(441 - count, count),
     })),
     expect.objectContaining({
       cursor: "older-80",
       limit: 320,
-      maxBytes:
-        3 * 1024 * 1024 -
-        JSON.stringify(Array.from({ length: 80 }, (_, index) => nativeHistoryMessage(81 + index)))
-          .length,
+      maxBytes: 3 * 1024 * 1024 - wireBytes(81, 80),
     }),
     expect.objectContaining({
       cursor: "newer-401",
       limit: 320,
-      maxBytes:
-        3 * 1024 * 1024 -
-        JSON.stringify(Array.from({ length: 80 }, (_, index) => nativeHistoryMessage(321 + index)))
-          .length,
+      maxBytes: 3 * 1024 * 1024 - wireBytes(321, 80),
     }),
   ]);
   for (const [, params] of request.mock.calls) {

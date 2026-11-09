@@ -5,13 +5,13 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { readChatHistoryRequestBudget } from "./chat-history-request-budget.ts";
 import "./chat-pane.tsx";
 import {
-  admitChatHistoryPages,
   prepareChatHistoryPages,
   resolveChatHistoryPagination,
   type ChatHistoryResult,
 } from "./chat-history-snapshot.ts";
 import { prepareChatHistoryPacket } from "./chat-history-window.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { admitChatHistoryPages } from "./chat-pane-history-packets.runtime.ts";
 import {
   createStagedPrefetchPane,
   appendChatThread,

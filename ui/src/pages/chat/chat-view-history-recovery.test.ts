@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { admitChatHistoryPages } from "./chat-history-snapshot.ts";
 import { setChatHistoryRetrying } from "./chat-history-state.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { admitChatHistoryPages } from "./chat-pane-history-packets.runtime.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import {
   renderChatView,

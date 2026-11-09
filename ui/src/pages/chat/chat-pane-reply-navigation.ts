@@ -5,9 +5,8 @@ import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
-import { loadOlderChatHistoryPage } from "./chat-history-request.ts";
+import { loadOlderChatHistoryPage, readChatHistoryPageRuntime } from "./chat-history-request.ts";
 import { formatChatHistoryLoadError } from "./chat-history-retry.ts";
-import { admitChatHistoryPages } from "./chat-history-snapshot.ts";
 import { reloadChatHistoryWindow, requiresChatHistoryReload } from "./chat-history.ts";
 import { ChatPaneSession } from "./chat-pane-session.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
@@ -161,7 +160,8 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
         if (requiresChatHistoryReload(result, state.currentSessionId)) {
           await reloadChatHistoryWindow(state);
         } else {
-          admitChatHistoryPages(state, [result], "around");
+          // This successful wire read already loaded the shared navigation runtime.
+          readChatHistoryPageRuntime()!.admitChatHistoryPages(state, [result], "around");
         }
         if (!isCurrent()) {
           return;

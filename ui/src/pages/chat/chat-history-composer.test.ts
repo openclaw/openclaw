@@ -3,9 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { rewindChatHistory } from "./chat-history-actions.ts";
-import { admitChatHistoryPages, type ChatHistoryResult } from "./chat-history-snapshot.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { prepareChatHistoryPacket } from "./chat-history-window.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { admitChatHistoryPages } from "./chat-pane-history-packets.runtime.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import {

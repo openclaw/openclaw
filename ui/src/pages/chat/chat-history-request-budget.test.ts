@@ -1,7 +1,8 @@
 import { expect, it } from "vitest";
 import { readChatHistoryRequestBudget } from "./chat-history-request-budget.ts";
-import { prepareChatHistoryPages, admitChatHistoryPages } from "./chat-history-snapshot.ts";
+import { prepareChatHistoryPages } from "./chat-history-snapshot.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { admitChatHistoryPages } from "./chat-pane-history-packets.runtime.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjection,

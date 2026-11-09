@@ -44,10 +44,7 @@ export {
   chatHistoryRequestParams,
 } from "./chat-history-request-params.ts";
 
-type ChatHistoryPageRuntime = {
-  loadPreparedChatHistoryPackets: typeof import("./chat-pane-history-packets.runtime.ts").loadPreparedChatHistoryPackets;
-  requestOlderChatHistoryPage: typeof import("./chat-pane-history-packets.runtime.ts").requestOlderChatHistoryPage;
-};
+type ChatHistoryPageRuntime = typeof import("./chat-pane-history-packets.runtime.ts");
 let chatHistoryPageRuntime: ChatHistoryPageRuntime | undefined;
 let chatHistoryPageRuntimeLoad: Promise<ChatHistoryPageRuntime> | undefined;
 
@@ -62,12 +59,7 @@ export function loadChatHistoryPageRuntime(): Promise<ChatHistoryPageRuntime> {
     return chatHistoryPageRuntimeLoad;
   }
   const pending = (async () => {
-    const { loadPreparedChatHistoryPackets, requestOlderChatHistoryPage: readOlderPage } =
-      await import("./chat-pane-history-packets.runtime.ts");
-    return (chatHistoryPageRuntime = {
-      loadPreparedChatHistoryPackets,
-      requestOlderChatHistoryPage: readOlderPage,
-    });
+    return (chatHistoryPageRuntime = await import("./chat-pane-history-packets.runtime.ts"));
   })().finally(() => {
     if (chatHistoryPageRuntimeLoad === pending) {
       chatHistoryPageRuntimeLoad = undefined;
