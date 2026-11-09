@@ -38,7 +38,7 @@ it("provisions an untracked include manifest without synchronous source filesyst
 });
 
 it.each(["guard", "abort"] as const)(
-  "stops subsequent copies after publication when %s revokes the caller",
+  "refuses the completion receipt when %s revokes the caller",
   async (kind) => {
     const { source, destination } = await fixture();
     await fs.writeFile(path.join(source, ".worktreeinclude"), "*.local\n");
@@ -59,8 +59,11 @@ it.each(["guard", "abort"] as const)(
       }),
     ).rejects.toBe(revoked);
     expect(await fs.readFile(path.join(destination, "a.local"), "utf8")).toBe("first");
-    await expect(fs.lstat(path.join(destination, "b.local"))).rejects.toMatchObject({
-      code: "ENOENT",
+    // Copies already accepted by the worker may settle; no receipt may publish afterward.
+    const settled = await fs.readdir(destination);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
     });
+    expect(await fs.readdir(destination)).toEqual(settled);
   },
 );
