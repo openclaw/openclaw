@@ -1,3 +1,3 @@
-# Exact native-owned context-window selection and conservative unknown fallback.
-# Net +32 test lines for the resolver regression.
-32
+# Exact native-owned context-window selection plus CLI discovery-path proof.
+# Net +95 allocated test lines across resolver regression and CLI cases.
+95
