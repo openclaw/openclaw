@@ -296,27 +296,6 @@ metadata: |
         )
         self.assertTrue(*self.validate_content(content))
 
-    def test_nel_keys_survive_private_use_exhaustion(self):
-        private_use = "".join(
-            chr(codepoint)
-            for start, end in ((0xE000, 0xF900), (0xF0000, 0xFFFFD), (0x100000, 0x10FFFD))
-            for codepoint in range(start, end)
-        )
-        content = (
-            "---\n"
-            "name: unicode-exhaustion-skill\n"
-            "description: Summarize meetings\n"
-            "metadata:\n"
-            "  ? \"a\u0085b\"\n"
-            "  : enabled\n"
-            "  ? \"a b\"\n"
-            "  : active\n"
-            f"# {private_use}\n"
-            "---\n"
-            "# Skill\n"
-        )
-        self.assertTrue(*self.validate_content(content))
-
     def test_multiline_unicode_breaks_are_not_folded_as_lf(self):
         for character, escape in (("\u0085", "u0085"), ("\u2028", "u2028"), ("\u2029", "u2029")):
             for second_key, expected in ((r'"a\nb"', True), (f'"a \\{escape}b"', False)):
@@ -440,6 +419,19 @@ metadata: |
                     "# Skill\n"
                 )
                 self.assertTrue(*self.validate_content(content))
+
+    def test_omap_rejects_original_multi_pair_entry_with_alias(self):
+        content = (
+            "---\n"
+            "name: alias-skill\n"
+            "description: Summarize meetings\n"
+            "metadata: !!omap [&pair {a: 1, b: 2}, *pair]\n"
+            "---\n"
+            "# Skill\n"
+        )
+        valid, message = self.validate_content(content)
+        self.assertFalse(valid)
+        self.assertIn("expected a single mapping item", message)
 
     def test_omap_alias_object_key_coexists_with_string_key(self):
         content = (

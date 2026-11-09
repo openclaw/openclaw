@@ -212,7 +212,8 @@ def _load_frontmatter(frontmatter_text: str):
     """Load YAML with the loader's duplicate-key rejection."""
 
     visited = set()
-    alias_ids = set()
+    # PyYAML aliases share nodes; retain the aliased occurrence within each omap.
+    omap_alias_indices = {}
     object_identities = {}
 
     def object_identity(node):
@@ -239,14 +240,14 @@ def _load_frontmatter(frontmatter_text: str):
             return
         if isinstance(node, yaml.SequenceNode):
             ordered_map_keys = [] if node.tag == "tag:yaml.org,2002:omap" else None
-            for child in node.value:
+            for child_index, child in enumerate(node.value):
                 if ordered_map_keys is None:
                     validate_node(child)
                     continue
 
                 is_alias = id(child) in visited
                 if is_alias:
-                    alias_ids.add(id(child))
+                    omap_alias_indices.setdefault(id(node), set()).add(child_index)
                 if isinstance(child, yaml.MappingNode) and not is_alias:
                     if len(child.value) == 1:
                         validate_node(child, ordered_map_keys)
@@ -360,8 +361,10 @@ def _load_frontmatter(frontmatter_text: str):
                     f"expected a sequence, but found {node.id}",
                     node.start_mark,
                 )
-            for subnode in node.value:
-                if id(subnode) in alias_ids or not isinstance(subnode, yaml.MappingNode):
+            for subnode_index, subnode in enumerate(node.value):
+                if subnode_index in omap_alias_indices.get(id(node), set()) or not isinstance(
+                    subnode, yaml.MappingNode
+                ):
                     key_node, value_node = subnode, None
                 elif len(subnode.value) > 1:
                     raise yaml.constructor.ConstructorError(
