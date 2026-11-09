@@ -21,6 +21,7 @@ import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { startWorktreeWait } from "./allocation.js";
 import { fetchRemoteDefault } from "./base-fetch.js";
+import type { ResolvedWorktreeBase } from "./base-ref.types.js";
 import { estimateWorktreeGitBytes } from "./capacity.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
@@ -29,16 +30,6 @@ import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 import type { CreateManagedWorktreeParams, WorktreeWaitBudget } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
-
-export type ResolvedWorktreeBase = {
-  commit: string;
-  gitOperand: string;
-  recordRef: string;
-  noOrigin?: true;
-  fetchSucceeded?: boolean;
-  warning?: string;
-  preparationKey?: string;
-};
 
 type RemoteDefaultAttempt = {
   pending: Promise<ResolvedWorktreeBase & { branch?: string }>;

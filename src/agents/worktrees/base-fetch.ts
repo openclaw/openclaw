@@ -3,7 +3,7 @@ import { appendGitConfig } from "../../infra/git-maintenance-env.js";
 import { withGitObjectStoreTransport } from "../../infra/git-object-store-transport.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
-import type { ResolvedWorktreeBase } from "./base-ref.js";
+import type { ResolvedWorktreeBase } from "./base-ref.types.js";
 import { commandError, requireGit, runGit } from "./git.js";
 
 // `ls-remote --symref` names HEAD's branch, then the object id it advertises for that tip.
