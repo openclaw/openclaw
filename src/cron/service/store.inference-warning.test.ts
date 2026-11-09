@@ -149,7 +149,10 @@ it.each(["budget", "stop"])(
     await withOpenClawTestState({ label: "cron-diagnostic-cutoff" }, async (state) => {
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
-      const jobs = [{ ...job("slow"), sessionTarget: "session:agent:main:slow" }, job("unchecked")];
+      const jobs: CronStoredJob[] = [
+        { ...job("slow"), sessionTarget: "session:agent:main:slow" },
+        job("unchecked"),
+      ];
       const storePath = state.statePath("cron", "jobs.json");
       await saveCronJobsStore(storePath, { version: 1, jobs });
       const pending = createDeferredCore();
