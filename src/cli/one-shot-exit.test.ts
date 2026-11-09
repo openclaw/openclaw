@@ -47,10 +47,10 @@ describe("one-shot CLI completion", () => {
   let previousExitCode: typeof process.exitCode;
   beforeEach(() => {
     previousExitCode = process.exitCode;
-    process.exitCode = undefined;
+    process.exitCode = 0;
   });
   afterEach(() => {
-    process.exitCode = previousExitCode;
+    process.exitCode = previousExitCode ?? 0;
     vi.restoreAllMocks();
   });
 
@@ -102,7 +102,7 @@ describe("one-shot CLI completion", () => {
     ).rejects.toBe(commandFailure ?? cleanupFailure);
     expect(onError).toHaveBeenCalledExactlyOnceWith(cleanupFailure);
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("does not finalize a long-lived command until its run settles", async () => {
@@ -116,7 +116,7 @@ describe("one-shot CLI completion", () => {
     requestExitAfterOneShotOutput(defaultRuntime, 7);
     await Promise.resolve();
     expect(finalize).not.toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
     finish.resolve();
     await running;
     expect(finalize).toHaveBeenCalledOnce();
@@ -171,7 +171,7 @@ describe("one-shot CLI completion", () => {
     });
     try {
       await entered.promise;
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(0);
     } finally {
       closed.resolve();
       await running;
@@ -197,16 +197,6 @@ describe("one-shot CLI completion", () => {
     });
     expect(order).toEqual(["reported", "closed"]);
     expect(process.exitCode).toBe(6);
-  });
-
-  it("preserves the default successful outcome", async () => {
-    await runCliWithExitFinalization({
-      run: async () => {
-        requestExitAfterOneShotOutput();
-      },
-      onError: ignoreError,
-    });
-    expect(process.exitCode).toBe(0);
   });
 
   it.each(["before cleanup", "during cleanup"])(
@@ -312,12 +302,14 @@ describe("one-shot CLI completion", () => {
 
   it.each([
     { name: "deferred hooks failure", exitCode: 1, explicitRequest: true },
+    { name: "default successful completion", exitCode: 0, explicitRequest: "default" },
     {
       name: "natural successful completion",
       exitCode: 0,
       explicitRequest: false,
     },
   ])("keeps real dual-TTY JSON clean for $name", ({ exitCode, explicitRequest }) => {
+    const exitArgs = explicitRequest === "default" ? "" : `defaultRuntime, ${exitCode}`;
     const script = `
       import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl.href)};
       import { defaultRuntime } from ${JSON.stringify(resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.runtime).href)};
@@ -325,10 +317,11 @@ describe("one-shot CLI completion", () => {
       Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
       Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
       loggingState.forceConsoleToStderr = true;
+      if (${explicitRequest === "default"} && process.exitCode !== undefined) throw new Error("default exit status must start unset");
       await runCliWithExitFinalization({
         run: async () => {
           defaultRuntime.writeStdout(JSON.stringify({ ok: ${exitCode === 0} }));
-          ${explicitRequest ? `requestExitAfterOneShotOutput(defaultRuntime, ${exitCode});` : ""}
+          ${explicitRequest ? `requestExitAfterOneShotOutput(${exitArgs});` : ""}
         },
         finalize: async () => {
           await Promise.resolve();
@@ -336,6 +329,7 @@ describe("one-shot CLI completion", () => {
         },
         onError: (error) => { throw error; },
       });
+      if (${explicitRequest === "default"} && process.exitCode !== 0) throw new Error("default exit status must become zero");
     `;
 
     const result = runCliChild(script);

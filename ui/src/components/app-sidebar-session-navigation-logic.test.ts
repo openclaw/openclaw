@@ -163,6 +163,26 @@ describe("sidebar session sort modes", () => {
     ]);
   });
 
+  it("orders Updated mode by conversation activity, not metadata writes", () => {
+    const rows = [
+      // Renamed, pinned/unpinned, or marked unread after its last message.
+      { ...row("metadata-touched", 100, 900), lastActivityAt: 200 },
+      { ...row("replied", 100, 500), lastActivityAt: 400 },
+      // A just-sent message counts before the reply lands.
+      { ...row("sent", 100, 600), lastActivityAt: 100, lastInteractionAt: 600 },
+      // Rows without activity clocks keep their recorded updatedAt.
+      row("legacy", 100, 300),
+    ];
+    const observed = new Map(rows.map((entry, index) => [entry.key, index]));
+
+    expect(sortSidebarRows(rows, "updated", observed).map((entry) => entry.key)).toEqual([
+      "sent",
+      "replied",
+      "legacy",
+      "metadata-touched",
+    ]);
+  });
+
   it("keeps first-facet precedence and row label fallbacks across People projections", () => {
     const alex = row("alex", 100, 1, " alex ");
     const sam = row("sam", 100, 1, "sam");

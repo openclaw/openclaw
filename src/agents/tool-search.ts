@@ -383,10 +383,12 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           }
           // Invocation results need identity, not another copy of the discovery metadata.
           // Keep the full target result in details; forward its already-projected images as content.
+          // Compact: indenting would escape and re-indent target text the model already reads,
+          // spending the shared output cap on whitespace.
           const controlResult = formatToolSearchControlResult(
             { tool: { id, name, source }, result: modelResult },
             runtime,
-            { parentToolCallId: toolCallId, images },
+            { parentToolCallId: toolCallId, images, compact: true },
           );
           const failureKind = resolveToolResultFailureKind(callResult.result);
           // Keep the model-visible `{ tool, result }` envelope stable while the
