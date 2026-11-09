@@ -89,6 +89,14 @@ it("hands off one connection, initial history, and ordered events without loss o
   expect(takeEarlyGatewaySubscription(boot.client, key, { initialHistory })).toBeUndefined();
 });
 
+it("delivers hello once when it arrives during adoption", async () => {
+  const connection = await handshake();
+  const onHello = vi.fn();
+  expect(boot.adopt({ ...options, onHello })).toBe(boot.client);
+  await acceptHello(connection);
+  expect(onHello).toHaveBeenCalledTimes(1);
+});
+
 it("keeps live delivery when the pane needs a different initial history request", async () => {
   const connection = await handshake();
   const { socket } = connection;

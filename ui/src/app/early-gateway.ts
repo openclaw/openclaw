@@ -98,21 +98,18 @@ export function startEarlyApplicationGateway(
     connection.offlineRecoveryScope ? undefined : historyFor(),
     window.location.href,
   );
-  if (connection.offlineRecoveryScope) {
-    initial.prewarmChatSnapshot();
-    const entry = peekPrewarmedChatSnapshot();
-    const key = resolveChatSnapshotKey(
-      { settings, client: transport.client },
-      { sessionKey: route.sessionKey },
-    );
-    if (entry?.cacheKey === key) {
-      void entry.ready?.then(() => {
-        const snapshot = entry.prepared?.snapshot;
-        if (snapshot && !entry.cancelled && peekPrewarmedChatSnapshot() === entry) {
-          transport.startInitialHistory(historyFor(snapshot));
-        }
-      });
-    }
+  initial.prewarmChatSnapshot();
+  const entry = peekPrewarmedChatSnapshot();
+  if (
+    entry &&
+    entry.cacheKey === resolveChatSnapshotKey({ settings, client: transport.client }, route)
+  ) {
+    void entry.ready?.then(() => {
+      const snapshot = entry.prepared?.snapshot;
+      if (snapshot && peekPrewarmedChatSnapshot() === entry) {
+        transport.startHistory(historyFor(snapshot));
+      }
+    });
   }
   return { transport, credentials };
 }

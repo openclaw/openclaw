@@ -287,28 +287,37 @@ async function connectWarmGateway() {
   return socket;
 }
 
-it("requests warm cursor history before mounting the pane", async () => {
-  const warm = prepareWarmSnapshot();
-  await warm.resolve();
-  expect(getLatestWebSocket().sent).toEqual([]);
-  const socket = await connectWarmGateway();
-  expect(socket.sent.map((frame) => JSON.parse(frame))).toContainEqual(
-    expect.objectContaining({
-      method: "sessions.messages.subscribe",
-      params: expect.objectContaining({
-        key: "agent:main:warm",
-        initialHistory: {
-          limit: 80,
-          maxBytes: 262144,
-          toolResultMaxChars: 2000,
-          cursor: "warm-cursor",
-          knownState: { commands: "commands-1" },
-        },
+it.each(["before", "after"])(
+  "requests warm cursor history prepared %s hello before mounting the pane",
+  async (timing) => {
+    const warm = prepareWarmSnapshot();
+    if (timing === "before") {
+      await warm.resolve();
+    }
+    expect(getLatestWebSocket().sent).toEqual([]);
+    const socket = await connectWarmGateway();
+    if (timing === "after") {
+      await warm.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(socket.sent.map((frame) => JSON.parse(frame))).toContainEqual(
+      expect.objectContaining({
+        method: "sessions.messages.subscribe",
+        params: expect.objectContaining({
+          key: "agent:main:warm",
+          initialHistory: {
+            limit: 80,
+            maxBytes: 262144,
+            toolResultMaxChars: 2000,
+            cursor: "warm-cursor",
+            knownState: { commands: "commands-1" },
+          },
+        }),
       }),
-    }),
-  );
-  expect(runtime).toBeUndefined();
-});
+    );
+    expect(runtime).toBeUndefined();
+  },
+);
 
 it.each(["different route cache", "foreground handoff", "retired recovery scope"])(
   "leaves warm history with the pane after %s",
