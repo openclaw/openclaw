@@ -677,3 +677,52 @@ it("persists component descriptions and preserves them when content is updated w
   await store.putWidget({ ...content, description: "" });
   expect((await store.getSnapshot({ sessionKey })).widgets[0]?.description).toBe("");
 });
+
+it("backfills an existing HTML component identity without changing its saved content or grant", async () => {
+  const board = fixture();
+  const saved = await board.put({
+    name: "planner",
+    title: "Planner",
+    content: { kind: "html", html: "<p>Saved plan</p>" },
+    declared: { tools: ["health"] },
+  });
+  const widget = saved.widgets[0]!;
+  await board.grant("planner", widget.revision, widget.instanceId);
+  // HTML manifest shape emitted by v2026.11.2's serializeManifest; no Lobby metadata.
+  board.updateWidget(
+    "manifest = ?",
+    [
+      JSON.stringify({
+        contentOwner: "html",
+        tools: ["health"],
+        nameIdentity: { kind: "explicit" },
+        grantSemanticsVersion: 2,
+      }),
+    ],
+    "planner",
+  );
+  await board.reopen();
+  const before = (await board.current()).widgets[0]!;
+  expect(before.componentId).toBeUndefined();
+  expect(before.grantState).toBe("granted");
+  const store = new SqliteBoardStore(board.storeOptions);
+  const identity = await store.ensureComponentIdentity(board.target, "planner", before.instanceId!);
+  await board.reopen();
+  const after = (await board.current()).widgets[0]!;
+  expect(after).toMatchObject({
+    name: "planner",
+    title: "Planner",
+    componentId: identity.id,
+    revision: before.revision,
+    grantState: "granted",
+    instanceId: before.instanceId,
+  });
+  expect(await board.readHtml("planner")).toMatchObject({ html: "<p>Saved plan</p>" });
+  expect(board.manifest("planner")).toMatchObject({
+    contentOwner: "html",
+    tools: ["health"],
+    grantSemanticsVersion: 2,
+    nameIdentity: { kind: "explicit" },
+    componentId: identity.id,
+  });
+});

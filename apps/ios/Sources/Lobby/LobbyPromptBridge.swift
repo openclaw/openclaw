@@ -7,16 +7,22 @@ struct LobbyComponentSelection: Equatable {
     let instanceID: String
 }
 
+struct LobbyComponentPrompt {
+    let text: String
+    let ticket: String
+    let isCurrent: @MainActor () -> Bool
+}
+
 /// The trusted dashboard hands conversational text to the existing native conversation owner.
 @MainActor
 final class LobbyPromptBridge: NSObject, WKScriptMessageHandlerWithReply {
     static let name = "openclawLobbyPrompt"
     let url: URL
-    let accept: (String) -> Bool
+    let accept: (LobbyComponentPrompt) async -> Bool
     var onSelection: ((LobbyComponentSelection?) -> Void)?
     weak var webView: WKWebView?
 
-    init(url: URL, accept: @escaping (String) -> Bool) {
+    init(url: URL, accept: @escaping (LobbyComponentPrompt) async -> Bool) {
         self.url = url
         self.accept = accept
     }
@@ -62,11 +68,21 @@ final class LobbyPromptBridge: NSObject, WKScriptMessageHandlerWithReply {
             replyHandler(true, nil)
             return
         }
-        guard let text = Self.text(message.body) else { replyHandler(false, nil)
+        guard let text = Self.text(message.body),
+              let body = message.body as? [String: Any],
+              let ticket = body["ticket"] as? String, !ticket.isEmpty, ticket.utf8.count <= 2048
+        else { replyHandler(false, nil)
             return
         }
-        // No await between admission and custody; send() reserves the normal owner's draft.
-        replyHandler(self.accept(text), nil)
+        let prompt = LobbyComponentPrompt(text: text, ticket: ticket, isCurrent: { [weak self, weak webView] in
+            guard let self, let webView else { return false }
+            return self.webView === webView && !webView.isLoading && webView.window != nil &&
+                Self.matches(webView.url, expected: self.url)
+        })
+        Task {
+            let accepted = await self.accept(prompt)
+            replyHandler(accepted, nil)
+        }
     }
 
     var script: String? {
@@ -77,7 +93,8 @@ final class LobbyPromptBridge: NSObject, WKScriptMessageHandlerWithReply {
               event.preventDefault();
               event.stopPropagation();
               event.detail.respond(window.webkit.messageHandlers.openclawLobbyPrompt
-                .postMessage({text: event.detail.text}).then(accepted => accepted === true));
+                .postMessage({text: event.detail.text, ticket: event.detail.boardTicket})
+                .then(accepted => accepted === true));
             });
             """, url: self.url)
     }

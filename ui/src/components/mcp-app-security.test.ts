@@ -138,9 +138,18 @@ describe("MCP App sandbox security", () => {
     frame.focus();
     const decision = createDeferred<boolean>();
     frame.addEventListener(WIDGET_PROMPT_EVENT, (event) => {
-      (event as CustomEvent<WidgetPromptEventDetail>).detail.respond(decision.promise);
+      const detail = (event as CustomEvent<WidgetPromptEventDetail>).detail;
+      expect(detail.boardTicket).toBe("source-ticket");
+      detail.respond(decision.promise);
     });
-    const pending = dispatchWidgetPrompt(frame, "Compare plans", crypto.randomUUID());
+    const pending = dispatchWidgetPrompt(
+      frame,
+      "Compare plans",
+      crypto.randomUUID(),
+      undefined,
+      undefined,
+      "source-ticket",
+    );
     decision.resolve(accepted);
     expect(await pending).toBe(accepted);
   });

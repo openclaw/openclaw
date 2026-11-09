@@ -191,6 +191,7 @@ export class BoardWidgetBridgeOwner {
           this.options.rateKey,
           authorization.confirmationRequired === false ? undefined : this.options.confirmPrompt,
           options.isCurrent,
+          request.ticket,
         );
         if (!accepted) {
           throw new Error("widget prompt was not accepted");

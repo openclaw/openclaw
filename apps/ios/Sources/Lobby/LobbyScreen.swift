@@ -23,7 +23,7 @@ struct LobbyScreen: View {
                     agentId: self.model.ownerAgentID,
                     isLobby: true,
                     onLobbyPrompt: { text in
-                        self.model.acceptComponentPrompt(
+                        await self.model.acceptComponentPrompt(
                             text,
                             selection: self.selectedComponent,
                             presentationID: presentationID,

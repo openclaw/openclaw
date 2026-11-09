@@ -429,3 +429,12 @@ it("does not borrow proxy activation or a widget-supplied flag without inner wra
   expect(client.request).not.toHaveBeenCalled();
   expect(widgetActivated).not.toHaveBeenCalled();
 });
+
+it("carries the admitted source ticket through the asynchronous prompt handoff", async () => {
+  await handle(
+    "prompt.send",
+    { text: "Show details", ticket: "forged-param" },
+    { promptUserActivated: true },
+  );
+  expect(dispatchPrompt.mock.calls[0]?.[5]).toBe("ticket");
+});

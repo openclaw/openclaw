@@ -117,7 +117,7 @@ struct SessionDashboardContent: View {
     let sessionKey: String
     let agentId: String?
     var isLobby = false
-    var onLobbyPrompt: ((String) -> Bool)?
+    var onLobbyPrompt: ((LobbyComponentPrompt) async -> Bool)?
     var onLobbySelection: ((LobbyComponentSelection?) -> Void)?
     var lobbySettingsRequest = 0
     let onNavigationOutsideScope: () -> Void

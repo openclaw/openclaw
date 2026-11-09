@@ -29,7 +29,13 @@ struct LobbyPresentationBridgeTests {
         let url = try #require(URL(string: "https://gateway.example.test/focus/dashboard/main/~key/lobby-a"))
         var received: [String] = []
         var selected: [LobbyComponentSelection?] = []
-        let bridge = LobbyPromptBridge(url: url) { text in received.append(text)
+        var pendingAcceptance: CheckedContinuation<Bool, Never>?
+        let bridge = LobbyPromptBridge(url: url) { prompt in
+            received.append(prompt.text)
+            #expect(prompt.ticket == "fixture-ticket")
+            if prompt.text == "Delayed request" {
+                return await withCheckedContinuation { pendingAcceptance = $0 }
+            }
             return true
         }
         let configuration = WKWebViewConfiguration()
@@ -61,7 +67,7 @@ struct LobbyPresentationBridgeTests {
         }
         #expect(!webView.isLoading)
         let accepted = try await webView.callAsyncJavaScript(
-            "return await window.webkit.messageHandlers.openclawLobbyPrompt.postMessage({text:'Compare plans'});",
+            "return await window.webkit.messageHandlers.openclawLobbyPrompt.postMessage({text:'Compare plans',ticket:'fixture-ticket'});",
             arguments: [:], in: nil, contentWorld: .page)
         #expect(accepted as? Bool == true)
         #expect(received == ["Compare plans"])
@@ -75,10 +81,36 @@ struct LobbyPresentationBridgeTests {
             arguments: [:], in: nil, contentWorld: .page)
         #expect(invalidSelection as? Bool == false)
         let rejected = try await webView.callAsyncJavaScript(
-            "return await document.querySelector('iframe').contentWindow.webkit.messageHandlers.openclawLobbyPrompt.postMessage({text:'From frame'});",
+            "return await document.querySelector('iframe').contentWindow.webkit.messageHandlers.openclawLobbyPrompt.postMessage({text:'From frame',ticket:'fixture-ticket'});",
             arguments: [:], in: nil, contentWorld: .page)
         #expect(rejected as? Bool == false)
         #expect(received == ["Compare plans"])
+        let missingAuthority = try await webView.callAsyncJavaScript(
+            "return await window.webkit.messageHandlers.openclawLobbyPrompt.postMessage({text:'No ticket'});",
+            arguments: [:], in: nil, contentWorld: .page)
+        #expect(missingAuthority as? Bool == false)
+        _ = try await webView.evaluateJavaScript("""
+        window.webkit.messageHandlers.openclawLobbyPrompt
+          .postMessage({text:'Delayed request',ticket:'fixture-ticket'})
+          .then(value => { window.promptReceipt = value; });
+        true;
+        """)
+        let preparationDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while pendingAcceptance == nil, ContinuousClock.now < preparationDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let continuation = try #require(pendingAcceptance)
+        let unresolved = try await webView.evaluateJavaScript("typeof window.promptReceipt === 'undefined'")
+        #expect(unresolved as? Bool == true)
+        continuation.resume(returning: false)
+        let receipt = try await webView.callAsyncJavaScript("""
+        while (typeof window.promptReceipt === 'undefined') {
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        return window.promptReceipt;
+        """, arguments: [:], in: nil, contentWorld: .page)
+        #expect(receipt as? Bool == false)
+        #expect(received == ["Compare plans", "Delayed request"])
     }
 
     @Test func `Lobby confines pinch to components without disabling other dashboards`() async throws {

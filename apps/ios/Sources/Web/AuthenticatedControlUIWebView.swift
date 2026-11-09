@@ -904,7 +904,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
     let deviceSettingsBridge: IOSDeviceSettingsBridge?
     let usesNativeEmbed: Bool
     let isLobby: Bool
-    let onLobbyPrompt: ((String) -> Bool)?
+    let onLobbyPrompt: ((LobbyComponentPrompt) async -> Bool)?
     let onLobbySelection: ((LobbyComponentSelection?) -> Void)?
     let lobbySettingsRequest: Int
     let embedCompatibility: DashboardEmbedCompatibility?
@@ -926,7 +926,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         deviceSettingsBridge: IOSDeviceSettingsBridge? = nil,
         usesNativeEmbed: Bool = false,
         isLobby: Bool = false,
-        onLobbyPrompt: ((String) -> Bool)? = nil,
+        onLobbyPrompt: ((LobbyComponentPrompt) async -> Bool)? = nil,
         onLobbySelection: ((LobbyComponentSelection?) -> Void)? = nil,
         lobbySettingsRequest: Int = 0,
         embedCompatibility: DashboardEmbedCompatibility? = nil,
@@ -988,7 +988,10 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
             let coordinator = context.coordinator
             let bridge = LobbyPromptBridge(url: self.url) { [weak coordinator] text in
                 guard coordinator?.isAccessAdmissionCurrent() == true else { return false }
-                return onLobbyPrompt(text)
+                let prompt = LobbyComponentPrompt(text: text.text, ticket: text.ticket, isCurrent: {
+                    coordinator?.isAccessAdmissionCurrent() == true && text.isCurrent()
+                })
+                return await onLobbyPrompt(prompt)
             }
             bridge.onSelection = self.onLobbySelection
             coordinator.lobbyPromptBridge = bridge

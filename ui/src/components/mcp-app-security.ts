@@ -16,6 +16,8 @@ export type McpAppHostSandboxCsp = NonNullable<
 export const WIDGET_PROMPT_EVENT = "openclaw-widget-prompt";
 export type WidgetPromptEventDetail = {
   text: string;
+  /** Opaque Board authority, retained only by the trusted host/native owner. */
+  boardTicket?: string;
   /** A receipt from the normal conversation owner, not proof of model completion. */
   respond: (accepted: boolean | Promise<boolean>) => void;
 };
@@ -70,6 +72,7 @@ export async function dispatchWidgetPrompt(
   rateKey: string,
   confirmPrompt?: (text: string) => boolean | Promise<boolean>,
   isCurrent?: () => boolean,
+  boardTicket?: string,
 ): Promise<boolean> {
   const text = typeof raw === "string" ? raw.trim() : "";
   if (
@@ -98,6 +101,7 @@ export async function dispatchWidgetPrompt(
       cancelable: true,
       detail: {
         text,
+        ...(boardTicket ? { boardTicket } : {}),
         respond: (accepted) => {
           if (dispatching && !delivery.receipt) {
             delivery.receipt = Promise.resolve(accepted);

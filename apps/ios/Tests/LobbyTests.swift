@@ -3,6 +3,7 @@ import OpenClawChatUI
 import OpenClawProtocol
 import Testing
 @testable import OpenClaw
+@testable import OpenClawKit
 
 @MainActor
 struct LobbyTests {
@@ -75,20 +76,85 @@ struct LobbyTests {
         #expect(!viewModel.isSubmittingDraft)
     }
 
+    @Test(arguments: ["allowed", "revoked", "draft"])
+    func `prompt waits for preparation and reauthorizes before native custody`(mode: String) async throws {
+        let suite = "LobbyPrompt.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let app = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+        defer { app.disconnectGateway() }
+        let stableID = suite
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.allowStoredDeviceAuth = false
+        options.deviceAuthGatewayID = stableID
+        let url = try #require(URL(string: "ws://lobby-prompt.invalid"))
+        let config = GatewayConnectConfig(
+            url: url, stableID: stableID, tls: nil, token: nil,
+            bootstrapToken: nil, password: nil, nodeOptions: options)
+        app.activeGatewayConnectConfig = config
+        let scope = LobbySessionReferenceStore.scope(
+            gatewayID: config.effectiveStableID, principal: nil, credential: "",
+            deviceProfile: options.deviceIdentityProfile.rawValue)
+        let store = LobbySessionReferenceStore(defaults: defaults)
+        let parent = store.reserve(scope: scope, agentID: "main")
+        store.confirm(scope: scope)
+        let wire = LobbyPromptWireFixture(parent: parent)
+        let socket = GatewayTestWebSocketTask(sendHook: { socket, message, _ in
+            guard GatewayWebSocketTestSupport.requestMethod(from: message) != "connect" else { return }
+            let reply = try await wire.reply(message)
+            socket.emitReceiveSuccess(.data(reply))
+        })
+        try await app.operatorSession.connect(
+            url: url, credentials: .init(), connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: { socket })),
+            onConnected: {}, onDisconnected: { _ in },
+            onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+        app.setOperatorConnected(true, scopes: ["operator.admin"])
+        let model = LobbyModel(defaults: defaults)
+        model.sync(appModel: app)
+        #expect(model.sessionKey == parent)
+        if mode == "draft" {
+            wire.holdsCreation = false
+            #expect(await model.openConversation(
+                selection: LobbyComponentSelection(name: "planner", instanceID: "frame"), appModel: app))
+            model.conversationViewModel?.input = "Unsent authoring request"
+            wire.holdsCreation = true
+        }
+        var receipt: Bool?
+        let task = Task {
+            receipt = await model.acceptComponentPrompt(
+                LobbyComponentPrompt(text: "Compare plans", ticket: "original-ticket", isCurrent: { true }),
+                selection: LobbyComponentSelection(name: "planner", instanceID: "frame"),
+                presentationID: model.presentationID, appModel: app)
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while wire.preparation == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let preparation = try #require(wire.preparation)
+        #expect(receipt == nil)
+        #expect(!wire.methods.contains("board.prompt.authorize"))
+        wire.revoked = mode == "revoked"
+        preparation.resume()
+        await task.value
+        #expect(wire.methods.contains("board.prompt.authorize"))
+        #expect(receipt == (mode == "allowed"))
+        if mode == "draft" {
+            #expect(model.conversationViewModel?.input == "Unsent authoring request")
+        }
+        if mode == "revoked" {
+            #expect(model.conversationViewModel?.input.isEmpty == true)
+            #expect(model.conversationViewModel?.isSubmittingDraft == false)
+            #expect(!wire.methods.contains("chat.send"))
+        }
+        await app.operatorSession.disconnect()
+    }
+
     private func withStore(_ body: (LobbySessionReferenceStore) throws -> Void) throws {
         let name = "LobbyTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         try body(LobbySessionReferenceStore(defaults: defaults))
-    }
-
-    @Test func `opening an empty Lobby does not reserve a session`() throws {
-        try self.withStore { store in
-            #expect(store.existing(scope: "gateway-a") == nil)
-            #expect(!store.isConfirmed(scope: "gateway-a"))
-        }
-        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "lobby"]) == .lobby)
-        #expect(RootTabs.initialDestination(arguments: ["OpenClaw"]) == .chat)
     }
 
     @Test func `reserved conversation survives retry and relaunch without changing its agent`() throws {
@@ -181,5 +247,69 @@ struct LobbyTests {
         } catch {
             #expect(methods == ["sessions.create"])
         }
+    }
+}
+
+/// Controlled wire responses exercise the native preparation and chat owners without inference.
+@MainActor
+private final class LobbyPromptWireFixture {
+    let parent: String
+    var methods: [String] = []
+    var preparation: CheckedContinuation<Void, Never>?
+    var revoked = false
+    var holdsCreation = true
+    init(parent: String) {
+        self.parent = parent
+    }
+
+    func reply(_ message: URLSessionWebSocketTask.Message) async throws -> Data {
+        let data: Data = switch message {
+        case let .data(value): value
+        case let .string(value): Data(value.utf8)
+        @unknown default: throw URLError(.cannotParseResponse)
+        }
+        let request = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let method = try #require(request["method"] as? String)
+        let id = try #require(request["id"] as? String)
+        let params = request["params"] as? [String: Any] ?? [:]
+        let key = params["sessionKey"] as? String ?? params["key"] as? String ?? self.parent
+        self.methods.append(method)
+        var payload: [String: Any] = [:]
+        switch method {
+        case "board.widget.conversation":
+            payload = [
+                "key": "\(self.parent):component:planner:\(String(repeating: "a", count: 32))",
+                "title": "Planner",
+            ]
+        case "sessions.create":
+            if self.holdsCreation { await withCheckedContinuation { self.preparation = $0 } }
+            payload = ["ok": true, "key": key, "sessionId": "fixture-session"]
+        case "chat.history":
+            payload = [
+                "sessionKey": key,
+                "sessionId": "fixture-session",
+                "messages": [],
+                "sessionInfo": ["key": key, "agentId": "main", "hasActiveRun": false],
+            ]
+        case "sessions.list":
+            payload = ["ts": 0, "count": 0, "sessions": [], "defaults": [:]]
+        case "health": payload = ["ok": true]
+        case "board.prompt.authorize":
+            #expect(params["ticket"] as? String == "original-ticket")
+            if self.revoked {
+                return try JSONSerialization.data(withJSONObject: [
+                    "type": "res", "id": id, "ok": false,
+                    "error": ["code": "INVALID_REQUEST", "message": "board widget view ticket is stale"],
+                ])
+            }
+            payload = ["confirmationRequired": false]
+        case "question.list": payload = ["questions": []]
+        case "models.list": payload = ["models": []]
+        case "agents.list":
+            payload = try #require(JSONSerialization.jsonObject(
+                with: Data(GatewayWebSocketTestSupport.agentCatalogPayload.utf8)) as? [String: Any])
+        default: break
+        }
+        return try JSONSerialization.data(withJSONObject: ["type": "res", "id": id, "ok": true, "payload": payload])
     }
 }

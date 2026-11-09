@@ -192,35 +192,58 @@ final class LobbyModel {
     }
 
     func acceptComponentPrompt(
-        _ text: String,
+        _ prompt: LobbyComponentPrompt,
         selection: LobbyComponentSelection?,
         presentationID: UUID,
-        appModel: NodeAppModel) -> Bool
+        appModel: NodeAppModel) async -> Bool
     {
-        if let selection {
-            guard self.presentationID == presentationID, !self.isPreparingConversation, !self.isHandlingComponentPrompt,
-                  appModel.isOperatorGatewayConnected else { return false }
-            self.isHandlingComponentPrompt = true
-            Task {
-                defer { if self.presentationID == presentationID { self.isHandlingComponentPrompt = false } }
-                guard await self.openConversation(selection: selection, appModel: appModel),
-                      self.presentationID == presentationID, let viewModel = self.conversationViewModel
-                else { return }
-                if !Self.sendComponentPrompt(text, to: viewModel) {
-                    self.errorText = viewModel.composerModelAvailabilityMessage ?? viewModel.errorText ??
-                        String(localized: "Finish or clear the current conversation draft, then try again.")
-                }
-            }
-            return true
-        }
-        guard self.presentationID == presentationID, !self.isWorking,
-              appModel.isOperatorGatewayConnected,
-              self.authority == appModel.activeGatewayConnectConfig?.controlUIInputs,
-              let viewModel, !viewModel.isLoading,
-              viewModel.sessionKey == self.sessionKey,
-              viewModel.composerModelAvailabilityMessage == nil
+        guard self.presentationID == presentationID, prompt.isCurrent(),
+              !self.isPreparingConversation, !self.isHandlingComponentPrompt,
+              appModel.isOperatorGatewayConnected, let authority = self.authority,
+              authority == appModel.activeGatewayConnectConfig?.controlUIInputs,
+              let route = await appModel.operatorSession.currentRoute()
         else { return false }
-        return Self.sendComponentPrompt(text, to: viewModel)
+        let isCurrent = {
+            self.presentationID == presentationID && prompt.isCurrent() &&
+                self.authority == authority && appModel.isOperatorGatewayConnected &&
+                appModel.activeGatewayConnectConfig?.controlUIInputs == authority && !Task.isCancelled
+        }
+        guard isCurrent(), !self.isHandlingComponentPrompt else { return false }
+        self.isHandlingComponentPrompt = true
+        defer { if self.presentationID == presentationID { self.isHandlingComponentPrompt = false } }
+        let target: OpenClawChatViewModel
+        if let selection {
+            guard await self.openConversation(selection: selection, appModel: appModel),
+                  isCurrent(), let viewModel = self.conversationViewModel else { return false }
+            target = viewModel
+        } else {
+            guard !self.isWorking, let viewModel, !viewModel.isLoading,
+                  viewModel.sessionKey == self.sessionKey else { return false }
+            target = viewModel
+        }
+        do {
+            // Reuse the Gateway's live ticket check after all conversation preparation.
+            // Removal, replacement and grant changes retire the originating ticket.
+            let data = try await appModel.operatorSession.request(
+                method: "board.prompt.authorize",
+                params: ["ticket": AnyCodable(prompt.ticket)],
+                ifCurrentRoute: route,
+                distinguishPreDispatchRouteChange: true)
+            struct Authorization: Decodable { let confirmationRequired: Bool }
+            _ = try JSONDecoder().decode(Authorization.self, from: data)
+            // The host already performed any required confirmation before handing off
+            // this exact ticket. No await separates this check from normal chat custody.
+            guard isCurrent(), target.composerModelAvailabilityMessage == nil else { return false }
+            let accepted = Self.sendComponentPrompt(prompt.text, to: target)
+            if !accepted {
+                self.errorText = target.errorText ?? String(localized:
+                    "Finish or clear the current conversation draft, then try again.")
+            }
+            return accepted
+        } catch {
+            if isCurrent() { self.errorText = error.localizedDescription }
+            return false
+        }
     }
 
     func openConversation(selection: LobbyComponentSelection?, appModel: NodeAppModel) async -> Bool {

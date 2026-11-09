@@ -426,6 +426,25 @@ describe("board gateway methods", () => {
     expect(approved.mock.calls[0]?.[1]).toEqual({ confirmationRequired: false });
   });
 
+  it.each(["revoke", "replace"] as const)(
+    "rejects the original prompt ticket after %s during conversation preparation",
+    async (change) => {
+      const { invoke, put, grant, get } = widgetHarness();
+      const { widget } = await put("planner", html("original"), { tools: ["prompt"] });
+      await grant(widget);
+      const original = findWidget(await get(), "planner");
+      const admitted = await invoke("board.prompt.authorize", { ticket: original.viewTicket });
+      expect(admitted.mock.calls[0]?.[0]).toBe(true);
+      if (change === "revoke") {
+        await grant(original, "rejected");
+      } else {
+        await put("planner", html("replacement"), { tools: ["prompt"] });
+      }
+      const retired = await invoke("board.prompt.authorize", { ticket: original.viewTicket });
+      expect(retired.mock.calls[0]?.[0]).toBe(false);
+    },
+  );
+
   it("keeps identical global widget notices separate for each owner", async () => {
     const widget = `notice-${randomUUID()}`;
     const { invoke } = createHarness(undefined, {}, undefined, {
