@@ -111,17 +111,16 @@ function projectMcpCallToolResultContent(result: {
   if (isRecord(result.structuredContent)) {
     try {
       const isStructuredMirror = createMcpStructuredContentMirrorMatcher(result.structuredContent);
-      const structuredJson = JSON.stringify(
-        JSON.parse(stableStringify(result.structuredContent)),
-        null,
-        2,
-      );
+      // Compact, key-sorted JSON: deterministic for prompt caching and loop digests, and
+      // indentation would only add tokens the model and the Tool Search envelope pay for.
+      const structuredJson = JSON.stringify(JSON.parse(stableStringify(result.structuredContent)));
       const structuredText = `structuredContent:\n${structuredJson}`;
       return {
         content: [
           { type: "text", text: structuredText },
           ...sourceContent
-            // Only a full JSON mirror of structuredContent is redundant; overlapping text can carry recovery guidance.
+            // Only a full mirror of structuredContent (or of its single wrapped value) is redundant;
+            // overlapping text can carry recovery guidance.
             .filter(
               (block) =>
                 !isRecord(block) ||
