@@ -123,8 +123,14 @@ export async function prepareAgentCatalogSource(
         ...options,
         ...(sourceOptions.authStore ? { authStore: sourceOptions.authStore } : {}),
       });
+      const { captureModelsJsonSource } = await import("./prepared-model-runtime.facts.js");
+      const captured = captureModelsJsonSource(input);
+      const usesCapturedSource = source.modelsJsonContents === null;
       return {
-        modelsJsonContents: source.modelsJsonContents,
+        modelsJsonContents: source.modelsJsonContents ?? captured.contents,
+        ...(usesCapturedSource && captured.sanitizedFallback
+          ? { modelsJsonSanitizedFallback: true }
+          : {}),
         pluginCatalogs: source.pluginCatalogs,
         providerOutcomes: resultOutcomes(),
       };
@@ -139,9 +145,13 @@ export async function prepareAgentCatalogSource(
         return { ...publishedSource, providerOutcomes: resultOutcomes() };
       }
     }
-    const { captureModelsJsonContents } = await import("./prepared-model-runtime.facts.js");
+    // Capture immediately after the serialized write. Another owner may share this directory and
+    // publish a different workspace generation before full-catalog parsing begins.
+    const { captureModelsJsonSource } = await import("./prepared-model-runtime.facts.js");
+    const captured = captureModelsJsonSource(input);
     return {
-      modelsJsonContents: captureModelsJsonContents(input.agentDir),
+      modelsJsonContents: captured.contents,
+      ...(captured.sanitizedFallback ? { modelsJsonSanitizedFallback: true } : {}),
       pluginCatalogs: await loadPersistedPluginModelCatalogs(input.agentDir, undefined, env),
       providerOutcomes: resultOutcomes(),
     };

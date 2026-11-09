@@ -60,6 +60,7 @@ import {
   type RegistryProviderSources,
   type ResolvedRequestAuth,
 } from "./model-registry-sources.js";
+import { applySanitizedFallbackRequestHeaders } from "./model-registry.catalog-composition.js";
 import type { ProviderConfigInput } from "./provider-config.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 
@@ -72,6 +73,7 @@ type ModelRegistryOptions = {
   config?: OpenClawConfig;
   includePluginCatalogs?: boolean;
   modelsJsonContents?: string | null;
+  modelsJsonSanitizedFallback?: boolean;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
   staticProviderConfigs?: Readonly<Record<string, ModelProviderConfig>>;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
@@ -98,6 +100,7 @@ export class ModelRegistry {
   readonly authStorage: AuthStorage;
   private modelsJsonPath: string | undefined;
   private modelsJsonContents: string | null | undefined;
+  private modelsJsonSanitizedFallback = false;
   private pluginCatalogs: readonly PersistedPluginModelCatalog[] | undefined;
   private pluginCatalogReadError: string | undefined;
   private readonly reloadPluginCatalogs: boolean;
@@ -146,6 +149,7 @@ export class ModelRegistry {
     }
     this.modelsJsonPath = modelsJsonPath;
     this.modelsJsonContents = options.modelsJsonContents;
+    this.modelsJsonSanitizedFallback = options.modelsJsonSanitizedFallback === true;
     this.pluginCatalogs = preparedCatalogs?.catalogs ?? options.pluginCatalogs;
     this.pluginCatalogReadError = preparedCatalogs?.error;
     this.staticProviderConfigs = options.staticProviderConfigs;
@@ -401,6 +405,14 @@ export class ModelRegistry {
       });
     }
     let combined = this.parseModels(providers);
+    if (this.modelsJsonSanitizedFallback) {
+      applySanitizedFallbackRequestHeaders({
+        fallbackProviders: customResult.providers,
+        models: combined,
+        providerRequestConfigs: this.providerRequestConfigs,
+        modelRequestHeaders: this.modelRequestHeaders,
+      });
+    }
 
     for (const oauthProvider of this.authStorage.getOAuthProviders()) {
       const cred = this.authStorage.get(oauthProvider.id);
