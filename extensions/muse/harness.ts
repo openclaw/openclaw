@@ -196,7 +196,8 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           ? "allowAll"
           : "promptUnmatched";
       params.hostCapabilities.prepareContinuationRetryCount?.({ cwd: workspace });
-      const lease = await pool.acquire(workspace, apiKey, readOnly);
+      // One host per OpenClaw session: a stuck turn's force-close must not end its siblings.
+      const lease = await pool.acquire(workspace, apiKey, readOnly, undefined, params.sessionId);
       const { runtime } = lease;
       const compatibility = JSON.stringify([
         workspace,

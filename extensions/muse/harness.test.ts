@@ -236,6 +236,15 @@ describe("Muse native MSP harness", () => {
     },
   );
 
+  it("reuses a host within one OpenClaw session and starts another for a sibling", async () => {
+    const { run, log } = setup(true);
+    await run();
+    await run();
+    await run({ sessionId: crypto.randomUUID() });
+    const spawns = (await readRequests(log)).filter((request) => request.event === "spawn");
+    expect(spawns).toHaveLength(2);
+  });
+
   it.each(["defaults", "agent"] as const)(
     "applies host approval %s security floors before launching Muse",
     async (scope) => {

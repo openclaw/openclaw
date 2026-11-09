@@ -1,0 +1,2 @@
+28
+# Muse runtime pool: hosts are scoped per OpenClaw session so one session's force-close cannot end a sibling on the same agent.

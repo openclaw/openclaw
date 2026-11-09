@@ -110,6 +110,11 @@ export class MusePool {
     apiKey: string | undefined,
     readOnly: boolean,
     signal?: AbortSignal,
+    /**
+     * Separates hosts for callers that must not share one. A cancelled turn can
+     * force-close its host, which would otherwise end every session on it.
+     */
+    scope?: string,
   ): Promise<MuseLease> {
     signal?.throwIfAborted();
     if (this.disposed) {
@@ -151,7 +156,7 @@ export class MusePool {
     }
     signal?.throwIfAborted();
     const apiKeyIdentity = credentialFingerprint(apiKey);
-    const key = JSON.stringify([workspace, apiKeyIdentity, readOnly]);
+    const key = JSON.stringify([workspace, apiKeyIdentity, readOnly, scope]);
     const credentialIdentity = JSON.stringify([
       apiKey ? apiKeyIdentity : credentialFingerprint(env.META_API_KEY),
       credentialSource,
@@ -195,7 +200,7 @@ export class MusePool {
       if (this.entries.get(key) === entry) {
         this.entries.delete(key);
       }
-      return this.acquire(workspace, apiKey, readOnly, signal);
+      return this.acquire(workspace, apiKey, readOnly, signal, scope);
     }
     clearTimeout(runtime.timer);
     runtime.users++;

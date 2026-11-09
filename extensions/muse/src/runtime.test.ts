@@ -66,6 +66,25 @@ describe("Muse process pool", () => {
       }
     },
   );
+  it("gives each OpenClaw session its own host so closing one cannot end a sibling", async () => {
+    const pool = new MusePool(fixture);
+    try {
+      const first = await pool.acquire(workspace, "key-a", false, undefined, "session-a");
+      const again = await pool.acquire(workspace, "key-a", false, undefined, "session-a");
+      const sibling = await pool.acquire(workspace, "key-a", false, undefined, "session-b");
+      expect(again.runtime).toBe(first.runtime);
+      expect(sibling.runtime).not.toBe(first.runtime);
+      // A stuck turn's force-close retires only its own session's host.
+      await first.runtime.close();
+      await first.runtime.host.exited;
+      expect(sibling.runtime.dead || sibling.runtime.closing).toBe(false);
+      first.release();
+      again.release();
+      sibling.release();
+    } finally {
+      await pool.dispose();
+    }
+  });
   it("isolates pooled credentials, reuses matching hosts, and closes idle hosts", async () => {
     const pool = new MusePool(fixture);
     try {
