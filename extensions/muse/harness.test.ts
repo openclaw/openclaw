@@ -9,6 +9,7 @@ import type {
   AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type * as AgentHarnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type * as ExecApprovalsRuntime from "openclaw/plugin-sdk/exec-approvals-runtime";
 import {
@@ -30,6 +31,19 @@ const writes = vi.hoisted(() => ({
   append: vi.fn(async (params: { messages: unknown[] }) => params.messages),
   publish: vi.fn(async () => undefined),
 }));
+const registeredRun = vi.hoisted(() => ({
+  handle: undefined as undefined | { ownsLiveness?: () => boolean },
+}));
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
+  const original = await importOriginal<typeof AgentHarnessRuntime>();
+  return {
+    ...original,
+    setActiveEmbeddedRun: (...args: Parameters<typeof original.setActiveEmbeddedRun>) => {
+      registeredRun.handle = args[1];
+      return original.setActiveEmbeddedRun(...args);
+    },
+  };
+});
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof TranscriptRuntime>()),
   appendSessionTranscriptMessagesByIdentity: writes.append,
@@ -396,6 +410,23 @@ describe("Muse native MSP harness", () => {
     );
     expect(terminal(result).kind).toBe("ok");
     expect(result).toMatchObject({ lastToolError, toolMetas: [{ isError: true }] });
+  });
+
+  // The host's stalled-run watchdog spares a native turn only while its handle owns liveness.
+  it("owns its liveness while a native turn runs", async () => {
+    const { run } = setup();
+    const controller = new AbortController();
+    const observed: Array<boolean | undefined> = [];
+    await run({
+      prompt: "settle",
+      abortSignal: controller.signal,
+      onExecutionStarted: () => {
+        observed.push(registeredRun.handle?.ownsLiveness?.());
+        controller.abort();
+        observed.push(registeredRun.handle?.ownsLiveness?.());
+      },
+    });
+    expect(observed).toEqual([true, false]);
   });
 
   it.each(["callback", "transcript", "abort", "timeout", "approval"] as const)(

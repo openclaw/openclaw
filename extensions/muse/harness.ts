@@ -283,6 +283,8 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         },
         isStreaming: () => !aborted,
         isAborted: () => aborted,
+        // Muse enforces this turn's own deadline, so the host's stall watchdog must not.
+        ownsLiveness: () => !aborted && !timedOut,
         isCompacting: () => false,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
         cancel: onAbort,
