@@ -80,11 +80,11 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
     if ("schedule" in item) {
       return item.schedule + " · " + item.timezone;
     }
+    if ("ref" in item) {
+      return t("templatesCatalog.dependencyClawHub", { version: item.version });
+    }
     if ("kind" in item) {
-      return (
-        (item.kind === "plugin" ? t("tabs.plugin") : t("tabs.mcp")) +
-        (item.version ? " · " + item.version : "")
-      );
+      return t("tabs.mcp");
     }
     return "";
   };
@@ -211,12 +211,14 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                     <span>
                                       <strong>{item.name}</strong>
                                       <small>
-                                        {"excerpt" in item
-                                          ? item.excerpt
-                                          : "schedule" in item
-                                            ? item.schedule + " · " + item.timezone
-                                            : "version" in item
-                                              ? item.version
+                                        {"ref" in item
+                                          ? t("templatesCatalog.dependencyClawHub", {
+                                              version: item.version,
+                                            })
+                                          : "excerpt" in item
+                                            ? item.excerpt
+                                            : "schedule" in item
+                                              ? item.schedule + " · " + item.timezone
                                               : ""}
                                       </small>
                                     </span>
