@@ -1,2 +1,2 @@
-131
-# Cover source/root replacement, native-child settlement, and unavailable-GNU-cp fallback.
+140
+# Cover source/root replacement, native-child settlement, unavailable-GNU-cp fallback, and existing-target source-admission skips.

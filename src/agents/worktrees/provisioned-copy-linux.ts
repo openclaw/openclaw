@@ -87,6 +87,11 @@ export async function copyProvisionedPathsLinux(
       let stage: string | undefined;
       try {
         for (const name of names) {
+          if (
+            fsSync.lstatSync(`${descriptorPath(destination)}/${name}`, { throwIfNoEntry: false })
+          ) {
+            continue;
+          }
           let fd: number;
           try {
             fd = fsSync.openSync(
@@ -102,10 +107,7 @@ export async function copyProvisionedPathsLinux(
           let retained = false;
           try {
             const stat = fsSync.fstatSync(fd);
-            if (
-              stat.isFile() &&
-              !fsSync.lstatSync(`${descriptorPath(destination)}/${name}`, { throwIfNoEntry: false })
-            ) {
+            if (stat.isFile()) {
               batch.push({ name, fd, mode: stat.mode & 0o7777 });
               retained = true;
             }

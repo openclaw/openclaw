@@ -92,6 +92,15 @@ it.for(["native", "cross-filesystem", "portable", "revoked", "aborted"])(
     await fs.symlink(source, path.join(destination, "nested"), "dir");
 
     const candidates = ["file", "hardlink", "symlink", "existing", "nested/file", "../escape"];
+    const open = fsSync.openSync.bind(fsSync);
+    vi.spyOn(fsSync, "openSync").mockImplementation((...args) => {
+      if (typeof args[0] === "string" && args[0].endsWith("/existing")) {
+        throw Object.assign(new Error("existing target must not require source read access"), {
+          code: "EACCES",
+        });
+      }
+      return open(...args);
+    });
     const pending = copyProvisionedPaths(source, destination, candidates, {
       assertCurrent,
       signal: controller.signal,
