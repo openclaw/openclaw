@@ -158,8 +158,18 @@ function TranscriptRows(props: {
                       "min-height": `${props.snapshot.layout.rowMinimum(index())}px`,
                       display: active() ? undefined : preparing() ? "flow-root" : "none",
                       position: active() ? undefined : "absolute",
-                      top: active() ? undefined : "0",
-                      opacity: active() ? undefined : "0",
+                      top: active()
+                        ? undefined
+                        : preparing()
+                          ? `${virtualRow().start - blockStart()}px`
+                          : "0",
+                      opacity: active() || preparing() ? undefined : "0",
+                      // Paint the measurement row inside its estimated slot without
+                      // letting an underestimated height overlap admitted content.
+                      "clip-path":
+                        !active() && preparing()
+                          ? `inset(0 0 max(0px, calc(100% - ${virtualRow().size}px)) 0)`
+                          : undefined,
                       "content-visibility":
                         preparing() || streaming() ? "visible" : active() ? undefined : "hidden",
                     }}

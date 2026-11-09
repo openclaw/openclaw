@@ -243,7 +243,7 @@ function scrollReader(viewport: HTMLElement, offset: number) {
 }
 
 it.each([30, "estimate"] as const)(
-  "keeps retained content still before a new predecessor's first resize delivery (%s)",
+  "keeps a measuring predecessor paintable without moving retained content (%s)",
   async (size) => {
     const messages = [
       makeMessage("geometry-question", 1, { role: "user" }),
@@ -276,9 +276,12 @@ it.each([30, "estimate"] as const)(
       flush();
       await Promise.resolve();
       flush();
-      expect(
-        requireElement(host, '.chat-virtual-row[data-index="2"]').getBoundingClientRect().height,
-      ).toBe(height);
+      const predecessor = requireElement(host, '.chat-virtual-row[data-index="2"]');
+      expect(predecessor.getBoundingClientRect().height).toBe(height);
+      expect(getComputedStyle(predecessor).opacity).toBe("1");
+      expect(getComputedStyle(predecessor).position).toBe("absolute");
+      expect(getComputedStyle(predecessor).clipPath).not.toBe("none");
+      expect(predecessor.hasAttribute("inert")).toBe(true);
       expect(requireElement(host, '.chat-virtual-row[data-index="4"]')).toBe(retained);
       expect(painted).not.toHaveBeenCalled();
       expect(viewport.scrollTop).toBe(offset - 1);
