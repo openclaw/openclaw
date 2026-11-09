@@ -219,6 +219,13 @@ const writeDiagnosticStabilityBundleForFailureSync = vi.fn(() => ({
 }));
 const hasManagedProviderLocalServices = vi.fn(() => false);
 const stopManagedProviderLocalServices = vi.fn(async () => {});
+const requestSettledExitWatchdog = vi.fn((_delayMs: number) => {});
+// mock-isolation: settled fixtures must not arm process termination in Vitest.
+vi.mock("../one-shot-exit.js", async (original) => ({
+  ...(await original<typeof import("../one-shot-exit.js")>()),
+  requestSettledExitWatchdog: (delayMs: number) => requestSettledExitWatchdog(delayMs),
+}));
+
 const cancelShutdownHardExitWatchdog = vi.fn(async () => {});
 const armShutdownHardExitWatchdog = vi.fn(
   (_params: { delayMs: number; onError: (error: unknown) => void }) => ({
@@ -525,6 +532,7 @@ export const runLoopFixture = {
   acquireGatewayLock,
   advanceCronActiveJobGeneration,
   armShutdownHardExitWatchdog,
+  requestSettledExitWatchdog,
   cancelManagedServiceUpdateHandoff,
   cancelShutdownHardExitWatchdog,
   captureForegroundUpdateHandoffStop,

@@ -48,6 +48,7 @@ export function registerGracefulGatewayShutdownTests({
   flushLogger,
   requestGatewayRestartWithSignalAdmission,
   armShutdownHardExitWatchdog,
+  requestSettledExitWatchdog,
 }: UpdateRespawnFixtures): void {
   registerTimedOutGatewayStopTests({
     createSignaledLoopHarness,
@@ -118,6 +119,7 @@ export function registerGracefulGatewayShutdownTests({
         expect(flushLogger).toHaveBeenCalledOnce();
         expect(timelineAtLogFlush).toContain('"name":"gateway.stop"');
         expect(armShutdownHardExitWatchdog).not.toHaveBeenCalled();
+        expect(requestSettledExitWatchdog).not.toHaveBeenCalled();
       } finally {
         flushDiagnosticsTimeline();
         tempDirs.cleanup();
@@ -151,6 +153,7 @@ export function registerGracefulGatewayShutdownTests({
           await eof;
           await closing.promise;
           expect(runtime.exit).not.toHaveBeenCalled();
+          expect(requestSettledExitWatchdog).not.toHaveBeenCalled();
           if (!restart) {
             expect(close).toHaveBeenCalledExactlyOnceWith({
               retainSharedState: true,
@@ -168,6 +171,7 @@ export function registerGracefulGatewayShutdownTests({
           expect(flushLogger).toHaveBeenCalledOnce();
           expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
           expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
+          expect(requestSettledExitWatchdog).toHaveBeenCalledExactlyOnceWith(10_000);
         });
       } finally {
         closed.resolve();
@@ -329,6 +333,7 @@ export function registerShutdownCompletionTests({
   gatewayLog,
   armShutdownHardExitWatchdog,
   cancelShutdownHardExitWatchdog,
+  requestSettledExitWatchdog,
   writeDiagnosticStabilityBundleForFailureSync,
 }: UpdateRespawnFixtures): void {
   async function withShutdownClock(
@@ -392,6 +397,7 @@ export function registerShutdownCompletionTests({
           expect(runtime.exit).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(2_000);
           expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+          expect(requestSettledExitWatchdog).not.toHaveBeenCalled();
           if (closeFails) {
             expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenLastCalledWith(
               "gateway.stop_shutdown_timeout",

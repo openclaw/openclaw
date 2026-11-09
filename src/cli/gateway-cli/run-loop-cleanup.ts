@@ -2,6 +2,7 @@ import { MessageChannel } from "node:worker_threads";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { cleanupSnapshotOperations } from "../../infra/sqlite-readonly-location-cleanup.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
+import { requestSettledExitWatchdog } from "../one-shot-exit.js";
 import { flushGatewayLogsBeforeExit } from "./run-loop-exit.js";
 import type { ShutdownHardExitWatchdog } from "./shutdown-hard-exit.js";
 
@@ -117,6 +118,11 @@ export function createGatewayRunCleanup(
         throw new AggregateError(failures, "Gateway loop and final resource cleanup failed", {
           cause: failures[0],
         });
+      }
+      if (ownsProcessLifecycle && processResourcesDrained && !cleanupFailed) {
+        // Deadline watchdogs are retired. Bound leaked handles only after the CLI
+        // finishes its remaining owned work, disposers, and finalizers.
+        requestSettledExitWatchdog(10_000);
       }
       const code = operations.getExitCode();
       // Cleanup failure promotes success without replacing a supervisor-owned

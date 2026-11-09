@@ -127,3 +127,105 @@ it.concurrent.for([
     });
   },
 );
+
+it.for([
+  { leak: false, exitCode: 0, status: 0, signal: null, terminated: false, mode: "natural" },
+  { leak: true, exitCode: 0, status: 143, signal: "SIGTERM", terminated: true, mode: "native" },
+  // A non-zero status can be a supervisor's restart instruction, so it is only reported.
+  { leak: true, exitCode: 7, status: 7, signal: null, terminated: false, mode: "nonzero" },
+  { leak: true, exitCode: 0, status: 0, signal: null, terminated: false, mode: "windows" },
+  { leak: true, exitCode: 0, status: 1, signal: null, terminated: false, mode: "failed" },
+  { leak: true, exitCode: 0, status: 0, signal: null, terminated: false, mode: "embedded" },
+])(
+  "bounds a leaked handle after settled finalization ($mode)",
+  async (
+    { leak, exitCode, status, signal: expectedSignal, terminated, mode },
+    { expect, signal },
+  ) => {
+    if (terminated && process.platform === "win32") {
+      return;
+    }
+    const script = `
+      import { createServer } from "node:net";
+      import { once } from "node:events";
+      import { Worker } from "node:worker_threads";
+      import { setTimeout as delay } from "node:timers/promises";
+      import { requestSettledExitWatchdog, runCliWithExitFinalization } from ${JSON.stringify(new URL("./one-shot-exit.ts", import.meta.url).href)};
+      import { runCliDisposer } from ${JSON.stringify(new URL("./runtime-cleanup.ts", import.meta.url).href)};
+      const mode = ${JSON.stringify(mode)};
+      if (mode === "windows") Object.defineProperty(process, "platform", { value: "win32" });
+      process.on("SIGTERM", () => {});
+      let server;
+      if (${leak}) {
+        server = createServer().listen(0, "127.0.0.1");
+        await once(server, "listening");
+      }
+      await runCliWithExitFinalization({
+        run: async () => {
+          process.exitCode = ${exitCode};
+          requestSettledExitWatchdog(200);
+          if (mode === "native") {
+            // Native work outlives the reporting grace and the requested exit bound.
+            const worker = new Worker("setTimeout(() => {}, 400)", { eval: true, execArgv: [] });
+            const finished = once(worker, "exit").then(() => {
+              process.stdout.write("native-settled\\n");
+            });
+            await runCliDisposer("settled-native", () => finished, undefined, 50);
+          }
+        },
+        // Finalization longer than the watchdog proves it is armed only afterwards.
+        finalize: async () => {
+          await delay(400);
+          process.stdout.write("finalized\\n");
+          if (mode === "native") {
+            await runCliDisposer("finalizer-tail", async () => {
+              await delay(400);
+              process.stdout.write("tail-settled\\n");
+            }, undefined, 50);
+          }
+          if (mode === "failed") throw new Error("synthetic finalizer failure");
+        },
+        onError: (error) => { process.stderr.write(error.message + "\\n"); },
+        ...(mode === "embedded" ? {
+          runtime: { log() {}, error() {}, exit() {} },
+        } : {}),
+      });
+      // Start fallback only after work settles; slow native work cannot consume it.
+      if (server) setTimeout(() => server.close(), 1_500).unref();
+    `;
+    let child: ChildProcess | undefined;
+    const result = await runNodeScript(
+      ["--import", "tsx", "--input-type=module", "--eval", script],
+      {
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        TSX_DISABLE_CACHE: "1",
+      },
+      5_000,
+      {
+        signal,
+        onReady: (started) => {
+          child = started;
+        },
+      },
+    );
+    const diagnostics = JSON.stringify(result);
+    expect(result.error, diagnostics).toBeUndefined();
+    expect(result.stdout, diagnostics).toContain("finalized");
+    expect(child?.signalCode, diagnostics).toBe(expectedSignal);
+    expect(result.status, diagnostics).toBe(status);
+    if (mode === "native") {
+      expect(result.stdout, diagnostics).toBe("native-settled\nfinalized\ntail-settled\n");
+    }
+    if (leak && mode !== "embedded" && mode !== "failed") {
+      // Resource names are runtime diagnostics; Bun reports fewer handle types than Node.
+      expect(result.stderr, diagnostics).toContain(
+        "command settled but the process is still alive after 200ms; active resources:",
+      );
+      expect(result.stderr.includes("; terminating"), diagnostics).toBe(terminated);
+    } else {
+      expect(result.stderr, diagnostics).not.toContain("still alive");
+    }
+  },
+);

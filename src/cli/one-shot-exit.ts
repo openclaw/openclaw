@@ -1,9 +1,16 @@
+import { writeSync } from "node:fs";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, ExitError, restoreRuntimeTerminalState } from "../runtime.js";
-import { waitForPendingCliDisposers } from "./runtime-cleanup.js";
+import {
+  getCliDisposerFailureCount,
+  getPendingCliDisposers,
+  waitForPendingCliDisposers,
+} from "./runtime-cleanup.js";
 import { waitForCliSignalExit } from "./signal-exit-barrier.js";
 
 let requestedExitCode: number | "process" | undefined;
+let settledExitWatchdogMs: number | undefined;
+let settledExitWatchdog: ReturnType<typeof setTimeout> | undefined;
 
 function resolveProcessExitCode(fallback = 0): number {
   const value = process.exitCode;
@@ -24,6 +31,12 @@ export async function runCliWithExitFinalization(params: {
   runtime?: RuntimeEnv;
 }): Promise<void> {
   const runtime = params.runtime ?? defaultRuntime;
+  // A prior settled execution cannot terminate new command or embedded work.
+  clearTimeout(settledExitWatchdog);
+  settledExitWatchdog = undefined;
+  settledExitWatchdogMs = undefined;
+  const disposerFailuresBeforeRun = getCliDisposerFailureCount();
+  let finalizerFailed = false;
   let finalizationFailure: { error: unknown } | undefined;
   try {
     await params.run();
@@ -47,6 +60,7 @@ export async function runCliWithExitFinalization(params: {
       try {
         await params.finalize();
       } catch (error) {
+        finalizerFailed = true;
         try {
           await params.onError(error);
         } catch (reportError) {
@@ -73,7 +87,16 @@ export async function runCliWithExitFinalization(params: {
         restoreRuntimeTerminalState("CLI exit", { resumeStdinIfPaused: false });
       }
       // Node drains stdio and V8 compiler work naturally.
+      if (
+        settledExitWatchdogMs !== undefined &&
+        !finalizerFailed &&
+        getCliDisposerFailureCount() === disposerFailuresBeforeRun
+      ) {
+        armSettledExitWatchdog(settledExitWatchdogMs, disposerFailuresBeforeRun);
+      }
     }
+    // Embedded invocations must not leave a request for the next process-owned run.
+    settledExitWatchdogMs = undefined;
   }
   // A cleanup failure must not replace an embedded runtime's original exit.
   if (finalizationFailure) {
@@ -98,6 +121,47 @@ export function requestExitAfterOneShotOutput(
   }
   requestedExitCode = exitCode ?? "process";
   return true;
+}
+
+/**
+ * Long-lived owners retire their deadline watchdogs once shutdown settles. Ask the CLI to bound
+ * a referenced handle nobody closed after every command-owned job, disposer and finalizer ends.
+ * Requests belong to the current CLI invocation; pre-run requests are not retained.
+ */
+export function requestSettledExitWatchdog(delayMs: number): void {
+  settledExitWatchdogMs = delayMs;
+}
+
+function armSettledExitWatchdog(delayMs: number, disposerFailuresBeforeRun: number): void {
+  // Unref'd: a natural exit is never delayed.
+  settledExitWatchdog = setTimeout(() => {
+    settledExitWatchdog = undefined;
+    // A late disposer failure or newly admitted cleanup invalidates the settled claim.
+    if (
+      getCliDisposerFailureCount() !== disposerFailuresBeforeRun ||
+      getPendingCliDisposers().length > 0
+    ) {
+      return;
+    }
+    const counts = new Map<string, number>();
+    for (const resource of process.getActiveResourcesInfo()) {
+      counts.set(resource, (counts.get(resource) ?? 0) + 1);
+    }
+    const resources = [...counts].map(([name, count]) => `${name}x${count}`).join(", ");
+    // Only a clean POSIX outcome is ended here; a non-zero status can be a supervisor's
+    // restart instruction that no signal can carry, so it stays with the supervisor.
+    const terminate = process.platform !== "win32" && resolveProcessExitCode() === 0;
+    writeSync(
+      2,
+      `command settled but the process is still alive after ${delayMs}ms; active resources: ${resources || "unreported"}${terminate ? "; terminating" : ""}\n`,
+    );
+    if (terminate) {
+      // Re-raise the stop signal with its default action: no Node exit teardown
+      // (process.exit is banned) and supervisors record a clean stop.
+      process.removeAllListeners("SIGTERM");
+      process.kill(process.pid, "SIGTERM");
+    }
+  }, delayMs).unref();
 }
 
 /** Report unsettled cleanup without bypassing its native resource owner. */

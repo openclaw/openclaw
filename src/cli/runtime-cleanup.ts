@@ -9,10 +9,17 @@ import type { CliHarnessCleanup } from "./runtime-cleanup-scope.js";
 // Match Gateway's harness/MCP shutdown grace; local-provider TERM/KILL already
 // consumes at most two 2-second waits. Keep command teardown bounded independently.
 const DISPOSER_TIMEOUT_MS = 5_000;
+// Process-local observation only; callers snapshot it instead of clearing another execution's failure.
+let disposerFailureCount = 0;
 const pendingDisposers = new Map<
   symbol,
   { name: string; operation: Promise<void>; deferred: boolean }
 >();
+
+/** Internal CLI observation; failures still log and resolve under the existing contract. */
+export function getCliDisposerFailureCount(): number {
+  return disposerFailureCount;
+}
 
 export function getPendingCliDisposers(): string[] {
   return [...pendingDisposers.values()].map(({ name }) => name);
@@ -68,6 +75,7 @@ export async function runCliDisposer(
   const operation = Promise.resolve()
     .then(() => (runCleanup ? runCleanup(dispose) : dispose()))
     .catch(async (error: unknown) => {
+      disposerFailureCount++;
       const { formatErrorMessage } = await import("../infra/errors.js");
       // Observe failures even after the reporting deadline, without blocking later teardown.
       console.error(`CLI cleanup failed: ${name}: ${formatErrorMessage(error)}`);

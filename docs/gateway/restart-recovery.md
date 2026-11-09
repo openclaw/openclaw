@@ -372,7 +372,16 @@ that will replace the Gateway. Ordinary
 cancellation keeps its five-second grace before forced termination. During
 shutdown, a relay that needs forced termination after its owned processes are
 confirmed gone produces a warning. Completed cleanup leaves the Gateway's exit
-status at zero; an unconfirmed process cleanup boundary still reports failure.
+status at zero; an unconfirmed process cleanup boundary still reports failure. After
+clean process-owned shutdown retires its deadline watchdogs, the CLI waits ten
+seconds past its own final cleanup. If a leaked handle still keeps the process
+alive, it prints the active resource types to stderr. On Linux and macOS, an exit
+status of zero then ends with SIGTERM. Whether a supervisor treats that signal as
+a clean stop depends on its configuration.
+Non-zero statuses (including supervisor restart instructions) and Windows keep
+the report only. A failed CLI disposer or finalizer suppresses this settled-exit
+watchdog without changing its existing error reporting or exit status. Starting
+another CLI execution retires the prior watchdog. Natural exits are not delayed.
 
 The process's cgroup selects the system or user manager, independently of the
 account running the Gateway or its restart owner. This also covers hand-written
