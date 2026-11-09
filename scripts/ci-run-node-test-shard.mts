@@ -395,7 +395,9 @@ export function resolveShardChildCommand(
         ? [
             fileURLToPath(new URL("./lib/vitest-worker-bootstrap.mts", import.meta.url)),
             workerRun.descriptor.directory,
-            ...(workerRun.descriptor.preset === "runtime" ? ["--worker-preset=runtime"] : []),
+            ...(workerRun.descriptor.preset && workerRun.descriptor.preset !== "full"
+              ? [`--worker-preset=${workerRun.descriptor.preset}`]
+              : []),
           ]
         : []),
       testProjectsEntrypoint,
@@ -428,7 +430,13 @@ async function loadWorkerOwner() {
   const [
     worker,
     processOwner,
-    { areRuntimeOnlyVitestUnitFiles, shouldUseRuntimeOnlyVitestWorkers },
+    {
+      selectVitestWorkerPreset,
+      areRuntimeOnlyVitestUnitFiles,
+      shouldUseRuntimeOnlyVitestWorkers,
+      areToolingOnlyVitestUnitFiles,
+      shouldUseToolingOnlyVitestWorkers,
+    },
   ] = await Promise.all([
     import("./lib/vitest-worker-run.mts"),
     import("./lib/vitest-process.mts"),
@@ -436,7 +444,10 @@ async function loadWorkerOwner() {
   ]);
   return {
     createWorkerRun: worker.createVitestWorkerRun,
+    selectPreset: selectVitestWorkerPreset,
     areRuntimeOnlyFiles: areRuntimeOnlyVitestUnitFiles,
+    areToolingOnlyFiles: areToolingOnlyVitestUnitFiles,
+    useToolingOnlyWorkers: shouldUseToolingOnlyVitestWorkers,
     useRuntimeOnlyWorkers: shouldUseRuntimeOnlyVitestWorkers,
     resolveCompilerEnv: resolveSharedVitestCompilerEnv,
     spawn: processOwner.spawnOwnedVitestProcess,
@@ -454,17 +465,20 @@ function createWorkerContext(
   const compilerEnv = owner.resolveCompilerEnv(
     plans.length > 0 ? plans.map((plan) => prepareChildEnv(plan, env)) : [env],
   );
-  const runtimeOnly =
+  const supportsPreset = (
+    files: typeof owner.areRuntimeOnlyFiles,
+    selection: typeof owner.useRuntimeOnlyWorkers,
+  ) =>
     !hasExtraArgs &&
     plans.length > 0 &&
     plans.every((entry) =>
       entry.kind === "target"
-        ? owner.areRuntimeOnlyFiles([entry.target])
+        ? files([entry.target])
         : entry.plan.configs.length === 1 &&
           Boolean(entry.plan.includePatterns?.length) &&
           !entry.plan.requiresDist &&
           entry.plan.pretestBuildMode === undefined &&
-          owner.useRuntimeOnlyWorkers(
+          selection(
             entry.plan.configs[0]!,
             [],
             prepareChildEnv(entry, env),
@@ -473,7 +487,14 @@ function createWorkerContext(
           ),
     );
   return {
-    workerRun: owner.createWorkerRun(compilerEnv, undefined, runtimeOnly ? "runtime" : "full"),
+    workerRun: owner.createWorkerRun(
+      compilerEnv,
+      undefined,
+      owner.selectPreset(
+        supportsPreset(owner.areRuntimeOnlyFiles, owner.useRuntimeOnlyWorkers),
+        supportsPreset(owner.areToolingOnlyFiles, owner.useToolingOnlyWorkers),
+      ),
+    ),
     normalCompletion: true,
     spawn: owner.spawn,
     exitBySignal: owner.exitBySignal,

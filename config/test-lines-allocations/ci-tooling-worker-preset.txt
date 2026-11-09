@@ -1,0 +1,2 @@
+# Cover narrow-preset parent compatibility, mixed CI groups, cache isolation, and slot reuse.
+60
