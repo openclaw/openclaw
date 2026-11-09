@@ -1,5 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginStateKeyedStoreV2ForTests as openStore } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as runtimeModule from "./runtime.js";
 
 const sendReactionsModule = await import("./send-reactions.js");
 const sendReactionSignalMock = vi
@@ -14,6 +19,12 @@ const sendMessageSignalMock = vi.spyOn(sendModule, "sendMessageSignal").mockReso
   receipt: { platformMessageIds: [], parts: [], sentAt: 0 },
 });
 const { signalMessageActions } = await import("./message-actions.js");
+const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
 
 const DEFAULT_CFG: OpenClawConfig = { channels: { signal: { account: "+15550001111" } } };
 const uuid = "123e4567-e89b-12d3-a456-426614174000";
@@ -82,6 +93,14 @@ describe("signalMessageActions", () => {
   });
 
   it("aims a second edit of the original message at its newest revision", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("signal-edit-action-") };
+    const runtime = createPluginRuntimeMock({
+      state: {
+        openKeyedStoreV2: <T>(options: Parameters<typeof openStore>[1]) =>
+          openStore<T>("signal", { ...options, env }, { assertCurrent() {} }),
+      },
+    });
+    const runtimeSpy = vi.spyOn(runtimeModule, "getOptionalSignalRuntime").mockReturnValue(runtime);
     sendMessageSignalMock.mockClear();
     const edit = (text: string) =>
       signalMessageActions.handleAction?.({
@@ -99,6 +118,7 @@ describe("signalMessageActions", () => {
     expect(sendMessageSignalMock.mock.calls.map((call) => call[2]?.editTimestamp)).toEqual([
       1700000000500, 1700000000600,
     ]);
+    runtimeSpy.mockRestore();
   });
 
   it.each(["implicit", "explicit"] as const)(

@@ -1,2 +1,2 @@
-77
-# Signal edit action: handler cases prove initial and repeated edits; loopback native/container cases preserve edit timestamps on success and rejection without ordinary-send fallback; action discovery cases updated.
+91
+# Signal edit action: handler cases prove initial and repeated edits (the repeat edit runs through the plugin-state revision store); loopback native/container cases preserve edit timestamps on success and rejection without ordinary-send fallback; action discovery cases updated.
