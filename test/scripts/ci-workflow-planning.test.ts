@@ -6429,7 +6429,9 @@ describe("ci workflow guards", () => {
           override: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
         ) => evaluateWorkflowExpression(runner, { ...fork, ...override });
         for (const runner of [plannerRunner, typeRunner, lintRunner]) {
-          expect(route(runner)).toBe("blacksmith-4vcpu-ubuntu-2404");
+          expect(route(runner)).toBe(
+            runner === typeRunner ? "blacksmith-2vcpu-ubuntu-2404" : "blacksmith-4vcpu-ubuntu-2404",
+          );
           for (const override of [
             { runnerBackend: "github" },
             { runAttempt: 2 },
@@ -6438,6 +6440,9 @@ describe("ci workflow guards", () => {
           ] as const) {
             expect(route(runner, override)).toBe("ubuntu-24.04");
           }
+        }
+        for (const preflightOutputs of [{ frozen_target: "" }, { compatibility_target: "true" }]) {
+          expect(route(typeRunner, { preflightOutputs })).toBe("blacksmith-4vcpu-ubuntu-2404");
         }
         // Frozen defaults retain their historical hosted route; hybrid owns its own layout.
         for (const runner of runnerBackend === "hybrid" ? [lintRunner] : [typeRunner, lintRunner]) {
@@ -6453,16 +6458,18 @@ describe("ci workflow guards", () => {
       eventName: "workflow_dispatch" as const,
       preflightOutputs: { ci_qualification: "true", qualification_runner_backend: "hybrid" },
     };
-    expect(evaluateWorkflowExpression(plannerRunner, qualification)).toBe(
-      "blacksmith-4vcpu-ubuntu-2404",
-    );
-    expect(
-      evaluateWorkflowExpression(plannerRunner, {
-        ...qualification,
-        dispatchId: "full-release-validation-test",
-        releaseRunnerGroup: "test-group",
-      }),
-    ).toEqual({ group: "test-group", labels: "blacksmith-4vcpu-ubuntu-2404" });
+    for (const runner of [plannerRunner, typeRunner]) {
+      expect(evaluateWorkflowExpression(runner, qualification)).toBe(
+        "blacksmith-4vcpu-ubuntu-2404",
+      );
+      expect(
+        evaluateWorkflowExpression(runner, {
+          ...qualification,
+          dispatchId: "full-release-validation-test",
+          releaseRunnerGroup: "test-group",
+        }),
+      ).toEqual({ group: "test-group", labels: "blacksmith-4vcpu-ubuntu-2404" });
+    }
     for (const override of [
       { runnerBackend: "github" },
       { runnerBackend: "runson" },
