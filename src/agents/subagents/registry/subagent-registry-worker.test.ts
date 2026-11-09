@@ -627,13 +627,10 @@ it("settles a plugin-origin requester cohort and killed-child cleanup during shu
     reason: "synthetic kill",
     suppressTaskDelivery: true,
   });
-  const results = await Promise.allSettled([...completions, settlement, killed]).finally(
-    async () => {
-      gatewayAdmission.resetGatewayWorkAdmission();
-      await host.close();
-      await scheduler.stop();
-    },
-  );
+  const results = await Promise.allSettled([...completions, settlement, killed]);
+  gatewayAdmission.resetGatewayWorkAdmission();
+  await host.close();
+  await scheduler.stop();
   expect(results.filter((result) => result.status === "rejected")).toEqual([]);
   await expect(fs.stat(attachmentDir)).rejects.toMatchObject({ code: "ENOENT" });
   const saved = loadSubagentRegistryFromSqlite();
