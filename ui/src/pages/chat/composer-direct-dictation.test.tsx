@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal, flush } from "solid-js";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import { t } from "../../i18n/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { ComposerDictationStatus } from "./components/chat-voice-activity.tsx";
@@ -15,6 +16,7 @@ const dictationHarness = vi.hoisted(() => {
     active = false;
     connecting = false;
     finalizing = false;
+    transcribing = false;
     transcript = "";
 
     get locksComposer() {
@@ -233,6 +235,26 @@ describe("DirectDictationControl", () => {
     container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit")?.click();
     await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
     expect(controller.finishActive).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the finishing status visible after Stop unlocks the composer", () => {
+    const { control } = fixture();
+    control.prepare("agent-a");
+    const controller = expectDefined(dictationHarness.controllers[0], "dictation controller");
+    controller.active = true;
+    const { container, update } = mountControl(control, true);
+    const status = () => container.querySelector(".agent-chat__dictation-status");
+    expect(status()?.textContent).toBe(t("chat.composer.dictationListening"));
+
+    controller.active = false;
+    controller.transcribing = true;
+    update();
+    expect(status()?.textContent).toBe(t("chat.composer.dictationFinalizing"));
+    expect(container.querySelector(".agent-chat__dictation-phase--listening")).toBeNull();
+
+    controller.transcribing = false;
+    update();
+    expect(status()).toBeNull();
   });
 
   it("does not submit a replacement route after finishing the previous draft's dictation", async () => {

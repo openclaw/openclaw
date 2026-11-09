@@ -89,6 +89,14 @@ export class ComposerDictationSession {
     },
   ) {}
 
+  get reportedFailure(): boolean {
+    return this.failed;
+  }
+
+  get disconnected(): boolean {
+    return this.gatewayDisconnected;
+  }
+
   start(): Promise<void> {
     this.startPromise ??= this.startInternal();
     return this.startPromise;

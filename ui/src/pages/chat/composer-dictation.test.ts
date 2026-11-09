@@ -4,6 +4,7 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { t } from "../../i18n/index.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -648,6 +649,46 @@ describe("ComposerDictationOwner", () => {
       expect(publishedErrors).toContain("Local transcription failed");
     }
     unsubscribe();
+  });
+
+  it("publishes the pending final drain while the composer stays unlocked", async () => {
+    const { controller, onCommit } = createHarness();
+    const states: boolean[] = [];
+    const unsubscribe = controller.subscribe(() => states.push(controller.transcribing));
+    await startDirect(controller);
+    emit({ type: "partial", text: "still transcribing" });
+    const finished = controller.finishActive();
+    expect(controller).toMatchObject({ transcribing: true, locksComposer: false });
+    expect(states.at(-1)).toBe(true);
+    transcript("still transcribing");
+    emit({ type: "close", reason: "completed" });
+    await expect(finished).resolves.toBe(true);
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith("still transcribing", true);
+    expect(controller.transcribing).toBe(false);
+    expect(states.at(-1)).toBe(false);
+    unsubscribe();
+  });
+
+  it.each([
+    ["timeout", "chat.composer.dictationFailed"],
+    ["disconnect", "chat.composer.dictationDisconnected"],
+  ])("reports why an empty final drain ended through %s", async (outcome, key) => {
+    const { controller, options, onCommit, onError } = createHarness();
+    await startDirect(controller);
+    const finished = controller.finishActive();
+    await vi.advanceTimersByTimeAsync(0);
+    if (outcome === "disconnect") {
+      controller.update({ ...options, connected: false });
+    } else {
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    await expect(finished).resolves.toBe(false);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledExactlyOnceWith(t(key), {
+      kind: "interrupted",
+      preservesText: false,
+    });
+    expect(controller.transcribing).toBe(false);
   });
 
   it("buffers microphone audio while the transcription session is being created", async () => {

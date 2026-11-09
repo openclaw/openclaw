@@ -1,0 +1,3 @@
+# Regression tests for issue #195982: Control UI dictation shows the pending final drain and reports why an empty drain ended.
+# Exact net test-line growth (owner + status component tests).
+63
