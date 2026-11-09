@@ -64,6 +64,8 @@ export interface ControlUiMockGatewayScenario
   heldMethods?: string[];
   /** Hold only requests matching these method and parameter selectors. */
   heldRequests?: MockGatewayRequestSelector[];
+  /** Delay only these RPC handlers; `forever` waits for setMethodDelay to release it. */
+  methodDelays?: Record<string, number | "forever">;
   /** Fail each admission-dependent read this many times before serving its normal response. */
   startupPendingResponses?: number;
   /** Non-release gateway checkout branch surfaced in the sidebar footer. */
@@ -254,6 +256,7 @@ export function normalizeScenario(
     deferredRequests: scenario.deferredRequests ?? [],
     heldMethods: scenario.heldMethods ?? [],
     heldRequests: scenario.heldRequests ?? [],
+    methodDelays: scenario.methodDelays ?? {},
     startupPendingResponses: scenario.startupPendingResponses ?? 0,
     devGitBranch: scenario.devGitBranch?.trim() || "",
     serverBuildId: scenario.serverBuildId?.trim() || sharedBuildInfo?.buildId || "e2e",

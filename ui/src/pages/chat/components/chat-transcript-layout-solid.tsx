@@ -290,7 +290,7 @@ export class ChatTranscriptRenderer {
     }
   }
 
-  queueAfterCommit(effect: () => void): void {
+  queueAfterCommit(effect: () => void, yieldToBrowser = false): void {
     if (!this.lifecycle || this.layoutEffects.has(effect)) {
       return;
     }
@@ -298,14 +298,41 @@ export class ChatTranscriptRenderer {
     const release = () => {
       this.layoutEffects.delete(effect);
     };
-    this.lifecycle.afterCommit(() => {
-      // Nested row islands finish their commits before initial geometry is read.
-      queueMicrotask(() => {
+    this.lifecycle.afterCommit((done) => {
+      // The initial tail ladder can yield between rows. Position restoration
+      // and other geometry effects keep their before-paint microtask timing.
+      // SAFETY: scheduler.yield is an optional browser scheduling capability.
+      const browser = globalThis as typeof globalThis & {
+        scheduler?: { yield?: () => Promise<void> };
+      };
+      if (!yieldToBrowser || !browser.scheduler?.yield) {
+        // Nested row islands finish their commits before geometry is read.
+        queueMicrotask(() => {
+          release();
+          if (this.isPresented()) {
+            effect();
+          }
+        });
+        return undefined;
+      }
+      let pending = true;
+      void browser.scheduler.yield().then(() => {
+        if (!pending) {
+          return;
+        }
+        pending = false;
         release();
         if (this.isPresented()) {
           effect();
         }
+        done();
       });
+      return () => {
+        if (pending) {
+          pending = false;
+          release();
+        }
+      };
     }, release);
   }
 

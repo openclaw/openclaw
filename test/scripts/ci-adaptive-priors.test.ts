@@ -22,6 +22,19 @@ const env = {
 };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function bareRepository() {
+  const root = tempDirs.make("ci-prior-tree-");
+  const git = (args: string[], input?: string) =>
+    execFileSync("git", args, {
+      cwd: root,
+      input,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+  git(["init", "--bare"]);
+  return { root, git };
+}
+
 function fixture(
   options: {
     artifacts?: number;
@@ -147,15 +160,7 @@ function fixture(
 
 describe("adaptive CI prior restore", () => {
   it.each([486, 599, 600])("compares %i paths without the prior commit locally", async (count) => {
-    const root = tempDirs.make("ci-prior-tree-");
-    const git = (args: string[], input?: string) =>
-      execFileSync("git", args, {
-        cwd: root,
-        input,
-        encoding: "utf8",
-        stdio: ["pipe", "pipe", "pipe"],
-      }).trim();
-    git(["init", "--bare"]);
+    const { root, git } = bareRepository();
     const blob = git(["hash-object", "-w", "--stdin"], "content");
     const paths = Array.from({ length: count - 6 }, (_, index) => `file-${index}`);
     const entries = [
@@ -244,11 +249,31 @@ describe("adaptive CI prior restore", () => {
     },
     { padding: "x".repeat(32 * 1024 * 1024) },
   ])("rejects incomplete or invalid large-diff trees ($truncated)", async (change) => {
-    const f = fixture({
-      comparison: { files: Array.from({ length: 300 }, () => ({ filename: "partial" })) },
-      treeResponse: { sha: tree, truncated: false, tree: [], ...change },
-    });
-    expect((await restoreCiAdaptivePriors({ env, fetchImpl: f.fetchImpl })).candidates).toEqual([]);
+    const { root, git } = bareRepository();
+    const headTree = git(["mktree"], "");
+    const head = git(
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit-tree",
+        headTree,
+      ],
+      "fixture\n",
+    );
+    git(["update-ref", "HEAD", head]);
+    const restore = (treeChange: Record<string, unknown> = {}) => {
+      const f = fixture({
+        checkoutRevision: head,
+        comparison: { files: Array.from({ length: 300 }, () => ({ filename: "partial" })) },
+        treeResponse: { sha: tree, truncated: false, tree: [], ...treeChange },
+      });
+      return restoreCiAdaptivePriors({ env, repositoryRoot: root, fetchImpl: f.fetchImpl });
+    };
+    // Keep the valid diff below the path limit so only the changed guard can reject it.
+    expect((await restore()).candidates).toHaveLength(2);
+    expect((await restore(change)).candidates).toEqual([]);
   });
 
   it("retains verified observations from a failed workflow without admitting cancelled runs", async () => {
@@ -311,7 +336,10 @@ describe("adaptive CI prior restore", () => {
     ["archive digest", { digestMismatch: true }],
     ["completion after cutoff", { updatedAt: later }],
     ["divergent history", { comparison: { merge_base_commit: { sha: "c".repeat(40) } } }],
-    ["wrong comparison base", { comparison: { base_commit: { sha: "c".repeat(40) } } }],
+    [
+      "wrong comparison base",
+      { comparison: { base_commit: { sha: "c".repeat(40), commit: { tree: { sha: tree } } } } },
+    ],
     ["behind comparison", { comparison: { status: "behind", behind_by: 1 } }],
     [
       "saturated comparison",

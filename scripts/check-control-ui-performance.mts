@@ -57,9 +57,8 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Coordinator accepted the sidebar snapshot-save repair; complete build plus 64 B.
-  // Retain the accepted resident-history allocation over that approved main policy.
-  // Main 1,294,652 B + resident history 9,306 B; other budgets follow main.
+  // Preserve the accepted resident-history ceiling over incoming main.
+  // Main 1,296,751 B; the unchanged 1,303,958 B ceiling leaves 7,207 B.
   chatBootJsGzipBytes: 1_303_958,
   // Channels: raw -159 B, served +22 B; coordinator-accepted normalized trade +64 B.
   newBootJsGzipBytes: 803_250,

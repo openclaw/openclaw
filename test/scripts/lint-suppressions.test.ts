@@ -164,6 +164,8 @@ describe("production lint suppressions", () => {
         "extensions/x/src/thread.ts|unicorn/no-array-sort|2",
         // The memory census attributes RSS only to the pinned Playwright browser's child tree.
         "scripts/bench-control-ui-engines.ts|no-underscore-dangle|1",
+        // Read rendered content so parked Chat panes cannot satisfy readiness evidence.
+        "scripts/bench-control-ui-rpc-hostage.ts|unicorn/prefer-dom-node-text-content|1",
         // The Talk readiness probe calls the saved media method with its original receiver.
         "scripts/bench-control-ui-talk.ts|typescript/unbound-method|1",
         // The fault observer preserves methods for restoration and supplies each database receiver through .call.
@@ -188,6 +190,7 @@ describe("production lint suppressions", () => {
         "scripts/lib/control-ui-talk-fixture.ts|typescript/unbound-method|5",
         "scripts/lib/plain-gh.mjs|no-warning-comments|1",
         "scripts/lib/sqlite-reliability-process.ts|typescript/prefer-promise-reject-errors|1",
+        "scripts/lib/usage-bench-observer.mjs|typescript/unbound-method|1",
         // The frame census retains native methods and supplies their original receivers through .call.
         "scripts/perf/agent-event-frame-census-preload.mjs|typescript/unbound-method|3",
         // The copy-count probe restores the native method after measurement.
@@ -203,6 +206,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/command-capture-pool-retention.ts|typescript/unbound-method|2",
         // The diagnostics probe restores Session.post and invokes it with its live receiver.
         "scripts/perf/diagnostic-profile-measure.ts|typescript/unbound-method|1",
+        // The heap probe forwards saved SQLite methods with their original native receivers.
+        "scripts/perf/doctor-transcript-heap-probe.cjs|typescript/unbound-method|3",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/gateway-runtime-exit-listeners-preload.mjs|unicorn/require-post-message-target-origin|1",
         // Node BroadcastChannel.postMessage has no target-origin parameter.

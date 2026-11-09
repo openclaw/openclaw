@@ -6,7 +6,7 @@ import {
   routeIdFromPath,
   sameRouteLocation,
 } from "./app-route-paths.ts";
-import { createApplicationRouter } from "./app-routes.ts";
+import { createApplicationRouter, startApplicationRouter } from "./app-routes.ts";
 import type { ApplicationContext } from "./app/context.ts";
 
 it.each([
@@ -130,5 +130,98 @@ it("prepares a cold page's selected language before returning its renderer", asy
     page.resolve({ default: { searchPage: { queryDefault: "OpenClaw Dokumentation" } } });
     await loading;
     await i18n.setLocale("en");
+  }
+});
+
+it.each([
+  ["/ui/settings?keep=1#anchor", "/ui/chat?keep=1#anchor"],
+  ["/ui/communications?section=%20channels%20&drop=1#anchor", "/ui/settings/channels#anchor"],
+  ["/ui/automation?section=plugins&drop=1#anchor", "/ui/settings/plugins?tab=advanced#anchor"],
+  ["/ui/settings/plugins/discover?query=calendar#featured", "/ui/plugins?query=calendar#featured"],
+  [
+    "/ui/plugins/ch_QG9wZW5jbGF3L2xpbmVhcg?probe=1#catalog",
+    "/ui/plugins/openclaw/linear?probe=1#catalog",
+  ],
+])("canonicalizes bookmark and history entry %s", async (requestedUrl, expectedUrl) => {
+  const location = (url: string) => {
+    const parsed = new URL(url, "https://control.test");
+    return { pathname: parsed.pathname, search: parsed.search, hash: parsed.hash };
+  };
+  let current = location(requestedUrl);
+  let pop: (next: typeof current) => void = () => {};
+  const replace = vi.fn((next: typeof current) => {
+    current = next;
+  });
+  const history = {
+    location: () => current,
+    replace,
+    push: vi.fn((next: typeof current) => {
+      current = next;
+    }),
+    listen: (listener: typeof pop) => {
+      pop = listener;
+      return () => {};
+    },
+  };
+  const router = createApplicationRouter();
+  // SAFETY: The fixture substitutes route loading; only the router/history boundary runs.
+  const context = {
+    basePath: "/ui",
+    gateway: { snapshot: { phase: "disconnected", hello: null }, subscribe: () => () => {} },
+  } as unknown as ApplicationContext;
+  const mocks = router.routes.flatMap((page) => [
+    vi.spyOn(page, "component").mockResolvedValue({ renderSolid: () => null }),
+    ...(page.loader ? [vi.spyOn(page, "loader").mockReturnValue(undefined)] : []),
+    ...(page.loaderDeps ? [vi.spyOn(page, "loaderDeps").mockReturnValue("")] : []),
+  ]);
+  try {
+    await startApplicationRouter(router, history, "/ui", context);
+    expect(router.getState().resolvedLocation).toEqual(location(expectedUrl));
+    expect(replace).toHaveBeenCalledExactlyOnceWith(location(expectedUrl));
+    expect(history.push).not.toHaveBeenCalled();
+    await router.navigate("portals", context, { history: "push" });
+    const requested = location(requestedUrl);
+    current = requested;
+    pop(requested);
+    await vi.waitFor(() =>
+      expect(router.getState().resolvedLocation).toEqual(location(expectedUrl)),
+    );
+    expect(current).toEqual(location(expectedUrl));
+    expect(history.push).toHaveBeenCalledOnce();
+  } finally {
+    router.stop();
+    for (const mock of mocks) {
+      mock.mockRestore();
+    }
+  }
+});
+
+it("leaves embedded Settings intact and intercepts the requested URL before canonicalization", async () => {
+  vi.stubGlobal("__OPENCLAW_NATIVE_EMBED__", { platform: "ios", formFactor: "phone" });
+  const router = createApplicationRouter();
+  const settings = router.getRoute("settings")!;
+  const component = vi.spyOn(settings, "component").mockResolvedValue({ renderSolid: () => null });
+  const interceptNavigation = vi.fn(() => false);
+  // SAFETY: Native Settings has no data loader and interception owns the second navigation.
+  const context = {
+    basePath: "",
+    nativeConversation: { interceptNavigation },
+  } as unknown as ApplicationContext;
+  try {
+    await router.navigate("settings", context);
+    expect(router.getState().resolvedLocation).toEqual({
+      pathname: "/settings",
+      search: "",
+      hash: "",
+    });
+    interceptNavigation.mockReturnValue(true);
+    const requested = { pathname: "/automation", search: "?section=plugins", hash: "#anchor" };
+    await router.navigate("automation", context, { history: "push" }, requested);
+    expect(interceptNavigation).toHaveBeenLastCalledWith(requested);
+    expect(router.getState().resolvedLocation?.pathname).toBe("/settings");
+  } finally {
+    router.stop();
+    component.mockRestore();
+    vi.unstubAllGlobals();
   }
 });

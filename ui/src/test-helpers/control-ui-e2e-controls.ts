@@ -125,6 +125,7 @@ export function createMockGatewayControls(
         return gateway.getSessionRow(sessionKey);
       }, key);
     },
+    setSessionRow: (...args) => mutate("setSessionRow", ...args),
     getSocketCount: () =>
       page.evaluate(
         () => (window as MockGatewayWindow).openclawControlUiE2eGateway?.socketCount() ?? 0,
@@ -141,6 +142,7 @@ export function createMockGatewayControls(
     setServerBuildId: (...args) => mutate("setServerBuildId", ...args),
     setOperatorScopes: (...args) => mutate("setOperatorScopes", ...args),
     setHistoryMessages: (messages) => mutate("setHistoryMessages", materializeHistory(messages)),
+    setMethodDelay: (...args) => mutate("setMethodDelay", ...args),
     async setMethodResponse(method, payload) {
       methodResponses[method] = payload;
       await mutate("setMethodResponse", method, payload);

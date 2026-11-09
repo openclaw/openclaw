@@ -26,8 +26,8 @@ function createVitestWorkerDirectory(env: NodeJS.ProcessEnv, preset: VitestWorke
   } else {
     // A retained or live generation keeps its slot. Only joined disposal releases it.
     for (let slot = 0; ; slot++) {
-      // Runtime borrowers must not replace a full seed or reserve its exact output path.
-      directory = path.join(parent, `run-cache-${preset === "runtime" ? "runtime-" : ""}${slot}`);
+      // Narrow presets must not replace another preset's seed or executable path.
+      directory = path.join(parent, `run-cache-${preset === "full" ? "" : `${preset}-`}${slot}`);
       try {
         fs.mkdirSync(directory, { mode: 0o700 });
         break;
@@ -50,8 +50,10 @@ export function createVitestWorkerRun(
   compilerExecPath = process.execPath,
 ) {
   const preset = parent ? (parent.preset ?? "full") : (requestedPreset ?? "full");
-  if (preset === "runtime" && requestedPreset === "full") {
-    throw new Error("Runtime compiled subprocess owner cannot serve a full preset borrower");
+  if (preset !== "full" && requestedPreset !== undefined && requestedPreset !== preset) {
+    throw new Error(
+      `${preset === "runtime" ? "Runtime" : "Tooling"} compiled subprocess owner cannot serve a ${requestedPreset} preset borrower`,
+    );
   }
   const directory = parent?.directory ?? createVitestWorkerDirectory(env, preset);
   let preparation: Promise<VitestWorkerManifest> | undefined;
@@ -106,7 +108,7 @@ export function createVitestWorkerRun(
         args: [
           fileURLToPath(new URL("./vitest-worker-compiler.mts", import.meta.url)),
           directory,
-          ...(preset === "runtime" ? ["--preset=runtime"] : []),
+          ...(preset === "full" ? [] : [`--preset=${preset}`]),
         ],
         cwd: root,
         env,

@@ -213,6 +213,25 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     },
   );
 
+  it("shows mention loading only after a delay and only while the list has nothing to show", async () => {
+    const params = panelParams(inboxEntries([authWarning], []));
+    params.mentions.snapshot.phase = "loading";
+    const all = mountPanel(params, shellFor());
+    const mentions = mountPanel({ ...params, selectedTab: "mentions" }, shellFor());
+    expect([part(mentions, "loading"), part(mentions, "empty")]).toEqual([null, null]);
+    await waitForSolid(() =>
+      expect(part(mentions, "loading")?.textContent).toBe("Loading mentions…"),
+    );
+    expect([part(all, "loading"), part(all, "mentions-note"), part(all, "empty")]).toEqual([
+      null,
+      null,
+      null,
+    ]);
+    params.mentions.snapshot.phase = "ready";
+    const loaded = mountPanel({ ...params, selectedTab: "mentions" }, shellFor());
+    expect([part(loaded, "loading"), part(loaded, "empty")?.tagName]).toEqual([null, "DIV"]);
+  });
+
   it("keeps existing mentions visible with a refresh action after a request fails", () => {
     const entries = inboxEntries([], [inboxMention("mention-a")]);
     const params = panelParams(entries);

@@ -445,10 +445,10 @@ suite.define(() => {
         const shortTail = profile === "short-tail";
         const olderMessages =
           profile === "large" || shortTail || imported
-            ? Array.from({ length: imported ? 119 : 239 }, (_, index) => ({
-                role: shortTail && index >= 160 ? "toolResult" : index % 2 ? "assistant" : "user",
+            ? Array.from({ length: imported ? 119 : shortTail ? 159 : 239 }, (_, index) => ({
+                role: shortTail && index >= 80 ? "toolResult" : index % 2 ? "assistant" : "user",
                 content: `Older history ${index + 1}`,
-                ...(shortTail && index >= 160
+                ...(shortTail && index >= 80
                   ? { toolCallId: `older-tool-${index}`, toolName: "read" }
                   : {}),
                 __openclaw: {
@@ -788,6 +788,40 @@ suite.define(() => {
           sessionInfo: currentRow,
           metadata: { models: [] },
         });
+        const messages = [
+          ...olderMessages,
+          {
+            ...rememberedMessage,
+            __openclaw: {
+              ...rememberedMessage["__openclaw"],
+              senderProfileAvatarUrl: "/api/users/synthetic/avatar?v=2",
+            },
+          },
+        ];
+        const heldStart = messages.length - 80;
+        const firstPage = messages.slice(0, heldStart);
+        if (profile === "large" || shortTail || imported) {
+          // Short tool-heavy tails can refill as soon as hello is released.
+          await gateway.setMethodResponse("chat.history", {
+            cases: [
+              {
+                match: { messageId: `older-${heldStart + 1}`, limit: 1 },
+                response: {
+                  messages: [messages[heldStart]],
+                  sessionId: currentRow.sessionId,
+                  olderCursor: "warm-before-held",
+                },
+              },
+              {
+                match: { cursor: "warm-before-held" },
+                response: {
+                  messages: firstPage,
+                  sessionId: currentRow.sessionId,
+                },
+              },
+            ],
+          });
+        }
         if (profile === "different") {
           const client = isRecord(connect.params) ? connect.params.client : null;
           if (!isRecord(client) || typeof client.instanceId !== "string") {
@@ -845,56 +879,32 @@ suite.define(() => {
         await capture(`warm-${profile}-after-hello.png`);
         if (profile === "large" || shortTail || imported) {
           await waitForChatScrollIdle(page);
-          expect(await gateway.getRequests("chat.history")).toEqual([]);
-          const messages = [
-            ...olderMessages,
-            {
-              ...rememberedMessage,
-              __openclaw: {
-                ...rememberedMessage["__openclaw"],
-                senderProfileAvatarUrl: "/api/users/synthetic/avatar?v=2",
-              },
-            },
-          ];
-          const heldStart = messages.length - 80;
-          const firstPage = messages.slice(0, heldStart);
-          await gateway.setMethodResponse("chat.history", {
-            // Disk trimming retains 80 groups but no certified page edge. Reopen
-            // that held source, then fetch strictly before it without replacing rows.
-            cases: [
-              {
-                match: { messageId: `older-${heldStart + 1}`, limit: 1 },
-                response: {
-                  messages: [messages[heldStart]],
-                  sessionId: currentRow.sessionId,
-                  olderCursor: "warm-before-held",
-                },
-              },
-              {
-                match: { cursor: "warm-before-held" },
-                response: {
-                  messages: firstPage,
-                  sessionId: currentRow.sessionId,
-                },
-              },
-            ],
-          });
           const pane = page.locator(".chat-pane-cache__pane--active");
           const messageCount = () => historyMessageCount(pane);
           const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-          await thread.hover();
-          await page.mouse.wheel(0, -100_000);
+          if (!shortTail) {
+            expect(await gateway.getRequests("chat.history")).toEqual([]);
+            await thread.hover();
+            await page.mouse.wheel(0, -100_000);
+          }
           const history = await gateway.waitForRequest("chat.history", {
             match: { messageId: `older-${heldStart + 1}` },
           });
           expect(history.params).toMatchObject({ messageId: `older-${heldStart + 1}`, limit: 1 });
           expect(history.params).not.toHaveProperty("offset");
-          await gateway.waitForRequest("chat.history", { match: { cursor: "warm-before-held" } });
+          const fill = await gateway.waitForRequest("chat.history", {
+            match: { cursor: "warm-before-held" },
+          });
           await expect.poll(messageCount).toBe(firstPage.length + 80);
+          if (shortTail) {
+            expect(fill.params).toMatchObject({ limit: 80, maxBytes: 256 * 1024 });
+            expect(await gateway.getRequests("chat.history")).toHaveLength(2);
+          }
           await page
             .getByText(`Older history ${heldStart}`, { exact: true })
             .waitFor({ state: "attached" });
           await waitForChatScrollIdle(page);
+          await thread.hover();
           await page.mouse.wheel(0, -1_000_000);
           await expect.poll(messageCount).toBe(messages.length);
           // Reopening restores all bounded history; the next wheel reaches its exhausted edge.

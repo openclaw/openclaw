@@ -784,12 +784,19 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   }
 
   private queueLayout(): void {
+    const initial = this.initialRange.pending && this.rowKeys.length > 0;
     if (
-      (this.initialRange.pending && this.rowKeys.length) ||
+      initial ||
       this.offsetState.scrollCommand?.target === "message" ||
       this.bookmarkState.bookmark
     ) {
-      this.renderer.queueAfterCommit(this.completeLayout);
+      // A saved reader bookmark owns initial layout; only unanchored tail work yields.
+      const yieldToBrowser =
+        initial &&
+        !this.bookmarkState.bookmark &&
+        !this.offsetState.pendingScrollOffset &&
+        this.rowKeys.length > 1;
+      this.renderer.queueAfterCommit(this.completeLayout, yieldToBrowser);
     }
   }
 

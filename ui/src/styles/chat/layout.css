@@ -804,7 +804,12 @@ openclaw-pending-session-create {
 
 .chat-scroll-to-bottom {
   position: absolute;
-  bottom: calc(var(--chat-scroll-to-bottom-gap) + var(--chat-scroll-to-bottom-clearance, 0px));
+  /* Activity clearance is measured from the transcript's bottom edge, which
+     already lies below the composer's overlapping top. */
+  bottom: calc(
+    var(--chat-scroll-to-bottom-gap) +
+      max(var(--chat-composer-overlap, 0px), var(--chat-scroll-to-bottom-clearance, 0px))
+  );
   left: 50%;
   display: inline-flex;
   align-items: center;
@@ -1537,12 +1542,15 @@ openclaw-chat-video-player {
 .chat-selection-popup {
   display: flex;
   gap: 2px;
+  padding: 3px;
   animation: fade-in 0.12s var(--ease-out);
 }
 
+/* A compact strip on every pointer type: it floats over the transcript. */
 .chat-selection-popup button {
   gap: 6px;
-  padding: 6px 10px;
+  min-height: 24px;
+  padding: 3px 8px;
   font-size: 12px;
   white-space: nowrap;
 }

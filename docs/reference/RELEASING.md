@@ -147,6 +147,22 @@ approval-status read is reported as unknown, not as no pending approval, and doe
 not stop validation monitoring. Public release evidence can still use its existing
 anonymous rate-limit fallback; caller-specific approval reads cannot.
 
+### Resume activation while ClawHub recovery is independent
+
+For an already-published core, the hosted publisher accepts `defer_clawhub=true`
+with `openclaw_npm_resume_run_id=<original-successful-run>` and
+`wait_for_clawhub=false`. This recovery-only input requires direct core
+publication (`publish_openclaw_npm=true`, no `prepared_plugins`). The publisher
+still authenticates the original core's exact registry bytes and provenance,
+and retains all npm, source, artifact, approval, and finalization gates. It
+neither republishes core nor plans or dispatches new ClawHub work.
+
+The default remains normal ClawHub publication. A deferred run records
+`clawHubDeferred` in its authenticated dispatch receipt and explicit incomplete
+ClawHub proof. GitHub, Docker, and platform activation may continue, but the
+full release remains incomplete until independent ClawHub recovery verifies the
+original artifacts. Deferral does not authorize repacking or replacing them.
+
 ### Watch publication
 
 After the stable orchestrator has dispatched publication, keep its read-only

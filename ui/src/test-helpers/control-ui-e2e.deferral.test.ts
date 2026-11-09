@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import type { MockGatewayWindow } from "./control-ui-e2e-contract.ts";
 import { createControlUiMockGatewayInitScript } from "./control-ui-e2e.ts";
 import {
@@ -13,6 +13,53 @@ function expectReply(frames: readonly unknown[], id: string, payload?: unknown) 
   const result = { id, ok: true };
   expect(frames.at(-1)).toMatchObject(payload === undefined ? result : { ...result, payload });
 }
+
+it.for(["models.list", "sessions.messages.subscribe"])(
+  "delays the %s wire request once while unrelated RPCs complete",
+  async (method, { gatewayPage }) => {
+    vi.useFakeTimers();
+    try {
+      gatewayPage.execute(
+        createControlUiMockGatewayInitScript({
+          methodDelays: { [method]: 3000, "chat.startup": 3000 },
+        }),
+      );
+      const { send } = gatewayPage.connect();
+      await vi.advanceTimersByTimeAsync(1);
+      send("slow", method, { key: "agent:main:main", initialHistory: {} });
+      send("fast", "health");
+      await vi.advanceTimersByTimeAsync(2999);
+      expect(ids(gatewayPage.responses)).toEqual(["fast"]);
+      await vi.advanceTimersByTimeAsync(2);
+      expect(ids(gatewayPage.responses)).toEqual(["fast", "slow"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("releases a forever delay and ignores its closed connection", async ({ gatewayPage }) => {
+  gatewayPage.execute(
+    createControlUiMockGatewayInitScript({ methodDelays: { "models.list": "forever" } }),
+  );
+  const first = gatewayPage.connect();
+  await flush();
+  first.send("closed", "models.list");
+  await flush();
+  const gateway = (gatewayPage.window as MockGatewayWindow).openclawControlUiE2eGateway!;
+  gateway.closeLatest();
+  const second = gatewayPage.connect();
+  await flush();
+  second.send("held", "models.list");
+  second.send("fast", "health");
+  await flush();
+  expect(ids(gatewayPage.responses)).toEqual(["fast"]);
+  gateway.setMethodDelay("models.list", null);
+  expect(ids(gatewayPage.responses)).toEqual(["fast", "held"]);
+  second.send("released", "models.list");
+  await flush();
+  expect(ids(gatewayPage.responses)).toEqual(["fast", "held", "released"]);
+});
 
 it.for(["resolve", "reject"] as const)(
   "%ss every held request without changing one-shot deferrals",

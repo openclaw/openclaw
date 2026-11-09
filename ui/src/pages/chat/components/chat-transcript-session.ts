@@ -41,6 +41,7 @@ export type TranscriptCallbacks = {
   getComposerFloat?: () => HTMLElement | null;
   getComposerActivityLayout?: () => ComposerActivityLayout | null;
   onViewportResize?: () => void;
+  /** Explicit keys report direction; undefined reconciles geometry or neutral contact. */
   onReaderScroll?: (towardEnd?: boolean, source?: "bookmark") => void;
   onNativeScroll?: (scroll: TranscriptNativeScroll) => void;
   onHistoryIntent?: (event: Event) => void;

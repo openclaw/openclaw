@@ -242,7 +242,7 @@ function queueChatScroll(
       // A return issued at an already-clamped end produces no native scroll event.
       // Settle it here; an actual smooth journey waits for its final position event.
       if (manualScroll && distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
-        updateChatScrollPosition(host, target, "toward-end");
+        updateChatScrollPosition(host, target, true);
       }
     };
     frame = requestAnimationFrame(() => {
@@ -284,12 +284,12 @@ export function scheduleChatScroll(
 }
 
 export function handleChatScroll(host: ChatScrollHost, scroll: TranscriptNativeScroll): void {
-  updateChatScrollPosition(host, scroll.viewport, false, scroll);
+  updateChatScrollPosition(host, scroll.viewport, undefined, scroll);
 }
 
 export function handleChatScrollTakeover(
   host: ChatScrollHost,
-  towardEnd = false,
+  towardEnd?: boolean,
   source?: "bookmark",
 ): void {
   cancelChatScroll(host);
@@ -300,7 +300,7 @@ export function handleChatScrollTakeover(
     updateChatScrollPosition(
       host,
       container,
-      source === "bookmark" ? "restored-reader" : towardEnd ? "toward-end" : "reader",
+      source === "bookmark" ? "restored-reader" : (towardEnd ?? "reader"),
     );
   }
 }
@@ -318,7 +318,7 @@ export function lockChatScroll(host: ChatScrollHost): void {
 function updateChatScrollPosition(
   host: ChatScrollHost,
   container: Readonly<TranscriptViewportMeasurement>,
-  takeover: false | "reader" | "toward-end" | "restored-reader" = false,
+  takeover?: boolean | "reader" | "restored-reader",
   native?: TranscriptNativeScroll,
 ): void {
   const scrollTop = Math.max(0, container.scrollTop);
@@ -330,7 +330,7 @@ function updateChatScrollPosition(
   // streaming stops pinning them back to the bottom.
   const maintenance = native ? native.maintenance : host.chatIsMaintenanceScroll?.();
   const programmatic = native ? native.programmatic : host.chatIsProgrammaticScroll?.();
-  const isUserScrollUp = takeover !== false || (delta < 0 && !maintenance);
+  const isUserScrollUp = takeover !== undefined || (delta < 0 && !maintenance);
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   if ((programmatic || maintenance) && !isUserScrollUp) {
     // A measured arrival clears the affordance even when maintenance must not
@@ -340,9 +340,10 @@ function updateChatScrollPosition(
     }
     return;
   }
-  // A detached window's physical bottom is still history. Unlocking follow here
-  // would jump past the held source as its next newer page commits.
+  // Upward keys lock before motion. A detached window's bottom remains history;
+  // unlocking follow would jump past its held source as the next page commits.
   if (
+    takeover === false ||
     takeover === "restored-reader" ||
     host.chatHistoryPagination.hasNewer ||
     (isUserScrollUp && distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX)
@@ -354,7 +355,7 @@ function updateChatScrollPosition(
     host.chatReadingHistory = true;
   } else if (
     distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX &&
-    (delta > 0 || takeover === "toward-end")
+    (delta > 0 || takeover === true)
   ) {
     // A shrinking dock can clamp scrollTop backwards to the new end. Only
     // reader movement toward the end or fresh input resumes following.
