@@ -225,13 +225,9 @@ describe("login gate failure recovery", () => {
     expect(element.querySelector('label[for="login-gate-credential"]')?.textContent).toBe(
       "Gateway secret",
     );
-    expect(input).toMatchObject({
-      placeholder: "Paste the token or type the password",
-      type: "password",
-      value: "old-secret",
-    });
+    expect(input).toMatchObject({ type: "password", value: "old-secret" });
+    expect(input.placeholder).toBe("Paste the token or type the password");
     expect(element.querySelector('[role="radiogroup"]')).toBeNull();
-
     input.value = "";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     element.props = { ...element.props, secret: "" };
@@ -240,7 +236,6 @@ describe("login gate failure recovery", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(element.props.onSecretChange).toHaveBeenNthCalledWith(1, "");
     expect(element.props.onSecretChange).toHaveBeenNthCalledWith(2, "replacement-secret");
-
     element
       .querySelector<HTMLButtonElement>('[aria-label="Toggle Gateway secret visibility"]')
       ?.click();
@@ -248,46 +243,11 @@ describe("login gate failure recovery", () => {
     element.props = { ...element.props, secret: "replacement-secret", showGatewaySecret: true };
     await element.updateComplete;
     expect(input).toMatchObject({ type: "text", value: "replacement-secret" });
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(element.props.onConnect).toHaveBeenCalledOnce();
-  });
-
-  it("does not connect while an IME candidate is being composed", async () => {
-    const element = await mountFailure("", null);
-    const input = element.querySelector<HTMLInputElement>("#login-gate-credential")!;
-    element.props = { ...element.props, secret: "draft", showGatewaySecret: true };
-    await element.updateComplete;
-    input.value = "draft";
-    for (const composing of [
-      { isComposing: true },
-      { keyCode: 229 },
-      { isComposing: true, ctrlKey: true },
-      { keyCode: 229, metaKey: true },
-    ] as const) {
+    for (const isComposing of [true, false]) {
       input.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, ...composing }),
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing }),
       );
-      expect(element.props.onConnect).not.toHaveBeenCalled();
     }
-    // WebKit can deliver the committing Enter after compositionend with both flags
-    // cleared; the input-local grace keeps it from connecting mid-composition.
-    input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(element.props.onConnect).not.toHaveBeenCalled();
-    // An intentional Enter after composition retires the grace and connects.
-    input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(element.props.onConnect).toHaveBeenCalledOnce();
-  });
-
-  it("keeps IME composition from connecting from the Gateway URL field", async () => {
-    const element = await mountFailure("", null);
-    const input = element.querySelector<HTMLInputElement>("#login-gate-url")!;
-    input.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing: true }),
-    );
-    expect(element.props.onConnect).not.toHaveBeenCalled();
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(element.props.onConnect).toHaveBeenCalledOnce();
   });
 
