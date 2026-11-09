@@ -336,6 +336,53 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.resolveTarget).not.toHaveBeenCalled();
   });
 
+  it.each(["id", "name", "handle"] as const)(
+    "matches canonically equivalent directory %s without rewriting the destination",
+    async (field) => {
+      directPlugin();
+      for (const [value, query] of [
+        ["Café", "Cafe\u0301"],
+        ["Cafe\u0301", "Café"],
+      ] as const) {
+        resetDirectoryCache();
+        const entry: ChannelDirectoryEntry = { kind: "user", id: "Original-ID", [field]: value };
+        mocks.listPeers.mockResolvedValue([entry]);
+
+        const result = await expectOkResolution(query);
+
+        expect(result.target).toMatchObject({
+          to: entry.id,
+          display: entry.name ?? entry.handle ?? entry.id,
+          source: "directory",
+        });
+      }
+    },
+  );
+
+  it("refuses canonically equivalent names for distinct destinations", async () => {
+    mocks.listGroups.mockResolvedValue([
+      { kind: "group", id: "first", name: "Café" },
+      { kind: "group", id: "second", name: "Cafe\u0301" },
+    ] satisfies ChannelDirectoryEntry[]);
+
+    const result = expectFailure(await resolve("Café"));
+
+    expect(result.error.message).toContain("Ambiguous");
+    expect(result.candidates?.map((entry) => entry.id)).toEqual(["first", "second"]);
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+  });
+
+  it.each(["Café", "Cafe\u0301"])(
+    "keeps accents significant in directory name %s",
+    async (name) => {
+      mocks.listGroups.mockResolvedValue([{ kind: "group", id: "first", name }]);
+
+      const result = expectFailure(await resolve("Cafe"));
+
+      expect(result.error.message).toContain("Unknown target");
+    },
+  );
+
   it("keeps plugin-owned id casing when resolver returns a normalized target", async () => {
     setPlugin({
       targetResolver: {
