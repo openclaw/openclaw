@@ -113,6 +113,10 @@ export function resolveLocalPairingApproval(
 ): PairingApprovalPlan["localApproval"] {
   const { reason, existingPairedDevice, state, configSnapshot, scopes } = params;
   const { role, isControlUi, isWebchat, isNativeAppUi, authMethod, pairingLocality } = state;
+  // Tunnel addresses identify peers, not networks or same-host trust.
+  if (state.authResult.openclawId) {
+    return null;
+  }
   // Adding a first node role is not a token replacement. Keep real node-token
   // repairs, scope upgrades, and browser requests on their existing approval path.
   const addingLocalNodeRole =

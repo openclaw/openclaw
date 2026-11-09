@@ -1,11 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readFile, writeFile, chmod } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile, chmod } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
-import { createGunzip } from "node:zlib";
+import { gunzipSync } from "node:zlib";
 import { expect, it } from "vitest";
 import { useTestTempDirs } from "./test-support.js";
 
@@ -18,32 +16,34 @@ const discrawlScript = path.join(scripts, "discrawl-normalize.mjs");
 const run = (script: string, args: string[], options = {}) =>
   execFileSync(process.execPath, [script, ...args], { cwd: root, encoding: "utf8", ...options });
 const jsonl = (rows: unknown[]) => rows.map((row) => JSON.stringify(row)).join("\n") + "\n";
-// Expand {name: value} into CLI flags, in insertion order.
 const flags = (options: Record<string, string>) =>
   Object.entries(options).flatMap(([name, value]) => ["--" + name, value]);
 
-// Snapshot one Discord channel's rows covering [start, end), observed at `observed`.
 async function snapshot(
   dir: string,
   name: string,
   rows: unknown[],
   [start, end, observed]: string[],
   completeness = "complete",
+  options = {},
 ) {
   const input = path.join(dir, name + ".jsonl");
   const output = path.join(dir, name + ".manifest.jsonl.gz");
   const summary = path.join(dir, name + ".summary.json");
   await writeFile(input, jsonl(rows));
   const coverage = { "coverage-start": start!, "coverage-end": end!, "observed-at": observed! };
-  run(manifestScript, [
-    "snapshot",
-    ...flags({ provider: "discord", "source-key": "discord:guild:channel", ...coverage }),
-    ...flags({ completeness, input, output, summary }),
-  ]);
+  run(
+    manifestScript,
+    [
+      "snapshot",
+      ...flags({ provider: "discord", "source-key": "discord:guild:channel", ...coverage }),
+      ...flags({ completeness, input, output, summary }),
+    ],
+    options,
+  );
   return { output, summary };
 }
 
-// Plan a current snapshot against prior snapshots and return the parsed plan.
 async function plan(dir: string, current: string, ...previous: string[]) {
   const output = path.join(dir, "plan.json");
   const priors = previous.flatMap((prior) => ["--previous", prior]);
@@ -53,28 +53,26 @@ async function plan(dir: string, current: string, ...previous: string[]) {
 
 it("source manifests are deterministic, content-private, and produce overlap-aware plans", async () => {
   const dir = tempDirs.make("knowledge-source-ingest-");
+  const at = (fraction: string) => `2026-09-27T00:00:00.${fraction}Z`;
+  const payload = { a: 1, ä: [{ "2": "two", "10": "ten", a: 1 }, true, null], z: 3 };
   const old = await snapshot(
     dir,
     "old",
     [
-      { id: "a", occurred_at: "2026-09-25T01:00:00-07:00", payload: { text: "same" } },
-      { id: "b", occurred_at: "2026-09-26T01:00:00-07:00", payload: { text: "old" } },
-      { id: "c", occurred_at: "2026-09-27T01:00:00-07:00", payload: { text: "deleted" } },
-      { id: "x", occurred_at: "2026-09-22T01:00:00-07:00", payload: { text: "outside" } },
+      { id: "a", occurred_at: "2026-09-26T17:00:00.000600001-07:00", payload },
+      { id: "b", occurred_at: at("000700001"), payload: { text: "old" } },
+      { id: "c", occurred_at: at("001400001"), payload: { text: "deleted" } },
+      { id: "x", occurred_at: at("000100001"), payload: { text: "outside" } },
       { id: "z", payload: { text: "no date" } },
     ],
-    ["2026-09-21T00:00:00-07:00", "2026-09-28T00:00:00-07:00", "2026-09-28T00:05:00-07:00"],
+    [at("000"), at("001500001"), at("010000001")],
   );
   const rows = [
-    { id: "a", occurred_at: "2026-09-25T08:00:00Z", payload: { text: "same" } },
-    { id: "b", occurred_at: "2026-09-26T08:00:00Z", payload: { text: "new" } },
-    { id: "d", occurred_at: "2026-09-29T08:00:00Z", payload: { text: "added" } },
+    { id: "a", occurred_at: at("000600001"), payload },
+    { id: "b", occurred_at: at("000700001"), payload: { text: "new" } },
+    { id: "d", occurred_at: at("002"), payload: { text: "added" } },
   ];
-  const window = [
-    "2026-09-25T00:00:00-07:00",
-    "2026-10-01T00:00:00-07:00",
-    "2026-10-01T00:05:00-07:00",
-  ];
+  const window = [at("000500001"), at("002500001"), at("010000002")];
   const current = await snapshot(dir, "current", rows, window);
   const result = await plan(dir, current.output, old.output);
   expect(result.items.added).toStrictEqual(["d"]);
@@ -82,45 +80,38 @@ it("source manifests are deterministic, content-private, and produce overlap-awa
   expect(result.items.unchanged).toStrictEqual(["a"]);
   expect(result.items.deleted).toStrictEqual(["c"]);
   expect(result.items.unresolved_missing).toStrictEqual(["z"]);
-  expect(result.coverage.covered).toStrictEqual([
-    { start: "2026-09-25T07:00:00.000Z", end: "2026-09-28T07:00:00.000Z" },
-  ]);
+  expect(result.coverage.covered).toStrictEqual([{ start: at("000500001"), end: at("001500001") }]);
   expect(result.coverage.uncovered).toStrictEqual([
-    { start: "2026-09-28T07:00:00.000Z", end: "2026-10-01T07:00:00.000Z" },
+    { start: at("001500001"), end: at("002500001") },
   ]);
-  const plain = path.join(dir, "manifest.txt");
-  await pipeline(createReadStream(current.output), createGunzip(), createWriteStream(plain));
-  expect(await readFile(plain, "utf8")).not.toMatch(/same|new|added/);
-  const summary = JSON.parse(await readFile(current.summary, "utf8"));
-  expect(summary.manifest_sha256).toMatch(/^[a-f0-9]{64}$/);
+  const content = gunzipSync(await readFile(current.output)).toString();
+  expect(content).not.toMatch(/same|new|added/);
+  const hash = JSON.parse(content.trim().split("\n")[1]!).sha256;
+  expect(hash).toBe("ed2694e52b2fe820bd83b6f77118d0be33a57d9087ca71284b5705006b3d519a");
   const repeated = await snapshot(dir, "current-repeat", rows.toReversed(), window);
   expect(await readFile(repeated.output)).toStrictEqual(await readFile(current.output));
-});
-
-it("newest prior observation wins independent of argument order and partial snapshots do not prove deletion", async () => {
-  const dir = tempDirs.make("knowledge-source-ingest-");
-  const at = (n: number) => [
-    "2026-09-25T00:00:00Z",
-    "2026-09-27T00:00:00Z",
-    `2026-09-27T0${n}:00:00Z`,
-  ];
-  const row = (n: number) => [{ id: "a", occurred_at: "2026-09-26T00:00:00Z", payload: { n } }];
-  const older = await snapshot(dir, "older", row(1), at(1));
-  const newer = await snapshot(dir, "newer", row(2), at(2));
-  const current = await snapshot(dir, "partial", [], at(3), "partial");
-  const result = await plan(dir, current.output, newer.output, older.output);
-  expect(result.items.deleted).toStrictEqual([]);
-  expect(result.items.unresolved_missing).toStrictEqual(["a"]);
-});
-
-it("duplicate stable IDs reject a snapshot", async () => {
-  const dir = tempDirs.make("knowledge-source-ingest-");
-  const rows = [
-    { id: "a", payload: 1 },
-    { id: "a", payload: 2 },
-  ];
-  const window = ["2026-09-01T00:00:00Z", "2026-09-02T00:00:00Z", "2026-09-02T00:00:00Z"];
-  await expect(snapshot(dir, "duplicate", rows, window)).rejects.toThrow(/Duplicate item id/);
+  const newest = await plan(dir, current.output, current.output, old.output);
+  expect(newest.items.changed).toEqual([]);
+  expect(newest.items.unchanged).toEqual(["a", "b", "d"]);
+  const partial = await snapshot(dir, "partial", [], window, "partial");
+  const missing = await plan(dir, partial.output, current.output);
+  expect(missing.items.deleted).toEqual([]);
+  expect(missing.items.unresolved_missing).toEqual(["a", "b", "d"]);
+  await expect(snapshot(dir, "duplicate", [rows[0], rows[0]], window)).rejects.toThrow(
+    /Duplicate item id/,
+  );
+  const scratch = tempDirs.make("knowledge-source-scratch-");
+  const env = { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch };
+  const options = { timeout: 10_000, env };
+  expect(() =>
+    run(manifestScript, ["plan", "--current", path.join(scratch, "missing.gz")], options),
+  ).toThrow(/ENOENT/);
+  expect(await readdir(scratch)).toEqual([]);
+  await mkdir(path.join(dir, "unwritable.manifest.jsonl.gz"));
+  await expect(snapshot(dir, "unwritable", rows, window, "complete", options)).rejects.toThrow(
+    /EISDIR/,
+  );
+  expect(await readdir(scratch)).toEqual([]);
 });
 
 const DISCRAWL_SCHEMA =
@@ -141,20 +132,11 @@ async function archive(seed: (db: DatabaseSync) => void) {
   await writeFile(path.join(bin, "discrawl"), `#!/bin/sh\nprintf '%s\\n' '${report}'\n`);
   await chmod(path.join(bin, "discrawl"), 0o755);
   const output = path.join(dir, "messages.jsonl");
+  const config = path.join(dir, "config.yaml");
+  const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH };
   return async (channel: string, since: string, before: string, ...extra: string[]) => {
-    const stdout = run(
-      discrawlScript,
-      [
-        "--config",
-        path.join(dir, "config.yaml"),
-        ...flags({ channel, since, before, output }),
-        ...extra,
-      ],
-      {
-        env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const args = [...flags({ config, channel, since, before, output }), ...extra];
+    const stdout = run(discrawlScript, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     expect(stdout).toBe("");
     const lines = (await readFile(output, "utf8")).trim().split("\n");
     return lines.map((line) => JSON.parse(line));
@@ -194,11 +176,18 @@ it("Discrawl adapter resolves a stable channel, bounds instants, emits attachmen
   expect(row.payload.author_bot).toBe(0);
   expect(row.payload.attachments).toBe("a:aa:fetched|b:bb:fetched");
   const day = ["20", "2026-09-27T00:00:00-07:00", "2026-09-28T00:00:00-07:00"] as const;
-  expect((await exportRows(...day)).map((message) => message.id)).toStrictEqual([
+  expect((await exportRows(...day)).map((msg) => msg.id)).toStrictEqual(["start", "30", "last"]);
+  const since = "2026-09-27T00:00:00.000000000-07:00";
+  const before = "2026-09-27T07:00:00.000000001Z";
+  expect((await exportRows("20", since, before)).map((message) => message.id)).toStrictEqual([
     "start",
-    "30",
-    "last",
   ]);
+  for (const [start, end] of [
+    [before, since],
+    [since, "2026-09-27T07:00:00Z"],
+  ]) {
+    await expect(exportRows("20", start!, end!)).rejects.toThrow(/--since must precede --before/);
+  }
   const threaded = await exportRows(...day, "--threads", "include");
   expect(
     threaded.map((message) => [message.id, message.payload.thread_name ?? null]),

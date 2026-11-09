@@ -24,7 +24,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isJson5Warm, warmJson5 } from "../../lib/json5-runtime.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
-import { omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
+import { omitEditorOwnedConfigLeaves } from "./config-sections.ts";
 import { AppearanceSection } from "./view-appearance.tsx";
 import { computeRawDiff, formatConfigDiffPath, renderRawDiffValue } from "./view-diff.ts";
 import { ConfigForm, HighlightedJson, NotificationsSection, SetupSection } from "./view-lazy.ts";
@@ -125,7 +125,7 @@ export function Config(props: ConfigProps) {
           ),
         }
       : formSchema;
-    const editorSchema = editorSchemaBase && omitCuratedOwnedConfigLeaves(editorSchemaBase);
+    const editorSchema = editorSchemaBase && omitEditorOwnedConfigLeaves(editorSchemaBase);
     return { channelGroups, channelGroup, editorSchema, setupSchema };
   });
   const state = createMemo(() => {

@@ -20,7 +20,7 @@ export const PUBLICATION_RETRY_INITIAL_MS = 2_000;
 /** Longest delay between retries; retries continue at this pace until one succeeds. */
 export const PUBLICATION_RETRY_MAX_MS = 5 * 60_000;
 /**
- * Delay from a successful publication to the next re-sign: 55 minutes, jittered down by up
+ * Delay from an accepted or stale publication to the next re-sign: 55 minutes, jittered down by up
  * to 10%, so even with a few retries the published snapshot stays younger than an hour.
  */
 export const PUBLICATION_REFRESH_MS = SNAPSHOT_REPUBLISH_SECONDS * 1000 - 5 * 60_000;
@@ -97,7 +97,7 @@ export function createPublicationRetry(params: PublicationRetryParams) {
     refreshAt = undefined;
   };
 
-  // Arms the next re-sign after a successful publication, replacing any earlier one.
+  // Arms the next re-sign, replacing any earlier one.
   const armRefresh = () => {
     cancelRefresh();
     if (!active) {
@@ -138,12 +138,16 @@ export function createPublicationRetry(params: PublicationRetryParams) {
     timer.unref?.();
   };
 
-  // Every successful publication, direct or scheduled, replaces the refresh deadline here.
+  // A stale refusal can be a duplicate issued_at. Keep the normal refresh alive without
+  // treating the refused attempt as accepted or immediately retrying a lagging seq.
   const publishWithRefresh = async (
     publish: PublicationRetryParams["publish"],
   ): Promise<PublishOutcome | undefined> => {
     const outcome = await publish();
-    if (outcome?.state === "published") {
+    if (
+      outcome?.state === "published" ||
+      (outcome?.state === "failed" && outcome.code === "stale_snapshot")
+    ) {
       armRefresh();
     }
     return outcome;
@@ -166,6 +170,11 @@ export function createPublicationRetry(params: PublicationRetryParams) {
         return "again";
       }
       await params.setPending(false);
+      if (rerun) {
+        // A request arrived while clearing; its pending write may have landed first.
+        await params.setPending(true);
+        return "again";
+      }
       return "done";
     }
     if (outcome?.state === "failed" && outcome.retryable) {
@@ -175,9 +184,7 @@ export function createPublicationRetry(params: PublicationRetryParams) {
       return "done";
     }
     if (outcome?.state === "failed") {
-      params.log.warn(
-        `openclaw-id: Discovery publication refused (${outcome.code}); kept pending until the next start or change`,
-      );
+      params.log.warn(`openclaw-id: Discovery publication refused (${outcome.code}); kept pending`);
     }
     return "done";
   };

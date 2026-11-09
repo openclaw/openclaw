@@ -1,7 +1,7 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import {
   getAgentToolResultMiddlewareMatcherScope,
-  listAgentToolResultMiddlewares,
+  listAgentToolResultMiddlewareRegistrations,
 } from "../../plugins/agent-tool-result-middleware.js";
 import { getGlobalHookRunnerRegistry } from "../../plugins/hook-runner-global-state.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
@@ -94,7 +94,7 @@ export function nativeHookRelayEventHasLocalWork(
     return (
       Boolean(registration.postToolUseToolNames?.length) ||
       hasGlobalHooks("after_tool_call") ||
-      listAgentToolResultMiddlewares("codex").length > 0
+      listAgentToolResultMiddlewareRegistrations("codex").length > 0
     );
   }
   if (event === "before_agent_finalize") {
@@ -290,7 +290,7 @@ async function runNativeHookRelayPostToolUse(
   // Native results are observe-only for middleware: codex-rs PostToolUse hooks
   // cannot replace tool_response (PostToolUseOutcome has no result field), so a
   // transformed result reaches only after_tool_call observers, never the model.
-  const hasToolResultMiddleware = listAgentToolResultMiddlewares("codex").length > 0;
+  const hasToolResultMiddleware = listAgentToolResultMiddlewareRegistrations("codex").length > 0;
   const result = !hasToolResultMiddleware
     ? rawResult
     : await createAgentToolResultMiddlewareRunner({

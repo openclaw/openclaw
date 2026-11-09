@@ -720,27 +720,13 @@ openclaw-appearance-background .settings-background-preview .session-background_
 }
 
 /* A row's own details chevron: the quiet disclosure's glyph, as a button after the row's action. */
-.btn.settings-details-toggle {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
-  padding: 0;
-  color: var(--muted);
-}
-
-.btn.settings-details-toggle svg {
-  width: var(--list-row-icon-size);
-  height: var(--list-row-icon-size);
-}
-
 .settings-details-toggle[aria-expanded="true"] svg {
   transform: rotate(90deg);
 }
 
 /* At the row's end, the glyph lines up with the other rows' chevrons, also when the control
    wraps under the title on phones. The tooltip host is display: contents. */
-.settings-row__control > openclaw-tooltip:last-child > .btn.settings-details-toggle {
+.settings-row__control > openclaw-tooltip:last-child > .settings-details-toggle {
   margin-inline: auto -6px;
 }
 
@@ -2215,10 +2201,11 @@ openclaw-approvals-page .data-table-pagination__info {
   min-width: 0;
 }
 
+/* Height comes from the shared trigger (--settings-control-height); 9px plus the
+   1px border puts the avatar on the sidebar's 22px content edge. */
 .settings-sidebar__agent .agent-select__trigger {
   min-width: 0;
-  min-height: 40px;
-  padding: 6px 8px;
+  padding: 0 9px;
   border-color: transparent;
   background: transparent;
   font-size: 14px;
@@ -2239,12 +2226,6 @@ openclaw-approvals-page .data-table-pagination__info {
   .settings-sidebar__agent
   .agent-select__trigger[aria-expanded="true"] {
   background: var(--bg-hover);
-}
-
-@media (pointer: coarse) {
-  .settings-sidebar__agent .agent-select__trigger {
-    min-height: var(--settings-touch-control-height);
-  }
 }
 
 .settings-sidebar__search::after {
@@ -2286,11 +2267,13 @@ openclaw-approvals-page .data-table-pagination__info {
 
   width: 100%;
   min-width: 0;
-  height: 34px;
+  height: 32px;
   padding-block: 0;
-  padding-inline: 32px 34px;
+  /* Query text starts on the nav labels' edge (10px glyph inset + 15px glyph + 9px gap),
+     minus this field's 1px border; the end keeps room for the clear button. */
+  padding-inline: 33px 34px;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  border-radius: var(--radius-md);
+  border-radius: var(--field-radius);
   background: color-mix(in srgb, var(--card) 72%, transparent);
   color: var(--text);
   font: inherit;
@@ -2339,7 +2322,7 @@ openclaw-approvals-page .data-table-pagination__info {
 }
 
 .settings-sidebar__group-label {
-  padding: 0 9px;
+  padding: 0 10px;
   margin: 0 0 4px;
   font-size: calc(10.5px * var(--control-ui-text-scale));
   font-weight: 650;

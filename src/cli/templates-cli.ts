@@ -79,7 +79,7 @@ export function registerTemplatesCli(program: Command) {
   templates
     .command("add")
     .description("Add a new agent and its requirements from a Template")
-    .argument("<source>", "Path to a canonical Template package directory or CLAW.md")
+    .argument("<source>", "ClawHub package name, local package directory, or CLAW.md")
     .option("--dry-run", "Preview all actions without mutating state", false)
     .option("--accept-capabilities", "Accept required plugin capabilities", false)
     .option("--acknowledge-clawhub-risk", "Acknowledge ClawHub trust warnings", false)

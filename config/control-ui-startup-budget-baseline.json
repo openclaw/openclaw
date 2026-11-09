@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 89370,
-  "reason": "Retire unused browser fallbacks, dead English copy, and unused theme validator initialization; measured startup 89,370 B normalized gzip.",
-  "updatedAt": "2026-11-06"
+  "startupJsGzipBytes": 91561,
+  "reason": "PR #195865 (L310): warm cached-page reveal latch in startup boot owners; lead byte exception",
+  "updatedAt": "2026-11-09"
 }

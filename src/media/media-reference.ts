@@ -1,6 +1,6 @@
 import path from "node:path";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
-import { realpathOrResolve } from "../infra/path-existence.js";
+import { realpathViaExistingPrefix } from "../infra/path-containment.js";
 import { relativePathEscapesRoot } from "../infra/path-guards.js";
 import { maybeLocalPathFromSource } from "./inbound-media-path.js";
 import {
@@ -95,11 +95,19 @@ export async function resolveInboundMediaReference(source: string): Promise<{
   const rawInboundDir = path.resolve(getMediaDir(), "inbound");
   const rawResolvedPath = path.resolve(localPath);
   const rawRel = path.relative(rawInboundDir, rawResolvedPath);
-  // Realpath fallback catches symlinks and moved state dirs before accepting direct paths.
-  const rel =
-    rawRel && !relativePathEscapesRoot(rawRel)
-      ? rawRel
-      : path.relative(await realpathOrResolve(rawInboundDir), await realpathOrResolve(localPath));
+  // Canonical fallback catches symlinks and moved state dirs before accepting direct paths. Both
+  // sides use the same existing-prefix spelling so a missing file still matches its store.
+  let rel = rawRel;
+  if (!rawRel || relativePathEscapesRoot(rawRel)) {
+    const [canonicalInboundDir, canonicalPath] = await Promise.all([
+      realpathViaExistingPrefix(rawInboundDir),
+      realpathViaExistingPrefix(localPath),
+    ]);
+    if (!canonicalInboundDir || !canonicalPath) {
+      return null;
+    }
+    rel = path.relative(canonicalInboundDir, canonicalPath);
+  }
   if (!rel || relativePathEscapesRoot(rel) || rel.includes(path.sep)) {
     return null;
   }

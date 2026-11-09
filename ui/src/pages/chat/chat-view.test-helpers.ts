@@ -481,7 +481,7 @@ export function createReactiveDraftHarness({
     });
   };
   renderCurrent();
-  return { container, renderCurrent };
+  return { container, readDraft: () => draft, renderCurrent };
 }
 
 export function createSlashRerenderHarness() {

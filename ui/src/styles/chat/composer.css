@@ -92,7 +92,7 @@
   inset: -1px;
   padding: 1px;
   border-radius: inherit;
-  corner-shape: superellipse(1.5);
+  corner-shape: inherit;
   /* Comet, not a ring: a long fading tail behind a bright head, dark again
      right in front of it, so the light reads as travelling, not as a ring. */
   background: conic-gradient(
@@ -606,11 +606,6 @@
 .chat-controls__target-icon svg {
   width: 100%;
   height: 100%;
-}
-
-.agent-chat__talk-status-text {
-  min-width: 0;
-  flex: 1;
 }
 
 /* Bars-only meter; the stop-voice pill button supplies the chrome around it. */
@@ -1448,7 +1443,6 @@
     height: 56px;
     min-width: 0;
     max-width: min(216px, 100%);
-    border-color: var(--border);
   }
 
   .chat-selection-annotations__chip .chat-attachment-file {
@@ -1464,7 +1458,7 @@
     height: 40px;
     border-radius: max(0px, calc(var(--chat-attachment-radius) - 8px));
     corner-shape: inherit;
-    background: color-mix(in srgb, var(--text) 4%, transparent);
+    background: transparent;
     color: var(--muted);
   }
 
@@ -1533,10 +1527,10 @@
   flex: 0 0 auto;
   width: 56px;
   height: 56px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--chat-attachment-radius);
   corner-shape: superellipse(1.5);
-  background: var(--chat-composer-surface, var(--popover));
+  background: var(--card-highlight);
 }
 
 .chat-attachment-file {
@@ -1701,7 +1695,7 @@
   padding: 0;
   border-radius: max(0px, calc(var(--chat-attachment-radius) - 8px));
   corner-shape: inherit;
-  background: color-mix(in srgb, var(--text) 4%, transparent);
+  background: transparent;
   color: var(--muted);
 }
 
@@ -1716,6 +1710,11 @@
   font-size: 12px;
   font-weight: 500;
   line-height: 16px;
+}
+
+.chat-attachments-preview .chat-attachment-file__type,
+.chat-attachments-preview .chat-browser-annotation-card__meta {
+  color: var(--text);
 }
 
 .chat-attachment-file__type,
@@ -1816,12 +1815,16 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   corner-shape: round;
-  background: var(--chat-composer-surface, var(--popover));
+  background:
+    linear-gradient(var(--card-highlight), var(--card-highlight)),
+    var(--chat-composer-surface, var(--popover));
   box-shadow: var(--shadow-sm);
 }
 
 .chat-attachment-remove:hover:not(:disabled)::before {
-  background: color-mix(in srgb, var(--text) 6%, var(--chat-composer-surface, var(--popover)));
+  background:
+    linear-gradient(var(--surface-hover), var(--surface-hover)),
+    var(--chat-composer-surface, var(--popover));
 }
 
 .chat-attachment-remove:disabled {
@@ -1988,12 +1991,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   gap: var(--chat-composer-chip-gap, 6px);
   width: 100%;
   height: var(--chat-composer-chip-height, 30px);
-  min-height: var(--chat-composer-chip-height, 30px);
   /* Symmetric on purpose: this trigger carries a label and an optional leading
      icon, never a trailing one, so the old 6px trailing inset was unmatched
      asymmetry that made the chip look narrower on its right than its siblings. */
-  padding-block: 0;
-  padding-inline: var(--chat-composer-chip-padding-inline, 8px);
+  padding: 0 var(--chat-composer-chip-padding-inline, 8px);
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -2008,7 +2009,12 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .agent-chat__input .chat-controls__inline-select-trigger {
+  /* The chip fills the action row's box (see --chat-composer-chip-height) and
+     paints its pill one step inside it, on the same 30px tier as the primary
+     action's painted disc. */
+  border-block: 1px solid transparent;
   border-radius: var(--radius-full);
+  background-clip: padding-box;
 }
 
 .agent-chat__composer-lead .chat-controls__permission-trigger {
@@ -2127,8 +2133,12 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .chat-controls__effort-menu {
   box-shadow: none;
   padding: var(--menu-padding);
-  width: min(330px, calc(100vw - 24px));
+  width: min(var(--chat-effort-menu-width, 280px), calc(100vw - 24px));
   max-height: min(280px, var(--auto-size-available-height, calc(100vh - 120px)));
+}
+
+.chat-controls__effort-menu:has(> .chat-controls__speed-panel) {
+  --chat-effort-menu-width: 330px;
 }
 
 .chat-controls__permission-menu {
