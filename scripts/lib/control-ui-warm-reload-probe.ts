@@ -259,16 +259,27 @@ export function warmReloadProbe(
     for (const entry of entries) {
       // Element Timing is implemented by Chromium but absent from lib.dom.
       const paint = entry as ElementPaint;
-      const row = paint.element?.closest(".chat-virtual-row");
-      const witness = paint.element ? witnessElements.get(paint.element) : undefined;
       if (
-        (paint.identifier !== "openclaw-transcript" &&
-          (!witness || paint.identifier !== `openclaw-transcript-${witness.source}`)) ||
-        !row ||
         !paint.element ||
         paint.renderTime <= 0 ||
         paint.intersectionRect.width <= 0 ||
         paint.intersectionRect.height <= 0
+      ) {
+        continue;
+      }
+      if (
+        paint.identifier === "openclaw-details" &&
+        paint.element.closest(".chat-details-session")
+      ) {
+        milestones.firstDetailsPaint ??= paint.renderTime;
+        continue;
+      }
+      const row = paint.element.closest(".chat-virtual-row");
+      const witness = witnessElements.get(paint.element);
+      if (
+        (paint.identifier !== "openclaw-transcript" &&
+          (!witness || paint.identifier !== `openclaw-transcript-${witness.source}`)) ||
+        !row
       ) {
         continue;
       }
@@ -448,7 +459,7 @@ export function warmReloadProbe(
     const regions = new Map<string, number>();
     const textRoots = new Set<Element>();
     const addedRoots = new Set<Element>();
-    const textSelector = input.lateRowFacts ? ".chat-text, .chat-notice" : ".chat-text";
+    const textSelector = `.chat-text, .chat-details-session${input.lateRowFacts ? ", .chat-notice" : ""}`;
     for (const record of records) {
       const element =
         record.target instanceof Element ? record.target : record.target.parentElement;
@@ -505,7 +516,8 @@ export function warmReloadProbe(
     // cover descendant block text, and a DOM/rAF timestamp is not presentation.
     for (const root of textRoots) {
       const row = root.closest(".chat-virtual-row");
-      if (!row) {
+      const details = root.closest(".chat-details-session");
+      if (!row && !details) {
         continue;
       }
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -514,7 +526,7 @@ export function warmReloadProbe(
         const parent = text.parentElement;
         const textContent = text.textContent;
         if (textContent?.trim() && parent && !parent.hasAttribute("elementtiming")) {
-          const rowKey = row.getAttribute("data-virtual-row-key");
+          const rowKey = row?.getAttribute("data-virtual-row-key");
           const source = witnesses
             ? (["saved", "live"] as const).find(
                 (kind) =>
@@ -530,7 +542,11 @@ export function warmReloadProbe(
           }
           parent.setAttribute(
             "elementtiming",
-            source ? `openclaw-transcript-${source}` : "openclaw-transcript",
+            details
+              ? "openclaw-details"
+              : source
+                ? `openclaw-transcript-${source}`
+                : "openclaw-transcript",
           );
         }
       }

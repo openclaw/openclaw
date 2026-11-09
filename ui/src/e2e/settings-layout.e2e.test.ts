@@ -97,7 +97,7 @@ const settingsRowRoutes = [
   "debug",
 ] as const satisfies readonly RouteId[];
 
-const mobileSettingsRoutes = [...settingsRowRoutes, "logs"] as const satisfies readonly RouteId[];
+const mobileSettingsRoutes = ["profile", "plugins", "logs"] as const satisfies readonly RouteId[];
 
 const mobileStandaloneSettingsPageRoutes = ["memory-import"] as const satisfies readonly RouteId[];
 
@@ -338,7 +338,7 @@ suite.define(() => {
     }
   });
 
-  it("aligns every mobile settings page with the topbar content", async () => {
+  it("aligns mobile settings shells and page-owned columns with the topbar", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -368,7 +368,7 @@ suite.define(() => {
           };
         }, route);
 
-      // The desktop audit below owns cold CSS coverage; these rows check shell insets.
+      // Keep an ordinary settings route and both workspace overrides; page geometry stays below.
       for (const [index, route] of mobileSettingsRoutes.entries()) {
         const pathname = pathForRoute(route);
         if (index === 0) {

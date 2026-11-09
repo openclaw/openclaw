@@ -14,7 +14,11 @@ import {
   reconcileSessionTranscriptIndexInTransaction,
   sessionTranscriptIndexNeedsReconcile,
 } from "./session-transcript-index.js";
-import { prepareColdTranscriptPayload, readTranscriptPayload } from "./transcript-payload.js";
+import {
+  clearSessionTranscriptActiveFacts,
+  prepareColdTranscriptPayload,
+  readTranscriptPayload,
+} from "./transcript-payload.js";
 
 type ColdDatabase = Pick<OpenClawAgentDatabase, "db" | "path">;
 
@@ -25,6 +29,7 @@ export function retainSessionColdNavigationInTransaction(
 ): void {
   // Historical archives can carry an unfinished projection. Qualify it while bodies are available.
   reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
+  clearSessionTranscriptActiveFacts(database.db, sessionId);
   const db = getNodeSqliteKysely<DB>(database.db);
   for (const row of iterateSqliteQuerySync(
     database.db,

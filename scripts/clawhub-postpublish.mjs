@@ -408,8 +408,15 @@ export async function verifyClawHubPostpublish({
     "normalClawHubRunId",
     "normalClawHubRunAttempt",
   ];
+  if (Object.hasOwn(dispatch ?? {}, "clawHubDeferred")) {
+    dispatchFields.push("clawHubDeferred");
+  }
   if (
     !dispatch ||
+    (Object.hasOwn(dispatch, "clawHubDeferred") &&
+      (dispatch.clawHubDeferred !== true ||
+        dispatch.normalClawHubRunId !== null ||
+        dispatch.normalClawHubRunAttempt !== null)) ||
     Object.keys(dispatch).length !== dispatchFields.length ||
     dispatchFields.some((key) => !Object.hasOwn(dispatch, key)) ||
     dispatch.schemaVersion !== 1 ||
@@ -453,8 +460,8 @@ export async function verifyClawHubPostpublish({
       parentRunId: runId,
       parentRunAttempt: runAttempt,
       dispatchRunAttempt,
-      complete: true,
-      outcome: "no-normal-clawhub-publication",
+      complete: dispatch.clawHubDeferred !== true,
+      outcome: dispatch.clawHubDeferred ? "clawhub-deferred" : "no-normal-clawhub-publication",
       dispatchArtifactId: dispatchRecord.artifact.id,
       dispatchArtifactDigest: dispatchRecord.artifact.digest,
       packages: [],

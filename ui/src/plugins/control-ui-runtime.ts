@@ -1,4 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { racePromiseWithAbortSignal, raceWithTimeout } from "@openclaw/retry";
 import type {
   PluginControlUiActivation,
@@ -318,7 +319,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
               pluginId: descriptor.pluginId,
               revision: descriptor.revision,
               status: "failed",
-              error: grantError.slice(0, 512),
+              error: truncateUtf16Safe(grantError, 512),
             });
           }
         }
@@ -506,7 +507,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
           pluginId: descriptor.pluginId,
           revision: descriptor.revision,
           status: "failed",
-          error: formatUiError(error, "Plugin UI activation failed.").slice(0, 512),
+          error: truncateUtf16Safe(formatUiError(error, "Plugin UI activation failed."), 512),
         };
       }
     } finally {

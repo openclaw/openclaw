@@ -47,8 +47,9 @@ export type CiCheckPlanInput = {
 /** Narrow checks and pack complete extension fallback within the existing runner budget. */
 export async function createCiCheckPlan(input: CiCheckPlanInput) {
   const runs = (task: string) => input.checkMatrix.include.some((row) => row.task === task);
+  // PR lint consumers can be precise even when guards and types remain broad.
   const lintPlan =
-    runs("lint") && !input.preserveFullChecks
+    runs("lint") && (!input.preserveFullChecks || input.extensionLintMode === "affected")
       ? await (
           await import("./check-changed.mts")
         ).createChangedCiLintPlan(detectChangedLanes(input.changedPaths), {
