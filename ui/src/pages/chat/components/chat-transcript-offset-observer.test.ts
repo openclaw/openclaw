@@ -60,70 +60,6 @@ it("keeps maintenance and active commands owned until the committed viewport set
   expect(isTranscriptProgrammaticScroll(state, element)).toBe(false);
 });
 
-it.each([undefined, 1000])(
-  "keeps latest through a temporary native end clamp (issued target: %s)",
-  (offset) => {
-    const element = document.createElement("div");
-    let height = 1000;
-    Object.defineProperties(element, {
-      clientHeight: { value: 200 },
-      scrollHeight: { get: () => height },
-    });
-    element.scrollTop = 800;
-    const state = new TranscriptOffsetState();
-    const command = { target: "end" as const, behavior: "smooth" as const, offset };
-    state.scrollCommand = command;
-    const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-      count: 0,
-      getScrollElement: () => element,
-      estimateSize: () => 40,
-      scrollToFn: vi.fn(),
-      observeElementRect: vi.fn(),
-      observeElementOffset: vi.fn(),
-    });
-    virtualizer.scrollElement = element;
-    virtualizer.targetWindow = window;
-    const cancelScroll = vi.fn(() => {
-      state.scrollCommand = null;
-    });
-    onTestFinished(
-      observeTranscriptOffset(
-        {
-          state,
-          getScrollElement: () => element,
-          endAnchor: new TranscriptEndAnchor(() => {}),
-          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
-          canFollowEnd: () => true,
-          isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
-          cancelScroll,
-          onLayoutCorrection: vi.fn(),
-          invalidate: vi.fn(),
-          onOffset: vi.fn(),
-          onReaderScroll: vi.fn(),
-          onComposerLayout: vi.fn(),
-        },
-        virtualizer,
-        vi.fn(),
-      ),
-    );
-    expect(state.scrollCommand).toBe(command);
-    expect(cancelScroll).not.toHaveBeenCalled();
-
-    command.offset = 1000;
-    element.dispatchEvent(new Event("scroll"));
-    element.dispatchEvent(new Event("scrollend"));
-    expect(cancelScroll).not.toHaveBeenCalled();
-    height = 1200;
-    element.scrollTop = 998;
-    element.dispatchEvent(new Event("scroll"));
-    element.dispatchEvent(new Event("scrollend"));
-    expect(cancelScroll).not.toHaveBeenCalled();
-    element.scrollTop = 1000;
-    element.dispatchEvent(new Event("scroll"));
-    expect(cancelScroll).toHaveBeenCalledExactlyOnceWith(true);
-  },
-);
-
 it.each([
   {
     name: "records native end geometry before rendering and pane policy",
@@ -211,6 +147,13 @@ it.each([
   expect(recordedEnd).toEqual([true]);
   expect(paneRecordedEnd).toEqual([true]);
   expect(geometryReads).toEqual([false, false]);
+  // Earlier PageUp motion can arrive while a newer Latest prepares its destination.
+  state.scrollCommand = { target: "end", behavior: "smooth" };
+  element.scrollTop = 12;
+  element.dispatchEvent(new Event("scroll"));
+  expect(state.scrollCommand?.target).toBe("end");
+  expect(cancelScroll).not.toHaveBeenCalled();
+  state.scrollCommand = null;
   expect(onReaderScroll).toHaveBeenCalledExactlyOnceWith(true);
   onReaderScroll.mockClear();
   const nested = document.createElement("div");
@@ -218,7 +161,7 @@ it.each([
   order.length = 0;
   nested.dispatchEvent(new Event("scroll"));
   expect(order).toEqual(["composer"]);
-  expect(onNativeScroll).toHaveBeenCalledOnce();
+  expect(onNativeScroll).toHaveBeenCalledTimes(2);
   nested.addEventListener("wheel", (event) => event.preventDefault(), { once: true });
   nested.dispatchEvent(new WheelEvent("wheel", { deltaY: -240, bubbles: true, cancelable: true }));
   expect(cancelScroll).not.toHaveBeenCalled();

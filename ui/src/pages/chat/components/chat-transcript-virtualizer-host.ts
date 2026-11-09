@@ -627,9 +627,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     // command intentionally supersedes restoration.
     const allowed =
       source !== "auto" || (!this.offsetState.pendingScrollOffset && this.canAutoFollow());
-    // An accepted end command may still be measuring its destination.
-    if (!allowed || (source === "auto" && this.initialRange.preparingEnd)) {
-      return allowed;
+    if (!allowed) {
+      return false;
     }
     if (source !== "auto") {
       // End-follow must not let speculative history measurements move its target.
@@ -640,9 +639,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       this.virtualizer,
       { source, behavior },
       (preserveEnd) => this.cancelScroll(preserveEnd),
-      () => this.presentation.queueRowMeasure(),
       this.endAnchor,
       this.initialRange.prepareEnd,
+      this.initialRange.finishEndWhenSettled,
     );
     return true;
   }

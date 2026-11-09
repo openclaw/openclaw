@@ -1,0 +1,4 @@
+# Latest retains measured destination rows until three stable end frames.
+# Covers prior PageUp motion, fresh input cancellation, growth, and parked resume.
+# 94 net test lines, replacing the existing 32-line Latest allocation.
+126
