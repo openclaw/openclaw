@@ -513,8 +513,8 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               pairingGeneration: generation.key,
               isClientCurrent: () => hasCurrentClientAuthority?.() !== false,
               cleanup: (lease) => {
-                void cleanupSimulatorNodeSession(lease, (params) =>
-                  context.nodeRegistry.invoke(params),
+                void cleanupSimulatorNodeSession(lease, (cleanupParams) =>
+                  context.nodeRegistry.invoke(cleanupParams),
                 ).catch(() => {
                   context.logGateway.warn(
                     `Simulator session cleanup failed for node ${lease.nodeId}`,
