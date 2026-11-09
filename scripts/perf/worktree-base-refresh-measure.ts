@@ -8,10 +8,13 @@
  * lower baseRefresh wall/CPU/allocation, no >20% regression in owner metrics.
  * Add --advancing for a newer local origin HEAD: both arms must fetch once,
  * preserve the target/ancestry, and reduce ref-completeness without extra objects.
+ * --base-fetch-file compares the extracted fetch owner. --registration starts a
+ * real no-checkout worktree registration when the fetch reaches Git execution;
+ * reports its admission wait separately, with no injected network delay.
  * Run on Node 26 for the exact V8 total_allocated_bytes counter.
  * JS allocation is exact V8 allocation; native Git CPU/RSS uses macOS time -l.
  * File copying, startup and hydration are outside baseRefresh. This is neither
- * a Gateway send benchmark nor a reproduction of production queue contention.
+ * a Gateway send benchmark nor a reproduction of production network latency.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -30,11 +33,13 @@ const { values } = parseArgs({
   options: {
     seed: { type: "string" },
     "base-file": { type: "string" },
+    "base-fetch-file": { type: "string" },
     output: { type: "string" },
     pairs: { type: "string", default: "5" },
     arm: { type: "string" },
     profile: { type: "boolean" },
     advancing: { type: "boolean" },
+    registration: { type: "boolean" },
   },
 });
 assert(values.seed && values.output, "--seed and --output are required");
@@ -42,6 +47,9 @@ assert(process.platform === "darwin", "Native CPU receipts require macOS time -l
 const seed = await fs.realpath(values.seed);
 const output = path.resolve(values.output);
 const baseline = values["base-file"] ? path.resolve(values["base-file"]) : undefined;
+const baselineFetch = values["base-fetch-file"]
+  ? path.resolve(values["base-fetch-file"])
+  : undefined;
 const actualGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const gitEnv = {
@@ -59,11 +67,16 @@ const ownerSha256 = createHash("sha256")
   .update(
     readFileSync(baseline ?? new URL("../../src/agents/worktrees/base-ref.ts", import.meta.url)),
   )
+  .update(
+    readFileSync(
+      baselineFetch ?? new URL("../../src/agents/worktrees/base-fetch.ts", import.meta.url),
+    ),
+  )
   .digest("hex");
 await fs.mkdir(output);
 
 if (!values.arm) {
-  assert(baseline, "--base-file is required for paired comparison");
+  assert(baseline || baselineFetch, "A baseline owner file is required for paired comparison");
   const pairs = Number(values.pairs);
   assert(Number.isSafeInteger(pairs) && pairs >= 5);
   const rows: unknown[] = [];
@@ -86,8 +99,16 @@ if (!values.arm) {
         if (values.advancing) {
           args.push("--advancing");
         }
+        if (values.registration) {
+          args.push("--registration");
+        }
         if (arm === "base" || control) {
-          args.push("--base-file", baseline);
+          if (baseline) {
+            args.push("--base-file", baseline);
+          }
+          if (baselineFetch) {
+            args.push("--base-fetch-file", baselineFetch);
+          }
         }
         const stdout = execFileSync(process.execPath, args, {
           env: gitEnv,
@@ -100,6 +121,7 @@ if (!values.arm) {
         console.log(JSON.stringify(rows.at(-1)));
         await fs.writeFile(path.join(output, "results.json"), JSON.stringify(rows, null, 2));
         await fs.rm(path.join(sampleOutput, "clone"), { recursive: true });
+        await fs.rm(path.join(sampleOutput, "registered"), { recursive: true, force: true });
       }
     }
   }
@@ -151,6 +173,11 @@ if (!values.arm) {
   let commandCount = 0;
   let fetches = 0;
   let advertisements = 0;
+  let register: (() => void) | undefined;
+  let registration: Promise<void> | undefined;
+  let registrationStart = 0;
+  let registrationQueueWaitMs: number | undefined;
+  let registrationWallMs: number | undefined;
   const profiler = values.profile ? new Session() : undefined;
   profiler?.connect();
   if (profiler) {
@@ -193,10 +220,17 @@ if (!values.arm) {
         }
       },
       command(args: string[]) {
+        if (args[0] === "worktree" && args[1] === "add") {
+          registrationQueueWaitMs = performance.now() - registrationStart;
+          return "registration";
+        }
         if (phase === "baseRefresh") {
           commandCount++;
           fetches += Number(args[0] === "fetch");
           advertisements += Number(args[0] === "ls-remote");
+          if (args[0] === "fetch") {
+            register?.();
+          }
         }
         return phase;
       },
@@ -209,6 +243,13 @@ if (!values.arm) {
           format: "module-typescript",
           shortCircuit: true,
           source: readFileSync(baseline, "utf8"),
+        };
+      }
+      if (url.endsWith("/src/agents/worktrees/base-fetch.ts") && baselineFetch) {
+        return {
+          format: "module-typescript",
+          shortCircuit: true,
+          source: readFileSync(baselineFetch, "utf8"),
         };
       }
       if (url.endsWith("/src/agents/worktrees/preparation-timing.ts")) {
@@ -239,11 +280,44 @@ if (!values.arm) {
     },
   });
   const { resolveWorktreeBase } = await import("../../src/agents/worktrees/base-ref.js");
+  const { requireGit } = await import("../../src/agents/worktrees/git.js");
   const { drainGlobalSingletonLifecycleState } =
     await import("../../src/shared/global-singleton.js");
   const loadBefore = loadavg();
+  if (values.registration) {
+    register = () => {
+      register = undefined;
+      registrationStart = performance.now();
+      registration = requireGit(
+        clone,
+        [
+          "worktree",
+          "add",
+          "--no-checkout",
+          "-b",
+          "fixture-concurrent",
+          path.join(output, "registered"),
+          cached,
+        ],
+        { refMutationDirectory: path.join(clone, ".git") },
+      ).then(() => {
+        registrationWallMs = performance.now() - registrationStart;
+      });
+    };
+  }
   try {
     const result = await resolveWorktreeBase(clone);
+    if (values.registration) {
+      assert(registration, "The refresh must fetch to measure concurrent registration");
+      await registration;
+      assert.equal(
+        execFileSync(actualGit, ["-C", path.join(output, "registered"), "rev-parse", "HEAD"], {
+          env: gitEnv,
+          encoding: "utf8",
+        }).trim(),
+        cached,
+      );
+    }
     assert.equal(result.commit, expected);
     assert.equal(result.fetchSucceeded, true);
     assert.equal(fetches, values.advancing || baseline ? 1 : 0);
@@ -293,7 +367,7 @@ if (!values.arm) {
     const row = {
       arm: values.arm,
       advancing: Boolean(values.advancing),
-      baseline: Boolean(baseline),
+      baseline: Boolean(baseline || baselineFetch),
       ownerSha256,
       ...phases.baseRefresh,
       commandCount,
@@ -304,6 +378,8 @@ if (!values.arm) {
       receivedObjects,
       offeredHaves,
       gitPhasesMs,
+      registrationQueueWaitMs,
+      registrationWallMs,
       commit: result.commit,
       loadBefore,
       loadAfter: loadavg(),
@@ -311,6 +387,7 @@ if (!values.arm) {
     await fs.writeFile(path.join(output, "result.json"), JSON.stringify(row, null, 2));
     console.log(JSON.stringify(row));
   } finally {
+    await Promise.allSettled([registration]);
     await drainGlobalSingletonLifecycleState();
     profiler?.disconnect();
     hook.deregister();
