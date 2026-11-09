@@ -45,7 +45,7 @@ const normalize = (value: string) => value.toLocaleLowerCase().normalize("NFC");
  * session count. The rows are plain menu rows, so arrows, Enter and Escape behave like every
  * other menu; Enter in the search toggles the first match.
  */
-function createUsageValuePicker(config: UsageValuePickerConfig, closeMenu?: () => void) {
+export function createUsageValuePicker(config: UsageValuePickerConfig, closeMenu?: () => void) {
   const controls = config.controls ?? createMenuControls();
   const [query, setQuery] = createSignal("");
   // Pinned rows are fixed when the list opens, so checking a value never moves rows under the pointer.
