@@ -497,6 +497,9 @@ final class NodeAppModel {
     let voiceNoteRecorder: OpenClawVoiceNoteRecorder
     let talkMode: TalkModeManager
     private(set) var locationAuthorizationSnapshot = LocationAuthorizationSnapshot.undetermined
+    /// Observed by gateway registration; refreshed on activation because these statuses post no changes.
+    private(set) var mediaAuthorizationSnapshot = MediaAuthorizationSnapshot.current()
+    @ObservationIgnored private let mediaAuthorizationProvider: @MainActor () -> MediaAuthorizationSnapshot
     private let locationService: any LocationServicing
     private let deviceStatusService: any DeviceStatusServicing
     private let photosService: any PhotosServicing
@@ -1014,7 +1017,8 @@ final class NodeAppModel {
         talkMode: TalkModeManager = TalkModeManager(),
         voiceNoteRecorder: OpenClawVoiceNoteRecorder = OpenClawVoiceNoteRecorder(),
         audioAdmissionInitiallyAllowed: Bool = true,
-        restoringSavedGatewayRoute: Bool = false)
+        restoringSavedGatewayRoute: Bool = false,
+        mediaAuthorizationProvider: @escaping @MainActor () -> MediaAuthorizationSnapshot = { .current() })
     {
         if restoringSavedGatewayRoute, let stableID = GatewaySettingsStore.activeGatewayEntry()?.stableID {
             self.connectedGatewayID = stableID
@@ -1027,6 +1031,8 @@ final class NodeAppModel {
         self.screenRecorder = screenRecorder
         self.locationService = locationService
         self.locationAuthorizationSnapshot = locationService.authorizationSnapshot()
+        self.mediaAuthorizationProvider = mediaAuthorizationProvider
+        self.mediaAuthorizationSnapshot = mediaAuthorizationProvider()
         self.notificationCenter = notificationCenter
         self.deviceStatusService = deviceStatusService
         self.photosService = photosService
@@ -1127,6 +1133,13 @@ final class NodeAppModel {
         }
     }
 
+    func refreshMediaAuthorizationSnapshot() {
+        let snapshot = self.mediaAuthorizationProvider()
+        // Publish only real changes; each publication can refresh the gateway registration.
+        guard snapshot != self.mediaAuthorizationSnapshot else { return }
+        self.mediaAuthorizationSnapshot = snapshot
+    }
+
     func setScenePhase(_ phase: ScenePhase) {
         let keepTalkActive = UserDefaults.standard.bool(forKey: "talk.background.enabled")
         if phase != .active {
@@ -1170,6 +1183,8 @@ final class NodeAppModel {
             break
         case .active:
             self.isBackgrounded = false
+            // Permission prompts and Settings changes return through activation.
+            self.refreshMediaAuthorizationSnapshot()
             if self.clientDatabases == nil {
                 // Recovery must run even after forgetting the final gateway;
                 // no chat facade may remain to initialize the container.
