@@ -39,9 +39,9 @@ import {
   publishSessionTranscriptUpdateByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { consumeTurn } from "./src/events.js";
-import { MUSE_STARTUP_TIMEOUT_MS, MusePool, openMuseSession } from "./src/runtime.js";
+import { MusePool, openMuseSession } from "./src/runtime.js";
 import { museTurnUsage } from "./src/usage.js";
-import { MuseCatalogReader } from "./src/verify-setup.js";
+import { CATALOG_TIMEOUT_MS, MuseCatalogReader } from "./src/verify-setup.js";
 
 type MuseInputPart = Parameters<Session["sendUserTurn"]>[0]["input"][number];
 
@@ -197,7 +197,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           ? "allowAll"
           : "promptUnmatched";
       params.hostCapabilities.prepareContinuationRetryCount?.({ cwd: workspace });
-      const lease = await pool.acquire(workspace, apiKey, readOnly);
+      const lease = await pool.acquire(workspace, apiKey, readOnly, params.abortSignal);
       const { runtime } = lease;
       const compatibility = JSON.stringify([
         workspace,
@@ -648,11 +648,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       catalogs.delete(params.agentDir);
       const request = catalogReader.read({
         config: params.config,
-        // The catalog read may start a host, so its deadline must outlast host startup.
-        signal: AbortSignal.any([
-          catalogAbort.signal,
-          AbortSignal.timeout(MUSE_STARTUP_TIMEOUT_MS + 30_000),
-        ]),
+        signal: AbortSignal.any([catalogAbort.signal, AbortSignal.timeout(CATALOG_TIMEOUT_MS)]),
         assertCurrent: () => {
           if (disposed) {
             throw new Error("Muse harness has been disposed.");

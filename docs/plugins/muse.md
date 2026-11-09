@@ -155,7 +155,8 @@ during verification. The same check runs again before activation is committed.
 The read-only Muse host is reused while its credential binding stays unchanged;
 the pre-commit check still requests the live catalog and rechecks caller authority.
 Canceling sign-in stops its verification wait. During startup, cancellation closes
-the starting verification host. Once the host is initialized, other catalog readers
+the starting verification host only when no other callers are waiting for it.
+Once the host is initialized, other catalog readers
 sharing it continue; OpenClaw closes the canceled verification host after its last
 reader finishes.
 **AI Setup** selects that model; **Provider Access** preserves the active model.

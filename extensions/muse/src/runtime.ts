@@ -10,6 +10,7 @@ import {
 } from "@muse-code/sdk";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import musePackage from "../package.json" with { type: "json" };
 
 export type MuseOpenSession = {
@@ -101,7 +102,12 @@ export async function openMuseSession(runtime: MuseRuntime, options: MuseOpenSes
 export class MusePool {
   private readonly entries = new Map<
     string,
-    { credentialIdentity: string; pending: Promise<MuseRuntime>; startup: AbortController }
+    {
+      credentialIdentity: string;
+      pending: Promise<MuseRuntime>;
+      startup: AbortController | undefined;
+      waiters: number;
+    }
   >();
   private disposed = false;
   constructor(
@@ -171,25 +177,44 @@ export class MusePool {
         }
         return this.spawn(workspace, env, readOnly, credentialIdentity, startup.signal);
       })();
-      entry = { credentialIdentity, pending, startup };
+      entry = { credentialIdentity, pending, startup, waiters: 0 };
       this.entries.set(key, entry);
-      void pending.catch(() => {
-        if (this.entries.get(key) === entry) {
-          this.entries.delete(key);
-        }
-      });
+      const startingEntry = entry;
+      void pending.then(
+        () => {
+          startingEntry.startup = undefined;
+        },
+        () => {
+          if (this.entries.get(key) === startingEntry) {
+            this.entries.delete(key);
+          }
+        },
+      );
     }
-    const abort = () => entry.startup.abort(signal?.reason);
-    signal?.addEventListener("abort", abort, { once: true });
+    entry.waiters++;
     let runtime: MuseRuntime;
     try {
-      runtime = await entry.pending;
+      runtime = await racePromiseWithAbortSignal(
+        entry.pending,
+        signal,
+        (aborted) => aborted.reason,
+      );
+      signal?.throwIfAborted();
     } finally {
-      signal?.removeEventListener("abort", abort);
-    }
-    if (signal?.aborted) {
-      await runtime.close();
-      signal.throwIfAborted();
+      entry.waiters--;
+      // A caller owns its wait, not the other callers sharing this startup.
+      if (signal?.aborted && entry.waiters === 0) {
+        if (entry.startup) {
+          if (this.entries.get(key) === entry) {
+            this.entries.delete(key);
+          }
+          entry.startup.abort(signal.reason);
+        }
+        const unused = await entry.pending.catch(() => undefined);
+        if (unused && entry.waiters === 0 && unused.users === 0) {
+          await unused.close();
+        }
+      }
     }
     if (this.disposed) {
       await runtime.close();
@@ -304,9 +329,7 @@ export class MusePool {
       await handshake.close();
       // A caller that gave up (for example a catalog deadline) owns the reason, not install state.
       if (signal.aborted && !startupTimedOut) {
-        throw signal.reason instanceof Error
-          ? signal.reason
-          : new Error("Muse Code startup was cancelled.", { cause: error });
+        signal.throwIfAborted();
       }
       const stderr = handshake.child.stderrTail.join("\n");
       throw new Error(
