@@ -36,6 +36,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import java.io.File
@@ -347,7 +348,8 @@ class CameraCaptureManager(
             }
         session.ownRecording(recording)
 
-        kotlinx.coroutines.delay(durationMs.toLong())
+        // CameraX can terminate early; release the capture without waiting out its duration.
+        withTimeoutOrNull(durationMs.toLong()) { finalized.await() }
         recording.close()
 
         val finalizeEvent =
