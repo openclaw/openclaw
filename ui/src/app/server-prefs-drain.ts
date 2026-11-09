@@ -91,9 +91,22 @@ export async function drainPendingPrefs(
       sync.updateRetainedLocalKeys(sync.pendingScope, ["theme"], true);
       continue;
     }
-    const profileBatch = selectProfileUiPrefs(sync.pendingPrefs, sync.canWriteProfilePref);
+    const conflict = sync.preferenceWriteFailures
+      .get(sync.pendingScope)
+      ?.get("personalSessionGroups");
+    const dispatchable: ServerUiPrefs = { ...sync.pendingPrefs };
+    if (conflict?.retained && prefValuesEqual(conflict.value, dispatchable.personalSessionGroups)) {
+      // Keep the conflicted layout durable and shadowing reads, but do not let
+      // it repeatedly win navigation-first batching over unrelated preferences.
+      delete dispatchable.personalSessionGroups;
+      delete dispatchable.personalSessionGroupsBase;
+      if (!pendingUiPrefKeys(dispatchable).length) {
+        return;
+      }
+    }
+    const profileBatch = selectProfileUiPrefs(dispatchable, sync.canWriteProfilePref);
     const useProfile = Object.keys(profileBatch).length > 0;
-    let batch = useProfile ? profileBatch : { ...sync.pendingPrefs };
+    let batch = useProfile ? profileBatch : dispatchable;
     if (!useProfile) {
       clearSidebarEntriesMetadata(batch);
       delete batch.navigationConfirmation;
@@ -497,10 +510,15 @@ export async function drainPendingPrefs(
         }
         if (result.reason === "conflict" && dispatchedBatch.personalSessionGroups) {
           // A same-group conflict cannot be fixed by repeating the same authored layout.
-          sync.recordPreferenceWriteFailures(sync.pendingScope, dispatchedBatch, result.error);
+          sync.recordPreferenceWriteFailures(
+            sync.pendingScope,
+            { personalSessionGroups: dispatchedBatch.personalSessionGroups },
+            result.error,
+            true,
+          );
           sync.publishPreferenceWrites();
           showToast({ placement: "top-right", severity: "error", message: result.error });
-          return;
+          break;
         }
         if (result.reason === "conflict" && attempt === 0) {
           await sleepWithAbort(250);

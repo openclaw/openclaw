@@ -456,7 +456,6 @@ export function pushServerUiPrefs(
   for (const key of keys) {
     sync.compositions[key]?.(sync.pendingPrefs, writablePrefs);
   }
-  delete writablePrefs.personalSessionGroupsPrevious;
   sync.pendingPrefs = mergePendingUiPrefs(sync.pendingPrefs, writablePrefs);
   mergePendingIntoStorage();
   publishPreferenceWrites();

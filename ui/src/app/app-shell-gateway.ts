@@ -31,6 +31,7 @@ import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import type { ApplicationContext } from "./context.ts";
 import { isNativeMobileHost } from "./native-web-chrome.ts";
 import { profilePreferencesState } from "./server-prefs-profile.ts";
+import { applyServerUiPrefs, loadProfileAppearancePrefs } from "./server-prefs-reconcile.ts";
 import { flushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { capturePlacementStartupConnection } from "./session-placement-startup.ts";
 import { invalidateUserPreferences } from "./user-prefs-cache.ts";
@@ -640,11 +641,7 @@ export class ShellGatewayOwner {
           return;
         }
         profileRuntime.adoptLocalPersonalSessionGroups(runtimeConfig, { profile: snapshot });
-        const runtime = await import("./server-prefs-reconcile.ts");
-        if (!remainsCurrent()) {
-          return;
-        }
-        const pending = runtime.loadProfileAppearancePrefs(client, profileId, scope, {
+        const pending = loadProfileAppearancePrefs(client, profileId, scope, {
           isCurrent: remainsCurrent,
         });
         // Read admission may adopt the profile identity before its first await.
@@ -655,7 +652,7 @@ export class ShellGatewayOwner {
         }
         const applied =
           loaded &&
-          runtime.applyServerUiPrefs(currentDisplayConfig(runtimeConfig.state), {
+          applyServerUiPrefs(currentDisplayConfig(runtimeConfig.state), {
             profileId,
             scope,
             navigationConfirmed: true,

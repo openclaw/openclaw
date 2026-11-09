@@ -14,7 +14,6 @@ ui/src/app/gateway-store.ts	1
 ui/src/app/mcp-app-link-routing.ts	1
 ui/src/app/nav-drawer-swipe-loader.ts	1
 ui/src/app/overlays.ts	1
-ui/src/app/server-prefs-drain.ts	1
 ui/src/app/server-prefs-reconcile.ts	1
 ui/src/app/server-prefs.ts	1
 ui/src/app/theme-background-artwork.ts	2

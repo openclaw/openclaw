@@ -195,6 +195,51 @@ suite.define(() => {
                 }
               }),
             );
+            let hold:
+              | { phase: "request" | "response"; captured: boolean; seen: boolean }
+              | undefined;
+            await page.routeWebSocket(urls[0]!, (socket) => {
+              const server = socket.connectToServer();
+              let blockedResponseId: string | undefined;
+              socket.onMessage((message) => {
+                const frame: {
+                  type?: string;
+                  method?: string;
+                  id?: string;
+                  params?: { entries?: Record<string, unknown> };
+                } = JSON.parse(message.toString());
+                const groups = frame.params?.entries?.["ui.personalSessionGroups"];
+                if (
+                  hold &&
+                  !hold.captured &&
+                  frame.type === "req" &&
+                  frame.method === "users.prefs.set" &&
+                  Array.isArray(groups) &&
+                  groups.some((item) => item.label === "Pending")
+                ) {
+                  hold.captured = true;
+                  if (hold.phase === "request") {
+                    hold.seen = true;
+                    return;
+                  }
+                  blockedResponseId = frame.id;
+                }
+                server.send(message);
+              });
+              server.onMessage((message) => {
+                const frame: { type?: string; id?: string; ok?: boolean } = JSON.parse(
+                  message.toString(),
+                );
+                if (blockedResponseId && frame.type === "res" && frame.id === blockedResponseId) {
+                  if (!frame.ok || !hold) {
+                    throw new Error("Held collection save did not commit");
+                  }
+                  hold.seen = true;
+                  return;
+                }
+                socket.send(message);
+              });
+            });
             await page.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
             await waitForControlUiGatewayReady(page);
             const sidebar = page.locator("openclaw-app-sidebar");
@@ -238,6 +283,21 @@ suite.define(() => {
             }
             await sidebar.getByRole("link", { name: /Verification notes/ }).waitFor();
             methods.length = 0;
+            for (const phase of ["request", "response"] as const) {
+              // Exercise a real dropped request and a real committed save whose ACK
+              // is lost with the tab. Only the existing browser outbox survives reload.
+              hold = { phase, captured: false, seen: false };
+              await create("Pending", "Reliability Tracker");
+              await expect.poll(() => hold?.seen).toBe(true);
+              await menu("Pending", "Remove section");
+              await page.reload();
+              await waitForControlUiGatewayReady(page);
+              await expect.poll(() => group("Pending").count()).toBe(0);
+              await expect
+                .poll(() => rpc(editor, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }))
+                .toMatchObject({ entries: { "ui.personalSessionGroups": [] } });
+              hold = undefined;
+            }
             await create("Focus", "Reliability Tracker");
             await group("Focus")
               .getByRole("link", { name: /Verification notes/ })
@@ -314,14 +374,14 @@ suite.define(() => {
             await page.reload();
             await waitForControlUiGatewayReady(page);
             await expect.poll(order).toEqual(["Later", "This week"]);
-            expect(
-              await rpc(page, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }),
-            ).toMatchObject({
-              status: "ok",
-              entries: {
-                "ui.personalSessionGroups": [later, { ...observed[0], label: "This week" }],
-              },
-            });
+            await expect
+              .poll(() => rpc(page, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }))
+              .toMatchObject({
+                status: "ok",
+                entries: {
+                  "ui.personalSessionGroups": [later, { ...observed[0], label: "This week" }],
+                },
+              });
             const freshContext = await suite.newBrowserContext({
               reducedMotion: "reduce",
               storageState: initialStorage,

@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import type { AgentToolGatewayRequestCaller } from "../../../src/agents/tools/in-process-gateway.js";
 import { runPersonalSessionGroups } from "../../../src/agents/tools/sessions-personal-groups.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { i18n } from "../i18n/index.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { resolveServerUiPrefWriteStatus } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
@@ -200,4 +201,112 @@ it("adopts a pre-upgrade queued layout using its saved confirmed profile baselin
   await vi.dynamicImportSettled();
   expect(backend.profiles.guest![key]).toEqual([focus]);
   expect(localStorage.getItem(pendingKey)).toBeNull();
+});
+
+it.each(
+  [false, true].flatMap((committed) => [
+    { committed, kind: "remove", original: [], intermediate: [focus], desired: [] },
+    { committed, kind: "restore", original: [focus], intermediate: [], desired: [focus] },
+    {
+      committed,
+      kind: "label reversal",
+      original: [focus],
+      intermediate: [{ ...focus, label: "Work" }],
+      desired: [focus],
+    },
+    {
+      committed,
+      kind: "reference reversal",
+      original: [focus],
+      intermediate: [{ ...focus, sessionKeys: ["agent:main:later"] }],
+      desired: [focus],
+    },
+    {
+      committed,
+      kind: "order reversal",
+      original: [focus, later],
+      intermediate: [later, focus],
+      desired: [focus, later],
+    },
+    {
+      committed,
+      kind: "order reversal with addition",
+      original: [focus, later],
+      intermediate: [later, focus],
+      desired: [focus, later, { id: "extra", label: "Extra", sessionKeys: [] }],
+    },
+  ]),
+)(
+  "preserves queued $kind across reload before acknowledgement (committed=$committed)",
+  async ({ committed, original: groups, intermediate, desired }) => {
+    const backend = createProfilePrefsServer({ guest: groups.length ? { [key]: groups } : {} });
+    const guest = backend.connect("guest");
+    await guest.refresh();
+    const started = createDeferred();
+    const release = createDeferred();
+    const original = guest.request.getMockImplementation()!;
+    let held = false;
+    guest.request.mockImplementation(async (method, params) => {
+      if (method === "users.prefs.set" && !held) {
+        held = true;
+        const result = committed ? await original(method, params) : undefined;
+        started.resolve();
+        await release.promise;
+        if (!committed) {
+          throw new Error("connection closed before commit");
+        }
+        return result;
+      }
+      return original(method, params);
+    });
+    const before = loadSettings();
+    const first = patchSettings({ personalSessionGroups: intermediate });
+    pushServerUiPrefs(guest.writer, changedServerUiPrefs(before, first)!, hooks());
+    await started.promise;
+    const removed = patchSettings({ personalSessionGroups: desired });
+    pushServerUiPrefs(guest.writer, changedServerUiPrefs(first, removed)!, hooks());
+    // Losing this tab retires the in-memory composition callback; only storage survives.
+    resetServerUiPrefsSync();
+    release.resolve();
+    const restored = backend.connect("guest");
+    flushServerUiPrefs(restored.writer, hooks());
+    await vi.dynamicImportSettled();
+    expect(backend.profiles.guest![key]).toEqual(desired);
+    expect(loadSettings().personalSessionGroups).toEqual(desired);
+    expect(
+      localStorage.getItem("openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:guest"),
+    ).toBeNull();
+  },
+);
+
+it("retains a localized collection conflict while unrelated profile preferences drain", async () => {
+  const backend = createProfilePrefsServer({ guest: { [key]: [focus] } });
+  const guest = backend.connect("guest");
+  await guest.refresh();
+  const translate = i18n.t.bind(i18n);
+  vi.spyOn(i18n, "t").mockImplementation((name, params) =>
+    name === "quickSettings.personal.groupsConflict"
+      ? "localized collection conflict"
+      : translate(name, params),
+  );
+  const before = loadSettings();
+  const local = { ...focus, label: "Local focus" };
+  const next = patchSettings({ personalSessionGroups: [local] });
+  const remote = { ...focus, label: "Remote focus" };
+  backend.profiles.guest![key] = [remote];
+  invalidateUserPreferences(guest.writer.state.client!);
+  const authority = { profileId: "guest", canWrite: true };
+  pushServerUiPrefs(guest.writer, changedServerUiPrefs(before, next)!, authority);
+  await vi.dynamicImportSettled();
+  expect
+    .soft(resolveServerUiPrefWriteStatus("personalSessionGroups", scope, "guest"))
+    .toEqual({ status: "error", error: "localized collection conflict" });
+  const withFont = patchSettings({ fontUi: "geist" });
+  pushServerUiPrefs(guest.writer, changedServerUiPrefs(next, withFont)!, authority);
+  await vi.dynamicImportSettled();
+  expect(backend.profiles.guest).toEqual({ [key]: [remote], "ui.fontUi": "geist" });
+  expect(loadSettings().personalSessionGroups).toEqual([local]);
+  expect(resolveServerUiPrefWriteStatus("personalSessionGroups", scope, "guest").status).toBe(
+    "error",
+  );
 });

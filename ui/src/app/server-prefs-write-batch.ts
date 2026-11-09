@@ -242,10 +242,9 @@ export async function writeProfileAppearancePrefs(
             ? rebasePersonalSessionGroups(observed ?? [], batch.personalSessionGroups, remote)
             : undefined;
         if (!merged) {
-          return failure(
-            "Personal groups changed elsewhere or exceed their limit. Your local layout is retained; review the other layout before retrying.",
-            "conflict",
-          );
+          const { registerPreferencesEnglish } = await import("../i18n/locales/en-preferences.ts");
+          registerEnglishCatalog(registerPreferencesEnglish);
+          return failure(t("quickSettings.personal.groupsConflict"), "conflict");
         }
         committedBatch.personalSessionGroups = merged;
       }
