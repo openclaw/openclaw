@@ -16,6 +16,7 @@ import {
 } from "../daemon/launchd.js";
 import { mergeGatewayServiceEnv } from "../daemon/service-env-merge.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { runExec } from "../process/exec.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -71,7 +72,12 @@ async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(): Promise<string
   const service = resolveGatewayService();
   const command = await service.readCommand(baseEnv).catch(() => null);
   const scanEnv = mergeGatewayServiceEnv(baseEnv, command);
-  const jobs = await findStaleOpenClawUpdateLaunchdJobs(scanEnv).catch(() => []);
+  let jobs: Awaited<ReturnType<typeof findStaleOpenClawUpdateLaunchdJobs>>;
+  try {
+    jobs = await findStaleOpenClawUpdateLaunchdJobs(scanEnv);
+  } catch (error) {
+    return `Could not inspect stale OpenClaw updater launchd jobs: ${formatErrorMessage(error)}; interrupted-update leftovers were NOT checked. Check launchctl availability and rerun ${formatCliCommand("openclaw doctor", baseEnv)}.`;
+  }
   if (jobs.length === 0) {
     return null;
   }
