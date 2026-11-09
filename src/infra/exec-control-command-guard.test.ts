@@ -43,13 +43,24 @@ describe("exec control command guard", () => {
     );
   });
 
-  it("rejects a partial POSIX parse that can execute an earlier command", async () => {
-    const command = 'echo hi; openclaw channels login\n"';
+  it.each([
+    ['echo hi; openclaw channels login\n"', "channel-login", /interactive OpenClaw channel login/],
+    ["ls !(*.txt); /approve abc allow-once", "approve", /exec cannot run \/approve/],
+    [
+      "echo ${${x%.*}##*/}; openclaw channels login",
+      "channel-login",
+      /interactive OpenClaw channel login/,
+    ],
+  ] as const)(
+    "checks commands recovered from a partial parse: %s",
+    async (command, kind, message) => {
+      await expect(detectUnsafeExecControlShellCommand(command)).resolves.toBe(kind);
+      await expect(rejectUnsafeExecControlShellCommand(command)).rejects.toThrow(message);
+    },
+  );
 
-    await expect(detectUnsafeExecControlShellCommand(command)).resolves.toBe("parser-failure");
-    await expect(rejectUnsafeExecControlShellCommand(command)).rejects.toThrow(
-      /command parser is unavailable or failed/,
-    );
+  it("leaves unrelated syntax errors to normal shell and approval handling", async () => {
+    await expect(detectUnsafeExecControlShellCommand('echo hi\n"')).resolves.toBe(null);
   });
 
   it("keeps PowerShell CRLF commands eligible for control-command inspection", async () => {
@@ -105,6 +116,11 @@ describe("exec control command guard", () => {
         `echo${" ".repeat(128 * 1024)}; /approve abc123 allow-once`,
       ),
     ).resolves.toBe("incomplete-analysis");
+    await expect(
+      rejectUnsafeExecControlShellCommand(
+        `echo${" ".repeat(128 * 1024)}; /approve abc123 allow-once`,
+      ),
+    ).rejects.toThrow(/file tool or script file/);
   });
 
   it("keeps live-state denial for commands padded with safe whitespace", async () => {

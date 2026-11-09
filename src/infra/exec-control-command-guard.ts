@@ -15,6 +15,7 @@ import {
   explainShellCommand,
 } from "./command-explainer/extract.js";
 import {
+  CommandExplanationParseTimeoutError,
   CommandExplanationSourceSizeLimitError,
   CommandExplanationUnsupportedControlCharacterError,
 } from "./command-explainer/tree-sitter-runtime.js";
@@ -304,12 +305,13 @@ export async function detectUnsafeExecControlShellCommand(
   // the caller still executes the original command unchanged.
   const inspectionCommand = windows ? command.replaceAll("\r\n", "\n") : command;
   const rawCommand = trimShellBoundaryWhitespace(inspectionCommand);
-  let explanation: CommandExplanation | null = null;
+  let explanation: CommandExplanation;
   try {
     explanation = await explainShellCommand(rawCommand);
   } catch (error) {
     if (
       error instanceof CommandExplanationWorkLimitError ||
+      error instanceof CommandExplanationParseTimeoutError ||
       error instanceof CommandExplanationSourceSizeLimitError
     ) {
       return "incomplete-analysis";
@@ -320,20 +322,17 @@ export async function detectUnsafeExecControlShellCommand(
     // A parser exception leaves no reliable command inventory for the fallback.
     return "parser-failure";
   }
-  // A POSIX shell can execute the parsed prefix before a later syntax error.
-  if (explanation && !explanation.ok && !windows) {
-    return "parser-failure";
+  const commands = [...explanation.topLevelCommands, ...explanation.nestedCommands];
+  const argvCandidates = commands.flatMap((step) => buildCommandPayloadArgvCandidates(step.argv));
+  if (!explanation.ok) {
+    // Error recovery can omit a command; approval planning still fails closed on ok:false.
+    argvCandidates.push(
+      ...normalizeStringEntries(rawCommand.split(/\r?\n/)).flatMap((line) => {
+        const argv = splitShellArgs(line);
+        return argv ? buildCommandPayloadArgvCandidates(argv) : [[line]];
+      }),
+    );
   }
-  const argvCandidates = (() => {
-    if (explanation?.ok) {
-      const commands = [...explanation.topLevelCommands, ...explanation.nestedCommands];
-      return commands.flatMap((step) => buildCommandPayloadArgvCandidates(step.argv));
-    }
-    return normalizeStringEntries(rawCommand.split(/\r?\n/)).flatMap((line) => {
-      const argv = splitShellArgs(line);
-      return argv ? buildCommandPayloadArgvCandidates(argv) : [[line]];
-    });
-  })();
   const controlCandidates = uniqueStrings(argvCandidates.map((argv) => argv.join(" ")));
   for (const candidate of controlCandidates) {
     if (isExecApprovalShellCommand(candidate)) {
@@ -356,7 +355,7 @@ function rejectIncompleteCommandAnalysis(
 ): void {
   if (unsafeKind === "incomplete-analysis") {
     throw new Error(
-      "exec cannot run a shell command that exceeds the command explanation work limit. Simplify the command so its complete syntax can be inspected before execution.",
+      "exec cannot run a shell command that exceeds the command explanation work limit. Simplify the command, or write large content with a file tool or script file so its complete syntax can be inspected before execution.",
     );
   }
   if (unsafeKind === "unsupported-control-character") {

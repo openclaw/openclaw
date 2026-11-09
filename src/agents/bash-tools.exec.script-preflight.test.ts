@@ -460,6 +460,18 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
 });
 
 describeNonWin("exec shell control-byte preflight", () => {
+  it("rejects a control command recovered before a later syntax error", async () => {
+    await withTempDir("openclaw-exec-recovered-command-", async (root) => {
+      const marker = path.join(root, "started");
+      const command = `printf started > ${JSON.stringify(marker)}; openclaw channels login\n"`;
+
+      await expect(runExecPreflight(command, root)).rejects.toThrow(
+        /interactive OpenClaw channel login/,
+      );
+      await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
   it("rejects raw and decoded bytes before spawn and permits ordinary whitespace", async () => {
     await withTempDir("openclaw-exec-control-byte-", async (root) => {
       const stateDir = path.join(root, "state");

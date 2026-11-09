@@ -9,6 +9,7 @@ export type BashCommandParser = (source: string) => TreeSitter.Tree;
 
 export class CommandExplanationUnsupportedControlCharacterError extends Error {}
 export class CommandExplanationSourceSizeLimitError extends Error {}
+export class CommandExplanationParseTimeoutError extends Error {}
 
 let parserPromise: Promise<BashCommandParser> | null = null;
 const MAX_COMMAND_EXPLANATION_SOURCE_CHARS = 128 * 1024;
@@ -50,7 +51,7 @@ function parseBashForCommandExplanation(
   if (!tree) {
     parser.reset();
     if (timedOut) {
-      throw new Error(
+      throw new CommandExplanationParseTimeoutError(
         `tree-sitter-bash timed out after ${MAX_COMMAND_EXPLANATION_PARSE_MS}ms while parsing shell command`,
       );
     }

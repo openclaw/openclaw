@@ -495,7 +495,11 @@ The `exec` tool rejects POSIX shell text containing raw carriage returns, vertic
 tabs, or form feeds before approval handling. This includes quoted text and
 decoded shell-wrapper payloads. Remove these bytes from the command; ordinary
 spaces, tabs, and line feeds remain eligible for automatic allowlist matching.
-POSIX commands with incomplete shell syntax are also rejected before execution.
+Commands with syntax the parser cannot fully analyze cannot satisfy automatic
+allowlist matching. OpenClaw still checks recovered commands for protected
+operations before normal approval handling. Commands over 128 KiB or beyond the
+parser work limit are rejected; write large content with a file tool or script
+file, or simplify the command.
 Windows Gateway and node exec accept ordinary CRLF line endings in PowerShell
 and CMD commands, respectively. Backtick-newline continuations in PowerShell,
 caret-newline continuations in CMD, and other carriage returns remain unsupported
