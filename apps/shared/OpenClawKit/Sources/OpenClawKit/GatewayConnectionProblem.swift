@@ -386,7 +386,7 @@ public enum GatewayConnectionProblemMapper {
                 message: "The gateway is temporarily refusing new auth attempts after repeated failures.",
                 actionLabel: "Wait and retry",
                 docsURLString: "https://docs.openclaw.ai/gateway/troubleshooting")
-        case .authRequired, .authUnauthorized, .authVerifiedUserRequired, .none:
+        case .authRequired, .authUnauthorized, .authVerifiedUserRequired, .authenticatedProfileUnavailable, .none:
             AuthProblemDefaults(
                 kind: .unknown,
                 owner: .unknown,

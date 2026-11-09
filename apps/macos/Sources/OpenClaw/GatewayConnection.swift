@@ -241,6 +241,7 @@ actor GatewayConnection: Observable {
     private let activationBindingKeyProvider: @Sendable () -> SymmetricKey?
     let includeDeviceIdentity: Bool
     private let sessionProvider: SessionProvider
+    private let personalIdentityServeURLProvider: @Sendable () async -> URL?
     private let clientShutdown: @Sendable (GatewayChannelActor) async -> Void
     private let decoder = JSONDecoder()
     private var browserSessionExpiryTask: Task<Void, Never>?
@@ -281,6 +282,7 @@ actor GatewayConnection: Observable {
     /// advances it so delayed config and retry work cannot recreate a route.
     private var shutdownGeneration: UInt64 = 0
     private var pendingPersonalConfiguration: PendingPersonalConfiguration?
+    private var pendingPersonalRecovery: PendingPersonalConfiguration?
     /// Callback work keeps the physical socket epoch that decoded it. Retiring
     /// that epoch prevents delayed pushes from entering a replacement socket.
     private(set) var socketGenerationState = GatewaySocketGenerationState()
@@ -340,6 +342,9 @@ actor GatewayConnection: Observable {
             GatewayConnection.defaultActivationBindingKey,
         sessionBox: WebSocketSessionBox? = nil,
         sessionProvider: SessionProvider? = nil,
+        personalIdentityServeURLProvider: @escaping @Sendable () async -> URL? = {
+            await TailscaleServeGatewayDiscovery.discoverLocalGatewayServeURL()
+        },
         clientShutdown: @escaping @Sendable (GatewayChannelActor) async -> Void = { client in
             await client.shutdown()
         })
@@ -353,6 +358,7 @@ actor GatewayConnection: Observable {
             sessionBox: sessionBox,
             sessionProvider: sessionProvider)
         self.clientShutdown = clientShutdown
+        self.personalIdentityServeURLProvider = personalIdentityServeURLProvider
     }
 
     #if DEBUG
@@ -378,6 +384,7 @@ actor GatewayConnection: Observable {
         // Mock WebSocket routes do not exercise device authentication and must not
         // depend on the process-global persisted identity store.
         self.includeDeviceIdentity = false
+        self.personalIdentityServeURLProvider = { nil }
         self.sessionProvider = Self.resolveSessionProvider(
             sessionBox: sessionBox,
             sessionProvider: sessionProvider)
@@ -396,6 +403,7 @@ actor GatewayConnection: Observable {
         // Mock WebSocket routes do not exercise device authentication and must not
         // depend on the process-global persisted identity store.
         self.includeDeviceIdentity = false
+        self.personalIdentityServeURLProvider = { nil }
         self.sessionProvider = Self.resolveSessionProvider(
             sessionBox: sessionBox,
             sessionProvider: nil)
@@ -447,6 +455,11 @@ actor GatewayConnection: Observable {
         } catch {
             try Task.checkCancellation()
             if GatewayCompatibilityIssue(error: error) != nil { throw error }
+            if let replacement = try await self.renewPersonalIdentity(
+                after: error, route: route, shutdownGeneration: shutdownGeneration)
+            {
+                return try await replacement.request(method: method, params: params, timeoutMs: timeoutMs)
+            }
             if let tlsError = error as? GatewayTLSValidationError,
                let replacement = try await self.renewLearnedPin(
                    after: tlsError.failure, route: route, shutdownGeneration: shutdownGeneration)
@@ -548,10 +561,8 @@ actor GatewayConnection: Observable {
         return try await self.configure(endpoint: refreshed, shutdownGeneration: shutdownGeneration)
     }
 
-    /// Automatic reconnects have no request to retry: renew through the same owner
-    /// checks, then reconnect only the replacement socket.
-    private func renewLearnedPinAfterReconnectFailure(
-        _ error: GatewayTLSValidationError,
+    private func recoverAfterReconnectFailure(
+        _ error: Error,
         routeGeneration: UInt64) async
     {
         guard routeGeneration == self.routeGeneration, let connection = self.configuredConnection else { return }
@@ -559,11 +570,73 @@ actor GatewayConnection: Observable {
             endpoint: connection.endpoint,
             generation: routeGeneration,
             activationBindingKey: connection.activationBindingKey)
-        guard let replacement = try? await self.renewLearnedPin(
-            after: error.failure, route: route, shutdownGeneration: connection.shutdownGeneration)
-        else { return }
+        let replacement: GatewayChannelActor?
+        do {
+            if let tlsError = error as? GatewayTLSValidationError {
+                replacement = try await self.renewLearnedPin(
+                    after: tlsError.failure, route: route, shutdownGeneration: connection.shutdownGeneration)
+            } else {
+                replacement = try await self.renewPersonalIdentity(
+                    after: error, route: route, shutdownGeneration: connection.shutdownGeneration)
+            }
+        } catch { return }
+        guard let replacement else { return }
         // Retiring the old channel cancels the task that reported this failure.
         Task { try? await replacement.connect() }
+    }
+
+    private func renewPersonalIdentity(
+        after error: Error,
+        route: Route,
+        shutdownGeneration: UInt64) async throws -> GatewayChannelActor?
+    {
+        guard (error as? GatewayConnectAuthError)?.detail == .authenticatedProfileUnavailable,
+              let connection = self.configuredConnection,
+              case .use? = connection.personalIdentity,
+              connection.endpoint.enablesPrimaryPersonalIdentity
+        else { return nil }
+        let endpoint = try await self.currentEndpoint()
+        try self.requireCurrentPreflightRoute(route, endpoint: endpoint, shutdownGeneration: shutdownGeneration)
+        guard endpoint.matchesConnectionIdentity(as: connection.endpoint) else { throw CancellationError() }
+        if let pending = self.pendingPersonalRecovery, pending.routeGeneration == route.generation {
+            return try await pending.task.value
+        }
+        let id = UUID()
+        let task = Task { [weak self] () throws -> GatewayChannelActor in
+            guard let self else { throw CancellationError() }
+            return try await self.rebindPersonalIdentity(
+                endpoint: endpoint, route: route, shutdownGeneration: shutdownGeneration, recoveryID: id)
+        }
+        self.pendingPersonalRecovery = PendingPersonalConfiguration(
+            id: id,
+            endpoint: endpoint,
+            shutdownGeneration: shutdownGeneration,
+            routeGeneration: route.generation,
+            task: task)
+        defer {
+            if self.pendingPersonalRecovery?.id == id { self.pendingPersonalRecovery = nil }
+        }
+        return try await task.value
+    }
+
+    private func rebindPersonalIdentity(
+        endpoint: EndpointSnapshot,
+        route: Route,
+        shutdownGeneration: UInt64,
+        recoveryID: UUID) async throws -> GatewayChannelActor
+    {
+        let binding = try await self.bindPrimaryPersonalIdentity(
+            endpoint: endpoint, shutdownGeneration: shutdownGeneration, routeGeneration: route.generation)
+        let current = try await self.currentEndpoint()
+        try self.requireCurrentPreflightRoute(route, endpoint: current, shutdownGeneration: shutdownGeneration)
+        guard current.matchesConnectionIdentity(as: endpoint) else { throw CancellationError() }
+        let previous = self.retireConfiguredConnection(preservingPersonalRecovery: recoveryID)
+        return try await self.configureUnretired(
+            endpoint: current,
+            shutdownGeneration: shutdownGeneration,
+            configuredRouteGeneration: self.routeGeneration,
+            previousClient: previous,
+            personalIdentityBinding: binding)
     }
 
     /// Learned-pin renewal can be shared with another connection. Only that TLS
@@ -1020,6 +1093,13 @@ extension GatewayConnection {
         guard ifCurrent() else { return }
         let client = self.retireConfiguredConnection(disconnection: .disconnected(nil))
         self.shutdownGeneration &+= 1
+        if let pending = self.pendingPersonalRecovery {
+            pending.task.cancel()
+            _ = try? await pending.task.value
+            if self.pendingPersonalRecovery?.id == pending.id {
+                self.pendingPersonalRecovery = nil
+            }
+        }
         if let pending = self.pendingPersonalConfiguration {
             pending.task.cancel()
             _ = try? await pending.task.value
@@ -1040,6 +1120,20 @@ extension GatewayConnection {
         let config = endpoint.config
         let browserSession = endpoint.browserSession
         try browserSession?.validate(for: config.url)
+        if self.configuredConnection == nil,
+           let pending = self.pendingPersonalRecovery,
+           !pending.task.isCancelled,
+           pending.shutdownGeneration == shutdownGeneration,
+           self.routeGeneration == pending.routeGeneration &+ 1,
+           pending.endpoint.matchesConnectionIdentity(as: endpoint)
+        {
+            let client = try await pending.task.value
+            try Task.checkCancellation()
+            try self.requireCurrentShutdownGeneration(shutdownGeneration)
+            guard self.configuredClient(endpoint: endpoint, shutdownGeneration: shutdownGeneration) === client
+            else { throw CancellationError() }
+            return client
+        }
         if let client = configuredClient(
             endpoint: endpoint,
             shutdownGeneration: shutdownGeneration)
@@ -1139,7 +1233,8 @@ extension GatewayConnection {
         endpoint: EndpointSnapshot,
         shutdownGeneration: UInt64,
         configuredRouteGeneration reservedRouteGeneration: UInt64? = nil,
-        previousClient reservedPreviousClient: GatewayChannelActor? = nil) async throws -> GatewayChannelActor
+        previousClient reservedPreviousClient: GatewayChannelActor? = nil,
+        personalIdentityBinding: PrimaryPersonalIdentityBinding? = nil) async throws -> GatewayChannelActor
     {
         try self.requireCurrentShutdownGeneration(shutdownGeneration)
         let config = endpoint.config
@@ -1170,10 +1265,14 @@ extension GatewayConnection {
         let expectedGatewayId: String?
         let personalIdentityTLSRoute: GatewayTLSRoute?
         if endpoint.enablesPrimaryPersonalIdentity {
-            let binding = try await self.bindPrimaryPersonalIdentity(
-                endpoint: endpoint,
-                shutdownGeneration: shutdownGeneration,
-                routeGeneration: configuredRouteGeneration)
+            let binding: PrimaryPersonalIdentityBinding = if let personalIdentityBinding {
+                personalIdentityBinding
+            } else {
+                try await self.bindPrimaryPersonalIdentity(
+                    endpoint: endpoint,
+                    shutdownGeneration: shutdownGeneration,
+                    routeGeneration: configuredRouteGeneration)
+            }
             try self.requireCurrentShutdownGeneration(shutdownGeneration)
             try Task.checkCancellation()
             guard self.routeGeneration == configuredRouteGeneration else { throw CancellationError() }
@@ -1247,8 +1346,8 @@ extension GatewayConnection {
             extraHeadersProvider: browserSession.map { session in
                 { @Sendable in (try? session.headers(for: config.url)) ?? [:] }
             },
-            reconnectTLSFailureHandler: { [weak self] error in
-                await self?.renewLearnedPinAfterReconnectFailure(error, routeGeneration: configuredRouteGeneration)
+            reconnectFailureHandler: { [weak self] error in
+                await self?.recoverAfterReconnectFailure(error, routeGeneration: configuredRouteGeneration)
             })
         self.configuredConnection = ConfiguredConnection(
             client: client,
@@ -1303,8 +1402,18 @@ extension GatewayConnection {
         routeGeneration: UInt64,
         allowTLSRenewal: Bool = true) async throws -> PrimaryPersonalIdentityBinding
     {
-        guard endpoint.config.url.host.map(LoopbackHost.isLoopbackHost) == true,
-              let sourceURL = await TailscaleServeGatewayDiscovery.discoverLocalGatewayServeURL(),
+        guard endpoint.config.url.host.map(LoopbackHost.isLoopbackHost) == true else {
+            throw GatewayPersonalIdentityError.unavailable("Personal Gateway identity requires a local Primary Gateway")
+        }
+        let sourceURL = await self.personalIdentityServeURLProvider()
+        let current = try await self.currentEndpoint()
+        try self.requireCurrentShutdownGeneration(shutdownGeneration)
+        try Task.checkCancellation()
+        guard self.routeGeneration == routeGeneration,
+              current.enablesPrimaryPersonalIdentity,
+              current.matchesConnectionIdentity(as: endpoint)
+        else { throw CancellationError() }
+        guard let sourceURL,
               sourceURL.scheme == "wss",
               sourceURL.host?.hasSuffix(".ts.net") == true,
               sourceURL.user == nil,
@@ -1447,7 +1556,13 @@ extension GatewayConnection {
 
     /// Invalidate every route-owned fact before shutdown can suspend; otherwise
     /// reentrant work could continue on a client whose replacement is in flight.
-    private func retireConfiguredConnection(disconnection: PushDelivery.Event? = nil) -> GatewayChannelActor? {
+    private func retireConfiguredConnection(
+        disconnection: PushDelivery.Event? = nil,
+        preservingPersonalRecovery: UUID? = nil) -> GatewayChannelActor?
+    {
+        if let pending = self.pendingPersonalRecovery, pending.id != preservingPersonalRecovery {
+            pending.task.cancel()
+        }
         self.browserSessionExpiryTask?.cancel()
         self.browserSessionExpiryTask = nil
         self.retirePublication(disconnection: disconnection, retiresRoute: true)

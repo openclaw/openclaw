@@ -100,9 +100,7 @@ public actor GatewayChannelActor {
     private let pushHandler: (@Sendable (GatewayPush, UInt64) async -> Void)?
     private var connectOptions: GatewayConnectOptions?
     private let disconnectHandler: (@Sendable (String, UInt64) async -> Void)?
-    /// Automatic reconnects have no caller to repair TLS trust. The owner may
-    /// repair and replace this channel, never retry on it.
-    private let reconnectTLSFailureHandler: (@Sendable (GatewayTLSValidationError) async -> Void)?
+    private let reconnectFailureHandler: (@Sendable (Error) async -> Void)?
 
     public init(
         url: URL,
@@ -116,7 +114,7 @@ public actor GatewayChannelActor {
         connectOptions: GatewayConnectOptions? = nil,
         disconnectHandler: (@Sendable (String, UInt64) async -> Void)? = nil,
         extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
-        reconnectTLSFailureHandler: (@Sendable (GatewayTLSValidationError) async -> Void)? = nil)
+        reconnectFailureHandler: (@Sendable (Error) async -> Void)? = nil)
     {
         self.init(
             url: url,
@@ -130,7 +128,7 @@ public actor GatewayChannelActor {
             connectOptions: connectOptions,
             disconnectHandler: disconnectHandler,
             extraHeadersProvider: extraHeadersProvider,
-            reconnectTLSFailureHandler: reconnectTLSFailureHandler,
+            reconnectFailureHandler: reconnectFailureHandler,
             networkPathUpdates: GatewayNetworkPathMonitor.systemUpdates)
     }
 
@@ -146,7 +144,7 @@ public actor GatewayChannelActor {
         connectOptions: GatewayConnectOptions? = nil,
         disconnectHandler: (@Sendable (String, UInt64) async -> Void)? = nil,
         extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
-        reconnectTLSFailureHandler: (@Sendable (GatewayTLSValidationError) async -> Void)? = nil,
+        reconnectFailureHandler: (@Sendable (Error) async -> Void)? = nil,
         networkPathUpdates: (@Sendable () -> AsyncStream<GatewayNetworkPath>)?)
     {
         self.networkPathUpdates = networkPathUpdates
@@ -161,7 +159,7 @@ public actor GatewayChannelActor {
         self.pushHandler = pushHandler
         self.connectOptions = connectOptions
         self.disconnectHandler = disconnectHandler
-        self.reconnectTLSFailureHandler = reconnectTLSFailureHandler
+        self.reconnectFailureHandler = reconnectFailureHandler
         Task { [weak self] in
             await self?.startNetworkPathObservation()
         }
@@ -1315,9 +1313,7 @@ extension GatewayChannelActor {
         }
         let wrapped = self.wrap(error, context: context)
         self.logger.error("\(context, privacy: .public) failed \(wrapped.localizedDescription, privacy: .public)")
-        if let tlsError = wrapped as? GatewayTLSValidationError {
-            await self.reconnectTLSFailureHandler?(tlsError)
-        }
+        await self.reconnectFailureHandler?(wrapped)
         return false
     }
 

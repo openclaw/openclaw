@@ -40,6 +40,7 @@ public enum GatewayConnectAuthDetailCode: String, Sendable {
     case authTailscaleWhoisFailed = "AUTH_TAILSCALE_WHOIS_FAILED"
     case authTailscaleIdentityMismatch = "AUTH_TAILSCALE_IDENTITY_MISMATCH"
     case authVerifiedUserRequired = "AUTH_VERIFIED_USER_REQUIRED"
+    case authenticatedProfileUnavailable = "AUTHENTICATED_PROFILE_UNAVAILABLE"
     case pairingRequired = "PAIRING_REQUIRED"
     case protocolMismatch = "PROTOCOL_MISMATCH"
     case controlUiDeviceIdentityRequired = "CONTROL_UI_DEVICE_IDENTITY_REQUIRED"

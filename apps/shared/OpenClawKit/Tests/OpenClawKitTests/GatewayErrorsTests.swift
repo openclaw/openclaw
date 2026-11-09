@@ -3,6 +3,22 @@ import OpenClawKit
 import Testing
 
 struct GatewayErrorsTests {
+    @Test func `unavailable authenticated profile preserves the retryable Gateway rejection`() {
+        let error = GatewayConnectAuthError(
+            message: "Authenticated profile unavailable",
+            detailCode: "AUTHENTICATED_PROFILE_UNAVAILABLE",
+            canRetryWithDeviceToken: false)
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(error.detail == .authenticatedProfileUnavailable)
+        #expect(!error.isNonRecoverable)
+        #expect(problem?.kind == .unknown)
+        #expect(problem?.owner == .unknown)
+        #expect(problem?.message == "Authenticated profile unavailable")
+        #expect(problem?.pauseReconnect == false)
+        #expect(problem?.needsCredentialUpdate == false)
+    }
+
     @Test func `response error reads structured missing scope`() throws {
         let error = GatewayResponseError(
             method: "question.list",
