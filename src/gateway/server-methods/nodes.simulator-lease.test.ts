@@ -15,11 +15,15 @@ function viewer() {
   };
 }
 
+function cleanupSpy() {
+  return vi.fn((_lease: unknown) => {});
+}
+
 function start(params: {
   nodeId: string;
   client: GatewayClient;
   executionId: string;
-  cleanup: ReturnType<typeof vi.fn>;
+  cleanup: Parameters<typeof admitSimulatorInvoke>[0]["cleanup"];
   isClientCurrent?: () => boolean;
   connId?: string;
 }) {
@@ -41,7 +45,7 @@ describe("Simulator Gateway lease", () => {
     const executionId = crypto.randomUUID();
     const first = viewer();
     const second = viewer();
-    const cleanup = vi.fn();
+    const cleanup = cleanupSpy();
     const admission = start({ nodeId, client: first.client, executionId, cleanup });
     expect(admission).toHaveProperty("started", true);
     if (!("lease" in admission)) return;
@@ -91,7 +95,7 @@ describe("Simulator Gateway lease", () => {
     const nodeId = crypto.randomUUID();
     const executionId = crypto.randomUUID();
     const first = viewer();
-    const cleanup = vi.fn();
+    const cleanup = cleanupSpy();
     const admission = start({ nodeId, client: first.client, executionId, cleanup });
     if (!("lease" in admission)) throw new Error("expected lease");
     completeSimulatorInvoke(
@@ -142,7 +146,7 @@ describe("Simulator Gateway lease", () => {
     const executionId = crypto.randomUUID();
     const first = viewer();
     let authorized = true;
-    const cleanup = vi.fn();
+    const cleanup = cleanupSpy();
     const admission = start({
       nodeId,
       client: first.client,
@@ -190,7 +194,7 @@ describe("Simulator Gateway lease", () => {
     const nodeId = crypto.randomUUID();
     const executionId = crypto.randomUUID();
     const first = viewer();
-    const admission = start({ nodeId, client: first.client, executionId, cleanup: vi.fn() });
+    const admission = start({ nodeId, client: first.client, executionId, cleanup: cleanupSpy() });
     if (!("lease" in admission)) throw new Error("expected lease");
     completeSimulatorInvoke(
       admission,
