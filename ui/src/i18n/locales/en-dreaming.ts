@@ -9,7 +9,7 @@ const enDreaming = {
       engineOff: "Memory engine is off. Choose an engine in Settings to turn on Dreaming.",
       ownerManaged: "{plugin} runs its own dreaming. Manage it in that plugin's settings.",
       ownerManagedHostOn:
-        "{plugin} runs its own dreaming, and memory-core's sweep is on as well. Turning it off here unloads memory-core's dreaming, but a promotion job it already scheduled stays in the cron list and keeps running until it is removed by hand or by the orphan-cron cleanup.",
+        "{plugin} runs its own dreaming, and memory-core's sweep is on as well. Turning it off here unloads memory-core's dreaming; the orphan-cron cleanup removes the promotion job it already scheduled.",
     },
     toggleConfirmation: {
       subtitle: "Dreaming applies to all agents.",
@@ -21,7 +21,7 @@ const enDreaming = {
       disableDetail:
         "The nightly dreaming sweep will stop for every agent, not only this agent. Existing memories stay; nothing new gets promoted. This applies right away.",
       disableDetailOwner:
-        "{plugin} keeps running its own dreaming; this switch does not reach it. Turning it off unloads memory-core's dreaming for every agent, but a promotion job memory-core already scheduled stays in the cron list and keeps running until it is removed by hand or by the orphan-cron cleanup. Existing memories stay. This applies right away.",
+        "{plugin} keeps running its own dreaming; this switch does not reach it. Turning it off unloads memory-core's dreaming for every agent; the orphan-cron cleanup removes the promotion job memory-core already scheduled. Existing memories stay. This applies right away.",
       disableConfirm: "Turn off dreaming",
       saving: "Saving…",
       failed: "Couldn’t change dreaming settings. Check your connection and try again.",

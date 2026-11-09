@@ -53,10 +53,10 @@ describe("renderDreamingToggleConfirmation", () => {
     expect(renderToggle({ enabling: true }).querySelector("button.btn.danger")).toBeNull();
   });
 
-  it("describes the surviving promotion job when the slot owner runs its own dreaming", () => {
+  it("describes the auto-cleaned promotion job when the slot owner runs its own dreaming", () => {
     const disabling = renderToggle({ enabling: false, ownerPluginId: "acme-memory" }).textContent;
     expect(disabling).toContain("acme-memory keeps running its own dreaming");
-    expect(disabling).toContain("stays in the cron list");
+    expect(disabling).toContain("orphan-cron cleanup removes the promotion job");
     expect(disabling).not.toContain("not only this agent");
     // Turning on is blocked by the panel owner; the copy stays the generic one.
     expect(renderToggle({ enabling: true, ownerPluginId: "acme-memory" }).textContent).toContain(

@@ -1,0 +1,6 @@
+# Exact net test-line growth from PR #155860 (let the memory slot owner report
+# its own dreaming status): regression coverage for the dreaming.getStatus
+# provider seam, the owner lock, and the Overview/Dreams presentation of a
+# reporting owner, after trimming the added doctor.dreaming-provider.test.ts
+# request/response boilerplate into a shared helper.
+483

@@ -13,9 +13,10 @@ export type DreamingToggleConfirmationProps = {
   // stops the sweep for every agent, not just the one this panel is showing.
   enabling: boolean;
   // Set while the memory slot owner reports its own dreaming. Turning the host
-  // switch off then unloads memory-core's dreaming without stopping the owner,
-  // and a promotion job memory-core already scheduled survives the unload, so
-  // the Off copy must not promise that the sweep stops.
+  // switch off then unloads memory-core's dreaming without stopping the owner;
+  // the orphan-cron cleanup removes the promotion job memory-core already
+  // scheduled, so the Off copy must not promise that the owner's own dreaming
+  // stops.
   ownerPluginId?: string;
   disabled: boolean;
   onConfirm: () => Promise<void> | undefined;
