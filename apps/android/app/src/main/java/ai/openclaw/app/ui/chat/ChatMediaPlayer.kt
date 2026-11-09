@@ -48,6 +48,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -555,6 +557,7 @@ private fun MediaPlaybackPresentation.AudioPlayerSurface(
         }
       }
       Slider(
+        modifier = Modifier.semantics { contentDescription = nativeString("Audio position") },
         value = positionMs.coerceIn(0L, durationMs.coerceAtLeast(0L)).toFloat(),
         onValueChange = onSeek,
         valueRange = 0f..durationMs.coerceAtLeast(1L).toFloat(),
