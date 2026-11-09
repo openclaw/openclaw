@@ -7,12 +7,14 @@ import {
   isRuntimeToolAllowed,
   createRuntimeToolMatcher,
   isToolAllowedByPolicyName,
+  isToolAllowedByPolicies,
 } from "./tool-policy-match.js";
 import {
   collectExplicitAllowlist,
   couldNormalizeToolNamePrefixToAllowedTool,
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   hasRestrictiveAllowPolicy,
+  mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
 
@@ -41,6 +43,48 @@ describe("tool-policy", () => {
 
   it("ignores unknown profiles", () => {
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
+  });
+
+  it("resolves custom profiles by unioning the builtin base with extra entries", () => {
+    const policy = resolveToolProfilePolicy("desk-operator", {
+      "desk-operator": {
+        base: "coding",
+        allow: ["brayer_order_get", "brayer_order_next"],
+        deny: ["browser", " exec "],
+      },
+    });
+    expect(policy?.allow).toContain("exec");
+    expect(policy?.allow).toContain("brayer_order_get");
+    expect(policy?.allow).toContain("brayer_order_next");
+    expect(policy?.deny).toEqual(["browser", "exec"]);
+  });
+
+  it("applies merged custom profile policies with deny precedence", () => {
+    const profilePolicy = resolveToolProfilePolicy("desk-operator", {
+      "desk-operator": {
+        base: "coding",
+        allow: ["brayer_order_get"],
+        deny: ["browser"],
+      },
+    });
+    const policy = mergeAlsoAllowPolicy(profilePolicy, ["brayer_order_next"]);
+    expect(isToolAllowedByPolicies("brayer_order_get", [policy])).toBe(true);
+    expect(isToolAllowedByPolicies("brayer_order_next", [policy])).toBe(true);
+    expect(isToolAllowedByPolicies("browser", [policy])).toBe(false);
+  });
+
+  it("resolves custom profiles without a base as a standalone allowlist", () => {
+    const policy = resolveToolProfilePolicy("read-only", {
+      "read-only": { allow: ["read"] },
+    });
+    expect(policy?.allow).toEqual(["read"]);
+    expect(policy?.deny).toBeUndefined();
+  });
+
+  it("ignores blank custom profile definitions and entries", () => {
+    expect(
+      resolveToolProfilePolicy("blank", { blank: { allow: ["", "  "], deny: [] } }),
+    ).toBeUndefined();
   });
 
   it("matches literal constructor prefixes only when allowed", () => {

@@ -41,6 +41,37 @@ workspace and identity checks or the meeting transcript caller checks.
 `coding` and `messaging` also include the [theme tool](/tools/theme) and implicitly
 allow `bundle-mcp` (configured MCP servers).
 
+## Custom profiles
+
+Sites that need stable, named policy packs can define operator profiles under
+`tools.profiles.<name>` and reference them anywhere `tools.profile` is accepted
+(global, per-agent, and `byProvider`). Each definition has `base` (a built-in
+profile), `allow` (extra tool entries unioned over the base), and `deny`
+(entries denied after allow expansion; deny wins):
+
+```json5
+{
+  tools: {
+    profiles: {
+      "desk-operator": {
+        base: "coding",
+        allow: ["brayer_order_get", "brayer_order_next"],
+        deny: ["browser"],
+      },
+    },
+    profile: "desk-operator",
+  },
+}
+```
+
+Profile names may only use letters, digits, `-`, and `_`; the four built-in
+profile ids are reserved. A definition must set `base`, `allow`, or `deny`, and
+`base` only accepts built-in profile ids — custom profiles cannot chain. The
+entries accept the same tool identities as `tools.allow`, including
+`group:*` groups and `bundle-mcp`. Name resolution is validated against
+`tools.profiles` at config validation, so a typo in a `profile` reference is a
+config error, not a silent no-policy baseline.
+
 The [`tts` tool](/tools/tts/api#tool-profiles) is not part of any restricted
 profile. To let an agent on `minimal`, `coding`, or `messaging` call it, add
 `tts` to `tools.alsoAllow`. [Automatic TTS](/tools/tts/output#auto-tts-behavior)

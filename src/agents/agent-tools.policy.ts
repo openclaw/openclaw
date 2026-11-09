@@ -49,7 +49,11 @@ import {
 } from "./subagents/spawn/subagent-capabilities.js";
 import { createToolPolicyMatcher } from "./tool-policy-match.js";
 import type { ConfiguredToolPolicySources } from "./tool-policy-pipeline.js";
-import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
+import {
+  mergeAlsoAllowPolicy,
+  resolveToolProfilePolicy,
+  type CustomToolProfiles,
+} from "./tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
 export { resolveProviderToolPolicy };
@@ -148,7 +152,10 @@ export function resolveConfiguredToolPolicies(params: {
 }): SandboxToolPolicy[] {
   const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
   const profileAlsoAllow = params.agentTools?.alsoAllow ?? params.cfg.tools?.alsoAllow;
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
+  const profilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(profile, params.cfg.tools?.profiles),
+    profileAlsoAllow,
+  );
   const policies = [
     profilePolicy,
     pickSandboxToolPolicy(params.cfg.tools),
@@ -279,8 +286,12 @@ export function resolveTrustedGroupId(params: {
   });
 }
 
-function profileAllowsGatewayConfigReads(profile?: string, alsoAllow?: string[]): boolean {
-  const policy = resolveToolProfilePolicy(profile);
+function profileAllowsGatewayConfigReads(
+  profile?: string,
+  alsoAllow?: string[],
+  customProfiles?: CustomToolProfiles,
+): boolean {
+  const policy = resolveToolProfilePolicy(profile, customProfiles);
   if (!policy?.allow || policy.allow.includes("*")) {
     return true;
   }
@@ -336,6 +347,7 @@ export function resolveEffectiveToolPolicy(params: {
     agentConfig?.tools ??
     (params.config && !hasAgentRosterProperty(params.config) ? implicitDefaultTools : undefined);
   const globalTools = params.config?.tools;
+  const customProfiles = globalTools?.profiles;
 
   const profile = agentTools?.profile ?? globalTools?.profile;
   const profileSource = agentTools?.profile ? "agent" : globalTools?.profile ? "global" : undefined;
@@ -440,10 +452,11 @@ export function resolveEffectiveToolPolicy(params: {
   };
 
   const gatewayConfigReadAllowed =
-    profileAllowsGatewayConfigReads(profile, effectivePolicy.profileAlsoAllow) &&
+    profileAllowsGatewayConfigReads(profile, effectivePolicy.profileAlsoAllow, customProfiles) &&
     profileAllowsGatewayConfigReads(
       effectivePolicy.providerProfile,
       effectivePolicy.providerProfileAlsoAllow,
+      customProfiles,
     );
 
   // Recommend removed implicit grants only when adding them to the profile
@@ -456,7 +469,7 @@ export function resolveEffectiveToolPolicy(params: {
     });
     if (implicitGrants.length > 0) {
       const profilePolicy = mergeAlsoAllowPolicy(
-        resolveToolProfilePolicy(profile),
+        resolveToolProfilePolicy(profile, customProfiles),
         explicitProfileAlsoAllow,
       );
       const matchesProfile = createToolPolicyMatcher(profilePolicy);
@@ -466,7 +479,7 @@ export function resolveEffectiveToolPolicy(params: {
         effectivePolicy.agentPolicy,
         effectivePolicy.agentProviderPolicy,
         mergeAlsoAllowPolicy(
-          resolveToolProfilePolicy(effectivePolicy.providerProfile),
+          resolveToolProfilePolicy(effectivePolicy.providerProfile, customProfiles),
           effectivePolicy.providerProfileAlsoAllow,
         ),
       ].map((policy) => createToolPolicyMatcher(policy));

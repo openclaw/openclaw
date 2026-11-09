@@ -46,7 +46,7 @@ export async function acquirePluginToolsForMcp(params: {
       })
     : undefined;
   const profilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(effective?.profile ?? config.tools?.profile),
+    resolveToolProfilePolicy(effective?.profile ?? config.tools?.profile, config.tools?.profiles),
     effective?.profileAlsoAllow ?? config.tools?.alsoAllow,
   );
   const globalPolicy = effective?.globalPolicy ?? pickSandboxToolPolicy(config.tools);

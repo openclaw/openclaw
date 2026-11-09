@@ -209,9 +209,12 @@ function repairRunConfig(
       policy.agentPolicy,
       policy.globalProviderPolicy,
       policy.agentProviderPolicy,
-      mergeAlsoAllowPolicy(resolveToolProfilePolicy(policy.profile), policy.profileAlsoAllow),
       mergeAlsoAllowPolicy(
-        resolveToolProfilePolicy(policy.providerProfile),
+        resolveToolProfilePolicy(policy.profile, base.tools?.profiles),
+        policy.profileAlsoAllow,
+      ),
+      mergeAlsoAllowPolicy(
+        resolveToolProfilePolicy(policy.providerProfile, base.tools?.profiles),
         policy.providerProfileAlsoAllow,
       ),
     ];

@@ -48,7 +48,7 @@ export function selectableAgentsList(agentsList: AgentsListResult): AgentsListRe
   return { ...agentsList, agents: listSelectableAgents(agentsList.agents) };
 }
 
-type AgentDisplayTools = Pick<ToolsConfig, "allow" | "alsoAllow" | "deny"> & {
+type AgentDisplayTools = Pick<ToolsConfig, "allow" | "alsoAllow" | "deny" | "profiles"> & {
   profile?: string;
   github?: Partial<Pick<GitHubToolIdentityConfig, "profileId" | "gitAuthor">>;
 };

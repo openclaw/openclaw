@@ -37,6 +37,7 @@ import {
   hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
+  type CustomToolProfiles,
 } from "./tool-policy.js";
 import { prepareSandboxSessionTools } from "./tools/sessions-operator-authority.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
@@ -44,6 +45,7 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 function resolveManifestToolProfileNames(
   snapshot: Pick<PluginMetadataSnapshot, "plugins"> | undefined,
   profile: string | undefined,
+  substituteProfiles: readonly string[] = [],
 ): string[] {
   if (!profile) {
     return [];
@@ -51,7 +53,9 @@ function resolveManifestToolProfileNames(
   return uniqueStrings(
     (snapshot?.plugins ?? []).flatMap((plugin) =>
       (plugin.contracts?.tools ?? []).filter((toolName) =>
-        plugin.toolMetadata?.[toolName]?.profiles?.some((candidate) => candidate === profile),
+        plugin.toolMetadata?.[toolName]?.profiles?.some(
+          (candidate) => candidate === profile || substituteProfiles.includes(candidate),
+        ),
       ),
     ),
   );
@@ -173,13 +177,28 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
     inheritedToolPolicy,
     sessionInheritedToolPolicy,
   } = requesterPolicies;
+  const customProfiles = params.config?.tools?.profiles;
+  // Manifest grants target built-in profile ids; a custom profile inherits the
+  // grants of its configured base while its own deny entries still win.
+  const manifestSubstitutes = (profiles: CustomToolProfiles | undefined, profile?: string) => {
+    const base = profiles?.[profile ?? ""]?.base;
+    return base ? [base] : [];
+  };
   const profilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(effective.profile),
-    resolveManifestToolProfileNames(params.pluginMetadataSnapshot, effective.profile),
+    resolveToolProfilePolicy(effective.profile, customProfiles),
+    resolveManifestToolProfileNames(
+      params.pluginMetadataSnapshot,
+      effective.profile,
+      manifestSubstitutes(customProfiles, effective.profile),
+    ),
   );
   const providerProfilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(effective.providerProfile),
-    resolveManifestToolProfileNames(params.pluginMetadataSnapshot, effective.providerProfile),
+    resolveToolProfilePolicy(effective.providerProfile, customProfiles),
+    resolveManifestToolProfileNames(
+      params.pluginMetadataSnapshot,
+      effective.providerProfile,
+      manifestSubstitutes(customProfiles, effective.providerProfile),
+    ),
   );
   const configuredOverridePolicies = [
     effective.globalPolicy,

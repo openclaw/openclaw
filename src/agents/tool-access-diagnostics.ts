@@ -139,11 +139,11 @@ export function resolveConfiguredToolAccess(params: {
     steps: buildDefaultToolPolicyPipelineSteps({
       ...policy,
       profilePolicy: mergeAlsoAllowPolicy(
-        resolveToolProfilePolicy(policy.profile),
+        resolveToolProfilePolicy(policy.profile, params.config.tools?.profiles),
         policy.profileAlsoAllow,
       ),
       providerProfilePolicy: mergeAlsoAllowPolicy(
-        resolveToolProfilePolicy(policy.providerProfile),
+        resolveToolProfilePolicy(policy.providerProfile, params.config.tools?.profiles),
         policy.providerProfileAlsoAllow,
       ),
     }),

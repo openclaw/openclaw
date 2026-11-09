@@ -1,8 +1,12 @@
 /** Canonical tool identities and policy facts, independent of catalog presentation. */
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
 // Shared with restart classification without importing the tool-search runtime contract.
 export const TOOL_CALL_RAW_TOOL_NAME = "dispatch_action";
+
+/** Built-in tool profile ids reserved in config and resolvable without tools.profiles. */
+export const BUILTIN_TOOL_PROFILE_IDS = ["minimal", "coding", "messaging", "full"] as const;
 
 /** Built-in tool profile ids exposed in config and UI. */
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
@@ -271,8 +275,63 @@ export const PROFILE_OPTIONS = [
   { id: "full", label: "Full" },
 ] as const;
 
-/** Resolves the allow/deny policy for a built-in tool profile. */
-export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
+/** Operator-defined named tool profile (`tools.profiles.<name>`). */
+export type CustomToolProfileDefinition = {
+  base?: ToolProfileId;
+  allow?: string[];
+  deny?: string[];
+};
+
+export type CustomToolProfiles = Record<string, CustomToolProfileDefinition>;
+
+/** Resolves an operator-defined profile: built-in base first, then allow/deny unions. */
+export function resolveCustomToolProfilePolicy(
+  profile?: string,
+  customProfiles?: CustomToolProfiles,
+): ToolProfilePolicy | undefined {
+  const definition = profile ? customProfiles?.[profile] : undefined;
+  if (!definition || (!definition.base && !definition.allow?.length && !definition.deny?.length)) {
+    return undefined;
+  }
+  let baseAllow: string[] = [];
+  let baseDeny: string[] = [];
+  if (definition.base) {
+    // Base ids are restricted to built-in profiles both at schema and runtime level, so custom
+    // names cannot form reference cycles here.
+    const base = resolveBuiltinToolProfilePolicy(definition.base);
+    baseAllow = base?.allow ?? [];
+    baseDeny = base?.deny ?? [];
+  }
+  const allow = uniqueStrings([
+    ...baseAllow,
+    ...(definition.allow ?? []).map((entry) => entry.trim()).filter(Boolean),
+  ]);
+  const deny = uniqueStrings([
+    ...baseDeny,
+    ...(definition.deny ?? []).map((entry) => entry.trim()).filter(Boolean),
+  ]);
+  if (allow.length === 0 && deny.length === 0) {
+    return undefined;
+  }
+  return {
+    allow: allow.length > 0 ? allow : undefined,
+    deny: deny.length > 0 ? deny : undefined,
+  };
+}
+
+/** Resolves the allow/deny policy for a built-in or configured custom tool profile. */
+export function resolveCoreToolProfilePolicy(
+  profile?: string,
+  customProfiles?: CustomToolProfiles,
+): ToolProfilePolicy | undefined {
+  const builtin = resolveBuiltinToolProfilePolicy(profile);
+  if (builtin) {
+    return builtin;
+  }
+  return resolveCustomToolProfilePolicy(profile, customProfiles);
+}
+
+function resolveBuiltinToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
   if (!profile) {
     return undefined;
   }

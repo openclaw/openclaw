@@ -92,8 +92,11 @@ export async function resolveSkillDispatchTools(params: {
     modelProvider: params.provider,
     modelId: params.model,
   });
-  const profilePolicy = resolveToolProfilePolicy(profile);
-  const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
+  const profilePolicy = resolveToolProfilePolicy(profile, params.cfg.tools?.profiles);
+  const providerProfilePolicy = resolveToolProfilePolicy(
+    providerProfile,
+    params.cfg.tools?.profiles,
+  );
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
   const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
     providerProfilePolicy,

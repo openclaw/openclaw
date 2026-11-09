@@ -8,6 +8,7 @@ import {
   resolveConfiguredAgentId,
   resolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
+import { BUILTIN_TOOL_PROFILE_IDS } from "../agents/core-tool-facts.js";
 import { resolveSandboxDockerEnv, resolveSandboxScope } from "../agents/sandbox/config-contract.js";
 import { LEGACY_AGENT_ROSTER_RULES } from "../commands/doctor/shared/legacy-config-migrations.runtime.entries.js";
 import { collectLegacyToolsBySenderIssues } from "../commands/doctor/shared/legacy-tools-by-sender.js";
@@ -247,6 +248,62 @@ function validateGatewayTailscaleAuth(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+function collectToolProfileReferenceIssues(config: OpenClawConfig): ConfigValidationIssue[] {
+  const knownProfiles = new Set<string>([
+    ...BUILTIN_TOOL_PROFILE_IDS,
+    ...Object.keys(config.tools?.profiles ?? {}),
+  ]);
+  const issues: ConfigValidationIssue[] = [];
+  const checkProfile = (profile: unknown, configPath: string): void => {
+    if (typeof profile !== "string") {
+      return;
+    }
+    const trimmed = profile.trim();
+    if (trimmed.length === 0) {
+      // An empty selection overrides nullish inheritance and resolves to no policy;
+      // removing the key is the only intent that matches that result.
+      issues.push({
+        path: configPath,
+        message:
+          "empty tool profile selection; remove the key to inherit the parent profile, " +
+          "or use a defined profile name",
+      });
+      return;
+    }
+    if (knownProfiles.has(trimmed)) {
+      return;
+    }
+    issues.push({
+      path: configPath,
+      message:
+        `unknown tool profile: ${sanitizeForLog(JSON.stringify(profile))}. ` +
+        "Define it under tools.profiles.<name> (with a built-in base plus allow/deny entries), " +
+        "or use a built-in profile: minimal, coding, messaging, full.",
+    });
+  };
+  const checkToolsPolicy = (
+    tools:
+      | {
+          profile?: unknown;
+          byProvider?: Record<string, { profile?: unknown }> | undefined;
+        }
+      | undefined,
+    configPath: string,
+  ): void => {
+    checkProfile(tools?.profile, `${configPath}.profile`);
+    for (const [key, policy] of Object.entries(tools?.byProvider ?? {})) {
+      checkProfile(policy?.profile, `${configPath}.byProvider[${JSON.stringify(key)}].profile`);
+    }
+  };
+  checkToolsPolicy(config.tools, "tools");
+  for (const { entry: agent, source } of listAgentEntriesWithSource(config)) {
+    const pathPrefix =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
+    checkToolsPolicy(agent.tools, `${pathPrefix}.tools`);
+  }
+  return issues;
+}
+
 function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidationIssue[] {
   const issues: ConfigValidationIssue[] = [];
   const defaultModels = config.agents?.defaults?.models;
@@ -461,6 +518,7 @@ export function validateConfigObjectRaw(
     () => validateGatewayTailscaleBind(validatedConfig),
     () => validateGatewayTailscaleAuth(validatedConfig),
     () => collectModelPolicyAllowIssues(validatedConfig),
+    () => collectToolProfileReferenceIssues(validatedConfig),
   ]) {
     const issues = validate();
     if (issues.length > 0) {

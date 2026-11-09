@@ -136,7 +136,9 @@ export function AgentTools(
   const basePolicy = createMemo(() =>
     hasAgentAllow()
       ? { allow: agentTools().allow ?? [], deny: configuredDeny() }
-      : resolveToolProfilePolicy(profile()),
+      : // Runtime resolves custom profile refs against tools.profiles; mirror that
+        // here so panel enrollment and saved geometry match the effective policy.
+        resolveToolProfilePolicy(profile(), globalTools().profiles),
   );
   const matchesBase = createMemo(() => createToolPolicyMatcher(basePolicy()));
   const matchesAllow = createMemo(() => createRuntimeToolMatcher(alsoAllow()));

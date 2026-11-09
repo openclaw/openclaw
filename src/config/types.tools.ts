@@ -56,6 +56,10 @@ export type MediaToolsConfig = {
 
 export type ToolProfileId = NonNullable<SchemaToolsConfig["profile"]>;
 
+export type ToolProfilesConfig = NonNullable<SchemaToolsConfig["profiles"]>;
+
+export type CustomToolProfileConfig = ToolProfilesConfig[string];
+
 export type ToolLoopDetectionConfig = NonNullable<SchemaToolsConfig["loopDetection"]>;
 
 export type ToolSearchConfig = NonNullable<SchemaToolsConfig["toolSearch"]>;

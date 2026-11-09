@@ -7,7 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { CORE_TOOL_GROUPS } from "./tool-catalog.js";
 
 export { resolveCoreToolProfilePolicy as resolveToolProfilePolicy } from "./tool-catalog.js";
-export type { ToolProfileId } from "./tool-catalog.js";
+export type { ToolProfileId, CustomToolProfiles } from "./tool-catalog.js";
 
 const TOOL_NAME_ALIASES = new Map<string, string>([
   ["bash", "exec"],

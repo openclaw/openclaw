@@ -101,12 +101,13 @@ export function shouldIncludeProgressCardToolForOpenClawTools(
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
+  const customProfiles = params.config?.tools?.profiles;
   const profilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(effective.profile),
+    resolveToolProfilePolicy(effective.profile, customProfiles),
     effective.profileAlsoAllow,
   );
   const providerProfilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(effective.providerProfile),
+    resolveToolProfilePolicy(effective.providerProfile, customProfiles),
     effective.providerProfileAlsoAllow,
   );
   return isToolAllowedByPolicies(

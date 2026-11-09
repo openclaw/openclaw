@@ -159,13 +159,14 @@ export function resolveSandboxWorkspaceAuthority(params: {
         modelProvider: model.provider,
         modelId: model.model,
       });
+      const customProfiles = params.config.tools?.profiles;
       const policies = [
         mergeAlsoAllowPolicy(
-          resolveToolProfilePolicy(effective.profile),
+          resolveToolProfilePolicy(effective.profile, customProfiles),
           effective.profileAlsoAllow,
         ),
         mergeAlsoAllowPolicy(
-          resolveToolProfilePolicy(effective.providerProfile),
+          resolveToolProfilePolicy(effective.providerProfile, customProfiles),
           effective.providerProfileAlsoAllow,
         ),
         effective.globalPolicy,
