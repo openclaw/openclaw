@@ -1,0 +1,2 @@
+87
+# Re-serve a skill whose delivered copy a tool-result reducer shortened.

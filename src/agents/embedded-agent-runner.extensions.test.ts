@@ -13,6 +13,7 @@ import {
   ModelRegistry,
   SessionManager,
 } from "openclaw/plugin-sdk/agent-sessions";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentToolResultMiddleware,
@@ -24,12 +25,15 @@ import {
   consumeAdjustedParamsForToolCall,
   recordAdjustedParamsForToolCall,
 } from "./agent-tools.before-tool-call.js";
+import { wrapReadToolWithSkillContent } from "./agent-tools.read.js";
 import { buildEmbeddedExtensionFactories } from "./embedded-agent-runner/extensions.js";
 import { consumeEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import { cleanupTempPluginTestEnvironment } from "./test-helpers/temp-plugin-extension-fixtures.js";
 import { jsonResult } from "./tools/common.js";
 
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const skillInstructionPath = "/skills/pond/SKILL.md";
+const skillInstructionText = "# Pond\ncomplete instructions";
 
 afterEach(() => {
   cleanupTempPluginTestEnvironment([], originalBundledPluginsDir);
@@ -285,6 +289,48 @@ describe("buildEmbeddedExtensionFactories", () => {
         isError: true,
       });
       expect(result).toEqual(complete ? { ...payload, isError: false } : undefined);
+    },
+  );
+
+  it.each([
+    ["shortened", "# Pond"],
+    ["intact", "# Pond\ncomplete instructions"],
+  ])(
+    "drops the whole-read skill cache only when middleware shortened the copy: %s",
+    async (label, deliveredText) => {
+      const shortened = deliveredText !== skillInstructionText;
+      installMiddleware(() => ({
+        result: textToolResult(deliveredText, { kind: "text" as const, content: deliveredText }),
+      }));
+      const deliveryCache = new Map<string, Promise<boolean>>();
+      const cachedRead = wrapReadToolWithSkillContent(
+        {
+          name: "read",
+          label: "read",
+          description: "read a file",
+          parameters: Type.Object({ path: Type.String() }),
+          execute: async () => ({
+            content: [{ type: "text" as const, text: skillInstructionText }],
+            details: { kind: "text" as const, content: skillInstructionText },
+          }),
+        },
+        [{ filePath: skillInstructionPath }],
+        { instructionDeliveryCache: deliveryCache },
+      );
+      const toolCallId = `call-skill-${label}`;
+      const served = await cachedRead.execute(toolCallId, { path: skillInstructionPath });
+      expect(deliveryCache.size).toBe(1);
+
+      const handler = await createToolResultHandler();
+      await handler({
+        toolName: "read",
+        toolCallId,
+        input: { path: skillInstructionPath },
+        content: served.content,
+        details: served.details,
+      });
+
+      expect(deliveryCache.size).toBe(shortened ? 0 : 1);
     },
   );
 });

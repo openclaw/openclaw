@@ -14,8 +14,18 @@ import { createAgentToolResultMiddlewareApplier } from "../harness/tool-result-m
 import type { AgentToolResult } from "../runtime/index.js";
 import type { ToolResultEvent } from "../sessions/extensions/types.js";
 import type { ExtensionFactory, SessionManager } from "../sessions/index.js";
+import { reconcileSkillInstructionDelivery } from "../skill-instruction-result.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { recordEmbeddedToolReceipt } from "./tool-send-receipts.js";
+
+/** Concatenates the text the model will receive after middleware has run. */
+function deliveredTextOf(result: AgentToolResult<unknown>): string {
+  return result.content
+    .flatMap((block) =>
+      block.type === "text" && typeof block.text === "string" ? [block.text] : [],
+    )
+    .join("\n");
+}
 
 export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
@@ -98,6 +108,14 @@ export function buildEmbeddedExtensionFactories(params: {
         result: current,
       });
       const result = update ?? current;
+      if (eventToolCallId) {
+        // A reducer may have shortened a skill read after the tool served it whole;
+        // drop the whole-read cache entry so an explicit re-read serves the document.
+        reconcileSkillInstructionDelivery({
+          toolCallId: eventToolCallId,
+          deliveredText: deliveredTextOf(result),
+        });
+      }
       const isAcceptedSessionSpawn =
         event.toolName === "sessions_spawn" && normalizeAcceptedSessionSpawnResult(result) !== null;
       const hasError = event.isError === true || inputHadErrorStatus || isToolResultError(result);

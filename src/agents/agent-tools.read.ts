@@ -63,6 +63,7 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./sessions/tools/truncate.
 import {
   createAlreadyDeliveredSkillResult,
   rememberSkillInstructionDelivery,
+  rememberSkillInstructionDeliveryForToolCall,
 } from "./skill-instruction-result.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 import {
@@ -1112,6 +1113,11 @@ export function wrapReadToolWithSkillContent(
         }
         if (!signal?.aborted) {
           rememberSkillInstructionDelivery(result, details.content, delivery);
+          rememberSkillInstructionDeliveryForToolCall({
+            toolCallId,
+            content: details.content,
+            forget: resetDelivery,
+          });
         }
         settleDelivery(true);
         return result;
