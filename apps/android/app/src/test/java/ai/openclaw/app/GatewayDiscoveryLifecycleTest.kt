@@ -22,7 +22,9 @@ class GatewayDiscoveryLifecycleTest {
     val prefs = SecurePrefs(app, securePrefsOverride = app.getSharedPreferences("discovery-lifecycle", Context.MODE_PRIVATE))
     val nsd = shadowOf(app.getSystemService(NsdManager::class.java))
     val runtime = NodeRuntime(app, prefs, initialForeground = false)
+
     fun listeners() = nsd.getDiscoveryListeners("_openclaw-gw._tcp.").orEmpty().size
+
     try {
       assertEquals(0, listeners())
       runtime.setForeground(true)
