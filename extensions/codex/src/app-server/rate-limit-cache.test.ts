@@ -1,5 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
+import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
+import { createClientHarness } from "./test-support.js";
 import {
   mergeCodexRateLimitsUpdate,
   readCodexRateLimitsRevision,
@@ -68,6 +70,35 @@ it("expires the cached read on elapsed time even when the wall clock steps back"
   // …while the wall clock steps backward, so a Date.now-keyed window would never lapse.
   wall.mockReturnValue(1_000_000_000_000 - 60 * 60_000);
   expect(readRecentCodexRateLimits(client)).toBeUndefined();
+});
+
+it("serves a fresh snapshot over the real client runtime until elapsed time passes despite a wall-clock step back", async () => {
+  // Real client transport + real notification wiring + real rate-limit cache module.
+  const harness = createClientHarness();
+  ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
+  const wall = vi.spyOn(Date, "now").mockReturnValue(1_000_000_000_000);
+  const elapsed = vi.spyOn(performance, "now").mockReturnValue(0);
+  try {
+    // The real codex app-server notification path records the snapshot.
+    harness.send({
+      method: "account/rateLimits/updated",
+      params: { rateLimits: { limitId: "codex" } },
+    });
+    await vi.waitFor(() =>
+      expect(readRecentCodexRateLimits(harness.client)).toEqual({
+        rateLimits: { limitId: "codex" },
+      }),
+    );
+    // Real elapsed time passes the 10-minute max-age window…
+    elapsed.mockReturnValue(10 * 60_000 + 1);
+    // …while the wall clock steps backward, so a Date.now-keyed window would never lapse.
+    wall.mockReturnValue(1_000_000_000_000 - 60 * 60_000);
+    expect(readRecentCodexRateLimits(harness.client)).toBeUndefined();
+  } finally {
+    harness.client.close();
+    harness.emitExit();
+    await harness.client.closeAndWait().catch(() => undefined);
+  }
 });
 
 it("merges sparse rolling updates without clearing account metadata", () => {
