@@ -206,7 +206,11 @@ pr_preflight_baseline_arguments() {
   if [ "$proof" = true ]; then
     PR_BASELINE_FOR_PROOF=1
     for option in --expected-head --baseline --expected-tree --expected-review; do case "$seen" in *" $option "*) ;; *) return 2 ;; esac; done
-    for option in --predecessor-head --predecessor-binding --signer; do case "$seen" in *" $option "*) return 2 ;; esac; done
+    case "$seen" in *" --signer "*) return 2 ;; esac
+    case "$seen" in *" --predecessor-head "*|*" --predecessor-binding "*)
+      for option in --predecessor-head --predecessor-binding; do case "$seen" in *" $option "*) ;; *) return 2 ;; esac; done
+      for option in --incoming-head --incoming-review --publication-receipt --publication-oid; do case "$seen" in *" $option "*) return 2 ;; esac; done ;;
+    esac
     case "$seen" in *" --incoming-head "*|*" --incoming-review "*|*" --publication-receipt "*|*" --publication-oid "*)
       for option in --incoming-head --incoming-review --publication-receipt --publication-oid; do case "$seen" in *" $option "*) ;; *) return 2 ;; esac; done ;;
     esac
@@ -1526,6 +1530,7 @@ Usage:
     Requires no armed auto-merge/queue. Never qualifies gates or merge, and never creates a GraphQL commit alias.
   scripts/pr prepare-baseline-refresh <PR> --expected-head <SHA> --baseline <SHA> [--resolutions <file>]
     Pending-proof source: add --for-proof --expected-tree <OID> --expected-review <OID> [--source-review <file>] [--coauthors <file>].
+    Bound pending-proof source also requires --predecessor-head <SHA> --predecessor-binding <OID>; fresh-incoming continuation flags cannot combine.
     Published-source continuation: also select --incoming-head <SHA> --incoming-review <OID> --publication-receipt <push|sync> --publication-oid <OID>.
   scripts/pr prepare-baseline-successor <PR> --expected-head <SHA> --expected-tree <OID> --expected-review <OID> --predecessor-head <SHA> --predecessor-binding <OID> --baseline <SHA> [--resolutions <file>]
   scripts/pr prepare-baseline-signing-request <PR> --expected-head <SHA> --baseline <SHA> --signer <fingerprint> [--resolutions <file>] [successor identity options]
