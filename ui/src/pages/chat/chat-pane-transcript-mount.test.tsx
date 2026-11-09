@@ -48,11 +48,15 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
       flush();
     }
   };
-  function mountPane(paneId: string, restoring = false) {
+  function mountPane(paneId: string, restoring = false, messageCount = 1) {
     const chat = createChatProps({
       paneId,
       sessionKey: `agent:main:${paneId}`,
-      messages: [{ role: "assistant", content: "Initial history", timestamp: 1 }],
+      messages: Array.from({ length: messageCount }, (_, index) => ({
+        role: "assistant",
+        content: "Initial history",
+        timestamp: index + 1,
+      })),
       restoring,
     });
     chat.transcript.start();
@@ -164,4 +168,29 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
   expect(restored.container.querySelector('.chat-thread[role="log"]')).not.toBeNull();
   expect(restored.container.querySelector(".chat-conversation-loading")).toBeNull();
   restored.unmount();
+
+  vi.stubGlobal("chrome", {});
+  const preparing = mountPane("mount-preparing", false, 600);
+  preparing.update({ chat: { ...preparing.chat, messages: [], loading: true } });
+  await paint();
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(preparing.container.querySelector(".chat-virtual-row")).toBeNull();
+  preparing.update({ chat: preparing.chat });
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  // The composer is usable, but no partial history may reach the transcript.
+  expect(preparing.getByRole<HTMLTextAreaElement>("textbox").disabled).toBe(false);
+  expect(preparing.container.querySelector(".chat-virtual-row")).toBeNull();
+  preparing.update({
+    chat: {
+      ...preparing.chat,
+      messages: [{ role: "assistant", content: "Replacement history", timestamp: 1 }],
+    },
+  });
+  await vi.advanceTimersByTimeAsync(1);
+  await settlePaints();
+  expect(preparing.container.textContent).toContain("Replacement history");
+  expect(preparing.container.textContent).not.toContain("Initial history");
+  preparing.unmount();
 });

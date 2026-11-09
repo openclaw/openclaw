@@ -1,27 +1,24 @@
 import type { JSX } from "@solidjs/web";
 import { currentThemeBranding } from "../../../app/theme-branding.ts";
-import { i18n } from "../../../i18n/index.ts";
 import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-avatar.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
 import { createPendingSteerLookup } from "../chat-pending-inputs.ts";
 import { resolveTurnRecap, shouldRenderQueuedSendInThread } from "../chat-progress.ts";
-import { projectChatReasoning } from "../chat-reasoning.ts";
-import { groupReadsHandoffRoster, projectSubagentStatus } from "../chat-subagent-wait.ts";
+import { groupReadsHandoffRoster } from "../chat-subagent-wait.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import {
   buildCachedChatItems,
+  getChatItemsGeneration,
+  syncToolCardExpansionState,
   getExpansionStateVersion,
   getExpandedToolCards,
   getExpandedUserMessages,
   setExpansionState,
-  syncToolCardExpansionState,
 } from "../chat-thread.ts";
 import { readAsyncQuestions } from "./chat-async-question-content.ts";
-import { buildChatArchiveNotice } from "./chat-divider.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
@@ -34,10 +31,7 @@ import {
 } from "./chat-thread-interactions.ts";
 import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
-import {
-  resolveTranscriptAvatarPlacement,
-  resolveTranscriptParticipants,
-} from "./chat-transcript-identity.ts";
+import { resolveTranscriptAvatarPlacement } from "./chat-transcript-identity.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 import {
@@ -47,7 +41,6 @@ import {
   projectTranscriptRows,
   type PlacedContentRow,
 } from "./chat-transcript-message-index.ts";
-import { projectTranscriptRecovery } from "./chat-transcript-recovery.ts";
 import {
   GuardedTranscriptItem,
   guardChatRenderItems,
@@ -56,9 +49,72 @@ import {
 } from "./chat-transcript-render-guard.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
-import { createTranscriptStreamSource } from "./chat-transcript-stream-source.ts";
+import {
+  chatTranscriptInputs,
+  createTranscriptStreamSource,
+} from "./chat-transcript-stream-source.ts";
 import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+
+function chatTranscriptChain(
+  chatItems: ReturnType<typeof buildCachedChatItems>,
+  props: ChatThreadProps,
+  searchFiltering: boolean,
+) {
+  syncToolCardExpansionState(
+    props.sessionKey,
+    chatItems,
+    Boolean(props.autoExpandToolCalls),
+    searchFiltering || !props.showToolCalls,
+  );
+  const chain = projectTranscriptChain(chatItems, {
+    sessionKey: props.sessionKey,
+    messages: props.messages,
+    activeRunId: props.runActive || props.runWorking ? props.runId : null,
+    runWorking: Boolean(props.runWorking),
+    searchActive: searchFiltering,
+    bubbleMode: props.chatBubbleMode === true,
+    session: props.transcriptMetadata ?? props.selectedSession,
+  });
+  const replyNavigationId = props.replyMessageAccess?.navigationId;
+  if (replyNavigationId) {
+    expandReplyTargetWork(
+      chain.transcriptItems,
+      getExpandedToolCards(props.sessionKey),
+      replyNavigationId,
+    );
+  }
+  return chain;
+}
+
+/** Fill the canonical caches before admitting one complete initial transcript. */
+export function* prepareChatTranscript(
+  getProps: () => ChatThreadProps,
+  getSession: (key: string) => ChatTranscriptSession,
+) {
+  let preparedItems: ReturnType<typeof buildCachedChatItems> | undefined;
+  let preparedGeneration = -1;
+  while (true) {
+    const props = getProps();
+    if (props.messages.length <= 512) {
+      return;
+    }
+    const input = chatTranscriptInputs(props, getSession(props.sessionKey));
+    // Freeze the live getter exactly as the stream source does before caching it.
+    const items = buildCachedChatItems({ ...input.chatItemsInput });
+    const generation = getChatItemsGeneration(items);
+    // Keep grouping with item preparation; the admission task indexes and renders.
+    const chain = chatTranscriptChain(items, props, input.searchFiltering);
+    if (items !== preparedItems || generation !== preparedGeneration) {
+      preparedItems = items;
+      preparedGeneration = generation;
+      yield;
+      continue;
+    }
+    projectTranscriptIndex(chain, getExpandedToolCards(props.sessionKey), props);
+    return;
+  }
+}
 
 const questionIndexes = createTranscriptMemo<NonNullable<StreamGroupOptions["questionPrompts"]>>();
 const emptyQuestions: NonNullable<StreamGroupOptions["questionPrompts"]> = new Map();
@@ -72,9 +128,10 @@ export function projectChatTranscript(
   const realtimeConversation = projectRealtimeTalkConversation(props);
   const { asyncQuestions, selectedSession: activeSession } = props;
   const asyncQuestionGeneration = state.asyncQuestionGeneration;
-  const { showOwnSenderName, replyPeople } = resolveTranscriptParticipants(props);
+  const expandedAssistantMessages = transcript.expandedAssistantMessages;
+  const { chatItemsInput, searchFiltering, showReasoning, showOwnSenderName, recovery, subagents } =
+    chatTranscriptInputs(props, transcript, search);
   const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
-  const { showReasoning, reasoning } = projectChatReasoning(props);
   const assistantAgentId = props.currentAgentId ?? props.fullMessageAgentId;
   const assistantAvatar = resolveAssistantDisplayAvatar(props, assistantAgentId);
   const assistantIdentity = {
@@ -83,62 +140,6 @@ export function projectChatTranscript(
     avatar: assistantAvatar.avatar,
     textAvatar: assistantAvatar.textAvatar,
   };
-  const locale = i18n.getLocale();
-  const searchFiltering = search.open && Boolean(search.query.trim());
-  const expandedAssistantMessages = transcript.expandedAssistantMessages;
-  const recovery = projectTranscriptRecovery(expandedAssistantMessages, props);
-  const subagents = projectSubagentStatus(props, searchFiltering);
-  const chatItemsInput = {
-    paneId: props.paneId,
-    sessionKey: props.sessionKey,
-    archiveNotice: buildChatArchiveNotice(props.transcriptMetadata ?? activeSession),
-    runId: props.runId ?? null,
-    compactionStatus: props.compactionStatus,
-    locale,
-    messages: props.messages,
-    toolMessages: props.toolMessages,
-    guardianNotices: props.guardianNotices,
-    streamSegments: props.streamSegments,
-    get stream() {
-      return props.stream ?? null;
-    },
-    reasoning,
-    showReasoning,
-    streamStartedAt: props.streamStartedAt,
-    queue: props.queue,
-    initialTurnId: props.initialTurnId,
-    pendingInputs: props.pendingInputs,
-    workerSetupPending: ["requested", "provisioning", "syncing", "starting"].includes(
-      activeSession?.placement?.state ?? "",
-    ),
-    workspaceSyncPendingRunIds:
-      (activeSession?.placement?.state === "active" ||
-        activeSession?.placement?.state === "draining") &&
-      activeSession.placement.workspaceResultReconciling === true
-        ? activeSession.activeRunIds
-        : undefined,
-    showToolCalls: props.showToolCalls,
-    persistCommentary: props.persistCommentary,
-    runWorking: Boolean(props.runWorking),
-    runFinalizing: props.runFinalizing,
-    runActive: Boolean(props.runActive),
-    subagentWait: subagents.placedWait,
-    questionPrompts: props.questionPrompts,
-    loading: props.loading,
-    replyPeople,
-    replyLocalPerson: localParticipantIdentityKey(props.userId),
-    searchOpen: search.open,
-    searchQuery: search.query,
-    messageRecovery: searchFiltering
-      ? {
-          messages: expandedAssistantMessages,
-          revision: recovery.revision,
-          agentId: props.fullMessageAgentId,
-          displayFacts: props.displayFacts,
-          canFetchFullMessage: Boolean(props.loadFullAssistantMessage),
-        }
-      : undefined,
-  } satisfies Parameters<typeof buildCachedChatItems>[0];
   const { snapshot, live, resolveLiveStream } = createTranscriptStreamSource(
     chatItemsInput,
     searchFiltering,
@@ -151,28 +152,10 @@ export function projectChatTranscript(
     runningActivityGroupKey,
     runOutputTokens,
   } = projectTranscriptActivity(chatItems, props);
-  syncToolCardExpansionState(
-    props.sessionKey,
-    chatItems,
-    Boolean(props.autoExpandToolCalls),
-    searchFiltering || !props.showToolCalls,
-  );
+  const transcriptChain = chatTranscriptChain(chatItems, props, searchFiltering);
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
   const expandedUserMessages = getExpandedUserMessages(props.sessionKey);
-  const transcriptChain = projectTranscriptChain(chatItems, {
-    sessionKey: props.sessionKey,
-    messages: props.messages,
-    activeRunId: props.runActive || props.runWorking ? props.runId : null,
-    runWorking: Boolean(props.runWorking),
-    searchActive: searchFiltering,
-    bubbleMode: props.chatBubbleMode === true,
-    session: props.transcriptMetadata ?? activeSession,
-  });
   const { collapsedItems, transcriptItems, continuations } = transcriptChain;
-  const replyNavigationId = props.replyMessageAccess?.navigationId;
-  if (replyNavigationId) {
-    expandReplyTargetWork(transcriptItems, expandedToolCards, replyNavigationId);
-  }
   const {
     messageRowKeysById,
     transcriptMessageKeys,
@@ -430,7 +413,7 @@ export function projectChatTranscript(
   // Deferred palettes apply leaf branding after the preference snapshot.
   const appliedBranding = currentThemeBranding();
   trackTranscriptRenderDependencies(state, [
-    locale,
+    chatItemsInput.locale,
     props.branding?.mascot,
     props.branding?.brandIcon,
     props.branding?.workingIndicator,

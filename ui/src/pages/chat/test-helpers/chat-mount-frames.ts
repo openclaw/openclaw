@@ -49,14 +49,17 @@ export function settleChatMount<T>(mount: () => T): T {
         }
       }
       flush();
-      const queuedTasks = [...tasks];
-      for (const [timer, callback] of queuedTasks) {
-        if (tasks.delete(timer)) {
-          clearTimer(timer);
-          callback();
+      // Initial preparation can span tasks without requiring another layout frame.
+      while (tasks.size) {
+        const queuedTasks = [...tasks];
+        for (const [timer, callback] of queuedTasks) {
+          if (tasks.delete(timer)) {
+            clearTimer(timer);
+            callback();
+          }
         }
+        flush();
       }
-      flush();
     }
     return view;
   } finally {

@@ -50,7 +50,7 @@ import {
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
 import type { ChatTranscript } from "./chat-transcript-controller.ts";
-import { projectChatTranscript } from "./chat-transcript-projection.ts";
+import { prepareChatTranscript, projectChatTranscript } from "./chat-transcript-projection.ts";
 import type { TranscriptHeader } from "./chat-transcript-session.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import "../../../styles/chat/selection-annotations.css";
@@ -97,25 +97,54 @@ type ChatThreadInput = {
 };
 
 export function ChatThread(input: ChatThreadInput) {
+  // Undefined waits for the composer frame; false prepares history; true admits it.
   // Restored snapshots join the header and composer in their first visible frame.
-  const initialReady = Boolean(input.props.restoring);
-  const [ready, setReady] = createSignal(initialReady);
+  const [ready, setReady] = createSignal<boolean | undefined>(
+    input.props.restoring ? true : undefined,
+  );
   const isPresented = usePanePresentation(() => input.props.transcriptVisible ?? true);
-  const reveal = createTimeout(() => {
-    if (isPresented()) {
+  // Match boot admission: task yields delay Firefox's initial readiness.
+  const prepareHistory = "chrome" in window;
+  let preparation: Generator<void> | undefined;
+  const reveal = createTimeout(
+    () => {
+      try {
+        if (prepareHistory) {
+          preparation ??= prepareChatTranscript(
+            () => input.props,
+            (key) => input.transcript.renderSession(key, (session) => session),
+          );
+          if (!preparation.next().done) {
+            reveal.schedule();
+            return;
+          }
+        }
+      } catch {
+        // Replay failed preparation under the existing render error boundary.
+      }
+      preparation = undefined;
       setReady(true);
-    }
-  });
+    },
+    () =>
+      ready() === false &&
+      isPresented() &&
+      (!prepareHistory || !input.props.loading || input.props.messages.length > 0)
+        ? 0
+        : undefined,
+  );
   return (
     <div class="chat-thread-viewport" ref={[elementRef(input.props.onScrollPortRef)]}>
       <Show when={ready() || isPresented()}>
         {(_presented) => {
           onSettled(() => {
             // Let this frame paint the composer before preparing the transcript in a task.
-            scheduleLayout(reveal, () => () => reveal.schedule());
+            if (ready() === undefined) {
+              scheduleLayout(reveal, () => () => setReady(false));
+            }
             return () => {
               cancelLayout(reveal);
               reveal.cancel();
+              preparation = undefined;
             };
           });
           return (
@@ -216,10 +245,7 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
   );
   const expansionVersions = createParkedProjection(
     () => expansions().map((expansion) => expansion.read()),
-    () => {
-      const visible = input.props.transcriptVisible ?? true;
-      return typeof visible === "object" ? visible.isPresented() : visible;
-    },
+    () => input.presented,
   );
   const current = createMemo(() => {
     const searchState = search().read();

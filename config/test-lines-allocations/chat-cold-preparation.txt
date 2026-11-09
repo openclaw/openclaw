@@ -1,0 +1,3 @@
+# Initial preparation must keep partial history hidden and discard a replaced source.
+# Includes task draining in the existing synchronous mount fixture.
+32
