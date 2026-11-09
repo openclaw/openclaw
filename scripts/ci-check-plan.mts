@@ -47,8 +47,9 @@ export type CiCheckPlanInput = {
 /** Narrow checks and pack complete extension fallback within the existing runner budget. */
 export async function createCiCheckPlan(input: CiCheckPlanInput) {
   const runs = (task: string) => input.checkMatrix.include.some((row) => row.task === task);
+  // PR lint consumers can be precise even when guards and types remain broad.
   const lintPlan =
-    runs("lint") && !input.preserveFullChecks
+    runs("lint") && (!input.preserveFullChecks || input.extensionLintMode === "affected")
       ? await (
           await import("./check-changed.mts")
         ).createChangedCiLintPlan(detectChangedLanes(input.changedPaths), {
@@ -288,9 +289,16 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
       });
       centralLintSelection = JSON.stringify(central);
     } else if (hosted) {
+      // Reuse an admitted SDK consumer for the tail instead of preparing it again centrally.
+      const tailOwner = input.lintCoreMatrix.include.findLast(
+        ({ stripe: stripeIndex }) => stripeIndex < 6 && selectedStripes.includes(stripeIndex),
+      )?.stripe;
       coreLint = input.lintCoreMatrix.include.flatMap((template) => {
         const current = coreLint.find((row) => row.stripe === template.stripe);
-        const extensionStripes = selectedStripes.includes(template.stripe) ? [template.stripe] : [];
+        const extensionStripes = selectedStripes.filter(
+          (stripeIndex) =>
+            stripeIndex === template.stripe || (stripeIndex === 6 && template.stripe === tailOwner),
+        );
         if (!current && extensionStripes.length === 0) {
           return [];
         }
@@ -317,7 +325,7 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
       centralLintSelection = JSON.stringify(
         withExtensions(
           central,
-          selectedStripes.filter((stripeIndex) => stripeIndex === 6),
+          selectedStripes.filter((stripeIndex) => stripeIndex === 6 && tailOwner === undefined),
         ),
       );
     } else {

@@ -289,7 +289,8 @@ describe("ClawHub fixture server", () => {
     expectFailure(assertPending("discord"), "whatsapp plugin install record missing");
     expect(assertRequests("complete").status).toBe(1);
     const whatsappPath = `/api/v1/packages/${encodeURIComponent("@openclaw/whatsapp")}`;
-    const versionPath = `${whatsappPath}/versions/${version}`;
+    const detail = await fetchJson(baseUrl, whatsappPath);
+    const versionPath = `${whatsappPath}/versions/${detail.package.tags.alpha}`;
     const completeRequestPaths = [
       whatsappPath,
       `${versionPath}/artifact`,
@@ -297,11 +298,10 @@ describe("ClawHub fixture server", () => {
       `${versionPath}/artifact/download`,
       `${whatsappPath}/detail`,
     ];
-    const detail = await fetchJson(baseUrl, whatsappPath);
     expect(detail.package).toMatchObject({
       latestVersion: version,
       runtimeId: "whatsapp",
-      tags: { beta: version, latest: version },
+      tags: { alpha: version, beta: version, latest: version },
     });
     const artifact = await fetchJson(baseUrl, `${versionPath}/artifact`);
     expect(artifact.artifact).toMatchObject({ artifactKind: "npm-pack", artifactSha256: sha256 });

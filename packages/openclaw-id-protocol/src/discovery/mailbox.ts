@@ -29,6 +29,7 @@ export const MAILBOX_NOTICE_REF_MAX_LENGTH = 128;
 
 /** Message payloads. Every security-relevant payload is a signed statement the reader verifies. */
 export type MailboxPayload =
+  | { kind: "node_redemption"; redemption: SignedStatement<"NodeRedemption"> }
   | { kind: "invite_redemption"; redemption: SignedStatement<"InviteRedemption"> }
   /** R-signed statements: kit enrollment (add_owner_device) and other root changes. */
   | { kind: "root_statement"; statements: SignedStatement[] }
@@ -73,7 +74,12 @@ export function parseSeqConflictRef(ref: string): number | undefined {
 }
 
 /** Payload kinds the Gateway accepts from its mailbox. Device-signed MembershipChanges are not among them. */
-export const GATEWAY_MAILBOX_KINDS = ["invite_redemption", "root_statement", "revocation"] as const;
+export const GATEWAY_MAILBOX_KINDS = [
+  "invite_redemption",
+  "node_redemption",
+  "root_statement",
+  "revocation",
+] as const;
 
 /** Sender identity as asserted by OpenClaw ID; display only, never authority. */
 export type ReportedSender = {
@@ -85,12 +91,21 @@ export type ReportedSender = {
   reported_by: "openclaw-id";
 };
 
+/** A node has no asserted account; its fingerprint names W, never an owner device D. */
+export type ReportedNodeSender = {
+  account_id: null;
+  email: null;
+  display_name: null;
+  device_fp: KeyFingerprint;
+  reported_by: "openclaw-id";
+};
+
 /** A stored message as returned to its reader. */
 export type MailboxMessage = {
   message_id: string;
   claw_id: string;
   to: MailboxRecipient;
-  from: ReportedSender;
+  from: ReportedSender | ReportedNodeSender;
   /** Coarse location hint for approval prompts ("reported by OpenClaw ID"). */
   location_hint: string | null;
   payload: MailboxPayload;

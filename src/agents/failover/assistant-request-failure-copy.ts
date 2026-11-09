@@ -45,6 +45,8 @@ export const ERROR_DETAILS_HINT =
   "For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
 
 const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
+  "storage-worker-memory":
+    "OpenClaw's storage worker ran out of memory. Ask the Gateway operator to check the logs and address memory or resource pressure before trying again. Restarting this session alone will not fix the underlying problem.",
   unavailable:
     "The database connection was lost. This operation was rolled back; nothing from it was saved. Please retry.",
   SQLITE_BUSY:
@@ -66,6 +68,8 @@ const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
 };
 
 const RUNTIME_COORDINATION_FAILURE_CODE_COPY: Readonly<Record<string, string>> = {
+  child_completion_delivery_failed:
+    "The child result couldn't be delivered to this conversation. Your conversation is preserved. Check the child sessions for saved work, then retry or resend your request.",
   codex_node_disconnected: "Codex execution node disconnected. Start a fresh attempt.",
   node_runner_update_required:
     "The device worker requires an update before it can host sessions. Run `openclaw update`, reconnect it, then run `openclaw node restart` on a headless node before trying again.",

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { serialize } from "node:v8";
 import { deflateRawSync } from "node:zlib";
 import {
@@ -24,8 +23,10 @@ import {
 import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprints.js";
 import {
   prepareLocalWorkspaceArchive,
+  localWorkspaceManifestDocument as manifestDocument,
   parseLocalWorkspaceSourcePaths,
   selectLocalWorkspaceCanonicalPaths,
+  readLocalWorkspaceGitExclusions,
 } from "./local-workspace-inventory.js";
 import {
   createLocalWorkspaceManifestTree,
@@ -36,6 +37,7 @@ import {
   type LocalWorkspaceManifestRecord,
 } from "./local-workspace-manifest-tree.js";
 import type {
+  LocalWorkspaceCheckpointReceipt,
   LocalWorkspaceManifestMutation,
   LocalWorkspaceManifestScan,
   LocalWorkspaceManifestValue,
@@ -44,14 +46,12 @@ import type {
 } from "./local-workspace-store.types.js";
 import { scanActualWorkspaceManifest } from "./workspace-actual-manifest.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
-import {
-  parseWorkerWorkspaceManifest,
-  serializeWorkerWorkspaceManifest,
-  type WorkerWorkspaceManifest,
-  type WorkspaceManifestPathPolicy,
-} from "./workspace-manifest.js";
+import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
-import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
+import {
+  buildCacheInputPaths,
+  isIgnoredWorkspaceBuildOutput,
+} from "./workspace-path-exclusions.js";
 
 export type LocalWorkspaceBaselineDocument = {
   rawManifest: string;
@@ -97,6 +97,12 @@ export function readLocalWorkspaceManifestRows(
 
 function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceManifestInput) {
   const query = getNodeSqliteKysely<DB>(db);
+  const target =
+    input.action.kind === "scan" || input.action.kind === "probe"
+      ? input.action.target
+      : input.action.kind === "archive"
+        ? "canonical"
+        : undefined;
   const row = executeSqliteQueryTakeFirstSync(
     db,
     query
@@ -110,9 +116,16 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
         "baseline_ref",
         "tree_root_digest",
         "source_paths_digest",
-        "canonical_fingerprints",
-        "projection_fingerprints",
         "pending_ref",
+      ])
+      // Keep the snapshot shape without materializing fingerprints this action never consumes.
+      .select((eb) => [
+        (target === "projection" ? eb.ref("canonical_fingerprints") : eb.val(null)).as(
+          "canonical_fingerprints",
+        ),
+        (target === "canonical" ? eb.ref("projection_fingerprints") : eb.val(null)).as(
+          "projection_fingerprints",
+        ),
       ])
       .$if(input.action.kind === "repair", (builder) => builder.select("checkpoint_json"))
       .where("worktree_id", "=", input.id),
@@ -151,33 +164,6 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
     }
   }
   return { row, records };
-}
-
-function manifestDocument(
-  nodes: Iterable<LocalWorkspaceManifestNode>,
-  baseCommit: string,
-  retained?: string[],
-  pathPolicy: WorkspaceManifestPathPolicy = "current",
-) {
-  const manifest: WorkerWorkspaceManifest = {
-    version: 1,
-    baseCommit,
-    entries: [],
-    directories: [],
-    ...(retained ? { buildCacheInputs: retained } : {}),
-  };
-  for (const node of nodes) {
-    if (node.type === "directory") {
-      manifest.directories!.push(node.path);
-    } else {
-      manifest.entries.push(node);
-    }
-  }
-  const rawManifest = serializeWorkerWorkspaceManifest(manifest, pathPolicy);
-  return {
-    rawManifest,
-    manifestRef: `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`,
-  };
 }
 
 function prepareUpdate(
@@ -230,9 +216,15 @@ export async function executeLocalWorkspaceManifestRead(
     const retained = buildCacheInputPaths(parseLocalWorkspaceSourcePaths(row.source_paths_json));
     // A pending receipt can name an intact result after both live sides have
     // moved beyond the baseline. Its saved delta can reconstruct the merge base.
-    const checkpoint = row.checkpoint_json
-      ? (JSON.parse(row.checkpoint_json) as LocalWorkspaceManifestCheckpoint) // SAFETY: Owner-written checkpoint.
+    const receipt = row.checkpoint_json
+      ? (JSON.parse(row.checkpoint_json) as LocalWorkspaceCheckpointReceipt) // SAFETY: Owner-written checkpoint.
       : undefined;
+    const checkpoint =
+      receipt?.kind === "rejected"
+        ? receipt.checkpoint
+          ? (JSON.parse(receipt.checkpoint) as LocalWorkspaceManifestCheckpoint) // SAFETY: Preserved owner-written checkpoint.
+          : undefined
+        : receipt;
     const documents = checkpoint
       ? [
           parseWorkerWorkspaceManifest(
@@ -542,17 +534,30 @@ export async function executeLocalWorkspaceManifestRead(
     assertCurrent: () => undefined,
   });
   const retained = [...buildCacheInputPaths(canonicalPaths)];
+  const root = target === "canonical" ? row.projection_path : action.canonicalRoot;
+  const gitIgnore = await readLocalWorkspaceGitExclusions(
+    action.canonicalRoot,
+    root,
+    canonicalPaths,
+  );
+  const includePaths = target === "projection" ? new Set(canonicalPaths) : undefined;
+  const excluded = new Set<string>();
   const preserveDirectories = new Set<string>();
   for (const [entryPath, { node }] of records) {
     if (entryPath === "") {
       continue;
     }
+    if (
+      !canonicalPaths.has(entryPath) &&
+      isIgnoredWorkspaceBuildOutput(entryPath, gitIgnore.paths)
+    ) {
+      excluded.add(entryPath);
+      continue;
+    }
     if (node.type === "directory") {
       preserveDirectories.add(entryPath);
     }
-    if (target === "projection") {
-      canonicalPaths.add(entryPath);
-    }
+    includePaths?.add(entryPath);
   }
   const fingerprintTarget = target === "canonical" ? "projection" : "canonical";
   const previousFingerprints =
@@ -572,12 +577,14 @@ export async function executeLocalWorkspaceManifestRead(
   const changedDuringProbe = new Error("Workspace changed during reuse probe");
   try {
     await scanActualWorkspaceManifest({
-      root: target === "canonical" ? row.projection_path : action.canonicalRoot,
+      root,
       baseCommit: row.base_commit,
-      includePaths: target === "projection" ? canonicalPaths : undefined,
+      includePaths,
+      gitIgnore,
       preserveDirectories,
       buildCacheInputs: new Set(retained),
       reuseFile: fingerprintScan.reuseFile,
+      unchangedProbe: action.kind === "probe",
       onEntry(node, identity) {
         seen.add(node.path);
         const previous = records.get(node.path);
@@ -639,7 +646,9 @@ export async function executeLocalWorkspaceManifestRead(
   const previousNodes: LocalWorkspaceManifestNode[] = [];
   for (const entryPath of inspected) {
     const previous = records.get(entryPath);
-    if (previous) {
+    // Old captures may own ignored build outputs. Retire their membership, not
+    // their files: omitting both delta sides must never synthesize a deletion.
+    if (previous && !excluded.has(entryPath)) {
       previousNodes.push(previous.node);
     }
   }

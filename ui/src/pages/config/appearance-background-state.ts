@@ -321,7 +321,10 @@ export function createAppearanceBackground(
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
       host().style.setProperty("--settings-background-preview-top", `${bounds.top}px`);
-      host().style.setProperty("--settings-background-preview-left", `${bounds.left}px`);
+      host().style.setProperty(
+        "--settings-background-preview-left",
+        `${bounds.left + canvas.clientLeft}px`,
+      );
       host().style.setProperty("--settings-background-preview-width", `${width}px`);
       host().style.setProperty("--settings-background-preview-height", `${height}px`);
       // Docks and responsive chrome can change the canvas without window resize.

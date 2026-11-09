@@ -2491,7 +2491,7 @@ const canonicalNodeTestOwners = fullSuiteVitestShards.map((shard) => ({
   ...shard,
   projects: [...shard.projects],
 }));
-let canonicalMetadataConfigs: ReadonlySet<string> | undefined;
+const canonicalMetadataConfigs = new Map<string, ReadonlySet<string>>();
 type CanonicalTargetInventory = {
   configsByFile: Map<string, Set<string>>;
   configs: Set<string>;
@@ -2638,12 +2638,11 @@ function resolveSplitNodeShards(name: string): NodeTestSplitShard[] | undefined 
 export function nodeTestConfigRequiresCanonicalMetadata(config: string): boolean {
   // Aggregate configs can be exclusive without owning canonical shard metadata.
   // Check immutable project descriptors before discovering unrelated test files.
-  if (!canonicalNodeTestOwners.some((owner) => owner.projects.includes(config))) {
+  const owners = canonicalNodeTestOwners.filter((owner) => owner.projects.includes(config));
+  if (owners.length === 0) {
     return false;
   }
-  const toolingOwner = canonicalNodeTestOwners.some(
-    (owner) => owner.name === "core-tooling" && owner.projects.includes(config),
-  );
+  const toolingOwner = owners.some((owner) => owner.name === "core-tooling");
   if (config === TOOLING_CONFIG) {
     return toolingOwner;
   }
@@ -2662,19 +2661,23 @@ export function nodeTestConfigRequiresCanonicalMetadata(config: string): boolean
   ) {
     return false;
   }
-  canonicalMetadataConfigs ??= new Set(
-    createNodeTestShardsForOwners(canonicalNodeTestOwners, {
-      includeReleaseOnlyPluginShards: false,
-    })
-      .filter(
-        (shard) =>
-          shard.env ||
-          shard.shardName.startsWith("core-tooling") ||
-          shard.configs.some(isExclusiveCiTestConfig),
-      )
-      .flatMap((shard) => shard.configs),
-  );
-  return canonicalMetadataConfigs.has(config);
+  return owners.some((owner) => {
+    let configs = canonicalMetadataConfigs.get(owner.name);
+    if (!configs) {
+      configs = new Set(
+        createNodeTestShardsForOwners([owner], { includeReleaseOnlyPluginShards: false })
+          .filter(
+            (shard) =>
+              shard.env ||
+              shard.shardName.startsWith("core-tooling") ||
+              shard.configs.some(isExclusiveCiTestConfig),
+          )
+          .flatMap((shard) => shard.configs),
+      );
+      canonicalMetadataConfigs.set(owner.name, configs);
+    }
+    return configs.has(config);
+  });
 }
 
 function formatNodeTestShardCheckName(shardName: string): string {
@@ -4329,17 +4332,18 @@ export function createSelectedNodeTestShardBundles(
       if (!files?.length) {
         return [];
       }
-      // Artifact descriptors and opaque paired configs retain their complete owner.
-      if (group.requiresDist || isWholeToolingPair(group)) {
+      const selectedConfigs = group.configs.filter((config) =>
+        files.some((file) => configs.get(file) === config),
+      );
+      // A shared include file would cross config boundaries for mixed pairs.
+      // Single-config selections retain that config's isolation and process policy.
+      if (group.requiresDist || (isWholeToolingPair(group) && selectedConfigs.length !== 1)) {
         retainedSeconds += seconds;
         canonicalFamilies.set(group, compactStripeFamily(group));
         return [group];
       }
       const includePatterns =
         group.includePatterns?.filter((file) => files.includes(file)) ?? files;
-      const selectedConfigs = group.configs.filter((config) =>
-        files.some((file) => configs.get(file) === config),
-      );
       const inventory =
         group.includePatterns ??
         listWholeConfigFiles(group.shard_name) ??
@@ -4810,7 +4814,7 @@ function createCompactNodeTestShardBundles(
   const groupsByRunner = new Map<string, [NodeTestShardGroup, ...NodeTestShardGroup[]]>();
   const synthesizedSplitSeconds = new Map<string, number>();
   const selectedToolingTimings =
-    selectedToolingFiles && options.runnerBackend === "hybrid"
+    selectedToolingFiles && (isBlacksmithProfile || options.runnerBackend === "hybrid")
       ? readToolingFileTimings("blacksmith")
       : undefined;
   const runnerRank = (group: Pick<NodeTestShardGroup, "runner">) =>

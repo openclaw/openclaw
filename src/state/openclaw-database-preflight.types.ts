@@ -10,6 +10,11 @@ export type AgentDatabasePreflightStats = {
   schemaProcessCount: number;
   schemaInspectionCount: number;
   schemaSnapshotCount: number;
+  statePreflightMs?: number;
+  agentPreflightMs?: number;
+  stateIntegrityCheckCount?: number;
+  stateIntegrityMs?: number;
+  stateSealCount?: number;
 };
 
 export type IncompatibleOpenClawDatabase = {

@@ -46,7 +46,12 @@ export async function ownerLifecycleEvents(
   }
   return [
     { type: "disconnect", peer_keys: [...new Set([...dropped, ...expired])] },
-    ...(dropped.length > 0 ? [{ type: "invalidate_tokens" as const, peer_keys: dropped }] : []),
+    ...(dropped.length > 0
+      ? [
+          { type: "invalidate_tokens" as const, peer_keys: dropped },
+          { type: "remove_node_pairings" as const, peer_keys: dropped },
+        ]
+      : []),
     { type: "publish_snapshot" },
   ];
 }
