@@ -35,7 +35,8 @@ function pageContext(overrides: {
     basePath: "",
     gateway: createApplicationGateway().gateway,
     agentSelection: { state: { selectedId: "main", scopeId: null }, subscribe: () => () => {} },
-    agents: { state: { agentsList: null } },
+    agents: { state: { agentsList: null }, subscribe: () => () => {} },
+    agentIdentity: { subscribe: () => () => {}, get: () => undefined },
     sessions: { listSnapshot: () => snapshot(null), subscribeList: () => () => {} },
     ...overrides,
   } as ApplicationContext;
@@ -312,7 +313,7 @@ it("renders the route host and filters by search and author and sorts cards by t
   const [authorSelect, sortSelect] = element.querySelectorAll<HTMLSelectElement>("select");
   changeValue(authorSelect!, "mira");
   expect(cardTitles(element)).toEqual(["Alpha signals"]);
-  expect(element.textContent).toContain("By Mira");
+  expect(element.querySelector(".dashboard-card__author")?.textContent).toContain("Mira");
 
   changeValue(authorSelect!, "", false);
   changeValue(sortSelect!, "title");
