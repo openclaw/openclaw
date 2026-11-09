@@ -409,24 +409,12 @@ export class ComposerDictationOwner extends EventTarget {
         }
         if (
           !ownsPendingCommit ||
+          !lateTranscript ||
           !wasActive ||
           this.disposed ||
           !this.options.enabled ||
           this.options.realtimeTalkActive
         ) {
-          return false;
-        }
-        if (!lateTranscript) {
-          // A provider error already named the cause; only an otherwise silent empty drain reports here.
-          if (!session.reportedFailure) {
-            const message = session.disconnected
-              ? t("chat.composer.dictationDisconnected")
-              : t("chat.composer.dictationFailed");
-            this.options.onError(message, {
-              kind: "interrupted",
-              preservesText: false,
-            });
-          }
           return false;
         }
         this.options.onCommit(lateTranscript, true);
