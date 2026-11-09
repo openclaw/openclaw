@@ -125,7 +125,7 @@ it.each<
       await vi.waitFor(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
       page
         .querySelector<HTMLButtonElement>(
-          '[id="usage-filter-provider:content"] [data-value="option:openai"]',
+          '[id="usage-filter-provider:content"] [role="menuitemcheckbox"][aria-label="openai"]',
         )!
         .click();
       await vi.waitFor(() =>

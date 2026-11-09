@@ -6,6 +6,7 @@ import {
   Menu,
   createMenuControls,
   type MenuControls,
+  type MenuHandle,
   type MenuEntry,
   type MenuItem,
 } from "../../components/solid/menu.tsx";
@@ -44,7 +45,7 @@ const normalize = (value: string) => value.toLocaleLowerCase().normalize("NFC");
  * session count. The rows are plain menu rows, so arrows, Enter and Escape behave like every
  * other menu; Enter in the search toggles the first match.
  */
-export function createUsageValuePicker(config: UsageValuePickerConfig) {
+export function createUsageValuePicker(config: UsageValuePickerConfig, closeMenu?: () => void) {
   const controls = config.controls ?? createMenuControls();
   const [query, setQuery] = createSignal("");
   // Pinned rows are fixed when the list opens, so checking a value never moves rows under the pointer.
@@ -94,6 +95,9 @@ export function createUsageValuePicker(config: UsageValuePickerConfig) {
     event.preventDefault();
     event.stopPropagation();
     config.onToggle(first.value);
+    if (!config.multiple) {
+      closeMenu?.();
+    }
   });
   const searchEntry: MenuEntry = {
     kind: "content",
@@ -108,7 +112,7 @@ export function createUsageValuePicker(config: UsageValuePickerConfig) {
           data-form-control=""
           data-initial-focus=""
           autocomplete="off"
-          spellcheck={false}
+          spellcheck="false"
           aria-label={config.searchLabel()}
           placeholder={config.searchLabel()}
           value={query()}
@@ -220,10 +224,11 @@ export function UsageValuePicker(
     ref?: (open: () => void) => void;
   },
 ) {
-  const picker = createUsageValuePicker(props);
+  let menu: MenuHandle | undefined;
+  const picker = createUsageValuePicker(props, () => menu?.close());
   return (
     <Menu
-      id={`usage-value-picker-${props.id}`}
+      id={`usage-filter-${props.id}`}
       lazy
       label={props.label}
       class={props.class}
@@ -234,7 +239,10 @@ export function UsageValuePicker(
       items={picker.entries()}
       onBeforeShow={picker.reset}
       onSelect={(item) => void picker.select(item)}
-      ref={(handle) => props.ref?.(() => handle.open())}
+      ref={(handle) => {
+        menu = handle;
+        props.ref?.(() => handle.open());
+      }}
       trigger={props.trigger}
     />
   );
