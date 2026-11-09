@@ -1,5 +1,5 @@
 ---
-summary: "Experimental: reviews ongoing agent work on the session's own model and offers one short correction."
+summary: "Experimental: reviews ongoing agent work and offers one short correction."
 read_when:
   - You are installing, configuring, or auditing the advisor plugin
 title: "Advisor plugin reference"
@@ -10,7 +10,7 @@ Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
 between the openclaw-plugin-reference:manual-start and
 openclaw-plugin-reference:manual-end comment markers. -->
 
-Experimental: reviews ongoing agent work on the session's own model and offers one short correction.
+Experimental: reviews ongoing agent work and offers one short correction.
 
 ## Distribution
 

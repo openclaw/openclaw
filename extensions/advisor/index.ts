@@ -195,11 +195,12 @@ function formatTranscript(messages: unknown[], currentRequest: string): string {
   const notice = "[... " + lines.length + " earlier entries omitted ...]";
   let used = prefix.length + notice.length + 5;
   for (let index = lines.length - 1; index > first; index--) {
-    if (used + lines[index].length + 1 > maxChars) {
+    const line = lines[index];
+    if (line === undefined || used + line.length + 1 > maxChars) {
       break;
     }
-    tail.unshift(lines[index]);
-    used += lines[index].length + 1;
+    tail.unshift(line);
+    used += line.length + 1;
   }
   const omitted = lines.length - head.length - tail.length;
   return [
