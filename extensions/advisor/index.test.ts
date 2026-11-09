@@ -14,13 +14,37 @@ type AgentEventSubscription = Parameters<Api["registerAgentEventSubscription"]>[
 type EventContext = Parameters<AgentEventSubscription["handle"]>[1];
 type Hook = (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown;
 
-async function startAdvisor(everyToolCalls = 1, reply = "NO_CHANGE", runTrigger = "user") {
+async function startAdvisor(
+  everyToolCalls = 1,
+  reply = "NO_CHANGE",
+  runTrigger = "user",
+  options: {
+    sessionKey?: string;
+    entries?: Record<
+      string,
+      { spawnedBy?: string; parentSessionKey?: string; heartbeatIsolatedBaseSessionKey?: string }
+    >;
+    messages?: unknown[];
+    lookupThrows?: boolean;
+    inputProvenance?: { kind: "inter_session" | "external_user"; sourceTool?: string };
+  } = {},
+) {
   const runContexts = new Map<string, PluginJsonValue>();
   const subscribe = vi.fn<Api["registerAgentEventSubscription"]>();
   const on = vi.fn<Api["on"]>();
   const registerService = vi.fn<Api["registerService"]>();
   const runtime = createPluginRuntimeMock();
   const forkSession = vi.spyOn(runtime.subagent, "forkSession").mockResolvedValue({ text: reply });
+  vi.spyOn(runtime.agent.session, "getSessionEntryAsync").mockImplementation(async ({ sessionKey }) => {
+    if (options.lookupThrows) {
+      throw new Error("session lookup unavailable");
+    }
+    const entry = options.entries?.[sessionKey];
+    return entry ? { sessionId: "session", updatedAt: 0, ...entry } : undefined;
+  });
+  vi.spyOn(runtime.subagent, "getSessionMessages").mockResolvedValue({
+    messages: options.messages ?? [],
+  });
   const api = createTestPluginApi({
     id: "advisor",
     pluginConfig: { everyToolCalls, everyMinutes: 0 },
@@ -40,6 +64,7 @@ async function startAdvisor(everyToolCalls = 1, reply = "NO_CHANGE", runTrigger 
     }
     return true;
   };
+  api.runContext.getRunContext = ({ runId, namespace }) => runContexts.get(`${runId}:${namespace}`);
   plugin.register(api);
   const service = registerService.mock.calls.find(([s]) => s.apiVersion === 2)?.[0];
   if (service && service.apiVersion !== 2) {
@@ -76,8 +101,12 @@ async function startAdvisor(everyToolCalls = 1, reply = "NO_CHANGE", runTrigger 
   };
   const startRun = async (runId = "run-1", trigger = "user") => {
     const beforeReply = on.mock.calls[0]?.[1] as Hook | undefined;
-    await beforeReply?.({}, { sessionKey: "agent:main:main", runId, trigger });
+    await beforeReply?.({}, { sessionKey: options.sessionKey ?? "agent:main:main", runId, trigger });
     await send("lifecycle", "start", {}, undefined, runId);
+    const beforePrompt = on.mock.calls.find(([name]) => name === "before_prompt_build")?.[1] as
+      | Hook
+      | undefined;
+    await beforePrompt?.({}, { runId, inputProvenance: options.inputProvenance });
   };
   const tool = async (reviews?: number) => {
     const toolCallId = `call-${(calls += 1)}`;
@@ -173,4 +202,89 @@ it("registers nothing when both triggers are off", async () => {
   const run = await startAdvisor(0);
   expect(run.service).toBeUndefined();
   expect(run.warn).toHaveBeenCalledOnce();
+});
+
+it.each(["cron", "heartbeat"])("does not review a lane rooted in a %s run", async (kind) => {
+  const run = await startAdvisor(1, "NO_CHANGE", "user", {
+    sessionKey: "agent:main:subagent:lane",
+    entries: {
+      "agent:main:subagent:lane": { spawnedBy: "agent:main:subagent:parent" },
+      "agent:main:subagent:parent": { spawnedBy: `agent:main:${kind}:job:run:example` },
+    },
+  });
+  await run.tool(0);
+  await run.tool(0);
+});
+
+it("reviews a subagent spawned from a direct chat", async () => {
+  const run = await startAdvisor(1, "NO_CHANGE", "user", {
+    sessionKey: "agent:main:subagent:child",
+    entries: { "agent:main:subagent:child": { spawnedBy: "agent:main:direct:peer" } },
+  });
+  await run.tool(1);
+});
+
+it("does not review Workboard workers", async () => {
+  const run = await startAdvisor(1, "NO_CHANGE", "user", {
+    sessionKey: "agent:ops:subagent:workboard-board-card",
+  });
+  await run.tool(0);
+});
+
+it("skips a review when the current turn came from sessions_send", async () => {
+  const run = await startAdvisor(1, "NO_CHANGE", "user", {
+    messages: [
+      {
+        role: "user",
+        content: "task",
+        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      },
+    ],
+  });
+  await run.tool(0);
+});
+
+it("reviews a human turn after a sessions_send turn", async () => {
+  const run = await startAdvisor(1, "NO_CHANGE", "user", {
+    messages: [
+      { role: "user", provenance: { kind: "inter_session", sourceTool: "sessions_send" } },
+      { role: "user", content: "a new direct request" },
+    ],
+  });
+  await run.tool(1);
+});
+
+it("keeps the run reviewable when the session lookup fails", async () => {
+  const run = await startAdvisor(1, "NO_CHANGE", "user", {
+    sessionKey: "agent:main:subagent:child",
+    lookupThrows: true,
+  });
+  await run.tool(1);
+});
+
+it("does not mistake dashboard topology for spawn provenance", async () => {
+  const run = await startAdvisor(1, "NO_CHANGE", "user", {
+    sessionKey: "agent:main:dashboard:chat",
+    entries: { "agent:main:dashboard:chat": { parentSessionKey: "agent:main:cron:job" } },
+  });
+  await run.tool(1);
+});
+
+it.each([
+  ["agent:main:subagent:workboard-board-card", {}],
+  ["agent:main:main:heartbeat", { heartbeatIsolatedBaseSessionKey: "agent:main:main" }],
+] as const)("does not review a child spawned from %s", async (parent, entry) => {
+  const run = await startAdvisor(1, "NO_CHANGE", "user", {
+    sessionKey: "agent:main:subagent:child",
+    entries: { "agent:main:subagent:child": { spawnedBy: parent }, [parent]: entry },
+  });
+  await run.tool(0);
+});
+
+it("retains sessions_send provenance after its input leaves the recent window", async () => {
+  const run = await startAdvisor(1, "NO_CHANGE", "user", {
+    inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+    messages: Array.from({ length: 300 }, () => ({ role: "toolResult", content: "done" })),
+  });
+  await run.tool(0);
 });
