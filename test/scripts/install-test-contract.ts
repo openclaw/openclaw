@@ -2,6 +2,7 @@ import type { SpawnSyncReturns } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -367,13 +368,10 @@ function writeInstalledEntry(nodeDir: string, nodeExecutable: string) {
   writeFileSync(entry, "");
 }
 
-function npmRetryFixture({
-  scriptPath,
-  runShell,
-  nodeExecutable,
-  prefix,
-  createTempDir,
-}: InstallerContract) {
+function npmRetryFixture(
+  { scriptPath, runShell, nodeExecutable, prefix, createTempDir }: InstallerContract,
+  callerUmask?: string,
+) {
   const root = createTempDir("openclaw-install-npm-retry-");
   const bin = join(root, "bin");
   const calls = join(root, "calls");
@@ -382,16 +380,19 @@ function npmRetryFixture({
   const npmRoot = join(prefix ? nodeDir : root, "lib", "node_modules");
   const nodeBin = prefix ? join(nodeDir, "bin") : bin;
   const npm = prefix ? join(root, "npm") : join(bin, "npm");
+  const packageDir = join(npmRoot, "openclaw");
   mkdirSync(nodeBin, { recursive: true });
   symlinkSync(nodeExecutable, join(nodeBin, "node"));
   writeNpmInstallRetryFixture(npm);
   return {
     calls,
+    packageDir,
     wrapper: join(installPrefix, "bin", "openclaw"),
     run(requested: string, outcome: string, error: string, packageProduced = true) {
       return runShell(
         [
           "set -euo pipefail",
+          ...(callerUmask ? [`umask ${callerUmask}`, "("] : []),
           `source ${JSON.stringify(scriptPath)}`,
           ...(prefix
             ? [
@@ -411,17 +412,38 @@ function npmRetryFixture({
           ...(packageProduced
             ? ["set +e", "install_openclaw", "status=$?", 'exit "$status"']
             : ["install_openclaw"]),
+          ...(callerUmask ? [")", 'printf "caller-umask=%s\\n" "$(umask)"'] : []),
         ].join("\n"),
         {
           NPM_FAKE_CALLS: calls,
           NPM_FAKE_ERROR: error,
           NPM_FAKE_OUTCOME: outcome,
-          ...(packageProduced ? { NPM_FAKE_PACKAGE_DIR: join(npmRoot, "openclaw") } : {}),
+          ...(packageProduced ? { NPM_FAKE_PACKAGE_DIR: packageDir } : {}),
           ...(prefix ? {} : { NPM_FAKE_ROOT: npmRoot }),
         },
       );
     },
   };
+}
+
+export function defineInstallerNpmUmaskContract(installer: InstallerContract) {
+  it.each([
+    { callerUmask: "0002", forbidden: 0o022 },
+    { callerUmask: "0077", forbidden: 0o077 },
+  ])(
+    "keeps npm package permissions private and caller umask unchanged ($callerUmask)",
+    ({ callerUmask, forbidden }) => {
+      const fixture = npmRetryFixture(installer, callerUmask);
+      const result = fixture.run("latest", "success", "");
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      for (const entry of ["", "dist", "dist/entry.js", "openclaw.mjs"]) {
+        const mode = lstatSync(join(fixture.packageDir, entry)).mode;
+        expect(mode & forbidden, entry || "package root").toBe(0);
+        expect(mode & 0o700, entry || "package root").toBe(0o700);
+      }
+      expect(result.stdout).toContain(`caller-umask=${callerUmask}\n`);
+    },
+  );
 }
 
 export function defineInstallerNpmRetryContract(installer: InstallerContract) {

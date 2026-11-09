@@ -38,6 +38,7 @@ import {
   defineInstallerNpmDirectoryIdentityContract,
   defineInstallerNpmRetryContract,
   defineInstallerNpmFreshnessContract,
+  defineInstallerNpmUmaskContract,
   defineInstallerPnpmContract,
 } from "./install-test-contract.js";
 
@@ -1792,6 +1793,8 @@ EOF
   defineInstallerNpmRetryContract(installerContract);
 
   defineInstallerNpmFreshnessContract(installerContract);
+
+  defineInstallerNpmUmaskContract(installerContract);
 
   it.each([0, 17])("joins the finalization watchdog after probe exit %s", (probeExit) => {
     const root = tempDirs.make("openclaw-install-watchdog-");

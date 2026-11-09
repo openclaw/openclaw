@@ -36,6 +36,7 @@ import {
 import { findDarwinReexecBash } from "./install-reexec-fixtures.js";
 import {
   defineInstallerNpmFreshnessContract,
+  defineInstallerNpmUmaskContract,
   defineInstallerShellIsolationContract,
 } from "./install-test-contract.js";
 import { linkPnpmBootstrapShellTools } from "./test-helpers.js";
@@ -1623,4 +1624,6 @@ fi
   );
 
   defineInstallerNpmFreshnessContract(installerContract);
+
+  defineInstallerNpmUmaskContract(installerContract);
 });

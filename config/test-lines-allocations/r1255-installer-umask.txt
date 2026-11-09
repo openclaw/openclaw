@@ -1,0 +1,3 @@
+# R1255: both installer process masks and inherited strict-mask preservation.
+# Four real shell/npm-fixture cases; exact net test/support LF growth.
+28
