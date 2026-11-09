@@ -56,6 +56,7 @@ it("takes a ready worktree without paying injected 20-second template latency", 
     expect(requests).toHaveLength(1);
     expect(requests[0]!.template).not.toHaveProperty("release");
     await service.prewarm(requests[0]!, {});
+    await fs.writeFile(path.join(requests[0]!.template.path, "README.md"), "dirty source\n");
     const before = elapsed;
     const calls = vi.mocked(backend.cloneTemplate).mock.calls.length;
     const warm = await create("pool-warm");

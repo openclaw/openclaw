@@ -1,10 +1,11 @@
-import { queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { readGlobalSingleton } from "../../../shared/global-singleton.js";
+import { expectCollected, expectLiveObjects } from "../../../test-utils/retention.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
+import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -108,13 +109,15 @@ it.each([
   },
 );
 
-it("releases prompt payloads while completed attempts' resource owners remain reachable", () => {
+it("releases prompt payloads while completed attempts' resource owners remain reachable", async () => {
   class PromptPayload extends Set<string> {}
+  const payloads: WeakRef<PromptPayload>[] = [];
   let sequence = 0;
   const createRetainedReview = (release: boolean) => {
     const owner = createEmbeddedAttemptSessionResources(new AbortController().signal);
     const lease = retainEmbeddedSessionPromptState(`retained-review-${sequence++}`);
     lease.state.removedRuntimeContextKeys = new PromptPayload(["runtime-context"]);
+    payloads.push(new WeakRef(lease.state.removedRuntimeContextKeys));
     owner.resources.promptStateLease = lease;
     if (release) {
       owner.takeForCleanup();
@@ -125,9 +128,9 @@ it("releases prompt payloads while completed attempts' resource owners remain re
   const callbacks = [createRetainedReview(false)];
   try {
     callbacks.push(...Array.from({ length: 32 }, () => createRetainedReview(true)));
-    expect(queryObjects(PromptPayload)).toBe(1);
+    await expectLiveObjects(payloads, 1);
     callbacks.shift();
-    expect(queryObjects(PromptPayload)).toBe(0);
+    await expectCollected(...payloads);
   } finally {
     callbacks.length = 0;
   }
@@ -253,5 +256,54 @@ it.each([false, true])(
     await settled;
     expect(finished).toHaveBeenCalledOnce();
     expect(tracker.buildAbortSettlePromise()).toBeNull();
+  },
+);
+
+it.each([1, 16])(
+  "bounds %s restart settlements once before closing transcript writers",
+  async (count) => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    controller.abort(createAgentRunRestartAbortError());
+    const settle = deferred();
+    const disposed = vi.fn();
+    const scope = createAgentCleanupScope();
+    const cleanup = scope.run(() =>
+      Promise.all(
+        Array.from({ length: count }, () =>
+          cleanupEmbeddedAttemptSessionPhase({
+            attempt: {
+              runId: "restart-bound",
+              sessionId: "restart-bound",
+              abortSignal: controller.signal,
+            },
+            trajectoryRecorder: null,
+            trajectoryEndRecorded: false,
+            buildAbortSettlePromise: () => settle.promise,
+            state: {
+              terminal: { kind: "aborted", source: "external" },
+              beforeAgentRunBlockedBy: undefined,
+            },
+            transcriptLifecycle: {
+              beginCleanup: async () => {},
+              dispose: async () => {
+                disposed();
+              },
+            },
+          }),
+        ),
+      ),
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(249);
+      expect(disposed).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(disposed).toHaveBeenCalledTimes(count);
+      expect(scope.outcome).toBe("uncertain");
+    } finally {
+      settle.resolve();
+      await cleanup;
+      vi.useRealTimers();
+    }
   },
 );

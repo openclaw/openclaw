@@ -66,6 +66,10 @@ import {
   resolveEngineConfigurations,
   type EngineConfiguration,
 } from "./lib/control-ui-engine-configurations.ts";
+import {
+  createEngineEventLoadScenarios,
+  verifyEngineEventLoad,
+} from "./lib/control-ui-engine-event-load-scenarios.ts";
 import { createEngineGestureScenarios } from "./lib/control-ui-engine-gesture-scenarios.ts";
 import {
   createEngineIdleControls,
@@ -92,6 +96,9 @@ import {
   type EngineRouteTransition,
 } from "./lib/control-ui-engine-page-scenarios.ts";
 import { createEnginePluginMemoryScenarios } from "./lib/control-ui-engine-plugin-memory-scenarios.ts";
+import { createEngineProfileReadinessScenarios } from "./lib/control-ui-engine-profile-readiness.ts";
+import { createEngineRapidNavigationScenarios } from "./lib/control-ui-engine-rapid-navigation-scenarios.ts";
+import { createEngineSettingsSearchScenarios } from "./lib/control-ui-engine-settings-search.ts";
 import { createEngineStreamingScenarios } from "./lib/control-ui-engine-streaming-scenarios.ts";
 import { createEngineStyleScenarios } from "./lib/control-ui-engine-style-scenarios.ts";
 import {
@@ -139,6 +146,7 @@ import {
 import { createEngineRemountScenarios } from "./lib/control-ui-remount-scenarios.ts";
 import { installControlUiResourceCounts } from "./lib/control-ui-resource-counts.ts";
 import { launchTalkObservationBrowser } from "./lib/control-ui-talk-fixture.ts";
+import { startTranscriptLayoutAudit } from "./lib/control-ui-transcript-layout-audit.ts";
 import {
   createWorkboardResourceFixture,
   prepareWorkboardResourceSource,
@@ -172,6 +180,8 @@ const { values } = parseArgs({
     "native-audit": { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     "mutation-audit": { type: "boolean", default: false },
+    "transcript-layout-audit": { type: "boolean", default: false },
+    "transcript-paint-marker": { type: "boolean", default: false },
     "live-region-audit": { type: "boolean", default: false },
     "remount-audit": { type: "boolean", default: false },
     "route-transitions": { type: "boolean", default: false },
@@ -179,10 +189,29 @@ const { values } = parseArgs({
     "cpu-throttle": { type: "string", default: "1" },
     "idle-warmup-ms": { type: "string" },
     "idle-duration-ms": { type: "string", default: "30000" },
+    "event-load-duration-ms": { type: "string", default: "240000" },
+    "event-load-tools": { type: "string", default: "200" },
+    "event-load-inventory": { type: "string", default: "1000" },
+    "event-load-interactions-only": { type: "boolean", default: false },
     "memory-soak-rounds": { type: "string", default: "10" },
   },
 });
 const pairs = Number(values.pairs);
+const eventLoadDurationMs = Number(values["event-load-duration-ms"]);
+const eventLoadTools = Number(values["event-load-tools"]);
+const eventLoadInventory = Number(values["event-load-inventory"]);
+if (
+  !Number.isInteger(eventLoadDurationMs) ||
+  eventLoadDurationMs < 1000 ||
+  !Number.isInteger(eventLoadTools) ||
+  eventLoadTools < 1 ||
+  !Number.isInteger(eventLoadInventory) ||
+  eventLoadInventory < 101
+) {
+  throw new Error(
+    "event-load-duration-ms must be >=1000 and event-load-tools must be positive integers; event-load-inventory must be >=101",
+  );
+}
 const rpcDelayMs = Number(values["rpc-delay-ms"]);
 if (
   !Number.isFinite(rpcDelayMs) ||
@@ -275,6 +304,20 @@ if (values["control-bundle-dir"]?.length && !values["compare-bundle-dir"]) {
 }
 if (values.trace && values["cpu-only"]) {
   throw new Error("Choose --trace or --cpu-only; use separate untraced timing runs");
+}
+if (values["transcript-paint-marker"] && !values["transcript-layout-audit"]) {
+  throw new Error("--transcript-paint-marker requires --transcript-layout-audit");
+}
+if (
+  values["transcript-layout-audit"] &&
+  (values.trace ||
+    values["cpu-only"] ||
+    values["cpu-profile"] ||
+    values["native-audit"] ||
+    values.allocations ||
+    values["mutation-audit"])
+) {
+  throw new Error("--transcript-layout-audit requires a separate diagnostic run");
 }
 if (
   (values["mutation-audit"] || values["remount-audit"]) &&
@@ -421,6 +464,7 @@ type Observation = {
   configurationEvidence?: Awaited<ReturnType<typeof readEngineConfigurationObservation>>;
   engine: ControlUiEngine;
   networkProfile: NetworkProfile["name"];
+  appliedNetworkProfile: Pick<NetworkProfile, "httpLatencyMs" | "gatewayLatencyMs">;
   viewport: string;
   step: string;
   bundle: number;
@@ -546,8 +590,17 @@ try {
     ...createEngineGestureScenarios(),
     ...createEngineMemoryScenarios(memorySoakRounds),
     ...createEnginePluginMemoryScenarios(),
+    ...createEngineProfileReadinessScenarios(servers[0]!.server.baseUrl),
+    ...createEngineRapidNavigationScenarios(),
     ...createEngineStreamingScenarios(),
+    ...createEngineEventLoadScenarios(
+      eventLoadDurationMs,
+      eventLoadTools,
+      eventLoadInventory,
+      values["event-load-interactions-only"],
+    ),
     ...createEnginePageScenarios(0, pageOrigin, servers[0]!.server.baseUrl),
+    ...createEngineSettingsSearchScenarios(servers[0]!.server.baseUrl),
     ...createEngineRemountScenarios(),
     ...createEngineRouteTransitionScenarios(async (_page, _transition, run) => {
       await run();
@@ -562,22 +615,26 @@ try {
     ),
   ];
   const ids = requestedIds?.flatMap((id) =>
-    id === "gestures"
+    id === "rapid-navigation"
       ? catalog
-          .filter((scenario) => scenario.id.startsWith("gesture-"))
+          .filter((scenario) => scenario.id.startsWith("rapid-"))
           .map((scenario) => scenario.id)
-      : id === "remount-interactions"
+      : id === "gestures"
         ? catalog
-            .filter(
-              (scenario) =>
-                scenario.id.startsWith("remount-") && !scenario.id.startsWith("remount-from-"),
-            )
+            .filter((scenario) => scenario.id.startsWith("gesture-"))
             .map((scenario) => scenario.id)
-        : id === "chat-actions"
+        : id === "remount-interactions"
           ? catalog
-              .filter((scenario) => scenario.id.startsWith("chat-actions-"))
+              .filter(
+                (scenario) =>
+                  scenario.id.startsWith("remount-") && !scenario.id.startsWith("remount-from-"),
+              )
               .map((scenario) => scenario.id)
-          : [id],
+          : id === "chat-actions"
+            ? catalog
+                .filter((scenario) => scenario.id.startsWith("chat-actions-"))
+                .map((scenario) => scenario.id)
+            : [id],
   );
   const scenarios = catalog.filter(({ id, explicitOnly, memory }) =>
     ids
@@ -609,11 +666,15 @@ try {
     networkProfiles.some(({ name }) => name !== "localhost") &&
     scenarios.some(
       ({ id }) =>
-        id !== "cold-boot" && id !== "warm-boot" && !/^page-.+-(?:visit|revisit)$/u.test(id),
+        id !== "cold-boot" &&
+        id !== "warm-boot" &&
+        id !== "page-model-providers-refresh" &&
+        !id.startsWith("rapid-") &&
+        !/^page-.+-(?:visit|revisit)$/u.test(id),
     )
   ) {
     throw new Error(
-      "Nonlocal --network-profiles require cold-boot, warm-boot or page-<route>-visit/revisit steps",
+      "Nonlocal --network-profiles require cold-boot, warm-boot, rapid-*, page-<route>-visit/revisit or page-model-providers-refresh steps",
     );
   }
   planned =
@@ -655,12 +716,16 @@ try {
           "./lib/control-ui-interaction-scenarios.ts",
           "./lib/control-ui-interaction-navigation.ts",
           "./lib/control-ui-engine-streaming-scenarios.ts",
+          "./lib/control-ui-engine-event-load-scenarios.ts",
+          "./lib/control-ui-event-load-producer.ts",
+          "./lib/control-ui-event-load-wire.ts",
           "./lib/control-ui-streaming-reply.ts",
           "./lib/control-ui-streaming-fixture.ts",
           "./lib/control-ui-streaming-statistics.ts",
           "./lib/control-ui-engine-memory.ts",
           "./lib/control-ui-engine-memory-scenarios.ts",
           "./lib/control-ui-engine-plugin-memory-scenarios.ts",
+          "./lib/control-ui-engine-rapid-navigation-scenarios.ts",
           "./lib/control-ui-engine-page-scenarios.ts",
           "./lib/control-ui-data-board-scenarios.ts",
           "./lib/control-ui-data-log-scenarios.ts",
@@ -719,6 +784,8 @@ try {
     idleDurationMs,
     allocations: values.allocations,
     mutationAudit: values["mutation-audit"],
+    transcriptLayoutAudit: values["transcript-layout-audit"],
+    transcriptPaintMarker: values["transcript-paint-marker"],
     liveRegionAudit: values["live-region-audit"],
     remountAudit: values["remount-audit"],
     routeTransitions: values["route-transitions"],
@@ -728,31 +795,35 @@ try {
       : undefined,
     cpuThrottle,
     memorySoakRounds,
-    collection: values["live-region-audit"]
-      ? "Live-region MutationObserver diagnostic; DOM update candidates, not screen-reader speech or timing proof"
-      : values.allocations
-        ? "V8 sampled allocations including major/minor-GC collected objects; diagnostic overhead, not timing proof"
-        : values["remount-audit"]
-          ? "DOM attachment census with synchronous removal snapshots; diagnostic overhead, not timing proof. DOM detach is not Solid disposal."
-          : values["mutation-audit"]
-            ? "MutationObserver over document/open shadow roots and formatter wrappers; diagnostic overhead, not timing proof. Pixel differences include caret/animation changes. Child-content identity is sampled at observer delivery."
-            : values["native-audit"]
-              ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
-              : values["cpu-profile"]
-                ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
-                : values.trace
-                  ? "Playwright tracing and engine Inspector/Profiler; overhead included"
-                  : values["cpu-only"]
-                    ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
-                    : "Untraced wall and browser-local application time; Chromium CDP counters only, unavailable WebKit/Firefox counters are null",
+    collection: values["transcript-layout-audit"]
+      ? "Transcript frame geometry, mutation ancestry and all-engine screencast; diagnostic overhead, not timing proof"
+      : values["live-region-audit"]
+        ? "Live-region MutationObserver diagnostic; DOM update candidates, not screen-reader speech or timing proof"
+        : values.allocations
+          ? "V8 sampled allocations including major/minor-GC collected objects; diagnostic overhead, not timing proof"
+          : values["remount-audit"]
+            ? "DOM attachment census with synchronous removal snapshots; diagnostic overhead, not timing proof. DOM detach is not Solid disposal."
+            : values["mutation-audit"]
+              ? "MutationObserver over document/open shadow roots and formatter wrappers; diagnostic overhead, not timing proof. Pixel differences include caret/animation changes. Child-content identity is sampled at observer delivery."
+              : values["native-audit"]
+                ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
+                : values["cpu-profile"]
+                  ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
+                  : values.trace
+                    ? "Playwright tracing and engine Inspector/Profiler; overhead included"
+                    : values["cpu-only"]
+                      ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
+                      : "Untraced wall and browser-local application time; Chromium CDP counters only, unavailable WebKit/Firefox counters are null",
     order:
       "Serial network profiles alternate each pair; engine/configuration/bundle positions rotate and reverse across pairs; fresh browser context per observation",
     acceptance:
       "Census screens >1.3x engine/Chromium; confirm with ten rotated pairs plus A/A. Fix proof: twenty rotated pairs plus A/A; median regression <=5% and p95 no worse. Missing CPU clocks cannot certify CPU wins on a noisy host; >20% attributable regression blocks.",
+    rapidNavigationContract:
+      "Rapid scenarios pace input against browser-local deadlines without waiting for intermediate destinations. Their network profiles delay HTTP requests only; synthetic Gateway replies remain immediate. Actual event delivery and lateness remain visible; delivery includes driver overhead and application work, not just input queue delay. Final input to two correct frames measures settled application state, not paint. Route/history automation is marked non-native. Total interval CPU is not attributable to abandoned destinations. ResourceTiming counts completed chunks only; in-flight chunks and unsupported long tasks are unavailable.",
     frameCadence:
       "Prepare and settle frame intervals are consecutive requestAnimationFrame timestamp differences, not the full wait duration. scenarioMs includes driver input and scenario assertions; settleWaitMs measures the final two-frame wait. Their sum is wallMs. These are automation-to-assertion timings, not input-to-paint latency. Browser-local actionTiming splits the driver prefix, application elapsed to the last observed DOM commit (or native value edit), and the assertion/settle tail. These three sum to browserSpanMs, not Node wallMs. Focus work can occur in the prefix; compound input spans retain intermediate driver delays. Trace-only marks expose the same boundaries. Missing native input or an explicit Gateway-response mark, or a missing commit, makes action timing unavailable.",
     boundary:
-      "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Nonlocal profiles add the configured delay to every HTTP request and every incoming mock Gateway frame (including the connect challenge); RPC replies thus include a simulated round trip, with no added throughput cap. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
+      "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Nonlocal profiles add the configured delay to every HTTP request. Boot/page scenarios also delay incoming mock Gateway frames (including the connect challenge); rapid scenarios retain immediate synthetic Gateway replies. No added throughput cap. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
     memoryContract:
       "Opt-in memory-* scenes retain one document, drain 4.1 s retirement timers, clear synthetic request history, then force two collections at each named checkpoint. Compare warm and late checkpoints; heap/native categories/RSS and DOM wrapper/native counts have different engine-specific meanings. Memory-scene elapsed times include forced GC and snapshots and are not latency evidence.",
     idleContract: `Idle CPU spans a Node-side ${idleDurationMs} ms wait. Hidden idle defaults to 60000 ms of warmup after native visibility settles; visible idle defaults to 0 ms. An explicit idle-warmup-ms overrides either default; 0 measures the initial transition, which can include background memory reclamation. Each idle scenario records its resolved warmup. Counter/request endpoints also include measurement instrumentation setup/draining; reveal and clock recovery occur afterward. Blank/static controls retain shared observation instrumentation without loading the app or Gateway.`,
@@ -797,6 +868,14 @@ try {
               createEngineCompletedRunScenarios(slot.server.baseUrl).find(
                 ({ id }) => id === item.id,
               ) ??
+              createEngineProfileReadinessScenarios(
+                slot.server.baseUrl,
+                networkProfile.gatewayLatencyMs,
+              ).find(({ id }) => id === item.id) ??
+              createEngineSettingsSearchScenarios(
+                slot.server.baseUrl,
+                networkProfile.gatewayLatencyMs,
+              ).find(({ id }) => id === item.id) ??
               (item.id.startsWith("page-")
                 ? createEnginePageScenarios(
                     networkProfile.gatewayLatencyMs,
@@ -812,6 +891,12 @@ try {
               configuration: configuration.name,
               engine,
               networkProfile: networkProfile.name,
+              appliedNetworkProfile: {
+                httpLatencyMs: networkProfile.httpLatencyMs,
+                gatewayLatencyMs: scenario.id.startsWith("rapid-")
+                  ? 0
+                  : networkProfile.gatewayLatencyMs,
+              },
               viewport: viewport.name,
               step: scenario.id,
               bundle,
@@ -928,6 +1013,9 @@ try {
             let measurement: Awaited<ReturnType<typeof startEngineMeasurement>> | undefined;
             let cpuProfile: ColdLoadCpuProfile | undefined;
             let layerAudit: Awaited<ReturnType<typeof createControlUiLayerAudit>> | undefined;
+            let transcriptLayoutAudit:
+              | Awaited<ReturnType<typeof startTranscriptLayoutAudit>>
+              | undefined;
             let memory: Awaited<ReturnType<typeof createEngineMemoryCollector>> | undefined;
             let throttle: Awaited<ReturnType<typeof context.newCDPSession>> | undefined;
             let accessibility:
@@ -1315,6 +1403,15 @@ try {
                   Reflect.set(window, "openclawMemoryDocumentIdentity", identity);
                 }, artifactPrefix);
               }
+              if (values["transcript-layout-audit"]) {
+                transcriptLayoutAudit = await startTranscriptLayoutAudit(
+                  page,
+                  artifactDir,
+                  artifactPrefix,
+                  engine,
+                  values["transcript-paint-marker"],
+                );
+              }
               if (scenario.id.startsWith("gesture-")) {
                 await startControlUiGestureProbe(page, scenario.id);
                 gestureRecording = true;
@@ -1385,6 +1482,11 @@ try {
               if (!isEngineIdleScenario(scenario) && scenario.visibility !== "hidden") {
                 observation.settleFrameIntervalMs = await frames(page);
               }
+              if (transcriptLayoutAudit) {
+                const audit = transcriptLayoutAudit;
+                transcriptLayoutAudit = undefined;
+                await audit.finish();
+              }
               observation.wallMs = performance.now() - start;
               observation.settleWaitMs = observation.wallMs - observation.scenarioMs;
               if (actionTiming) {
@@ -1395,6 +1497,18 @@ try {
               measurement = undefined;
               const captured = await activeMeasurement.stop();
               observation.metrics = captured.metrics;
+              if (scenario.id.startsWith("event-load-")) {
+                observation.evidence = {
+                  ...observation.evidence,
+                  ...(await verifyEngineEventLoad(
+                    page,
+                    scenario.id === "event-load-unloaded"
+                      ? -1
+                      : Number(scenario.id.slice("event-load-".length)),
+                    eventLoadTools,
+                  )),
+                };
+              }
               if (observation.gesture && captured.timeline) {
                 const inputs = observation.gesture.totals.inputs;
                 observation.gestureNative = summarizeGestureTrace(
@@ -1594,6 +1708,7 @@ try {
               phase = "capture";
               observation.errorEvents = errors;
               try {
+                await transcriptLayoutAudit?.finish();
                 if (gestureRecording) {
                   observation.gesture = await stopControlUiGestureProbe(page);
                 }
@@ -1605,11 +1720,22 @@ try {
                   );
                   await writeJson(`${artifactPrefix}.resize-errors.json`, resizeErrors);
                 }
-                if (measurement) {
-                  await writeJson(
-                    `${artifactPrefix}.interrupted-inspector.json`,
-                    await measurement.stop(),
+                if (scenario.id.startsWith("event-load-")) {
+                  const partial = await page.evaluate(() =>
+                    Reflect.get(window, "__eventLoadEvidence"),
                   );
+                  if (partial) {
+                    observation.evidence = { ...partial, ...observation.evidence };
+                  }
+                }
+                if (measurement) {
+                  const interruptedMeasurement = measurement;
+                  measurement = undefined;
+                  const interrupted = await interruptedMeasurement.stop();
+                  if (scenario.id.startsWith("event-load-")) {
+                    observation.metrics = interrupted.metrics;
+                  }
+                  await writeJson(`${artifactPrefix}.interrupted-inspector.json`, interrupted);
                 }
                 if (scenario.id.startsWith("streaming-")) {
                   const streaming = await page.evaluate(() =>
@@ -2005,6 +2131,24 @@ await writeFile(
       : []),
     "Firefox uses the pinned Playwright build. Its mobile cells emulate viewport and touch only (isMobile is unsupported). CPU/native traces/heap snapshots are unavailable; application elapsed time keeps the same browser-local boundaries. Layout Instability and Long Tasks support are detected per observation; missing entries remain null.",
     "",
+    ...(summary.some((row) => row.step.startsWith("rapid-"))
+      ? [
+          "## Interrupted navigation",
+          "",
+          "Input pacing does not wait for intermediate content. Delivery lateness includes driver overhead; it is not isolated input queue delay. Settlement is the final input to two consecutive correct animation-frame observations, not paint. Programmatic route/history actions are marked non-native in observations. CPU covers the whole interval, not individual abandoned owners. Completed chunk counts exclude in-flight requests. Compare rapid scenes with their direct controls and retain A/A noise before claiming a win.",
+          "",
+          "| Engine | Viewport | Scenario | Network | Bundle | Passed/failed | Final input → settled median/p95 ms | Total task CPU median ms | Longest task p95 ms | RPCs median | Retained panes median |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+          ...summary
+            .filter((row) => row.step.startsWith("rapid-"))
+            .map((row) => {
+              const number = (value: number | undefined) => value?.toFixed(2) ?? "unavailable";
+              const ready = row.evidence.finalInputToSettledMs;
+              return `| ${row.engine} | ${row.viewport} | ${row.step} | ${row.networkProfile} | ${row.bundle} | ${row.passed}/${row.failed} | ${number(ready?.median)}/${number(ready?.p95)} | ${number(row.metrics.taskMs?.median)} | ${number(row.evidence.longestTaskMs?.p95)} | ${number(row.evidence.rpcRequests?.median)} | ${number(row.evidence.retainedPanes?.median)} |`;
+            }),
+          "",
+        ]
+      : []),
     "ResizeObserver loop errors are counted in every run, including without tracing or observer-origin diagnostics. Any browser error fails its observation and the command; completed timing intervals do not waive the zero-error requirement.",
     "",
     ...(observations.some((row) => row.gesture)
@@ -2034,7 +2178,7 @@ await writeFile(
         `| ${row.configuration} | ${row.viewport} | ${row.step} | ${row.networkProfile} | ${row.bundle} | ${row.engine} | ${row.resizeErrorCount} | ${row.resizeErrorObservations} / ${row.passed + row.failed} |`,
     ),
     "",
-    `Network profiles: ${networkProfiles.map(({ name, httpLatencyMs, gatewayLatencyMs }) => `${name} (${httpLatencyMs} ms per HTTP request; ${gatewayLatencyMs} ms per incoming Gateway frame)`).join("; ")}. The Gateway probe retains event ordering and uses no extra frame gap or throughput cap.`,
+    `Network profiles: ${networkProfiles.map(({ name, httpLatencyMs, gatewayLatencyMs }) => `${name} (${httpLatencyMs} ms per HTTP request; ${gatewayLatencyMs} ms per incoming Gateway frame for boot/page scenarios, immediate replies for rapid scenarios)`).join("; ")}. The Gateway probe retains event ordering and uses no extra frame gap or throughput cap.`,
     "",
     "Application elapsed is first trusted native input (or an explicitly marked Gateway response delivery) to last observed DOM commit/native value edit before scenario return. Gateway marks run inside the page immediately before releasing the deferred response. It excludes the initial driver prefix and later assertion/settle tail, but includes intermediate driver gaps in compound actions; it is not CPU or paint latency. Navigation/memory and actions without both boundaries are unranked. The driver prefix may include application focus work. Browser-local phases do not include boundary RPC transport and do not sum to Node wall time.",
     "",

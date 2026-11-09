@@ -1,9 +1,8 @@
 import { performance } from "node:perf_hooks";
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { expectCollected } from "../../test-utils/retention.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { createProcessSupervisor } from "./supervisor.js";
 import { createStubChildAdapter, type StubChildAdapter } from "./supervisor.test-support.js";
@@ -130,11 +129,13 @@ describe("process supervisor", () => {
     const run = await spawn({ scopeKey: "scope" });
     adapter.settle(0);
     await run.wait();
-    const failure = new ExpiredCaller().fail();
+    const { failure, caller: callerRef } = (() => {
+      const caller = new ExpiredCaller();
+      return { failure: caller.fail(), caller: new WeakRef(caller) };
+    })();
     extinction.reject(failure);
     await run.waitForExtinction!().catch(() => undefined);
-    await nextTurn();
-    expect(queryObjects(ExpiredCaller)).toBe(0);
+    await expectCollected(callerRef);
     await expect(cleanup()).rejects.toBe(failure);
     await expect(supervisor.shutdown()).rejects.toBe(failure);
     expect(failure.code).toBe("ECLEANUP");

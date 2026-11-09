@@ -60,13 +60,15 @@ held on FD 9; an inherited path or a descendant does not grant deletion authorit
 Before an operation child starts, authenticated creator cleanup may retire the
 anchor. After dispatch, the supervisor retires it only after the process group
 has exited and the notification pipe has closed. A creator crash, uncertain drain,
-or changed creation evidence never authorizes releasing dependency holds.
-A closed output reader, as in `scripts/pr --help | head`, is an ordinary exit: the
+or changed creation evidence never automatically releases dependency holds. A
+closed output reader, as in `scripts/pr --help | head`, is an ordinary exit: the
 creator still retires its anchor and releases its holds, then exits 141. A selected
 revision older than the lifetime owner cannot release the hold its parent took.
-There is no startup stale-anchor sweep: PID death, age, and path disappearance do
-not prove that inherited consumers finished. A retained PR operation lock requires
-its separate `lock-recover` procedure after verifying that no child tools remain.
+There is no startup stale-anchor sweep: PID death, age, and path disappearance on
+their own never authorize release or prove that inherited consumers finished. The
+only operator exception is [Release finished dependency holds](#release-finished-dependency-holds).
+A retained PR operation lock requires its separate `lock-recover` procedure after
+verifying that no child tools remain.
 
 `OPENCLAW_PR_TOOLING_ROOT` selects a full checkout of the same repository for
 materialized wrappers' third-party dependencies; otherwise `openclaw.pr.toolingRoot` in the
@@ -166,16 +168,88 @@ lock, workflow-binding, and merge-outcome owners.
 Native PR tooling already supports an operator-provisioned symlink at the
 canonical `.worktrees` parent. The preflight resolves that target, and provisioning
 uses native Git there while keeping the same canonical repository and state
-owners. An existing allowed target can avoid a full clone. Do not repoint a
+owners. Reuse this object store instead of cloning for each task. Do not repoint a
 shared parent or move existing PR worktrees to solve one task’s access problem;
 provisioning that shared layout belongs to its operator, not the caller.
 
-If no existing supported location is accessible, use a fresh full ordinary
+If no existing supported location is accessible, create a separate ordinary
 checkout inside the allowed workspace **before starting the PR workflow**, then
-repeat this preflight. Preserve full history and blobs; do not use a shallow,
-sparse, or linked checkout as a substitute. Never move an active or uncertain
+repeat this preflight:
+
+```bash
+git clone --filter=blob:none --single-branch --branch main \
+  https://github.com/openclaw/openclaw.git /allowed/workspace/openclaw
+```
+
+Keep full commit history (no `--depth`) and a full working tree (no `--sparse`);
+historical blobs can stay omitted. `--single-branch` alone does **not** limit blob
+history. This fallback still downloads commits, trees, and checkout blobs; use
+the existing base whenever its canonical paths are accessible. `--reference`
+rejects shallow donors, and `--dissociate` copies borrowed objects, so neither is
+the default replacement for a shared worktree. Never move an active or uncertain
 operation to another clone: first reconcile it through the native recovery owner
 in the original repository. A new clone has a different lock/outcome namespace.
+
+## Reuse the base and fetch only needed history
+
+Never use `fetch --depth`, `pull --depth`, `--shallow-since`, or
+`--shallow-exclude` in a managed base or its linked worktrees: their shallow
+boundary is shared. Fetch the required ref without a depth limit. If a managed
+base is already shallow, use `openclaw doctor --fix`; keep `blob:none`.
+
+Start in the assigned managed/task worktree. `scripts/pr review-init <PR>`
+provisions `.worktrees/pr-<PR>` through the worktree owner; it shares the canonical
+object store. Do not manually create that PR directory or clone into scratch to
+obtain main. For ordinary task isolation outside the managed lifecycle, native
+`git -C <base> worktree add -b <task-branch> <allowed-task-path> <start-commit>`
+also shares objects. A linked worktree still requires access to its canonical
+Git directory and does not fix an inaccessible `scripts/pr workspace` result.
+
+PR review and landing need commits and trees for merge-base, ancestry checks,
+and log ranges, plus blobs for the checked-out files, diffs, and merges. They do
+not need every historical blob. The source-acquisition owner retains the base's
+promisor filter; missing checkout/diff blobs are fetched on demand. Do not clear
+promisor settings, fetch with `--no-filter`, or repack just to review a PR.
+
+If ancestry fails, first distinguish a shallow boundary from an unavailable
+commit or genuinely unrelated histories:
+
+```bash
+git rev-parse --is-shallow-repository
+git --no-lazy-fetch merge-base --all "$main_sha" "$head_sha"
+```
+
+Use the exact main and PR head SHAs from the current PR observation. For a
+registry-owned managed base, the existing migration is `openclaw doctor --fix`:
+it fetches full commit history with `blob:none` under the project checkout
+lifecycle lease, skipping busy clones. The operator must own that repair; do not
+manually deepen a live managed base or run a broad Doctor repair outside task
+authority. See [project clone repair](/gateway/doctor/gateway-and-services#11e-project-clone-shape).
+
+For a task-owned ordinary shallow clone, acquire only the required range before
+workflow admission (or after the failed command has exited and its native lock
+is settled):
+
+```bash
+git fetch --deepen=256 --filter=blob:none --no-tags --no-auto-maintenance \
+  --no-write-fetch-head --refmap= origin "$main_sha" "$head_sha"
+git --no-lazy-fetch merge-base --all "$main_sha" "$head_sha"
+```
+
+This preserves shared refs and `FETCH_HEAD`; it extends the shared shallow
+boundary, so coordinate with other users of that object store. Stop once the
+needed merge-base is available. If 256 commits are insufficient, use one larger
+batch (`--deepen=1024`) and check again. A release-wide history audit or an older
+PR may need complete commit history: use `--unshallow` in place of `--deepen`
+while retaining the other flags, then rerun the failed history operation.
+Full commit history and full blob history are different requirements.
+
+A failed fetch, a still-shallow origin, or a missing local-only snapshot parent
+is not repaired by repeatedly cloning GitHub. Preserve the checkout and native
+workflow evidence; report the failing command and missing object/ref, restore
+origin access or recover the parent from its original repository, and retry
+through the same owner. An available merge-base proves that range, not arbitrary
+older ancestry; qualify any older refs required by release or recovery separately.
 
 ## Keep the admitted workflow across commands
 
@@ -415,6 +489,74 @@ postimage returns `already-recovered` without changing rows. Any third state
 refuses and requires fresh inspection. A failure is not proof that no commit
 occurred. After verified recovery, use the original command's ordinary admission;
 its existing source, dependency, and workflow requirements still apply.
+
+## Release finished dependency holds
+
+A creator that exits before retiring its anchor can leave dependency holds behind.
+After reviewing the consumers and recovery obligations, an operator can release
+those holds with a sealed plan:
+
+```bash
+scripts/pr dependency-hold-release --dry-run [--anchor <path>]... > plan.json
+scripts/pr dependency-hold-release plan.json --plan-sha256 <SHA256> --confirmed-no-running-tools
+```
+
+The dry run writes only the plan JSON to stdout and a human review, summary, seal,
+and release command to stderr. It changes no ledger rows or anchors. Repeatable
+`--anchor` arguments select exact paths; an unknown path refuses. With no holds,
+the report is an empty plan. Blocked anchors remain in the report, and a completed
+dry run exits successfully even when none can release.
+
+The same official-main authentication as `dependency-cache-recover` applies before
+ledger access. Developer-wrapper opt-in cannot admit unlanded release code. This
+command uses Node built-ins, `ps`, and `lsof`, takes the shared metadata mutex only
+for ledger work, and never installs or materializes dependencies.
+
+The operator must attest that no detached PR tools still consume these resources,
+that retained PR operation locks have already been resolved through `lock-recover`,
+and that no retained `tooling-recover` obligation remains. Evidence alone grants
+no release authority. Preserve this exclusion until the outcome is reconciled.
+
+The dry run scans processes once; release rescans immediately before each anchor.
+Scans run outside the metadata mutex, which other wrappers wait on for at most one
+second. Each checks creator PIDs, process groups, command lines, and open files.
+A live same-user creator or process in its group blocks release;
+PID reuse by the same user intentionally delays it, while a foreign-user PID is
+recorded separately. Any process referencing an anchor basename or one of its
+entry keys blocks release, including every other anchor holding that entry.
+The command and its ancestors are excluded only from command-line matching,
+never open-file matching. A changed anchor identity or a missing or changed entry
+also blocks release. Scan errors, empty output, and unavailable tools stop the
+command; outcomes already printed stand. Missing anchors can release; their
+disappearance alone is never authority. A hold taken by a live wrapper during a
+batch is safe by accounting: its anchor is not in the sealed plan, and its row
+keeps the entry unsettled.
+
+The version-1 plan records the physical `cache` path, releasable `anchors`, and
+`blocked` anchors with their blockers. Every anchor has its path and decimal
+`dev`, `ino`, `uid`, and `mode` identities, plus `holds` with each 64-hex entry key
+and its identities. Evidence records anchor presence, birthtime when present,
+creator PID and state, and process references with PID, source, target, and a
+bounded command line. Birthtime is informational. The SHA-256 seals the exact
+stdout bytes; release validates the plan and gathers evidence again.
+
+Release acts only on `anchors`. Under the metadata mutex, the owner requires the
+exact reviewed holds and installation identities. It then retires a present
+anchor outside the mutex before releasing holds in a revalidated SQLite
+transaction, in the creator's original order. An absent anchor skips removal.
+An entry settles only when its last hold releases; co-held entries remain
+unsettled. Each planned anchor prints a JSON outcome: `released` with `settled`
+and `retained` entry keys, `already-released`, `blocked` with blockers, or `refused`
+with a reason. Failures do not stop other anchors; exit 0 requires every planned
+anchor to finish released or already released.
+
+Keep the plan and seal. Rerunning the same sealed plan after interruption or a
+lost reply is safe; `already-released` is expected and never removes a replacement
+path. The next materialization's existing collector handles eligible eviction
+and deletes evicted entries synchronously. After a large release, the next
+materializing wrapper run pays for those deletions before it continues.
+This command deletes no cache entry. Never edit `lifetime.sqlite` or delete cache
+entries by hand.
 
 ## Recover a retained dependency projection
 

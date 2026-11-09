@@ -7,7 +7,11 @@ import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions, WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runWithAgentDatabaseReadAdmissionTurn } from "../../state/agent-database-admission.js";
+import {
+  captureAgentDatabaseAdmission,
+  runWithAgentDatabaseReadAdmissionTurn,
+} from "../../state/agent-database-admission.js";
+import { getAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
@@ -137,6 +141,10 @@ export function retainSessionHistoryWorkerDatabase(
 ) {
   const owned = acquireHistoryDatabaseResource(options);
   const { database } = owned;
+  const assertAgentAdmitted = captureAgentDatabaseAdmission(database.agentId, {
+    env: options.env,
+    access: "read",
+  });
   let knownSource = false;
   const assertCurrent = () => {
     if (owned.revoked) {
@@ -263,6 +271,12 @@ export function retainSessionHistoryWorkerDatabase(
                 return requestLane.pool.run(
                   () => {
                     assertCurrent();
+                    const cleanup = getAgentDeletionDatabaseCleanup(readOptions);
+                    if (cleanup) {
+                      cleanup.assertCurrentHost();
+                    } else if (!preserveSourceArtifacts) {
+                      assertAgentAdmitted();
+                    }
                     options.prepareRead?.();
                     const input = prepare();
                     if (preserveSourceArtifacts && input.kind === "session-exact-entries") {

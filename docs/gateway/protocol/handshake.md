@@ -181,6 +181,9 @@ Retired APIs: use plugin surfaces instead of `canvasHostUrl`, `canvasCapability`
 or `node.canvas.capability.refresh`; use `sessions.companion.ask` instead of
 `sessions.observer.ask`.
 
+For a complete client flow after a timeout or disconnect, see
+[config-write reconciliation](/gateway/protocol/rpc-talk-config-and-agents#reconcile-a-config-write-after-a-lost-response).
+
 While the Gateway is preparing authentication and request state, `connect` can return a
 retryable `UNAVAILABLE` error with `details.reason: "startup-sidecars"` and
 `retryAfterMs`. Retry within your connection budget instead of treating it as

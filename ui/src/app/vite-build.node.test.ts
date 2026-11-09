@@ -143,6 +143,8 @@ afterEach(async () => {
 it("keeps inline recovery executable and its DOM intact after document compaction", async () => {
   const source = `<style>/* fallback */ h1 { color: rgb(255, 0, 0); }</style>
     <h1>Still loading</h1><button>Retry</button>
+    <p><span>Keep</span>
+      <span>spacing</span></p><pre>  code\n  next</pre><textarea>  draft\n  next</textarea>
     <script data-cfasync="false">/* recovery */
       document.querySelector("button").addEventListener("click", function () {
         document.querySelector("h1").textContent = "Retrying";
@@ -161,6 +163,9 @@ it("keeps inline recovery executable and its DOM intact after document compactio
     /[=]>|\b(?:let|const)\b/u,
   );
   expect(compact).not.toContain("/* recovery */");
+  expect(document.querySelector("p")?.textContent).toBe("Keep spacing");
+  expect(document.querySelector("pre")?.textContent).toBe("  code\n  next");
+  expect(document.querySelector("textarea")?.value).toBe("  draft\n  next");
   dom.window.close();
 });
 
@@ -286,43 +291,11 @@ it("fetches a locale's co-registered error catalogs in one lazy request", async 
   expect(html).not.toContain(errorsChunk.fileName);
 });
 
-it("preloads only the selected locale's late Chat catalogs before body parsing", async () => {
+it("preloads only the selected locale's Chat catalogs before body parsing", async () => {
   const config = createConfig();
-  const namespaces = [
-    "runtimeErrors",
-    "filePreview",
-    "mcpApp",
-    "worktrees",
-    "newSession",
-    "sessionsView",
-    "mcpServers",
-    "mcpPage",
-    "profilePage",
-    "connection",
-    "attention",
-    "chat",
-  ];
-  const filename = (locale: string, namespace: string) =>
-    namespace === "runtimeErrors"
-      ? `locale-errors-${locale}`
-      : `locale-namespace-${locale}-${namespace}`;
-  await writeRoot("lazy-catalog.js", "export const createCatalog = (value) => value;");
-  for (const locale of ["de", "ar"]) {
-    for (const namespace of namespaces) {
-      await writeRoot(
-        `${filename(locale, namespace)}.js`,
-        `export default "${locale}/${namespace}";`,
-      );
-    }
-    await writeRoot(
-      `${locale}.js`,
-      `import { createCatalog } from "./lazy-catalog.js";
-export default createCatalog({${namespaces.map((namespace) => `${namespace}: () => import("./${filename(locale, namespace)}.js")`).join(",")}});`,
-    );
-  }
   await writeRoot(
     "main.js",
-    'globalThis.locales = [() => import("./de.js"), () => import("./ar.js")];',
+    `globalThis.locales = [${["de", "ar"].map((locale) => `() => import(${JSON.stringify(fileURLToPath(new URL(`../i18n/locales/${locale}.ts`, import.meta.url)))})`).join(",")}];`,
   );
   await writeRoot(
     "index.html",
@@ -396,6 +369,7 @@ it("keeps page styles separate from measured JavaScript boot groups", async () =
     "main.js",
     'import "./initial.css"; globalThis.loadFirst = () => import("fixture:first"); globalThis.loadSecond = () => import("fixture:second"); globalThis.loadLazy = () => import("fixture:lazy");',
   );
+  await writeRoot("index.html", '<head></head><script type="module" src="./main.js"></script>');
   addModules(config, modules, {
     "fixture:first": first,
     "fixture:second": second,
@@ -427,11 +401,21 @@ it("keeps page styles separate from measured JavaScript boot groups", async () =
   expect(html).toContain(initial.name);
   expect(html).toMatch(/<link[^>]*rel="preload"[^>]*as="style"[^>]*>/u);
   expect(html).toMatch(/<link[^>]*id="openclaw-boot-styles"[^>]*media="print"[^>]*>/u);
-  expect(html).not.toContain(firstStyle.name);
-  expect(html).not.toContain(secondStyle.name);
+  const page = new JSDOM(html);
+  for (const style of [firstStyle, secondStyle]) {
+    expect(page.window.document.querySelector(`link[href$="${style.name}"]`)).toBeNull();
+  }
   const scripts = (await readAssets(names, ".js")).map(({ source }) => source).join("\n");
-  expect(scripts).toContain(firstStyle.name);
-  expect(scripts).toContain(secondStyle.name);
+  const importMap: { imports: Record<string, string> } = JSON.parse(
+    page.window.document.querySelector('script[type="importmap"]')!.textContent!,
+  );
+  page.window.close();
+  for (const style of [firstStyle, secondStyle]) {
+    const reference = Object.entries(importMap.imports).find(
+      ([, target]) => target === `./assets/${style.name}`,
+    )?.[0];
+    expect(scripts).toContain(reference ? path.posix.basename(reference) : style.name);
+  }
 });
 
 it("compresses small route boot modules while leaving deferred modules lazy", async () => {

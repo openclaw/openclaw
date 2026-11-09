@@ -6,16 +6,20 @@ import {
   selectGatewayConnectAuth,
 } from "../../packages/gateway-client/src/connect-auth.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { fingerprint } from "../../packages/openclaw-id-protocol/src/index.js";
+import { buildWorld } from "../../packages/openclaw-id-protocol/src/testing/world.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as oneShotExit from "../cli/one-shot-exit.js";
 import { getConfigResolutionFacts, setConfigResolutionFacts } from "../config/resolution-facts.js";
 import { GatewayClientRequestError, type GatewayClientOptions } from "../gateway/client.js";
 import { NODE_RUNNER_INVENTORY_UPDATE_METHOD } from "../infra/node-runner-inventory.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import {
   getExistingOpenClawStateSchemaPath,
   withExistingOpenClawStateSchema,
 } from "../state/openclaw-state-db-schema-policy.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import * as nodeTunnel from "./openclaw-id-transport.js";
 import {
   expectCalls,
   expectStartupTimeout,
@@ -518,6 +522,56 @@ describe("runNodeHost", () => {
       );
     },
   );
+
+  it("uses the logical tunnel target for OpenClaw ID hello and socket errors", async () => {
+    const world = await buildWorld();
+    const url = "ws+unix:/tmp/oc-node-diagnostic/gateway.sock:/";
+    const label = `${world.binding.body.hostname} via OpenClaw ID (direct)`;
+    const formatDiagnostic = vi.fn((message: string) => message.replaceAll(url, label));
+    vi.spyOn(nodeTunnel, "startNodeTunnelTransport").mockResolvedValue({
+      url,
+      peerKey: "iroh:fixture",
+      formatDiagnostic,
+      close: async () => {},
+    });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    await withReadyNodeHost(
+      async ({ options }) => {
+        receiveHello(options);
+        options.onConnectError?.(new Error(`socket failed ${url}`));
+        expect(stderr).toHaveBeenCalledWith(`node host gateway connected: ${label}\n`);
+        expect(stderr).toHaveBeenCalledWith(
+          `node host gateway connect failed: socket failed ${label}\n`,
+        );
+      },
+      {
+        gatewayTarget: {
+          kind: "openclaw-id",
+          openclawId: {
+            hostname: world.binding.body.hostname,
+            relayUrl: "https://relay.example/",
+            pin: {
+              claw_id: world.binding.body.claw_id,
+              root_fp: await fingerprint(world.rootPub),
+              binding_seq: 1,
+            },
+            evidence: { root_pub: world.rootPub, binding: world.binding },
+          },
+        },
+      },
+    );
+  });
+
+  it("keeps private socket paths out of connection-error stderr", async () => {
+    await expectStartupTimeout();
+    const socketPath = "/tmp/oc-node-diagnostic/gateway.sock";
+    registerSecretValueForRedaction(socketPath);
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    lastCapturedOptions()?.onConnectError?.(new Error(`connect ENOENT ${socketPath}`));
+    expect(stderr).toHaveBeenCalledWith(
+      "node host gateway connect failed: connect ENOENT [private]\n",
+    );
+  });
 
   it("keeps pairing reconnect pauses visible without stopping the foreground host", async () => {
     await expectStartupTimeout();

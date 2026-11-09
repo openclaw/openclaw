@@ -9,6 +9,8 @@
 // --plain-result exercises object consumers instead of retained serialized selection.
 // --list-shape runtime-search exercises cold runtime-label rejection; --acp-rows gives one
 // third of rows persisted ACP ownership. --source-ref pins runtime owners to a Git revision.
+// --archived-sessions fixes the archive population; --row-updates-per-list publishes metadata
+// writes per logical second, with --row-update-population and --row-update-field selecting them.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -46,7 +48,12 @@ const { values } = parseArgs({
     "running-candidates": { type: "boolean", default: false },
     reconciliation: { type: "boolean", default: false },
     "metadata-churn": { type: "boolean", default: false },
+    "archived-sessions": { type: "string" },
+    "row-updates-per-list": { type: "string", default: "0" },
+    "row-update-population": { type: "string", default: "active" },
+    "row-update-field": { type: "string", default: "updatedAt" },
     "cpu-profile": { type: "boolean", default: false },
+    "count-visits": { type: "boolean", default: false },
     golden: { type: "string" },
     "sort-rows": { type: "string" },
     "sort-workload": { type: "boolean", default: false },
@@ -65,6 +72,10 @@ assert(values["state-dir"], "--state-dir must name a new synthetic directory");
 assert(values.mode === "timing" || values.mode === "allocation" || values.mode === "verify");
 assert(!values["cpu-profile"] || values.mode === "timing", "Separate CPU and heap sampling");
 assert(global.gc, "Run with --expose-gc");
+assert(
+  !values["count-visits"] || values.mode === "verify",
+  "Work-count instrumentation is not a timing/allocation run",
+);
 // Pin only the runtime projection owners; fixture, transport, and measurement stay identical.
 if (values["source-ref"]) {
   const sources = new Map(
@@ -77,6 +88,8 @@ if (values["source-ref"]) {
       "src/gateway/session-row-model-facts.ts",
       "src/gateway/session-row-projection-materialize.ts",
       "src/gateway/session-utils-list.ts",
+      "src/gateway/session-row-selection.ts",
+      "src/gateway/session-list-view-cache.ts",
       "src/gateway/session-sharing-read.ts",
       "src/gateway/session-row-presentation.ts",
     ].map((file) => [
@@ -94,7 +107,14 @@ if (values["source-ref"]) {
   });
 }
 const integer = (
-  name: "sessions" | "agents" | "iterations" | "warmup" | "updates-per-list",
+  name:
+    | "sessions"
+    | "agents"
+    | "iterations"
+    | "warmup"
+    | "updates-per-list"
+    | "archived-sessions"
+    | "row-updates-per-list",
   min = 1,
 ) => parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
 const sessions = integer("sessions", values["list-shape"] ? 200 : 100);
@@ -102,6 +122,12 @@ const agents = integer("agents", 4);
 const iterations = integer("iterations");
 const warmup = integer("warmup");
 const updatesPerList = integer("updates-per-list", 0);
+const archivedSessions =
+  values["archived-sessions"] === undefined ? undefined : integer("archived-sessions", 0);
+const rowUpdatesPerList = integer("row-updates-per-list", 0);
+assert(archivedSessions === undefined || archivedSessions <= sessions);
+assert(["active", "archived", "mixed"].includes(values["row-update-population"]));
+assert(["updatedAt", "inputTokens", "mixed"].includes(values["row-update-field"]));
 const root = path.resolve(values["state-dir"]);
 const presentationSourceHash = createHash("sha256")
   .update(
@@ -124,6 +150,8 @@ if (values["reuse-fixture"]) {
   assert.equal(previous.agents, agents);
   assert.equal(previous.listShape, values["list-shape"]);
   assert.equal(previous.acpRows === true, values["acp-rows"]);
+  assert.equal(previous.archivedSessions, archivedSessions);
+  assert.equal(previous.rowUpdatesPerList ?? 0, 0, "Reuse starts from an unmodified row fixture");
   assert(values["list-shape"], "Reuse requires a completed shape workload");
   assert(
     !previous.metadataChurn &&
@@ -231,6 +259,26 @@ if (siblingSessions && !values["reuse-fixture"]) {
       { agentId },
     );
   }
+}
+if (archivedSessions !== undefined && !values["reuse-fixture"]) {
+  const { readSessionEntryStore, writeSessionEntry } =
+    await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
+  let index = 0;
+  for (const agentId of ["main", ...siblings]) {
+    agentDb.runOpenClawAgentWriteTransaction(
+      (database) => {
+        for (const [key, entry] of Object.entries(readSessionEntryStore(database))) {
+          const archived =
+            Math.floor(((index + 1) * archivedSessions) / sessions) >
+            Math.floor((index * archivedSessions) / sessions);
+          writeSessionEntry(database, key, { ...entry, archivedAt: archived ? anchor : undefined });
+          index++;
+        }
+      },
+      { agentId },
+    );
+  }
+  assert.equal(index, sessions, "Archive fixture must include every seeded row");
 }
 plugins.setActivePluginRegistry(pluginRegistry.createEmptyPluginRegistry());
 const releaseForeground = foreground.retainSessionListForegroundWork();
@@ -376,6 +424,8 @@ if (values.mode === "verify") {
 if (values["list-shape"] && values["list-shape"] !== "mixed") {
   const shapes: Record<string, SessionsListParams> = {
     default: {},
+    archived: { archived: true },
+    all: { archived: "all" },
     sidebar: { source: "sidebar", rowMode: "sidebar", limit: 100, archived: false },
     full: { source: "sessions-page", limit: 100, archived: "all" },
     search: { source: "sessions-page", search: "dashboard", limit: 100, archived: "all" },
@@ -516,6 +566,22 @@ try {
     });
     await projection.ensureMaterialized();
   }
+  const archivePopulation =
+    archivedSessions === undefined
+      ? undefined
+      : projection.selectEntries({ sortBy: null }).reduce(
+          (counts, row) => {
+            counts[row.entry?.archivedAt === undefined ? "active" : "archived"]++;
+            return counts;
+          },
+          { active: 0, archived: 0 },
+        );
+  if (archivePopulation) {
+    assert.deepEqual(archivePopulation, {
+      active: sessions - archivedSessions!,
+      archived: archivedSessions,
+    });
+  }
   const searchIdentities = values["search-workload"]
     ? await lists.prepareSessionSearchIdentityNames(projection, {}, true)
     : undefined;
@@ -575,6 +641,19 @@ try {
   const metadataTargets = rows
     .filter((row) => row.entry && row.entry.archivedAt === undefined)
     .slice(0, 64);
+  const rowTargets = rowUpdatesPerList
+    ? projection
+        .selectEntries({ sortBy: null })
+        .filter(
+          (row) =>
+            row.entry &&
+            (values["row-update-population"] === "mixed" ||
+              (row.entry.archivedAt !== undefined) ===
+                (values["row-update-population"] === "archived")),
+        )
+    : [];
+  assert(!rowUpdatesPerList || rowTargets.length);
+  let rowUpdates = 0;
   let updates = 0;
   const update = () => {
     const index = updates % active.length;
@@ -637,7 +716,9 @@ try {
       0,
     );
   const firstReadStarted = performance.now();
+  const firstReadCpuStarted = process.threadCpuUsage();
   const initialGolden = await capture();
+  const firstReadCpu = process.threadCpuUsage(firstReadCpuStarted);
   const firstReadMs = performance.now() - firstReadStarted;
   let sequence = 0;
   const durations: number[] = [];
@@ -666,6 +747,27 @@ try {
       let before = process.threadCpuUsage();
       for (let step = 0; step < updatesPerList; step++) {
         update();
+      }
+      for (let step = 0; step < rowUpdatesPerList; step++) {
+        const target = rowTargets[rowUpdates % rowTargets.length]!;
+        const scope = {
+          agentId: target.agentId,
+          storePath: target.storeTarget.storePath,
+          sessionKey: target.key,
+        };
+        const entry = sessionEntries.loadSessionEntry(scope);
+        assert(entry);
+        const field =
+          values["row-update-field"] === "mixed"
+            ? rowUpdates % 5 === 0
+              ? "updatedAt"
+              : "inputTokens"
+            : values["row-update-field"];
+        sessionEntries.replaceSessionEntrySync(scope, {
+          ...entry,
+          [field]: field === "updatedAt" ? clock : rowUpdates + 1,
+        });
+        rowUpdates++;
       }
       if (values["metadata-churn"]) {
         const target = metadataTargets[sequence % metadataTargets.length]!;
@@ -779,6 +881,30 @@ try {
     }
   };
   await run(warmup, false);
+  let partitionEntriesVisited = 0;
+  if (values["count-visits"]) {
+    const prepared = lists.prepareSessionRowSelection(
+      projection,
+      { archived: "all" },
+      { ordered: true, metadataPrepared: true },
+    );
+    for (const { entries } of prepared.partitions ?? []) {
+      const forEach = entries.forEach.bind(entries);
+      const mapValues = entries.values.bind(entries);
+      entries.forEach = (visit, thisArg) =>
+        forEach((value, key, map) => {
+          partitionEntriesVisited++;
+          visit.call(thisArg, value, key, map);
+        });
+      entries.values = function* () {
+        for (const value of mapValues()) {
+          partitionEntriesVisited++;
+          yield value;
+        }
+        return undefined;
+      };
+    }
+  }
   global.gc();
   await nextTurn();
   inspector.connect();
@@ -895,6 +1021,21 @@ try {
     cpuProfile: values["cpu-profile"],
     reconciliation: values.reconciliation,
     metadataChurn: values["metadata-churn"],
+    archivedSessions,
+    archivePopulation,
+    rowUpdatesPerList,
+    rowUpdatePopulation: values["row-update-population"],
+    rowUpdateField: values["row-update-field"],
+    partitionRevisions: afterSelections.partitionRevisions.map(
+      ({ reason, changes: revisionChanges }) => ({
+        reason,
+        changes:
+          revisionChanges -
+          (beforeSelections.partitionRevisions.find((item) => item.reason === reason)?.changes ??
+            0),
+      }),
+    ),
+    partitionEntriesVisited: values["count-visits"] ? partitionEntriesVisited : undefined,
     partitions: {
       hits: lastPartitions.hits - firstPartitions.hits,
       misses: lastPartitions.misses - firstPartitions.misses,
@@ -908,6 +1049,7 @@ try {
     acpRows: values["acp-rows"],
     sourceRef: values["source-ref"] ?? "working-tree",
     firstReadMs,
+    firstReadCpuMs: (firstReadCpu.user + firstReadCpu.system) / 1000,
     latencyMs: {
       median: durations[Math.floor(durations.length * 0.5)],
       p95: durations[Math.floor(durations.length * 0.95)],

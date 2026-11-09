@@ -58,14 +58,20 @@ const repositoryScriptEntries = [
   "scripts/perf/auth-file-watch-events-measure.ts!",
   "scripts/perf/gateway-crash-record-measure.mts!",
   "scripts/perf/native-pr-bootstrap-measure.mjs!",
+  "scripts/perf/native-image-replay-measure.ts!",
   "scripts/perf/backup-verify-fixture.mjs!",
   "scripts/perf/backup-verify-measure.mjs!",
   "scripts/perf/board-read-admission-measure.ts!",
+  "scripts/perf/browser-protocol-retention.ts!",
+  "scripts/perf/browser-protocol-comparison.ts!",
+  "scripts/perf/browser-protocol-retention-preload.ts!",
+  "scripts/perf/fswatcher-retention-preload.mjs!",
   "scripts/perf/podman-exec-measure.ts!",
   "scripts/perf/responses-policy-fingerprint-measure.ts!",
   "scripts/perf/cron-own-receipts-measure.mjs!",
   "scripts/perf/spawn-broker-shutdown-measure.ts!",
   "scripts/perf/workspace-inventory-spawn-measure.ts!",
+  "scripts/perf/sandbox-projection-fetch-measure.ts!",
   // catalog-compare-released.mts copies and spawns this sandboxed reader by path.
   "scripts/lib/catalog-compare-released-worker.mts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
@@ -142,6 +148,8 @@ const repositoryScriptEntries = [
   "scripts/lib/usage-bench-observer.mjs!",
   // scripts/README.md invokes the Chromium/WebKit companion with shared scenarios.
   "scripts/bench-control-ui-engines.ts!",
+  // The event-load guide invokes the isolated Gateway wire fixture directly.
+  "scripts/bench-control-ui-event-load-wire.ts!",
   // Its companion guide invokes the same-document aged-tab census by path.
   "scripts/bench-control-ui-aged-tab.ts!",
   "scripts/bench-control-ui-aged-tab-compare.ts!",
@@ -229,6 +237,7 @@ const repositoryScriptEntries = [
   "scripts/perf/sandbox-paths-measure.ts!",
   "scripts/perf/github-publication-snapshot-measure.ts!",
   "scripts/perf/workspace-reconciliation-measure.ts!",
+  "scripts/perf/reply-directives-stream-measure.ts!",
   // Maintained source headers invoke these standalone commands and external preload by exact path.
   "scripts/bench-control-ui-talk.ts!",
   // Maintained source headers invoke these standalone analysis commands by exact path.
@@ -477,6 +486,7 @@ const repositoryScriptEntries = [
   // worktree.sh invokes explicit, supervised checkout-file salvage by path.
   "scripts/pr-lib/review-transition-recovery.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
+  "scripts/pr-lib/dependency-hold-release.mjs!",
   // worktree.sh launches the locked cold-worktree adapter by path.
   "scripts/pr-lib/worktree-provision.mts!",
   "scripts/pre-commit/filter-staged-files.mjs!",
@@ -1265,6 +1275,8 @@ const config = {
         "ffmpeg",
         // sqlite-snapshot-retirement.mts inspects its btrfs fixture with this host tool.
         "filefrag",
+        // shutdown-loaded-measure.ts uses the host fio utility for disk pressure.
+        "fio",
         "lsattr",
         "mint",
         // Muse E2E setup installs this CLI outside npm (scripts/e2e/lib/muse-runtime/setup.sh).

@@ -174,14 +174,15 @@ it.each([
   "joins pending native admission before a usage write (closing=$closing, retarget=$retarget, refresh=$refresh)",
   async ({ closing, retarget, refresh }) => {
     const root = tempDirs.make("openclaw-usage-admission-");
+    const originalCwd = process.cwd();
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
       const agentId = "usage-test";
       const databasePath = openOpenClawAgentDatabase({ agentId }).path;
       closeOpenClawAgentDatabasesForTest();
       invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(databasePath);
-      const cwd = retarget
-        ? vi.spyOn(process, "cwd").mockReturnValue(path.dirname(databasePath))
-        : undefined;
+      if (retarget) {
+        process.chdir(path.dirname(databasePath));
+      }
       const retargeted = path.join(root, "other-cwd");
       if (retarget) {
         fs.mkdirSync(retargeted);
@@ -246,7 +247,9 @@ it.each([
         await setImmediate();
         expect(writeSettled).toBe(false);
         expect(readRows(agentId, databasePath)).toEqual([]);
-        cwd?.mockReturnValue(retargeted);
+        if (retarget) {
+          process.chdir(retargeted);
+        }
         if (closing) {
           drain = closeOpenClawAgentDatabasesAsync(root).then(() => {
             drained = true;
@@ -277,7 +280,7 @@ it.each([
         await written;
         await drain;
       }
-    });
+    }).finally(() => process.chdir(originalCwd));
   },
 );
 

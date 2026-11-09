@@ -40,6 +40,7 @@ import {
 import {
   resolveVitestRuntimeCliSelections,
   shouldPrepareVitestCoreWorkers,
+  shouldUseRuntimeOnlyVitestWorkers,
 } from "./lib/vitest-runtime-selection.mts";
 import {
   createShardTimingSample,
@@ -524,7 +525,26 @@ export async function runTestProjects(
       ({ spec, execution }) => !spec.watchMode && !execution?.options.watch,
     );
     if (compiled.length) {
-      workers = createVitestWorkerRun(baseEnv, getVitestWorkerDescriptor());
+      const runtimeOnly = compiled.every(
+        ({ spec, cliArgs, execution }) =>
+          execution &&
+          execution.options.root === undefined &&
+          execution.options.dir === undefined &&
+          execution.options.project === undefined &&
+          execution.options.run !== false &&
+          shouldUseRuntimeOnlyVitestWorkers(
+            spec.config,
+            cliArgs,
+            spec.env,
+            execution.options.testNamePattern,
+            spec.includePatterns ?? undefined,
+          ),
+      );
+      workers = createVitestWorkerRun(
+        baseEnv,
+        getVitestWorkerDescriptor(),
+        runtimeOnly ? "runtime" : "full",
+      );
       for (const { spec } of compiled) {
         spec.workerRun = workers;
       }
