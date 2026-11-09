@@ -692,6 +692,11 @@ Native Codex subagents use Codex's execution and collaboration controls, not
 OpenClaw's retired Tasks view. Their current execution, assignment result, and
 result delivery remain separate facts.
 
+Observed running or waiting native children keep their requester's working indicator
+visible after the requester yields. Unknown or ended execution clears that activity;
+retained result delivery alone does not keep the indicator running. This display
+state does not create a foreground run or change native child controls.
+
 Once every native child has finished and its result has been captured, pending
 result delivery no longer prevents the parent from resuming. OpenClaw retains
 those results for delivery and retry. Running children still protect the parent
