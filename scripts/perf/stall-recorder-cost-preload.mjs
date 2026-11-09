@@ -70,9 +70,8 @@ if (interruptMode !== null) {
     const heartbeat = new BigInt64Array(workerData.heartbeat);
     const records = new WeakMap();
     let attempts = 0;
-    const connect = Session.prototype.connectToMainThread;
-    const post = Session.prototype.post;
-    const disconnect = Session.prototype.disconnect;
+    // These originals always receive their Session explicitly through .call(this) below.
+    const { connectToMainThread: connect, post, disconnect } = Session.prototype;
     Session.prototype.connectToMainThread = function () {
       const row = { attempt: ++attempts, atMs: now(), failed: 0 };
       records.set(this, row);
