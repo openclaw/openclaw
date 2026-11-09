@@ -322,6 +322,8 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
       key("src/state/local-onboarding-state.worker.ts", "localOnboarding.complete"),
       // installationCountStateKey is fixed to telemetry.installationCount.<endpoint hash>.
       key("src/infra/telemetry-store.worker.ts", "telemetry.claimInstallationCount"),
+      // Pairing receipts are fixed to devicePairing.openclawIdNode.<peer>, never credential keys.
+      key("src/infra/device-pairing-openclaw-id.worker.ts", "consumeOpenClawIdNodePairingInWorker"),
       // Fixed update recovery/cohort prefixes cannot address authProfiles.store.
       ...[
         "beginPluginCohortRecovery",
@@ -993,7 +995,9 @@ function operation(node: ts.Node): string {
 export function inspectPersonalCredentialWriters(
   sources: readonly { file: string; source: ts.SourceFile }[],
   checker: NativeTypeScriptProject["project"]["checker"],
+  symbolsAt: (nodes: readonly ts.Node[]) => (Symbol | undefined)[],
 ): string[] {
+  const symbolAt = (node: ts.Node) => symbolsAt([node])[0];
   const approvedCallers = new Map([...callers, ...exclusiveMaintenanceCallers]);
   const protectedDeclarations = new Map<ts.Node, string>();
   const names = new Set(
@@ -1092,7 +1096,7 @@ export function inspectPersonalCredentialWriters(
       expression.expression.kind === ts.SyntaxKind.ImportKeyword
     ) {
       const specifier = expression.arguments[0];
-      return specifier && resolveSymbol(checker.getSymbolAtLocation(specifier));
+      return specifier && resolveSymbol(symbolAt(specifier));
     }
     if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
       const base = accessSymbol(expression.expression);
@@ -1109,11 +1113,11 @@ export function inspectPersonalCredentialWriters(
         );
       }
     }
-    return resolveSymbol(checker.getSymbolAtLocation(expression));
+    return resolveSymbol(symbolAt(expression));
   };
   const bindModule = (binding: ts.BindingName, module: Symbol): boolean => {
     if (ts.isIdentifier(binding)) {
-      const local = checker.getSymbolAtLocation(binding);
+      const local = symbolAt(binding);
       if (local) {
         importedBindings.set(local, module);
         bindingNames.push(binding);
@@ -1208,7 +1212,7 @@ export function inspectPersonalCredentialWriters(
     source.forEachChild(visit);
   }
   // Resolve namespace candidates after every dynamic binding has its prepared target.
-  const bindingSymbols = bindingNames.length ? checker.getSymbolAtLocation(bindingNames) : [];
+  const bindingSymbols = symbolsAt(bindingNames);
   for (const [index, binding] of bindingNames.entries()) {
     if (targets(bindingSymbols[index]).length) {
       names.add(binding.text);
@@ -1284,7 +1288,7 @@ export function inspectPersonalCredentialWriters(
         while (table && !seen.has(table)) {
           seen.add(table);
           if (ts.isIdentifier(table)) {
-            const declaration = checker.getSymbolAtLocation(table)?.valueDeclaration?.resolve();
+            const declaration = symbolAt(table)?.valueDeclaration?.resolve();
             if (declaration && ts.isVariableDeclaration(declaration)) {
               const loop = declaration.parent.parent;
               table =
@@ -1424,7 +1428,7 @@ export function inspectPersonalCredentialWriters(
         !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) &&
         !(ts.isElementAccessExpression(node.parent) && node.parent.argumentExpression === node),
     );
-    const symbols = directReferences.length ? checker.getSymbolAtLocation(directReferences) : [];
+    const symbols = symbolsAt(directReferences);
     let symbolIndex = 0;
     for (const node of references) {
       const symbol = ts.isShorthandPropertyAssignment(node.parent)

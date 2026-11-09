@@ -1,7 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -190,6 +192,153 @@ describe("worktree default-base preparation", () => {
     }
   });
 
+  it("confirms an unchanged default from origin's advertisement without fetching", async () => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const remote = await createRemote();
+    const head = await git(repo, "rev-parse", "HEAD");
+    const execute = gitExec.executeGitCommand;
+    const network: string[] = [];
+    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+      if (args[0] === "ls-remote" || args[0] === "fetch") {
+        network.push(args[0]);
+      }
+      return await execute(cwd, args, options);
+    });
+    const resolveAt = async (offsetMs: number) => {
+      clock.mockReturnValue(now + offsetMs);
+      return await resolveWorktreeBase(repo);
+    };
+
+    await expect(resolveAt(0)).resolves.toMatchObject({ commit: head, fetchSucceeded: true });
+    expect(network).toEqual(["ls-remote", "fetch"]);
+    // A confirmed default keeps a fetched default's freshness window.
+    await expect(resolveAt(30_000)).resolves.toMatchObject({
+      commit: head,
+      recordRef: "origin/main",
+      fetchSucceeded: true,
+    });
+    await resolveAt(59_000);
+    expect(network).toEqual(["ls-remote", "fetch", "ls-remote"]);
+
+    // A default branch switch to a commit already tracked locally still moves origin/HEAD.
+    await git(remote, "update-ref", "refs/heads/next", head);
+    await git(remote, "symbolic-ref", "HEAD", "refs/heads/next");
+    await git(repo, "update-ref", "refs/remotes/origin/next", head);
+    await expect(resolveAt(60_000)).resolves.toMatchObject({ recordRef: "origin/next" });
+    expect(await git(repo, "symbolic-ref", "refs/remotes/origin/HEAD")).toBe(
+      "refs/remotes/origin/next",
+    );
+    expect(network).toEqual(["ls-remote", "fetch", "ls-remote", "ls-remote"]);
+
+    const advanced = await git(
+      remote,
+      ...gitIdentity,
+      "commit-tree",
+      "HEAD^{tree}",
+      "-p",
+      "HEAD",
+      "-m",
+      "remote update",
+    );
+    await git(remote, "update-ref", "refs/heads/next", advanced);
+    const unrelated = await createChildCommit("HEAD^{tree}", "unrelated session");
+    await git(repo, "update-ref", "refs/heads/unrelated", unrelated);
+    const pack = execFileSync("git", ["pack-objects", path.join(repo, ".git/objects/pack/pack")], {
+      cwd: repo,
+      input: `${unrelated}\n`,
+      encoding: "utf8",
+    }).trim();
+    await fs.unlink(path.join(repo, ".git/objects", unrelated.slice(0, 2), unrelated.slice(2)));
+    const accesses = path.join(root, "refresh.pack-access");
+    vi.stubEnv("GIT_TRACE_PACK_ACCESS", accesses);
+    const packets = path.join(root, "refresh.packets");
+    vi.stubEnv("GIT_TRACE_PACKET", packets);
+    await expect(resolveAt(90_000)).resolves.toMatchObject({
+      commit: advanced,
+      fetchSucceeded: true,
+    });
+    expect(await fs.readFile(accesses, "utf8").catch(() => "")).not.toContain(pack);
+    vi.stubEnv("GIT_TRACE_PACK_ACCESS", undefined);
+    const negotiation = await fs.readFile(packets, "utf8");
+    expect(negotiation).toContain(`have ${head}`);
+    expect(negotiation).not.toContain(`have ${unrelated}`);
+    vi.stubEnv("GIT_TRACE_PACKET", undefined);
+    expect(network).toEqual(["ls-remote", "fetch", "ls-remote", "ls-remote", "ls-remote", "fetch"]);
+
+    // An explicit fetch/ref bypasses preparation reuse, including a force-pushed rewind.
+    await git(remote, "update-ref", "refs/heads/next", head);
+    await git(repo, "fetch", "origin", "+refs/heads/next:refs/remotes/origin/next");
+    await expect(resolveWorktreeBase(repo, "origin/next")).resolves.toMatchObject({ commit: head });
+    await expect(resolveAt(120_000)).resolves.toMatchObject({ commit: head, fetchSucceeded: true });
+    expect(network.slice(-1)).toEqual(["ls-remote"]);
+    await git(remote, "update-ref", "refs/heads/next", advanced);
+    await git(repo, "config", "remote.origin.fetch", "+refs/heads/next:refs/remotes/custom/next");
+    await resolveAt(150_000);
+    expect(await git(repo, "rev-parse", "refs/remotes/custom/next")).toBe(advanced);
+    await git(remote, "update-ref", "refs/heads/next", head);
+    await expect(resolveAt(180_000)).resolves.toMatchObject({ commit: head, fetchSucceeded: true });
+    expect(network.slice(-4)).toEqual(["ls-remote", "fetch", "ls-remote", "fetch"]);
+  });
+
+  it.each(["sha1", "sha256"])(
+    "preserves shallow partial transport policy in a linked %s worktree",
+    async (format) => {
+      const source = path.join(root, "source");
+      await git(root, "init", "--bare", `--object-format=${format}`, source);
+      await git(source, "config", "uploadpack.allowFilter", "true");
+      const tree = execFileSync("git", ["mktree"], {
+        cwd: source,
+        input: "",
+        encoding: "utf8",
+      }).trim();
+      const base = await git(source, ...gitIdentity, "commit-tree", tree, "-m", "base");
+      await git(source, "update-ref", "refs/heads/main", base);
+      await git(source, "symbolic-ref", "HEAD", "refs/heads/main");
+      const clone = path.join(root, "partial");
+      await git(
+        root,
+        "clone",
+        "--depth=1",
+        "--filter=blob:none",
+        "--no-checkout",
+        pathToFileURL(source).href,
+        clone,
+      );
+      const linked = path.join(root, "linked");
+      await git(clone, "worktree", "add", "--detach", "--no-checkout", linked, base);
+      const target = await git(
+        source,
+        ...gitIdentity,
+        "commit-tree",
+        tree,
+        "-p",
+        base,
+        "-m",
+        "advance",
+      );
+      await git(source, "update-ref", "refs/heads/main", target);
+      const included = path.join(root, "transport.config");
+      await fs.writeFile(included, '[url "../"]\n  insteadOf = synthetic:\n');
+      await git(clone, "config", "remote.origin.url", "synthetic:source");
+      await git(
+        clone,
+        "config",
+        `includeIf.gitdir:${clone.replaceAll(path.sep, "/")}/.git/.path`,
+        included,
+      );
+      const shallow = await fs.readFile(path.join(clone, ".git/shallow"), "utf8");
+      await expect(resolveWorktreeBase(linked)).resolves.toMatchObject({
+        commit: target,
+        fetchSucceeded: true,
+      });
+      expect(await git(clone, "rev-parse", "origin/main")).toBe(target);
+      expect(await git(linked, "rev-parse", "HEAD")).toBe(base);
+      expect(await fs.readFile(path.join(clone, ".git/shallow"), "utf8")).toBe(shallow);
+      expect(await git(clone, "merge-base", base, target)).toBe(base);
+    },
+  );
+
   it("closes an unused base preparation without allowing later Git effects", async () => {
     let expired: WorktreeBasePreparation | undefined;
     const execute = vi.spyOn(gitExec, "executeGitCommand");
@@ -267,6 +416,8 @@ describe("worktree default-base preparation", () => {
         discoveries: ["remote", "config", "symbolic-ref"].includes(command) ? 0 : 1,
         fetches: ["fetch", "update-head", "verify"].includes(command) ? 1 : 0,
       };
+      // A landed fetch tracks origin's advertised tip, so recovery confirms it without fetching.
+      const fetchLanded = ["update-head", "verify"].includes(command);
       vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
         if (args[0] === "ls-remote") {
           discoveries++;
@@ -363,7 +514,7 @@ describe("worktree default-base preparation", () => {
           });
           expect({ discoveries, fetches }).toEqual({
             discoveries: failedCounts.discoveries + 1,
-            fetches: failedCounts.fetches + 1,
+            fetches: failedCounts.fetches + Number(!fetchLanded),
           });
         } else if (outcome === "exit-failure" || outcome === "output-limit") {
           expect(firstOutcome).toBeInstanceOf(Error);
@@ -410,11 +561,11 @@ describe("worktree default-base preparation", () => {
     const replacementEntered = createDeferred();
     const releaseReplacement = createDeferred();
     const execute = gitExec.executeGitCommand;
-    let fetches = 0;
+    let discoveries = 0;
     vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
       const result = await execute(cwd, args, options);
-      if (args[0] === "fetch") {
-        if (++fetches === 1) {
+      if (args[0] === "ls-remote") {
+        if (++discoveries === 1) {
           entered.resolve();
           await release.promise;
         } else {
@@ -441,13 +592,13 @@ describe("worktree default-base preparation", () => {
       await withinTest(replacementEntered.promise, signal);
       deadline.abort(expired);
       expect(await withinTest(follower, signal)).toBe(expired);
-      expect(fetches).toBe(2);
+      expect(discoveries).toBe(2);
       releaseReplacement.resolve();
       await expect(replacement).resolves.toMatchObject({
         commit: await git(repo, "rev-parse", "HEAD"),
         fetchSucceeded: true,
       });
-      expect(fetches).toBe(2);
+      expect(discoveries).toBe(2);
     } finally {
       release.resolve();
       releaseReplacement.resolve();
@@ -471,17 +622,17 @@ describe("worktree default-base preparation", () => {
       const execute = gitExec.executeGitCommand;
       let discoveries = 0;
       let fetches = 0;
-      let activeFetches = 0;
-      let maxActiveFetches = 0;
+      let activeRemote = 0;
+      let maxActiveRemote = 0;
       let forwards = 0;
       vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
         discoveries += Number(args[0] === "ls-remote");
         forwards += Number(args[0] === "merge");
-        if (args[0] !== "fetch") {
+        if (args[0] !== "fetch" && args[0] !== "ls-remote") {
           return await execute(cwd, args, options);
         }
-        const first = ++fetches === 1;
-        maxActiveFetches = Math.max(maxActiveFetches, ++activeFetches);
+        const first = args[0] === "fetch" && ++fetches === 1;
+        maxActiveRemote = Math.max(maxActiveRemote, ++activeRemote);
         try {
           // Complete a real fetch before cancellation. Its settled result still
           // belongs to the first consumer until the production boundary consumes it.
@@ -492,7 +643,7 @@ describe("worktree default-base preparation", () => {
           }
           return result;
         } finally {
-          activeFetches--;
+          activeRemote--;
         }
       });
       let firstResult: Promise<unknown> | undefined;
@@ -560,11 +711,12 @@ describe("worktree default-base preparation", () => {
             );
           }
         }
+        // Recovery confirms the landed fetch's tip from origin's advertisement.
         const attempts = ["follower", "all", "budget"].includes(mode) ? 1 : 2;
-        expect({ discoveries, fetches, maxActiveFetches }).toEqual({
+        expect({ discoveries, fetches, maxActiveRemote }).toEqual({
           discoveries: attempts,
-          fetches: attempts,
-          maxActiveFetches: 1,
+          fetches: 1,
+          maxActiveRemote: 1,
         });
         // Surviving preserve-only consumers never inherit the retired owner's
         // permission to fast-forward the source checkout.
@@ -604,8 +756,11 @@ describe("managed worktree creation groups", () => {
   }
   function observeReads() {
     const execute = gitExec.executeGitCommand;
-    const counts = { fetches: 0, statusReads: 0 };
+    const counts = { discoveries: 0, fetches: 0, statusReads: 0 };
     vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+      if (args[0] === "ls-remote") {
+        counts.discoveries++;
+      }
       if (args[0] === "fetch") {
         counts.fetches++;
       }
@@ -755,7 +910,7 @@ describe("managed worktree creation groups", () => {
     expect(await git(repo, "rev-parse", "origin/main")).toBe(remoteHead);
     expect(await fs.readFile(path.join(repo, "README.md"), "utf8")).toBe("local work\n");
     expect(failures).toEqual([]);
-    expect(reads).toEqual({ fetches: 1, statusReads: 1 });
+    expect(reads).toEqual({ discoveries: 1, fetches: 1, statusReads: 1 });
   });
 
   it("shares a prepared default past fetch settlement", async ({ signal }) => {
@@ -784,17 +939,17 @@ describe("managed worktree creation groups", () => {
         signal,
       );
       const createdFirst = await withinTest(first, signal);
-      expect(reads.fetches).toBe(1);
+      expect(reads.discoveries).toBe(1);
       const late = await create("cohort-late");
       expect(await head(late.path)).toBe(expectedHead);
-      expect(reads.fetches).toBe(1);
+      expect(reads.discoveries).toBe(1);
       // An overlapping creation must not extend the freshness window indefinitely.
       clock.mockReturnValue(now + 30_000);
       await create("cohort-expired");
-      expect(reads.fetches).toBe(2);
+      expect(reads.discoveries).toBe(2);
       releaseSecond.resolve();
       const createdSecond = await withinTest(second, signal);
-      expect(reads.fetches).toBe(2);
+      expect(reads.discoveries).toBe(2);
       expect(await head(createdFirst.path)).toBe(expectedHead);
       expect(await head(createdSecond.path)).toBe(expectedHead);
       expect(
@@ -802,9 +957,9 @@ describe("managed worktree creation groups", () => {
       ).toBe("refs/remotes/origin/main");
       const repeated = await create("cohort-second");
       expect(repeated.id).toBe(createdSecond.id);
-      expect(reads.fetches).toBe(2);
+      expect(reads.discoveries).toBe(2);
       await create("cohort-fresh");
-      expect(reads.fetches).toBe(2);
+      expect(reads.discoveries).toBe(2);
     } finally {
       secondAdmitted.resolve();
       releaseSecond.resolve();
@@ -816,14 +971,14 @@ describe("managed worktree creation groups", () => {
     const execute = gitExec.executeGitCommand;
     const events: string[] = [];
     vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
-      if (args[0] === "fetch") {
-        events.push("fetch");
+      if (args[0] === "ls-remote") {
+        events.push("ls-remote");
       }
       return await execute(cwd, args, options);
     });
     const onProgress = (phase: string) => events.push(phase);
     await service.create({ repoRoot: repo, name: "default", onProgress });
-    expect(events.slice(0, 2)).toEqual(["base", "fetch"]);
+    expect(events.slice(0, 2)).toEqual(["base", "ls-remote"]);
     expect(events.at(-1)).toBe("checkout");
     events.length = 0;
     await service.create({ repoRoot: repo, name: "explicit", baseRef: "HEAD", onProgress });

@@ -1,8 +1,14 @@
 // Response shapes of the Gateway's openclawId.* methods that the members page reads.
-import type { MemberRole } from "@openclaw/openclaw-id-protocol";
+import type { IrohEndpointKey, MemberRole, NodeDescription } from "@openclaw/openclaw-id-protocol";
 
 /** An active owner device as `openclawId.status` lists it. */
-export type OwnerDevice = { devicePub: string; label: string; peerKeys: string[]; cert: unknown };
+export type OwnerDevice = {
+  devicePub: string;
+  label: string;
+  peerKeys: string[];
+  cert: unknown;
+  deviceFp?: string;
+};
 
 /** One active run a member's device started, read from the Gateway's run registry. */
 type MemberRun = { runId: string; sessionKey: string };
@@ -65,6 +71,8 @@ export type Link = {
   ownerDevices?: OwnerDevice[];
   members?: Member[];
   invites?: Invite[];
+  nodes?: NodeRecord[];
+  nodeInvites?: NodeInvite[];
   publication?:
     | { state: "published"; ownerAccountId: string | null; snapshotSeq: number }
     | { state: "needs_enrollment_code" }
@@ -73,9 +81,36 @@ export type Link = {
 
 /** The `openclawId.status` result. */
 export type StatusResult = {
-  status: { state: "off" | "unconfigured" | "on" | "failed" };
+  status: {
+    state: "off" | "unconfigured" | "on" | "failed";
+    tunnel?: { state: string; relayUrl?: string };
+  };
   link: Link;
   channel: "local_operator" | "tunnel" | null;
   /** Whether `openclawId.people` answers this client (loopback operator or an owner device). */
   owner?: boolean;
+};
+
+/** Owner-only public node projection; never contains the invitation proof key. */
+export type NodeRecord = {
+  peerKey: IrohEndpointKey;
+  label: string;
+  description: NodeDescription;
+  addedBy: string;
+  lastSeen: number;
+  inviteId: string;
+};
+export type NodeInvite = {
+  inviteId: string;
+  label: string;
+  createdAt: number;
+  expiresAt: number;
+  status: "open" | "pending" | "approved" | "denied" | "expired";
+  pending?: {
+    peerKey: IrohEndpointKey;
+    requestedAt: number;
+    decideBy: number;
+    description: NodeDescription;
+    verificationCode: string;
+  };
 };

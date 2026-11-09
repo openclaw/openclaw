@@ -113,14 +113,14 @@ describe("Models page catalog publication", () => {
     const page = appendPage(context);
     await waitForProviders(page, config);
     const row = () => page.querySelector('[data-provider-id="workstation"]');
-    await waitForSolid(() => {
-      expect(row()?.textContent).toContain("Research Lab");
-      expect(row()?.querySelector(".provider-brand-icon svg")).not.toBeNull();
-    });
+    await waitForSolid(() => expect(row()?.textContent).toContain("Research Lab"));
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
+      expect(row()?.querySelector(".provider-brand-icon svg")).not.toBeNull(),
+    );
     expect(displayedCatalog(page)?.models).toEqual([]);
     expect(row()?.textContent).not.toContain("Raw config");
     const initialGeometry = row()?.querySelector(".provider-brand-icon svg")?.innerHTML;
-
     providerName = "Studio";
     iconName = "cloud";
     publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
@@ -416,6 +416,39 @@ describe("Models page catalog publication", () => {
     expect(page.querySelector(".model-providers__catalog-progress")).toBeNull();
     expect(page.querySelector('[role="option"][data-value="openai/recovered"]')).not.toBeNull();
     expect(page.view.props.catalogDiscoveryError).toBeNull();
+  });
+
+  it("clears a prior catalog warning when background publication succeeds", async () => {
+    const { context, request, discover, readPublished, publishEvent, catalogRequest } =
+      createCatalogHarness(preparedCatalog);
+    const failed = { ...preparedCatalog, refreshFailed: true };
+    readPublished.mockReturnValue(failed);
+    discover.mockResolvedValue(failed);
+    const page = appendPage(context);
+    await waitForProviders(page, savedModelConfig);
+    await retryCatalog(page);
+    const warning = () => page.querySelector('.model-providers__catalog-progress[role="alert"]');
+    await waitForSolid(() => expect(warning()).not.toBeNull());
+
+    const publication = deferred<ModelCatalogResult>();
+    let publicationStarted = false;
+    request.mockImplementation((method: string, params?: { refresh?: boolean }) => {
+      if (method === "models.list" && !params?.refresh) {
+        publicationStarted = true;
+        return publication.promise;
+      }
+      return catalogRequest(method, params);
+    });
+    publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+    await waitForSolid(() => expect(publicationStarted).toBe(true));
+    await drainPageUpdates(page);
+    expect(warning()).not.toBeNull();
+
+    publication.resolve(preparedCatalog);
+    await waitForSolid(() => expect(warning()).toBeNull());
+    expect(page.view.props.catalogDiscoveryError).toBeNull();
+    expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
+    expect(discover).toHaveBeenCalledOnce();
   });
 
   it.each(["utility"] as const)(

@@ -395,6 +395,9 @@ export function resolveShardChildCommand(
         ? [
             fileURLToPath(new URL("./lib/vitest-worker-bootstrap.mts", import.meta.url)),
             workerRun.descriptor.directory,
+            ...(workerRun.descriptor.preset && workerRun.descriptor.preset !== "full"
+              ? [`--worker-preset=${workerRun.descriptor.preset}`]
+              : []),
           ]
         : []),
       testProjectsEntrypoint,
@@ -424,12 +427,28 @@ async function loadWorkerOwner() {
     return undefined;
   }
   const { resolveSharedVitestCompilerEnv } = await import("./lib/vitest-process-env.mts");
-  const [worker, processOwner] = await Promise.all([
+  const [
+    worker,
+    processOwner,
+    {
+      selectVitestWorkerPreset,
+      areRuntimeOnlyVitestUnitFiles,
+      shouldUseRuntimeOnlyVitestWorkers,
+      areToolingOnlyVitestUnitFiles,
+      shouldUseToolingOnlyVitestWorkers,
+    },
+  ] = await Promise.all([
     import("./lib/vitest-worker-run.mts"),
     import("./lib/vitest-process.mts"),
+    import("./lib/vitest-runtime-selection.mts"),
   ]);
   return {
     createWorkerRun: worker.createVitestWorkerRun,
+    selectPreset: selectVitestWorkerPreset,
+    areRuntimeOnlyFiles: areRuntimeOnlyVitestUnitFiles,
+    areToolingOnlyFiles: areToolingOnlyVitestUnitFiles,
+    useToolingOnlyWorkers: shouldUseToolingOnlyVitestWorkers,
+    useRuntimeOnlyWorkers: shouldUseRuntimeOnlyVitestWorkers,
     resolveCompilerEnv: resolveSharedVitestCompilerEnv,
     spawn: processOwner.spawnOwnedVitestProcess,
     exitBySignal: processOwner.exitVitestBySignal,
@@ -441,12 +460,41 @@ function createWorkerContext(
   owner: NonNullable<Awaited<ReturnType<typeof loadWorkerOwner>>>,
   env: NodeJS.ProcessEnv,
   plans: ShardPlan[],
+  hasExtraArgs: boolean,
 ) {
   const compilerEnv = owner.resolveCompilerEnv(
     plans.length > 0 ? plans.map((plan) => prepareChildEnv(plan, env)) : [env],
   );
+  const supportsPreset = (
+    files: typeof owner.areRuntimeOnlyFiles,
+    selection: typeof owner.useRuntimeOnlyWorkers,
+  ) =>
+    !hasExtraArgs &&
+    plans.length > 0 &&
+    plans.every((entry) =>
+      entry.kind === "target"
+        ? files([entry.target])
+        : entry.plan.configs.length === 1 &&
+          Boolean(entry.plan.includePatterns?.length) &&
+          !entry.plan.requiresDist &&
+          entry.plan.pretestBuildMode === undefined &&
+          selection(
+            entry.plan.configs[0]!,
+            [],
+            prepareChildEnv(entry, env),
+            undefined,
+            entry.plan.includePatterns ?? undefined,
+          ),
+    );
   return {
-    workerRun: owner.createWorkerRun(compilerEnv),
+    workerRun: owner.createWorkerRun(
+      compilerEnv,
+      undefined,
+      owner.selectPreset(
+        supportsPreset(owner.areRuntimeOnlyFiles, owner.useRuntimeOnlyWorkers),
+        supportsPreset(owner.areToolingOnlyFiles, owner.useToolingOnlyWorkers),
+      ),
+    ),
     normalCompletion: true,
     spawn: owner.spawn,
     exitBySignal: owner.exitBySignal,
@@ -798,7 +846,14 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     interrupted ??= signal;
   };
   try {
-    context = workerOwner ? createWorkerContext(workerOwner, baseEnv, admittedPlans) : undefined;
+    context = workerOwner
+      ? createWorkerContext(
+          workerOwner,
+          baseEnv,
+          admittedPlans,
+          admittedPlans.some((entry) => extraArgs(entry).length > 0),
+        )
+      : undefined;
     if (hostResources) {
       console.log(
         `[shard:resources] logicalCpuCount=${hostResources.logicalCpuCount} totalMemoryBytes=${hostResources.totalMemoryBytes} requested plans=${requestedConcurrency} admitted plans=${concurrency}`,

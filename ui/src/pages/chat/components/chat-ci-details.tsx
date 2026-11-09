@@ -71,16 +71,18 @@ function CheckStatus(props: { state: CheckState }) {
       aria-label={label()}
       title={label()}
     >
-      <Show
-        when={props.state !== "skipped"}
-        fallback={
-          <StrokeIcon aria-hidden="true">
-            <circle cx="12" cy="12" r="10" />
-            <path d="M8 12h8" />
-          </StrokeIcon>
-        }
-      >
-        <Icon name={CHECK_PRESENTATION[props.state][1]} />
+      <Show when={props.state !== "running"} fallback={<span class="btn__spinner" />}>
+        <Show
+          when={props.state !== "skipped"}
+          fallback={
+            <StrokeIcon aria-hidden="true">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M8 12h8" />
+            </StrokeIcon>
+          }
+        >
+          <Icon name={CHECK_PRESENTATION[props.state][1]} />
+        </Show>
       </Show>
     </span>
   );

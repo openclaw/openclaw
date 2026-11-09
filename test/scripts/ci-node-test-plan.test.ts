@@ -296,6 +296,7 @@ describe("Control UI release-only inventories", () => {
   const entry = "ui/src/e2e/chat-session-entry.e2e.test.ts";
   const staleBuild = "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts";
   const teamScale = "ui/src/e2e/team-scale-cold-load.e2e.test.ts";
+  const mantis = "ui/src/e2e/mantis-chat-proof.e2e.test.ts";
   const automationManagement =
     "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
   const reconnectContinuity = "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts";
@@ -455,7 +456,7 @@ describe("Control UI release-only inventories", () => {
     {
       name: "directly edited release matrices",
       full: false,
-      edited: [entry, staleBuild, teamScale, ...releaseOnlyRealGateway],
+      edited: [entry, staleBuild, teamScale, mantis, ...releaseOnlyRealGateway],
     },
     {
       name: "full selection with one edited release suite",
@@ -466,7 +467,7 @@ describe("Control UI release-only inventories", () => {
     const groups = createUiTestShardGroups({
       includeReleaseOnlyTests: false,
       includeReleaseOnlyE2eTests: full,
-      uiE2eFiles: full ? [embed, entry, staleBuild, teamScale] : undefined,
+      uiE2eFiles: full ? [embed, entry, staleBuild, teamScale, mantis] : undefined,
       changedPaths: [...edited, "ui/src/e2e", "ui/src/pages/usage/usage-page.tsx"],
     });
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
@@ -479,7 +480,7 @@ describe("Control UI release-only inventories", () => {
     for (const file of [embed, entry]) {
       expect(groups.e2e[0]?.includePatterns).toContain(file);
     }
-    for (const file of [staleBuild, teamScale]) {
+    for (const file of [staleBuild, teamScale, mantis]) {
       expect(groups.e2e[0]?.includePatterns?.includes(file)).toBe(edited.includes(file));
     }
     expectRealGatewayCoverage(
@@ -2079,7 +2080,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("selects provisioning and closure guards without replacing source test owners", () => {
+  it("limits provisioning to copied inputs while retaining source closure guards", () => {
     const guards = [
       // Provisioning inspects templates through the fork-owned SQLite broker.
       ["test/scripts/pr-worktree-provision.test.ts", configPath("infra")],
@@ -2101,9 +2102,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const newModule = "src/plugins/unrelated-new-plugin.ts";
     const newModuleTargets = resolvePolicyTestTargets([newModule]);
     const testOnlyTargets = resolvePolicyTestTargets(["src/plugins/unrelated-new-plugin.test.ts"]);
+    expect(newModuleTargets).not.toContain(guards[0][0]);
+    expect(newModuleTargets).toContain(guards[1][0]);
+    expect(newModuleTargets).toContain("test/scripts/pr-wrapper-source-closure.test.ts");
     for (const [guard] of guards) {
-      expect(newModuleTargets).toContain(guard);
       expect(testOnlyTargets).not.toContain(guard);
+    }
+    for (const changedPath of ["test/setup.ts", "test/vitest/vitest.tooling.config.ts"]) {
+      expect(resolvePolicyTestTargets([changedPath]), changedPath).toContain(guards[0][0]);
     }
     expect(isPolicyTestOwnedPath(newModule)).toBe(false);
     expect(isPolicyTestOwnedPath(manifest)).toBe(true);
@@ -2705,7 +2711,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const configs = new Set([configPath("cli"), configPath("cli-process")]);
     const restore = selectFixtureProjects((config) => configs.has(config));
     const timings = spyTimings().mockReturnValue({
-      "agentic-cli": 136,
+      "agentic-cli": 130,
     });
     const options = compactOptions("hybrid", "pull-request");
     try {
@@ -2899,6 +2905,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     "prices fully measured tooling selections without discarded siblings on %s",
     (runnerBackend) => {
       const target = "test/scripts/update-restart-module-outcome.test.ts";
+      // Unknown files must cost more than startup headroom regardless of which
+      // siblings the current checkout places in the target's tooling stripe.
+      vi.spyOn(shardMetadata, "estimateVitestToolingFileSeconds").mockReturnValue(60);
       const timings = vi
         .spyOn(testTimings, "readToolingFileTimings")
         .mockReturnValue({ [target]: 1 });
@@ -2912,6 +2921,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const unknown = required(selectTests([target], { runnerBackend }));
       expectPlanFiles(unknown, [target]);
       expect(sumSeconds(unknown)).toBeGreaterThan(25);
+      expect(sumSeconds(unknown)).toBeGreaterThanOrEqual(60);
     },
   );
 
@@ -4017,6 +4027,7 @@ function expectImpacts(
 describe("CI changed Node test plan", () => {
   it.each([
     ["ui/src/main.ts", true],
+    ["src/gateway/control-ui-route-preloads.ts", true],
     ["ui/src/pages/chat/chat-gateway.test.ts", false],
     // Erased TSX header imports do not bring Gateway server code into the UI runtime.
     ["packages/gateway-client/src/index.ts", false],

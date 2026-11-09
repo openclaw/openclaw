@@ -69,7 +69,7 @@ export function LazyElementModal(props: {
               <header class="lazy-element-loading__header">
                 <h2>{state().element.label}</h2>
                 <button
-                  class="btn btn--ghost btn--icon"
+                  class="oc-icon-button"
                   type="button"
                   aria-label={t("common.close")}
                   onClick={() => props.onClose()}

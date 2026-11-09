@@ -180,11 +180,14 @@ validate_prep_baseline_transition() {
   # Replay once before observing live authority. The private facts stay in this
   # recovery invocation; retry must reconstruct them from the admitted journal.
   PREP_TRANSITION_FACTS=$(node "$helper" validate-transition \
-    "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID") || return 1
+    "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" "${PR_MAIN_SHA:-}") || return 1
   validate_review_transition_state "$pr" "$source" "$target" || return 1
   observation=$(cat .local/pr-meta.json) || return 1
   archive=$(printf '%s' "$PREP_TRANSITION_FACTS" | jq -er '.binding | @base64d | fromjson | .archive') || return 1
   revalidate_baseline_publication "$pr" "$observation" "$source" "$archive" || return 1
+  if printf '%s' "$PREP_TRANSITION_FACTS" | jq -e '.binding | @base64d | fromjson | .version == 2 and .purpose == "proof"' >/dev/null; then
+    require_proof_publication_custody "$pr" proof || return 1
+  fi
   if [ "$command" = install-transition ]; then
     PREP_TRANSITION_FACTS=$(printf '%s' "$PREP_TRANSITION_FACTS" | node "$helper" install-transition \
       "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID") || return 1
@@ -289,9 +292,9 @@ recover_review_transition() {
       pr_git update-ref --no-deref "refs/heads/$branch" "$target" "$source" || return 1
     fi
   elif [ "$mode" = "branch" ]; then
-    pr_git checkout -B "$branch" "$target" || return 1
+    GIT_NO_LAZY_FETCH=1 pr_git checkout -B "$branch" "$target" || return 1
   else
-    pr_git checkout --detach "$target" || return 1
+    GIT_NO_LAZY_FETCH=1 pr_git checkout --detach "$target" || return 1
   fi
 
   local actual_branch
@@ -332,7 +335,12 @@ checkout_pr_worktree_target() {
 
   local source target mode=detached
   source=$(pr_git rev-parse HEAD) || return 1
-  target=$(pr_git rev-parse "$target_ref^{commit}") || return 1
+  # A lazy commit fetch sends no haves and can download all reachable history.
+  # Acquire missing commits through the filtered, negotiating source owner first.
+  target=$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse --verify "$target_ref^{commit}" 2>/dev/null) || {
+    fetch_canonical_ref "$target_ref" --no-write-fetch-head || return 1
+    target=$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse --verify "$target_ref^{commit}") || return 1
+  }
   require_no_ignored_transition_paths "$pr" "$source" "$target" || return 1
   [ -z "$branch" ] || mode=branch
   write_review_transition_journal "$pr" "$source" "$target" "$mode" "$branch" || return 1

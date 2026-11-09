@@ -225,13 +225,9 @@ describe("login gate failure recovery", () => {
     expect(element.querySelector('label[for="login-gate-credential"]')?.textContent).toBe(
       "Gateway secret",
     );
-    expect(input).toMatchObject({
-      placeholder: "Paste the token or type the password",
-      type: "password",
-      value: "old-secret",
-    });
+    expect(input).toMatchObject({ type: "password", value: "old-secret" });
+    expect(input.placeholder).toBe("Paste the token or type the password");
     expect(element.querySelector('[role="radiogroup"]')).toBeNull();
-
     input.value = "";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     element.props = { ...element.props, secret: "" };
@@ -240,7 +236,6 @@ describe("login gate failure recovery", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(element.props.onSecretChange).toHaveBeenNthCalledWith(1, "");
     expect(element.props.onSecretChange).toHaveBeenNthCalledWith(2, "replacement-secret");
-
     element
       .querySelector<HTMLButtonElement>('[aria-label="Toggle Gateway secret visibility"]')
       ?.click();
@@ -248,7 +243,11 @@ describe("login gate failure recovery", () => {
     element.props = { ...element.props, secret: "replacement-secret", showGatewaySecret: true };
     await element.updateComplete;
     expect(input).toMatchObject({ type: "text", value: "replacement-secret" });
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    for (const isComposing of [true, false]) {
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing }),
+      );
+    }
     expect(element.props.onConnect).toHaveBeenCalledOnce();
   });
 

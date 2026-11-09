@@ -829,7 +829,7 @@
 .sidebar-agent-menu__agent-switch,
 .sidebar-agent-menu__create {
   flex: none;
-  min-height: 44px;
+  min-height: 36px;
   min-width: 0;
   padding: 0 !important;
   color: var(--muted) !important;
@@ -863,8 +863,8 @@
   gap: 10px;
   width: 100%;
   min-width: 0;
-  min-height: 44px;
-  padding: 8px;
+  min-height: 36px;
+  padding: 6px 8px;
 }
 
 .sidebar-agent-menu__agent-avatar {
@@ -1047,9 +1047,10 @@
 }
 
 /* Only the switcher list shrinks and scrolls; the action rows stay visible. */
+/* Agent rows: 36 tall around a 24px avatar. */
 .sidebar-agent-menu {
-  --agent-avatar-size: 28px;
-  --agent-avatar-glyph-size: 18px;
+  --agent-avatar-size: 24px;
+  --agent-avatar-glyph-size: 16px;
 }
 
 .oc-menu.sidebar-agent-menu {
@@ -1080,6 +1081,13 @@
 .oc-menu.sidebar-identity-menu {
   min-width: max(220px, var(--sidebar-identity-menu-min-width, 220px));
   max-height: calc(100dvh - 16px);
+}
+
+/* On touch the identity menu keeps compact 36px rows. */
+@media (pointer: coarse) {
+  .oc-menu.sidebar-identity-menu {
+    --menu-item-height: 36px;
+  }
 }
 
 .sidebar-identity-menu__avatar {
@@ -1156,6 +1164,8 @@
   flex: none;
   width: 28px;
   height: 28px;
+  /* The 28px hit area overhangs the 24px avatar line so the row stays 36. */
+  margin-block: -2px;
   padding: 6px;
   border: 0;
   border-radius: var(--radius-sm);

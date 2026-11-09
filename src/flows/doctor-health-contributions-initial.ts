@@ -442,17 +442,17 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution("doctor:project-clone-shape", "Project clones", {
       updateWork: { kind: "standalone" },
       healthChecks: {
-        description: "Partial and shallow registry-owned project clones need manual repair.",
+        description: "Shallow registry-owned project clones need full history.",
         defaultEnabled: false,
         async detect(ctx) {
           const { collectProjectCloneShapeHealthFindings } =
             await import("../commands/doctor-project-clone-shape.js");
-          return await collectProjectCloneShapeHealthFindings(ctx.cfg);
+          return await collectProjectCloneShapeHealthFindings(ctx.cfg, { env: ctx.env });
         },
       },
       async run(ctx) {
         const { noteProjectCloneShape } = await import("../commands/doctor-project-clone-shape.js");
-        await noteProjectCloneShape(ctx.cfg);
+        await noteProjectCloneShape(ctx.cfg, { repair: ctx.options.repair, env: ctx.env });
       },
     }),
     createDoctorHealthContribution("doctor:db-bloat", "SQLite database size", {
