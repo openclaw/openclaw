@@ -3,7 +3,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type Mock } from "vitest";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
-import * as sessionIdentity from "../config/sessions/session-accessor.sqlite-identity.js";
+import * as sessionTurnPublication from "../config/sessions/session-turn-publication.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { RespondFn } from "./server-methods/types.js";
@@ -84,13 +84,13 @@ export function registerGoalChatRestartSettlementCase(fixture: {
       "Keep the committed Goal after publication fails",
       "goal-publication-failure",
     );
-    const publish = sessionIdentity.publishCommittedSessionIdentity;
+    const publish = sessionTurnPublication.publishCommittedSessionTurn;
     let rejected = false;
-    const notification = vi
-      .spyOn(sessionIdentity, "publishCommittedSessionIdentity")
-      .mockImplementation((...args) => {
-        publish(...args);
-        if (!rejected && args[3].has(request.sessionKey)) {
+    const publication = vi
+      .spyOn(sessionTurnPublication, "publishCommittedSessionTurn")
+      .mockImplementation((candidate, context) => {
+        publish(candidate, context);
+        if (!rejected && context.scope.sessionKey === request.sessionKey) {
           rejected = true;
           throw new Error("Synthetic input publication failed after commit");
         }
@@ -101,7 +101,7 @@ export function registerGoalChatRestartSettlementCase(fixture: {
         ? undefined
         : redactSensitiveText(
             JSON.stringify({
-              publicationCount: notification.mock.calls.length,
+              publicationCount: publication.mock.calls.length,
               responses: response.mock.calls.map(([ok, result, error]) => ({
                 ok,
                 status: isRecord(result) ? result.status : undefined,
@@ -122,7 +122,7 @@ export function registerGoalChatRestartSettlementCase(fixture: {
       });
       expect(readGoalChatUserMessages(fixture.scope())).toHaveLength(1);
     } finally {
-      notification.mockRestore();
+      publication.mockRestore();
     }
   });
 }
