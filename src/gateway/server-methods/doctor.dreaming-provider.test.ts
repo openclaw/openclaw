@@ -23,6 +23,14 @@ vi.mock("../../plugins/memory-state.js", async (importOriginal) => ({
 }));
 
 describe("doctor.memory.status with a memory slot owner's dreaming provider", () => {
+  // Shared request/unwrap for the repeated respond/invoke/read triple below;
+  // each test still supplies its own distinct mocks and assertions.
+  async function requestMemoryStatus(options?: { cronList?: ReturnType<typeof vi.fn> }) {
+    const respond = vi.fn();
+    await invokeDoctorMemory("doctor.memory.status", respond, { params: {}, ...options });
+    return respondPayload(respond) as Record<string, any>;
+  }
+
   beforeEach(() => {
     resolveActiveMemoryDreamingStatus.mockReset().mockResolvedValue(null);
     getRuntimeConfig.mockReset().mockReturnValue({});
@@ -45,11 +53,9 @@ describe("doctor.memory.status with a memory slot owner's dreaming provider", ()
         rem: { enabled: true, scheduled: true, cron: "15 1 * * *", nextRunAtMs: 1_000 },
       },
     });
-    const respond = vi.fn();
 
-    await invokeDoctorMemory("doctor.memory.status", respond, { params: {} });
+    const payload = await requestMemoryStatus();
 
-    const payload = respondPayload(respond) as Record<string, unknown>;
     // The search diagnostic stays exactly as before.
     expect(payload.embedding).toEqual({ ok: false, error: "memory search unavailable" });
     const dreaming = payload.dreaming as Record<string, any>;
@@ -73,11 +79,8 @@ describe("doctor.memory.status with a memory slot owner's dreaming provider", ()
       timezone: "Asia/Tokyo",
       phases: { rem: { enabled: true, scheduled: true, cron: "15 1 * * *" } },
     });
-    const respond = vi.fn();
 
-    await invokeDoctorMemory("doctor.memory.status", respond, { params: {} });
-
-    const dreaming = (respondPayload(respond) as Record<string, any>).dreaming;
+    const dreaming = (await requestMemoryStatus()).dreaming;
     expect(dreaming.reportedByProvider).toBe(true);
     expect(dreaming.timezone).not.toBe("Asia/Tokyo");
     expect(dreaming.phases.rem.cron).toBe("15 1 * * *");
@@ -96,11 +99,8 @@ describe("doctor.memory.status with a memory slot owner's dreaming provider", ()
       lastPromotedAt: "2026-09-25T06:00:00.000Z",
     };
     resolveActiveMemoryDreamingStatus.mockResolvedValueOnce({ enabled: true, stats });
-    const respond = vi.fn();
 
-    await invokeDoctorMemory("doctor.memory.status", respond, { params: {} });
-
-    const dreaming = (respondPayload(respond) as Record<string, any>).dreaming;
+    const dreaming = (await requestMemoryStatus()).dreaming;
     expect(dreaming.reportedStats).toEqual(stats);
     // memory-core's count still describes memory-core's list.
     expect(dreaming.shortTermCount).toBe(1);
@@ -118,11 +118,8 @@ describe("doctor.memory.status with a memory slot owner's dreaming provider", ()
     });
     getMemorySearchManager.mockResolvedValue({ manager: null, error: "memory search unavailable" });
     resolveActiveMemoryDreamingStatus.mockResolvedValueOnce({ enabled: true });
-    const respond = vi.fn();
 
-    await invokeDoctorMemory("doctor.memory.status", respond, { params: {} });
-
-    const dreaming = (respondPayload(respond) as Record<string, any>).dreaming;
+    const dreaming = (await requestMemoryStatus()).dreaming;
     // `enabled` is what the page's toggle writes; the report must not mask it.
     expect(dreaming.enabled).toBe(false);
     expect(dreaming.reportedEnabled).toBe(true);
@@ -148,11 +145,8 @@ describe("doctor.memory.status with a memory slot owner's dreaming provider", ()
         state: { nextRunAtMs: 9_000 },
       },
     ]);
-    const respond = vi.fn();
 
-    await invokeDoctorMemory("doctor.memory.status", respond, { params: {}, cronList });
-
-    const phases = (respondPayload(respond) as Record<string, any>).dreaming.phases;
+    const phases = (await requestMemoryStatus({ cronList })).dreaming.phases;
     // Event-driven phase: the sweep's timestamp is not its schedule.
     expect(phases.light).toMatchObject({ cron: "", managedCronPresent: true, lastRunAtMs: 500 });
     expect(phases.light).not.toHaveProperty("nextRunAtMs");
@@ -167,11 +161,8 @@ describe("doctor.memory.status with a memory slot owner's dreaming provider", ()
     resolveActiveMemoryDreamingStatus.mockResolvedValueOnce({
       phases: { rem: { enabled: true, scheduled: true, cron: "15 1 * * *" } },
     });
-    const respond = vi.fn();
 
-    await invokeDoctorMemory("doctor.memory.status", respond, { params: {} });
-
-    const dreaming = (respondPayload(respond) as Record<string, any>).dreaming;
+    const dreaming = (await requestMemoryStatus()).dreaming;
     // Presence is what locks the page's switch; enablement stays unknown.
     expect(dreaming.reportedByProvider).toBe(true);
     expect(dreaming).not.toHaveProperty("reportedEnabled");
@@ -193,14 +184,12 @@ describe("doctor.memory.status with a memory slot owner's dreaming provider", ()
       phases: { rem: { enabled: true, scheduled: true, cron: "15 1 * * *" } },
       stats: { promotedToday: 4 },
     });
-    const respond = vi.fn();
 
-    await invokeDoctorMemory("doctor.memory.status", respond, { params: {} });
+    const payload = await requestMemoryStatus();
 
     expect(getMemorySearchManager).not.toHaveBeenCalled();
     expect(health).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
-    const payload = respondPayload(respond) as Record<string, any>;
     expect(payload).toMatchObject({ provider: "records", health: { status: "ready" } });
     expect(payload.dreaming).toMatchObject({
       reportedByProvider: true,
