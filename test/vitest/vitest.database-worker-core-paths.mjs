@@ -440,6 +440,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/doctor-memory-startup.test.ts",
   "src/commands/doctor-security.test.ts",
   "src/flows/doctor-gateway-token-repair.test.ts",
+  "src/plugins/provider-auth-choice.duplicate-profile.test.ts",
   "src/plugins/provider-auth-persistence.test.ts",
   "src/system-agent/config-write-validation.test.ts",
   "src/system-agent/inference-route-runtime.test.ts",

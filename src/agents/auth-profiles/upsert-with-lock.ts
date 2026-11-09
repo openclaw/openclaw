@@ -10,10 +10,16 @@ import {
   prepareSharedAuthStoreOwnership,
 } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
+import { isSharedAuthProfileWrite } from "./shared-store-bootstrap.js";
+import { prepareAuthProfileWriteEnvironment } from "./sqlite.js";
 import { updateAuthProfileStoreWithLock } from "./store-runtime.js";
 import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
 import { runAuthProfileStoreUpdate } from "./store-update.js";
-import { findPersistedAuthProfileCredential, getScopedAuthProfileEnv } from "./store.js";
+import {
+  findPersistedAuthProfileCredential,
+  getScopedAuthProfileEnv,
+  resolveRuntimeAuthProfileAgentDir,
+} from "./store.js";
 import type {
   AuthProfileCredential,
   AuthProfileStore,
@@ -22,24 +28,20 @@ import type {
 } from "./types.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
 
-function loadAuthProfileWriteTarget(params: {
-  agentDir?: string;
-  stateDir?: string;
-}): AuthProfileStore | null {
-  if (params.agentDir || !params.stateDir) {
-    return loadPersistedAuthProfileStore(params.agentDir);
-  }
-  return loadPersistedSharedAuthProfileStore({
-    ...process.env,
-    OPENCLAW_STATE_DIR: params.stateDir,
-    OPENCLAW_AGENT_DIR: undefined,
-  });
+function loadAuthProfileWriteTarget(
+  agentDir: string | undefined,
+  env: NodeJS.ProcessEnv,
+): AuthProfileStore | null {
+  return agentDir
+    ? loadPersistedAuthProfileStore(agentDir)
+    : loadPersistedSharedAuthProfileStore(env);
 }
 
 function resolveAuthProfileWriteEnv(params: { stateDir?: string }): NodeJS.ProcessEnv {
-  return params.stateDir
-    ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir }
-    : (getScopedAuthProfileEnv() ?? process.env);
+  return prepareAuthProfileWriteEnvironment({
+    stateDir: params.stateDir,
+    env: params.stateDir ? undefined : getScopedAuthProfileEnv(),
+  });
 }
 
 function loadAuthProfileWriteAuthorities(
@@ -49,18 +51,27 @@ function loadAuthProfileWriteAuthorities(
   if (profileIds.length === 0) {
     return new Map();
   }
-  const target = loadAuthProfileWriteTarget(params);
+  // Observe the same shared/agent owner selected by the existing store writer.
+  const env = resolveAuthProfileWriteEnv(params);
+  const agentDir = isSharedAuthProfileWrite({
+    agentDir: params.agentDir,
+    allowExplicitMain: true,
+    env,
+  })
+    ? undefined
+    : params.agentDir;
+  const target = loadAuthProfileWriteTarget(agentDir, env);
   const missingIds = profileIds.filter((profileId) => !target?.profiles[profileId]);
   let inherited: ReadonlyMap<string, AuthProfileCredential | undefined> | undefined;
-  if (params.agentDir && missingIds.length > 0) {
+  if (agentDir && missingIds.length > 0) {
     if (params.stateDir) {
-      const shared = loadAuthProfileWriteTarget({ stateDir: params.stateDir });
+      const shared = loadAuthProfileWriteTarget(undefined, env);
       inherited = new Map(missingIds.map((profileId) => [profileId, shared?.profiles[profileId]]));
     } else {
       inherited = new Map(
         missingIds.map((profileId) => [
           profileId,
-          findPersistedAuthProfileCredential({ agentDir: params.agentDir, profileId }),
+          findPersistedAuthProfileCredential({ agentDir, profileId }),
         ]),
       );
     }
@@ -388,7 +399,10 @@ export async function upsertAuthProfileWithLock(
     await prepareSharedAuthStoreOwnership(resolveAuthProfileWriteEnv(params));
   }
   const observed = needsOAuthRefreshAuthority(credential)
-    ? loadAuthProfileWriteAuthorities(params, [params.profileId]).get(params.profileId)
+    ? loadAuthProfileWriteAuthorities(
+        { ...params, agentDir: resolveRuntimeAuthProfileAgentDir(params.agentDir) },
+        [params.profileId],
+      ).get(params.profileId)
     : undefined;
   let rejectedFencedGeneration = false;
   const update = async () => {
