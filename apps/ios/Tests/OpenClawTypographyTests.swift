@@ -4,51 +4,7 @@ import Testing
 import UIKit
 @testable import OpenClaw
 
-struct RootSidebarTypographyTests {
-    @Test func `root sidebar uses branded typography`() throws {
-        let sidebar = try String(
-            contentsOf: URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .appendingPathComponent("Sources/RootSidebar.swift"),
-            encoding: .utf8)
-
-        #expect(sidebar.contains("OpenClawType.headline"))
-        #expect(sidebar.contains("OpenClawType.subheadSemiBold"))
-        #expect(sidebar.contains("OpenClawType.captionMedium"))
-        #expect(sidebar.contains("OpenClawType.caption2Bold"))
-        #expect(!sidebar.contains(".font(."))
-    }
-}
-
 struct OpenClawTypographyTests {
-    @Test func `gateway picker uses branded typography`() throws {
-        let source = try String(
-            contentsOf: Self.sourceURL("RootSidebarGatewayControl.swift"),
-            encoding: .utf8)
-        #expect(source.contains(".font(OpenClawType.subheadSemiBold)"))
-        #expect(source.contains(".font(OpenClawType.captionMedium)"))
-        #expect(!source.contains(".font(."))
-    }
-
-    @Test func `thread controls use branded typography`() throws {
-        let support = try String(
-            contentsOf: Self.sourceURL("Design/CommandCenterSupport.swift"),
-            encoding: .utf8)
-        let commandCenter = try String(
-            contentsOf: Self.sourceURL("Design/CommandCenterTab.swift"),
-            encoding: .utf8)
-
-        #expect(support.contains("TextField(self.editorPlaceholder"))
-        #expect(support.contains("Label(\"Move to Group\""))
-        #expect(support.contains("Label(\"Delete…\""))
-        #expect(support.contains(".font(OpenClawType.subhead)"))
-        #expect(support.contains(".font(OpenClawType.subheadSemiBold)"))
-        #expect(commandCenter.contains("Toggle(isOn: self.$showArchived)"))
-        #expect(commandCenter.contains("Text(\"Show Archived\")"))
-        #expect(commandCenter.contains(".font(OpenClawType.captionMedium)"))
-    }
-
     @Test func `bundled fonts load from app bundle`() {
         for name in OpenClawType.registeredPostScriptNames {
             #expect(UIFont(name: name, size: 12) != nil, "Missing bundled font: \(name)")
@@ -90,346 +46,45 @@ struct OpenClawTypographyTests {
         #expect(weightValue?.doubleValue == 900)
     }
 
-    @Test func `app extensions register bundled branded fonts`() throws {
+    @Test func `activity widget registers bundled branded fonts`() throws {
+        // The widget has no test host; the Watch loads these fonts in OpenClawWatchTests.
         let project = try String(contentsOf: Self.projectYmlURL(), encoding: .utf8)
-        let activityPlist = try String(contentsOf: Self.activityWidgetInfoPlistURL(), encoding: .utf8)
-        let watchPlist = try String(contentsOf: Self.watchInfoPlistURL(), encoding: .utf8)
+        let plist = try String(contentsOf: Self.activityWidgetInfoPlistURL(), encoding: .utf8)
+        let target = try Self.extract(project, from: "  OpenClawActivityWidget:", to: "  OpenClawWatchApp:")
 
-        for targetName in ["OpenClawActivityWidget", "OpenClawWatchApp"] {
-            let target = try Self.extract(
-                project,
-                from: "  \(targetName):",
-                to: targetName == "OpenClawActivityWidget" ? "  OpenClawWatchApp:" : "  OpenClawTests:")
-            #expect(target.contains("- path: Sources/Fonts"))
-            #expect(target.contains("UIAppFonts:"))
-            for font in Self.bundledFontFiles {
-                #expect(target.contains("- \(font)"))
-            }
-        }
-
-        for plist in [activityPlist, watchPlist] {
-            #expect(plist.contains("<key>UIAppFonts</key>"))
-            for font in Self.bundledFontFiles {
-                #expect(plist.contains("<string>\(font)</string>"))
-            }
+        #expect(target.contains("- path: Sources/Fonts"))
+        #expect(target.contains("UIAppFonts:"))
+        #expect(plist.contains("<key>UIAppFonts</key>"))
+        for font in Self.bundledFontFiles {
+            #expect(target.contains("- \(font)"))
+            #expect(plist.contains("<string>\(font)</string>"))
         }
     }
 
-    @Test func `extension text surfaces use branded typography helpers`() throws {
-        let activityTypeSource = try String(contentsOf: Self.activityWidgetTypographySourceURL(), encoding: .utf8)
-        let activitySource = try String(contentsOf: Self.activityWidgetSourceURL(), encoding: .utf8)
-        let watchTypeSource = try String(contentsOf: Self.watchTypographySourceURL(), encoding: .utf8)
-        let watchSource = try String(contentsOf: Self.watchInboxSourceURL(), encoding: .utf8)
-
-        #expect(activityTypeSource.contains("relativeTo: .subheadline"))
-        #expect(activityTypeSource.contains("relativeTo: .caption"))
-        #expect(!activityTypeSource.contains(".custom(\"RedHatDisplay-Regular\", size: size).weight"))
-        #expect(!activityTypeSource.contains(".custom(\"Inter-Regular\", size: size)"))
-        #expect(activitySource.contains("OpenClawActivityType.subheadSemiBold"))
-        #expect(activitySource.contains("OpenClawActivityType.subheadBold"))
-        #expect(activitySource.contains("OpenClawActivityType.caption"))
-        #expect(!activitySource.contains(".font(.subheadline"))
-        #expect(!activitySource.contains(".font(.caption"))
-
-        #expect(watchTypeSource.contains("relativeTo textStyle: Font.TextStyle"))
-        #expect(watchTypeSource.contains("body(size: 12, weight: .semibold, relativeTo: .caption)"))
-        #expect(watchTypeSource.contains("body(size: 12, weight: .bold, relativeTo: .caption)"))
-        #expect(watchTypeSource.contains("body(size: 11, relativeTo: .caption2)"))
-        #expect(watchTypeSource.contains("relativeTo: .caption2"))
-        #expect(watchTypeSource.contains("relativeTo: .headline"))
-        #expect(!watchTypeSource.contains(".custom(\"RedHatDisplay-Regular\", size: size).weight"))
-        #expect(!watchTypeSource.contains(".custom(\"Inter-Regular\", size: size).weight"))
-        #expect(watchSource.contains("WatchClawType.title"))
-        #expect(watchSource.contains("WatchClawType.body"))
-        #expect(watchSource.contains("WatchClawType.caption"))
-        #expect(!watchSource.contains(".font(.system"))
-        #expect(!watchSource.contains(".font(.caption"))
-        #expect(!watchSource.contains(".font(.title"))
+    @Test func `activity widget fonts scale relative to Dynamic Type text styles`() throws {
+        // The widget has no test host, so its scaling helpers stay source-audited.
+        let source = try String(contentsOf: Self.activityWidgetTypographySourceURL(), encoding: .utf8)
+        #expect(source.contains("relativeTo: .subheadline"))
+        #expect(source.contains("relativeTo: .caption"))
+        #expect(!source.contains(".custom(\"RedHatDisplay-Regular\", size: size).weight"))
+        #expect(!source.contains(".custom(\"Inter-Regular\", size: size)"))
     }
 
-    @Test func `UIKit typography refreshes when Dynamic Type changes`() throws {
-        let appSource = try String(contentsOf: Self.appSourceURL(), encoding: .utf8)
-        let typographySource = try String(
-            contentsOf: Self.sourceURL("Design/OpenClawTypography.swift"),
-            encoding: .utf8)
+    @MainActor
+    @Test func `Dynamic Type refresh applies the clamped branded font to search fields`() throws {
+        defer { OpenClawType.installUIKitAppearance() }
+        let window = UIWindow()
+        let searchField = UISearchTextField()
+        window.addSubview(searchField)
+        searchField.font = .systemFont(ofSize: 17)
 
-        #expect(appSource.contains("UIContentSizeCategory.didChangeNotification"))
-        #expect(appSource.contains("OpenClawType.refreshUIKitAppearance(in: Self.connectedWindows())"))
-        #expect(typographySource.contains("static func refreshUIKitAppearance(in windows: [UIWindow])"))
-        #expect(typographySource.contains("applyUIKitTypography(fonts, to: window)"))
-        #expect(typographySource.contains("maximumPointSize: 13"))
-        #expect(typographySource.contains("maximumPointSize: 16"))
-        #expect(typographySource.contains("maximumPointSize: 22"))
-        #expect(typographySource.contains("maximumPointSize: 44"))
-        #expect(typographySource.contains("scaledFont(for: base, maximumPointSize: maximumPointSize)"))
-        #expect(typographySource.contains("case let searchTextField as UISearchTextField"))
-        #expect(!typographySource.contains("case let textField as UITextField"))
-        #expect(!typographySource.contains("case let textView as UITextView"))
-    }
-
-    @Test func `listed iOS app surfaces enforce branded control typography`() throws {
-        let proComponents = try String(
-            contentsOf: Self.sourceURL("Design/OpenClawProComponents.swift"),
-            encoding: .utf8)
-        let quickSetup = try String(contentsOf: Self.sourceURL("Gateway/GatewayQuickSetupSheet.swift"), encoding: .utf8)
-        let gatewayProblem = try String(contentsOf: Self.sourceURL("Gateway/GatewayProblemView.swift"), encoding: .utf8)
-        let onboardingSteps = try String(
-            contentsOf: Self.sourceURL("Onboarding/OnboardingWizardSteps.swift"),
-            encoding: .utf8)
-        let onboardingWizard = try [
-            "Onboarding/OnboardingWizardView.swift",
-            "Onboarding/OnboardingWizardConnectionSections.swift",
-            "Onboarding/OnboardingWizardTypes.swift",
-        ].map { path in
-            try String(contentsOf: Self.sourceURL(path), encoding: .utf8)
-        }.joined(separator: "\n")
-        let settingsSections = try String(
-            contentsOf: Self.sourceURL("Design/SettingsProTabSections.swift"),
-            encoding: .utf8)
-        let settingsSupport = try String(
-            contentsOf: Self.sourceURL("Design/SettingsProTabSupport.swift"),
-            encoding: .utf8)
-        let settingsHub = try String(
-            contentsOf: Self.sourceURL("Settings/SettingsHubScreen.swift"),
-            encoding: .utf8)
-        let dashboardPage = try String(
-            contentsOf: Self.sourceURL("Settings/DashboardPageScreen.swift"),
-            encoding: .utf8)
-        let approvalDialog = try String(
-            contentsOf: Self.sourceURL("Gateway/ExecApprovalPromptDialog.swift"),
-            encoding: .utf8)
-        let docs = try String(contentsOf: Self.sourceURL("Design/OpenClawDocsScreen.swift"), encoding: .utf8)
-        let chatTypography = try String(
-            contentsOf: Self.iosRootURL()
-                .deletingLastPathComponent()
-                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatTypography.swift"),
-            encoding: .utf8)
-        let chatMessageViews = try String(
-            contentsOf: Self.iosRootURL()
-                .deletingLastPathComponent()
-                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift"),
-            encoding: .utf8)
-        let chatWorkingClawView = try String(
-            contentsOf: Self.iosRootURL()
-                .deletingLastPathComponent()
-                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingClawView.swift"),
-            encoding: .utf8)
-        let chatMarkdownRenderer = try String(
-            contentsOf: Self.iosRootURL()
-                .deletingLastPathComponent()
-                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift"),
-            encoding: .utf8)
-
-        #expect(proComponents.contains(".font(OpenClawType.subheadSemiBold)"))
-        #expect(proComponents.contains("primaryActionTitle.text"))
-        #expect(proComponents.contains("secondaryActionTitle.text"))
-
-        #expect(!quickSetup.contains("Button(\"Close\")"))
-        #expect(quickSetup.contains(".navigationTitle(\"Quick Setup\")"))
-        #expect(quickSetup.contains("Text(\"Close\")"))
-        #expect(quickSetup.contains(".font(OpenClawType.subheadSemiBold)"))
-        #expect(quickSetup.contains("let text: LocalizedStringKey"))
-        #expect(!quickSetup.contains("Text(verbatim: self.text)"))
-
-        #expect(gatewayProblem.contains("Text(\"Connection problem\")"))
-        #expect(gatewayProblem.contains("Text(\"Copy request ID\")"))
-        #expect(gatewayProblem.contains("Text(\"Copy command\")"))
-        #expect(gatewayProblem.contains("? \"Set up Tailscale\" : \"Details\""))
-        #expect(gatewayProblem.contains("onSecondaryAction: self.secondaryAction"))
-        #expect(gatewayProblem.contains(".font(OpenClawType.subheadSemiBold)"))
-
-        #expect(onboardingSteps.contains("title: \"Connect Gateway\""))
-        #expect(onboardingSteps.contains("Text(\"Scan QR\")"))
-        #expect(onboardingSteps.contains("Text(\"Connect Manually\")"))
-        #expect(onboardingSteps.contains("Label(\"Go to Chat\", systemImage: \"bubble.left.and.bubble.right.fill\")"))
-        #expect(onboardingSteps.contains(".font(OpenClawType.subheadSemiBold)"))
-        #expect(onboardingSteps.contains("let title: LocalizedStringKey"))
-        #expect(onboardingSteps.contains("let subtitle: LocalizedStringKey?"))
-        #expect(onboardingSteps.contains("let text: LocalizedStringKey"))
-
-        #expect(onboardingWizard.contains("Text(\"Scan Setup Code\")")
-            || onboardingWizard.contains(".navigationTitle(\"Scan Setup Code\")"))
-        #expect(onboardingWizard.contains("Label(\"Resume After Approval\", systemImage: \"arrow.clockwise\")"))
-        #expect(onboardingWizard.contains("Label(\"Scan Setup Code Again\", systemImage: \"qrcode.viewfinder\")"))
-        #expect(onboardingWizard.contains("Text(\"Apply\")"))
-        #expect(onboardingWizard.contains(".font(OpenClawType.subheadSemiBold)"))
-        #expect(onboardingWizard.contains("_ title: LocalizedStringKey"))
-        #expect(onboardingWizard.contains("_ placeholder: LocalizedStringKey"))
-        #expect(onboardingWizard.contains("if self.developerModeEnabled.wrappedValue {"))
-        #expect(onboardingWizard.contains("title: \"Same Machine (Dev)\""))
-        #expect(onboardingWizard.contains("if lastMode == .developerLocal"))
-        #expect(onboardingWizard.contains("self.developerModeEnabled = true"))
-        let onboardingSecurityPicker = try Self.extract(
-            onboardingWizard,
-            from: "private var manualConnectionSecurityRows",
-            to: "    private func onboardingLabeledContent")
-        let onboardingUnencryptedOption = try Self.extract(
-            onboardingSecurityPicker,
-            from: "Text(\"Unencrypted\")",
-            to: ".tag(false)")
-        let onboardingSecureOption = try Self.extract(
-            onboardingSecurityPicker,
-            from: "Text(\"Secure (TLS)\")",
-            to: ".tag(true)")
-        #expect(onboardingUnencryptedOption.contains(".font(OpenClawType.captionSemiBold)"))
-        #expect(onboardingSecureOption.contains(".font(OpenClawType.captionSemiBold)"))
-
-        #expect(settingsSections.contains(".font(OpenClawType.body)"))
-        for label in ["Gateway", "Approvals", "Open Gateway"] {
-            let text = try Self.extract(settingsHub, from: "Text(\"\(label)\")", to: "}")
-            #expect(text.contains(".font(OpenClawType.subheadSemiBold)"))
+        UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge).performAsCurrent {
+            OpenClawType.refreshUIKitAppearance(in: [window])
         }
-        let upgradeWarning = try Self.extract(
-            settingsHub,
-            from: "\"This Gateway's Dashboard is older than the app;",
-            to: ".accessibilityIdentifier(\"SettingsHub.GatewayUpgradeWarning\")")
-        #expect(upgradeWarning.contains(".font(OpenClawType.footnote)"))
-        let approvalBadge = try Self.extract(
-            settingsHub,
-            from: "Text(self.appModel.pendingExecApprovalCount.formatted())",
-            to: "}")
-        #expect(approvalBadge.contains(".font(OpenClawType.captionSemiBold)"))
-        let dashboardClose = try Self.extract(dashboardPage, from: "Text(\"Done\")", to: "}")
-        #expect(dashboardClose.contains(".font(OpenClawType.subheadSemiBold)"))
-        #expect(settingsSections.contains("Text(warningText)"))
-        #expect(settingsSections.contains(".font(OpenClawType.caption)"))
-        #expect(approvalDialog.contains("Text(warningText)"))
-        #expect(approvalDialog.contains(".font(OpenClawType.footnote)"))
-        #expect(approvalDialog.contains("ScrollView {"))
-        #expect(approvalDialog.contains("self.actionFooter"))
-        #expect(approvalDialog.contains("exec-approval-review-scroll"))
-        #expect(approvalDialog.contains("exec-approval-actions"))
-        #expect(approvalDialog.contains("ViewThatFits(in: .horizontal)"))
-        #expect(settingsSections.contains("OpenClawToggleIndicator(isOn: isOn.wrappedValue)"))
-        #expect(settingsSections.contains(".font(OpenClawType.subhead)"))
-        let gatewayDestination = try Self.extract(
-            settingsSections,
-            from: "var gatewayDestination: some View",
-            to: "private var gatewayStatusCard: some View")
-        let reconnect = try Self.extract(
-            gatewayDestination,
-            from: "Label(\"Reconnect\", systemImage:",
-            to: "}")
-        #expect(reconnect.contains(".font(OpenClawType.body)"))
-        #expect(settingsSections.contains("SettingsDetailRow(\"Address\", value: .verbatim(self.gatewayAddress))"))
-        #expect(settingsSections.contains("func gatewayActionButton"))
-        #expect(settingsSections.contains("func settingsToggle"))
-        #expect(settingsSections.contains(".font(OpenClawType.subheadSemiBold)"))
-        #expect(settingsSupport.contains("struct SettingsBuildMetadataStrip"))
-        #expect(settingsSupport.contains(".font(OpenClawType.caption2SemiBold)"))
-        #expect(settingsSupport.contains(".font(OpenClawType.monoSmall)"))
-        #expect(settingsSupport.contains("Text(\"Copy Build Info\")"))
-        #expect(settingsSections.contains("Text(\"Use Manual Gateway\")")
-            || settingsSections.contains("\"Use Manual Gateway\""))
-        #expect(settingsSections.contains("func gatewaySecureField"))
-        #expect(settingsSections.contains("self.gatewaySecureField(\"Gateway Auth Token\""))
-        #expect(settingsSections.contains("self.gatewaySecureField(\"Gateway Password\""))
-        let gatewaySecureField = try Self.extract(
-            settingsSections,
-            from: "func gatewaySecureField",
-            to: "    var diagnosticsAdvancedCard")
-        #expect(gatewaySecureField.contains(".accessibilityLabel(Text(placeholder))"))
-        #expect(gatewaySecureField.contains(".accessibilityHidden(true)"))
-        #expect(gatewaySecureField.contains(".textInputAutocapitalization(.never)"))
-        #expect(gatewaySecureField.contains(".autocorrectionDisabled()"))
-        #expect(settingsSections.contains("Picker(\"Default Agent\", selection: self.$selectedAgentPickerId)"))
-        #expect(settingsSections.contains("Text(\"Default\")"))
-        let settingsSecurityPicker = try Self.extract(
-            settingsSections,
-            from: "Picker(selection: self.manualGatewayTLSBinding)",
-            to: "            .pickerStyle(.segmented)")
-        let settingsUnencryptedOption = try Self.extract(
-            settingsSecurityPicker,
-            from: "Text(\"Unencrypted\")",
-            to: ".tag(false)")
-        let settingsSecureOption = try Self.extract(
-            settingsSecurityPicker,
-            from: "Text(\"Secure (TLS)\")",
-            to: ".tag(true)")
-        #expect(settingsUnencryptedOption.contains(".font(OpenClawType.captionSemiBold)"))
-        #expect(settingsSecureOption.contains(".font(OpenClawType.captionSemiBold)"))
 
-        #expect(docs.contains(".font(OpenClawType.body)"))
-
-        #expect(chatMessageViews.contains("typography: segment.kind.markdownTypography"))
-        #expect(chatMessageViews.contains(".font(OpenClawChatTypography.caption)"))
-        #expect(chatMessageViews.contains("chat-user-message-disclosure-toggle"))
-        #expect(chatMarkdownRenderer.contains("OpenClawChatTypography.callout.italic()"))
-        #expect(!chatMessageViews.contains("font: .body"))
-        #expect(!chatMessageViews.contains("Font.body"))
-        #expect(!chatMessageViews.contains("Font.callout"))
-        #expect(chatWorkingClawView.contains(".font(OpenClawChatTypography.caption)"))
-        #expect(chatWorkingClawView.contains(".font(OpenClawChatTypography.captionSemiBold)"))
-        #expect(!chatWorkingClawView.contains(".font(."))
-        #expect(chatMarkdownRenderer.contains(".font(self.typography.proseFont)"))
-        #expect(chatTypography
-            .contains("Font.custom(self.macSystemFontName(size: size), size: size, relativeTo: textStyle)"))
-        #expect(chatTypography.contains(
-            "Font.custom(self.macMonospacedSystemFontName(size: size), size: size, relativeTo: textStyle)"))
-        #expect(!chatTypography.contains("Font.system(textStyle, design: .default)"))
-        #expect(!chatTypography.contains("Font.system(textStyle, design: .monospaced)"))
-    }
-
-    @Test func `chat model menu uses branded typography`() throws {
-        let chatTab = try String(contentsOf: Self.sourceURL("Design/ChatProTab.swift"), encoding: .utf8)
-        let menu = try String(
-            contentsOf: Self.sourceURL("Design/ChatModelControlsMenu.swift"),
-            encoding: .utf8)
-        let chatActionsStart = try #require(chatTab.range(of: "private var chatActionsMenu: some View"))
-        let chatActionsEnd = try #require(chatTab.range(
-            of: "private var chatActionsPopover: some View",
-            range: chatActionsStart.upperBound..<chatTab.endIndex))
-        let chatActionsMenu = String(chatTab[chatActionsStart.lowerBound..<chatActionsEnd.lowerBound])
-
-        #expect(chatTab.contains("title: \"New chat in worktree\""))
-        #expect(!chatTab.contains("title: String(localized: \"Sessions…\")"))
-        #expect(chatTab.contains("title: \"New session options…\""))
-        #expect(chatTab.contains("title: \"Background tasks\""))
-        #expect(chatTab.contains("title: \"Export transcript\""))
-        #expect(chatTab.contains("title: \"Gateway settings\""))
-        #expect(chatTab.contains("title: String(localized: \"Show reasoning & tool activity\")"))
-        #expect(chatTab.contains(".accessibilityIdentifier(\"chat-show-reasoning-toggle\")"))
-        #expect(!chatTab.contains("title: \"Export Transcript\""))
-        #expect(!chatTab.contains("Divider()"))
-        #expect(!menu.contains("Divider()"))
-        #expect(chatActionsMenu.contains(".buttonStyle(.plain)"))
-        #expect(chatTab.components(separatedBy: ".sharedBackgroundVisibility(.hidden)").count >= 3)
-        #expect(menu.contains("Text(self.title)"))
-        #expect(menu.contains(".font(OpenClawType.body)"))
-        #expect(menu.contains(".font(OpenClawType.caption)"))
-    }
-
-    @Test func `chat copy and select text surfaces use branded typography`() throws {
-        let selectableTextSheet = try String(
-            contentsOf: Self.iosRootURL()
-                .deletingLastPathComponent()
-                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatSelectableTextSheet.swift"),
-            encoding: .utf8)
-        let chatView = try String(
-            contentsOf: Self.iosRootURL()
-                .deletingLastPathComponent()
-                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift"),
-            encoding: .utf8)
-        let markdownBlockViews = try String(
-            contentsOf: Self.iosRootURL()
-                .deletingLastPathComponent()
-                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownBlockViews.swift"),
-            encoding: .utf8)
-        let mermaidBlockView = try String(
-            contentsOf: Self.iosRootURL()
-                .deletingLastPathComponent()
-                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatMermaidBlockView.swift"),
-            encoding: .utf8)
-
-        #expect(selectableTextSheet.contains("OpenClawChatTypography.bodyUIFont"))
-        #expect(selectableTextSheet.contains("Text(\"Close\")"))
-        #expect(selectableTextSheet.contains(".font(OpenClawChatTypography.body)"))
-        #expect(!selectableTextSheet.contains("Button(\""))
-        #expect(chatView.contains("Text(\"Select Text\")"))
-        #expect(!chatView.contains("copyToClipboard"))
-        #expect(markdownBlockViews.contains("ChatCopyButton("))
-        #expect(markdownBlockViews.contains("\"Copy code\""))
-        #expect(!mermaidBlockView.contains("UIPasteboard"))
+        let font = try #require(searchField.font)
+        #expect(font.familyName == "Inter")
+        #expect(font.pointSize == 22)
     }
 
     @Test func `iOS app text and control calls keep branded font boundaries`() throws {
@@ -566,28 +221,8 @@ struct OpenClawTypographyTests {
         self.iosRootURL().appendingPathComponent("ActivityWidget/Info.plist")
     }
 
-    private static func watchInfoPlistURL() -> URL {
-        self.iosRootURL().appendingPathComponent("WatchApp/Info.plist")
-    }
-
-    private static func activityWidgetSourceURL() -> URL {
-        self.iosRootURL().appendingPathComponent("ActivityWidget/OpenClawLiveActivity.swift")
-    }
-
     private static func activityWidgetTypographySourceURL() -> URL {
         self.iosRootURL().appendingPathComponent("ActivityWidget/OpenClawActivityTypography.swift")
-    }
-
-    private static func watchInboxSourceURL() -> URL {
-        self.iosRootURL().appendingPathComponent("WatchApp/Sources/WatchInboxView.swift")
-    }
-
-    private static func watchTypographySourceURL() -> URL {
-        self.iosRootURL().appendingPathComponent("WatchApp/Sources/WatchClawTypography.swift")
-    }
-
-    private static func appSourceURL() -> URL {
-        self.sourceURL("OpenClawApp.swift")
     }
 
     private static func sourceURL(_ relativePath: String) -> URL {
@@ -597,6 +232,7 @@ struct OpenClawTypographyTests {
     private static func swiftSourcesForTypographyAudit() throws -> [URL] {
         let roots = [
             self.sourceURL(""),
+            self.iosRootURL().appendingPathComponent("ActivityWidget"),
             self.iosRootURL().appendingPathComponent("WatchApp/Sources"),
             self.iosRootURL()
                 .deletingLastPathComponent()
@@ -623,16 +259,23 @@ struct OpenClawTypographyTests {
     }
 
     private static func unbrandedTextCallOffenders(in source: String, relativePath: String) -> [String] {
-        let fontTokens = ["OpenClawType", "OpenClawChatTypography", "WatchClawType", "typography."]
+        let fontTokens = [
+            "OpenClawType",
+            "OpenClawActivityType",
+            "OpenClawChatTypography",
+            "WatchClawType",
+            "typography.",
+        ]
         let sourceBytes = Array(source.utf8)
         let code = self.maskedSwiftCode(source)
+        guard !self.isCompleteMacOSSourceEnvelope(code) else { return [] }
         let imageFontRanges = Set(self.directImageFontModifierRanges(in: code))
         var offenders: [String] = []
 
         for fontRange in self.fontModifierRanges(in: code) {
             let fontCall = String(decoding: sourceBytes[fontRange], as: UTF8.self)
             let hasBrandedFont = fontTokens.contains { fontCall.contains($0) }
-                || self.hasAllowedBrandedFontParameter(fontCall, relativePath: relativePath)
+                || self.hasAllowedBrandedFontParameter(fontCall, relativePath: relativePath, code: code)
             guard !hasBrandedFont, !imageFontRanges.contains(fontRange) else { continue }
 
             let fontLine = code[..<fontRange.lowerBound].count(where: { $0 == 10 })
@@ -858,7 +501,11 @@ struct OpenClawTypographyTests {
         return cursor
     }
 
-    private static func hasAllowedBrandedFontParameter(_ fontCall: String, relativePath: String) -> Bool {
+    private static func hasAllowedBrandedFontParameter(
+        _ fontCall: String,
+        relativePath: String,
+        code: [UInt8]) -> Bool
+    {
         switch relativePath {
         case "apps/ios/Sources/Design/OpenClawProComponents.swift":
             fontCall.contains(".font(self.titleFont)") ||
@@ -866,6 +513,9 @@ struct OpenClawTypographyTests {
         case "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift":
             // Qualified values are composed here, then styled at the prose render boundary.
             fontCall.contains(".font(self.font)") || fontCall.contains(".font(font)")
+        case "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift":
+            self.hasBrandedFormFont(code) &&
+                [".font(self.formFont)", ".font(self.formFont.weight(.medium))"].contains(fontCall)
         default:
             false
         }
@@ -893,5 +543,135 @@ struct OpenClawTypographyTests {
         let tail = source[startRange.lowerBound...]
         let endRange = try #require(tail.range(of: end))
         return String(tail[..<endRange.lowerBound])
+    }
+}
+
+extension OpenClawTypographyTests {
+    @Test func `font boundary scanner excludes only whole macOS files`() {
+        let font = "Text(title).font(.body)"
+        let cases: [(String, Bool)] = [
+            ("#if os(macOS)\n\(font)\n#endif", true),
+            ("// Header\n#if os(macOS)\n\(font)\n#endif\n// Footer", true),
+            ("#if os(macOS)\n#if DEBUG\n\(font)\n#else\n\(font)\n#endif\n#endif", true),
+            ("#if os(macOS)\n#if(DEBUG)\n\(font)\n#endif\n#endif", true),
+            (font, false),
+            ("#if os(iOS)\n\(font)\n#endif", false),
+            ("#if os(macOS) || os(iOS)\n\(font)\n#endif", false),
+            ("#if os(macOS)\n\(font)\n#else\n\(font)\n#endif", false),
+            ("#if os(macOS)\n\(font)\n#elseif os(iOS)\n\(font)\n#endif", false),
+            ("#if os(macOS)\n\(font)\n#elseif(os(iOS))\n\(font)\n#endif", false),
+            ("import SwiftUI\n#if os(macOS)\n\(font)\n#endif", false),
+            ("#if os(macOS)\n#endif\n\(font)", false),
+            ("#if os(macOS)\n\(font)", false),
+            ("#if os(macOS)\n#endif\n#if os(iOS)\n\(font)\n#endif", false),
+            ("// #if os(macOS)\n\(font)\n// #endif", false),
+        ]
+        for (source, isMacOSOnly) in cases {
+            #expect(Self.isCompleteMacOSSourceEnvelope(Self.maskedSwiftCode(source)) == isMacOSOnly)
+            #expect(Self.unbrandedTextCallOffenders(in: source, relativePath: "Sample.swift").isEmpty == isMacOSOnly)
+        }
+    }
+
+    @Test func `form font alias requires its audited branded definition`() {
+        let path = "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift"
+        let source = """
+        private var formFont: Font {
+            #if os(macOS)
+            OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body)
+            #else
+            OpenClawChatTypography.body
+            #endif
+        }
+        Text(title).font(self.formFont)
+        Text(title).font(self.formFont.weight(.medium))
+        """
+        #expect(Self.unbrandedTextCallOffenders(in: source, relativePath: path).isEmpty)
+        #expect(Self.unbrandedTextCallOffenders(in: source, relativePath: "Sample.swift").count == 2)
+        for altered in [
+            source.replacingOccurrences(of: "OpenClawChatTypography.body", with: "Font.system"),
+            source.replacingOccurrences(of: "#else\n    OpenClawChatTypography.body", with: "#else\n    .body"),
+            source.replacingOccurrences(of: "private var formFont", with: "private var anotherFont"),
+        ] {
+            #expect(Self.unbrandedTextCallOffenders(in: altered, relativePath: path).count == 2)
+        }
+        for declaration in [
+            "let formFont: Font = .body", "let formFont = Font.body",
+            "var formFont: Font = .body", "var formFont = Font.body",
+            "let `formFont` = Font.body", "let other = Font.body, formFont = Font.body",
+        ] {
+            let shadow = "struct Other: View { \(declaration); " +
+                "var body: some View { Text(title).font(self.formFont) } }"
+            #expect(Self.unbrandedTextCallOffenders(in: source + shadow, relativePath: path).count == 3)
+        }
+        #expect(Self.unbrandedTextCallOffenders(
+            in: source + "\nText(title).font(self.otherFont)", relativePath: path).count == 1)
+        #expect(Self.unbrandedTextCallOffenders(
+            in: source + "\nText(title).font(self.formFont.weight(.bold))", relativePath: path).count == 1)
+    }
+
+    private static func hasBrandedFormFont(_ code: [UInt8]) -> Bool {
+        // Audit the alias producer as well as its uses, so a system-font substitution still fails.
+        guard let source = String(bytes: code, encoding: .utf8) else { return false }
+        let compact = source.filter { !$0.isWhitespace }
+        let definition = "privatevarformFont:Font{#ifos(macOS)" +
+            "OpenClawChatTypography.body(size:13,weight:.regular,relativeTo:.body)" +
+            "#elseOpenClawChatTypography.body#endif}"
+        // Any additional unqualified occurrence may declare another producer; keep uncertain source audited.
+        let withoutUses = compact.replacingOccurrences(of: "self.formFont", with: "")
+        return withoutUses.components(separatedBy: "formFont").count == 2 && compact.contains(definition)
+    }
+
+    @Test func `font boundary scanner excludes only complete macOS source envelopes`() {
+        let macOnly = """
+        // A shared directory can contain a macOS-only view.
+        #if os(macOS)
+        #if DEBUG
+        let example = "#endif"
+        #else
+        /* #endif */
+        #endif
+        Text("Mac").font(.system(size: 12))
+        #endif
+        """
+        #expect(Self.unbrandedTextCallOffenders(in: macOnly, relativePath: "Mac.swift").isEmpty)
+
+        for condition in ["os(iOS)", "os(watchOS)", "os(macOS) || os(iOS)"] {
+            let source = "#if \(condition)\nText(\"Visible\").font(.body)\n#endif"
+            #expect(Self.unbrandedTextCallOffenders(in: source, relativePath: "Visible.swift") == [
+                "Visible.swift:2: .font(.body)",
+            ])
+        }
+        for alternate in ["#else", "#elseif os(iOS)"] {
+            let source = "#if os(macOS)\n\(alternate)\nText(\"Visible\").font(.caption)\n#endif"
+            #expect(Self.unbrandedTextCallOffenders(in: source, relativePath: "Mixed.swift") == [
+                "Mixed.swift:3: .font(.caption)",
+            ])
+        }
+        let shared = macOnly + "\nText(\"Shared\").font(.body)"
+        #expect(Self.unbrandedTextCallOffenders(in: shared, relativePath: "Shared.swift").last ==
+            "Shared.swift:10: .font(.body)")
+    }
+
+    private static func isCompleteMacOSSourceEnvelope(_ code: [UInt8]) -> Bool {
+        guard let source = String(bytes: code, encoding: .utf8) else { return false }
+        let lines = source.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard lines.first == "#if os(macOS)", lines.last == "#endif" else { return false }
+        var depth = 0
+        for (index, line) in lines.enumerated() {
+            switch line.prefix(while: { $0 == "#" || $0.isLetter }) {
+            case "#if":
+                depth += 1
+            case "#else", "#elseif":
+                if depth == 1 { return false }
+            case "#endif":
+                depth -= 1
+                if depth == 0, index != lines.count - 1 { return false }
+            default:
+                break
+            }
+            if depth < 0 { return false }
+        }
+        return depth == 0
     }
 }

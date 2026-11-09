@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
+import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   BROWSER_PROXY_COMMAND,
   BROWSER_PROXY_UPLOAD_COMMAND,
@@ -21,12 +22,8 @@ import {
   isBrowserProxyUploadRequest,
   prepareBrowserProxyUploadRequest,
 } from "./browser-proxy-upload.js";
-import {
-  callGatewayTool,
-  fetchBrowserJson,
-  persistBrowserProxyResultFiles,
-} from "./browser-tool.runtime.js";
-import { BrowserServiceError } from "./browser/client-fetch.js";
+import { BrowserServiceError, fetchBrowserJson } from "./browser/client-fetch.js";
+import { persistBrowserProxyResultFiles } from "./browser/proxy-files.js";
 import {
   parseBrowserSessionTabCloseResult,
   type BrowserSessionTabRoute,
@@ -53,102 +50,6 @@ export type BrowserProxyRequest = ((params: {
   isHostFallbackActive: () => boolean;
   route: () => BrowserProxyRoute | undefined;
 };
-
-function unwrapBrowserProxyPayload(
-  payload: { payload?: unknown; payloadJSON?: unknown } | null,
-): BrowserProxyEnvelope | null {
-  if (payload?.payload !== undefined) {
-    return payload.payload as BrowserProxyEnvelope;
-  }
-  if (typeof payload?.payloadJSON !== "string" || !payload.payloadJSON.trim()) {
-    return null;
-  }
-  try {
-    return JSON.parse(payload.payloadJSON) as BrowserProxyEnvelope;
-  } catch {
-    return null;
-  }
-}
-
-async function callBrowserProxy(params: {
-  nodeId: string;
-  nodeLabel?: string;
-  declaredCommands: readonly string[];
-  pendingDeclaredCommands: readonly string[];
-  allowAutomaticHostFallback: boolean;
-  method: string;
-  path: string;
-  query?: Record<string, string | number | boolean | undefined>;
-  body?: unknown;
-  timeoutMs?: number;
-  profile?: string;
-  signal?: AbortSignal;
-}): Promise<BrowserProxyEnvelope> {
-  const { proxyTimeoutMs, nodeInvokeTimeoutMs, gatewayTimeoutMs } = resolveBrowserProxyTimeouts(
-    params.timeoutMs,
-  );
-  if (
-    isBrowserProxyUploadRequest(params) &&
-    !params.declaredCommands.includes(BROWSER_PROXY_UPLOAD_COMMAND)
-  ) {
-    throw new BrowserNodeSafeFallbackError(
-      browserProxyUploadUnavailableMessage(params.pendingDeclaredCommands),
-    );
-  }
-  const preparedUpload = await prepareBrowserProxyUploadRequest({
-    method: params.method,
-    path: params.path,
-    body: params.body,
-    signal: params.signal,
-  });
-  const command = preparedUpload.upload ? BROWSER_PROXY_UPLOAD_COMMAND : BROWSER_PROXY_COMMAND;
-  let payload: { payload?: unknown; payloadJSON?: unknown } | null;
-  try {
-    payload = await callGatewayTool<{ payload?: unknown; payloadJSON?: unknown }>(
-      "node.invoke",
-      { timeoutMs: gatewayTimeoutMs },
-      {
-        nodeId: params.nodeId,
-        command,
-        // Keep the browser action, node watchdog, and Gateway RPC on distinct
-        // budgets so a detailed node timeout can cross both outer boundaries.
-        timeoutMs: nodeInvokeTimeoutMs,
-        params: {
-          method: params.method,
-          path: params.path,
-          query: params.query,
-          body: preparedUpload.body,
-          upload: preparedUpload.upload,
-          timeoutMs: proxyTimeoutMs,
-          profile: params.profile,
-          errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
-        },
-        idempotencyKey: crypto.randomUUID(),
-      },
-      {
-        scopes: ["operator.admin"],
-        ...(params.signal ? { signal: params.signal } : {}),
-      },
-    );
-  } catch (error) {
-    if (params.allowAutomaticHostFallback && isBrowserControlHostUnavailableError(error)) {
-      throw new BrowserNodeSafeFallbackError("browser node control host unavailable", error);
-    }
-    throw error;
-  }
-  const parsed = unwrapBrowserProxyPayload(payload);
-  if (
-    !parsed ||
-    typeof parsed !== "object" ||
-    (!("result" in parsed) && !parseBrowserProxyFailure(parsed))
-  ) {
-    const selectedNode = truncateUtf16Safe(params.nodeLabel?.trim() || params.nodeId, 256);
-    throw new Error(
-      `Browser proxy returned an invalid response from node ${JSON.stringify(selectedNode)}. Retry with action=status target="host" to check Gateway host browser control.`,
-    );
-  }
-  return parsed;
-}
 
 async function callLocalBrowserControl(params: Parameters<BrowserProxyRequest>[0]) {
   const url = new URL(params.path, "http://localhost");
@@ -186,14 +87,85 @@ export function createBrowserNodeProxyRequest(params: {
       return await callLocalBrowserControl(requestWithSignal);
     }
     try {
-      const proxy = await callBrowserProxy({
+      const proxyParams = {
         nodeId: params.nodeTarget.nodeId,
         nodeLabel: params.nodeTarget.label,
         declaredCommands: params.nodeTarget.commands ?? [],
         pendingDeclaredCommands: params.nodeTarget.pendingDeclaredCommands ?? [],
         allowAutomaticHostFallback: target === "auto",
         ...requestWithSignal,
+      };
+      const { proxyTimeoutMs, nodeInvokeTimeoutMs, gatewayTimeoutMs } = resolveBrowserProxyTimeouts(
+        proxyParams.timeoutMs,
+      );
+      if (
+        isBrowserProxyUploadRequest(proxyParams) &&
+        !proxyParams.declaredCommands.includes(BROWSER_PROXY_UPLOAD_COMMAND)
+      ) {
+        throw new BrowserNodeSafeFallbackError(
+          browserProxyUploadUnavailableMessage(proxyParams.pendingDeclaredCommands),
+        );
+      }
+      const preparedUpload = await prepareBrowserProxyUploadRequest({
+        method: proxyParams.method,
+        path: proxyParams.path,
+        body: proxyParams.body,
+        signal: proxyParams.signal,
       });
+      const command = preparedUpload.upload ? BROWSER_PROXY_UPLOAD_COMMAND : BROWSER_PROXY_COMMAND;
+      let payload: { payload?: unknown; payloadJSON?: unknown } | null;
+      try {
+        payload = await callGatewayTool<{ payload?: unknown; payloadJSON?: unknown }>(
+          "node.invoke",
+          { timeoutMs: gatewayTimeoutMs },
+          {
+            nodeId: proxyParams.nodeId,
+            command,
+            // Keep the browser action, node watchdog, and Gateway RPC on distinct
+            // budgets so a detailed node timeout can cross both outer boundaries.
+            timeoutMs: nodeInvokeTimeoutMs,
+            params: {
+              method: proxyParams.method,
+              path: proxyParams.path,
+              query: proxyParams.query,
+              body: preparedUpload.body,
+              upload: preparedUpload.upload,
+              timeoutMs: proxyTimeoutMs,
+              profile: proxyParams.profile,
+              errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
+            },
+            idempotencyKey: crypto.randomUUID(),
+          },
+          {
+            scopes: ["operator.admin"],
+            ...(proxyParams.signal ? { signal: proxyParams.signal } : {}),
+          },
+        );
+      } catch (error) {
+        if (proxyParams.allowAutomaticHostFallback && isBrowserControlHostUnavailableError(error)) {
+          throw new BrowserNodeSafeFallbackError("browser node control host unavailable", error);
+        }
+        throw error;
+      }
+      const proxy =
+        payload?.payload !== undefined
+          ? (payload.payload as BrowserProxyEnvelope)
+          : typeof payload?.payloadJSON === "string" && payload.payloadJSON.trim()
+            ? safeParseJson<BrowserProxyEnvelope>(payload.payloadJSON)
+            : null;
+      if (
+        !proxy ||
+        typeof proxy !== "object" ||
+        (!("result" in proxy) && !parseBrowserProxyFailure(proxy))
+      ) {
+        const selectedNode = truncateUtf16Safe(
+          proxyParams.nodeLabel?.trim() || proxyParams.nodeId,
+          256,
+        );
+        throw new Error(
+          `Browser proxy returned an invalid response from node ${JSON.stringify(selectedNode)}. Retry with action=status target="host" to check Gateway host browser control.`,
+        );
+      }
       // A follow-up snapshot or setting belongs to the browser that already
       // handled this action, even if that node subsequently becomes unavailable.
       target = "node";

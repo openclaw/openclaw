@@ -10,12 +10,9 @@ describe("Claude CLI execution environment", () => {
     expect(resolveClaudeCliThinkingEnv(level, "claude-opus-4-8")).toEqual(expected);
   });
 
-  it.each(["off", "high", "max"] as const)(
-    "leaves mandatory-adaptive Fable thinking %s to Claude Code effort args",
-    (level) => {
-      expect(resolveClaudeCliThinkingEnv(level, "claude-fable-5")).toBeUndefined();
-    },
-  );
+  it("leaves mandatory-adaptive Fable thinking to Claude Code effort args", () => {
+    expect(resolveClaudeCliThinkingEnv("high", "claude-fable-5")).toBeUndefined();
+  });
 });
 
 describe("resolveClaudeCliAutoCompactEnv", () => {

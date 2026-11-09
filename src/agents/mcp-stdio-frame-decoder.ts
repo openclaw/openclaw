@@ -1,4 +1,5 @@
-import { JSONRPCMessageSchema, type JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import type { JSONRPCMessage } from "@modelcontextprotocol/client";
+import { JSONRPCMessageSchema } from "@modelcontextprotocol/core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 export class McpStdioFrameError extends Error {}
@@ -9,11 +10,26 @@ export class McpStdioFrameDecoder {
   private chunk: Buffer = Buffer.alloc(0);
   private cursor = 0;
 
-  constructor(private readonly maxFrameBytes: number) {}
+  constructor(
+    private readonly maxFrameBytes: number,
+    private readonly mode: "strict-proxy" | "transport" = "strict-proxy",
+  ) {}
 
   append(chunk: Buffer): void {
-    if (this.pendingBytes + chunk.length > this.maxFrameBytes) {
-      throw new McpStdioFrameError("response exceeded the line-size limit");
+    if (this.mode === "transport" && this.pendingBytes + chunk.length > this.maxFrameBytes) {
+      this.clear();
+      throw new Error(`ReadBuffer exceeded maximum size of ${this.maxFrameBytes} bytes`);
+    }
+    let pendingBytes = this.pendingBytes;
+    let offset = 0;
+    // Reject a bad wire frame before retaining any of this chunk, including valid predecessors.
+    while (pendingBytes + chunk.length - offset > this.maxFrameBytes) {
+      const newline = chunk.indexOf(0x0a, offset);
+      if (newline < 0 || pendingBytes + newline + 1 - offset > this.maxFrameBytes) {
+        throw new McpStdioFrameError("response exceeded the line-size limit");
+      }
+      offset = newline + 1;
+      pendingBytes = 0;
     }
     this.chunk = chunk;
     this.cursor = 0;
@@ -40,14 +56,20 @@ export class McpStdioFrameDecoder {
         this.chunk = Buffer.alloc(0);
         this.cursor = 0;
       }
-      if (line.length === 0) {
+      if (line.length === 0 && this.mode === "strict-proxy") {
         continue;
       }
       let response: unknown;
       try {
         response = JSON.parse(line.toString("utf8"));
       } catch (cause) {
+        if (this.mode === "transport") {
+          throw cause;
+        }
         throw new McpStdioFrameError("proxy returned invalid JSON", { cause });
+      }
+      if (this.mode === "transport") {
+        return JSONRPCMessageSchema.parse(response);
       }
       if (!isRecord(response) || response.jsonrpc !== "2.0") {
         throw new McpStdioFrameError("proxy returned an invalid JSON-RPC version");

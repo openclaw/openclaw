@@ -1,5 +1,6 @@
 {
   "id": "browser",
+  "uiCapabilities": ["widget"],
   "categories": ["web"],
   "cliCommands": [
     {
@@ -22,5 +23,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  }
+  },
+  "recommendedPrompts": [
+    "Help me choose a browser profile for automation without changing my existing tabs.",
+    "Research a topic in the browser and compare sources with links."
+  ]
 }

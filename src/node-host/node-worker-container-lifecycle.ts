@@ -8,7 +8,10 @@ import type {
   NodeWorkerContainerIdentity,
   NodeWorkerLaunchStore,
 } from "./node-worker-launch-store.js";
-import { inspectNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
+import {
+  getNodeWorkerBootIdentity,
+  inspectNodeWorkerProcessIdentity,
+} from "./node-worker-process-identity.js";
 
 type NodeWorkerContainerOwner = { gatewayNamespace: string; launchId: string };
 
@@ -23,7 +26,7 @@ export class NodeWorkerContainerLifecycle {
   ) {}
 
   async initialize(): Promise<void> {
-    for (const receipt of this.store.listNonterminal()) {
+    for (const receipt of await this.store.listNonterminal()) {
       if (
         receipt.container &&
         (receipt.container.engine !== this.engine.id ||
@@ -40,9 +43,13 @@ export class NodeWorkerContainerLifecycle {
     for (const container of await listNodeWorkerContainers(this.engine, {
       bundleRoot: this.bundleRoot,
     })) {
-      const receipt = this.store.get(container.launchId);
+      const receipt = await this.store.get(container.launchId);
       if (receipt?.state === "pending" && receipt.gatewayNamespace === container.gatewayNamespace) {
-        const supervisorState = inspectNodeWorkerProcessIdentity(receipt.supervisor);
+        const bootId = getNodeWorkerBootIdentity();
+        const supervisorState =
+          receipt.bootId && bootId && receipt.bootId !== bootId
+            ? "dead"
+            : inspectNodeWorkerProcessIdentity(receipt.supervisor);
         if (supervisorState === "live" || supervisorState === "unknown") {
           continue;
         }

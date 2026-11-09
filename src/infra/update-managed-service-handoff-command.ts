@@ -1,5 +1,10 @@
-import path from "node:path";
+import {
+  isStandaloneRuntimeExecutable,
+  resolveOpenClawCliInvocation,
+} from "../../cli-invocation.mjs";
 import { formatCliCommand } from "../cli/command-format.js";
+import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
+import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 import type { UpdateChannel } from "./update-channels.js";
 
 export function resolveUpdateCliArgv(params: {
@@ -7,6 +12,8 @@ export function resolveUpdateCliArgv(params: {
   channel?: UpdateChannel;
   tag?: string;
   acceptCapabilities?: boolean;
+  fullIntegrityCheck?: boolean;
+  admission?: "auto" | "installed";
   reapplyLocalOverrides?: boolean;
   execPath?: string;
   argv1?: string;
@@ -17,6 +24,8 @@ export function resolveUpdateCliArgv(params: {
     "--json",
     ...(params.reapplyLocalOverrides ? ["--reapply-local-overrides"] : []),
     ...(params.acceptCapabilities ? ["--accept-capabilities"] : []),
+    ...(params.fullIntegrityCheck ? ["--full-integrity-check"] : []),
+    ...(params.admission ? ["--admission", params.admission] : []),
     ...(params.channel ? ["--channel", params.channel] : []),
     ...(params.tag ? ["--tag", params.tag] : []),
     ...(typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
@@ -30,14 +39,21 @@ export function resolveManagedServiceCliArgv(
   args: string[],
 ): string[] {
   const execPath = params.execPath?.trim();
-  const argv1 = params.argv1?.trim();
-  if (execPath && argv1) {
-    return [execPath, argv1, ...args];
-  }
-  if (execPath && !/^(?:node|bun)(?:\.exe)?$/iu.test(path.basename(execPath))) {
-    return [execPath, ...args];
-  }
-  return ["openclaw", ...args];
+  const argv1 = execPath ? params.argv1?.trim() : undefined;
+  const command =
+    execPath &&
+    (argv1 ||
+      isStandaloneRuntimeExecutable(execPath) ||
+      (!isNodeRuntime(execPath) && !isBunRuntime(execPath)))
+      ? execPath
+      : "openclaw";
+  const invocation = resolveOpenClawCliInvocation({
+    execPath: command,
+    entryPath: argv1 || null,
+    execArgv: argv1 ? resolveRuntimeArgs(command) : [],
+    args,
+  });
+  return [invocation.command, ...invocation.args];
 }
 
 export function formatManagedServiceUpdateCommand(

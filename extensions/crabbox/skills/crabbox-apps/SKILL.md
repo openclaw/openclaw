@@ -52,6 +52,39 @@ capability and the actual completed state. A portal that the user's browser
 cannot reach is not a completed preview. Preserve the separate-origin portal
 transport; never expose arbitrary application scripts on the Gateway origin.
 
+## Apps that call a model API
+
+Cloud-agent inference already uses Gateway-held authentication. An application
+inside the lease making its own API calls needs a separate protected route.
+For an exclusively owned coordinator-backed Linux lease, use the host CLI:
+
+```sh
+openclaw crabbox run --id <lease-id> --model <provider/model> -- <command> <args>
+```
+
+Run from the credential-owning host and the local project directory that owns
+the lease. Prepare source and dependencies first: the command skips sync and
+hydration, and its bridge permits only the model host. A lease ID does not
+override Crabbox's repository claim. Require no active egress session and a
+Crabbox binary supporting `egress run --upstream-proxy-env`. Crabbox owns the
+foreground bridge, remote command, and session cleanup.
+
+The provider must have a configured API-key SecretRef and an OpenAI-compatible
+HTTPS endpoint on port 443. Auth-profile/OAuth credentials, custom headers, and
+request transport overrides are unsupported. The CLI injects a sentinel as
+`OPENAI_API_KEY`, plus `OPENAI_BASE_URL`, `OPENAI_MODEL`, proxy settings, and
+public CA trust. The actual key and upstream proxy credentials stay on the host.
+Use a client that honors the proxy and CA environment; Node.js needs
+`NODE_USE_ENV_PROXY` support, while Python's default `urllib.request` opener
+honors the environment. Custom SDK clients may need explicit proxy/trust setup.
+
+Keep this command alive for the full app lifetime. Do not detach the app or
+copy a key into the box. Ordinary tool `exec` and `background` do not acquire
+this model grant. Cancellation revokes access before cleanup; if settlement is
+uncertain, inspect the named session and remote process before reusing the lease.
+This path needs no Gateway restart or persistent egress setting. See the
+[setup, runnable example, and recovery guide](https://docs.openclaw.ai/gateway/secrets/secret-store-and-egress#model-credentials-for-crabbox-commands).
+
 ## Follow-ups and cleanup
 
 Reopen the current environment or portal for "show me again". A viewer reconnect

@@ -1,20 +1,7 @@
-import { supportsCurrentWorkerLaunch } from "./admission.js";
+import { supportsCurrentWorkerLaunch } from "../../worker/worker-build-identity.js";
 import type { WorkerDispatchEnvironmentService } from "./placement-dispatch-failure.js";
 import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
-
-export function isPendingProvisioningEnvironment(
-  environment: ReturnType<WorkerEnvironmentService["get"]>,
-  environmentId: string | null,
-): boolean {
-  return (
-    environment?.environmentId === environmentId &&
-    environment.destroyRequestedAtMs === null &&
-    (environment.state === "requested" ||
-      environment.state === "provisioning" ||
-      environment.state === "bootstrapping")
-  );
-}
 
 export function requireProvisionedEnvironment(
   environment: Awaited<ReturnType<WorkerEnvironmentService["createWithRequest"]>>,

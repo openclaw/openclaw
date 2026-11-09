@@ -1,10 +1,12 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import {
   formatCliProcessFailure,
   runCliProcessChild,
@@ -12,60 +14,46 @@ import {
 } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const require = createRequire(import.meta.url);
-const entry = fileURLToPath(new URL("../entry.ts", import.meta.url));
 
-type ResourceEvent = { event: string; database: string; mode: string };
+const expectedRows = [{ value: "registrar" }, { value: "action" }];
+const activePhases = ["opened", "registrar-entered", "registrar-completed", "action-entered"];
 
 it("keeps native plugin resources through registration and action, then disposes at CLI completion", async () => {
   const root = tempDirs.make("openclaw-cli-registration-resources-");
   const pluginDir = path.join(root, "plugin");
   const stateDir = path.join(root, "state");
   const configPath = path.join(root, "openclaw.json");
-  const eventsPath = path.join(root, "resource-events.jsonl");
+  const eventsPath = path.join(root, "resource-events.log");
+  const databasePath = path.join(root, "runtime.sqlite");
   fs.mkdirSync(pluginDir);
   fs.mkdirSync(stateDir);
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
+  const files = {
+    "openclaw.plugin.json": JSON.stringify({
       id: "cli-native-resource",
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     }),
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "descriptor.cjs"),
-    `module.exports = {
+    "descriptor.cjs": `module.exports = {
   name: "native-resource",
   description: "Synthetic native resource command",
   hasSubcommands: false,
   machineOutput: ({ argv }) => argv.includes("--rows"),
 };
 `,
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "cli-metadata.cjs"),
-    `const descriptor = require("./descriptor.cjs");
+    "cli-metadata.cjs": `const descriptor = require("./descriptor.cjs");
 module.exports = {
   id: "cli-native-resource",
   register(api) { api.registerCli(() => {}, { descriptors: [descriptor] }); },
 };
 `,
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "index.cjs"),
-    `const fs = require("node:fs");
-const path = require("node:path");
+    "index.cjs": `const fs = require("node:fs");
 const { DatabaseSync } = require("node:sqlite");
-let sequence = 0;
 module.exports = {
   id: "cli-native-resource",
   register(api) {
-    const mode = api.registrationMode;
-    if (mode === "cli-metadata") throw new Error("Use the inert metadata entry");
-    const databasePath = path.join(${JSON.stringify(root)}, mode + "-" + sequence++ + ".sqlite");
-    const database = new DatabaseSync(databasePath);
+    if (api.registrationMode === "cli-metadata") throw new Error("Use the inert metadata entry");
+    const database = new DatabaseSync(${JSON.stringify(databasePath)});
     database.exec("CREATE TABLE observations (value TEXT NOT NULL)");
-    const record = (event) => fs.appendFileSync(${JSON.stringify(eventsPath)}, JSON.stringify({ event, database: databasePath, mode }) + "\\n");
+    const record = (event) => fs.appendFileSync(${JSON.stringify(eventsPath)}, event + "\\n");
     record("opened");
     api.registerRuntimeLifecycle({
       id: "native-cli-resource",
@@ -98,23 +86,22 @@ module.exports = {
   },
 };
 `,
-  );
-  fs.writeFileSync(
-    configPath,
-    JSON.stringify({
-      agents: { defaults: { workspace: path.join(root, "workspace") } },
-      plugins: { allow: ["cli-native-resource"], load: { paths: [pluginDir] } },
-    }),
-  );
-  const readEvents = (): ResourceEvent[] =>
-    fs
-      .readFileSync(eventsPath, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
+  };
+  for (const [name, contents] of Object.entries(files)) {
+    fs.writeFileSync(path.join(pluginDir, name), contents);
+  }
+  writeFixtureJsonSync(configPath, {
+    agents: { defaults: { workspace: path.join(root, "workspace") } },
+    plugins: { allow: ["cli-native-resource"], load: { paths: [pluginDir] } },
+  });
+  const readEvents = () => fs.readFileSync(eventsPath, "utf8").trim().split("\n");
 
   const result = await runCliProcessChild({
-    nodeArgs: ["--import", require.resolve("tsx"), entry, "native-resource", "--rows"],
+    nodeArgs: [
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
+      "native-resource",
+      "--rows",
+    ],
     cwd: root,
     env: {
       PATH: process.env.PATH,
@@ -135,45 +122,21 @@ module.exports = {
     async interact(child) {
       try {
         await waitForCliProcessStderrMarker(child, "native-resource action entered");
-        const events = readEvents();
-        expect(events.some((event) => event.event === "registrar-completed")).toBe(true);
-        expect(events.some((event) => event.event === "action-completed")).toBe(false);
-        expect(events.filter((event) => event.event === "disposed")).toEqual([]);
+        expect(readEvents()).toEqual(activePhases);
       } finally {
         child.stdin.end("continue\n");
       }
     },
   });
   const diagnostics = formatCliProcessFailure({ reason: "Native plugin CLI result", ...result });
-  expect(result.code, diagnostics).toBe(0);
-  expect(result.signal, diagnostics).toBeNull();
-  expect(JSON.parse(result.stdout), diagnostics).toEqual([
-    { value: "registrar" },
-    { value: "action" },
-  ]);
+  expect(result, diagnostics).toMatchObject({ code: 0, signal: null });
+  expect(JSON.parse(result.stdout), diagnostics).toEqual(expectedRows);
   expect(result.stderr).toContain("native-resource diagnostic");
+  expect(fs.readdirSync(path.join(stateDir, "tmp", "plugin-captures"))).toEqual([]);
 
-  const events = readEvents();
-  const opened = events.filter((event) => event.event === "opened");
-  expect(opened, diagnostics).toHaveLength(1);
-  expect(opened[0]!.mode).not.toBe("cli-metadata");
-  const completed = events.find((event) => event.event === "action-completed");
-  expect(completed, diagnostics).toBeDefined();
-  const reopened = new DatabaseSync(completed!.database);
-  try {
-    expect(reopened.prepare("SELECT value FROM observations ORDER BY rowid").all()).toEqual([
-      { value: "registrar" },
-      { value: "action" },
-    ]);
-  } finally {
-    reopened.close();
-  }
-  expect(events.filter((event) => event.event === "cleanup")).toEqual([]);
-  expect(
-    events
-      .filter((event) => event.event === "disposed")
-      .map((event) => event.database)
-      .toSorted(),
-    diagnostics,
-  ).toEqual(opened.map((event) => event.database).toSorted());
+  expect(readEvents(), diagnostics).toEqual([...activePhases, "action-completed", "disposed"]);
+  using reopened = new DatabaseSync(databasePath);
+  expect(reopened.prepare("SELECT value FROM observations ORDER BY rowid").all()).toEqual(
+    expectedRows,
+  );
 });

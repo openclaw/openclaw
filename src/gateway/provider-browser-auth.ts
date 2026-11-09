@@ -1,8 +1,14 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
+import { readRuntimeConfig } from "../config/runtime-snapshot.js";
+import { OAUTH_PAGE_CSP } from "../infra/oauth-page-csp.js";
 import type { ProviderAuthContext } from "../plugins/provider-authentication.types.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { renderOAuthPage } from "../shared/oauth-page.js";
+import { isGatewayAuthPolicyCurrent } from "./auth-policy.js";
+import type { GatewayAuthPolicy } from "./auth-policy.types.js";
 import { isLoopbackHost } from "./net.js";
 import { isGatewayHostBrowserOrigin } from "./origin-check.js";
 import type { GatewayWsBrowserOrigin } from "./server/ws-types.js";
@@ -17,6 +23,7 @@ type PendingAuthorization = {
   accept: (result: AuthorizationResult) => void;
   reject: (error: Error) => void;
   isCurrent: () => boolean;
+  browserBinding?: { cookieName: string; cookieValue: string };
 };
 
 const pendingAuthorizations = resolveGlobalMap<string, PendingAuthorization>(
@@ -32,22 +39,50 @@ const pendingAuthorizations = resolveGlobalMap<string, PendingAuthorization>(
 export class ProviderBrowserSignInUnavailableError extends Error {
   constructor() {
     super(
-      "Browser sign-in needs a secure Gateway address reachable from your browser. Enable Gateway Tailscale Serve, then retry /login; or use the CLI sign-in flow.",
+      "Browser sign-in needs a secure Gateway address reachable from your browser. Open the dashboard on this Gateway's HTTPS address or its local loopback address, then retry; or use the CLI sign-in flow.",
     );
+  }
+}
+
+export class ProviderBrowserSignInError extends Error {
+  constructor(readonly reason: "declined" | "expired") {
+    super(
+      reason === "expired"
+        ? "Browser sign-in expired. Retry /login."
+        : "Provider sign-in was declined. Retry /login when you are ready.",
+    );
+    this.name = "ProviderBrowserSignInError";
   }
 }
 
 export function resolveBrowserAuthOrigin(
   browser: GatewayWsBrowserOrigin | undefined,
-  signal: AbortSignal,
+  {
+    signal = getGatewayRestartDrainSignal(),
+    authPolicy,
+  }: {
+    signal?: AbortSignal;
+    authPolicy?: GatewayAuthPolicy;
+  } = {},
 ) {
   const published = getTailscalePublishedOrigin();
   if (!browser || browser.origin === published?.origin) {
     return published;
   }
-  if (browser.origin && browser.isLocalClient && isGatewayHostBrowserOrigin(browser)) {
+  const config = authPolicy?.authMethod === "trusted-proxy" ? readRuntimeConfig() : null;
+  const isPublicProxyOrigin = Boolean(
+    config &&
+    browser.origin === resolveGatewayPublicOrigin(config) &&
+    isGatewayAuthPolicyCurrent(authPolicy, config),
+  );
+  if (browser.origin && (isGatewayHostBrowserOrigin(browser) || isPublicProxyOrigin)) {
     const url = new URL(browser.origin);
-    if ((url.protocol === "http:" || url.protocol === "https:") && isLoopbackHost(url.hostname)) {
+    // The authenticated browser connection already passed Gateway origin policy.
+    // Only authenticated trusted proxies may use publicOrigin when Host was rewritten.
+    if (
+      url.protocol === "https:" ||
+      (url.protocol === "http:" && browser.isLocalClient && isLoopbackHost(url.hostname))
+    ) {
       return { origin: url.origin, signal };
     }
   }
@@ -58,10 +93,16 @@ export function createProviderBrowserAuthSession(params: {
   signal?: AbortSignal;
   openUrl: (url: string) => Promise<void>;
   browserOrigin?: GatewayWsBrowserOrigin;
+  authPolicy?: GatewayAuthPolicy;
+  /** Bind account-link callbacks to the browser that initiated them. */
+  browserBinding?: { cookieName: string; cookieValue: string };
 }) {
   const lifetime = new AbortController();
   const browserOriginSignal = params.browserOrigin
-    ? resolveBrowserAuthOrigin(params.browserOrigin, lifetime.signal)?.signal
+    ? resolveBrowserAuthOrigin(params.browserOrigin, {
+        signal: lifetime.signal,
+        authPolicy: params.authPolicy,
+      })?.signal
     : undefined;
   const signal = AbortSignal.any([
     lifetime.signal,
@@ -72,16 +113,23 @@ export function createProviderBrowserAuthSession(params: {
   let origin: ReturnType<typeof resolveBrowserAuthOrigin>;
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let expiresAt: number | undefined;
-  let authorizationStarted = false;
   const originClosed = () =>
     lifetime.abort(
       new Error("Browser sign-in ended because the Gateway address changed. Retry /login."),
     );
+  const isOriginCurrent = () =>
+    !origin ||
+    resolveBrowserAuthOrigin(params.browserOrigin, { authPolicy: params.authPolicy })?.origin ===
+      origin.origin;
   const assertCurrent = () => {
     signal.throwIfAborted();
     origin?.signal.throwIfAborted();
+    if (!isOriginCurrent()) {
+      originClosed();
+      signal.throwIfAborted();
+    }
     if (expiresAt !== undefined && Date.now() >= expiresAt) {
-      throw new Error("Browser sign-in expired. Retry /login.");
+      throw new ProviderBrowserSignInError("expired");
     }
   };
   const authorizePrepared = async <Result = never>({
@@ -97,18 +145,20 @@ export function createProviderBrowserAuthSession(params: {
       | Promise<{ state: string; authorizationUrl: string } | { result: Result }>;
   }): Promise<AuthorizationResult | Result> => {
     assertCurrent();
-    const published = resolveBrowserAuthOrigin(params.browserOrigin, lifetime.signal);
+    const published = resolveBrowserAuthOrigin(params.browserOrigin, {
+      signal: lifetime.signal,
+      authPolicy: params.authPolicy,
+    });
     if (!published) {
       throw new ProviderBrowserSignInUnavailableError();
     }
-    if (authorizationStarted) {
+    if (origin) {
       throw new Error("Browser sign-in requires a unique authorization state.");
     }
-    authorizationStarted = true;
     origin = published;
     origin.signal.addEventListener("abort", originClosed, { once: true });
     deadline = setTimeout(
-      () => lifetime.abort(new Error("Browser sign-in expired. Retry /login.")),
+      () => lifetime.abort(new ProviderBrowserSignInError("expired")),
       timeoutMs,
     );
     deadline.unref();
@@ -127,10 +177,14 @@ export function createProviderBrowserAuthSession(params: {
     const requestSignal = signal;
     const onAbort = () => callback.reject(requestSignal.reason);
     const pending: PendingAuthorization = {
+      browserBinding: params.browserBinding,
       accept: callback.resolve,
       reject: callback.reject,
       isCurrent: () =>
-        !requestSignal.aborted && Date.now() < callbackExpiresAt && !published.signal.aborted,
+        !requestSignal.aborted &&
+        Date.now() < callbackExpiresAt &&
+        !published.signal.aborted &&
+        isOriginCurrent(),
     };
     pendingAuthorizations.set(state, pending);
     requestSignal.addEventListener("abort", onAbort, { once: true });
@@ -149,7 +203,7 @@ export function createProviderBrowserAuthSession(params: {
       ]);
       assertCurrent();
       if (!pending.isCurrent()) {
-        throw new Error("Browser sign-in expired. Retry /login.");
+        throw new ProviderBrowserSignInError("expired");
       }
       return result;
     } finally {
@@ -166,7 +220,12 @@ export function createProviderBrowserAuthSession(params: {
     });
   return {
     get available() {
-      return Boolean(resolveBrowserAuthOrigin(params.browserOrigin, lifetime.signal));
+      return Boolean(
+        resolveBrowserAuthOrigin(params.browserOrigin, {
+          signal: lifetime.signal,
+          authPolicy: params.authPolicy,
+        }),
+      );
     },
     authorize,
     authorizePrepared,
@@ -185,9 +244,13 @@ function respond(res: ServerResponse, status: number, message: string): void {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+  res.setHeader("Content-Security-Policy", OAUTH_PAGE_CSP);
   res.end(
-    `<!doctype html><html lang="en"><meta charset="utf-8"><title>Provider sign-in</title><body><main><h1>${message}</h1><p>Return to OpenClaw for the sign-in result.</p></main></body></html>`,
+    renderOAuthPage({
+      title: "Provider sign-in",
+      heading: message,
+      message: "Return to OpenClaw for the sign-in result.",
+    }),
   );
 }
 
@@ -206,26 +269,45 @@ export function handleProviderOAuthCallback(req: IncomingMessage, res: ServerRes
   if (!state || !pending || !pending.isCurrent()) {
     if (state && pending) {
       pendingAuthorizations.delete(state);
-      pending.reject(new Error("Browser sign-in expired. Retry /login."));
+      pending.reject(new ProviderBrowserSignInError("expired"));
     }
     respond(res, 410, "This sign-in link expired or was already used.");
     return true;
+  }
+  if (pending.browserBinding) {
+    const { cookieName, cookieValue } = pending.browserBinding;
+    const values = (req.headers.cookie ?? "")
+      .split(";")
+      .map((part) => part.trim())
+      .filter((part) => part.startsWith(cookieName + "="));
+    if (values.length !== 1 || values[0] !== cookieName + "=" + cookieValue) {
+      respond(res, 403, "Return to the browser that started account linking.");
+      return true;
+    }
   }
   const code = url.searchParams.get("code");
   const denied = url.searchParams.has("error");
   if (
     url.searchParams.getAll("state").length !== 1 ||
+    url.searchParams.getAll("iss").length > 1 ||
     (denied ? Boolean(code) : !code?.trim() || url.searchParams.getAll("code").length !== 1)
   ) {
     respond(res, 400, "Invalid sign-in response.");
     return true;
   }
+  if (pending.browserBinding) {
+    res.setHeader(
+      "Set-Cookie",
+      pending.browserBinding.cookieName + "=; Path=/; Max-Age=0; SameSite=Lax",
+    );
+  }
   pendingAuthorizations.delete(state);
   if (denied) {
-    pending.reject(new Error("Provider sign-in was declined. Retry /login when you are ready."));
+    pending.reject(new ProviderBrowserSignInError("declined"));
     respond(res, 400, "Sign-in was not completed.");
   } else {
-    pending.accept({ code: code!, state });
+    const iss = url.searchParams.get("iss");
+    pending.accept({ code: code!, state, ...(iss === null ? {} : { iss }) });
     respond(res, 200, "Sign-in response received.");
   }
   return true;

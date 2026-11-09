@@ -75,8 +75,7 @@ final class OnboardingConfiguredGatewayProbe {
 
     func invalidate() {
         self.generation &+= 1
-        self.pendingActivationDeadlineTask?.cancel()
-        self.pendingActivationDeadlineTask = nil
+        self.cancelPendingActivationRecheck()
     }
 
     func schedulePendingActivationRecheck(
@@ -98,8 +97,7 @@ final class OnboardingConfiguredGatewayProbe {
     }
 
     func cancelPendingActivationRecheck() {
-        self.pendingActivationDeadlineTask?.cancel()
-        self.pendingActivationDeadlineTask = nil
+        SimpleTaskSupport.stop(task: &self.pendingActivationDeadlineTask)
     }
 
     func probe(

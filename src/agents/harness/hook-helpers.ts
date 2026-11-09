@@ -1,16 +1,9 @@
-/**
- * Agent harness tool/message hook helpers.
- *
- * Harnesses use this to dispatch after-tool-call and before-message-write hooks
- * while isolating hook failures from the runtime path.
- */
-
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { applyTranscriptSenderIdentityToWrite } from "../../sessions/user-turn-transcript.metadata.js";
 import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-content.js";
-import { consumeAdjustedParamsForToolCall } from "../agent-tools.before-tool-call.js";
+import { consumeAdjustedParamsForToolCall } from "../agent-tools.before-tool-call.state.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -35,7 +28,6 @@ export async function runAgentHarnessAfterToolCallHook(params: {
     adjustedArgs && typeof adjustedArgs === "object"
       ? (adjustedArgs as Record<string, unknown>)
       : params.startArgs;
-  const eventArgs = structuredClone(resolvedArgs);
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("after_tool_call")) {
     return;
@@ -44,7 +36,7 @@ export async function runAgentHarnessAfterToolCallHook(params: {
     await hookRunner.runAfterToolCall(
       {
         toolName: params.toolName,
-        params: eventArgs,
+        params: structuredClone(resolvedArgs),
         ...(params.runId ? { runId: params.runId } : {}),
         toolCallId: params.toolCallId,
         ...(params.result ? { result: params.result } : {}),

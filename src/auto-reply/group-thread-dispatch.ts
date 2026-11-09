@@ -13,6 +13,7 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { observeAgentRunStart } from "./agent-run-start.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
 import { resolveGroupThreadConfig } from "./group-thread-config.js";
 import {
@@ -30,7 +31,6 @@ import type {
   DispatchReplyFromConfig,
 } from "./reply/dispatch-from-config.types.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
-import { REPLY_ADMISSION_TICKET } from "./reply/reply-admission-ticket.js";
 import {
   createReplyDispatchSettledCounts,
   REPLY_DISPATCH_OUTCOME_COUNTS,
@@ -43,17 +43,14 @@ import {
   type ReplyDispatcher,
 } from "./reply/reply-dispatcher.types.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply/reply-operation-run-state.js";
+import { clearReplySourceInput } from "./reply/reply-source-binding.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./reply/source-turn-id.js";
 import { withReplySystemEventContext } from "./reply/system-event-session-key.js";
 import type { FinalizedMsgContext } from "./templating.js";
 
 function participantDispatcher(parent: ReplyDispatcher): ReplyDispatcher {
   const queued = { tool: 0, block: 0, final: 0 };
-  const counts = {
-    tool: createReplyDispatchSettledCounts(),
-    block: createReplyDispatchSettledCounts(),
-    final: createReplyDispatchSettledCounts(),
-  };
+  const counts = mapReplyDispatchCounts(queued, createReplyDispatchSettledCounts);
   const pending: Promise<void>[] = [];
   const send = (kind: ReplyDispatchKind, operation: ReplyDispatchOperation) => {
     const payload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
@@ -69,25 +66,17 @@ function participantDispatcher(parent: ReplyDispatcher): ReplyDispatcher {
     if (accepted) {
       queued[kind]++;
     }
-    if (outcome.isTracked()) {
-      pending.push(
-        outcome.promise.then((result) => {
-          counts[kind][REPLY_DISPATCH_OUTCOME_COUNTS[result]]++;
-          const delivered = outcome.getDeliveredPayload() ?? payload;
-          if (
-            kind !== "tool" &&
-            result === "delivered" &&
-            isReplyPayloadTerminalContent(delivered)
-          ) {
-            recordGroupThreadReply(delivered);
-          }
-        }),
-      );
-    } else if (accepted) {
-      counts[kind].delivered++;
-      if (kind !== "tool" && isReplyPayloadTerminalContent(payload)) {
-        recordGroupThreadReply(payload);
+    const settle = (result: Awaited<typeof outcome.promise>, tracked = false) => {
+      counts[kind][REPLY_DISPATCH_OUTCOME_COUNTS[result]]++;
+      const delivered = tracked ? (outcome.getDeliveredPayload() ?? payload) : payload;
+      if (kind !== "tool" && result === "delivered" && isReplyPayloadTerminalContent(delivered)) {
+        recordGroupThreadReply(delivered);
       }
+    };
+    if (outcome.isTracked()) {
+      pending.push(outcome.promise.then((result) => settle(result, true)));
+    } else if (accepted) {
+      settle("delivered");
     }
     return accepted;
   };
@@ -177,7 +166,7 @@ function prepareParticipant(
     ctx,
     dispatcher: participantDispatcher(params.dispatcher),
     replyOptions: withReplySystemEventContext(
-      {
+      clearReplySourceInput({
         ...original,
         abortSignal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
         turnAdoptionLifecycle: undefined,
@@ -193,21 +182,19 @@ function prepareParticipant(
         suppressNextUserMessagePersistence: undefined,
         messageInjectionDisposition: undefined,
         runId: undefined,
-        onAgentRunStart: (...args) => {
-          runState.runId = args[0];
-          runState.executionIdentityToken = args[1];
-          return original?.onAgentRunStart?.(...args);
-        },
+        ...observeAgentRunStart(original, (start) => {
+          runState.runId = start.runId;
+          runState.executionIdentityToken = start.executionIdentityToken;
+        }),
         promptCacheKey: undefined,
         onSessionPrepared: undefined,
         replyOperation: undefined,
         [REPLY_OPERATION_RUN_STATE]: undefined,
-        [REPLY_ADMISSION_TICKET]: undefined,
         onQueuedFollowupReplyBatch: undefined,
         onQueuedFollowupAdmitted: undefined,
         onQueuedFollowupSettled: undefined,
         queuedDeliveryCorrelations: undefined,
-      },
+      }),
       { sessionKey },
     ),
   };
@@ -253,7 +240,7 @@ export async function dispatchGroupThread(
   const group =
     ctx.GroupThread?.group ??
     (peerId ? resolveGroupThreadConfig({ cfg, channel, peerId }) : undefined);
-  if (!peerId || !group || resolveBoundAcpDispatchSessionKey({ ctx, cfg })) {
+  if (!peerId || !group || (await resolveBoundAcpDispatchSessionKey({ ctx, cfg }))) {
     return undefined;
   }
   const accountId = normalizeAccountId(ctx.AccountId);

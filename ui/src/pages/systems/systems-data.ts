@@ -4,14 +4,13 @@ import type {
   SystemInfoResult,
 } from "@openclaw/gateway-protocol";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { formatUiError } from "../../lib/format-error.ts";
-
+import type { ApplicationGateway } from "../../app/gateway.ts";
 export type SystemsInventory = {
   environments: EnvironmentSummary[];
   nodes: NodeListNode[];
   gatewaySystemInfo: SystemInfoResult | null;
+  gatewaySampledAtMs: number | null;
   errors: { nodes?: string; systemInfo?: string };
 };
 
@@ -28,40 +27,27 @@ export type SystemsInventoryRow = {
   sessions: SystemsSessionRelation[];
 };
 
-/** The route owns connection epochs, refresh scheduling and publication of this snapshot. */
+/** The page owner schedules and publishes this canonical membership read. */
 export async function loadSystemsInventory(
-  client: Pick<GatewayBrowserClient, "request">,
-  options: { isCurrent: () => boolean; signal?: AbortSignal },
+  gateway: ApplicationGateway,
+  options: { signal?: AbortSignal },
 ): Promise<SystemsInventory | undefined> {
-  if (!options.isCurrent() || options.signal?.aborted) {
+  const client = gateway.snapshot.client;
+  if (!client) {
     return undefined;
   }
-  const requestOptions = { signal: options.signal };
-  const [inventory, nodes, systemInfo] = await Promise.allSettled([
-    client.request<EnvironmentsListResult>(
-      "environments.list",
-      { includeDesktopSetup: true },
-      requestOptions,
-    ),
-    client.request<{ nodes: NodeListNode[] }>("node.list", {}, requestOptions),
-    client.request<SystemInfoResult>("system.info", {}, requestOptions),
-  ]);
-  if (!options.isCurrent() || options.signal?.aborted) {
-    return undefined;
-  }
-  // Never rebuild inventory from auxiliary node reads: that would resurrect cloud-owned
-  // pairings deliberately suppressed by environments.list and hide inventory failures.
-  if (inventory.status === "rejected") {
-    throw inventory.reason;
-  }
+  // Only this list owns membership. Optional measurements load independently in the page owner.
+  const inventory = await client.request<EnvironmentsListResult>(
+    "environments.list",
+    { includeDesktopSetup: true },
+    { signal: options.signal },
+  );
   return {
-    environments: inventory.value.environments,
-    nodes: nodes.status === "fulfilled" ? nodes.value.nodes : [],
-    gatewaySystemInfo: systemInfo.status === "fulfilled" ? systemInfo.value : null,
-    errors: {
-      ...(nodes.status === "rejected" ? { nodes: formatUiError(nodes.reason) } : {}),
-      ...(systemInfo.status === "rejected" ? { systemInfo: formatUiError(systemInfo.reason) } : {}),
-    },
+    environments: inventory.environments,
+    nodes: [],
+    gatewaySystemInfo: null,
+    gatewaySampledAtMs: null,
+    errors: {},
   };
 }
 
@@ -70,16 +56,11 @@ export function projectSystemsInventory(
   inventory: SystemsInventory,
   sessions: readonly GatewaySessionRow[],
 ): SystemsInventoryRow[] {
-  const nodes = new Map(inventory.nodes.map((node) => [`node:${node.nodeId}`, node]));
   const relations = new Map<string, SystemsSessionRelation[]>();
   const add = (id: string, kind: SystemsSessionRelation["kind"], session: GatewaySessionRow) => {
-    const existing = relations.get(id);
-    const relation = { kind, session };
-    if (existing) {
-      existing.push(relation);
-    } else {
-      relations.set(id, [relation]);
-    }
+    const existing = relations.get(id) ?? [];
+    existing.push({ kind, session });
+    relations.set(id, existing);
   };
   for (const session of sessions) {
     const placement = session.placement;
@@ -104,21 +85,36 @@ export function projectSystemsInventory(
     const execNode = session.execNode?.trim();
     add(execNode ? `node:${execNode}` : "gateway", execNode ? "exec-binding" : "gateway", session);
   }
-  return inventory.environments
-    .filter((environment) => {
-      // Terminal worker records remain in Gateway history after their machine is gone.
-      return (
-        environment.type !== "worker" ||
-        (environment.worker?.state !== "destroyed" && environment.worker?.state !== "failed")
-      );
-    })
-    .map((environment) => {
-      return {
+  return projectSystemsTelemetry(
+    inventory.environments
+      .filter((environment) => {
+        // Terminal worker records remain in Gateway history after their machine is gone.
+        return (
+          environment.type !== "worker" ||
+          (environment.worker?.state !== "destroyed" && environment.worker?.state !== "failed")
+        );
+      })
+      .map((environment) => ({
         environment,
-        node: environment.type === "node" ? nodes.get(environment.id) : undefined,
-        gatewaySystemInfo:
-          environment.id === "gateway" ? (inventory.gatewaySystemInfo ?? undefined) : undefined,
         sessions: relations.get(environment.id) ?? [],
-      };
-    });
+      })),
+    inventory,
+  );
+}
+
+/** Measurements enrich existing membership and relationships without rebuilding them. */
+export function projectSystemsTelemetry(
+  rows: readonly SystemsInventoryRow[],
+  patch: Partial<Pick<SystemsInventory, "nodes" | "gatewaySystemInfo">>,
+): SystemsInventoryRow[] {
+  const nodes = patch.nodes && new Map(patch.nodes.map((node) => [`node:${node.nodeId}`, node]));
+  return rows.map((row) => {
+    if (nodes && row.environment.type === "node") {
+      return { ...row, node: nodes.get(row.environment.id) };
+    }
+    if (patch.gatewaySystemInfo !== undefined && row.environment.id === "gateway") {
+      return { ...row, gatewaySystemInfo: patch.gatewaySystemInfo ?? undefined };
+    }
+    return row;
+  });
 }

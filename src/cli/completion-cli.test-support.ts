@@ -1,37 +1,30 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  spawn,
+  spawnSync,
+  type ChildProcessWithoutNullStreams,
+  type SpawnSyncReturns,
+} from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { Command } from "commander";
 import { expect, it, type TestAPI } from "vitest";
+import { createBoundedChildOutput } from "../../test/helpers/bounded-child-output.js";
 import { getCompletionScript, registerCompletionCli } from "./completion-cli.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
 export function createCompletionProgram(): Command {
-  const program = new Command();
-  program.name("openclaw");
-  program.description("CLI root");
-  program.option("-v, --verbose", "Verbose output");
+  const program = new Command().name("openclaw").option("-v, --verbose");
   program.option(
     "--status-json",
     "Output JSON (alias for `models status --json`) in $OPENCLAW_STATE_DIR",
   );
-
-  const gateway = program.command("gateway").description("Gateway commands");
-  gateway.option("--force", "Force the action");
-  gateway.option("-t, --token <token>", "Gateway token");
-
-  gateway.command("status").description("Show gateway status").option("--json", "JSON output");
-  gateway.command("restart").description("Restart gateway");
-  program
-    .command("agent")
-    .description("Agent commands")
-    .option("--verbose <on|off>", "Set verbosity");
-  const sessions = program.command("sessions").description("Session commands");
-  sessions.option("--verbose", "Verbose output");
-  sessions.command("cleanup").description("Clean sessions").option("--dry-run", "Preview cleanup");
-
+  const gateway = program.command("gateway").option("--force").option("-t, --token <token>");
+  gateway.command("status").option("--json");
+  gateway.command("restart");
+  program.command("agent").option("--verbose <on|off>");
+  program.command("sessions").option("--verbose").command("cleanup").option("--dry-run");
   return program;
 }
 
@@ -42,9 +35,7 @@ export function createDocumentedCompletionProgram(): Command {
 }
 
 export function createAliasedCompletionProgram(): Command {
-  const program = new Command();
-  program.name("openclaw");
-  program.option("--profile <name>", "Profile");
+  const program = new Command().name("openclaw").option("--profile <name>", "Profile");
   const infer = program.command("infer").alias("capability").description("Run inference");
   infer.command("embed").description("Embed text").option("--model <id>", "Model id");
   const cron = program.command("cron").description("Cron commands");
@@ -70,8 +61,7 @@ export function runGeneratedBashCompletion(
   words: readonly string[],
   input: BashCompletionInput = {},
 ): string[] {
-  const script = getCompletionScript("bash", program);
-  return runBashCompletionScript(script, words, input);
+  return runBashCompletionScript(getCompletionScript("bash", program), words, input);
 }
 
 export function runBashCompletionScript(
@@ -92,57 +82,21 @@ printf '%s\\n' "\${COMPREPLY[@]}"
 `,
   });
 
+  return completionOutput(result, /\n/);
+}
+
+function completionOutput(result: SpawnSyncReturns<string>, separator: RegExp): string[] {
   if (result.error) {
     throw result.error;
   }
-  expect(result.stderr).toBe("");
-  expect(result.status).toBe(0);
-  return result.stdout.split("\n").filter(Boolean);
+  expect(result).toMatchObject({ stderr: "", status: 0 });
+  return result.stdout.split(separator).filter(Boolean);
 }
 
-function findFish(): string | null {
-  const executable = process.platform === "win32" ? "fish.exe" : "fish";
-  const candidates = (process.env.PATH ?? "")
-    .split(path.delimiter)
-    .filter(Boolean)
-    .map((directory) => path.join(directory, executable));
-  return candidates.find((candidate) => existsSync(candidate)) ?? null;
-}
-
-const fishPath = findFish();
-export const itWithFish: TestAPI["skip"] = fishPath ? it : it.skip;
-
-export function runGeneratedFishCompletion(program: Command, commandLine: string): string[] {
-  return runFishCompletionScript(getCompletionScript("fish", program), commandLine);
-}
-
-export function runFishCompletionScript(script: string, commandLine: string): string[] {
-  if (!fishPath) {
-    throw new Error("Fish is unavailable");
-  }
-
-  const quotedCommandLine = commandLine.replaceAll("'", "\\'");
-  const result = spawnSync(fishPath, ["--no-config"], {
-    encoding: "utf8",
-    timeout: 15_000,
-    input: `${script}\ncomplete --do-complete '${quotedCommandLine}'\n`,
-  });
-
-  if (result.error) {
-    throw result.error;
-  }
-  expect(result.stderr).toBe("");
-  expect(result.status).toBe(0);
-  return result.stdout
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((completion) => completion.split("\t")[0] ?? completion);
-}
-
-function findPowerShell(): string | null {
-  const executable = process.platform === "win32" ? "pwsh.exe" : "pwsh";
+function findShell(name: string, override?: string): string | null {
+  const executable = process.platform === "win32" ? `${name}.exe` : name;
   const candidates = [
-    process.env.OPENCLAW_TEST_PWSH,
+    override,
     ...(process.env.PATH ?? "")
       .split(path.delimiter)
       .filter(Boolean)
@@ -155,7 +109,29 @@ function findPowerShell(): string | null {
   );
 }
 
-const powerShellPath = findPowerShell();
+const fishPath = findShell("fish");
+export const itWithFish: TestAPI["skip"] = fishPath ? it : it.skip;
+
+export function runGeneratedFishCompletion(program: Command, commandLine: string): string[] {
+  return runFishCompletionScript(getCompletionScript("fish", program), commandLine);
+}
+
+export function runFishCompletionScript(script: string, commandLine: string): string[] {
+  if (!fishPath) {
+    throw new Error("Fish is unavailable");
+  }
+
+  const result = spawnSync(fishPath, ["--no-config"], {
+    encoding: "utf8",
+    timeout: 15_000,
+    input: `${script}\ncomplete --do-complete '${commandLine.replaceAll("'", "\\'")}'\n`,
+  });
+  return completionOutput(result, /\r?\n/).map(
+    (completion) => completion.split("\t")[0] ?? completion,
+  );
+}
+
+const powerShellPath = findShell("pwsh", process.env.OPENCLAW_TEST_PWSH);
 export const itWithPowerShell: TestAPI["skip"] = powerShellPath ? it : it.skip;
 
 type PowerShellCompletionResponse =
@@ -170,6 +146,10 @@ type PendingPowerShellCompletion = {
 
 const POWERSHELL_CASE_TIMEOUT_MS = 15_000;
 const POWERSHELL_CLOSE_TIMEOUT_MS = 5_000;
+
+function base64(value: string, encoding: BufferEncoding = "utf8"): string {
+  return Buffer.from(value, encoding).toString("base64");
+}
 
 function encodePowerShellHostScript(framePrefix: string): string {
   const script = String.raw`
@@ -209,7 +189,7 @@ while (($encodedRequest = [Console]::In.ReadLine()) -ne $null) {
   [Console]::Out.Flush()
 }
 `;
-  return Buffer.from(script, "utf16le").toString("base64");
+  return base64(script, "utf16le");
 }
 
 function decodePowerShellCompletionResponse(encoded: string): PowerShellCompletionResponse {
@@ -232,12 +212,7 @@ function decodePowerShellCompletionResponse(encoded: string): PowerShellCompleti
     ) {
       throw new Error("PowerShell completion response had invalid completions");
     }
-    return {
-      version: 1,
-      id: response.id,
-      ok: true,
-      completions: response.completions,
-    };
+    return { version: 1, id: response.id, ok: true, completions: response.completions };
   }
   if (typeof response.error !== "string") {
     throw new Error("PowerShell completion response had no error text");
@@ -275,11 +250,7 @@ export class PowerShellCompletionRunner {
     cursorPosition = commandLine.length,
   ): Promise<string[]> {
     const caseId = createHash("sha256")
-      .update(script)
-      .update("\0")
-      .update(commandLine)
-      .update("\0")
-      .update(String(cursorPosition))
+      .update([script, commandLine, String(cursorPosition)].join("\0"))
       .digest("hex")
       .slice(0, 20);
     const result = this.queue.then(() =>
@@ -310,18 +281,19 @@ export class PowerShellCompletionRunner {
           );
         }),
       ]);
+      // Cleanup must preserve the failure that already rejected queued completions.
+      if (this.failure) {
+        throw this.failure;
+      }
       if (outcome.code !== 0 || outcome.signal !== null) {
         throw new Error(
           `PowerShell completion runner exited with code ${String(outcome.code)} signal ${String(outcome.signal)}`,
         );
       }
-      if (this.failure) {
-        throw this.failure;
-      }
     } catch (error) {
       this.child.kill("SIGTERM");
       setTimeout(() => this.child?.kill("SIGKILL"), 1_000).unref();
-      throw error;
+      throw this.failure ?? error;
     } finally {
       if (closeTimer) {
         clearTimeout(closeTimer);
@@ -344,16 +316,15 @@ export class PowerShellCompletionRunner {
     if (!child) {
       throw new Error("PowerShell completion runner did not start");
     }
-    const request = Buffer.from(
+    const request = base64(
       JSON.stringify({
         version: 1,
         id: caseId,
-        script: Buffer.from(script, "utf8").toString("base64"),
-        commandLine: Buffer.from(commandLine, "utf8").toString("base64"),
+        script: base64(script),
+        commandLine: base64(commandLine),
         cursorPosition,
       }),
-      "utf8",
-    ).toString("base64");
+    );
     return await new Promise<string[]>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.poison(new Error(`PowerShell completion case ${caseId} timed out`));
@@ -374,6 +345,7 @@ export class PowerShellCompletionRunner {
     if (!powerShellPath) {
       return Promise.reject(new Error("PowerShell is unavailable"));
     }
+    const startedAt = performance.now();
     const child = spawn(
       powerShellPath,
       [
@@ -386,35 +358,62 @@ export class PowerShellCompletionRunner {
       { stdio: "pipe" },
     );
     this.child = child;
+    let spawnElapsedMs: number | null = null;
+    child.once("spawn", () => {
+      spawnElapsedMs = Math.round(performance.now() - startedAt);
+    });
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
+    // Readline cannot expose an incomplete READY frame. Retain only a bounded startup tail.
+    let startupStdout: ReturnType<typeof createBoundedChildOutput> | undefined =
+      createBoundedChildOutput(4096);
+    const captureStartupStdout = (chunk: string) => startupStdout?.append(chunk);
+    child.stdout.on("data", captureStartupStdout);
     this.stdoutLines = createInterface({ input: child.stdout });
     this.readyPromise = new Promise<void>((resolve, reject) => {
       const readyTimeout = setTimeout(
-        () => fail(new Error("PowerShell completion runner did not become ready")),
+        () =>
+          fail(
+            `PowerShell completion runner did not become ready\nStartup: ${JSON.stringify({
+              executable: powerShellPath,
+              elapsedMs: Math.round(performance.now() - startedAt),
+              spawnElapsedMs,
+              pid: child.pid ?? null,
+              exitCode: child.exitCode,
+              signalCode: child.signalCode,
+              killed: child.killed,
+              stdoutTail: startupStdout?.text() ?? "",
+            })}`,
+          ),
         POWERSHELL_CASE_TIMEOUT_MS,
       );
-      // Before READY there are no pending requests; poisoning alone would strand the queue.
-      const fail = (error: Error) => {
+      const finishStartup = () => {
         clearTimeout(readyTimeout);
+        child.stdout.removeListener("data", captureStartupStdout);
+        startupStdout = undefined;
+      };
+      // Before READY there are no pending requests; poisoning alone would strand the queue.
+      const fail = (reason: unknown) => {
+        const error = reason instanceof Error ? reason : new Error(String(reason));
+        finishStartup();
         reject(error);
         this.poison(error);
       };
       this.stdoutLines?.on("line", (line) => {
         if (line === `${this.framePrefix}READY`) {
-          clearTimeout(readyTimeout);
+          finishStartup();
           resolve();
           return;
         }
         if (!line.startsWith(this.framePrefix)) {
-          fail(new Error(`Unexpected PowerShell completion stdout: ${line}`));
+          fail(`Unexpected PowerShell completion stdout: ${line}`);
           return;
         }
         try {
           const response = decodePowerShellCompletionResponse(line.slice(this.framePrefix.length));
           const pending = this.pending.get(response.id);
           if (!pending) {
-            fail(new Error(`Unexpected PowerShell completion response id: ${response.id}`));
+            fail(`Unexpected PowerShell completion response id: ${response.id}`);
             return;
           }
           clearTimeout(pending.timeout);
@@ -427,14 +426,14 @@ export class PowerShellCompletionRunner {
             );
           }
         } catch (error) {
-          fail(error instanceof Error ? error : new Error(String(error)));
+          fail(error);
         }
       });
       child.once("error", fail);
       child.stderr.on("data", (chunk: string) => {
         const stderr = chunk.trim();
         if (stderr) {
-          fail(new Error(`Unexpected PowerShell completion stderr: ${stderr}`));
+          fail(`Unexpected PowerShell completion stderr: ${stderr}`);
         }
       });
       this.exitPromise = new Promise((exitResolve) => {
@@ -442,9 +441,7 @@ export class PowerShellCompletionRunner {
           exitResolve({ code, signal });
           if (!this.closing || code !== 0 || signal !== null) {
             fail(
-              new Error(
-                `PowerShell completion runner exited unexpectedly with code ${String(code)} signal ${String(signal)}`,
-              ),
+              `PowerShell completion runner exited unexpectedly with code ${String(code)} signal ${String(signal)}`,
             );
           }
         });

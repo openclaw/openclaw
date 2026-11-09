@@ -1,13 +1,14 @@
 /**
- * Normalized `web_search` output contract.
- *
  * Every bundled or external provider payload is normalized at the core tool
  * boundary into one of four closed branches (error / results / answer / raw).
  * The boundary owns the untrusted-content envelope: provider prose is
  * re-wrapped here unconditionally, so no provider-controlled metadata can
  * spoof the trust marker and transport-specific extras never reach the model.
  */
-import { asFiniteNumber as readFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber as readFiniteNumber,
+  parseDateStringTimestampMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
@@ -16,7 +17,11 @@ import {
   truncateSanitizedExternalContent,
   wrapWebContent,
 } from "../../security/external-content.js";
-import { MAX_SEARCH_COUNT } from "./web-search-provider-common.js";
+import {
+  formatWebSearchNotConfiguredMessage,
+  isMissingCredentialCode,
+} from "../../web-search/runtime-error.js";
+import { externalContentStamp, MAX_SEARCH_COUNT } from "./web-search-provider-common.js";
 
 const WebSearchExternalContentSchema = Type.Object(
   {
@@ -27,7 +32,6 @@ const WebSearchExternalContentSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-type WebSearchExternalContent = Static<typeof WebSearchExternalContentSchema>;
 
 const WebSearchResultSchema = Type.Object(
   {
@@ -116,7 +120,7 @@ const WEB_SEARCH_CITATION_MAX_SCAN = 1_000;
 
 type WebSearchOutputBudget = { remaining: number; truncated: boolean };
 
-function unwrapEnvelopes(value: string): string {
+export function unwrapWebSearchOutputText(value: string): string {
   return value.replace(ENVELOPE_OPEN_RE, "").replace(ENVELOPE_END_RE, "").trim();
 }
 
@@ -126,21 +130,18 @@ function toHttpUrl(value: string): string | undefined {
   if (value.length > 2_048) {
     return undefined;
   }
-  try {
-    const parsed = new URL(value);
-    return (parsed.protocol === "http:" || parsed.protocol === "https:") &&
-      parsed.href.length <= 2_048
-      ? parsed.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const parsed = URL.parse(value);
+  return parsed &&
+    (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+    parsed.href.length <= 2_048
+    ? parsed.href
+    : undefined;
 }
 // Purely structural date charset; free-form dates could smuggle instructions.
 const PUBLISHED_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;
 
 function wrapProse(value: string, budget?: WebSearchOutputBudget): string {
-  let inner = unwrapEnvelopes(value);
+  let inner = unwrapWebSearchOutputText(value);
   if (budget) {
     const bounded = truncateSanitizedExternalContent(inner, budget.remaining);
     budget.truncated ||= bounded.truncated;
@@ -159,18 +160,14 @@ function consumeUrlBudget(url: string, budget: WebSearchOutputBudget): boolean {
   return true;
 }
 
-function externalContentStamp(provider: string): WebSearchExternalContent {
-  return { untrusted: true, source: "web_search", wrapped: true, provider };
-}
-
 function normalizeCitations(
   value: unknown,
   budget: WebSearchOutputBudget,
-): Array<{ url: string; title?: string }> | undefined {
+): Array<Static<typeof WebSearchCitationSchema>> | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const citations: Array<{ url: string; title?: string }> = [];
+  const citations: Array<Static<typeof WebSearchCitationSchema>> = [];
   let scanned = 0;
   // A citation url must actually parse as http(s); free text in a url slot
   // would bypass the untrusted-content envelope.
@@ -182,38 +179,28 @@ function normalizeCitations(
       budget.truncated = true;
       break;
     }
-    if (typeof entry === "string") {
-      const url = toHttpUrl(entry);
-      if (url && consumeUrlBudget(url, budget)) {
-        citations.push({ url });
-      }
+    const source = typeof entry === "string" ? { url: entry } : entry;
+    if (!isRecord(source) || typeof source.url !== "string") {
       continue;
     }
-    const url = isRecord(entry) && typeof entry.url === "string" ? toHttpUrl(entry.url) : undefined;
-    if (!isRecord(entry) || !url || !consumeUrlBudget(url, budget)) {
+    const url = toHttpUrl(source.url);
+    if (!url || !consumeUrlBudget(url, budget)) {
       continue;
     }
     const citation: Static<typeof WebSearchCitationSchema> = { url };
-    if (typeof entry.title === "string") {
-      citation.title = entry.title;
+    if (typeof source.title === "string") {
+      citation.title = source.title;
     }
     citations.push(citation);
   }
   return citations;
 }
 
-// Provider output is untrusted third-party data (bundled or, worse, external
-// plugin code). Snapshot it into plain JSON before reading any field so exotic
-// values a real HTTP payload never has — bigint, circular refs, throwing
-// getters, Proxy traps — cannot crash the agent turn or vary between reads. A
-// payload that will not serialize degrades to a safe provider error rather than
-// throwing out of the boundary.
+// Snapshot provider data before reading it so getters/proxies cannot vary between
+// reads. Non-JSON values degrade to a provider error at this boundary.
 function snapshotProviderResult(result: Record<string, unknown>): Record<string, unknown> | null {
   try {
-    // Serialize-then-parse, not structuredClone: we specifically want non-JSON
-    // values (bigint, circular refs, functions, symbols) to flatten or throw
-    // here rather than survive and break a later serialization. structuredClone
-    // preserves them, so it would only move the crash downstream.
+    // structuredClone preserves non-JSON values that could break later serialization.
     const serialized = JSON.stringify(result ?? {});
     const cloned: unknown = JSON.parse(serialized);
     return isRecord(cloned) ? cloned : {};
@@ -222,7 +209,6 @@ function snapshotProviderResult(result: Record<string, unknown>): Record<string,
   }
 }
 
-/** Normalizes every bundled or external provider payload at the core tool boundary. */
 export function normalizeWebSearchOutput(params: {
   result: Record<string, unknown>;
   provider: string;
@@ -252,26 +238,27 @@ export function normalizeWebSearchOutput(params: {
   // success payloads, so treating it as failure first prevents an error plus
   // empty results from masquerading as a successful search.
   if (Object.hasOwn(result, "error")) {
-    // Error branches carry no externalContent marker, so nothing provider-
-    // controlled may pass unwrapped: the structured code is a core literal,
-    // the raw provider code and message travel inside the envelope, and docs
-    // must canonicalize as http(s).
-    // Non-string error payloads (numbers, objects) keep their diagnostics by
-    // serializing into the wrapped message instead of collapsing to a bare code.
-    const rawError =
+    // Error branches carry no trust marker: wrap the provider code and message,
+    // preserve non-string diagnostics as JSON, and allow only http(s) docs links.
+    const rawError = truncateUtf16Safe(
       typeof result.error === "string"
-        ? truncateUtf16Safe(result.error, 2_000)
-        : truncateUtf16Safe(JSON.stringify(result.error) ?? "provider_error", 2_000);
+        ? result.error
+        : (JSON.stringify(result.error) ?? "provider_error"),
+      2_000,
+    );
     const rawMessage = typeof result.message === "string" ? result.message : rawError;
     const docs = typeof result.docs === "string" ? toHttpUrl(result.docs) : undefined;
+    const detail = wrapProse(rawMessage === rawError ? rawError : `${rawError}: ${rawMessage}`, {
+      remaining: 4_000,
+      truncated: false,
+    });
     return {
       kind: "error",
       provider,
       error: "provider_error",
-      message: wrapProse(rawMessage === rawError ? rawError : `${rawError}: ${rawMessage}`, {
-        remaining: 4_000,
-        truncated: false,
-      }),
+      message: isMissingCredentialCode(result.error)
+        ? `${formatWebSearchNotConfiguredMessage(provider)}\nProvider setup details:\n${detail}`
+        : detail,
       ...(docs ? { docs } : {}),
     };
   }
@@ -293,7 +280,7 @@ export function normalizeWebSearchOutput(params: {
       const url = toHttpUrl(row.url as string) as string;
       return consumeUrlBudget(url, budget) ? [{ row, url }] : [];
     });
-    const results = boundedRows.map(({ row, url }) => {
+    const prepared = boundedRows.map(({ row, url }) => {
       const snippet =
         typeof row.snippet === "string"
           ? row.snippet
@@ -302,25 +289,57 @@ export function normalizeWebSearchOutput(params: {
             : Array.isArray(row.snippets)
               ? row.snippets.find((value): value is string => typeof value === "string")
               : undefined;
-      const published =
-        typeof row.published === "string" && PUBLISHED_RE.test(row.published)
-          ? row.published
-          : undefined;
-      const normalizedRow: Static<typeof WebSearchResultSchema> = {
-        title: wrapProse(row.title as string, budget),
-        url,
-      };
-      if (snippet !== undefined) {
-        normalizedRow.snippet = wrapProse(snippet, budget);
+      let published: string | undefined;
+      if (typeof row.published === "string" && PUBLISHED_RE.test(row.published)) {
+        const calendarDate = row.published.slice(0, 10);
+        const timestamp = parseDateStringTimestampMs(calendarDate);
+        if (timestamp !== undefined && new Date(timestamp).toISOString().startsWith(calendarDate)) {
+          published = row.published;
+        }
       }
-      if (published !== undefined) {
-        normalizedRow.published = published;
-      }
-      if (typeof row.siteName === "string") {
-        normalizedRow.siteName = wrapProse(row.siteName, budget);
-      }
-      return normalizedRow;
+      const title = row.title as string;
+      const siteName = typeof row.siteName === "string" ? row.siteName : undefined;
+      const proseChars = [title, snippet, siteName].reduce(
+        (total, value) =>
+          total +
+          (value === undefined
+            ? 0
+            : truncateSanitizedExternalContent(
+                unwrapWebSearchOutputText(value),
+                Number.MAX_SAFE_INTEGER,
+              ).text.length),
+        0,
+      );
+      return { url, title, snippet, published, siteName, proseChars };
     });
+    // Charge rows from the least prose to the most, each within an equal share of
+    // what is left: rows that fit keep everything and only the longest are trimmed,
+    // so one long page cannot blank the results after it.
+    const order = prepared
+      .map((entry, index) => ({ entry, index }))
+      .toSorted((a, b) => a.entry.proseChars - b.entry.proseChars);
+    const results: Array<Static<typeof WebSearchResultSchema>> = [];
+    for (const [position, { entry, index }] of order.entries()) {
+      const share = Math.floor(budget.remaining / (order.length - position));
+      const rowBudget: WebSearchOutputBudget = { remaining: share, truncated: false };
+      // The title and site name are charged before the snippet, which takes the rest.
+      const title = wrapProse(entry.title, rowBudget);
+      const siteName =
+        entry.siteName === undefined ? undefined : wrapProse(entry.siteName, rowBudget);
+      const normalizedRow: Static<typeof WebSearchResultSchema> = { title, url: entry.url };
+      if (entry.snippet !== undefined) {
+        normalizedRow.snippet = wrapProse(entry.snippet, rowBudget);
+      }
+      if (entry.published !== undefined) {
+        normalizedRow.published = entry.published;
+      }
+      if (siteName !== undefined) {
+        normalizedRow.siteName = siteName;
+      }
+      budget.remaining -= share - rowBudget.remaining;
+      budget.truncated ||= rowBudget.truncated;
+      results[index] = normalizedRow;
+    }
     const rowsWereReduced = rows.length !== results.length;
     return {
       kind: "results",

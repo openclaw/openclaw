@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import { registerHooks } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -13,6 +14,8 @@ export type LeaseScenario = {
   preDoctorChannel?: string;
   invalidConfig?: boolean;
   failDoctor?: "pre" | "post";
+  doctorWarnings?: string[];
+  completeDeferredPluginMigration?: string;
   readinessFailure?: "finding" | "execution";
   hostVersion?: string;
   writerConfig?: OpenClawConfig;
@@ -20,10 +23,87 @@ export type LeaseScenario = {
   runtimeRoot?: string;
   verifyRepairOwner?: boolean;
   verifyServiceCustody?: boolean;
+  runDoctorConfigFlow?: boolean;
+  doctorWarningsByInvocation?: string[][];
 };
 
 // A narrow child substitutes for the CLI, not for its cross-process lease.
 export async function runUpdateLeaseChild(): Promise<void> {
+  const observationUrl = new URL(
+    import.meta.url.endsWith(".js")
+      ? "../../infra/owned-directory-observation.js"
+      : "../../infra/owned-directory-observation.ts",
+    import.meta.url,
+  ).href;
+  // These short-lived Doctor fixtures never replace directories externally.
+  // Keep real discovery and repair, without unrelated native watcher setup.
+  const observationHook =
+    process.argv[2] === "doctor"
+      ? registerHooks({
+          load(url, context, nextLoad) {
+            return url === observationUrl || url.startsWith(`${observationUrl}?`)
+              ? {
+                  format: "module",
+                  source: "export function observeOwnedDirectory() { return { close() {} }; }",
+                  shortCircuit: true,
+                }
+              : nextLoad(url, context);
+          },
+        })
+      : undefined;
+  try {
+    if (process.argv[2] !== "doctor" || process.argv[3] === "--lint") {
+      await runUpdateLeaseChildWithCleanup();
+      return;
+    }
+    const startedAt = performance.now();
+    let tracing = false;
+    let phaseCount = 0;
+    const progress = (phase: string) => {
+      // Trace config-flow custody through cleanup without displacing intentional-failure output.
+      tracing ||= phase === "config:start";
+      if (tracing && phaseCount++ < 32) {
+        process.stderr.write(
+          `doctor fixture phase: ${phase} +${Math.round(performance.now() - startedAt)}ms\n`,
+        );
+      }
+    };
+    const [{ retainUpdateDoctorProcesses }, { withCommandProcessScope }] = await Promise.all([
+      import("../../infra/update-doctor-process-custody.js"),
+      import("../../process/exec-spawn.js"),
+    ]);
+    // Match Doctor's custody lifetime, including its final worker joins.
+    using custody = await retainUpdateDoctorProcesses();
+    await withCommandProcessScope(
+      () => runUpdateLeaseChildWithCleanup(progress),
+      undefined,
+      custody,
+    );
+    progress("scope:joined");
+  } finally {
+    observationHook?.deregister();
+  }
+}
+
+async function runUpdateLeaseChildWithCleanup(progress?: (phase: string) => void): Promise<void> {
+  try {
+    await runUpdateLeaseScenario(progress);
+  } finally {
+    // Fixture children bypass CLI cleanup and must join their database workers.
+    progress?.("state-close:start");
+    const { closeOpenClawStateDatabaseAsync } =
+      await import("../../state/openclaw-state-db-cache.js");
+    await closeOpenClawStateDatabaseAsync();
+    progress?.("state-close:done");
+    progress?.("native-close:start");
+    const { closeDefaultRetainedNativeWorkerSource } =
+      await import("../../infra/worker-native-lifecycle.js");
+    await closeDefaultRetainedNativeWorkerSource();
+    progress?.("native-close:done");
+  }
+}
+
+async function runUpdateLeaseScenario(progress?: (phase: string) => void): Promise<void> {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   assert.ok(stateDir && configPath);
@@ -67,6 +147,13 @@ export async function runUpdateLeaseChild(): Promise<void> {
     assert.deepEqual(process.argv.slice(2), ["config", "validate", "--json"]);
     assert.equal(process.env.OPENCLAW_UPDATE_IN_PROGRESS, "0");
     await record("validate");
+    process.stdout.write(
+      JSON.stringify(
+        scenario.invalidConfig
+          ? { valid: false, issues: [{ path: "gateway.port", message: "Invalid port" }] }
+          : { valid: true },
+      ),
+    );
     process.exitCode = scenario.invalidConfig ? 1 : 0;
     return;
   }
@@ -148,7 +235,8 @@ export async function runUpdateLeaseChild(): Promise<void> {
     if (scenario.verifyRepairOwner) {
       const runId = process.env.OPENCLAW_UPDATE_RUN_ID;
       assert.ok(runId, "Doctor did not inherit its invoking repair run ID");
-      const { DatabaseSync } = await import("node:sqlite");
+      const { requireNodeSqlite } = await import("../../infra/node-sqlite.js");
+      const { DatabaseSync } = requireNodeSqlite();
       const { readUpdateRunRecord } = await import("../../infra/update-run-read.kernel.js");
       const { resolveOpenClawStateSqlitePath } =
         await import("../../state/openclaw-state-db.paths.js");
@@ -189,7 +277,96 @@ export async function runUpdateLeaseChild(): Promise<void> {
     process.stdout.write("doctor fixture output\n");
     process.stderr.write("doctor fixture diagnostic\n");
     if (scenario.failDoctor === phase) {
-      throw new Error("doctor fixture failure");
+      process.stderr.write("doctor fixture failure\n");
+      process.exitCode = 1;
+      return;
+    }
+    if (scenario.runDoctorConfigFlow) {
+      progress?.("config:start");
+      const { loadAndMaybeMigrateDoctorConfig } =
+        await import("../../commands/doctor-config-flow.js");
+      const { createDoctorPrompter } = await import("../../commands/doctor-prompter.js");
+      const { runInitialConfigWriteHealth } =
+        await import("../../flows/doctor-health-contribution-runners.config.js");
+      const { defaultRuntime: runtime } = await import("../../runtime.js");
+      const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
+      const options = { repair: true, nonInteractive: true, workspaceSuggestions: false };
+      const prompter = createDoctorPrompter({ runtime, options });
+      // One real maintenance owner serves every migration in this Doctor invocation.
+      const maintenance = await beginDoctorMaintenance({ root: null, options, runtime });
+      assert.ok(maintenance);
+      progress?.("maintenance:acquired");
+      try {
+        const config = await maintenance.run(async () => {
+          await using configResult = await loadAndMaybeMigrateDoctorConfig({
+            options,
+            prompter,
+            runtime,
+            confirm: (params) => prompter.confirm(params),
+          });
+          progress?.("config:loaded");
+          progress?.("config-write:start");
+          await runInitialConfigWriteHealth({
+            runtime,
+            options,
+            prompter,
+            configResult,
+            cfg: configResult.cfg,
+            cfgForPersistence: structuredClone(configResult.cfg),
+            sourceConfigValid: configResult.sourceConfigValid ?? true,
+            configPath,
+            stateDirExistedAtStart: true,
+            runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot,
+            invalidatePluginMetadataSnapshot: configResult.invalidatePluginMetadataSnapshot,
+          });
+          progress?.("config-write:done");
+          return configResult.cfg;
+        });
+        progress?.("config:disposed");
+        progress?.("maintenance-finish:start");
+        await maintenance.finish(config);
+        progress?.("maintenance-finish:done");
+      } finally {
+        progress?.("maintenance-release:start");
+        await maintenance.release();
+        progress?.("maintenance-release:done");
+      }
+    }
+    if (scenario.doctorWarningsByInvocation) {
+      const attempts = (await fs.readFile(path.join(stateDir, "events.jsonl"), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { event: string })
+        .filter(({ event }) => event === "pre-attempt" || event === "post-attempt");
+      const resultPath = process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+      assert.ok(resultPath);
+      const { writeUpdatePostInstallDoctorResult } =
+        await import("../../infra/update-doctor-result.js");
+      await writeUpdatePostInstallDoctorResult({
+        resultPath,
+        result: {
+          status: "ok",
+          warnings: scenario.doctorWarningsByInvocation[attempts.length - 1] ?? [],
+        },
+      });
+    }
+    if (scenario.doctorWarnings?.length) {
+      const { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, writeUpdatePostInstallDoctorResult } =
+        await import("../../infra/update-doctor-result.js");
+      const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+      assert.ok(resultPath);
+      await writeUpdatePostInstallDoctorResult({
+        resultPath,
+        result: { status: "ok", warnings: scenario.doctorWarnings },
+      });
+    }
+    if (phase === "pre" && scenario.completeDeferredPluginMigration) {
+      const { recordDeferredPluginMigrations } =
+        await import("../../infra/deferred-plugin-migrations.js");
+      await recordDeferredPluginMigrations({
+        pending: [],
+        resolvedPluginIds: [scenario.completeDeferredPluginMigration],
+      });
     }
     return;
   }

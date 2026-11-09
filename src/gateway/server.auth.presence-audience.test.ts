@@ -5,6 +5,7 @@ import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import type { PresenceQueryResult } from "../../packages/gateway-protocol/src/schema/presence.js";
 import { PresenceEntrySchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
@@ -15,7 +16,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig, GatewayOperatorRolesConfig } from "../config/types.gateway.js";
 import { listSystemPresence, type SystemPresence } from "../infra/system-presence.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   connectReq,
   CONTROL_UI_CLIENT,
@@ -25,8 +27,10 @@ import {
   openWs,
   rpcReq,
   testState,
+  waitForWsClose,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
+import type { SessionsListResult } from "./session-utils.types.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -60,6 +64,27 @@ function responseScopes(response: Awaited<ReturnType<typeof connectReq>>): strin
   return (response.payload as { auth?: { scopes?: string[] } } | undefined)?.auth?.scopes;
 }
 
+const GUEST_PRESENCE_FIELDS = new Set([
+  "ts",
+  "text",
+  "reason",
+  "lastActivityAt",
+  "user",
+  "watchedSessions",
+]);
+
+function personOnlyViolations(row: Partial<SystemPresence>): string[] {
+  return [
+    ...Object.keys(row).filter((field) => !GUEST_PRESENCE_FIELDS.has(field)),
+    ...(row.user?.email ? ["user.email"] : []),
+  ];
+}
+
+function guestPresenceView(row: Omit<SystemPresence, "watchedSessions">) {
+  const { email: _email, ...user } = row.user!;
+  return { ts: row.ts, text: "", lastActivityAt: row.lastActivityAt, user };
+}
+
 describe("gateway presence audience", () => {
   test("shares people only with readers and filters their session references across hello, RPC, and activity events", async () => {
     await configureGatewayAuth(
@@ -83,6 +108,12 @@ describe("gateway presence audience", () => {
           restricted: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
           maintainer: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
           pairing: { sessions: { others: "none" }, agents: [], scopes: ["operator.pairing"] },
+          guest: { sessions: { others: "view" }, agents: "*", scopes: ["operator.sessions.write"] },
+          visitor: {
+            sessions: { others: "view" },
+            agents: "*",
+            scopes: ["operator.sessions.write"],
+          },
         },
       },
     );
@@ -90,10 +121,16 @@ describe("gateway presence audience", () => {
     const restricted = ensureProfileForEmail("restricted@example.com");
     setUserProfileRole(restricted.id, "restricted");
     setUserProfileRole(ensureProfileForEmail("admin@example.com").id, "maintainer");
-    setUserProfileRole(ensureProfileForEmail("watcher@example.com").id, "maintainer");
+    const watcherProfile = ensureProfileForEmail("watcher@example.com");
+    setUserProfileRole(watcherProfile.id, "maintainer");
+    setDisplayName(watcherProfile.id, "Presence Watcher");
     setUserProfileRole(ensureProfileForEmail("writer@example.com").id, "writer");
     setUserProfileRole(ensureProfileForEmail("pairing@example.com").id, "pairing");
+    const guestProfile = ensureProfileForEmail("guest@example.com");
+    setUserProfileRole(guestProfile.id, "writer");
+    setUserProfileRole(ensureProfileForEmail("visitor@example.com").id, "visitor");
     const sharedKey = "agent:main:presence-shared";
+    const guestKey = "agent:main:presence-guest";
     const sharedSessionId = randomUUID();
     const draftKey = "agent:main:presence-draft";
     const draftSessionId = randomUUID();
@@ -107,6 +144,7 @@ describe("gateway presence audience", () => {
     await withGatewayServer(async ({ port }) => {
       for (const [sessionKey, profileId, visibility, incognito] of [
         [sharedKey, creator.id, "shared", false],
+        [guestKey, guestProfile.id, "shared", false],
         [draftKey, creator.id, "draft", false],
         [incognitoKey, creator.id, "shared", true],
         [restrictedKey, restricted.id, "draft", false],
@@ -177,7 +215,12 @@ describe("gateway presence audience", () => {
           scopes,
           role,
           client,
-          deviceIdentityPath: path.join(identityDir, `${name}-${sockets.length}.sqlite`),
+          deviceIdentityPath: path.join(
+            identityDir,
+            `${name}-${sockets.length}`,
+            "client",
+            "credentials.sqlite",
+          ),
           browserOrigin: BROWSER_ORIGIN,
         });
         expect(connected.ok, `${name} connect: ${JSON.stringify(connected.error)}`).toBe(true);
@@ -189,10 +232,83 @@ describe("gateway presence audience", () => {
         };
       };
       try {
+        let guest = await openRecipient("guest", ["operator.sessions.write"]);
+        const activity = {
+          source: "activity",
+          includePeople: true,
+          includeOwnerSessionCounts: true,
+        };
+        const personActivity = { ...activity, involvingProfileId: creator.id };
+        expect(await rpcReq(guest.ws, "sessions.list", personActivity)).toMatchObject({
+          ok: true,
+          payload: { sessions: [{ key: sharedKey }] },
+        });
+        expect(await rpcReq(guest.ws, "sessions.list", activity)).toMatchObject({
+          ok: true,
+          payload: {
+            people: expect.arrayContaining([
+              expect.objectContaining({ identity: { type: "profile", id: creator.id } }),
+            ]),
+          },
+        });
+        // A changed current-role presentation claim retires the warmed connection.
+        const demoted = waitForWsClose(guest.ws, 1_000);
+        setUserProfileRole(guestProfile.id, "guest");
+        expect(await demoted).toBe(true);
+        guest = await openRecipient("guest", ["operator.sessions.write"]);
+        for (const method of ["users.list", "presence.query"]) {
+          expect(await rpcReq(guest.ws, method, {})).toMatchObject({
+            ok: false,
+            error: { code: "FORBIDDEN" },
+          });
+        }
+        // Online status stays visible to session readers, without device or activity detail.
+        const guestPresence = await rpcReq(guest.ws, "system-presence", {});
+        expect(guestPresence.ok).toBe(true);
+        if (!Value.Check(Type.Array(PresenceEntrySchema), guestPresence.payload)) {
+          throw new Error("demoted guest system-presence returned invalid presence rows");
+        }
+        for (const rows of [guest.hello.snapshot.presence, guestPresence.payload]) {
+          expect(rows.flatMap((row) => personOnlyViolations(row))).toEqual([]);
+        }
+        expect(await rpcReq(guest.ws, "sessions.describe", { key: sharedKey })).toMatchObject({
+          ok: true,
+          payload: { session: { sessionId: sharedSessionId } },
+        });
+        expect(await rpcReq(guest.ws, "sessions.list", personActivity)).toMatchObject({
+          ok: false,
+          error: { code: "FORBIDDEN" },
+        });
+        const afterDemotion = await rpcReq<SessionsListResult>(guest.ws, "sessions.list", activity);
+        expect(afterDemotion).toMatchObject({
+          ok: true,
+          payload: {
+            totalCount: 2,
+            people: [{ identity: { id: guestProfile.id } }],
+            owners: [{ id: guestProfile.id }],
+            ownerSessionCounts: [{ profileId: guestProfile.id, open: 1 }],
+            peopleSessionCount: 1,
+          },
+        });
+        expect(afterDemotion.payload?.sessions.map((session) => session.key)).toEqual(
+          expect.arrayContaining([guestKey, sharedKey]),
+        );
         const watcher = await openRecipient("watcher", ["operator.admin"]);
-        const idle = await openRecipient("idle", ["operator.read"]);
-        // A response on the watcher is a transport barrier, not a presence refresh.
-        expect((await rpcReq(watcher.ws, "health")).ok).toBe(true);
+        // Join publication itself: an RPC response can precede the coalescing window.
+        const firstConnect = onceMessage<{
+          type: string;
+          event: string;
+          payload: { presence: SystemPresence[] };
+        }>(
+          watcher.ws,
+          (frame) =>
+            frame.type === "event" &&
+            frame.event === "presence" &&
+            frame.payload.presence.some(
+              (entry) => entry.instanceId === "presence-idle" && entry.reason === "connect",
+            ),
+        );
+        const [idle] = await Promise.all([openRecipient("idle", ["operator.read"]), firstConnect]);
         expect
           .soft(watcher.events.at(-1), "first connect publishes without activity")
           .toEqual(
@@ -257,6 +373,7 @@ describe("gateway presence audience", () => {
             scopes: ["operator.admin"],
             allowed: [sharedKey, draftKey, incognitoKey, restrictedKey],
           },
+          { name: "visitor", scopes: ["operator.sessions.write"], allowed: [sharedKey] },
           { name: "pairing", scopes: ["operator.pairing"], allowed: [] },
           { name: "no-read", scopes: [], allowed: [] },
           { name: "node", scopes: [], allowed: [] },
@@ -314,6 +431,68 @@ describe("gateway presence audience", () => {
           }
           const presence = await rpcReq(recipient.ws, "system-presence");
           expect(presence.ok, `${scenario.name} system-presence scope`).toBe(canRead);
+          const query = await rpcReq<PresenceQueryResult>(
+            recipient.ws,
+            "presence.query",
+            scenario.name === "reader" ? { include: ["devices", "network"] } : {},
+          );
+          if (scenario.name === "visitor") {
+            expect(
+              (await rpcReq(recipient.ws, "presence.activity", {})).ok,
+              "guest reports its own activity",
+            ).toBe(true);
+          }
+          // Device and network inventory stays an operator.read surface.
+          const canQuery = canRead && scenario.name !== "visitor";
+          expect(query.ok, `${scenario.name} presence.query scope`).toBe(canQuery);
+          if (canQuery) {
+            expect(query.payload).toMatchObject({
+              status: "ok",
+              observedAt: expect.any(Number),
+              truncated: false,
+            });
+            const watcherPeople = query.payload?.people.filter(
+              (entry) => entry.profileId === watcherProfile.id,
+            );
+            expect(watcherPeople, `${scenario.name} reads one named person`).toEqual([
+              expect.objectContaining({ name: "Presence Watcher", online: true }),
+            ]);
+            if (scenario.name === "reader") {
+              expect(watcherPeople?.[0]).toMatchObject({
+                activity: {
+                  at: person.connectionLastActivityAt,
+                  source: "openclaw-interaction",
+                },
+                deviceCount: 1,
+                devices: [
+                  {
+                    kind: "client",
+                    connections: [
+                      {
+                        id: person.connectionId,
+                        clientId: CONTROL_UI_CLIENT.id,
+                        timeZone: "Europe/Vienna",
+                        network: { ip: "203.0.113.50" },
+                      },
+                    ],
+                  },
+                ],
+              });
+              const self = await rpcReq<PresenceQueryResult>(recipient.ws, "presence.query", {
+                action: "person",
+                person: "me",
+              });
+              expect(self).toMatchObject({
+                ok: true,
+                payload: {
+                  status: "ok",
+                  people: [{ profileId: ensureProfileForEmail("reader@example.com").id }],
+                },
+              });
+            }
+          } else {
+            expect(query.payload).toBeUndefined();
+          }
           recipients.push({ ...recipient, ...scenario, canRead, rpcPresence: presence.payload });
         }
 
@@ -334,7 +513,7 @@ describe("gateway presence audience", () => {
               frame.event === "presence" &&
               frame.payload.presence.some(
                 (entry) =>
-                  entry.instanceId === watcherInstanceId &&
+                  entry.user?.id === watcherProfile.id &&
                   entry.lastActivityAt !== undefined &&
                   entry.lastActivityAt >= typingStartedAt,
               ),
@@ -369,15 +548,30 @@ describe("gateway presence audience", () => {
             if (!Value.Check(Type.Array(PresenceEntrySchema), rows)) {
               throw new Error(`${recipient.name} ${surface} returned invalid presence rows`);
             }
-            const received = rows.find((entry) => entry.instanceId === watcherInstanceId);
+            const personOnly = recipient.name === "visitor";
+            const received = rows.find((entry) =>
+              personOnly
+                ? entry.user?.id === watcherProfile.id
+                : entry.instanceId === watcherInstanceId,
+            );
             const { watchedSessions, ...receivedPerson } = received ?? {};
+            const expected = surface === "presence event" ? activePerson : person;
             expect
               .soft(
                 receivedPerson,
                 `${recipient.name} ${surface} preserves the person and timestamp without hidden counts`,
               )
-              .toEqual(surface === "presence event" ? activePerson : person);
-            expect(rows.find((entry) => entry.instanceId === "presence-idle")).toEqual(idlePerson);
+              .toEqual(personOnly ? guestPresenceView(expected) : expected);
+            if (personOnly) {
+              expect(
+                rows.flatMap((row) => personOnlyViolations(row)),
+                `${surface} hides device, network, connection, and email fields from guests`,
+              ).toEqual([]);
+            } else {
+              expect(rows.find((entry) => entry.instanceId === "presence-idle")).toEqual(
+                idlePerson,
+              );
+            }
             expect
               .soft(
                 watchedSessions ?? [],
@@ -401,16 +595,26 @@ describe("gateway presence audience", () => {
         expect(preauthRead.payload).toBeUndefined();
         expect(unauthenticatedEvents).toEqual([]);
 
-        const liveIdleRows = async () => {
-          expect((await rpcReq(watcher.ws, "health")).ok).toBe(true);
-          return watcher.events
-            .at(-1)!
-            .filter(
-              (entry) => entry.user?.id === idlePerson.user?.id && entry.reason !== "disconnect",
-            );
+        const isLiveIdle = (entry: SystemPresence) =>
+          entry.user?.id === idlePerson.user?.id && entry.reason !== "disconnect";
+        const nextIdleRows = async (count: number) => {
+          const event = await onceMessage<{
+            type: string;
+            event: string;
+            payload: { presence: SystemPresence[] };
+          }>(
+            watcher.ws,
+            (frame) =>
+              frame.type === "event" &&
+              frame.event === "presence" &&
+              frame.payload.presence.filter(isLiveIdle).length === count,
+          );
+          return event.payload.presence.filter(isLiveIdle);
         };
-        const overlap = await openRecipient("idle", ["operator.read"]);
-        const overlappingRows = await liveIdleRows();
+        const [overlappingRows, overlap] = await Promise.all([
+          nextIdleRows(2),
+          openRecipient("idle", ["operator.read"]),
+        ]);
         expect.soft(overlappingRows, "overlapping connect publishes both sockets").toHaveLength(2);
         for (const entry of overlappingRows) {
           expect(entry.onlineSince).toBe(idlePerson.onlineSince);
@@ -420,40 +624,29 @@ describe("gateway presence audience", () => {
           [idle, 1],
           [overlap, 0],
         ] as const) {
-          const isLiveIdle = (entry: SystemPresence) =>
-            entry.user?.id === idlePerson.user?.id && entry.reason !== "disconnect";
           // A different socket's response cannot join this connection's server close.
-          const disconnected = onceMessage<{
-            type: string;
-            event: string;
-            payload: { presence: SystemPresence[] };
-          }>(
-            watcher.ws,
-            (frame) =>
-              frame.type === "event" &&
-              frame.event === "presence" &&
-              frame.payload.presence.filter(isLiveIdle).length === remaining,
-          );
+          const disconnected = nextIdleRows(remaining);
           const closed = once(connection.ws, "close");
           connection.ws.close();
-          const [, event] = await Promise.all([closed, disconnected]);
-          const rows = event.payload.presence.filter(isLiveIdle);
+          const [, rows] = await Promise.all([closed, disconnected]);
           expect(rows, "disconnect publishes only the surviving sockets").toHaveLength(remaining);
           if (remaining) {
             expect(rows[0]?.onlineSince).toBe(idlePerson.onlineSince);
           }
         }
-        const reconnected = await openRecipient("idle", ["operator.read"]);
+        const [reconnectedRows, reconnected] = await Promise.all([
+          nextIdleRows(1),
+          openRecipient("idle", ["operator.read"]),
+        ]);
         const returnedPerson = reconnected.hello.snapshot.presence.find(
           (entry) => entry.user?.id === idlePerson.user?.id && entry.reason === "connect",
         )!;
         expect(returnedPerson.onlineSince).toBeGreaterThan(idlePerson.onlineSince!);
         expect(returnedPerson.lastActivityAt).toBeUndefined();
         expect(returnedPerson.watchedSessions).toBeUndefined();
-        expect(
-          await liveIdleRows(),
-          "reconnect publishes without profile edit or activity",
-        ).toEqual([returnedPerson]);
+        expect(reconnectedRows, "reconnect publishes without profile edit or activity").toEqual([
+          returnedPerson,
+        ]);
         for (const recipient of recipients.filter(({ canRead }) => !canRead)) {
           expect((await rpcReq(recipient.ws, "health")).ok).toBe(true);
           expect(recipient.events, `${recipient.name} connection-driven frames`).toEqual([]);

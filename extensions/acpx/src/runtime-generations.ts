@@ -62,9 +62,7 @@ export class AcpxGenerationRegistry {
   }
 
   currentGeneration(resource: string): AcpxGeneration {
-    if (this.stopping) {
-      throw new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "ACP runtime is shut down.");
-    }
+    this.assertRunning();
     let generation = this.generations.get(resource);
     if (!generation) {
       const fresh = this.sessionStore.isFresh(resource);
@@ -80,7 +78,7 @@ export class AcpxGenerationRegistry {
         retired: false,
         activeOperations: 0,
         pendingAdmissions: 0,
-        admissionState: "unadmitted",
+        admitted: false,
         activeRecordOperations: new Map(),
         closedRecordIds: new Set(),
         records: new Map(),
@@ -102,16 +100,9 @@ export class AcpxGenerationRegistry {
     generation.pendingAdmissions += 1;
     try {
       return await generation.ensureQueue.enqueue(resource + "\u0000" + generation.id, async () => {
-        try {
-          const result = await run(generation);
-          generation.admissionState = "admitted";
-          return result;
-        } catch (error) {
-          if (generation.admissionState !== "admitted") {
-            generation.admissionState = "failed";
-          }
-          throw error;
-        }
+        const result = await run(generation);
+        generation.admitted = true;
+        return result;
       });
     } finally {
       generation.pendingAdmissions -= 1;
@@ -173,13 +164,13 @@ export class AcpxGenerationRegistry {
   private releaseIdleGeneration(generation: AcpxGeneration): void {
     if (
       !generation.retired &&
-      (generation.closeCompleted || generation.admissionState === "failed") &&
+      (generation.closeCompleted || !generation.admitted) &&
       generation.pendingAdmissions === 0 &&
       generation.activeOperations === 0 &&
       generation.records.size === 0 &&
       this.generations.get(generation.resource) === generation
     ) {
-      // Empty failed admission owns no reset intent or persistent-state mutation.
+      // Empty reads and failed admissions own no reset intent or persistent-state mutation.
       generation.retired = true;
       this.generations.delete(generation.resource);
     }

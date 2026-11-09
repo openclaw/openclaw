@@ -42,10 +42,6 @@ type TokenCredentialParams<TAccount extends ResolvedCredentialAccount> = Omit<
   };
 };
 
-function hasConfiguredCredentialField(value: unknown): boolean {
-  return hasConfiguredSecretInput(value);
-}
-
 /** Build a declarative token/secret setup step while preserving channel-owned patch semantics. */
 export function defineTokenCredential<TAccount extends ResolvedCredentialAccount>(
   params: TokenCredentialParams<TAccount>,
@@ -71,7 +67,7 @@ export function defineTokenCredential<TAccount extends ResolvedCredentialAccount
       const config = account.config as Record<string, unknown>;
       const hasConfiguredValue =
         resolveHasConfiguredValue?.(account) ??
-        configuredFields.some((field) => hasConfiguredCredentialField(config[field]));
+        configuredFields.some((field) => hasConfiguredSecretInput(config[field]));
       const inspectedResolvedValue = resolvedValue?.(account);
       return {
         accountConfigured:

@@ -1,41 +1,31 @@
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import type {
   FileEntry,
   SessionEntry,
   SessionHeader,
+  SessionMessageEntry,
 } from "../../agents/sessions/session-manager-types.js";
 import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
-const sessionEntryTypeSchema = z.enum([
-  "message",
-  "thinking_level_change",
-  "model_change",
-  "compaction",
-  "reset",
-  "branch_summary",
-  "custom",
-  "custom_message",
-  "label",
-  "session_info",
-]);
-const readableContentSchema = z.union([z.string(), z.array(z.looseObject({ type: z.string() }))]);
+const readableContentSchema = z.union([z.string(), z.array(z.object({ type: z.string() }))]);
 const readableMessageSchema = z.discriminatedUnion("role", [
-  z.looseObject({ role: z.literal("user"), content: readableContentSchema }),
-  z.looseObject({ role: z.literal("assistant"), content: readableContentSchema }),
-  z.looseObject({
+  z.object({ role: z.literal("user"), content: readableContentSchema }),
+  z.object({ role: z.literal("assistant"), content: readableContentSchema }),
+  z.object({
     role: z.literal("toolResult"),
     toolCallId: z.string(),
     toolName: z.string(),
     isError: z.boolean(),
     content: z.array(z.unknown()),
   }),
-  z.looseObject({
+  z.object({
     role: z.literal("custom"),
     customType: z.string(),
     content: readableContentSchema,
   }),
-  z.looseObject({
+  z.object({
     role: z.literal("bashExecution"),
     command: z.string(),
     output: z.string(),
@@ -47,66 +37,69 @@ const indexedSessionEntryBaseShape = {
   timestamp: z.string().optional(),
 };
 const indexedSessionEntrySchema = z.discriminatedUnion("type", [
-  z.looseObject({
+  z.object({
     ...indexedSessionEntryBaseShape,
     type: z.literal("message"),
     message: readableMessageSchema,
   }),
-  z.looseObject({
+  z.object({
     ...indexedSessionEntryBaseShape,
     type: z.literal("thinking_level_change"),
     thinkingLevel: z.string().min(1),
   }),
-  z.looseObject({
+  z.object({
     ...indexedSessionEntryBaseShape,
     type: z.literal("model_change"),
     provider: z.string().min(1),
     modelId: z.string().min(1),
   }),
-  z.looseObject({
+  z.object({
     ...indexedSessionEntryBaseShape,
     type: z.literal("compaction"),
     summary: z.string(),
     firstKeptEntryId: z.string().min(1),
     tokensBefore: z.custom<number>((value) => typeof value === "number"),
   }),
-  z.looseObject({
+  z.object({
     ...indexedSessionEntryBaseShape,
     type: z.literal("reset"),
     reason: z.coerce.string().pipe(z.enum(["new", "reset", "idle", "daily", "cron-stale"])),
     firstKeptEntryId: z.string().optional(),
   }),
-  z.looseObject({
+  z.object({
     ...indexedSessionEntryBaseShape,
     type: z.literal("branch_summary"),
     fromId: z.string(),
     summary: z.string(),
   }),
-  z.looseObject({
+  z.object({
     ...indexedSessionEntryBaseShape,
     type: z.literal("custom"),
     customType: z.string().min(1),
   }),
-  z.looseObject({
+  z.object({
     ...indexedSessionEntryBaseShape,
     type: z.literal("custom_message"),
     customType: z.string().min(1),
     content: readableContentSchema,
     display: z.boolean(),
   }),
-  z.looseObject({
+  z.object({
     ...indexedSessionEntryBaseShape,
     type: z.literal("label"),
     targetId: z.string().min(1),
     label: z.string().optional(),
   }),
-  z.looseObject({
+  z.object({
     ...indexedSessionEntryBaseShape,
     type: z.literal("session_info"),
     name: z.string().optional(),
   }),
 ]);
-const parentLinkedOpaqueEntrySchema = z.looseObject({
+const sessionEntryTypeSchema = z.enum(
+  indexedSessionEntrySchema.options.flatMap((entry) => [...entry.shape.type.values]),
+);
+const parentLinkedOpaqueEntrySchema = z.object({
   type: z
     .unknown()
     .optional()
@@ -114,7 +107,7 @@ const parentLinkedOpaqueEntrySchema = z.looseObject({
   id: z.string().min(1),
   parentId: z.union([z.string(), z.null()]),
 });
-const opaqueLeafEntrySchema = z.looseObject({
+const opaqueLeafEntrySchema = z.object({
   type: z.literal("leaf"),
   id: z.string().min(1),
   parentId: z.union([z.string(), z.null()]),
@@ -122,7 +115,15 @@ const opaqueLeafEntrySchema = z.looseObject({
   appendParentId: z.union([z.string(), z.null()]).optional(),
   appendMode: z.literal("side").optional(),
 });
-const sessionHeaderSchema = z.looseObject({ type: z.literal("session"), id: z.string() });
+const sessionHeaderSchema = z.object({ type: z.literal("session"), id: z.string() });
+
+/** Legacy writers could repeat the same header with a different timestamp. */
+export function equivalentLegacySessionHeaders(
+  first: Record<string, unknown>,
+  next: Record<string, unknown>,
+): boolean {
+  return isDeepStrictEqual({ ...first, timestamp: undefined }, { ...next, timestamp: undefined });
+}
 
 export function findSessionTranscriptHeader(entries: Iterable<unknown>): SessionHeader | undefined {
   for (const entry of entries) {
@@ -142,8 +143,13 @@ export function assertCurrentSessionTranscriptHeader(header: SessionHeader | und
   }
 }
 
-function isSessionEntryType(type: unknown): boolean {
-  return sessionEntryTypeSchema.safeParse(type).success;
+export function isReadableSessionMessage(
+  message: unknown,
+): message is Extract<
+  SessionMessageEntry["message"],
+  { role: z.infer<typeof readableMessageSchema>["role"] }
+> {
+  return readableMessageSchema.safeParse(message).success;
 }
 
 export function isIndexedSessionEntry(entry: unknown): entry is SessionEntry {
@@ -154,19 +160,15 @@ function isReadableContent(value: unknown): boolean {
   return readableContentSchema.safeParse(value).success;
 }
 
-function isReadableMessage(value: unknown): boolean {
-  return readableMessageSchema.safeParse(value).success;
-}
-
 function isReadableLegacySessionEntry(value: unknown): value is FileEntry {
   const message = isRecord(value) && value.type === "message" ? value.message : undefined;
   return (
     isRecord(value) &&
-    isSessionEntryType(value.type) &&
+    sessionEntryTypeSchema.safeParse(value.type).success &&
     (value.type !== "message" ||
       (isRecord(message) && message.role === "hookMessage"
         ? isReadableContent(message.content)
-        : isReadableMessage(message)))
+        : readableMessageSchema.safeParse(message).success))
   );
 }
 
@@ -227,7 +229,7 @@ export function classifySessionFileEntry(rawEntry: unknown, sourceVersion: numbe
   return { entry, recognized: false as const };
 }
 
-export function partitionSessionFileEntries(entries: readonly FileEntry[]): {
+export function partitionSessionFileEntries(entries: readonly unknown[]): {
   fileEntries: FileEntry[];
   opaqueEntries: Array<{ index: number; record: unknown }>;
   fileEntriesByOriginalIndex: Array<FileEntry | undefined>;
@@ -239,9 +241,9 @@ export function partitionSessionFileEntries(entries: readonly FileEntry[]): {
   const sourceVersion = header?.version ?? 1;
   let hasHeader = false;
   for (const [originalIndex, rawEntry] of entries.entries()) {
-    if (!hasHeader && sessionHeaderSchema.safeParse(rawEntry).success) {
-      fileEntries.push(rawEntry);
-      fileEntriesByOriginalIndex[originalIndex] = rawEntry;
+    if (!hasHeader && header !== undefined && rawEntry === header) {
+      fileEntries.push(header);
+      fileEntriesByOriginalIndex[originalIndex] = header;
       hasHeader = true;
       continue;
     }

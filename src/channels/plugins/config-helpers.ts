@@ -1,8 +1,3 @@
-/**
- * Channel config mutation helpers.
- *
- * Updates account enabled state and detects configured secret-like values.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveAccountKey,
@@ -122,13 +117,15 @@ export function deleteAccountFromConfigSection(params: {
   const accountId = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.sectionKey] as ChannelSection | undefined;
-  const storedAccountKey = resolveChannelAccountKey(
-    base?.accounts,
-    accountId,
-    params.sectionKey,
-    (id) => id,
-    params.accountKeyPolicy,
-  );
+  const resolveStoredKey = (accounts: ChannelSection["accounts"]) =>
+    resolveChannelAccountKey(
+      accounts,
+      accountId,
+      params.sectionKey,
+      (id) => id,
+      params.accountKeyPolicy,
+    );
+  const storedAccountKey = resolveStoredKey(base?.accounts);
   if (!base) {
     return params.cfg;
   }
@@ -140,13 +137,7 @@ export function deleteAccountFromConfigSection(params: {
 
   if (storedAccountKey !== undefined) {
     delete accounts[storedAccountKey];
-    const remainingKey = resolveChannelAccountKey(
-      accounts,
-      accountId,
-      params.sectionKey,
-      (id) => id,
-      params.accountKeyPolicy,
-    );
+    const remainingKey = resolveStoredKey(accounts);
     if (remainingKey !== undefined) {
       throw new Error(
         `Cannot delete account "${accountId}": stored keys "${storedAccountKey}" and "${remainingKey}" resolve to the same account. Resolve the collision before deleting.`,

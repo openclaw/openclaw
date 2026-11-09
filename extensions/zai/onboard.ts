@@ -1,4 +1,3 @@
-// Zai setup module handles plugin onboarding behavior.
 import {
   applyProviderConfigWithModelCatalogPreset,
   applyProviderConnectionConfig,
@@ -42,7 +41,7 @@ export function resolveZaiModelId(params?: {
 function applyZaiPreset(
   cfg: OpenClawConfig,
   params?: { endpoint?: string; modelId?: string },
-  primaryModelRef?: string,
+  setPrimaryModel = false,
   applyPreset = applyProviderConfigWithModelCatalogPreset,
 ): OpenClawConfig {
   const baseUrl = resolveZaiPresetBaseUrl(cfg, params?.endpoint);
@@ -54,7 +53,7 @@ function applyZaiPreset(
     baseUrl,
     catalogModels: buildZaiCatalogModels,
     aliases: [{ modelRef, alias: "GLM" }],
-    primaryModelRef,
+    primaryModelRef: setPrimaryModel ? modelRef : undefined,
   });
 }
 
@@ -69,24 +68,19 @@ export function applyZaiConfig(
   cfg: OpenClawConfig,
   params?: { endpoint?: string; modelId?: string },
 ): OpenClawConfig {
-  const baseUrl = resolveZaiPresetBaseUrl(cfg, params?.endpoint);
-  const modelId = resolveZaiModelId({ ...params, baseUrl });
-  const modelRef = modelId === ZAI_DEFAULT_MODEL_ID ? ZAI_DEFAULT_MODEL_REF : `zai/${modelId}`;
-  return applyZaiPreset(cfg, params, modelRef);
+  return applyZaiPreset(cfg, params, true);
 }
 
 export function applyZaiProviderConnectionConfig(
   cfg: OpenClawConfig,
   params?: { endpoint?: string; modelId?: string },
 ): OpenClawConfig {
-  return applyZaiPreset(cfg, params, undefined, applyProviderConnectionConfig);
+  return applyZaiPreset(cfg, params, false, applyProviderConnectionConfig);
 }
 
 export function applyZaiConnectionConfig(
   cfg: OpenClawConfig,
   params?: { endpoint?: string; modelId?: string },
 ): OpenClawConfig {
-  const baseUrl = resolveZaiPresetBaseUrl(cfg, params?.endpoint);
-  const modelId = resolveZaiModelId({ ...params, baseUrl });
-  return applyZaiPreset(cfg, params, `zai/${modelId}`, applyProviderConnectionConfig);
+  return applyZaiPreset(cfg, params, true, applyProviderConnectionConfig);
 }

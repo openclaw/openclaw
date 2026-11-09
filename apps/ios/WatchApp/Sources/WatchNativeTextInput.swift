@@ -22,12 +22,6 @@ enum WatchNativeTextInput {
     }
 
     private static func stringValue(_ result: Any) -> String? {
-        if let string = result as? String {
-            return string
-        }
-        if let attributed = result as? NSAttributedString {
-            return attributed.string
-        }
-        return nil
+        (result as? String) ?? (result as? NSAttributedString)?.string
     }
 }

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { tryResolvePathCaseInsensitive } from "../../infra/path-case.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { isSameFixedSessionStoreConfig } from "./session-store-config.js";
+import { resolvePersistedSessionStoreOwnerForTarget } from "./session-store-owner.js";
 
 describe("fixed session store identity", () => {
   it.runIf(process.platform !== "win32")(
@@ -31,6 +32,32 @@ describe("fixed session store identity", () => {
             process.env,
           ),
         ).toBe(false);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each(["file/../other.sqlite", "file/."])(
+    "retains the retired owner for an unresolvable symlink target %s",
+    async (linkTarget) => {
+      await withTestDir({ prefix: "openclaw-fixed-store-invalid-" }, async (root) => {
+        const ownedStore = path.join(root, "future", "sessions.sqlite");
+        const alias = path.join(root, "alias.sqlite");
+        await fs.writeFile(path.join(root, "file"), "not a directory");
+        await fs.symlink(linkTarget, alias);
+
+        expect(
+          resolvePersistedSessionStoreOwnerForTarget({
+            config: {
+              agents: {
+                entries: { active: {} },
+                defaults: { sessionStore: { agentId: "retired" } },
+              },
+              session: { store: ownedStore },
+            },
+            sessionKey: "main",
+            storePath: alias,
+          }),
+        ).toEqual({ kind: "retired", agentId: "retired" });
       });
     },
   );

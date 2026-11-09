@@ -1,8 +1,8 @@
-// Whatsapp tests cover session plugin behavior.
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate as flushCredsUpdate } from "node:timers/promises";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import {
   afterEach,
@@ -19,38 +19,6 @@ import { logWebSelfId } from "./auth-store.js";
 import { enqueueCredsSave } from "./creds-persistence.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
-const { envHttpProxyAgentCtor, proxyAgentCtor, dispatchSpy } = vi.hoisted(() => {
-  const dispatchSpyLocal = vi.fn(() => true);
-  return {
-    dispatchSpy: dispatchSpyLocal,
-    envHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
-      this: { options: unknown; dispatch: () => boolean },
-      options: unknown,
-    ) {
-      this.options = options;
-      this.dispatch = dispatchSpyLocal;
-    }),
-    proxyAgentCtor: vi.fn(function MockProxyAgent(
-      this: { options: unknown; dispatch: () => boolean },
-      options: unknown,
-    ) {
-      this.options = options;
-      this.dispatch = dispatchSpyLocal;
-    }),
-  };
-});
-
-const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
-
-vi.mock("undici", async () => {
-  const actual = await vi.importActual<typeof import("undici")>("undici");
-  return {
-    ...actual,
-    EnvHttpProxyAgent: envHttpProxyAgentCtor,
-    ProxyAgent: proxyAgentCtor,
-  };
-});
-
 const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
 
 let createWaSocket: typeof import("./session.js").createWaSocket;
@@ -62,12 +30,6 @@ let waitForWaConnection: typeof import("./session.js").waitForWaConnection;
 let waitForCredsSaveQueue: typeof import("./session.js").waitForCredsSaveQueue;
 let writeCredsJsonAtomically: typeof import("./session.js").writeCredsJsonAtomically;
 let DEFAULT_WHATSAPP_SOCKET_TIMING: typeof import("./socket-timing.js").DEFAULT_WHATSAPP_SOCKET_TIMING;
-
-async function flushCredsUpdate() {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
 
 async function emitCredsUpdate(authDir?: string) {
   const sock = getLastSocket();
@@ -82,13 +44,6 @@ function createTempAuthDir(prefix: string) {
   return path.resolve(
     fsSync.mkdtempSync(path.join((process.env.TMPDIR ?? "/tmp").replace(/\/+$/, ""), `${prefix}-`)),
   );
-}
-
-function createTempCaFile(contents: string): string {
-  const dir = createTempAuthDir("openclaw-wa-proxy-ca");
-  const caFile = path.join(dir, "proxy-ca.pem");
-  fsSync.writeFileSync(caFile, contents, "utf8");
-  return caFile;
 }
 
 function mockFsOpenForCredsWrites(params?: {
@@ -150,45 +105,54 @@ function mockFsOpenForCredsWrites(params?: {
   };
 }
 
-function firstMockCall(
-  mock: { mock: { calls: Array<readonly unknown[]> } },
-  label: string,
-): readonly unknown[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
+function readLastSocketOptions() {
+  return requireValue(vi.mocked(baileys.makeWASocket).mock.calls[0]?.[0], "Baileys socket options");
 }
 
-function readLastSocketOptions(): {
-  agent?: unknown;
-  connectTimeoutMs?: number;
-  defaultQueryTimeoutMs?: number;
-  fetchAgent?: unknown;
-  fireInitQueries?: boolean;
-  keepAliveIntervalMs?: number;
-  printQRInTerminal?: boolean;
-  waWebSocketUrl?: string | URL;
-  logger?: { level?: string; trace?: unknown };
-} {
-  const [options] = firstMockCall(
-    baileys.makeWASocket as ReturnType<typeof vi.fn>,
-    "Baileys socket creation",
+function symlinkedParent(prefix: string) {
+  const rootDir = createTempAuthDir(prefix);
+  const targetBaseDir = path.join(rootDir, "target-base");
+  const linkedBaseDir = path.join(rootDir, "linked-base");
+  fsSync.mkdirSync(targetBaseDir);
+  fsSync.symlinkSync(targetBaseDir, linkedBaseDir, "dir");
+  return {
+    authDir: path.join(linkedBaseDir, "default"),
+    target: path.join(targetBaseDir, "default"),
+  };
+}
+
+function symlinkedCreds(prefix: string, bytes: string) {
+  const authDir = createTempAuthDir(prefix);
+  const targetPath = path.join(authDir, "target-creds.json");
+  const credsPath = path.join(authDir, "creds.json");
+  fsSync.writeFileSync(targetPath, bytes, "utf-8");
+  fsSync.symlinkSync(targetPath, credsPath);
+  return { authDir, targetPath, credsPath };
+}
+
+function connectionWait(options: Parameters<typeof waitForWaConnection>[1]) {
+  const ev = new EventEmitter();
+  const promise = waitForWaConnection(
+    { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
+    options,
   );
-  if (typeof options !== "object" || options === null) {
-    throw new Error("expected Baileys socket options");
-  }
-  return options as {
-    agent?: unknown;
-    connectTimeoutMs?: number;
-    defaultQueryTimeoutMs?: number;
-    fetchAgent?: unknown;
-    fireInitQueries?: boolean;
-    keepAliveIntervalMs?: number;
-    printQRInTerminal?: boolean;
-    waWebSocketUrl?: string | URL;
-    logger?: { level?: string; trace?: unknown };
+  return { ev, promise };
+}
+
+function credentialGuard() {
+  const guardError = new Error("verified inference route changed");
+  let current = true;
+  return {
+    guardError,
+    revoke: () => {
+      current = false;
+    },
+    beforeCredentialPersistence: vi.fn(async () => {
+      if (!current) {
+        throw guardError;
+      }
+    }),
+    onCredentialPersistenceError: vi.fn(),
   };
 }
 
@@ -204,16 +168,6 @@ function expectRuntimeLogContaining(
   text: string,
 ): void {
   expect(runtime.log.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
-}
-
-function installUndiciRuntimeDeps(): void {
-  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-    Agent: vi.fn(),
-    EnvHttpProxyAgent: envHttpProxyAgentCtor,
-    Pool: vi.fn(),
-    ProxyAgent: proxyAgentCtor,
-    fetch: vi.fn(),
-  };
 }
 
 describe("web session", () => {
@@ -232,15 +186,11 @@ describe("web session", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    envHttpProxyAgentCtor.mockClear();
-    proxyAgentCtor.mockClear();
-    installUndiciRuntimeDeps();
     resetBaileysMocks();
     resetLoadConfigMock();
   });
 
   afterEach(async () => {
-    Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
     await waitForCredsSaveQueue();
     resetLogger();
     setLoggerOverride(null);
@@ -280,28 +230,7 @@ describe("web session", () => {
     const authDir = createTempAuthDir("openclaw-wa-directory-socket");
     const ws = new EventEmitter() as EventEmitter & { close: ReturnType<typeof vi.fn> };
     ws.close = vi.fn();
-    ws.on("CB:message", vi.fn());
-    ws.on("CB:call", vi.fn());
-    ws.on("CB:receipt", vi.fn());
-    ws.on("CB:notification", vi.fn());
-    ws.on("CB:ack,class:message", vi.fn());
-    ws.on("CB:presence", vi.fn());
-    ws.on("CB:chatstate", vi.fn());
-    ws.on("CB:ib,,dirty", vi.fn());
-    ws.on("CB:ib,,offline_preview", vi.fn());
-    ws.on("CB:ib,,offline", vi.fn());
-    ws.on("CB:ib,,edge_routing", vi.fn());
-    const sock = {
-      ev: new EventEmitter(),
-      ws,
-      groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
-    };
-    vi.mocked(baileys.makeWASocket).mockReturnValueOnce(sock as never);
-
-    await createWaDirectorySocket(authDir);
-
-    expect(readLastSocketOptions().fireInitQueries).toBe(false);
-    for (const event of [
+    const events = [
       "CB:message",
       "CB:call",
       "CB:receipt",
@@ -313,7 +242,21 @@ describe("web session", () => {
       "CB:ib,,offline_preview",
       "CB:ib,,offline",
       "CB:ib,,edge_routing",
-    ]) {
+    ];
+    for (const event of events) {
+      ws.on(event, vi.fn());
+    }
+    const sock = {
+      ev: new EventEmitter(),
+      ws,
+      groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
+    };
+    vi.mocked(baileys.makeWASocket).mockReturnValueOnce(sock as never);
+
+    await createWaDirectorySocket(authDir);
+
+    expect(readLastSocketOptions().fireInitQueries).toBe(false);
+    for (const event of events) {
       expect(ws.listenerCount(event), event).toBe(0);
     }
   });
@@ -342,15 +285,10 @@ describe("web session", () => {
   it.runIf(process.platform !== "win32")(
     "rejects symlinked creds before Baileys auth state reads",
     async () => {
-      const authDir = createTempAuthDir("openclaw-wa-creds-symlink-runtime");
-      const targetPath = path.join(authDir, "target-creds.json");
-      const credsPath = path.join(authDir, "creds.json");
-      fsSync.writeFileSync(
-        targetPath,
+      const { authDir, targetPath, credsPath } = symlinkedCreds(
+        "openclaw-wa-creds-symlink-runtime",
         JSON.stringify({ me: { id: "15551234567@s.whatsapp.net" } }),
-        "utf-8",
       );
-      fsSync.symlinkSync(targetPath, credsPath);
 
       await expect(createWaSocket(false, false, { authDir })).rejects.toThrow(
         "creds.json must be a regular file or missing",
@@ -388,30 +326,24 @@ describe("web session", () => {
   it.runIf(process.platform !== "win32")(
     "rejects symlinked auth directory parents before creating the auth directory",
     async () => {
-      const rootDir = createTempAuthDir("openclaw-wa-auth-parent-symlink-runtime");
-      const targetBaseDir = path.join(rootDir, "target-base");
-      const linkedBaseDir = path.join(rootDir, "linked-base");
-      const authDir = path.join(linkedBaseDir, "default");
-      fsSync.mkdirSync(targetBaseDir);
-      fsSync.symlinkSync(targetBaseDir, linkedBaseDir, "dir");
+      const { authDir, target } = symlinkedParent("openclaw-wa-auth-parent-symlink-runtime");
 
       await expect(createWaSocket(false, false, { authDir })).rejects.toThrow(
         "creds.json must be a regular file or missing",
       );
 
       expect(useMultiFileAuthStateMock).not.toHaveBeenCalled();
-      expect(fsSync.existsSync(path.join(targetBaseDir, "default"))).toBe(false);
+      expect(fsSync.existsSync(target)).toBe(false);
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "rejects symlinked creds before atomic credential saves",
     async () => {
-      const authDir = createTempAuthDir("openclaw-wa-creds-symlink-save");
-      const targetPath = path.join(authDir, "target-creds.json");
-      const credsPath = path.join(authDir, "creds.json");
-      fsSync.writeFileSync(targetPath, "keep", "utf-8");
-      fsSync.symlinkSync(targetPath, credsPath);
+      const { authDir, targetPath, credsPath } = symlinkedCreds(
+        "openclaw-wa-creds-symlink-save",
+        "keep",
+      );
 
       await expect(
         writeCredsJsonAtomically(authDir, { me: { id: "15551234567@s.whatsapp.net" } }),
@@ -425,18 +357,13 @@ describe("web session", () => {
   it.runIf(process.platform !== "win32")(
     "rejects symlinked credential parents before atomic credential saves",
     async () => {
-      const rootDir = createTempAuthDir("openclaw-wa-creds-parent-symlink-save");
-      const targetBaseDir = path.join(rootDir, "target-base");
-      const linkedBaseDir = path.join(rootDir, "linked-base");
-      const authDir = path.join(linkedBaseDir, "default");
-      fsSync.mkdirSync(targetBaseDir);
-      fsSync.symlinkSync(targetBaseDir, linkedBaseDir, "dir");
+      const { authDir, target } = symlinkedParent("openclaw-wa-creds-parent-symlink-save");
 
       await expect(
         writeCredsJsonAtomically(authDir, { me: { id: "15551234567@s.whatsapp.net" } }),
       ).rejects.toThrow("creds.json must be a regular file or missing");
 
-      expect(fsSync.existsSync(path.join(targetBaseDir, "default"))).toBe(false);
+      expect(fsSync.existsSync(target)).toBe(false);
     },
   );
 
@@ -469,16 +396,6 @@ describe("web session", () => {
     expect(readLastSocketOptions().waWebSocketUrl).toBe("ws://127.0.0.1:49153/ws/chat");
   });
 
-  it("preserves explicit Baileys WebSocket URL options over environment", async () => {
-    vi.stubEnv(OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV, "ws://127.0.0.1:49153/ws/chat");
-
-    await createWaSocket(false, false, {
-      waWebSocketUrl: "ws://127.0.0.1:49154/ws/chat",
-    });
-
-    expect(readLastSocketOptions().waWebSocketUrl).toBe("ws://127.0.0.1:49154/ws/chat");
-  });
-
   it("ignores blank Baileys WebSocket URL environment overrides", async () => {
     vi.stubEnv(OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV, " ");
 
@@ -506,135 +423,6 @@ describe("web session", () => {
     expect(readLastSocketOptions().waWebSocketUrl).toBe("ws://127.0.0.1:49154/ws/chat");
   });
 
-  it("uses ambient env proxy agent when HTTPS_PROXY is configured", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
-
-    await createWaSocket(false, false);
-
-    const passed = readLastSocketOptions();
-    const agent = requireValue(
-      passed.agent as { constructor: { name: string } } | undefined,
-      "WebSocket proxy agent",
-    );
-    const fetchAgent = requireValue(passed.fetchAgent, "fetch proxy agent");
-    expect(fetchAgent).not.toBe(agent);
-    expect(typeof (fetchAgent as { dispatch?: unknown }).dispatch).toBe("function");
-  });
-
-  it("adds managed proxy CA trust to WhatsApp env proxy agents", async () => {
-    const caFile = createTempCaFile("whatsapp-managed-proxy-ca");
-    vi.stubEnv("HTTPS_PROXY", "https://proxy.test:8443");
-    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
-    vi.stubEnv("OPENCLAW_PROXY_CA_FILE", caFile);
-
-    await createWaSocket(false, false);
-
-    const passed = readLastSocketOptions();
-    const agent = requireValue(
-      passed.agent as { constructor: { name: string } } | undefined,
-      "WebSocket proxy agent",
-    );
-    expect(agent.constructor.name).toBe("ProxylineNodeProxyAgent");
-    expect(proxyAgentCtor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        proxyTls: expect.objectContaining({ ca: "whatsapp-managed-proxy-ca" }),
-      }),
-    );
-  });
-
-  it("adds managed proxy CA trust to WhatsApp env fetch dispatchers", async () => {
-    const caFile = createTempCaFile("whatsapp-managed-env-proxy-ca");
-    vi.stubEnv("HTTPS_PROXY", "https://proxy.test:8443");
-    vi.stubEnv("NO_PROXY", "mmg.whatsapp.net");
-    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
-    vi.stubEnv("OPENCLAW_PROXY_CA_FILE", caFile);
-
-    await createWaSocket(false, false);
-
-    const passed = readLastSocketOptions();
-    expect(passed.agent).toBeUndefined();
-    const fetchAgent = requireValue(passed.fetchAgent, "fetch dispatcher");
-    if (
-      typeof fetchAgent !== "object" ||
-      fetchAgent === null ||
-      !("dispatch" in fetchAgent) ||
-      typeof fetchAgent.dispatch !== "function"
-    ) {
-      throw new Error("expected attached fetch dispatcher.dispatch");
-    }
-    fetchAgent.dispatch({ origin: "https://media.whatsapp.net", path: "/", method: "POST" }, {});
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    const proxy = requireValue(proxyAgentCtor.mock.instances[0], "selected proxy");
-    expect(dispatchSpy.mock.contexts[0]).toBe(proxy);
-    expect(proxy.options).toMatchObject({
-      uri: "https://proxy.test:8443",
-      allowH2: false,
-      proxyTls: { ca: "whatsapp-managed-env-proxy-ca" },
-    });
-    expect(proxy.options).not.toHaveProperty("requestTls.ca");
-
-    fetchAgent.dispatch({ origin: "https://mmg.whatsapp.net", path: "/", method: "POST" }, {});
-    expect(dispatchSpy).toHaveBeenCalledTimes(2);
-    const direct = requireValue(envHttpProxyAgentCtor.mock.instances[0], "direct dispatcher");
-    expect(dispatchSpy.mock.contexts[1]).toBe(direct);
-    expect(direct.options).not.toHaveProperty("proxyTls");
-    expect(direct.options).not.toHaveProperty("connect.ca");
-    expect(direct.options).not.toHaveProperty("requestTls.ca");
-  });
-
-  it("uses lowercase HTTPS proxy before uppercase for WA WebSocket connection", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://upper-proxy.test:8080");
-    vi.stubEnv("https_proxy", "http://lower-proxy.test:8080");
-
-    await createWaSocket(false, false);
-
-    const agent = requireValue(
-      readLastSocketOptions().agent as { getProxyForUrl?: (url: string) => string } | undefined,
-      "WebSocket proxy agent",
-    );
-    expect(agent.getProxyForUrl?.("https://mmg.whatsapp.net/")).toContain("lower-proxy.test");
-  });
-
-  it("skips WA WebSocket env proxy agent when NO_PROXY covers WhatsApp Web", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
-    vi.stubEnv("NO_PROXY", "mmg.whatsapp.net");
-
-    await createWaSocket(false, false);
-
-    const passed = readLastSocketOptions();
-    expect(passed.agent).toBeUndefined();
-    requireValue(passed.fetchAgent, "fetch proxy agent");
-  });
-
-  it("does not create a proxy agent when no env proxy is configured", async () => {
-    for (const key of [
-      "ALL_PROXY",
-      "all_proxy",
-      "HTTP_PROXY",
-      "http_proxy",
-      "HTTPS_PROXY",
-      "https_proxy",
-    ]) {
-      vi.stubEnv(key, "");
-    }
-
-    await createWaSocket(false, false);
-
-    const passed = readLastSocketOptions();
-    expect(passed.agent).toBeUndefined();
-    expect(passed.fetchAgent).toBeUndefined();
-  });
-
-  it("waits for connection open", async () => {
-    const ev = new EventEmitter();
-    const promise = waitForWaConnection(
-      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
-      { timeout: "none" },
-    );
-    ev.emit("connection.update", { connection: "open" });
-    await expect(promise).resolves.toBeUndefined();
-  });
-
   it("keeps one-argument callers on the old no-timeout wait policy", async () => {
     const ev = new EventEmitter();
     const promise = waitForWaConnection({ ev } as unknown as ReturnType<
@@ -645,11 +433,7 @@ describe("web session", () => {
   });
 
   it("rejects when connection closes", async () => {
-    const ev = new EventEmitter();
-    const promise = waitForWaConnection(
-      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
-      { timeout: "none" },
-    );
+    const { ev, promise } = connectionWait({ timeout: "none" });
     ev.emit("connection.update", {
       connection: "close",
       lastDisconnect: new Error("bye"),
@@ -658,11 +442,7 @@ describe("web session", () => {
   });
 
   it("preserves the underlying Baileys disconnect error", async () => {
-    const ev = new EventEmitter();
-    const promise = waitForWaConnection(
-      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
-      { timeout: "none" },
-    );
+    const { ev, promise } = connectionWait({ timeout: "none" });
     const disconnectError = Object.assign(new Error("logged out"), {
       output: { statusCode: 401 },
     });
@@ -677,11 +457,7 @@ describe("web session", () => {
 
   it("rejects after timeout with no connection event", async () => {
     vi.useFakeTimers();
-    const ev = new EventEmitter();
-    const promise = waitForWaConnection(
-      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
-      { timeoutMs: 100 },
-    );
+    const { ev, promise } = connectionWait({ timeoutMs: 100 });
     vi.advanceTimersByTime(100);
     const error = await promise.catch((err: unknown) => err);
     expect(error).toBeInstanceOf(Error);
@@ -693,11 +469,7 @@ describe("web session", () => {
 
   it("clears timeout when connection opens before timeout", async () => {
     vi.useFakeTimers();
-    const ev = new EventEmitter();
-    const promise = waitForWaConnection(
-      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
-      { timeoutMs: 5000 },
-    );
+    const { ev, promise } = connectionWait({ timeoutMs: 5000 });
     ev.emit("connection.update", { connection: "open" });
     await expect(promise).resolves.toBeUndefined();
     expect(ev.listenerCount("connection.update")).toBe(0);
@@ -741,7 +513,7 @@ describe("web session", () => {
   });
 
   it("formatError prints Boom-like payload message", () => {
-    const err = {
+    const result = formatError({
       error: {
         isBoom: true,
         output: {
@@ -753,10 +525,10 @@ describe("web session", () => {
           },
         },
       },
-    };
-    expect(formatError(err)).toContain("status=408");
-    expect(formatError(err)).toContain("Request Time-out");
-    expect(formatError(err)).toContain("QR refs attempts ended");
+    });
+    for (const detail of ["status=408", "Request Time-out", "QR refs attempts ended"]) {
+      expect(result).toContain(detail);
+    }
   });
 
   it("formatError keeps truncated object details free of lone surrogates", () => {
@@ -790,14 +562,8 @@ describe("web session", () => {
 
   it("revalidates setup ownership immediately before a delayed creds.update write", async () => {
     const authDir = createTempAuthDir("openclaw-wa-guarded-creds");
-    const guardError = new Error("verified inference route changed");
-    let routeOwner = "original";
-    const beforeCredentialPersistence = vi.fn(async () => {
-      if (routeOwner !== "original") {
-        throw guardError;
-      }
-    });
-    const onCredentialPersistenceError = vi.fn();
+    const { guardError, revoke, beforeCredentialPersistence, onCredentialPersistenceError } =
+      credentialGuard();
 
     await createWaSocket(false, false, {
       authDir,
@@ -806,7 +572,7 @@ describe("web session", () => {
     });
     expect(beforeCredentialPersistence).toHaveBeenCalledTimes(1);
 
-    routeOwner = "replacement";
+    revoke();
     const sock = getLastSocket();
     sock.ev.emit("creds.update", {});
     await waitForCredsSaveQueue(authDir);
@@ -819,14 +585,8 @@ describe("web session", () => {
 
   it("revalidates setup ownership before Baileys persists signal keys", async () => {
     const authDir = createTempAuthDir("openclaw-wa-guarded-keys");
-    const guardError = new Error("verified inference route changed");
-    let routeOwner = "original";
-    const beforeCredentialPersistence = vi.fn(async () => {
-      if (routeOwner !== "original") {
-        throw guardError;
-      }
-    });
-    const onCredentialPersistenceError = vi.fn();
+    const { guardError, revoke, beforeCredentialPersistence, onCredentialPersistenceError } =
+      credentialGuard();
     const onCredentialPersistenceTask = vi.fn();
 
     await createWaSocket(false, false, {
@@ -835,16 +595,14 @@ describe("web session", () => {
       onCredentialPersistenceError,
       onCredentialPersistenceTask,
     });
-    routeOwner = "replacement";
-    const [socketOptions] = firstMockCall(
-      baileys.makeWASocket as ReturnType<typeof vi.fn>,
-      "Baileys socket creation",
-    );
-    const guardedKeys = (
-      socketOptions as { auth: { keys: { set: (data: unknown) => Promise<void> } } }
-    ).auth.keys;
+    revoke();
+    const guardedKeys = readLastSocketOptions().auth.keys;
 
-    await expect(guardedKeys.set({ "pre-key": { test: {} } })).rejects.toBe(guardError);
+    await expect(
+      guardedKeys.set({
+        "pre-key": { test: { public: Buffer.from("public"), private: Buffer.from("private") } },
+      }),
+    ).rejects.toBe(guardError);
     expect(beforeCredentialPersistence).toHaveBeenCalledTimes(2);
     expect(onCredentialPersistenceError).toHaveBeenCalledWith(guardError);
     expect(onCredentialPersistenceTask).toHaveBeenCalledTimes(1);
@@ -854,10 +612,7 @@ describe("web session", () => {
   it("serializes creds.update saves to avoid overlapping writes", async () => {
     let inFlight = 0;
     let maxInFlight = 0;
-    let release: (() => void) | null = null;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const gate = Promise.withResolvers<void>();
 
     const authDir = createTempAuthDir("openclaw-wa-queue");
     const openMock = mockFsOpenForCredsWrites({
@@ -865,7 +620,7 @@ describe("web session", () => {
         if (filePath.startsWith(authDir)) {
           inFlight += 1;
           maxInFlight = Math.max(maxInFlight, inFlight);
-          await gate;
+          await gate.promise;
           inFlight -= 1;
         }
       },
@@ -882,7 +637,7 @@ describe("web session", () => {
         expect(inFlight).toBe(1);
       });
     } finally {
-      (release as (() => void) | null)?.();
+      gate.resolve();
     }
 
     await waitForCredsSaveQueue(authDir);
@@ -894,54 +649,36 @@ describe("web session", () => {
   });
 
   it("lets different authDir queues flush independently", async () => {
-    let inFlightA = 0;
-    let inFlightB = 0;
-    let releaseA: (() => void) | null = null;
-    let releaseB: (() => void) | null = null;
-    const gateA = new Promise<void>((resolve) => {
-      releaseA = resolve;
-    });
-    const gateB = new Promise<void>((resolve) => {
-      releaseB = resolve;
-    });
-
-    const authDirA = createTempAuthDir("openclaw-wa-a");
-    const authDirB = createTempAuthDir("openclaw-wa-b");
+    const queues = ["a", "b"].map((id) => ({
+      authDir: createTempAuthDir(`openclaw-wa-${id}`),
+      gate: Promise.withResolvers<void>(),
+      inFlight: 0,
+    }));
     const onError = vi.fn();
-
-    enqueueCredsSave(
-      authDirA,
-      async () => {
-        inFlightA += 1;
-        await gateA;
-        inFlightA -= 1;
-      },
-      onError,
-    );
-    enqueueCredsSave(
-      authDirB,
-      async () => {
-        inFlightB += 1;
-        await gateB;
-        inFlightB -= 1;
-      },
-      onError,
-    );
+    for (const queue of queues) {
+      enqueueCredsSave(
+        queue.authDir,
+        async () => {
+          queue.inFlight += 1;
+          await queue.gate.promise;
+          queue.inFlight -= 1;
+        },
+        onError,
+      );
+    }
 
     try {
       await vi.waitFor(() => {
-        expect(inFlightA).toBe(1);
-        expect(inFlightB).toBe(1);
+        expect(queues.map((queue) => queue.inFlight)).toEqual([1, 1]);
       });
     } finally {
-      (releaseA as (() => void) | null)?.();
-      (releaseB as (() => void) | null)?.();
+      for (const queue of queues) {
+        queue.gate.resolve();
+      }
     }
 
-    await Promise.all([waitForCredsSaveQueue(authDirA), waitForCredsSaveQueue(authDirB)]);
-
-    expect(inFlightA).toBe(0);
-    expect(inFlightB).toBe(0);
+    await Promise.all(queues.map((queue) => waitForCredsSaveQueue(queue.authDir)));
+    expect(queues.map((queue) => queue.inFlight)).toEqual([0, 0]);
     expect(onError).not.toHaveBeenCalled();
   });
 

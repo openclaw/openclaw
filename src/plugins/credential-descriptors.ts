@@ -1,12 +1,11 @@
 import type { PluginCredentialDescriptor } from "../../packages/gateway-protocol/src/schema/plugin-credentials.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseConcreteConfigPathTokens } from "../shared/dot-path.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
 import {
-  resolveBundledWebFetchProvidersFromPublicArtifacts,
-  resolveBundledWebSearchProvidersFromPublicArtifacts,
-} from "./web-provider-public-artifacts.js";
+  resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
+} from "./web-provider-public-artifacts.explicit.js";
 import type { WebSearchProviderPlugin } from "./web-provider-types.js";
 import { resolveWebSearchInstallCatalogEntries } from "./web-search-install-catalog.js";
 
@@ -49,12 +48,9 @@ function projectPluginCredentialDescriptors(
     if (fields.has(key)) {
       continue;
     }
+    const signupProtocol = provider.signupUrl && URL.parse(provider.signupUrl)?.protocol;
     const signupUrl =
-      provider.signupUrl &&
-      URL.canParse(provider.signupUrl) &&
-      ["https:", "http:"].includes(new URL(provider.signupUrl).protocol)
-        ? provider.signupUrl
-        : undefined;
+      signupProtocol === "https:" || signupProtocol === "http:" ? provider.signupUrl : undefined;
     fields.set(key, {
       path,
       label: provider.credentialLabel,
@@ -71,7 +67,6 @@ function projectPluginCredentialDescriptors(
 
 /** Metadata inspection must never enable or activate a plugin to discover a key field. */
 export function resolvePluginCredentialDescriptors(
-  config: OpenClawConfig,
   manifest: PluginManifestRecord,
 ): PluginCredentialDescriptor[] {
   const registry = getPluginRegistryForContext();
@@ -82,12 +77,13 @@ export function resolvePluginCredentialDescriptors(
     .filter((entry) => entry.pluginId === manifest.id)
     .map((entry) => entry.provider);
   if (manifest.origin === "bundled") {
-    const scope = { config, onlyPluginIds: [manifest.id], manifestRecords: [manifest] };
+    // Settings inspect installed metadata independently of runtime enablement/allowlists.
+    const scope = { onlyPluginIds: [manifest.id] };
     if (manifest.contracts?.webSearchProviders?.length) {
-      providers.push(...(resolveBundledWebSearchProvidersFromPublicArtifacts(scope) ?? []));
+      providers.push(...(resolveBundledExplicitWebSearchProvidersFromPublicArtifacts(scope) ?? []));
     }
     if (manifest.contracts?.webFetchProviders?.length) {
-      providers.push(...(resolveBundledWebFetchProvidersFromPublicArtifacts(scope) ?? []));
+      providers.push(...(resolveBundledExplicitWebFetchProvidersFromPublicArtifacts(scope) ?? []));
     }
   } else if (manifest.trustedOfficialInstall) {
     providers.push(

@@ -1,32 +1,36 @@
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import type { WorkshopMutation } from "./api.ts";
 
-export type SkillWorkshopAccess = {
-  canEvaluate: boolean;
-  canApply: boolean;
-  canRevise: boolean;
-  canReject: boolean;
-};
-
-type SkillWorkshopAdminMethod =
-  | "config.patch"
-  | "skills.proposals.apply"
-  | "skills.proposals.evaluate"
-  | "skills.proposals.reject"
-  | "skills.proposals.requestRevision";
-
-export function canCallWorkshopAdminMethod(
-  snapshot: ApplicationGatewaySnapshot | null | undefined,
-  method: SkillWorkshopAdminMethod,
+/**
+ * Workshop is the bundled skill-workshop plugin; it can be disabled or absent from a package.
+ * False only once the Gateway's method catalog shows that, so a pending hello hides nothing.
+ */
+export function isSkillWorkshopInstalled(
+  snapshot: Pick<ApplicationGatewaySnapshot, "hello"> | null | undefined,
 ): boolean {
-  return canCallGatewayMethod(snapshot, method, "operator.admin");
+  return isGatewayMethodAdvertised(snapshot ?? {}, "skills.workshop.list") !== false;
 }
 
-export function resolveWorkshopAccess(snapshot: ApplicationGatewaySnapshot): SkillWorkshopAccess {
+export function resolveWorkshopAccess(snapshot: ApplicationGatewaySnapshot | null | undefined) {
   return {
-    canEvaluate: canCallWorkshopAdminMethod(snapshot, "skills.proposals.evaluate"),
-    canApply: canCallWorkshopAdminMethod(snapshot, "skills.proposals.apply"),
-    canRevise: canCallWorkshopAdminMethod(snapshot, "skills.proposals.requestRevision"),
-    canReject: canCallWorkshopAdminMethod(snapshot, "skills.proposals.reject"),
+    canArchive: canCallGatewayMethod(snapshot, "skills.workshop.archive", "operator.admin"),
+    canRestore: canCallGatewayMethod(snapshot, "skills.workshop.restore", "operator.admin"),
+    // Apply and Discard ship together and share their scope.
+    canReviewDrafts: canCallGatewayMethod(snapshot, "skills.workshop.applyDraft", "operator.admin"),
+    canSetMode: canCallGatewayMethod(snapshot, "config.patch", "operator.admin"),
+    canEnablePlugin: canCallGatewayMethod(snapshot, "plugins.setEnabled", "operator.admin"),
   };
+}
+
+export function canRunWorkshopMutation(
+  access: ReturnType<typeof resolveWorkshopAccess>,
+  method: WorkshopMutation["method"],
+): boolean {
+  return {
+    "skills.workshop.archive": access.canArchive,
+    "skills.workshop.restore": access.canRestore,
+    "skills.workshop.applyDraft": access.canReviewDrafts,
+    "skills.workshop.discardDraft": access.canReviewDrafts,
+  }[method];
 }

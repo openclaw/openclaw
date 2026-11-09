@@ -28,6 +28,9 @@ export function setTestSkillsRemoteRegistry(
   const ids = typeof nodeIds === "string" ? [nodeIds] : nodeIds;
   setSkillsRemoteRegistry({
     ...registry,
+    listCurrentConnected:
+      registry.listCurrentConnected ??
+      (async () => ids.flatMap((nodeId) => (registry.get(nodeId) ? [registry.get(nodeId)!] : []))),
     listCurrentConnectedSync:
       registry.listCurrentConnectedSync ??
       (() => ids.flatMap((nodeId) => (registry.get(nodeId) ? [registry.get(nodeId)!] : []))),

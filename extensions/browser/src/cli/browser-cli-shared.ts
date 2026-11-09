@@ -1,33 +1,27 @@
-/**
- * Shared Browser CLI option parsing and gateway request helpers.
- */
+import { runCommandWithRuntime } from "openclaw/plugin-sdk/cli-runtime";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
+import { callGatewayFromCli, type GatewayRpcOpts } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   addTimerTimeoutGraceMs,
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPES,
 } from "../browser-gateway-contract.js";
 import { resolveBrowserProxyTimeouts } from "../browser-proxy-timeouts.js";
 import { BROWSER_ACTION_TRANSPORT_SLACK_MS } from "../browser/act-policy.js";
+import { normalizeBrowserRequestPath } from "../browser/request-policy.js";
 import { normalizeBrowserTimerDelayMs } from "../browser/timer-delay.js";
-import {
-  callGatewayFromCli,
-  danger,
-  defaultRuntime,
-  runCommandWithRuntime,
-  type GatewayRpcOpts,
-} from "./core-api.js";
 
-/** Parent Browser CLI options inherited by subcommands. */
 export type BrowserParentOpts = GatewayRpcOpts & {
   json?: boolean;
   browserProfile?: string;
 };
 
-/** Help text for user-facing tab references accepted by Browser CLI commands. */
 export const BROWSER_TAB_REFERENCE_HELP =
   "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix";
 
@@ -43,12 +37,36 @@ export function withBrowserActionTimeoutSlack(timeoutMs: number | undefined): nu
   return addTimerTimeoutGraceMs(timeoutMs ?? 20_000, BROWSER_ACTION_TRANSPORT_SLACK_MS) ?? 1;
 }
 
-/** Runs a Browser CLI command with the standard runtime error handling. */
-export function runBrowserCliCommand(action: () => Promise<void>) {
-  return runCommandWithRuntime(defaultRuntime, action, (error) => {
+export async function runBrowserCliCommand(
+  action: () => Promise<void>,
+  errorPolicy: "runtime" | "inline" = "runtime",
+): Promise<void> {
+  const run = async () => {
+    try {
+      await action();
+    } catch (error) {
+      const signal = getAsyncWorkSignal();
+      if (signal?.aborted && error === signal.reason) {
+        return;
+      }
+      throw error;
+    }
+  };
+  const reportError = (error: unknown) => {
     defaultRuntime.error(danger(String(error)));
     defaultRuntime.exit(1);
-  });
+  };
+  if (errorPolicy === "runtime") {
+    await runCommandWithRuntime(defaultRuntime, run, reportError);
+    return;
+  }
+  // Older commands retain local human-mode diagnostics. JSON requests select
+  // the runtime policy below so the host can render their failure envelope.
+  try {
+    await run();
+  } catch (error) {
+    reportError(error);
+  }
 }
 
 /** Execute a scoped request with the command family's existing error and output policy. */
@@ -91,21 +109,10 @@ export async function runBrowserCliRequest<T = unknown>(params: {
       );
     }
   };
-  if (params.errorPolicy !== "inline") {
-    await runBrowserCliCommand(action);
-    return;
-  }
-  // These older commands report even expected/JSON-mode errors locally. Keep
-  // that public CLI behavior distinct from runCommandWithRuntime's rethrow path.
-  try {
-    await action();
-  } catch (err) {
-    defaultRuntime.error(danger(String(err)));
-    defaultRuntime.exit(1);
-  }
+  const errorPolicy = params.parent.json ? "runtime" : params.errorPolicy;
+  await runBrowserCliCommand(action, errorPolicy);
 }
 
-/** Writes a Browser command result when structured output was requested. */
 export function printBrowserJsonResult(parent: BrowserParentOpts, payload: unknown): boolean {
   if (!parent?.json) {
     return false;
@@ -114,7 +121,22 @@ export function printBrowserJsonResult(parent: BrowserParentOpts, payload: unkno
   return true;
 }
 
-/** Combines the selected Browser profile with optional request query fields. */
+export function printBrowserList<T>(
+  entries: T[],
+  emptyMessage: string,
+  format: (entry: T, index: number) => string,
+  header?: string,
+): void {
+  if (entries.length === 0) {
+    defaultRuntime.log(emptyMessage);
+    return;
+  }
+  if (header !== undefined) {
+    defaultRuntime.log(header);
+  }
+  defaultRuntime.log(entries.map(format).join("\n"));
+}
+
 export function resolveBrowserProfileQuery(
   profile?: string,
   extra?: BrowserRequestParams["query"],
@@ -137,40 +159,43 @@ function normalizeQuery(query: BrowserRequestParams["query"]): Record<string, st
   return Object.keys(out).length ? out : undefined;
 }
 
-/** Parses a positive integer value for Browser CLI options. */
-export function parseBrowserPositiveIntegerValue(value: unknown): number | undefined {
-  return parseStrictPositiveInteger(value);
-}
-
-/** Parses a non-negative integer value for Browser CLI options. */
-export function parseBrowserNonNegativeIntegerValue(value: unknown): number | undefined {
-  return parseStrictNonNegativeInteger(value);
-}
-
-/** Parses and validates a required positive integer CLI option. */
 export function parseBrowserPositiveIntegerOption(raw: string, flag: string): number {
-  const parsed = parseBrowserPositiveIntegerValue(raw);
+  const parsed = parseStrictPositiveInteger(raw);
   if (parsed === undefined) {
     throw new Error(`${flag} must be a positive integer.`);
   }
   return parsed;
 }
 
-/** Parses and validates a required non-negative integer CLI option. */
 export function parseBrowserNonNegativeIntegerOption(raw: string, flag: string): number {
-  const parsed = parseBrowserNonNegativeIntegerValue(raw);
+  const parsed = parseStrictNonNegativeInteger(raw);
   if (parsed === undefined) {
     throw new Error(`${flag} must be a non-negative integer.`);
   }
   return parsed;
 }
 
-/** Calls the Browser gateway request method with normalized timeout/query options. */
 export async function callBrowserRequest<T>(
   opts: BrowserParentOpts,
   params: BrowserRequestParams,
-  extra?: { timeoutMs?: number; progress?: boolean },
+  extra?: { timeoutMs?: number; interruptible?: boolean },
 ): Promise<T> {
+  const query = normalizeQuery(params.query);
+  const path = normalizeBrowserRequestPath(params.path);
+  const sideEffectOption =
+    path === "/snapshot"
+      ? query?.labels
+      : path === "/errors" || path === "/requests"
+        ? query?.clear
+        : undefined;
+  // These GET options persist captures or clear records; retain their accepted receipt.
+  const hasSideEffect =
+    parseBooleanValue(sideEffectOption, { truthy: ["true", "1", "yes"] }) === true;
+  const signal =
+    params.method === "GET" && !hasSideEffect && extra?.interruptible !== false
+      ? getAsyncWorkSignal()
+      : undefined;
+  signal?.throwIfAborted();
   const resolvedTimeout =
     typeof extra?.timeoutMs === "number" && Number.isFinite(extra.timeoutMs)
       ? normalizeBrowserTimerDelayMs(extra.timeoutMs)
@@ -185,12 +210,16 @@ export async function callBrowserRequest<T>(
     {
       method: params.method,
       path: params.path,
-      query: normalizeQuery(params.query),
+      query,
       body: params.body,
       timeoutMs: budgets?.proxyTimeoutMs,
     },
-    { progress: extra?.progress, scopes: [...BROWSER_REQUEST_GATEWAY_SCOPES] },
-  );
+    { scopes: [...BROWSER_REQUEST_GATEWAY_SCOPES], ...(signal ? { signal } : {}) },
+  ).catch((error: unknown) => {
+    signal?.throwIfAborted();
+    throw error;
+  });
+  signal?.throwIfAborted();
   if (payload === undefined) {
     throw new Error("Unexpected browser.request response");
   }

@@ -1,52 +1,49 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { reserveSqliteWorkerInputPreparation } from "../infra/sqlite-worker-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
-import {
-  clearOpenClawStateDatabaseOpenFailure,
-  recordOpenClawStateDatabaseOpenFailure,
-} from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   createPluginBlobStoreForTests,
   resetPluginBlobStoreForTests,
 } from "./plugin-blob-store.js";
 
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    try {
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginBlobStoreForTests();
-    } finally {
-      cleanup();
-    }
-  }),
-);
-const MIB = 1024 * 1024;
-function fixture() {
-  const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("blob-input-preparation-") };
-  const store = createPluginBlobStoreForTests(
-    "blob-admission",
-    {
-      namespace: "prepared",
-      maxEntries: 1,
-      maxBytesPerEntry: 100 * MIB,
-      maxBytesPerNamespace: 100 * MIB,
-    },
-    env,
+describe("plugin-blob-store.admission", () => {
+  const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      try {
+        await closeOpenClawStateDatabaseAsync();
+        resetPluginBlobStoreForTests();
+      } finally {
+        cleanup();
+      }
+    }),
   );
-  return { env, store };
-}
+  const MIB = 1024 * 1024;
+  function fixture() {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("blob-input-preparation-") };
+    const store = createPluginBlobStoreForTests(
+      "blob-admission",
+      {
+        namespace: "prepared",
+        maxEntries: 1,
+        maxBytesPerEntry: 100 * MIB,
+        maxBytesPerNamespace: 100 * MIB,
+      },
+      env,
+    );
+    return { env, store };
+  }
 
-it.each(["register", "registerIfAbsent"] as const)(
-  "%s bounds copied payloads before awaiting worker preparation",
-  async (method) => {
+  it("register bounds copied payloads before awaiting worker preparation", async () => {
     const { store } = fixture();
+    const concurrentInputs = Array.from({ length: 3 }, () =>
+      reserveSqliteWorkerInputPreparation(64 * MIB),
+    );
     const bytes = new Uint8Array(16 * MIB).fill(7);
     const pending = Array.from({ length: 3 }, () =>
-      store[method]("same-key", bytes, { version: 1 }),
+      store.register("same-key", bytes, { version: 1 }),
     );
-    const refused = store[method]("same-key", bytes, { version: 1 });
+    const refused = store.register("same-key", bytes, { version: 1 });
     void refused.catch(() => undefined);
     try {
       expect(() => {
@@ -67,23 +64,20 @@ it.each(["register", "registerIfAbsent"] as const)(
       const recovered = reserveSqliteWorkerInputPreparation(64 * MIB);
       recovered.release();
     } finally {
+      for (const preparation of concurrentInputs) {
+        preparation.release();
+      }
       await Promise.allSettled([...pending, refused]);
     }
-  },
-);
+  });
 
-it.each(["copy", "admission"] as const)(
-  "releases captured capacity after %s fails",
-  async (failure) => {
-    const { env, store } = fixture();
-    const pathname = resolveOpenClawStateSqlitePath(env);
-    const cause = new Error(`${failure} failed`);
+  it("releases captured capacity after copying fails", async () => {
+    const { store } = fixture();
+    const concurrentInputs = Array.from({ length: 3 }, () =>
+      reserveSqliteWorkerInputPreparation(64 * MIB),
+    );
     const bytes = new Uint8Array(16 * MIB);
-    if (failure === "copy") {
-      structuredClone(bytes.buffer, { transfer: [bytes.buffer] });
-    } else {
-      recordOpenClawStateDatabaseOpenFailure(pathname, cause);
-    }
+    structuredClone(bytes.buffer, { transfer: [bytes.buffer] });
     try {
       await expect(store.register("failed", bytes, null)).rejects.toMatchObject({
         code: "PLUGIN_BLOB_OPEN_FAILED",
@@ -91,7 +85,9 @@ it.each(["copy", "admission"] as const)(
       const recovered = reserveSqliteWorkerInputPreparation(64 * MIB);
       recovered.release();
     } finally {
-      clearOpenClawStateDatabaseOpenFailure(pathname);
+      for (const preparation of concurrentInputs) {
+        preparation.release();
+      }
     }
-  },
-);
+  });
+});

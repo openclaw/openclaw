@@ -1,198 +1,96 @@
-// Onboard config tests cover workspace, bootstrap, and local setup config mutations.
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { resolveCoreToolProfilePolicy } from "../agents/tool-catalog.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   applyLocalSetupWorkspaceConfig,
+  applySkipBootstrapConfig,
   resolveOnboardingWorkspaceConflict,
 } from "./onboard-config.js";
 
-describe("applyLocalSetupWorkspaceConfig", () => {
-  it("leaves dmScope unset when not configured", () => {
-    const baseConfig: OpenClawConfig = {};
-    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const current = "/tmp/current-workspace";
+const requested = "/tmp/requested-workspace";
+const workspaceConfig: OpenClawConfig = { agents: { defaults: { workspace: current } } };
+afterEach(() => vi.restoreAllMocks());
 
-    expect(result.session?.dmScope).toBeUndefined();
-    expect(result).not.toHaveProperty("session.dmScope");
-    expect(result.gateway?.mode).toBe("local");
-    expect(result.agents?.defaults?.workspace).toBe("/tmp/workspace");
-    expect(result.tools?.profile).toBe("full");
-    expect(resolveCoreToolProfilePolicy(result.tools?.profile)?.allow).toEqual(["*"]);
-  });
-
-  it("preserves existing dmScope when already configured", () => {
-    const baseConfig: OpenClawConfig = {
-      session: {
-        dmScope: "main",
-      },
-    };
-    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
-
-    expect(result.session?.dmScope).toBe("main");
-  });
-
-  it("preserves explicit non-main dmScope values", () => {
-    const baseConfig: OpenClawConfig = {
-      session: {
-        dmScope: "per-account-channel-peer",
-      },
-    };
-    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
-
-    expect(result.session?.dmScope).toBe("per-account-channel-peer");
-  });
-
-  it.each([
-    { profile: undefined, expectedProfile: "full" },
-    { profile: "minimal", expectedProfile: "minimal" },
-    { profile: "coding", expectedProfile: "coding" },
-    { profile: "messaging", expectedProfile: "messaging" },
-    { profile: "full", expectedProfile: "full" },
-  ] as const)(
-    "selects $expectedProfile from $profile and preserves independent policies on rerun",
-    ({ profile, expectedProfile }) => {
-      const baseConfig: OpenClawConfig = {
-        tools: {
-          ...(profile ? { profile } : {}),
-          allow: ["group:openclaw"],
-          deny: ["exec"],
-          byProvider: { anthropic: { profile: "messaging", deny: ["browser"] } },
-          exec: { security: "deny", ask: "always" },
-          fs: { workspaceOnly: true },
-          sandbox: { tools: { deny: ["openclaw"] } },
-        },
-        agents: {
-          defaults: { sandbox: { mode: "all" } },
-          list: [{ id: "main", tools: { profile: "minimal", alsoAllow: ["message"] } }],
-        },
-      };
-      const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
-
-      expect(result.tools).toEqual({ ...baseConfig.tools, profile: expectedProfile });
-      expect(result.agents).toEqual(baseConfig.agents);
+it("sets skipBootstrap without mutating the existing agent defaults or other config", () => {
+  const config: OpenClawConfig = {
+    agents: {
+      defaults: { workspace: "/tmp/workspace" },
+      entries: { ops: { name: "Operations" } },
     },
-  );
+    gateway: { mode: "remote" },
+  };
+  const result = applySkipBootstrapConfig(config);
 
-  it("preserves agents.list and bindings on onboard rerun (openclaw#84692)", () => {
-    const baseConfig: OpenClawConfig = {
-      agents: {
-        list: [
-          { id: "alpha", model: "anthropic/claude-3-5-sonnet" },
-          { id: "beta", model: "openai/gpt-4o" },
-        ],
-      },
-      bindings: [
-        {
-          type: "route",
-          agentId: "alpha",
-          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
-        },
-      ],
-    } as OpenClawConfig;
-
-    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
-
-    expect(result.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
-    expect(result.bindings).toEqual(baseConfig.bindings);
+  expect(result).toEqual({
+    ...config,
+    agents: { ...config.agents, defaults: { workspace: "/tmp/workspace", skipBootstrap: true } },
   });
+  expect(config.agents?.defaults).toEqual({ workspace: "/tmp/workspace" });
+});
 
-  it("keeps fresh-install workspace writes unchanged", () => {
-    const result = applyLocalSetupWorkspaceConfig({}, "/tmp/new-workspace", {
-      env: { HOME: "/tmp/fresh-home", OPENCLAW_STATE_DIR: "/tmp/fresh-state" },
-    });
+it("defaults to full tools and preserves independent policies on rerun", () => {
+  const baseConfig: OpenClawConfig = {
+    tools: {
+      allow: ["group:openclaw"],
+      deny: ["exec"],
+      byProvider: { anthropic: { profile: "messaging", deny: ["browser"] } },
+      exec: { security: "deny", ask: "always" },
+      fs: { workspaceOnly: true },
+      sandbox: { tools: { deny: ["openclaw"] } },
+    },
+    agents: {
+      defaults: { sandbox: { mode: "all" } },
+      entries: { main: { tools: { profile: "minimal", alsoAllow: ["message"] } } },
+    },
+  };
+  const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
 
-    expect(result.agents?.defaults?.workspace).toBe("/tmp/new-workspace");
+  expect(result.tools).toEqual({ ...baseConfig.tools, profile: "full" });
+  expect(result.agents).toEqual(baseConfig.agents);
+});
+
+it.each([false, true])("moves a roster workspace only with confirmation (%s)", (confirmed) => {
+  const baseConfig: OpenClawConfig = {
+    agents: {
+      ...workspaceConfig.agents,
+      entries: { main: {}, ops: {} },
+    },
+  };
+
+  expect(resolveOnboardingWorkspaceConflict(baseConfig, requested)).toEqual({
+    currentWorkspaceDir: current,
+    requestedWorkspaceDir: requested,
   });
+  expect(
+    applyLocalSetupWorkspaceConfig(baseConfig, requested, {
+      allowWorkspaceChange: confirmed,
+    }).agents?.defaults?.workspace,
+  ).toBe(confirmed ? requested : current);
+});
 
-  it("preserves the current workspace when an agent roster exists", () => {
-    const baseConfig: OpenClawConfig = {
-      agents: {
-        defaults: { workspace: "/tmp/current-workspace" },
-        list: [{ id: "main" }, { id: "ops" }],
-      },
-    };
+it("keeps fresh-install workspace writes when only inference state exists on disk", async () => {
+  const stateDir = tempDirs.make("openclaw-onboard-state-");
+  await fs.mkdir(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
+  const env = { HOME: stateDir, OPENCLAW_STATE_DIR: stateDir };
 
-    const conflict = resolveOnboardingWorkspaceConflict(baseConfig, "/tmp/requested-workspace");
-    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/requested-workspace");
+  const result = applyLocalSetupWorkspaceConfig({}, requested, { env });
 
-    expect(conflict).toEqual({
-      currentWorkspaceDir: "/tmp/current-workspace",
-      requestedWorkspaceDir: "/tmp/requested-workspace",
-    });
-    expect(result.agents?.defaults?.workspace).toBe("/tmp/current-workspace");
+  expect(result.agents?.defaults?.workspace).toBe(requested);
+  const rerun = applyLocalSetupWorkspaceConfig(workspaceConfig, requested, { env });
+  expect(rerun.agents?.defaults?.workspace).toBe(current);
+});
+
+it("fails closed when existing agent state cannot be inspected", () => {
+  vi.spyOn(nodeFs, "readdirSync").mockImplementationOnce(() => {
+    throw Object.assign(new Error("permission denied"), { code: "EACCES" });
   });
-
-  it("does not materialize a fleet default for an existing roster", () => {
-    const env = { HOME: "/tmp/fleet-home", OPENCLAW_STATE_DIR: "/tmp/fleet-state" };
-    const baseConfig: OpenClawConfig = {
-      agents: { list: [{ id: "main" }, { id: "ops" }] },
-    };
-
-    const result = applyLocalSetupWorkspaceConfig(
-      baseConfig,
-      "/tmp/fleet-home/.openclaw/workspace",
-      { env },
-    );
-
-    expect(result.agents?.defaults?.workspace).toBeUndefined();
+  const result = applyLocalSetupWorkspaceConfig(workspaceConfig, requested, {
+    env: { HOME: "/tmp/unreadable-home", OPENCLAW_STATE_DIR: "/tmp/unreadable-state" },
   });
-
-  it("keeps fresh-install workspace writes when only inference state exists on disk", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-state-"));
-    try {
-      await fs.mkdir(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
-      const env = { HOME: stateDir, OPENCLAW_STATE_DIR: stateDir };
-
-      const result = applyLocalSetupWorkspaceConfig({}, "/tmp/requested-workspace", {
-        env,
-      });
-
-      expect(result.agents?.defaults?.workspace).toBe("/tmp/requested-workspace");
-      const rerun = applyLocalSetupWorkspaceConfig(
-        { agents: { defaults: { workspace: "/tmp/current-workspace" } } },
-        "/tmp/requested-workspace",
-        { env },
-      );
-      expect(rerun.agents?.defaults?.workspace).toBe("/tmp/current-workspace");
-    } finally {
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
-  });
-
-  it("fails closed when existing agent state cannot be inspected", () => {
-    const read = vi.spyOn(nodeFs, "readdirSync").mockImplementationOnce(() => {
-      throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-    });
-    try {
-      const result = applyLocalSetupWorkspaceConfig(
-        { agents: { defaults: { workspace: "/tmp/current-workspace" } } },
-        "/tmp/requested-workspace",
-        {
-          env: { HOME: "/tmp/unreadable-home", OPENCLAW_STATE_DIR: "/tmp/unreadable-state" },
-        },
-      );
-      expect(result.agents?.defaults?.workspace).toBe("/tmp/current-workspace");
-    } finally {
-      read.mockRestore();
-    }
-  });
-
-  it("allows an explicitly confirmed workspace move", () => {
-    const baseConfig: OpenClawConfig = {
-      agents: {
-        defaults: { workspace: "/tmp/current-workspace" },
-        list: [{ id: "main" }],
-      },
-    };
-
-    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/requested-workspace", {
-      allowWorkspaceChange: true,
-    });
-
-    expect(result.agents?.defaults?.workspace).toBe("/tmp/requested-workspace");
-  });
+  expect(result.agents?.defaults?.workspace).toBe(current);
 });

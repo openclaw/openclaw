@@ -1,142 +1,129 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { resetConfigOverrides } from "../config/runtime-overrides.js";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { expect, it, vi } from "vitest";
+import { createFixtureRequest } from "../../test/helpers/gateway-built-fixture.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import "../commands/agent.js";
+import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
+import { agentCliCommand } from "../commands/agent-via-gateway.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetAgentEventsForTest } from "../infra/agent-events.js";
-import { registerSkillsChangeListener } from "../skills/runtime/refresh.js";
-import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { getTrackedWorkerPoolSnapshot } from "../infra/worker-cpu.js";
+import {
+  closeSkillsWatchers,
+  refreshSkillsDiscovery,
+  registerSkillsChangeListener,
+} from "../skills/runtime/refresh.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
+import { resetGatewayTestState } from "./gateway.test-support.js";
+import { formatGatewayPendingCloseSteps } from "./restart-trace.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+// Keep cold subject imports outside the skill-refresh behavior's timeout.
+import "./server-start.js";
 
 const execFileAsync = promisify(execFile);
-const ENV_KEYS = [
-  "HOME",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_TEST_MINIMAL_GATEWAY",
-  "OPENCLAW_SKIP_CHANNELS",
-  "OPENCLAW_SKIP_GMAIL_WATCHER",
-  "OPENCLAW_SKIP_CRON",
-  "OPENCLAW_SKIP_CANVAS_HOST",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-  "OPENCLAW_SKIP_PROVIDERS",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-] as const;
 
-function resetGatewayState(): void {
-  resetConfigOverrides();
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  clearSessionStoreCacheForTest();
-  resetAgentEventsForTest({ preserveListeners: true });
-}
-
-afterEach(resetGatewayState);
-
-describe("Gateway agent skill refresh", () => {
-  it(
-    "refreshes managed-worktree skills once per edit and closes watchers with the Gateway",
-    { timeout: 90_000 },
-    async () => {
-      const env = captureEnv([...ENV_KEYS]);
-      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-skill-refresh-"));
-      const stateDir = path.join(home, ".openclaw");
-      const workspace = path.join(home, "workspace");
-      const seedSkillFile = path.join(workspace, "skills", "seed-proof", "SKILL.md");
-      const canonicalSkillFile = path.join(workspace, "skills", "canonical-proof", "SKILL.md");
-      const bundledPluginsDir = path.join(home, "empty-bundled-plugins");
-      const configPath = path.join(stateDir, "openclaw.json");
-      await Promise.all([
-        fs.mkdir(path.dirname(seedSkillFile), { recursive: true }),
-        fs.mkdir(bundledPluginsDir, { recursive: true }),
-        fs.mkdir(stateDir, { recursive: true }),
-      ]);
-      await writeSkill(seedSkillFile, "seed-proof", "seed-skill-description");
-      await initializeGitWorkspace(workspace);
-      for (const [key, value] of Object.entries({
-        HOME: home,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      })) {
-        setTestEnvValue(key, value);
-      }
-      deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
-      deleteTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY");
-      resetGatewayState();
-
-      const requests: string[] = [];
-      const providerServer = createServer((request, response) => {
-        void (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-          }
-          requests.push(Buffer.concat(chunks).toString("utf8"));
-          const message = {
-            type: "message",
-            id: randomUUID(),
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: "ok", annotations: [] }],
-          };
-          response.writeHead(200, { "content-type": "text/event-stream" });
-          for (const event of [
-            {
-              type: "response.output_item.added",
-              item: { ...message, status: "in_progress", content: [] },
-            },
-            { type: "response.output_item.done", item: message },
-            {
-              type: "response.completed",
-              response: {
-                status: "completed",
-                usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-              },
-            },
-          ]) {
-            response.write(`data: ${JSON.stringify(event)}\n\n`);
-          }
-          response.end("data: [DONE]\n\n");
-        })().catch((error: unknown) => response.writeHead(500).end(String(error)));
+it(
+  "refreshes canonical skills explicitly for managed worktrees and closes its discovery worker",
+  { timeout: 90_000 },
+  (context) => {
+    let state: OpenClawTestState | undefined;
+    let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+    let gatewayStartup: ReturnType<typeof startGatewayWithClient> | undefined;
+    let clientClose: Promise<void> | undefined;
+    let gatewayClose: Promise<void> | undefined;
+    let unregisterLifecycle: (() => void) | undefined;
+    const requests: string[] = [];
+    const providerServer = createTrackedProvider((raw, response) => {
+      requests.push(raw);
+      writeOpenAiResponsesText(response, {
+        text: "ok",
+        messageId: randomUUID(),
+        responseId: randomUUID(),
       });
-      const lifecycleEvents: string[] = [];
-      const unregisterLifecycle = registerSkillsChangeListener((event) => {
-        lifecycleEvents.push(event.reason);
-      });
-      let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-      let gatewayClosed = false;
-      try {
-        await new Promise<void>((resolve, reject) => {
-          providerServer.once("error", reject);
-          providerServer.listen(0, "127.0.0.1", resolve);
-        });
-        const address = providerServer.address();
-        if (!address || typeof address === "string") {
-          throw new Error("mock provider did not bind");
+    });
+    const closeClient = () =>
+      (clientClose ??= gateway ? disconnectGatewayClient(gateway.client) : Promise.resolve());
+    const closeGateway = () =>
+      (gatewayClose ??= Promise.resolve().then(async () => {
+        // A rejected acquisition may retain a server whose rollback did not finish.
+        const started = gateway ?? (await gatewayStartup);
+        try {
+          await started?.server.close({ reason: "skill refresh test cleanup" });
+        } catch (error) {
+          console.error(
+            "Skill refresh Gateway cleanup failed",
+            JSON.stringify({
+              pending: formatGatewayPendingCloseSteps(),
+              discoveryWorkers: discoveryWorkers(),
+              errors: collectNestedErrorCandidates(error)
+                .slice(0, 8)
+                .map((nested) =>
+                  nested instanceof Error
+                    ? { name: nested.name, message: nested.message.slice(0, 500) }
+                    : { name: typeof nested },
+                ),
+            }),
+          );
+          throw error;
         }
+      }));
+    return runQaGatewayTestFixture(
+      context,
+      async ({ signal, verifyCleanup }) => {
+        state = await createOpenClawTestState({
+          label: "agent-skill-refresh",
+          applyEnv: false,
+          verifyCleanup,
+          env: {
+            OPENCLAW_GATEWAY_TOKEN: undefined,
+            OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+            OPENCLAW_SKIP_CHANNELS: "1",
+            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+            OPENCLAW_SKIP_CRON: "1",
+            OPENCLAW_SKIP_CANVAS_HOST: "1",
+            OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+            OPENCLAW_SKIP_PROVIDERS: "1",
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          },
+        });
+        signal.throwIfAborted();
+        const { workspaceDir: workspace, configPath } = state;
+        const seedSkillFile = path.join(workspace, "skills", "seed-proof", "SKILL.md");
+        const canonicalSkillFile = path.join(workspace, "skills", "canonical-proof", "SKILL.md");
+        const bundledPluginsDir = state.path("empty-bundled-plugins");
+        state.envVars.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+        await Promise.all([
+          fs.mkdir(path.dirname(seedSkillFile), { recursive: true }),
+          fs.mkdir(bundledPluginsDir, { recursive: true }),
+        ]);
+        signal.throwIfAborted();
+        await writeSkill(seedSkillFile, "seed-proof", "seed-skill-description");
+        signal.throwIfAborted();
+        await initializeGitWorkspace(workspace, signal);
+        state.applyEnv();
+        resetGatewayTestState();
+        const lifecycleEvents: string[] = [];
+        unregisterLifecycle = registerSkillsChangeListener((event) => {
+          lifecycleEvents.push(event.reason);
+        });
         const provider = buildMockOpenAiResponsesProvider(
-          `http://127.0.0.1:${address.port}/v1`,
+          await providerServer.listen(),
           "skill-refresh",
         );
+        signal.throwIfAborted();
         const token = `skill-refresh-${process.pid}`;
         const gatewayEvents: string[] = [];
         const cfg = {
@@ -152,10 +139,11 @@ describe("Gateway agent skill refresh", () => {
           },
           gateway: { auth: { mode: "token", token } },
           models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
+          skills: { load: { watch: false } },
           plugins: { slots: { memory: "none" } },
           tools: { profile: "coding" },
         } satisfies OpenClawConfig;
-        gateway = await startGatewayWithClient({
+        gatewayStartup = startGatewayWithClient({
           cfg,
           configPath,
           token,
@@ -166,11 +154,19 @@ describe("Gateway agent skill refresh", () => {
             }
           },
         });
+        gateway = await gatewayStartup;
+        signal.throwIfAborted();
+        const request = createFixtureRequest(gateway.client, signal);
 
-        const created = await gateway.client.request<{
-          key: string;
-          worktree: { path: string };
-        }>("sessions.create", { agentId: "main", worktree: true, label: "Skill refresh" });
+        const created = await request<{ key: string; worktree: { path: string } }>(
+          "sessions.create",
+          {
+            agentId: "main",
+            worktree: true,
+            worktreeBaseRef: "HEAD",
+            label: "Skill refresh",
+          },
+        );
         const sessionKey = created.key;
         const worktreeSeedSkillFile = path.join(
           created.worktree.path,
@@ -178,148 +174,155 @@ describe("Gateway agent skill refresh", () => {
           "seed-proof",
           "SKILL.md",
         );
-        await runAgentTurn(gateway.client, sessionKey, "first");
+        await writeSkill(worktreeSeedSkillFile, "seed-proof", "worktree-only-description");
         const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-        const first = loadSessionEntry({ agentId: "main", sessionKey, storePath });
-        expect(first?.skillsSnapshot?.prompt).toContain("seed-skill-description");
-
-        await new Promise((resolve) => {
-          setTimeout(resolve, 1_000);
-        });
-        const firstLifecycleCount = lifecycleEvents.length;
+        const turn = async (message: string) => {
+          const runId = randomUUID();
+          const accepted = await request<{ runId?: string; status?: string }>("agent", {
+            sessionKey,
+            message,
+            deliver: false,
+            idempotencyKey: runId,
+          });
+          expect(accepted.status).toBe("accepted");
+          const completed = await request<{ status?: string }>(
+            "agent.wait",
+            { runId: accepted.runId ?? runId, timeoutMs: 30_000 },
+            { timeoutMs: 35_000 },
+          );
+          expect(completed.status).toBe("ok");
+          return loadSessionEntry({ agentId: "main", sessionKey, storePath })?.skillsSnapshot;
+        };
+        const refreshTurn = async (
+          file: string,
+          description: string,
+          message: string,
+          version = 0,
+        ) => {
+          const lifecycleCount = lifecycleEvents.length;
+          signal.throwIfAborted();
+          await writeSkill(file, path.basename(path.dirname(file)), description);
+          await refreshSkillsDiscovery({ workspaceDir: workspace });
+          signal.throwIfAborted();
+          expect(lifecycleEvents.length).toBeGreaterThan(lifecycleCount);
+          const current = await turn(message);
+          expect(current?.version).toBeGreaterThan(version);
+          expect(current?.prompt).toContain(description);
+          return current;
+        };
+        const first = await turn("first");
+        for (const prompt of [first?.prompt, requests.at(-1)]) {
+          expect(prompt).toContain("seed-skill-description");
+          expect(prompt).not.toContain("worktree-only-description");
+        }
+        expect(discoveryWorkers()).toEqual([expect.objectContaining({ workerCount: 1 })]);
         const firstEventCount = countSkillsChanged(gatewayEvents);
-        await writeSkill(worktreeSeedSkillFile, "seed-proof", "worktree-root-description");
-        await waitForLifecycleChange(lifecycleEvents, firstLifecycleCount + 1);
-        await runAgentTurn(gateway.client, sessionKey, "second");
-        const second = loadSessionEntry({ agentId: "main", sessionKey, storePath });
-        expect(second?.skillsSnapshot?.version).toBeGreaterThan(
-          first?.skillsSnapshot?.version ?? 0,
+        const second = await refreshTurn(
+          seedSkillFile,
+          "updated-seed-description",
+          "second",
+          first?.version,
         );
-        expect(second?.skillsSnapshot?.prompt).toContain("worktree-root-description");
-        expect(requests.at(-1)).toContain("worktree-root-description");
-        await waitForSkillsChanged(gatewayEvents, firstEventCount + 1);
+        expect(requests.at(-1)).toContain("updated-seed-description");
+        expect(countSkillsChanged(gatewayEvents)).toBeGreaterThan(firstEventCount);
+        const secondLifecycleCount = lifecycleEvents.length;
+        const secondEventCount = countSkillsChanged(gatewayEvents);
 
-        await runAgentTurn(gateway.client, sessionKey, "third without edit");
-        const repeatedTurnEventCount = lifecycleEvents.length;
-        await writeSkill(worktreeSeedSkillFile, "seed-proof", "worktree-root-description-v2");
-        await waitForLifecycleChange(lifecycleEvents, repeatedTurnEventCount + 1);
-        await expectNoAdditionalLifecycleChanges(lifecycleEvents, repeatedTurnEventCount + 1);
-        await runAgentTurn(gateway.client, sessionKey, "fourth");
-        const fourth = loadSessionEntry({ agentId: "main", sessionKey, storePath });
-        expect(fourth?.skillsSnapshot?.version).toBeGreaterThan(
-          second?.skillsSnapshot?.version ?? 0,
+        const third = await turn("third without edit");
+        expect(third?.version).toBe(second?.version);
+        expect(lifecycleEvents).toHaveLength(secondLifecycleCount);
+        expect(countSkillsChanged(gatewayEvents)).toBe(secondEventCount);
+        const fourth = await refreshTurn(
+          seedSkillFile,
+          "updated-seed-description-v2",
+          "fourth",
+          second?.version,
         );
-        expect(fourth?.skillsSnapshot?.prompt).toContain("worktree-root-description-v2");
 
         await fs.mkdir(path.dirname(canonicalSkillFile), { recursive: true });
-        const canonicalEventCount = lifecycleEvents.length;
-        await writeSkill(canonicalSkillFile, "canonical-proof", "canonical-root-description");
-        await waitForLifecycleChange(lifecycleEvents, canonicalEventCount + 1);
-        await runAgentTurn(gateway.client, sessionKey, "fifth");
-        const fifth = loadSessionEntry({ agentId: "main", sessionKey, storePath });
-        expect(fifth?.skillsSnapshot?.version).toBeGreaterThan(
-          fourth?.skillsSnapshot?.version ?? 0,
+        signal.throwIfAborted();
+        await refreshTurn(
+          canonicalSkillFile,
+          "canonical-root-description",
+          "fifth",
+          fourth?.version,
         );
-        expect(fifth?.skillsSnapshot?.prompt).toContain("canonical-root-description");
         expect(requests.at(-1)).toContain("canonical-root-description");
 
-        const localStartedAt = Date.now();
-        const local = await execFileAsync(
-          process.execPath,
-          [
-            path.join(process.cwd(), "openclaw.mjs"),
-            "agent",
-            "--local",
-            "--agent",
-            "main",
-            "--session-key",
-            "agent:main:local-skill-control",
-            "--message",
-            "local watcher control",
-            "--json",
-          ],
-          { cwd: process.cwd(), env: process.env, timeout: 20_000 },
-        );
-        expect(local.stderr).not.toContain("timed out");
-        expect(Date.now() - localStartedAt).toBeLessThan(20_000);
-
-        await disconnectGatewayClient(gateway.client);
+        await closeClient();
+        signal.throwIfAborted();
         const lifecycleCountBeforeClose = lifecycleEvents.length;
-        await gateway.server.close({ reason: "skill refresh lifecycle proof complete" });
-        gatewayClosed = true;
+        await closeGateway();
+        signal.throwIfAborted();
+        expect(discoveryWorkers()).toEqual([]);
         await writeSkill(canonicalSkillFile, "canonical-proof", "after-gateway-close");
-        await new Promise((resolve) => {
-          setTimeout(resolve, 750);
-        });
+        signal.throwIfAborted();
         expect(lifecycleEvents).toHaveLength(lifecycleCountBeforeClose);
-      } finally {
-        unregisterLifecycle();
-        if (gateway && !gatewayClosed) {
-          await disconnectGatewayClient(gateway.client).catch(() => undefined);
-          await gateway.server.close({ reason: "skill refresh test cleanup" });
-        }
-        providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          providerServer.close(() => resolve());
-        });
-        await fs.rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
-        env.restore();
-      }
-    },
-  );
-});
 
-async function runAgentTurn(
-  client: Awaited<ReturnType<typeof startGatewayWithClient>>["client"],
-  sessionKey: string,
-  message: string,
-): Promise<void> {
-  const runId = randomUUID();
-  const accepted = await client.request<{ runId?: string; status?: string }>("agent", {
-    sessionKey,
-    message,
-    deliver: false,
-    idempotencyKey: runId,
-  });
-  expect(accepted.status).toBe("accepted");
-  const completed = await client.request<{ status?: string }>(
-    "agent.wait",
-    { runId: accepted.runId ?? runId, timeoutMs: 30_000 },
-    { timeoutMs: 35_000 },
-  );
-  expect(completed.status).toBe("ok");
-}
+        const requestCountBeforeLocal = requests.length;
+        const runtime = createRuntimeEnv();
+        await agentCliCommand(
+          {
+            local: true,
+            agent: "main",
+            sessionKey: "agent:main:local-skill-control",
+            message: "local discovery control",
+            json: true,
+          },
+          runtime,
+        );
+        signal.throwIfAborted();
+        expect(runtime.error).not.toHaveBeenCalled();
+        expect(vi.mocked(runtime.writeJson).mock.calls[0]?.[0]).toMatchObject({
+          payloads: [{ text: "ok" }],
+          meta: { aborted: false },
+        });
+        expect(requests).toHaveLength(requestCountBeforeLocal + 1);
+        expect(requests.at(-1)).toContain("after-gateway-close");
+        expect(lifecycleEvents).toHaveLength(lifecycleCountBeforeClose);
+      },
+      async () => {
+        await runQaGatewayFixture(
+          closeClient,
+          closeGateway,
+          () => providerServer.close(),
+          async () => {
+            await runQaGatewayFixture(
+              async () => unregisterLifecycle?.(),
+              () => closeSkillsWatchers(true),
+            );
+          },
+        );
+        await state?.cleanup();
+        vi.restoreAllMocks();
+        resetGatewayTestState();
+      },
+    );
+  },
+);
 
 function countSkillsChanged(events: readonly string[]): number {
   return events.filter((event) => event === "skills.changed").length;
 }
 
-async function waitForSkillsChanged(events: readonly string[], expected: number): Promise<void> {
-  await expect
-    .poll(() => countSkillsChanged(events), { interval: 25, timeout: 35_000 })
-    .toBe(expected);
+function discoveryWorkers() {
+  return getTrackedWorkerPoolSnapshot().workerPools.filter(
+    (pool) => pool.script === "discovery.worker.js",
+  );
 }
 
-async function waitForLifecycleChange(events: readonly string[], expected: number): Promise<void> {
-  await expect.poll(() => events.length, { interval: 25, timeout: 5_000 }).toBe(expected);
-}
-
-async function expectNoAdditionalLifecycleChanges(
-  events: readonly string[],
-  expected: number,
-): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, 750);
-  });
-  expect(events).toHaveLength(expected);
-}
-
-async function initializeGitWorkspace(workspace: string): Promise<void> {
-  await execFileAsync("git", ["init", "-b", "main", workspace]);
-  await execFileAsync("git", ["-C", workspace, "config", "user.name", "OpenClaw Tests"]);
-  await execFileAsync("git", ["-C", workspace, "config", "user.email", "tests@openclaw.invalid"]);
-  await execFileAsync("git", ["-C", workspace, "add", "."]);
-  await execFileAsync("git", ["-C", workspace, "commit", "-m", "initial"]);
+async function initializeGitWorkspace(workspace: string, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  for (const args of [
+    ["init", "-b", "main", workspace],
+    ["-C", workspace, "config", "user.name", "OpenClaw Tests"],
+    ["-C", workspace, "config", "user.email", "tests@openclaw.invalid"],
+    ["-C", workspace, "add", "."],
+    ["-C", workspace, "commit", "-m", "initial"],
+  ]) {
+    await execFileAsync("git", args);
+    signal.throwIfAborted();
+  }
 }
 
 async function writeSkill(file: string, name: string, description: string): Promise<void> {

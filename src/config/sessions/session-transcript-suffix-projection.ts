@@ -1,14 +1,11 @@
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
+  readEventTimestamp,
   readTranscriptEventId,
   readTranscriptStorageRows,
 } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import {
-  canonicalizeTranscriptEventMedia,
-  readEventTimestamp,
-} from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionTranscriptIndexProjection } from "./session-transcript-index.js";
 import {
   extractTranscriptIndexEntry,
@@ -16,6 +13,7 @@ import {
   shouldProjectActiveEvent,
   transcriptEventContextEligibility,
 } from "./session-transcript-projection-append.js";
+import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,

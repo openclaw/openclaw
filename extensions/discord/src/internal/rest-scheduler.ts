@@ -1,4 +1,4 @@
-import { resolveIntegerOption, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { RateLimitError, readDiscordRateLimitBucket, readRetryAfter } from "./rest-errors.js";
 import {
   createBucketKey,
@@ -10,115 +10,75 @@ import {
 
 export type RequestPriority = "critical" | "standard" | "background";
 export type RequestQuery = Record<string, string | number | boolean>;
+
+/**
+ * Cancellation drops an attempt only while it is queued. A dispatched write
+ * keeps its normal outcome (#149277), including when its caller aborts.
+ */
+type ScheduledRequestState = "queued" | "dispatched" | "settled";
+
 type ScheduledRequest<TData> = {
   method: string;
   path: string;
   data?: TData;
-  enqueuedAt: number;
-  generation: number;
   priority: RequestPriority;
   query?: RequestQuery;
   routeKey: string;
   retryCount: number;
+  state: ScheduledRequestState;
+  signal?: AbortSignal;
+  detachAbort?: () => void;
   resolve: (value?: unknown) => void;
-  reject: (reason?: unknown) => void;
+  reject: (reason: Error) => void;
 };
 
 type LaneQueues<TData> = Record<RequestPriority, Array<ScheduledRequest<TData>>>;
 
 type BucketState<TData> = {
   active: number;
-  bucket?: string;
-  invalidRequests: number;
   limit?: number;
   pending: LaneQueues<TData>;
-  rateLimitHits: number;
   remaining?: number;
   resetAt: number;
   routeKeys: Set<string>;
 };
 
-type RestSchedulerLaneOptions = {
-  maxQueueSize: number;
-  staleAfterMs?: number;
-  weight: number;
-};
-
-type RestSchedulerOptions = {
-  lanes: Record<RequestPriority, RestSchedulerLaneOptions>;
-  maxConcurrency: number;
-  maxQueueSize: number;
-  maxRateLimitRetries: number;
-};
-
-const INVALID_REQUEST_WINDOW_MS = 10 * 60_000;
+const MAX_QUEUE_SIZE = 1000;
+const MAX_CONCURRENT_WORKERS = 4;
+const MAX_RATE_LIMIT_RETRIES = 3;
 const requestPriorities = ["critical", "standard", "background"] as const;
-
-function normalizeRestSchedulerOptions(options: RestSchedulerOptions): RestSchedulerOptions {
-  return {
-    lanes: {
-      critical: normalizeLaneOptions(options.lanes.critical),
-      standard: normalizeLaneOptions(options.lanes.standard),
-      background: normalizeLaneOptions(options.lanes.background),
-    },
-    maxConcurrency: resolveIntegerOption(options.maxConcurrency, 1, { min: 1 }),
-    maxQueueSize: resolveIntegerOption(options.maxQueueSize, 1, { min: 1 }),
-    maxRateLimitRetries: resolveIntegerOption(options.maxRateLimitRetries, 0, { min: 0 }),
-  };
-}
-
-function normalizeLaneOptions(options: RestSchedulerLaneOptions): RestSchedulerLaneOptions {
-  return {
-    maxQueueSize: resolveIntegerOption(options.maxQueueSize, 1, { min: 1 }),
-    ...(options.staleAfterMs === undefined
-      ? {}
-      : { staleAfterMs: resolveIntegerOption(options.staleAfterMs, 0, { min: 0 }) }),
-    weight: resolveIntegerOption(options.weight, 1, { min: 1 }),
-  };
-}
-
-function createLaneQueues<TData>(): LaneQueues<TData> {
-  return {
-    critical: [],
-    standard: [],
-    background: [],
-  };
-}
+const laneSchedule: readonly RequestPriority[] = [
+  "critical",
+  "critical",
+  "critical",
+  "critical",
+  "critical",
+  "critical",
+  "standard",
+  "standard",
+  "standard",
+  "background",
+];
 
 function countPending<TData>(bucket: BucketState<TData>): number {
   return requestPriorities.reduce((count, lane) => count + bucket.pending[lane].length, 0);
 }
 
 export class RestScheduler<TData> {
-  private readonly options: RestSchedulerOptions;
   private activeWorkers = 0;
   private buckets = new Map<string, BucketState<TData>>();
   private drainTimer: NodeJS.Timeout | undefined;
   private globalRateLimitUntil = 0;
-  private invalidRequestTimestamps: Array<{ at: number; status: number }> = [];
   private laneCursor = 0;
-  private laneDropped: Record<RequestPriority, number> = {
-    critical: 0,
-    standard: 0,
-    background: 0,
-  };
-  private laneSchedule: RequestPriority[];
   private queuedByLane: Record<RequestPriority, number> = {
     critical: 0,
     standard: 0,
     background: 0,
   };
-  private queueGeneration = 0;
   private queuedRequests = 0;
   private routeBuckets = new Map<string, string>();
 
-  constructor(
-    options: RestSchedulerOptions,
-    private readonly executor: (request: ScheduledRequest<TData>) => Promise<unknown>,
-  ) {
-    this.options = normalizeRestSchedulerOptions(options);
-    this.laneSchedule = this.buildLaneSchedule(this.options.lanes);
-  }
+  constructor(private readonly executor: (request: ScheduledRequest<TData>) => Promise<unknown>) {}
 
   enqueue(params: {
     method: string;
@@ -126,103 +86,74 @@ export class RestScheduler<TData> {
     data?: TData;
     priority: RequestPriority;
     query?: RequestQuery;
+    signal?: AbortSignal;
   }): Promise<unknown> {
-    if (this.queuedRequests >= this.options.maxQueueSize) {
+    if (this.queuedRequests >= MAX_QUEUE_SIZE) {
       throw new Error("Discord request queue is full");
     }
-    const laneOptions = this.options.lanes[params.priority];
-    if (this.queuedByLane[params.priority] >= laneOptions.maxQueueSize) {
-      this.laneDropped[params.priority] += 1;
-      throw new Error(
-        `Discord ${params.priority} request queue is full (${this.queuedByLane[params.priority]} / ${laneOptions.maxQueueSize})`,
-      );
+    const signal = params.signal;
+    if (signal?.aborted) {
+      return Promise.reject(abortReason(signal));
     }
     const routeKey = createRouteKey(params.method, params.path);
     const bucket = this.getBucket(this.routeBuckets.get(routeKey) ?? routeKey);
     return new Promise((resolve, reject) => {
-      this.queuedRequests += 1;
-      this.queuedByLane[params.priority] += 1;
-      bucket.pending[params.priority].push({
+      const request: ScheduledRequest<TData> = {
         ...params,
-        enqueuedAt: Date.now(),
-        generation: this.queueGeneration,
         routeKey,
         retryCount: 0,
-        resolve,
-        reject,
-      });
+        state: "queued",
+        resolve: (value) => {
+          this.settleRequest(request);
+          resolve(value);
+        },
+        reject: (reason) => {
+          this.settleRequest(request);
+          reject(reason);
+        },
+      };
+      if (signal) {
+        const onAbort = () => this.cancelQueuedRequest(request);
+        signal.addEventListener("abort", onAbort, { once: true });
+        request.detachAbort = () => signal.removeEventListener("abort", onAbort);
+      }
+      this.queuedRequests += 1;
+      this.queuedByLane[params.priority] += 1;
+      bucket.pending[params.priority].push(request);
       this.drainQueues();
     });
   }
 
-  recordResponse(routeKey: string, path: string, response: Response, parsed: unknown): void {
-    this.updateRateLimitState(routeKey, path, response, parsed);
-    this.recordInvalidRequest(routeKey, path, response);
-  }
-
-  clearQueue(): void {
-    this.queueGeneration += 1;
-    if (this.drainTimer) {
-      clearTimeout(this.drainTimer);
-      this.drainTimer = undefined;
+  /** Settles each request once, whether it completed, failed, or was cancelled. */
+  private settleRequest(request: ScheduledRequest<TData>): void {
+    if (request.state === "settled") {
+      return;
     }
-    this.rejectPending(new Error("Discord request queue cleared"));
+    request.state = "settled";
+    request.detachAbort?.();
+    request.detachAbort = undefined;
+    this.queuedRequests = Math.max(0, this.queuedRequests - 1);
   }
 
-  abortPending(): void {
-    this.queueGeneration += 1;
-    this.rejectPending(new DOMException("Aborted", "AbortError"));
-  }
-
-  get queueSize(): number {
-    return this.queuedRequests;
-  }
-
-  getMetrics() {
-    this.pruneInvalidRequests();
-    return {
-      globalRateLimitUntil: this.globalRateLimitUntil,
-      activeBuckets: this.buckets.size,
-      routeBucketMappings: this.routeBuckets.size,
-      buckets: Array.from(this.buckets.entries()).map(([key, bucket]) => ({
-        key,
-        active: bucket.active,
-        bucket: bucket.bucket,
-        invalidRequests: bucket.invalidRequests,
-        pending: countPending(bucket),
-        pendingByLane: Object.fromEntries(
-          requestPriorities.map((lane) => [lane, bucket.pending[lane].length]),
-        ),
-        rateLimitHits: bucket.rateLimitHits,
-        remaining: bucket.remaining,
-        resetAt: bucket.resetAt,
-        routeKeyCount: bucket.routeKeys.size,
-      })),
-      invalidRequestCount: this.invalidRequestTimestamps.length,
-      invalidRequestCountByStatus: this.invalidRequestTimestamps.reduce<Record<number, number>>(
-        (counts, entry) => {
-          counts[entry.status] = (counts[entry.status] ?? 0) + 1;
-          return counts;
-        },
-        {},
-      ),
-      queueSize: this.queueSize,
-      queueSizeByLane: { ...this.queuedByLane },
-      droppedByLane: { ...this.laneDropped },
-      oldestQueuedByLane: Object.fromEntries(
-        requestPriorities.map((lane) => [lane, this.getOldestQueuedAge(lane)]),
-      ),
-      activeWorkers: this.activeWorkers,
-      maxConcurrentWorkers: this.maxConcurrentWorkers,
-    };
-  }
-
-  private get maxConcurrentWorkers(): number {
-    return this.options.maxConcurrency;
-  }
-
-  private get maxRateLimitRetries(): number {
-    return this.options.maxRateLimitRetries;
+  /** Drops a queued attempt; dispatched work settles normally. */
+  private cancelQueuedRequest(request: ScheduledRequest<TData>): void {
+    if (request.state !== "queued") {
+      return;
+    }
+    for (const bucket of this.buckets.values()) {
+      for (const lane of requestPriorities) {
+        const queue = bucket.pending[lane];
+        const index = queue.indexOf(request);
+        if (index < 0) {
+          continue;
+        }
+        queue.splice(index, 1);
+        this.queuedByLane[lane] = Math.max(0, this.queuedByLane[lane] - 1);
+        request.reject(abortReason(request.signal));
+        return;
+      }
+    }
+    request.reject(abortReason(request.signal));
   }
 
   private getBucket(key: string): BucketState<TData> {
@@ -232,56 +163,12 @@ export class RestScheduler<TData> {
     }
     const bucket: BucketState<TData> = {
       active: 0,
-      invalidRequests: 0,
-      pending: createLaneQueues(),
-      rateLimitHits: 0,
+      pending: { critical: [], standard: [], background: [] },
       resetAt: 0,
       routeKeys: new Set([key]),
     };
     this.buckets.set(key, bucket);
     return bucket;
-  }
-
-  private hasBucketReference(key: string): boolean {
-    for (const bucketKey of this.routeBuckets.values()) {
-      if (bucketKey === key) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private isBucketRateLimited(bucket: BucketState<TData>, now = Date.now()): boolean {
-    return bucket.remaining === 0 && bucket.resetAt > now;
-  }
-
-  private pruneRouteMapping(routeKey: string): void {
-    const bucketKey = this.routeBuckets.get(routeKey);
-    if (!bucketKey) {
-      return;
-    }
-    this.routeBuckets.delete(routeKey);
-    this.buckets.get(bucketKey)?.routeKeys.delete(routeKey);
-  }
-
-  private pruneIdleRouteMappings(
-    bucketKey: string,
-    bucket: BucketState<TData>,
-    now = Date.now(),
-  ): void {
-    if (bucket.active > 0 || countPending(bucket) > 0 || this.isBucketRateLimited(bucket, now)) {
-      return;
-    }
-    for (const routeKey of Array.from(bucket.routeKeys)) {
-      if (this.routeBuckets.get(routeKey) === bucketKey) {
-        this.pruneRouteMapping(routeKey);
-      }
-    }
-  }
-
-  private shouldPruneIdleBucket(key: string): boolean {
-    const mappedBucketKey = this.routeBuckets.get(key);
-    return mappedBucketKey !== key && !this.hasBucketReference(key);
   }
 
   private bindRouteToBucket(routeKey: string, bucketKey: string): BucketState<TData> {
@@ -301,17 +188,11 @@ export class RestScheduler<TData> {
     return target;
   }
 
-  private updateRateLimitState(
-    routeKey: string,
-    path: string,
-    response: Response,
-    parsed: unknown,
-  ): void {
+  recordResponse(routeKey: string, path: string, response: Response, parsed: unknown): void {
     const bucketHeader = readDiscordRateLimitBucket(response);
     const bucket = bucketHeader
       ? this.bindRouteToBucket(routeKey, createBucketKey(bucketHeader, path))
       : this.getBucket(this.routeBuckets.get(routeKey) ?? routeKey);
-    bucket.bucket = bucketHeader ?? bucket.bucket;
     const limit = readHeaderNumber(response.headers, "X-RateLimit-Limit");
     if (limit !== undefined) {
       bucket.limit = limit;
@@ -327,8 +208,7 @@ export class RestScheduler<TData> {
     if (response.status !== 429) {
       return;
     }
-    bucket.rateLimitHits += 1;
-    const retryAfterMs = Math.max(0, readRetryAfter(parsed, response, 1) * 1000);
+    const retryAfterMs = Math.max(0, readRetryAfter(parsed, response) * 1000);
     const retryAt = resolveRateLimitResetAt(retryAfterMs);
     if (retryAt === undefined) {
       return;
@@ -339,36 +219,6 @@ export class RestScheduler<TData> {
     }
     bucket.remaining = 0;
     bucket.resetAt = Math.max(bucket.resetAt, retryAt);
-  }
-
-  private recordInvalidRequest(routeKey: string, path: string, response: Response): void {
-    if (response.status !== 401 && response.status !== 403 && response.status !== 429) {
-      return;
-    }
-    if (response.status === 429 && response.headers.get("X-RateLimit-Scope") === "shared") {
-      return;
-    }
-    const now = Date.now();
-    this.invalidRequestTimestamps.push({ at: now, status: response.status });
-    this.pruneInvalidRequests(now);
-    const bucketHeader = readDiscordRateLimitBucket(response);
-    const bucketKey = bucketHeader
-      ? createBucketKey(bucketHeader, path)
-      : (this.routeBuckets.get(routeKey) ?? routeKey);
-    const bucket = this.buckets.get(bucketKey);
-    if (bucket) {
-      bucket.invalidRequests += 1;
-    }
-  }
-
-  private pruneInvalidRequests(now = Date.now()): void {
-    const cutoff = now - INVALID_REQUEST_WINDOW_MS;
-    while (
-      this.invalidRequestTimestamps.length > 0 &&
-      (this.invalidRequestTimestamps[0]?.at ?? 0) <= cutoff
-    ) {
-      this.invalidRequestTimestamps.shift();
-    }
   }
 
   private getBucketWaitMs(bucket: BucketState<TData>, now: number): number {
@@ -392,16 +242,15 @@ export class RestScheduler<TData> {
       },
       resolveTimerTimeoutMs(delayMs, 0, 0),
     );
-    this.drainTimer.unref?.();
+    this.drainTimer.unref();
   }
 
   private drainQueues(): void {
-    let nextDelayMs = Number.POSITIVE_INFINITY;
-    while (this.activeWorkers < this.maxConcurrentWorkers) {
+    while (this.activeWorkers < MAX_CONCURRENT_WORKERS) {
       const next = this.takeNextQueuedRequest();
       if (!next.queued) {
-        if (next.waitMs !== undefined) {
-          nextDelayMs = Math.min(nextDelayMs, next.waitMs);
+        if (next.waitMs !== undefined && Number.isFinite(next.waitMs)) {
+          this.scheduleDrain(next.waitMs);
         }
         break;
       }
@@ -413,9 +262,6 @@ export class RestScheduler<TData> {
       this.activeWorkers += 1;
       void this.runQueuedRequest(queued, bucket);
     }
-    if (Number.isFinite(nextDelayMs)) {
-      this.scheduleDrain(nextDelayMs);
-    }
   }
 
   private takeNextQueuedRequest():
@@ -425,24 +271,33 @@ export class RestScheduler<TData> {
     if (this.globalRateLimitUntil > now) {
       return { waitMs: this.globalRateLimitUntil - now };
     }
-    this.pruneIdleBuckets(now);
+    for (const [key, bucket] of this.buckets) {
+      if (bucket.active !== 0 || countPending(bucket) > 0) {
+        continue;
+      }
+      if (bucket.remaining === 0 && bucket.resetAt > now) {
+        continue;
+      }
+      for (const routeKey of bucket.routeKeys) {
+        if (this.routeBuckets.get(routeKey) === key) {
+          this.routeBuckets.delete(routeKey);
+        }
+      }
+      this.buckets.delete(key);
+    }
     let nextDelayMs: number | undefined;
     const buckets = Array.from(this.buckets.values()).filter((bucket) => countPending(bucket) > 0);
     if (buckets.length === 0) {
       return {};
     }
-    for (let laneOffset = 0; laneOffset < this.laneSchedule.length; laneOffset += 1) {
-      const lane = this.laneSchedule[(this.laneCursor + laneOffset) % this.laneSchedule.length];
+    for (let laneOffset = 0; laneOffset < laneSchedule.length; laneOffset += 1) {
+      const lane = laneSchedule[(this.laneCursor + laneOffset) % laneSchedule.length];
       if (!lane || this.queuedByLane[lane] <= 0) {
         continue;
       }
       for (const bucket of buckets) {
         const queue = bucket.pending[lane];
-        this.dropStaleHeadRequests(queue, lane, now);
-        if (queue.length === 0) {
-          continue;
-        }
-        if (bucket.active > 0) {
+        if (queue.length === 0 || bucket.active > 0) {
           continue;
         }
         const waitMs = this.getBucketWaitMs(bucket, now);
@@ -454,139 +309,60 @@ export class RestScheduler<TData> {
         if (!queued) {
           continue;
         }
+        queued.state = "dispatched";
         this.queuedByLane[lane] = Math.max(0, this.queuedByLane[lane] - 1);
-        this.laneCursor = (this.laneCursor + laneOffset + 1) % this.laneSchedule.length;
+        this.laneCursor = (this.laneCursor + laneOffset + 1) % laneSchedule.length;
         return { bucket, queued };
       }
     }
     return { waitMs: nextDelayMs };
   }
 
-  private dropStaleHeadRequests(
-    queue: Array<ScheduledRequest<TData>>,
-    lane: RequestPriority,
-    now: number,
-  ): void {
-    if (lane !== "background") {
-      return;
-    }
-    const staleAfterMs = this.options.lanes[lane].staleAfterMs;
-    if (!staleAfterMs || staleAfterMs <= 0) {
-      return;
-    }
-    while (queue.length > 0 && now - (queue[0]?.enqueuedAt ?? now) > staleAfterMs) {
-      const stale = queue.shift();
-      if (!stale) {
-        continue;
-      }
-      this.queuedRequests = Math.max(0, this.queuedRequests - 1);
-      this.queuedByLane[lane] = Math.max(0, this.queuedByLane[lane] - 1);
-      this.laneDropped[lane] += 1;
-      stale.reject(new Error(`Dropped stale ${lane} request after ${now - stale.enqueuedAt}ms`));
-    }
-  }
-
-  private pruneIdleBuckets(now = Date.now()): void {
-    for (const [key, bucket] of this.buckets) {
-      if (bucket.active !== 0 || countPending(bucket) > 0) {
-        continue;
-      }
-      if (this.isBucketRateLimited(bucket, now)) {
-        continue;
-      }
-      this.pruneIdleRouteMappings(key, bucket, now);
-      if (this.shouldPruneIdleBucket(key)) {
-        this.buckets.delete(key);
-      }
-    }
-  }
-
   private async runQueuedRequest(
     queued: ScheduledRequest<TData>,
     bucket: BucketState<TData>,
   ): Promise<void> {
-    let requeued = false;
     try {
       queued.resolve(await this.executor(queued));
     } catch (error) {
       if (error instanceof RateLimitError && this.requeueRateLimitedRequest(queued)) {
-        requeued = true;
         return;
       }
-      queued.reject(error);
+      // A caller that cancelled during the issued attempt still learns the real
+      // transport outcome rather than a synthetic abort.
+      queued.reject(error instanceof Error ? error : new Error(String(error)));
     } finally {
       bucket.active = Math.max(0, bucket.active - 1);
       this.activeWorkers = Math.max(0, this.activeWorkers - 1);
-      if (!requeued) {
-        this.queuedRequests = Math.max(0, this.queuedRequests - 1);
-      }
-      if (bucket.active === 0 && countPending(bucket) === 0) {
-        for (const routeKey of bucket.routeKeys) {
-          if (this.routeBuckets.get(routeKey) === routeKey) {
-            this.routeBuckets.delete(routeKey);
-          }
-        }
-      }
       this.drainQueues();
     }
   }
 
   private requeueRateLimitedRequest(queued: ScheduledRequest<TData>): boolean {
-    if (
-      queued.generation !== this.queueGeneration ||
-      queued.retryCount >= this.maxRateLimitRetries
-    ) {
+    // A caller that aborted while the attempt was in flight must not have its
+    // never-issued retry queued again.
+    if (queued.signal?.aborted || queued.retryCount >= MAX_RATE_LIMIT_RETRIES) {
       return false;
     }
     const bucketKey = this.routeBuckets.get(queued.routeKey) ?? queued.routeKey;
-    this.getBucket(bucketKey).pending[queued.priority].push({
-      ...queued,
-      enqueuedAt: Date.now(),
-      retryCount: queued.retryCount + 1,
-    });
+    queued.retryCount += 1;
+    queued.state = "queued";
+    this.getBucket(bucketKey).pending[queued.priority].push(queued);
     this.queuedByLane[queued.priority] += 1;
     return true;
   }
+}
 
-  private rejectPending(error: Error | DOMException): void {
-    for (const bucket of this.buckets.values()) {
-      for (const lane of requestPriorities) {
-        for (const queued of bucket.pending[lane].splice(0)) {
-          queued.reject(error);
-          this.queuedRequests = Math.max(0, this.queuedRequests - 1);
-          this.queuedByLane[lane] = Math.max(0, this.queuedByLane[lane] - 1);
-        }
-      }
-    }
-  }
-
-  private buildLaneSchedule(lanes: Record<RequestPriority, RestSchedulerLaneOptions>) {
-    const schedule: RequestPriority[] = [];
-    for (const lane of requestPriorities) {
-      const weight = lanes[lane].weight;
-      for (let i = 0; i < weight; i += 1) {
-        schedule.push(lane);
-      }
-    }
-    return schedule.length > 0 ? schedule : [...requestPriorities];
-  }
-
-  private getOldestQueuedAge(lane: RequestPriority): number {
-    const now = Date.now();
-    let oldest = 0;
-    for (const bucket of this.buckets.values()) {
-      const queued = bucket.pending[lane][0];
-      if (!queued) {
-        continue;
-      }
-      oldest = Math.max(oldest, now - queued.enqueuedAt);
-    }
-    return oldest;
-  }
+/** Promise rejections always carry an Error; a non-Error abort reason uses the standard shape. */
+function abortReason(signal?: AbortSignal): Error {
+  const reason = signal?.reason;
+  return reason instanceof Error
+    ? reason
+    : new DOMException("The operation was aborted.", "AbortError");
 }
 
 function isGlobalRateLimit(parsed: unknown): boolean {
   return parsed && typeof parsed === "object" && "global" in parsed
-    ? Boolean((parsed as { global?: unknown }).global)
+    ? Boolean(parsed.global)
     : false;
 }

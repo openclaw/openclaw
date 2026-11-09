@@ -24,9 +24,9 @@ import {
   classifyAgentRunTerminalOutcome,
 } from "../agent-run-terminal-outcome.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
-import type { AgentRunSessionTarget } from "../run-session-target.js";
+import { resolveCommandReplyExpectation, resolveReplyCompletion } from "../reply-completion.js";
+import type { AgentRunSessionTarget } from "../run-session-target.types.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
-import { applyAgentRunAbortMetadata } from "./lifecycle.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import {
   loadAcpPolicyRuntime,
@@ -75,6 +75,17 @@ export async function runAcpAgentCommand(params: {
   const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
   const acpToolTracker = attemptExecutionRuntime.createAcpToolLifecycleTracker();
   const startedAt = Date.now();
+  const lifecycleContext = {
+    runId: params.runId,
+    agentId: params.sessionAgentId,
+    lifecycleGeneration: params.lifecycleGeneration,
+  };
+  const runtimeEventContext = {
+    ...lifecycleContext,
+    toolTracker: acpToolTracker,
+    sessionKey: params.sessionKey,
+    abortSignal: params.opts.abortSignal,
+  };
   const coordination = isSubagentCoordinationInputProvenance(params.opts.inputProvenance);
   registerAgentRunContext(params.runId, {
     sessionKey: params.sessionKey,
@@ -86,10 +97,8 @@ export async function runAcpAgentCommand(params: {
     ...(coordination ? { projectSessionMessages: false } : {}),
   });
   attemptExecutionRuntime.emitAcpLifecycleStart({
-    runId: params.runId,
+    ...lifecycleContext,
     startedAt,
-    agentId: params.sessionAgentId,
-    lifecycleGeneration: params.lifecycleGeneration,
   });
 
   const visibleTextAccumulator = attemptExecutionRuntime.createAcpVisibleTextAccumulator();
@@ -149,11 +158,7 @@ export async function runAcpAgentCommand(params: {
           }
           if (payload.text) {
             attemptExecutionRuntime.emitAcpRuntimeEvent({
-              runId: params.runId,
-              toolTracker: acpToolTracker,
-              sessionKey: params.sessionKey,
-              agentId: params.sessionAgentId,
-              abortSignal: params.opts.abortSignal,
+              ...runtimeEventContext,
               event: { type: "status", text: payload.text, tag: "elicitation" },
             });
           }
@@ -198,11 +203,7 @@ export async function runAcpAgentCommand(params: {
       onEvent: (event) => {
         if (event.type !== "text_delta") {
           attemptExecutionRuntime.emitAcpRuntimeEvent({
-            runId: params.runId,
-            toolTracker: acpToolTracker,
-            sessionKey: params.sessionKey,
-            agentId: params.sessionAgentId,
-            abortSignal: params.opts.abortSignal,
+            ...runtimeEventContext,
             event,
           });
         }
@@ -239,13 +240,9 @@ export async function runAcpAgentCommand(params: {
       fallbackMessage: "ACP turn failed before completion.",
     });
     attemptExecutionRuntime.emitAcpLifecycleError({
-      runId: params.runId,
-      toolTracker: acpToolTracker,
+      ...runtimeEventContext,
       error: acpError,
-      sessionKey: params.sessionKey,
-      agentId: params.sessionAgentId,
-      lifecycleGeneration: params.lifecycleGeneration,
-      abortSignal: params.opts.abortSignal,
+      terminalReply: visibleTextAccumulator.finalizeReplySnapshot(),
       ...(terminalOutcome ? { terminalOutcome } : {}),
     });
     throw acpError;
@@ -282,9 +279,11 @@ export async function runAcpAgentCommand(params: {
       : undefined;
     params.trackInternalModelRunTarget(internalTarget);
     const transcriptResult = await attemptExecutionRuntime.persistAcpTurnTranscript({
+      assistantIdempotencyKey: params.runId,
       body: params.body,
       transcriptBody: params.transcriptBody,
       inputProvenance: params.opts.inputProvenance,
+      privateCompletion: params.opts.privateCompletion,
       userTurnTranscriptRecorder: params.opts.userTurnTranscriptRecorder,
       ...(!params.opts.userTurnTranscriptRecorder &&
       params.opts.suppressPromptPersistence !== true &&
@@ -310,6 +309,7 @@ export async function runAcpAgentCommand(params: {
       threadId: params.opts.threadId,
       sessionCwd: resolveAcpSessionCwd(params.acpResolution.meta) ?? params.workspaceDir,
       config: params.cfg,
+      runId: params.runId,
     });
     if (!internalTarget) {
       sessionEntry = transcriptResult.sessionEntry;
@@ -322,36 +322,60 @@ export async function runAcpAgentCommand(params: {
   const restartAbortReason = params.opts.abortSignal?.reason;
   if (isAgentRunRestartAbortReason(restartAbortReason)) {
     attemptExecutionRuntime.emitAcpLifecycleError({
-      runId: params.runId,
-      toolTracker: acpToolTracker,
+      ...runtimeEventContext,
       error: restartAbortReason,
-      sessionKey: params.sessionKey,
-      agentId: params.sessionAgentId,
-      lifecycleGeneration: params.lifecycleGeneration,
-      abortSignal: params.opts.abortSignal,
+      terminalReply,
     });
     throw restartAbortReason;
   }
+  const expectation =
+    resolveCommandReplyExpectation({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
+      messageChannel:
+        params.opts.runContext?.messageChannel ??
+        params.opts.messageProvider ??
+        params.opts.channel,
+      opts: params.opts,
+    }) ?? "required";
+  if (
+    resultStatus !== "cancelled" &&
+    !params.opts.abortSignal?.aborted &&
+    resolveReplyCompletion(
+      expectation,
+      terminalReply.disposition === "visible" ? "ready" : terminalReply.disposition,
+    ).outcome === "missing"
+  ) {
+    const { toAcpRuntimeError } = await loadAcpRuntimeErrorsRuntime();
+    const error = toAcpRuntimeError({
+      error: new Error("ACP backend returned an empty response."),
+      fallbackCode: "ACP_TURN_FAILED",
+      fallbackMessage: "ACP backend returned an empty response.",
+    });
+    attemptExecutionRuntime.emitAcpLifecycleError({
+      ...runtimeEventContext,
+      error,
+      terminalReply,
+    });
+    throw error;
+  }
   attemptExecutionRuntime.emitAcpLifecycleEnd({
-    runId: params.runId,
+    ...lifecycleContext,
     toolTracker: acpToolTracker,
-    agentId: params.sessionAgentId,
-    lifecycleGeneration: params.lifecycleGeneration,
     endFields,
     terminalReply,
   });
 
-  const result = applyAgentRunAbortMetadata(
-    attemptExecutionRuntime.buildAcpResult({
-      payloadText: finalText,
-      terminalReply,
-      startedAt,
-      stopReason,
-      resultStatus,
-      abortSignal: params.opts.abortSignal,
-    }),
-    params.opts.abortSignal,
-  );
+  const result = attemptExecutionRuntime.buildAcpResult({
+    payloadText: finalText,
+    terminalReply,
+    startedAt,
+    stopReason,
+    resultStatus,
+    abortSignal: params.opts.abortSignal,
+  });
+  await params.opts.beforeTerminalDelivery?.();
   const { deliverAgentCommandResult } = await loadDeliveryRuntime();
   const deliveryResult = await deliverAgentCommandResult({
     cfg: params.cfg,

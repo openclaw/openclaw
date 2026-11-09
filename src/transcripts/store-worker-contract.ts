@@ -1,4 +1,3 @@
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type { TranscriptSessionDescriptor, TranscriptSourceLocator } from "./provider-types.js";
 import type {
   queryTranscriptReadEntries,
@@ -10,51 +9,45 @@ import type {
   TranscriptReadPurpose,
 } from "./store-read.js";
 import type {
+  readTranscriptCanonicalSessionRow,
+  readTranscriptExportOwnership,
+  readTranscriptExportPathCollisions,
+  readTranscriptExportPathOwners,
   readTranscriptSessionByIdentity,
   readTranscriptSessionEntries,
   readTranscriptSessionMatches,
   readStoredTranscriptSummary,
   readTranscriptUtterances,
   readTranscriptSummarySnapshot,
+  readTranscriptJsonlDigest,
 } from "./store-sqlite-read.js";
-import type { writeMeetingTranscriptSummaryInDatabase } from "./store-sqlite-write.js";
 import type {
-  appendMeetingTranscriptUtterance,
   readRecentStoppedTranscriptSession,
   readTranscriptSummaryInputRevision,
 } from "./store-sqlite.js";
 
 type SessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
 
-/** Host-only capture scheduling; functions never cross the worker boundary. */
-export type TranscriptAppendScheduler = (
-  write: (assertCurrent: () => void) => Promise<void>,
-) => Promise<void>;
-
-export type TranscriptWriteOperations = {
-  "transcripts.append": {
-    input: Omit<Parameters<typeof appendMeetingTranscriptUtterance>[0], "database"> & {
-      readOnly?: boolean;
-    };
-    output: void;
-  };
-  "transcripts.writeSummary": {
-    input: {
-      session: SessionIdentity;
-      summaryValues: Parameters<typeof writeMeetingTranscriptSummaryInDatabase>[2];
-      guard?: Parameters<typeof writeMeetingTranscriptSummaryInDatabase>[3];
-      readOnly?: boolean;
-    };
-    output: { ok: true } | { ok: false; reason: "changed" };
-  };
-};
-
-export type TranscriptWriteCommand = SqliteWorkerCommand<TranscriptWriteOperations>;
-
 export type TranscriptReadRequests = {
+  "transcripts.canonicalSessionRow": {
+    input: { selector: string };
+    output: ReturnType<typeof readTranscriptCanonicalSessionRow>;
+  };
   "transcripts.readEntries": {
     input: Parameters<typeof queryTranscriptReadEntries>[1];
     output: ReturnType<typeof queryTranscriptReadEntries>;
+  };
+  "transcripts.exportOwnership": {
+    input: { session: SessionIdentity };
+    output: ReturnType<typeof readTranscriptExportOwnership>;
+  };
+  "transcripts.exportPathCollisions": {
+    input: { exportKey: string };
+    output: ReturnType<typeof readTranscriptExportPathCollisions>;
+  };
+  "transcripts.exportPathOwners": {
+    input: { exportKey: string };
+    output: ReturnType<typeof readTranscriptExportPathOwners>;
   };
   "transcripts.summarySnapshot": {
     input: { session: SessionIdentity; maxUtterances: number };
@@ -78,7 +71,7 @@ export type TranscriptReadRequests = {
   };
   "transcripts.latest": { input: undefined; output: ReturnType<typeof readLatestTranscriptEntry> };
   "transcripts.notes": {
-    input: { session: SessionIdentity; purpose: TranscriptReadPurpose };
+    input: { session: SessionIdentity };
     output: ReturnType<typeof readStoredTranscriptNotes>;
   };
   "transcripts.libraryEntry": {
@@ -94,12 +87,16 @@ export type TranscriptReadRequests = {
     output: ReturnType<typeof readTranscriptSummaryInputRevision>;
   };
   "transcripts.utterances": {
-    input: { session: SessionIdentity; maxUtterances?: number };
+    input: { session: SessionIdentity };
     output: ReturnType<typeof readTranscriptUtterances>;
   };
   "transcripts.summary": {
     input: { session: SessionIdentity };
     output: ReturnType<typeof readStoredTranscriptSummary>;
+  };
+  "transcripts.exportDigest": {
+    input: { session: SessionIdentity };
+    output: ReturnType<typeof readTranscriptJsonlDigest>;
   };
 };
 
@@ -113,5 +110,3 @@ export type TranscriptReadOperations = {
     output: TranscriptReadResult<TranscriptReadRequests[Key]["output"]>;
   };
 };
-
-export type TranscriptReadCommand = SqliteWorkerCommand<TranscriptReadOperations>;

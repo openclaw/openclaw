@@ -16,6 +16,10 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { onSqliteWalCheckpoint } from "./sqlite-wal-checkpoint.js";
+import { observeSqliteWalPeriodicWork } from "./sqlite-wal-scheduler.test-support.js";
+import * as walAdmission from "./sqlite-wal-write-admission.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
@@ -30,15 +34,30 @@ it.each(["keep", "close", "replace"] as const)(
     const root = tempDirs.make("openclaw-agent-wal-admission-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
       openOpenClawStateDatabase();
-      const intervals = vi.spyOn(globalThis, "setInterval");
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const timers = intervals.mock.calls.filter(([, delay]) => delay === 30 * 60 * 1000);
-      intervals.mockRestore();
-      expect(timers).toHaveLength(1);
-      const periodic = timers[0]?.[0];
-      if (typeof periodic !== "function") {
-        throw new Error("Expected the published agent's maintenance timer");
+      const scheduled = observeSqliteWalPeriodicWork();
+      const queued = createDeferredCore();
+      const register = walAdmission.registerSqliteWalWorkerMaintenance;
+      const registration = vi
+        .spyOn(walAdmission, "registerSqliteWalWorkerMaintenance")
+        .mockImplementation((database, execute, cancel) =>
+          register(
+            database,
+            (request) => {
+              const work = execute(request);
+              queued.resolve();
+              return work;
+            },
+            cancel,
+          ),
+        );
+      let database: ReturnType<typeof openOpenClawAgentDatabase>;
+      try {
+        database = openOpenClawAgentDatabase({ agentId: "main" });
+      } finally {
+        registration.mockRestore();
+        scheduled.restore();
       }
+      const periodic = scheduled.periodic;
       database.db
         .prepare(
           "INSERT INTO cache_entries(scope, key, value_json, blob, updated_at) VALUES ('wal-proof', 'pages', '{}', randomblob(4194304), 1)",
@@ -49,6 +68,9 @@ it.each(["keep", "close", "replace"] as const)(
         Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count);
       const before = freePages();
       expect(before).toBeGreaterThan(512);
+      const tickReclaimed = createDeferredCore();
+      let foreground: Promise<void> | undefined;
+      let foregroundFreePages = 0;
       const exec = vi.spyOn(database.db, "exec");
       const prepare = vi.spyOn(database.db, "prepare");
       const vacuumCalls = () =>
@@ -56,44 +78,118 @@ it.each(["keep", "close", "replace"] as const)(
       const checkpointCalls = () =>
         prepare.mock.calls.filter(([sql]) => sql.startsWith("PRAGMA wal_checkpoint("));
       const options = { agentId: "main", path: database.path };
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const reservation = runOpenClawAgentWorkerWrite(options, async () => {
-        entered.resolve();
-        await release.promise;
+      const unobserve = onSqliteWalCheckpoint((observation) => {
+        if (observation.databasePath !== database.path || retirement !== "keep") {
+          return;
+        }
+        if (observation.health.state === "error") {
+          tickReclaimed.reject(
+            new Error(observation.health.error ?? "Periodic WAL maintenance failed"),
+          );
+          return;
+        }
+        const remaining = freePages();
+        if (remaining <= before - 512) {
+          tickReclaimed.resolve();
+        } else if (remaining < before && !foreground) {
+          foreground = runOpenClawAgentWriteAdmission(options, () => {
+            foregroundFreePages = freePages();
+          });
+        }
       });
-      await entered.promise;
       try {
-        periodic();
-        periodic();
-        periodic();
-        expect(vacuumCalls()).toHaveLength(0);
-        expect(checkpointCalls()).toHaveLength(0);
-        expect(freePages()).toBe(before);
-        if (retirement !== "keep") {
-          expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
-          if (retirement === "replace") {
-            const replacement = openOpenClawAgentDatabase(options);
-            expect(replacement.db.isOpen).toBe(true);
-            expect(replacement.db === database.db).toBe(false);
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const reservation = runOpenClawAgentWorkerWrite(options, async () => {
+          entered.resolve();
+          await release.promise;
+        });
+        await entered.promise;
+        let initialPeriodicWork: Promise<unknown> | undefined;
+        try {
+          initialPeriodicWork = Promise.resolve(periodic());
+          // Retire queued maintenance only after sidecar inspection has released its guard.
+          await queued.promise;
+          expect(vacuumCalls()).toHaveLength(0);
+          expect(checkpointCalls()).toHaveLength(0);
+          expect(freePages()).toBe(before);
+          if (retirement !== "keep") {
+            expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+            if (retirement === "replace") {
+              const replacement = openOpenClawAgentDatabase(options);
+              expect(replacement.db.isOpen).toBe(true);
+              expect(replacement.db === database.db).toBe(false);
+            }
+          }
+        } finally {
+          release.resolve();
+          try {
+            await reservation;
+            if (retirement === "keep") {
+              await tickReclaimed.promise;
+            }
+            await runOpenClawAgentWriteAdmission(options, () => undefined);
+            await foreground;
+          } finally {
+            await initialPeriodicWork;
           }
         }
+        if (retirement === "keep") {
+          expect(vacuumCalls()).toEqual([]);
+          expect(checkpointCalls()).toEqual([]);
+          expect(database.walMaintenance.health).toMatchObject({
+            state: "complete",
+            warning: false,
+          });
+          const reclaimed = before - freePages();
+          expect(reclaimed).toBe(512);
+          expect(foregroundFreePages).toBeGreaterThan(before - 512);
+          expect(foregroundFreePages).toBeLessThan(before);
+          const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
+          try {
+            reader.exec("BEGIN");
+            reader.prepare("SELECT COUNT(*) FROM cache_entries").get();
+            database.db
+              .prepare(
+                "INSERT INTO cache_entries(scope,key,blob,updated_at) VALUES('wal-proof','held',zeroblob(4096),1)",
+              )
+              .run();
+            const heldFreePages = freePages();
+            for (const expectedState of ["blocked", "blocked", "complete"] as const) {
+              if (expectedState === "complete") {
+                reader.exec("ROLLBACK");
+              }
+              const observed = createDeferredCore();
+              const stop = onSqliteWalCheckpoint((event) => {
+                if (event.databasePath === database.path) {
+                  observed.resolve();
+                }
+              });
+              let periodicWork: Promise<unknown> | undefined;
+              try {
+                periodicWork = Promise.resolve(periodic());
+                await observed.promise;
+                expect(database.walMaintenance.health?.state).toBe(expectedState);
+                if (expectedState === "blocked") {
+                  expect(freePages()).toBe(heldFreePages);
+                }
+              } finally {
+                stop();
+                await periodicWork;
+              }
+              // Let the original scheduler settle before triggering the next interval.
+              await runOpenClawAgentWriteAdmission(options, () => undefined);
+            }
+            expect(checkpointCalls()).toEqual([]);
+            expect(vacuumCalls()).toEqual([]);
+          } finally {
+            reader.close();
+          }
+        } else {
+          expect(vacuumCalls()).toEqual([]);
+        }
       } finally {
-        release.resolve();
-        await reservation;
-        await runOpenClawAgentWriteAdmission(options, () => undefined);
-      }
-      expect(vacuumCalls()).toEqual(
-        retirement === "keep" ? [["PRAGMA incremental_vacuum(512);"]] : [],
-      );
-      if (retirement === "keep") {
-        expect(checkpointCalls()).toEqual([["PRAGMA wal_checkpoint(PASSIVE);"]]);
-        const reclaimed = before - freePages();
-        expect(reclaimed).toBeGreaterThan(0);
-        expect(reclaimed).toBeLessThanOrEqual(512);
-        periodic();
-        await runOpenClawAgentWriteAdmission(options, () => undefined);
-        expect(vacuumCalls()).toHaveLength(2);
+        unobserve();
       }
     });
   },
@@ -101,6 +197,7 @@ it.each(["keep", "close", "replace"] as const)(
 
 const workerSource = String.raw`
   const { parentPort, workerData } = require("node:worker_threads");
+  const { setImmediate: nextTurn } = require("node:timers/promises");
   const messages = [];
   let receiver;
   parentPort.on("message", (message) => {
@@ -119,12 +216,8 @@ const workerSource = String.raw`
     const agent = await import(workerData.agentModule);
     const state = await import(workerData.stateModule);
     state.openOpenClawStateDatabase();
-    const nativeInterval = globalThis.setInterval;
-    let periodic;
-    globalThis.setInterval = (callback, delay, ...args) => {
-      if (delay === 30 * 60 * 1000) periodic = () => callback(...args);
-      return nativeInterval(callback, delay, ...args);
-    };
+    const { observeSqliteWalPeriodicWork } = await import(workerData.walTestModule);
+    const scheduled = observeSqliteWalPeriodicWork();
     let phase = "opening";
     let admitted = false;
     let authorized = true;
@@ -148,8 +241,14 @@ const workerSource = String.raw`
     await agent.withOpenClawAgentDatabaseAdmission(workerData.options, withAdmission, (opened) => {
       database = opened;
     });
-    globalThis.setInterval = nativeInterval;
-    if (!periodic) throw new Error("Expected the retained Worker database timer");
+    scheduled.restore();
+    const periodic = scheduled.periodic;
+    const periodicWork = [];
+    const fs = require("node:fs");
+    const readdir = fs.promises.readdir.bind(fs.promises);
+    // Sidecar identity has separate coverage; drain this scan to the real deferred admission.
+    fs.promises.readdir = (pathname, ...args) => pathname === "/proc/self/fd"
+      ? Promise.resolve([]) : readdir(pathname, ...args);
     const nativeExec = database.db.exec.bind(database.db);
     const withinAdmission = [];
     database.db.exec = (sql) => {
@@ -159,24 +258,28 @@ const workerSource = String.raw`
     parentPort.postMessage({ type: "ready" });
     const command = await receive();
     if (command.type !== "tick") throw new Error("Expected timer command");
-    if (!workerData.revoke) { periodic(); periodic(); periodic(); }
+    if (!workerData.revoke) {
+      periodicWork.push(periodic(), periodic(), periodic());
+      await nextTurn();
+    }
     parentPort.postMessage({ type: "ticked", count: withinAdmission.length });
     if (!workerData.retire) {
       phase = "flush";
       await agent.withOpenClawAgentDatabaseAdmission(workerData.options, withAdmission, async () => {
         if (workerData.revoke) {
-          periodic();
-          await Promise.resolve();
+          periodicWork.push(periodic());
+          await nextTurn();
           authorized = false;
         }
       });
     }
     phase = "close";
-    await withAdmission(() => {
-      const cleanup = agent.settleOpenClawAgentDatabaseWorkerClose(database.path);
+    await withAdmission(async () => {
+      const cleanup = await agent.settleOpenClawAgentDatabaseWorkerClose(database.path);
       if (!cleanup.settled) throw new Error("Worker database cleanup did not settle");
       state.closeOpenClawStateDatabaseForTest();
     });
+    await Promise.all(periodicWork);
     parentPort.postMessage({ type: "result", withinAdmission });
     parentPort.close();
   })().catch((error) => {
@@ -196,6 +299,9 @@ it.each([
     const root = tempDirs.make("openclaw-worker-wal-admission-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
       const initialized = openOpenClawAgentDatabase({ agentId: "main" });
+      initialized.db.exec(`INSERT INTO cache_entries(scope, key, blob, updated_at)
+        VALUES ('wal-proof', 'pages', zeroblob(4194304), 1);
+        DELETE FROM cache_entries WHERE scope = 'wal-proof';`);
       const options = {
         agentId: "main",
         path: initialized.path,
@@ -212,6 +318,7 @@ it.each([
           loader: import.meta.resolve("tsx/esm/api"),
           agentModule: new URL("../state/openclaw-agent-db.ts", import.meta.url).href,
           stateModule: new URL("../state/openclaw-state-db.ts", import.meta.url).href,
+          walTestModule: new URL("./sqlite-wal-scheduler.test-support.ts", import.meta.url).href,
         },
       });
       const ready = createDeferredCore();

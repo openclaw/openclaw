@@ -131,7 +131,6 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "runtime-config",
     "secrets",
     "shared-core",
-    "tasks",
     "tooling-docker",
     "tooling-isolated",
     "tooling",
@@ -183,6 +182,7 @@ export function createScopedVitestConfig(
     env?: Record<string, string | undefined>;
     environment?: string;
     exclude?: string[];
+    execArgv?: string[];
     argv?: string[];
     includeOpenClawRuntimeSetup?: boolean;
     isolate?: boolean;
@@ -245,6 +245,7 @@ export function createScopedVitestConfig(
       ...(options?.deps ? { deps: options.deps } : {}),
       ...(options?.name ? { name: options.name } : {}),
       ...(options?.environment ? { environment: options.environment } : {}),
+      ...(options?.execArgv ? { execArgv: options.execArgv } : {}),
       isolate,
       ...(runner ? { runner } : { runner: undefined }),
       setupFiles,

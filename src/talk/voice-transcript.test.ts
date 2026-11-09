@@ -1,13 +1,37 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
-  createVoiceTranscriptOperationRegistry,
+  buildPersistedVoiceMessage,
+  VoiceTranscriptOperationRegistry,
   VOICE_TRANSCRIPT_QUEUE_POLICY,
 } from "./voice-transcript.js";
 
+describe("persisted speech presentation", () => {
+  it.each([
+    { role: "user" as const, providerOwned: true },
+    { role: "assistant" as const, providerOwned: false },
+    { role: "assistant" as const, providerOwned: undefined },
+  ])(
+    "keeps $role speech without provider-owned assistant presentation ($providerOwned)",
+    (entry) => {
+      const message = buildPersistedVoiceMessage({
+        ...entry,
+        text: "Spoken words",
+        timestamp: 123,
+        provider: "openai",
+      });
+      expect(message).not.toHaveProperty("__openclaw.voiceTranscript");
+      expect(message).toMatchObject({
+        role: entry.role,
+        content: [{ type: "text", text: "Spoken words" }],
+      });
+    },
+  );
+});
+
 describe("VoiceTranscriptOperationRegistry", () => {
   it("rejects close after an accepted operation fails and releases the failed owner", async () => {
-    const registry = createVoiceTranscriptOperationRegistry(VOICE_TRANSCRIPT_QUEUE_POLICY);
+    const registry = new VoiceTranscriptOperationRegistry();
     const first = createDeferred();
     const key = "agent\0voice-failure";
     const active = registry.run(key, () => first.promise);
@@ -31,7 +55,7 @@ describe("VoiceTranscriptOperationRegistry", () => {
   });
 
   it("keeps overflow terminal through drain and releases it only on close", async () => {
-    const registry = createVoiceTranscriptOperationRegistry(VOICE_TRANSCRIPT_QUEUE_POLICY);
+    const registry = new VoiceTranscriptOperationRegistry();
     const first = createDeferred();
     const key = "agent\0voice-overflow";
     const accepted = [
@@ -48,9 +72,9 @@ describe("VoiceTranscriptOperationRegistry", () => {
     await Promise.all(accepted);
 
     const controlOperation = vi.fn();
-    await expect(
-      registry.run(key, controlOperation, { weight: 0, waitForCapacity: true }),
-    ).rejects.toThrow("voice transcript persistence queue capacity exceeded");
+    await expect(registry.run(key, controlOperation, { weight: 0 })).rejects.toThrow(
+      "voice transcript persistence queue capacity exceeded",
+    );
     expect(controlOperation).not.toHaveBeenCalled();
 
     const closeOperation = vi.fn();
@@ -58,9 +82,7 @@ describe("VoiceTranscriptOperationRegistry", () => {
       closeOperation();
     });
     expect(closeOperation).toHaveBeenCalledOnce();
-    await expect(
-      registry.run(key, controlOperation, { weight: 0, waitForCapacity: true }),
-    ).resolves.toBeUndefined();
+    await expect(registry.run(key, controlOperation, { weight: 0 })).resolves.toBeUndefined();
     expect(controlOperation).toHaveBeenCalledOnce();
   });
 });

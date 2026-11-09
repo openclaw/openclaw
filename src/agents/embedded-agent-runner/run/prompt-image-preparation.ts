@@ -1,5 +1,6 @@
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
+import { isImageMediaFact, readPersistedMediaFacts } from "../../../media/media-facts.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import { detectAndLoadPromptImages } from "./images.js";
@@ -10,17 +11,6 @@ type PromptExecutionAttempt = Pick<
   "config" | "imageOrder" | "images" | "media" | "userTurnTranscriptRecorder" | "workspaceDir"
 > & { model: { input?: string[] } };
 type PromptImageResult = Awaited<ReturnType<typeof detectAndLoadPromptImages>>;
-
-function emptyPromptImages(): PromptImageResult {
-  return {
-    images: [],
-    imageFactIndexes: [],
-    detectedRefs: [],
-    failedMediaCount: 0,
-    loadedCount: 0,
-    skippedCount: 0,
-  };
-}
 
 /** Prepares ordered prompt images using the admitted media and filesystem policy. */
 export async function prepareEmbeddedAttemptPromptExecution(input: {
@@ -40,10 +30,18 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
   }
 > {
   if (input.skipPromptSubmission) {
-    return emptyPromptImages();
+    return {
+      images: [],
+      imageFactIndexes: [],
+      detectedRefs: [],
+      failedMediaCount: 0,
+      loadedCount: 0,
+      skippedCount: 0,
+    };
   }
 
   const { attempt } = input;
+  let localRoots: readonly string[] | undefined;
   const result = await detectAndLoadPromptImages({
     prompt: input.prompt,
     workspaceDir: input.effectiveWorkspace,
@@ -58,7 +56,11 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
     workspaceOnly: input.effectiveFsWorkspaceOnly,
     localRoots: input.effectiveFsWorkspaceOnly
       ? undefined
-      : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.mediaOwnerAgentId),
+      : () =>
+          (localRoots ??= getAgentScopedMediaLocalRoots(
+            attempt.config ?? {},
+            input.mediaOwnerAgentId,
+          )),
     sandbox:
       input.sandbox?.enabled && input.sandbox.fsBridge
         ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
@@ -72,9 +74,14 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
       `failed to hydrate ${result.failedMediaCount} structured image attachment(s) for plugin harness input`,
     );
   }
+  const message = await attempt.userTurnTranscriptRecorder?.resolveMessage();
+  const media = ((message ? readPersistedMediaFacts(message) : undefined) ?? attempt.media)?.filter(
+    (fact) => !isImageMediaFact(fact),
+  );
   return {
     ...result,
     imageOrder: result.images.length ? result.images.map(() => "inline" as const) : undefined,
-    media: undefined,
+    // Images are already inline; native harnesses still need admitted file sources.
+    media: media?.length ? media : undefined,
   };
 }

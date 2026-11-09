@@ -3,10 +3,15 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { canonicalSparkleBuildFromVersion } from "../scripts/sparkle-build.ts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../src/infra/runtime-worker-url.js";
+import { toolingTsEntrypoints } from "./scripts/tooling-ts-runtime.test-support.js";
 
 const APPCAST_URL = new URL("../appcast.xml", import.meta.url);
 
@@ -23,14 +28,20 @@ describe("canonicalSparkleBuildFromVersion", () => {
       const repo = fileURLToPath(new URL("../", import.meta.url));
       const linkedRepo = path.join(fixture, "checkout");
       symlinkSync(repo, linkedRepo, "junction");
-      const script = path.join(kind === "linked" ? linkedRepo : repo, "scripts/sparkle-build.ts");
+      const preparedScript = fileURLToPath(
+        resolveRuntimeWorkerUrl(toolingTsEntrypoints.sparkleBuild),
+      );
+      const script = path.join(
+        kind === "linked" ? linkedRepo : repo,
+        path.relative(repo, preparedScript),
+      );
       for (const [version, status, stdout] of [
         ["2026.9.3", 0, "2609000390\n"],
         ["invalid", 1, ""],
       ] as const) {
         const result = spawnSync(
           process.execPath,
-          ["--import", "tsx", script, "canonical-build", version],
+          [...resolveRuntimeWorkerArgv(pathToFileURL(script)), "canonical-build", version],
           {
             cwd: repo,
             encoding: "utf8",

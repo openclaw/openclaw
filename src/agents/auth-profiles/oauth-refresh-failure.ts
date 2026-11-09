@@ -1,16 +1,20 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord,
+  readStringField,
+} from "@openclaw/normalization-core/record-coerce";
 import { normalizeBoundedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-/**
- * OAuth refresh failure classification and operator hints.
- * Parses provider/reason codes from refresh failures and formats safe login
- * commands without trusting raw provider text.
- */
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
+import { toErrorObject } from "../../infra/errors.js";
+import { redactSensitiveText } from "../../logging/redact.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
+import { isRecoverableOAuthRefreshFailure } from "../../shared/oauth-refresh-outcome.js";
 import { formatProviderLoginCommand } from "../../shared/provider-login-command.js";
-import type { AuthProfileFailureReason } from "./types.js";
+import type { AuthProfileFailureReason, AuthProfileStore, OAuthCredential } from "./types.js";
 
 export type OAuthRefreshFailureReason =
   | "refresh_token_reused"
@@ -30,19 +34,120 @@ type OAuthRefreshFailure = {
   summary?: string;
 };
 
-export type OAuthRefreshFailurePresentation = {
+type OAuthRefreshFailurePresentation = {
   errorType?: string;
   reason?: OAuthRefreshFailureReason;
   status?: number;
   summary?: string;
 };
 
+function formatRawErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    let formatted = error.message || error.name || "Error";
+    let cause: unknown = error.cause;
+    const seen = new Set<unknown>([error]);
+    while (cause && !seen.has(cause)) {
+      seen.add(cause);
+      if (cause instanceof Error) {
+        if (cause.message) {
+          formatted += ` | ${cause.message}`;
+        }
+        cause = cause.cause;
+      } else if (typeof cause === "string") {
+        formatted += ` | ${cause}`;
+        break;
+      } else {
+        break;
+      }
+    }
+    return formatted;
+  }
+  if (
+    typeof error === "string" ||
+    typeof error === "number" ||
+    typeof error === "boolean" ||
+    typeof error === "bigint"
+  ) {
+    return String(error);
+  }
+  try {
+    return JSON.stringify(error) ?? String(error);
+  } catch {
+    return Object.prototype.toString.call(error);
+  }
+}
+
+function formatRedactedOAuthRefreshError(error: unknown, secrets: string[]): string {
+  let redacted = formatRawErrorMessage(error);
+  for (const secret of secrets) {
+    redacted = redacted.split(secret).join("[redacted]");
+  }
+  return redactSensitiveText(redacted);
+}
+
+const oauthRefreshCleanupAggregates = new WeakSet<AggregateError>();
+// Duplicated module graphs share provenance separately from provider-owned error properties.
+// Weak keys keep each receipt bound to the lifetime of its owner-created wrapper.
+const settledRefreshFailures = resolveGlobalSingleton(
+  Symbol.for("openclaw.settledOAuthRefreshFailures"),
+  () => new WeakMap<Error, Error>(),
+);
+
+export function appendOAuthRefreshCleanupErrors(
+  error: unknown,
+  cleanupErrors: readonly unknown[],
+): Error {
+  const primaryError = toErrorObject(error, "OAuth refresh failed");
+  if (cleanupErrors.length === 0) {
+    return primaryError;
+  }
+  const normalizedCleanupErrors = cleanupErrors.map((cleanupError) =>
+    toErrorObject(cleanupError, "OAuth refresh cleanup failed"),
+  );
+  const errors =
+    primaryError instanceof AggregateError && oauthRefreshCleanupAggregates.has(primaryError)
+      ? [...primaryError.errors, ...normalizedCleanupErrors]
+      : [primaryError, ...normalizedCleanupErrors];
+  const aggregate = new AggregateError(
+    errors,
+    "OAuth refresh failed and cleanup could not be completed.",
+    { cause: errors[0] },
+  );
+  oauthRefreshCleanupAggregates.add(aggregate);
+  return aggregate;
+}
+
+function readSettledOAuthRefreshCause(error: unknown): unknown {
+  return error instanceof Error ? (settledRefreshFailures.get(error) ?? error) : error;
+}
+
+function readOAuthRefreshInitiatingError(error: unknown): unknown {
+  const cause = readSettledOAuthRefreshCause(error);
+  return cause instanceof AggregateError &&
+    oauthRefreshCleanupAggregates.has(cause) &&
+    cause.errors.length > 0
+    ? readSettledOAuthRefreshCause(cause.errors[0])
+    : cause;
+}
+
 const OAUTH_REFRESH_FAILURE_ERROR_TYPE_MAX_CHARS = 100;
 const OAUTH_REFRESH_FAILURE_SUMMARY_MAX_CHARS = 500;
 
-export function readProviderOAuthRefreshFailure(
-  error: unknown,
-): OAuthRefreshFailurePresentation | null {
+/** The refresh owner records failed external work only after its durable cleanup settles. */
+export function markOAuthRefreshFailureSettled(error: Error, initiatingError: Error = error): void {
+  materializeErrorStack(error);
+  if (initiatingError !== error) {
+    materializeErrorStack(initiatingError);
+  }
+  settledRefreshFailures.set(error, initiatingError);
+}
+
+/** Internal provenance survives transformed module graphs without trusting provider metadata. */
+export function isSettledOAuthRefreshFailure(error: unknown): error is Error {
+  return error instanceof Error && settledRefreshFailures.has(error);
+}
+
+function readProviderOAuthRefreshFailure(error: unknown): OAuthRefreshFailurePresentation | null {
   const presentation = asOptionalRecord(asOptionalRecord(error)?.oauthRefreshFailure);
   if (!presentation) {
     return null;
@@ -77,12 +182,8 @@ export function readProviderOAuthRefreshFailure(
   };
 }
 
-type StructuredClaudeCliAuthFailure = {
-  provider?: unknown;
-  rawError?: unknown;
-  reason?: unknown;
-  status?: unknown;
-};
+/** Recovery needs positive protocol evidence, independent of presentation and cleanup receipts. */
+export const isTransientOAuthRefreshFailure = isRecoverableOAuthRefreshFailure;
 
 /** Error type that carries provider and classified OAuth refresh failure reason. */
 export class OAuthRefreshFailureError extends Error {
@@ -92,6 +193,7 @@ export class OAuthRefreshFailureError extends Error {
   readonly reason: OAuthRefreshFailureReason | null;
   readonly status?: number;
   readonly summary?: string;
+  readonly retryable?: boolean;
 
   constructor(params: {
     provider: string;
@@ -102,6 +204,7 @@ export class OAuthRefreshFailureError extends Error {
     reason?: OAuthRefreshFailureReason | null;
     status?: number;
     summary?: string;
+    retryable?: boolean;
   }) {
     super(params.message, { cause: params.cause });
     const inherited =
@@ -109,6 +212,9 @@ export class OAuthRefreshFailureError extends Error {
         ? params.cause
         : readProviderOAuthRefreshFailure(params.cause);
     this.name = "OAuthRefreshFailureError";
+    this.retryable =
+      params.retryable ??
+      (params.cause instanceof OAuthRefreshFailureError ? params.cause.retryable : undefined);
     this.errorType = normalizeBoundedOptionalString(
       params.errorType ?? inherited?.errorType,
       OAUTH_REFRESH_FAILURE_ERROR_TYPE_MAX_CHARS,
@@ -127,6 +233,123 @@ export class OAuthRefreshFailureError extends Error {
   }
 }
 
+function createOAuthRefreshUserFacingCause(cause: unknown): unknown {
+  if (cause instanceof Error && "code" in cause && cause.code === "refresh_contention") {
+    // The structured error retains diagnostics; public cause traversal must not expose lock paths.
+    return new Error(cause.message);
+  }
+  return cause;
+}
+
+/** Refresh failure with a redacted public cause and private refreshed store. */
+export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
+  override readonly profileId: string;
+  readonly code?: string;
+  readonly lockPath?: string;
+  readonly #refreshedStore: AuthProfileStore;
+
+  constructor(params: {
+    credential: OAuthCredential;
+    attemptedCredentials?: OAuthCredential[];
+    profileId: string;
+    refreshedStore: AuthProfileStore;
+    retryable?: boolean;
+    cause: unknown;
+  }) {
+    const initiatingCause = readOAuthRefreshInitiatingError(params.cause);
+    const structuredCause = asOptionalObjectRecord(initiatingCause);
+    const surfacedCause = createOAuthRefreshUserFacingCause(initiatingCause);
+    const storedCredential = params.refreshedStore.profiles[params.profileId];
+    const secrets = collectOAuthCredentialSecrets(
+      params.credential,
+      ...(params.attemptedCredentials ?? []),
+      storedCredential?.type === "oauth" ? storedCredential : undefined,
+    );
+    const presentation =
+      initiatingCause instanceof OAuthRefreshFailureError
+        ? initiatingCause
+        : readProviderOAuthRefreshFailure(initiatingCause);
+    const causeMessage = formatRedactedOAuthRefreshError(surfacedCause, secrets);
+    super({
+      provider: params.credential.provider,
+      profileId: params.profileId,
+      message: `OAuth token refresh failed for ${params.credential.provider}: ${causeMessage}`,
+      cause: createRedactedOAuthRefreshCause(params.cause, secrets),
+      retryable:
+        params.retryable ??
+        (initiatingCause instanceof OAuthRefreshFailureError
+          ? initiatingCause.retryable
+          : undefined),
+      errorType: presentation?.errorType,
+      reason: presentation?.reason,
+      status: presentation?.status,
+      summary: presentation?.summary
+        ? formatRedactedOAuthRefreshError(presentation.summary, secrets)
+        : undefined,
+    });
+    this.name = "OAuthManagerRefreshError";
+    this.profileId = params.profileId;
+    this.#refreshedStore = params.refreshedStore;
+    if (isSettledOAuthRefreshFailure(params.cause)) {
+      markOAuthRefreshFailureSettled(this);
+    }
+    if (structuredCause) {
+      this.code = readStringField(structuredCause, "code");
+      this.lockPath =
+        readStringField(structuredCause, "lockPath") ??
+        readStringField(asOptionalObjectRecord(structuredCause.cause), "lockPath");
+    }
+  }
+
+  getRefreshedStore(): AuthProfileStore {
+    return this.#refreshedStore;
+  }
+
+  toJSON(): { name: string; message: string; profileId: string; provider: string } {
+    return {
+      name: this.name,
+      message: this.message,
+      profileId: this.profileId,
+      provider: this.provider,
+    };
+  }
+}
+
+function collectOAuthCredentialSecrets(
+  ...credentials: Array<OAuthCredential | undefined>
+): string[] {
+  const secrets = new Set<string>();
+  for (const credential of credentials) {
+    for (const secret of [credential?.access, credential?.refresh, credential?.idToken]) {
+      if (secret) {
+        secrets.add(secret);
+      }
+    }
+  }
+  return Array.from(secrets).toSorted((a, b) => b.length - a.length);
+}
+
+function createRedactedOAuthRefreshCause(value: unknown, secrets: string[]): Error {
+  const cause = readSettledOAuthRefreshCause(value);
+  if (cause instanceof AggregateError) {
+    const errors = cause.errors.map((error) => createRedactedOAuthRefreshCause(error, secrets));
+    const sanitized = new AggregateError(
+      errors,
+      formatRedactedOAuthRefreshError(cause.message, secrets),
+      errors.length > 0 ? { cause: errors[0] } : undefined,
+    );
+    sanitized.name = cause.name;
+    return sanitized;
+  }
+  const surfacedCause = createOAuthRefreshUserFacingCause(cause);
+  const redacted = formatRedactedOAuthRefreshError(surfacedCause, secrets);
+  const sanitized = new Error(redacted);
+  if (surfacedCause instanceof Error && surfacedCause.name) {
+    sanitized.name = surfacedCause.name;
+  }
+  return sanitized;
+}
+
 const OAUTH_REFRESH_FAILURE_PROVIDER_RE = /OAuth token refresh failed for ([^:]+):/i;
 const SAFE_PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
 // Matches the error surfaced via FailoverError when the `claude` subprocess
@@ -142,27 +365,16 @@ function isClaudeCliExpiredOAuthMessage(message: string): boolean {
   return CLAUDE_CLI_AUTH_FAILURE_RE.test(message);
 }
 
-function readStructuredClaudeCliAuthFailure(err: unknown): StructuredClaudeCliAuthFailure | null {
-  if (!err || typeof err !== "object") {
-    return null;
-  }
-  const candidate = err as StructuredClaudeCliAuthFailure & { name?: unknown };
-  if (
-    candidate.name !== "FailoverError" ||
-    candidate.provider !== "claude-cli" ||
-    candidate.reason !== "auth" ||
-    candidate.status !== 401
-  ) {
-    return null;
-  }
-  return candidate;
-}
-
 function classifyStructuredClaudeCliOAuthFailureReason(
   err: unknown,
 ): OAuthRefreshFailureReason | null {
-  const failure = readStructuredClaudeCliAuthFailure(err);
-  if (!failure) {
+  const failure = asOptionalObjectRecord(err);
+  if (
+    failure?.name !== "FailoverError" ||
+    failure.provider !== "claude-cli" ||
+    failure.reason !== "auth" ||
+    failure.status !== 401
+  ) {
     return null;
   }
   const rawError = typeof failure.rawError === "string" ? failure.rawError : "";
@@ -216,51 +428,30 @@ function quoteShellArg(value: string): string {
   return `'${escaped}'`;
 }
 
-/** Wrap a rendered login command in a Markdown code span that survives embedded backticks. */
-export function formatOAuthRefreshFailureLoginCommandMarkdown(command: string): string {
-  return formatInlineCodeSpan(command);
-}
-
 /** Classify a raw OAuth refresh failure message into a stable reason code. */
 export function classifyOAuthRefreshFailureReason(
   message: string,
 ): OAuthRefreshFailureReason | null {
   const lower = message.toLowerCase();
-  if (lower.includes("refresh_token_reused")) {
-    return "refresh_token_reused";
-  }
-  if (lower.includes("refresh_token_expired")) {
-    return "expired";
-  }
-  if (lower.includes("invalid_grant")) {
-    return "invalid_grant";
-  }
-  if (lower.includes("token_invalidated")) {
-    return "token_invalidated";
-  }
-  if (
-    lower.includes("sign_in_again") ||
-    lower.includes("signing in again") ||
-    lower.includes("sign in again") ||
-    lower.includes("log in again")
-  ) {
-    return "sign_in_again";
-  }
-  if (lower.includes("invalid_refresh_token") || lower.includes("invalid refresh token")) {
-    return "invalid_refresh_token";
-  }
-  if (lower.includes("expired or revoked") || lower.includes("revoked")) {
-    return "revoked";
-  }
-  if (isClaudeCliExpiredOAuthMessage(message)) {
-    // The claude subprocess emits "401 Invalid authentication credentials"
-    // when its stored OAuth token has expired.  Map this to "revoked" so the
-    // caller surfaces the targeted re-auth hint rather than the generic login
-    // failure copy.
-    return "revoked";
-  }
-  return null;
+  return (
+    OAUTH_REFRESH_REASON_SIGNALS.find(([, signals]) =>
+      signals.some((signal) => lower.includes(signal)),
+    )?.[0] ?? (isClaudeCliExpiredOAuthMessage(message) ? "revoked" : null)
+  );
 }
+
+// Specific provider codes take precedence over generic recovery guidance in the same message.
+const OAUTH_REFRESH_REASON_SIGNALS: ReadonlyArray<
+  readonly [OAuthRefreshFailureReason, readonly string[]]
+> = [
+  ["refresh_token_reused", ["refresh_token_reused"]],
+  ["expired", ["refresh_token_expired"]],
+  ["invalid_grant", ["invalid_grant"]],
+  ["token_invalidated", ["token_invalidated"]],
+  ["sign_in_again", ["sign_in_again", "signing in again", "sign in again", "log in again"]],
+  ["invalid_refresh_token", ["invalid_refresh_token", "invalid refresh token"]],
+  ["revoked", ["revoked"]],
+];
 
 /** Classify provider/reason from a user-facing OAuth refresh failure message. */
 export function classifyOAuthRefreshFailure(message: string): OAuthRefreshFailure | null {
@@ -332,25 +523,22 @@ export function buildOAuthRefreshFailureLoginCommand(
   const sanitizedProfileId = sanitizeOAuthRefreshFailureProfileId(options?.profileId);
   const agentId = options?.agentId ? sanitizeForLog(options.agentId).trim() : undefined;
   const agentOption = agentId ? ` --agent ${quoteShellArg(agentId)}` : "";
-  if (sanitizedProvider === "claude-cli") {
-    // claude-cli is not a standalone provider id; it is the Anthropic provider
-    // accessed via the CLI auth method. Refresh the local Claude CLI session
-    // first, then re-register that auth method with OpenClaw.
-    const claudeLoginCommand = formatCliCommand("claude auth login");
-    const openclawLoginCommand = formatCliCommand(
-      sanitizedProfileId
-        ? `openclaw models auth login --provider anthropic --method cli --profile-id ${quoteShellArg(sanitizedProfileId)}${agentOption}`
-        : `openclaw models auth login --provider anthropic --method cli${agentOption}`,
-    );
-    return `${claudeLoginCommand} && ${openclawLoginCommand}`;
-  }
-  return sanitizedProvider
-    ? formatCliCommand(
-        sanitizedProfileId
-          ? `openclaw models auth login --provider ${sanitizedProvider} --profile-id ${quoteShellArg(sanitizedProfileId)}${agentOption}`
-          : `openclaw models auth login --provider ${sanitizedProvider}${agentOption}`,
-      )
-    : formatCliCommand(`openclaw models auth login${agentOption}`);
+  const profileOption = sanitizedProfileId
+    ? ` --profile-id ${quoteShellArg(sanitizedProfileId)}`
+    : "";
+  // Claude CLI refreshes its session before OpenClaw registers the Anthropic CLI method.
+  const providerOption =
+    sanitizedProvider === "claude-cli"
+      ? " --provider anthropic --method cli"
+      : sanitizedProvider
+        ? ` --provider ${sanitizedProvider}`
+        : "";
+  const command = formatCliCommand(
+    `openclaw models auth login${providerOption}${sanitizedProvider ? profileOption : ""}${agentOption}`,
+  );
+  return sanitizedProvider === "claude-cli"
+    ? `${formatCliCommand("claude auth login")} && ${command}`
+    : command;
 }
 
 /** Build operator guidance for an active profile cooldown or disable window. */
@@ -369,12 +557,12 @@ export function buildAuthProfileUnusableHint(params: {
       // The legacy runtime has no auth method of its own. Recovery creates a
       // supported Google API-key profile and then selects it for that runtime.
       const command = formatCliCommand("openclaw models auth login --provider google");
-      return `Gemini CLI OAuth cannot be repaired by OpenClaw. Connect Google with an AI Studio API key using ${formatOAuthRefreshFailureLoginCommandMarkdown(command)}, then select that Google profile for the Gemini CLI runtime.`;
+      return `Gemini CLI OAuth cannot be repaired by OpenClaw. Connect Google with an AI Studio API key using ${formatInlineCodeSpan(command)}, then select that Google profile for the Gemini CLI runtime.`;
     }
     const command = buildOAuthRefreshFailureLoginCommand(params.provider, {
       profileId: params.profileId,
     });
-    return `Re-authenticate with ${formatOAuthRefreshFailureLoginCommandMarkdown(command)}.`;
+    return `Re-authenticate with ${formatInlineCodeSpan(command)}.`;
   }
   if (params.kind === "disabled" && params.reason === "billing") {
     return "Top up credits (provider billing) or switch provider.";

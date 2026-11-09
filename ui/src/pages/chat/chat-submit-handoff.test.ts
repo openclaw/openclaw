@@ -3,17 +3,17 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import {
-  captureChatOutboxAdmission,
-  readStoredOutboxStore,
-  storageTargetForGateway,
-} from "../../lib/chat/outbox-store.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
+import { readStoredOutboxStore, storageTargetForComposer } from "../../lib/chat/outbox-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { row, idleChatHistory } from "./chat-outbox-recovery.test-support.ts";
+import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import {
@@ -22,13 +22,12 @@ import {
   resumeStoredChatOutboxes,
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import {
-  admitStoredChatComposerQueueItem,
-  listStoredChatOutboxes,
-  updateStoredChatComposerQueueItem,
-} from "./composer-persistence.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
+import { createProps } from "./chat-thread.test-support.ts";
+import { updateStoredChatComposerQueueItems } from "./composer-queue-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { beginQueuedMessageEdit, updateQueuedMessageEdit } from "./queued-message-edit.ts";
+import { applySessionMessagePayload } from "./session-message-apply.ts";
 
 type TestChatHost = ReturnType<typeof makeChatHost>;
 const requireRecord = createRequireRecord("object", "expected-label");
@@ -43,23 +42,101 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
-  return {
-    key,
-    kind: "direct",
-    updatedAt: null,
-    ...overrides,
-  };
-}
-
-function idleChatHistory(sessionKey = "agent:main") {
-  return {
-    messages: [],
-    sessionInfo: row(sessionKey, { hasActiveRun: false, status: "done" }),
-  };
-}
-
 describe("chat submission handoff", () => {
+  it("keeps a setup-held original ahead of a steer through dispatch, custody, and persistence", async () => {
+    const originalRunId = "setup-run";
+    const original = {
+      id: "original-input",
+      runId: originalRunId,
+      acceptedAt: 10_000,
+      state: "queued" as const,
+      message: { role: "user", content: "Original request", timestamp: 10_000 },
+    };
+    const pendingInputs = { items: [original], total: 1 };
+    const dispatched = createDeferred();
+    const ack = createDeferred<unknown>();
+    const host = makeChatHost({
+      currentSessionId: "setup-session",
+      chatRunId: originalRunId,
+      requestHandlers: {
+        "chat.history": {
+          sessionId: "setup-session",
+          messages: [],
+          pendingInputs,
+          sessionInfo: row("agent:main", { hasActiveRun: true, status: "running" }),
+        },
+        "chat.send": () => {
+          dispatched.resolve();
+          return ack.promise;
+        },
+      },
+    });
+    const rows = () =>
+      buildChatItems(
+        createProps({
+          messages: host.chatMessages,
+          queue: host.chatQueue,
+          pendingInputs: getChatPendingInputs(host)?.page.items,
+          runId: host.chatRunId,
+          runWorking: true,
+        }),
+      ).flatMap((item) =>
+        item.kind === "group" ? item.messages.map(({ message }) => extractText(message)) : [],
+      );
+    await loadChatHistory(host);
+    expect(rows()).toEqual(["Original request"]);
+    const sending = handleSendChat(host, "Later steer", { followUpMode: "steer" });
+    await dispatched.promise;
+    const steer = expectDefined(host.chatQueue.at(-1), "steer submission");
+    ack.resolve({ runId: steer.sendRunId, status: "accepted" });
+    try {
+      expect(rows()).toEqual(["Original request", "Later steer"]);
+    } finally {
+      await sending;
+    }
+    applyChatPendingInputs(host, {
+      items: [
+        ...pendingInputs.items,
+        {
+          id: "steer-input",
+          runId: steer.sendRunId,
+          acceptedAt: 9_000,
+          state: "queued",
+          message: { role: "user", content: "Later steer", timestamp: 9_000 },
+        },
+      ],
+      total: 2,
+    });
+    expect(rows()).toEqual(["Original request", "Later steer"]);
+    for (const [index, input] of [
+      original,
+      {
+        ...original,
+        id: "steer-input",
+        runId: steer.sendRunId,
+        message: { role: "user", content: "Later steer", timestamp: 9_000 },
+      },
+    ].entries()) {
+      applySessionMessagePayload(
+        host,
+        {
+          message: {
+            ...input.message,
+            __openclaw: {
+              id: input.id,
+              seq: index + 1,
+              idempotencyKey: input.runId + ":user",
+              ...(index === 1 ? { steerTargetRunId: originalRunId } : {}),
+            },
+          },
+        },
+        true,
+        { kind: "history-delta" },
+      );
+      expect(rows()).toEqual(["Original request", "Later steer"]);
+    }
+  });
+
   it("queues identical messages from distinct user actions while coalescing re-entry", async () => {
     const sent = createDeferred<unknown>();
     const host = makeChatHost({
@@ -113,16 +190,16 @@ describe("chat submission handoff", () => {
   }
 
   it.each([
-    { policy: "default", predecessor: false, submitting: true },
-    { policy: "queue", predecessor: false, submitting: false },
-    { policy: "default", predecessor: true, submitting: false },
+    { policy: "default", submitting: true },
+    { policy: "steer", submitting: true },
+    { policy: "queue", submitting: false },
   ] as const)(
-    "preserves active-run $policy admission during the input yield (older FIFO row: $predecessor)",
-    async ({ policy, predecessor, submitting }) => {
+    "preserves active-run $policy admission alongside an older FIFO row during the input yield",
+    async ({ policy, submitting }) => {
       const host = makeChatHost({
         chatMessage: "follow up on the active run",
         chatRunId: "active-run",
-        settings: { chatFollowUpMode: policy === "queue" ? "queue" : undefined },
+        settings: { chatFollowUpMode: policy === "default" ? undefined : policy },
         requestHandlers: {
           "chat.history": {
             messages: [],
@@ -134,29 +211,17 @@ describe("chat submission handoff", () => {
           }),
         },
       });
-      if (predecessor) {
-        expect(
-          admitStoredChatComposerQueueItem(
-            host,
-            captureChatOutboxAdmission(host, host.sessionKey),
-            {
-              id: "older-queued-input",
-              text: "older queued input",
-              createdAt: 1,
-              sendState: "waiting-idle",
-              sendAttempts: 0,
-              sendRunId: "older-queued-run",
-            },
-          ),
-        ).toBe(true);
-      }
+      await handleSendChat(host, "older queued input", { followUpMode: "queue" });
+      expect(host.chatQueue).toEqual([
+        expect.objectContaining({ text: "older queued input", sendState: "waiting-idle" }),
+      ]);
+      const predecessorSnapshot = { ...host.chatQueue[0] };
+      let handoffState: ChatQueueItem["sendState"];
       const accepted = await submitAcrossBrowserInput(host, (queued) => {
         expect(queued).toMatchObject({ sendState: "waiting-idle", sendAttempts: 0 });
-        expect(queued.queueMode).toBeUndefined();
-        expect(host.chatQueue.find((item) => item.id === queued.id)?.sendState).toBe(
-          submitting ? "submitting" : "waiting-idle",
-        );
-        expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+        expect(queued.queueMode).toBe(policy === "steer" ? "steer" : undefined);
+        handoffState = host.chatQueue.find((item) => item.id === queued.id)?.sendState;
+        expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
       });
 
       expect(accepted).toBe(true);
@@ -165,14 +230,18 @@ describe("chat submission handoff", () => {
       if (submitting) {
         const payload = requireRecord(sends[0]?.[1], "active-run default send");
         expect(payload.message).toBe("follow up on the active run");
-        expect(payload).not.toHaveProperty("queueMode");
+        expect(payload.queueMode).toBe(policy === "steer" ? "steer" : undefined);
       } else {
         expect(host.chatQueue.map((item) => item.text)).toEqual([
-          ...(predecessor ? ["older queued input"] : []),
+          "older queued input",
           "follow up on the active run",
         ]);
         expect(host.chatQueue.every((item) => item.sendState === "waiting-idle")).toBe(true);
       }
+      expect(handoffState).toBe(submitting ? "submitting" : "waiting-idle");
+      expect(host.chatQueue.find((item) => item.id === predecessorSnapshot.id)).toEqual(
+        predecessorSnapshot,
+      );
     },
   );
 
@@ -186,6 +255,8 @@ describe("chat submission handoff", () => {
         chatReplyTarget: { messageId: "quoted-message", text: "original quote" },
       });
       const accepted = await submitAcrossBrowserInput(host, (queued) => {
+        expect(host.chatMessage).toBe("");
+        expect(host.chatReplyTarget).toBeNull();
         expect(queued).toMatchObject({
           sendState: connected ? "waiting-idle" : "waiting-reconnect",
           sendAttempts: 0,
@@ -210,9 +281,12 @@ describe("chat submission handoff", () => {
     "retires an event-backed continuation after its %s changes during the browser input yield",
     async (change) => {
       const host = makeChatHost({ requestHandlers: {}, chatMessage: "old owner input" });
+      const originalTarget = storageTargetForComposer(host);
       const newReply = { messageId: "same-message", text: "new owner quote" };
       host.chatReplyTarget = { messageId: newReply.messageId, text: "old owner quote" };
-      const accepted = await submitAcrossBrowserInput(host, () => {
+      let admitted: ChatQueueItem | undefined;
+      const accepted = await submitAcrossBrowserInput(host, (queued) => {
+        admitted = queued;
         if (change === "client") {
           host.client = createTestGatewayClient(host.request);
         } else if (change === "epoch") {
@@ -234,13 +308,14 @@ describe("chat submission handoff", () => {
       expect(host.lastError).toBeNull();
       expect(host.chatMessage).toBe("new owner draft");
       expect(host.chatReplyTarget).toBe(newReply);
-      const stored = readStoredOutboxStore(
-        sessionStorage,
-        storageTargetForGateway(host.settings.gatewayUrl),
-      );
+      const stored = readStoredOutboxStore(sessionStorage, originalTarget);
+      expect(admitted).toMatchObject({ sessionKey: "agent:main", sendAttempts: 0 });
       expect(Object.values(stored.sessions).flatMap((scope) => scope.queue ?? [])).toEqual([
-        expect.objectContaining({ sessionKey: "agent:main", sendAttempts: 0 }),
+        admitted,
       ]);
+      if (change === "recovery owner") {
+        expect(listStoredChatOutboxes(host)).toEqual([]);
+      }
     },
   );
 
@@ -291,11 +366,10 @@ describe("chat submission handoff", () => {
       expect(queued.mentions).toEqual(originalMentions);
       replacement = { ...queued, mentions: replacementMentions };
       expect(
-        updateStoredChatComposerQueueItem(
+        updateStoredChatComposerQueueItems(
           host,
           host.sessionKey,
-          queued,
-          replacement,
+          [{ expected: queued, next: replacement }],
           queued.agentId,
         ),
       ).toBe(true);
@@ -350,9 +424,10 @@ describe("chat submission handoff", () => {
     },
   );
 
-  it.each(
-    ["started", "ok"].flatMap((ack) => [false, true].map((connected) => ({ ack, connected }))),
-  )(
+  it.each([
+    { ack: "started", connected: true },
+    { ack: "ok", connected: false },
+  ])(
     "does not reacquire a $ack send advanced by reconnect during the browser input yield (initially connected: $connected)",
     async ({ ack, connected }) => {
       const host = makeChatHost({

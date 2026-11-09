@@ -2,17 +2,19 @@ import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protoco
 import type {
   WorkerDesktopEndpoint,
   WorkerProfile,
+  WorkerResourceReceipt,
   WorkerSshEndpoint,
 } from "../../plugins/capability-provider.types.js";
+import type {
+  WorkerEnvironmentRetention,
+  WorkerRetentionPolicy,
+} from "../../plugins/worker-retention.types.js";
 import type { WorkerSessionPlacementDispatchIdentity } from "./placement-record.js";
 import type { WorkerEnvironmentLeasedState, WorkerEnvironmentUnleasedState } from "./state.js";
 
-type WorkerEnvironmentProfileSnapshot = WorkerProfile;
-type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
-type WorkerBootstrapInstallKind = "bundle" | "local";
 export type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake & {
   /** Provenance only; admission authority remains the exact stored build identity. */
-  installKind?: WorkerBootstrapInstallKind;
+  installKind?: "bundle" | "local";
 };
 export type WorkerEnvironmentTeardownTerminalState = "destroyed" | "failed";
 export type WorkerEnvironmentPreparation = {
@@ -38,13 +40,15 @@ export type PreparedEnvironmentSelection = WorkerSessionPlacementDispatchIdentit
   nodeDeviceId: string;
   leaseId: string;
   bundleHash: string;
-  assertCurrent: () => void;
+  assertCurrent: import("./placement-authorization.js").WorkerPlacementAuthorization;
 };
 type RecordIdentity = { environmentId: string; providerId: string; profileId: string };
 type RecordBase = RecordIdentity & {
-  profileSnapshot: WorkerEnvironmentProfileSnapshot;
+  profileSnapshot: WorkerProfile;
   preparation: WorkerEnvironmentPreparation | null;
   provisionOperationId: string;
+  resourceReceipt: WorkerResourceReceipt | null;
+  retention: WorkerEnvironmentRetention | null;
   nodeSetupId: string | null;
   nodeDeviceId: string | null;
   sharedHost: boolean | null;
@@ -54,12 +58,13 @@ type RecordBase = RecordIdentity & {
   teardownTerminalState: WorkerEnvironmentTeardownTerminalState | null;
   attachedSessionIds: string[];
   lastError: string | null;
-} & { createdAtMs: number; updatedAtMs: number; stateChangedAtMs: number } & {
+  createdAtMs: number;
+  updatedAtMs: number;
+  stateChangedAtMs: number;
   lastActivatedAtMs: number | null;
   idleSinceAtMs: number | null;
   destroyRequestedAtMs: number | null;
 };
-type Ssh = WorkerEnvironmentSshEndpoint;
 type UnleasedRecord = {
   state: WorkerEnvironmentUnleasedState;
   leaseId: null;
@@ -68,11 +73,12 @@ type UnleasedRecord = {
 type LeasedRecord = {
   state: WorkerEnvironmentLeasedState;
   leaseId: string;
-  sshEndpoint: Ssh | null;
+  sshEndpoint: WorkerSshEndpoint | null;
 };
 export type WorkerEnvironmentRecord = RecordBase & (UnleasedRecord | LeasedRecord);
 export type WorkerEnvironmentIntentInput = RecordIdentity & {
   preparation?: WorkerEnvironmentPreparationIntent;
-  profileSnapshot: WorkerEnvironmentProfileSnapshot;
+  retention?: WorkerRetentionPolicy;
+  profileSnapshot: WorkerProfile;
   provisionOperationId: string;
 };

@@ -55,6 +55,7 @@ const boardSnapshotSchema = z.object({
 /** Resolve the current board instance; a saved browser target is never authority. */
 export async function readBrowserDashboardDefinition(
   request: BrowserDashboardRequest,
+  defaultProfile = "openclaw",
 ): Promise<BrowserDashboardDefinition | undefined> {
   const runtime = getBrowserStateRuntime();
   if (!runtime.gateway) {
@@ -71,7 +72,7 @@ export async function readBrowserDashboardDefinition(
   }
   const agentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId;
   if (!agentId) {
-    throw new Error("Board did not return a canonical agent-scoped session identity");
+    throw new Error("Board did not return a full agent-scoped session identity");
   }
   const widget = snapshot.widgets.find((entry) => entry.name === request.name);
   if (
@@ -98,7 +99,7 @@ export async function readBrowserDashboardDefinition(
     revision: widget.revision,
     ...(widget.title ? { title: widget.title } : {}),
     url: props.url,
-    profile: props.profile ?? "openclaw",
+    profile: props.profile ?? defaultProfile,
   };
 }
 

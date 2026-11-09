@@ -1,66 +1,42 @@
-import { createExtensionRuntime } from "./extensions/loader.js";
-import type { LoadExtensionsResult } from "./extensions/types.js";
-import type { ResourceLoader } from "./resource-loader.js";
-import { createSyntheticSourceInfo } from "./source-info.js";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ExtensionFactory, ExtensionEvent } from "./extensions/types.js";
+import { DefaultResourceLoader } from "./resource-loader.js";
 
-export function createResourceLoader(
-  handlers: Map<string, Array<(...args: unknown[]) => Promise<unknown>>> = new Map(),
-): ResourceLoader {
-  const extensionsResult: LoadExtensionsResult = {
-    extensions:
-      handlers.size > 0
-        ? [
-            {
-              path: "<test-extension>",
-              resolvedPath: "<test-extension>",
-              sourceInfo: createSyntheticSourceInfo("<test-extension>", {
-                source: "temporary",
-              }),
-              handlers,
-              tools: new Map(),
-              messageRenderers: new Map(),
-              commands: new Map(),
-              flags: new Map(),
-              shortcuts: new Map(),
-            },
-          ]
-        : [],
-    errors: [],
-    runtime: createExtensionRuntime(),
-  };
+export async function createResourceLoader(
+  extension?: ExtensionFactory,
+  paths?: { cwd: string; agentDir: string },
+): Promise<DefaultResourceLoader> {
+  // Empty explicit resource paths do no I/O; never discover resources in the operator's home.
+  const cwd = paths?.cwd ?? join(tmpdir(), `openclaw-test-resource-loader-${randomUUID()}`);
+  const loader = new DefaultResourceLoader({
+    cwd,
+    agentDir: paths?.agentDir ?? join(cwd, "agent"),
+    extensionFactories: extension ? [extension] : [],
+  });
+  await loader.reload();
+  const errors = loader.getExtensions().errors;
+  if (errors.length > 0) {
+    throw new Error(
+      `Failed to load test extension: ${errors.map((error) => error.error).join("; ")}`,
+    );
+  }
+  return loader;
+}
+
+export async function compactionHandler({
+  preparation,
+}: Extract<ExtensionEvent, { type: "session_before_compact" }>) {
   return {
-    getExtensions: () => extensionsResult,
-    getSkills: () => ({ skills: [], diagnostics: [] }),
-    getPrompts: () => ({ prompts: [], diagnostics: [] }),
-    getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
-    getSystemPrompt: () => undefined,
-    getAppendSystemPrompt: () => [],
-    extendResources: () => {},
-    reload: async () => {},
+    compaction: {
+      summary: "condensed history",
+      firstKeptEntryId: preparation.firstKeptEntryId,
+      tokensBefore: preparation.tokensBefore,
+    },
   };
 }
 
-export function createCompactionHandlers() {
-  return new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-    [
-      "session_before_compact",
-      [
-        async (event: unknown) => {
-          const preparation = (
-            event as {
-              preparation: { firstKeptEntryId: string; tokensBefore: number };
-            }
-          ).preparation;
-          return {
-            compaction: {
-              summary: "condensed history",
-              firstKeptEntryId: preparation.firstKeptEntryId,
-              tokensBefore: preparation.tokensBefore,
-            },
-          };
-        },
-      ],
-    ],
-  ]);
+export function createCompactionExtension(): ExtensionFactory {
+  return (api) => api.on("session_before_compact", compactionHandler);
 }

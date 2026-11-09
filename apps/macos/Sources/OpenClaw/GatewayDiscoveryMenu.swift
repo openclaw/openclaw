@@ -47,21 +47,12 @@ struct GatewayDiscoveryInlineList: View {
     private func displayInfo(
         for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> (label: String, selected: Bool)
     {
-        switch self.transport {
-        case .direct:
-            let url = GatewayDiscoveryHelpers.directUrl(for: gateway)
-            let label = url ?? "Gateway pairing only"
-            let selected = url != nil && self.trimmed(self.currentUrl) == url
-            return (label, selected)
-        case .ssh:
-            let target = GatewayDiscoveryHelpers.sshTarget(for: gateway)
-            let label = target ?? "Gateway pairing only"
-            let selected = target != nil && self.trimmed(self.currentTarget) == target
-            return (label, selected)
+        let (endpoint, current) = switch self.transport {
+        case .direct: (GatewayDiscoveryHelpers.directUrl(for: gateway), self.currentUrl)
+        case .ssh: (GatewayDiscoveryHelpers.sshTarget(for: gateway), self.currentTarget)
         }
-    }
-
-    private func trimmed(_ value: String?) -> String {
-        value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return (
+            endpoint ?? "Gateway pairing only",
+            endpoint != nil && (current?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") == endpoint)
     }
 }

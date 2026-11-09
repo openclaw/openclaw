@@ -177,7 +177,7 @@ export function defineFeaturePlugin<C extends FeatureContract>(
           );
         };
         const requiredScope = operation.kind === "query" ? "operator.read" : "operator.write";
-        api.registerSessionAction({
+        api.session.controls.registerSessionAction({
           id,
           description: operation.description,
           // SAFETY: registerSessionAction validates the schema as bounded JSON before retaining it.

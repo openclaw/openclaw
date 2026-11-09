@@ -1,0 +1,33 @@
+name: Setup ripgrep
+description: Reuse runner ripgrep or install the checksum-pinned release without apt.
+runs:
+  using: composite
+  steps:
+    - name: Install ripgrep
+      shell: bash
+      run: |
+        set -euo pipefail
+        if command -v rg >/dev/null 2>&1; then
+          rg --version
+          exit 0
+        fi
+        case "$RUNNER_OS/$RUNNER_ARCH" in
+          Linux/X64)
+            target=x86_64-unknown-linux-musl
+            checksum=33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c
+            ;;
+          Linux/ARM64)
+            target=aarch64-unknown-linux-gnu
+            checksum=a740b91c82eaf9914cfedd353572f2791cbe0162c84101ee0951058f4dcbc90d
+            ;;
+          *) echo "::error::ripgrep setup does not support $RUNNER_OS/$RUNNER_ARCH"; exit 1 ;;
+        esac
+        install_dir="$(mktemp -d "$RUNNER_TEMP/openclaw-ripgrep.XXXXXX")"
+        archive="$install_dir/ripgrep.tar.gz"
+        curl --fail --location --retry 3 --connect-timeout 15 --max-time 120 \
+          "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-$target.tar.gz" \
+          --output "$archive"
+        echo "$checksum  $archive" | sha256sum --check --strict
+        tar -xzf "$archive" -C "$install_dir" --strip-components=1 "ripgrep-15.2.0-$target/rg"
+        "$install_dir/rg" --version
+        echo "$install_dir" >> "$GITHUB_PATH"

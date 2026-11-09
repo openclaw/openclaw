@@ -1,27 +1,79 @@
 /* Profile settings page: authenticated user profile and identity controls.
    Structural surfaces come from settings.css. */
 
-/* Hero (custom identity content inside one settings group) */
+.profile-discord-reservation {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  /* Reserve the unavailable copy and the action's final row before the status reply. */
+  .profile-discord-description {
+    display: grid;
+
+    > span {
+      grid-area: 1 / 1;
+    }
+  }
+
+  .profile-discord-reservation {
+    display: block;
+    visibility: hidden;
+  }
+
+  :is(.shell--settings, .shell--embed-settings)
+    .settings-row:has(> .settings-row__text .profile-discord-description) {
+    flex-wrap: wrap;
+
+    > .settings-row__control {
+      width: 100%;
+      max-width: 100%;
+      justify-content: flex-start;
+    }
+  }
+}
+
+.identity-emails {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* Refresh stays beside the subtitle, which wraps first on narrow columns. */
+.content-header--settings:has(> .page-header-actions .profile-refresh) {
+  flex-wrap: nowrap;
+}
+
+.page-header-actions:has(.profile-refresh) {
+  flex-shrink: 0;
+}
+
+/* An account's identity under its title: an address, an id or a handle. */
+.identity-account {
+  min-width: 0;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
 
 .profile-hero {
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
-  gap: var(--space-2);
-  padding: var(--space-6) var(--space-4) var(--space-5);
+  gap: var(--space-1);
+  padding: var(--space-5) var(--space-4);
 }
 
 .profile-hero__avatar {
-  width: 88px;
-  height: 88px;
+  width: 72px;
+  height: 72px;
   border-radius: var(--radius-full);
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
   background: color-mix(in srgb, var(--accent) 10%, var(--panel));
-  border: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border: 2px solid var(--border);
   margin-bottom: var(--space-2);
 }
 
@@ -29,20 +81,22 @@
   width: 100%;
   height: 100%;
   border: 0;
-  font-size: 42px;
+  outline: 0;
+  font-size: 32px;
 }
 
 .profile-hero__avatar > .identity-avatar--agent {
-  font-size: 42px;
+  font-size: 32px;
   line-height: 1;
 }
 
 .profile-hero__name {
   max-width: 100%;
   overflow-wrap: anywhere;
-  font-size: 24px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
   color: var(--text-strong);
 }
 
@@ -64,36 +118,40 @@
 
 .profile-hero__badge {
   flex: 0 0 auto;
-}
-
-.profile-hero__badge,
-.model-accounts__provider {
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--accent);
   background: var(--accent-subtle);
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-full);
   padding: 2px 8px;
 }
 
-/* Personal connected accounts and sign-in steps. */
+.personal-instructions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
 
-.model-accounts__id {
+.personal-instructions__editor {
+  width: 100%;
+  max-width: none;
+  /* The seven-row default stays fixed as content grows; only the native handle resizes it. */
+  resize: vertical;
+  overflow-y: auto;
   font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
-  color: var(--text-strong);
+  line-height: 1.5;
 }
 
-.model-accounts__provider {
-  margin-left: var(--space-2);
-  vertical-align: middle;
+.personal-instructions__error {
+  color: var(--danger);
+  overflow-wrap: anywhere;
 }
 
-.model-accounts-flow,
-.model-accounts-choice {
+.model-accounts-flow {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -114,6 +172,66 @@
   min-width: 0;
 }
 
+.model-accounts-form .btn {
+  flex: none;
+}
+
+/* A typed credential id reads from its start. */
+.settings-row__control .model-accounts-form input.settings-input:not(.picker-select__search) {
+  text-align: start;
+}
+
+/* A provider and its account stay on one line on phones; the picker truncates long labels. */
+@media (max-width: 640px) {
+  :is(.shell--settings, .shell--embed-settings)
+    .settings-row:has(> .settings-row__control .profile-auth-account-picker) {
+    flex-wrap: nowrap;
+
+    > .settings-row__control {
+      width: auto;
+      flex: 0 1 64%;
+      flex-wrap: nowrap;
+    }
+  }
+}
+
 .model-accounts-error .settings-row__desc {
   color: var(--danger);
+}
+
+/* A name reads from its start; settings numbers and short values stay end-aligned. */
+.settings-row__control .identity-name-control input.settings-input:not(.picker-select__search) {
+  text-align: start;
+}
+
+/* A handle reads as plain text in the meta line; a long one truncates, full handle in its title. */
+.identity-github-login {
+  overflow: hidden;
+  max-width: 100%;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.identity-github-login:hover {
+  color: var(--text-strong);
+  text-decoration: underline;
+}
+
+/* The link wraps as one piece after its sentence. */
+.identity-attribution-link {
+  white-space: nowrap;
+}
+
+/* The avatar and its button sit at the row's end on phones too. */
+@media (max-width: 640px) {
+  :is(.shell--settings, .shell--embed-settings)
+    .settings-row:has(> .settings-row__control > .identity-avatar-control) {
+    flex-wrap: nowrap;
+
+    > .settings-row__control {
+      width: auto;
+      justify-content: flex-end;
+    }
+  }
 }

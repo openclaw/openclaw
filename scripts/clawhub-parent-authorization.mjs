@@ -239,9 +239,23 @@ export function clawHubParentArtifactName(identity) {
   validateClawHubIdentity(identity);
   return `openclaw-clawhub-parent-authorization-v2-${identity.parentRunId}-${identity.parentRunAttempt}-${identity.runId}-${identity.runAttempt}`;
 }
+function rejectAlphaTransactions(transactions) {
+  if (transactions.packages.some((entry) => entry.version.includes("-alpha."))) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
+}
+
 export function createClawHubParentAuthorization(transactions, authorizationRoute) {
+  validateClawHubTransactions(transactions);
+  rejectAlphaTransactions(transactions);
+  return parentAuthorizationRecord(transactions, authorizationRoute);
+}
+
+function parentAuthorizationRecord(transactions, authorizationRoute) {
   const { identity: i, packages } = validateClawHubTransactions(transactions);
-  if (!["automated-awaited", "automated-detached"].includes(authorizationRoute)) {
+  if (
+    !["automated-awaited", "automated-detached", "automated-sealed"].includes(authorizationRoute)
+  ) {
     throw new Error("Unsupported ClawHub authorization route.");
   }
   const receipt = {
@@ -374,7 +388,7 @@ export function createClawHubRecoveryApproval(env, runGhJson = api) {
 }
 
 export function validateClawHubParentAuthorization(receipt, transactions) {
-  const expected = createClawHubParentAuthorization(transactions, receipt?.authorizationRoute);
+  const expected = parentAuthorizationRecord(transactions, receipt?.authorizationRoute);
   exactKeys(receipt, Object.keys(expected), "ClawHub parent authorization");
   for (const key of Object.keys(expected)) {
     same(receipt[key], expected[key], `Parent authorization ${key}`);
@@ -385,7 +399,7 @@ export function validateClawHubParentAuthorization(receipt, transactions) {
 export function validateClawHubWorkflowRun(
   run,
   identity,
-  { parent = false, terminal = false } = {},
+  { parent = false, terminal = false, completedProducer = false } = {},
 ) {
   validateClawHubIdentity(identity);
   const expected = parent
@@ -426,7 +440,9 @@ export function validateClawHubWorkflowRun(
   const active =
     ["queued", "pending", "waiting", "in_progress"].includes(run.status) && run.conclusion === null;
   const success = run.status === "completed" && run.conclusion === "success";
-  if (!(terminal ? success : active || success)) {
+  const completed =
+    run.status === "completed" && typeof run.conclusion === "string" && run.conclusion.length > 0;
+  if (!(completedProducer ? active || completed : terminal ? success : active || success)) {
     throw new Error("ClawHub workflow is not in an authorized state.");
   }
   return run;
@@ -444,11 +460,13 @@ export async function downloadClawHubTransactions({
   runGhJson = api,
   fetchImpl,
   archivePath,
+  completedProducer = false,
 }) {
   validateClawHubIdentity(identity);
   const run = validateClawHubWorkflowRun(
     runGhJson(`actions/runs/${identity.runId}/attempts/${identity.runAttempt}`),
     identity,
+    { completedProducer },
   );
   const name = clawHubTransactionsArtifactName(identity);
   const listed = runGhJson(`actions/runs/${identity.runId}/artifacts?name=${name}&per_page=100`);
@@ -562,6 +580,7 @@ async function main() {
       )
       .toSorted((a, b) => a.name.localeCompare(b.name));
     result = validateClawHubTransactions({ schemaVersion: 1, identity, packages });
+    rejectAlphaTransactions(result);
     appendFileSync(
       process.env.GITHUB_OUTPUT,
       `identity=${JSON.stringify(identity)}\nartifact_name=${clawHubTransactionsArtifactName(identity)}\n`,
@@ -642,10 +661,9 @@ async function main() {
       parent: true,
     });
     validateClawHubWorkflowRun(api(`actions/runs/${identity.runId}`), identity);
-    result = createClawHubParentAuthorization(
-      transactions,
-      env.WAIT_FOR_CLAWHUB === "true" ? "automated-awaited" : "automated-detached",
-    );
+    // Core npm publication and the exact package roster are immutable before
+    // this point; later parent work must not revoke these transactions.
+    result = createClawHubParentAuthorization(transactions, "automated-sealed");
     appendFileSync(env.GITHUB_OUTPUT, `artifact_name=${clawHubParentArtifactName(identity)}\n`);
   } else if (positionals[0] === "recovery-approval") {
     result = createClawHubRecoveryApproval(process.env);

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { readSystemdStopTimeout } from "./systemd-stop-timeout.js";
 
 const { readFile, execUser, execSystem } = vi.hoisted(() => ({
@@ -21,88 +21,69 @@ const loaded = (timeout: string, invocation = "own") => ({
   stdout: `LoadState=loaded\nTimeoutStopUSec=${timeout}\nInvocationID=${invocation}`,
   stderr: "",
 });
-
+const own = { INVOCATION_ID: "own" };
+const userParent = "/user.slice/user-1000.slice/user@1000.service";
+const customUnit = "custom-gateway.service";
 beforeEach(() => {
   readFile.mockReset().mockRejectedValue(new Error("unavailable"));
   execUser.mockReset().mockResolvedValue({ code: 1, stdout: "", stderr: "unavailable" });
   execSystem.mockReset().mockResolvedValue(loaded("1min 30s"));
 });
-afterEach(() => vi.restoreAllMocks());
 
-describe("running systemd unit stop timeout", () => {
-  it.each([
-    { path: "/system.slice/custom-gateway.service", scope: "system" },
-    {
-      path: "/user.slice/user-1000.slice/user@1000.service/app.slice/custom-gateway.service",
-      scope: "user",
-    },
-  ])("finds a custom $scope unit from invocation membership", async ({ path, scope }) => {
-    readFile.mockResolvedValue(`0::${path}\n`);
-    execUser.mockResolvedValue(loaded("1min 30s"));
-    const result = await readSystemdStopTimeout({ INVOCATION_ID: "own" });
-    expect(result).toEqual({
-      timeoutMs: 90_000,
-      source: `systemd ${scope} custom-gateway.service TimeoutStopUSec`,
+type UnitCase = {
+  name: string;
+  scope: "user" | "system";
+  membership: string;
+  user: ReturnType<typeof loaded>;
+  env: NodeJS.ProcessEnv;
+  timeoutMs: number;
+  unit: string;
+  exclusive: boolean;
+};
+it.each`
+  name                          | scope       | membership                                                | user                        | env                                            | timeoutMs   | unit                               | exclusive
+  ${"system cgroup v2"}         | ${"system"} | ${`0::/system.slice/${customUnit}`}                       | ${loaded("1min 30s")}       | ${own}                                         | ${90_000}   | ${customUnit}                      | ${true}
+  ${"user cgroup v2"}           | ${"user"}   | ${`0::${userParent}/app.slice/${customUnit}`}             | ${loaded("5min 30s")}       | ${own}                                         | ${330_000}  | ${customUnit}                      | ${true}
+  ${"user legacy hierarchy"}    | ${"user"}   | ${`1:name=systemd:${userParent}/app.slice/${customUnit}`} | ${loaded("5min 30s")}       | ${own}                                         | ${330_000}  | ${customUnit}                      | ${true}
+  ${"wrong-manager invocation"} | ${"system"} | ${""}                                                     | ${loaded("10min", "other")} | ${{ ...own, OPENCLAW_SYSTEMD_UNIT: "custom" }} | ${90_000}   | ${"custom.service"}                | ${false}
+  ${"disabled infinity"}        | ${"user"}   | ${""}                                                     | ${loaded("infinity")}       | ${{ ...own, OPENCLAW_PROFILE: "work" }}        | ${Infinity} | ${"openclaw-gateway-work.service"} | ${false}
+  ${"disabled zero"}            | ${"user"}   | ${""}                                                     | ${loaded("0")}              | ${{ ...own, OPENCLAW_PROFILE: "work" }}        | ${Infinity} | ${"openclaw-gateway-work.service"} | ${false}
+`(
+  "reads the running unit timeout: $name",
+  async ({ scope, membership, user, env, timeoutMs, unit, exclusive }: UnitCase) => {
+    if (membership) {
+      readFile.mockResolvedValue(`2:cpu,cpuacct:${userParent}\n${membership}`);
+    }
+    execUser.mockResolvedValue(user);
+    expect(await readSystemdStopTimeout(env)).toEqual({
+      timeoutMs,
+      source: `systemd ${scope} ${unit} TimeoutStopUSec`,
     });
-    const queried = scope === "user" ? execUser : execSystem;
-    expect(queried.mock.calls.flat(2)).toContain("custom-gateway.service");
-    expect(scope === "user" ? execSystem : execUser).not.toHaveBeenCalled();
-  });
+    expect((scope === "user" ? execUser : execSystem).mock.calls.flat(2)).toContain(unit);
+    if (exclusive) {
+      expect(scope === "user" ? execSystem : execUser).not.toHaveBeenCalled();
+    }
+  },
+);
 
-  it.each(["0::", "1:name=systemd:"])(
-    "uses %s membership instead of resource-controller parents",
-    async (hierarchy) => {
-      readFile.mockResolvedValue(
-        [
-          "2:cpu,cpuacct:/user.slice/user-1000.slice/user@1000.service",
-          `${hierarchy}/user.slice/user-1000.slice/user@1000.service/app.slice/custom-gateway.service`,
-        ].join("\n"),
-      );
-      execUser.mockResolvedValue(loaded("5min 30s"));
-      expect(await readSystemdStopTimeout({ INVOCATION_ID: "own" })).toEqual({
-        timeoutMs: 330_000,
-        source: "systemd user custom-gateway.service TimeoutStopUSec",
-      });
-      expect(execSystem).not.toHaveBeenCalled();
-    },
-  );
-
-  it("rejects a same-named unit in the wrong manager", async () => {
-    execUser.mockResolvedValue(loaded("10min", "other"));
-    const result = await readSystemdStopTimeout({
-      OPENCLAW_SYSTEMD_UNIT: "custom",
-      INVOCATION_ID: "own",
-    });
-    expect(result).toEqual({
-      timeoutMs: 90_000,
-      source: "systemd system custom.service TimeoutStopUSec",
-    });
-  });
-
-  it.each(["infinity", "0"])("accepts disabled stop timeouts (%s)", async (value) => {
-    execUser.mockResolvedValue(loaded(value));
-    expect(
-      (await readSystemdStopTimeout({ OPENCLAW_PROFILE: "work", INVOCATION_ID: "own" }))?.timeoutMs,
-    ).toBe(Infinity);
-    expect(execUser.mock.calls.flat(2)).toContain("openclaw-gateway-work.service");
-  });
-
-  it("keeps startup available when the manager transport throws", async () => {
+it.each([
+  { code: 1, stdout: "", stderr: "permission denied" },
+  { code: 0, stdout: "LoadState=not-found\nTimeoutStopUSec=1h", stderr: "" },
+  loaded("garbage"),
+  new Error("systemctl unavailable"),
+])("uses a visible conservative default when inspection fails", async (result) => {
+  const threw = result instanceof Error;
+  if (threw) {
     execUser.mockRejectedValue(new Error("transport lookup failed"));
-    execSystem.mockRejectedValue(new Error("systemctl unavailable"));
-    expect((await readSystemdStopTimeout({ INVOCATION_ID: "own" }))?.timeoutMs).toBe(90_000);
-  });
-
-  it.each([
-    { code: 1, stdout: "", stderr: "permission denied" },
-    { code: 0, stdout: "LoadState=not-found\nTimeoutStopUSec=1h", stderr: "" },
-    loaded("garbage"),
-  ])("uses a visible conservative default when inspection fails", async (result) => {
+    execSystem.mockRejectedValue(result);
+  } else {
     execSystem.mockResolvedValue(result);
-    expect(await readSystemdStopTimeout({ OPENCLAW_SYSTEMD_UNIT: "custom" })).toEqual({
-      timeoutMs: 90_000,
-      source: "systemd custom.service timeout unavailable; default TimeoutStopUSec",
-      warning: expect.stringContaining("system manager custom.service:"),
-    });
+  }
+  const env = threw ? own : { OPENCLAW_SYSTEMD_UNIT: "custom" };
+  const unit = threw ? "openclaw-gateway.service" : "custom.service";
+  expect(await readSystemdStopTimeout(env)).toEqual({
+    timeoutMs: 90_000,
+    source: `systemd ${unit} timeout unavailable; default TimeoutStopUSec`,
+    warning: expect.stringContaining(`system manager ${unit}:`),
   });
 });

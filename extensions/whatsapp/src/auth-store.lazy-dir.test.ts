@@ -18,10 +18,7 @@ it("resolves active-profile directories after import and preserves the legacy st
     process.env.OPENCLAW_STATE_DIR = stateDir;
     const expected = path.join(stateDir, "credentials", "whatsapp", DEFAULT_ACCOUNT_ID);
     expect(authStore.resolveDefaultWebAuthDir()).toBe(expected);
-    expect(accounts.listWhatsAppAuthDirs({})).toEqual([
-      path.join(stateDir, "credentials"),
-      expected,
-    ]);
+    expect(accounts.listWhatsAppAuthDirs({})).toEqual([expected]);
 
     vi.resetModules();
     const profileAuthStore = await import("./auth-store.js");

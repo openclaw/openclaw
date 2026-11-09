@@ -3,7 +3,6 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 export const FEISHU_CARD_INTERACTION_VERSION = "ocf1";
 
 type FeishuCardInteractionKind = "button" | "quick" | "meta";
-type FeishuCardInteractionReason = "malformed" | "stale" | "wrong_user" | "wrong_conversation";
 
 type FeishuCardInteractionMetadata = Record<string, string | number | boolean | null | undefined>;
 
@@ -34,20 +33,6 @@ type FeishuCardActionEventLike = {
   };
 };
 
-type DecodedFeishuCardAction =
-  | {
-      kind: "structured";
-      envelope: FeishuCardInteractionEnvelope;
-    }
-  | {
-      kind: "legacy";
-      text: string;
-    }
-  | {
-      kind: "invalid";
-      reason: FeishuCardInteractionReason;
-    };
-
 function isInteractionKind(value: unknown): value is FeishuCardInteractionKind {
   return value === "button" || value === "quick" || value === "meta";
 }
@@ -71,7 +56,7 @@ export function createFeishuCardInteractionEnvelope(
   };
 }
 
-export function buildFeishuCardActionTextFallback(event: FeishuCardActionEventLike): string {
+function buildFeishuCardActionTextFallback(event: FeishuCardActionEventLike): string {
   const actionValue = event.action.value;
   if (isRecord(actionValue)) {
     if (typeof actionValue.text === "string") {
@@ -85,75 +70,65 @@ export function buildFeishuCardActionTextFallback(event: FeishuCardActionEventLi
   return String(actionValue);
 }
 
-export function decodeFeishuCardAction(params: {
-  event: FeishuCardActionEventLike;
-  now?: number;
-}): DecodedFeishuCardAction {
-  const { event, now = Date.now() } = params;
+export function decodeFeishuCardAction(event: FeishuCardActionEventLike) {
   const actionValue = event.action.value;
   if (!isRecord(actionValue) || actionValue.oc !== FEISHU_CARD_INTERACTION_VERSION) {
     return {
       kind: "legacy",
       text: buildFeishuCardActionTextFallback(event),
-    };
+    } as const;
   }
 
   if (!isInteractionKind(actionValue.k) || typeof actionValue.a !== "string" || !actionValue.a) {
-    return { kind: "invalid", reason: "malformed" };
+    return { kind: "invalid", reason: "malformed" } as const;
   }
 
   if (actionValue.q !== undefined && typeof actionValue.q !== "string") {
-    return { kind: "invalid", reason: "malformed" };
+    return { kind: "invalid", reason: "malformed" } as const;
   }
 
-  if (actionValue.m !== undefined) {
-    if (!isRecord(actionValue.m)) {
-      return { kind: "invalid", reason: "malformed" };
-    }
-    for (const value of Object.values(actionValue.m)) {
-      if (!isMetadataValue(value)) {
-        return { kind: "invalid", reason: "malformed" };
-      }
-    }
+  if (
+    actionValue.m !== undefined &&
+    (!isRecord(actionValue.m) || !Object.values(actionValue.m).every(isMetadataValue))
+  ) {
+    return { kind: "invalid", reason: "malformed" } as const;
   }
 
   if (actionValue.c !== undefined) {
     if (!isRecord(actionValue.c)) {
-      return { kind: "invalid", reason: "malformed" };
+      return { kind: "invalid", reason: "malformed" } as const;
     }
-    if (actionValue.c.u !== undefined && typeof actionValue.c.u !== "string") {
-      return { kind: "invalid", reason: "malformed" };
-    }
-    if (actionValue.c.h !== undefined && typeof actionValue.c.h !== "string") {
-      return { kind: "invalid", reason: "malformed" };
-    }
-    if (actionValue.c.s !== undefined && typeof actionValue.c.s !== "string") {
-      return { kind: "invalid", reason: "malformed" };
+    if (
+      (actionValue.c.u !== undefined && typeof actionValue.c.u !== "string") ||
+      (actionValue.c.h !== undefined && typeof actionValue.c.h !== "string") ||
+      (actionValue.c.s !== undefined && typeof actionValue.c.s !== "string")
+    ) {
+      return { kind: "invalid", reason: "malformed" } as const;
     }
     if (actionValue.c.e !== undefined && !Number.isFinite(actionValue.c.e)) {
-      return { kind: "invalid", reason: "malformed" };
+      return { kind: "invalid", reason: "malformed" } as const;
     }
     if (actionValue.c.t !== undefined && actionValue.c.t !== "p2p" && actionValue.c.t !== "group") {
-      return { kind: "invalid", reason: "malformed" };
+      return { kind: "invalid", reason: "malformed" } as const;
     }
 
-    if (typeof actionValue.c.e === "number" && actionValue.c.e < now) {
-      return { kind: "invalid", reason: "stale" };
+    if (typeof actionValue.c.e === "number" && actionValue.c.e < Date.now()) {
+      return { kind: "invalid", reason: "stale" } as const;
     }
 
     const expectedUser = actionValue.c.u?.trim();
     if (expectedUser && expectedUser !== (event.operator.open_id ?? "").trim()) {
-      return { kind: "invalid", reason: "wrong_user" };
+      return { kind: "invalid", reason: "wrong_user" } as const;
     }
 
     const expectedChat = actionValue.c.h?.trim();
     if (expectedChat && expectedChat !== (event.context.chat_id ?? "").trim()) {
-      return { kind: "invalid", reason: "wrong_conversation" };
+      return { kind: "invalid", reason: "wrong_conversation" } as const;
     }
   }
 
   return {
     kind: "structured",
     envelope: actionValue as FeishuCardInteractionEnvelope,
-  };
+  } as const;
 }

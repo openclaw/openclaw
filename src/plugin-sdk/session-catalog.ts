@@ -46,7 +46,9 @@ export type {
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 export {
   deleteSessionUpstreamLink,
+  deleteSessionUpstreamLinkAsync,
   upsertSessionUpstreamLink,
+  upsertSessionUpstreamLinkAsync,
 } from "../sessions/session-upstream-links.js";
 export {
   classifyClaudeCliHistoryMessage,

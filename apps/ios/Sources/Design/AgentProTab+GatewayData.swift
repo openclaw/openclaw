@@ -4,22 +4,12 @@ import SwiftUI
 
 extension AgentProTab {
     func agentName(for agent: AgentSummary) -> String {
-        self.normalized(agent.name) ?? agent.id
+        agent.name?.trimmedNonEmpty ?? agent.id
     }
 
     func agentBadge(for agent: AgentSummary) -> String {
-        if let identity = agent.identity,
-           let emoji = identity["emoji"]?.value as? String,
-           let normalizedEmoji = self.normalized(emoji)
-        {
-            return normalizedEmoji
-        }
-
-        let words = self.agentName(for: agent)
-            .split(whereSeparator: { $0.isWhitespace || $0 == "-" || $0 == "_" })
-            .prefix(2)
-        let initials = words.compactMap(\.first).map(String.init).joined()
-        return initials.isEmpty ? "OC" : initials.uppercased()
+        (agent.identity?["emoji"]?.value as? String)?.trimmedNonEmpty
+            ?? AgentIdentityPresentation.initialsBadge(for: self.agentName(for: agent))
     }
 
     func agentTint(for agent: AgentSummary, state: AgentRosterState) -> Color {
@@ -29,7 +19,7 @@ extension AgentProTab {
 
     func agentDetail(for agent: AgentSummary) -> String {
         let parts = [
-            self.modelLabel(for: agent),
+            RootSidebar.agentModelLabel(agent),
             agent.id == self.appModel.gatewayDefaultAgentId ? "Default" : nil,
         ].compactMap(\.self)
         return parts.isEmpty ? agent.id : parts.joined(separator: " • ")
@@ -51,26 +41,9 @@ extension AgentProTab {
         return .ready
     }
 
-    func modelLabel(for agent: AgentSummary) -> String? {
-        guard let model = agent.model else { return nil }
-        for key in ["primary", "name", "id", "model"] {
-            if let value = model[key]?.value as? String,
-               let normalized = self.normalized(value)
-            {
-                return normalized
-            }
-        }
-        return nil
-    }
-
     @MainActor
     func refreshAgents() async {
         guard self.scenePhase == .active, self.liveGatewayConnected else { return }
         await self.appModel.refreshGatewayOverviewIfConnected()
-    }
-
-    func normalized(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
     }
 }

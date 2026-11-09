@@ -1,58 +1,30 @@
 # Triage, assignment, and closure
 
-Use for queue discovery, related-item research, assignment decisions, and
-explicitly authorized labels or closures. Keep review/list requests read-only.
+- Queue discovery, related-item research, assignment, explicitly authorized labels/closes. review/list = read-only.
 
 ## Discovery
 
-Prefer local Gitcrawl candidates, then verify live with narrow `gh` queries.
-Do not rerun a broad sync/enrichment job unless requested or freshness blocks the
-actual decision. Search title/body first and comments when context warrants it.
-A similarity score never proves duplication or closure eligibility.
-
-For a requested count, return only qualified items; disclose an exhausted search
-rather than padding. Favor concrete current bugs with an understood owner and
-feasible proof. If the request is for small fixes, exclude feature/product
-choices and unclear or broad ownership changes. Do not equate a short diff with
-low risk.
-
-Generic shortlists prioritize external contributors. Exclude broad-access
-maintainer PRs younger than 14 days unless a named item or explicit request for
-maintainer work overrides this. Verify finalist permissions when uncertain; do
-not scan every author's complete history. Maintainer-authored issues remain
-suppressed in generic discovery unless relevant to the requested scope.
+- Local Gitcrawl candidates → narrow live `ghx` verification. Broad sync/enrichment only if requested or freshness blocks decision. Search title/body first; comments when relevant. Similarity score ≠ duplication/closure proof.
+- Requested count: qualified items only; report exhausted search, never pad. Favor concrete current bugs, understood owner, feasible proof. Small-fix request excludes feature/product choices, unclear/broad ownership. Short diff ≠ low risk.
+- Generic shortlists: external contributors first. Exclude broad-access maintainer PRs younger than 14 days unless named/explicit maintainer-work request. Verify uncertain finalist permissions, never every author's full history. Suppress maintainer-authored issues in generic discovery unless scope-relevant.
 
 ## Assignment
 
-Before deep work on a named item, inspect current assignees. Another assignment
-less than six hours old is active ownership; continue only with direction to do
-so. Older assignments are an ownership hint, not a silent veto. If assignment
-time cannot be verified, say it is unknown. Preserve co-assignees and never
-replace them without explicit authority.
-
-Use current assignment timeline evidence when its age matters. Claim only a
-named, unassigned item when assignment or landing/autonomous-resolution authority
-covers the action, and use the authenticated writer's actual login.
+- Before deep named-item work: inspect assignees. Another assignment less than six hours old = active ownership; continue only with direction. Older = hint, not veto. Unverifiable time = unknown. Preserve co-assignees; never replace without explicit authority.
+- Age matters → current assignment timeline evidence. Claim only named unassigned item under assignment/landing/autonomous-resolution authority, with authenticated writer's actual login.
 
 ## Labels and closes
 
-Read the current response/label policy before mutation. For a matching automatic
-close reason, apply the authorized reason label and let automation own the
-comment/close/lock; do not duplicate it manually. Current reason families include
-skill/support/third-party integration routing, submission limits, spam, and
-invalid/dirty items; verify the actual label rather than inventing one.
+- Read current response/label policy before mutation. Choose one route: an authorized reason label lets Barnacle own the standard comment/close/optional lock, or an explicitly authorized manual comment+close uses the same message once as the authenticated human. Never combine both routes. A copied human warning is human activity, not an authenticated Barnacle grace receipt. Families: skill/support/third-party integration routing, submission limits, spam, invalid/dirty items. Verify actual label; never invent.
+- Fixed issue/superseded PR: prove same-or-better current main. Inspect symptom/surfaces, preserve unique proof, comment canonical fix + proof before authorized close. Mitigation/diagnostic ≠ primary repair. Uncertain/actively held work stays open.
+- Product rejection, won't-implement/out-of-scope = maintainer judgment. Explicit decision/close scope → handle directly associated cluster consistently; state rationale, supported alternative, reopening evidence. Keyword ≠ neighborhood closure authority.
+- Root bulk-mutation approval limits apply. Uncertain ownership/evidence/trust/authority → stop; vague instruction ≠ mass closures.
 
-For a proven fixed issue or superseded PR, verify current main provides the same
-or better behavior. Inspect the original symptom and affected surfaces, preserve
-unique evidence, then comment the canonical fix and proof before an authorized
-close. A mitigation or diagnostic does not establish that the primary behavior is
-fixed. Keep uncertain or actively held work open.
+## Administrative inactivity
 
-Product rejection and won't-implement/out-of-scope decisions remain maintainer
-judgment. Under an explicit decision/close scope, handle its directly associated
-cluster consistently and state the rationale, supported alternative, and evidence
-that would warrant reopening. Do not close an entire neighborhood from a keyword.
-
-Respect root bulk-mutation approval limits. Stop if ownership, evidence, source
-trust, or authorization is uncertain; do not broaden a vague instruction into
-mass closures.
+- One owner: `scripts/github/stale-lifecycle.mjs`; schedule, explicit issue/PR targets, dry-run and backfill share it.
+- Ordinary unassigned issues/PRs: 7 inactive days + 7 notice days. Assigned: 14 inactive + 7 notice. Bug issues: 30 inactive + 14 retest days regardless of contributor assignment. Creation age never overrides recent human activity.
+- Human comments/reviews, content edits, assignment changes and PR head changes reset activity. Bot reviews/ratings do not. Current maintainer ownership, security/P0/P1 and durable `no-stale` holds preserve; `bad-barnacle` suppresses Barnacle before effects.
+- Normalize known freeform maintainer holds to `no-stale` before enabling migration for affected items; adjudicate with their owner, never infer release from silence. Do not hardcode item IDs or interpret natural-language holds automatically.
+- Version/cohort/head changes require a fresh authenticated v2 notice and full grace. Silence authorizes administrative closure, never a fixed/duplicate verdict. Bug issue closes use `not_planned`; they remain unlocked for retest replies.
+- Manual copies cannot become automation receipts. Verify canaries through actual bot warnings and real grace; clock-controlled fixtures cover immediate terminal behavior. Use `item_numbers`, `dry_run=true` and a small `max_closures`, then an explicitly approved live bounded run of the same workflow. No shortened cooldown or alternate executor.

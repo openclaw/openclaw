@@ -1,0 +1,450 @@
+import assert from "node:assert/strict";
+import { channel } from "node:diagnostics_channel";
+import { EventEmitter, once } from "node:events";
+import {
+  request,
+  type IncomingMessage,
+  type RequestListener,
+  type ServerResponse,
+} from "node:http";
+import { createServer } from "node:https";
+import { Socket } from "node:net";
+import { buffer as readBody } from "node:stream/consumers";
+import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
+import { createCodexInferenceModelBinding } from "./inference-dispatch.js";
+import { createCodexInferenceProxy, type CodexInferenceProxy } from "./inference-proxy.js";
+import { MAX_BODY_BYTES } from "./inference-upload.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import {
+  createClient,
+  createNativeModelSourceFixture,
+} from "./native-subagent-monitor.test-support.js";
+import { isJsonObject } from "./protocol.js";
+
+const transport = vi.hoisted(() => ({ origin: "" }));
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (original) => {
+  const actual = await original<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
+      const source = new URL(params.url);
+      expect(source.origin).toBe("https://api.openai.com");
+      expect(params).toMatchObject({
+        requireHttps: true,
+        maxRedirects: 0,
+        capture: false,
+        mode: "trusted_env_proxy",
+      });
+      const target = new URL(source.pathname + source.search, transport.origin);
+      return actual.fetchWithSsrFGuard({
+        ...params,
+        url: target.href,
+        policy: { allowedOrigins: [target.origin], hostnameAllowlist: ["127.0.0.1"] },
+        dispatcherPolicy: { mode: "direct", connect: { ca: PROXY_FIXTURE_CERTIFICATE } },
+      });
+    },
+  };
+});
+
+let proxy: CodexInferenceProxy;
+let server: ReturnType<typeof createServer>;
+let handle: RequestListener;
+let sockets: Set<Socket>;
+let changed: EventEmitter;
+const json = (value: unknown) => Buffer.from(JSON.stringify(value));
+const metadata = (value: object) => ({ "x-codex-turn-metadata": JSON.stringify(value) });
+const child = {
+  client_metadata: metadata({
+    request_kind: "turn",
+    thread_id: "child",
+    parent_thread_id: "parent",
+  }),
+};
+const register = (threadId: string, text = "private parent prefix") =>
+  proxy.context.register({
+    threadId,
+    text,
+    signal: new AbortController().signal,
+    assertCurrent: () => {},
+  });
+const forkFrom = (sourceThreadId: string, threadId: string) =>
+  proxy.context.fork({
+    sourceThreadId,
+    threadId,
+    signal: new AbortController().signal,
+    assertCurrent: () => {},
+  });
+
+function receiveBody(reply = "synthetic completion") {
+  const received = createDeferred<Buffer>();
+  handle = (req, res) => {
+    void readBody(req).then((bytes) => {
+      received.resolve(bytes);
+      res.end(reply);
+    }, received.reject);
+  };
+  return received.promise;
+}
+
+beforeEach(async () => {
+  sockets = new Set();
+  changed = new EventEmitter();
+  handle = (_req, res) => res.end("synthetic");
+  server = createServer({ key: PROXY_FIXTURE_KEY, cert: PROXY_FIXTURE_CERTIFICATE }, (req, res) =>
+    handle(req, res),
+  );
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("error", () => {});
+    socket.once("close", () => {
+      sockets.delete(socket);
+      changed.emit("closed");
+    });
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  transport.origin = `https://127.0.0.1:${address.port}`;
+  proxy = await createCodexInferenceProxy({
+    upstream: new URL("https://api.openai.com/v1"),
+    assertCurrent: () => {},
+  });
+});
+
+afterEach(async () => {
+  proxy.close();
+  for (const socket of sockets) {
+    socket.destroy();
+  }
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+  vi.restoreAllMocks();
+});
+
+function post(body = json(child), headers: Record<string, string> = {}) {
+  const response = createDeferred<IncomingMessage>();
+  const closed = createDeferred<void>();
+  const req = request(
+    proxy.baseUrl + "/responses?cursor=synthetic%2Fa%5Cb%2Ec",
+    {
+      method: "POST",
+      agent: false,
+      headers,
+    },
+    response.resolve,
+  );
+  req.once("error", response.reject);
+  req.once("socket", (socket) => {
+    socket.once("close", () => closed.resolve());
+  });
+  req.end(body);
+  return { req, response: response.promise, closed: closed.promise };
+}
+
+async function waitForUpstreamClose() {
+  while (sockets.size > 0) {
+    await once(changed, "closed");
+  }
+}
+
+describe("inference HTTP transport ownership", () => {
+  it.each([false, true])(
+    "authorizes a fork after early parent cleanup=%s",
+    async (earlyCleanup) => {
+      const client = createClient();
+      proxy.close();
+      proxy = await createCodexInferenceProxy({
+        upstream: new URL("https://api.openai.com/v1"),
+        assertCurrent: () => {},
+        bindModelExecution: createCodexInferenceModelBinding({
+          client: client.client,
+          provider: "test-provider",
+          assertCurrent: () => {},
+          memoryConfigured: () => false,
+          captureModelSource: codexNativeSubagentMonitorRuntime.captureModelSource,
+          resolveModelThreadId: codexNativeSubagentMonitorRuntime.resolveModelThreadId,
+        }),
+      });
+      const parent = await register("parent-thread");
+      if (earlyCleanup) {
+        parent.release();
+      }
+      const fork = await forkFrom("parent-thread", "fork-thread");
+      const source = createNativeModelSourceFixture(["allowed"]);
+      const owner = await codexNativeSubagentMonitorRuntime.register({
+        client: client.client,
+        parentThreadId: "fork-thread",
+        modelSource: source,
+        configurationQualification: { assertCurrent: () => {}, hasProvider: () => true },
+      });
+      await owner.ready;
+      owner.bindTurn("fork-turn");
+      const turn = {
+        session_id: "fork-session",
+        thread_id: "fork-thread",
+        turn_id: "fork-turn",
+        request_kind: "turn",
+        [CODEX_INFERENCE_GENERATION_KEY]: fork.generation,
+      };
+      const body = {
+        model: "allowed",
+        instructions: "native instructions",
+        prompt_cache_key: "parent-session",
+        client_metadata: {
+          session_id: turn.session_id,
+          turn_id: turn.turn_id,
+          ...metadata(turn),
+        },
+      };
+      const headers = {
+        "session-id": body.prompt_cache_key,
+        "thread-id": turn.thread_id,
+        ...metadata(turn),
+      };
+      const received = receiveBody("fork response");
+      try {
+        // Parent completion must not revoke the independently admitted fork.
+        parent.release();
+        const upload = post(json(body), headers);
+        const response = await upload.response;
+        const responseBody = (await readBody(response)).toString();
+        expect({ status: response.statusCode, body: responseBody }).toEqual({
+          status: 200,
+          body: "fork response",
+        });
+        expect(JSON.parse((await received).toString())).toEqual({
+          ...body,
+          instructions: "native instructions\n\nprivate parent prefix",
+          tool_choice: "none",
+        });
+        await upload.closed;
+        await owner.unregister();
+        const revoked = post(json(body), headers);
+        const denied = await revoked.response;
+        expect(denied.statusCode).toBe(403);
+        expect((await readBody(denied)).toString()).toContain("cannot verify the owner");
+        await revoked.closed;
+      } finally {
+        fork.release();
+        await owner.unregister();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "preserves guarded compressed HTTP transport (rewrite=%s)",
+    async (rewrite) => {
+      const registration = await register("root", rewrite ? "synthetic root context" : "");
+      const context = metadata({
+        request_kind: "turn",
+        thread_id: "root",
+        [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
+      });
+      const body = {
+        instructions: "native instructions",
+        input: [{ role: "developer", content: "catalog" }],
+        client_metadata: context,
+      };
+      // Preserve precision and escape spelling when preparation leaves the native body unchanged.
+      const source = rewrite
+        ? json(body)
+        : Buffer.from(
+            String.raw`{ "generate": false, "tools": [{ "minimum": 9007199254740993 }], "input": "\u0061", "client_metadata": ${JSON.stringify(context)} }`,
+          );
+      const received = createDeferred<Buffer>();
+      handle = (req, res) => {
+        void readBody(req).then((bytes) => {
+          expect(new URL(req.url!, transport.origin).searchParams.get("cursor")).toBe(
+            "synthetic/a\\b.c",
+          );
+          expect(req.url?.split("?")[0]).toBe("/v1/responses");
+          expect(req.httpVersion).toBe("1.1");
+          expect(req.headers).toMatchObject({
+            authorization: "Bearer synthetic-native-auth",
+            "content-encoding": "zstd",
+            "content-length": String(bytes.length),
+          });
+          expect(req.headers["transfer-encoding"]).toBeUndefined();
+          expect(req.headers).not.toHaveProperty("x-openai-chatpass-test");
+          received.resolve(bytes);
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          res.end("data: synthetic completion\n\n");
+        }, received.reject);
+      };
+      const wire = zstdCompressSync(source);
+      const upload = post(wire, {
+        authorization: "Bearer synthetic-native-auth",
+        "content-encoding": "zstd",
+      });
+      const response = await upload.response;
+      expect(response.statusCode).toBe(200);
+      expect(response.headers.connection).toBe("close");
+      expect((await readBody(response)).toString()).toBe("data: synthetic completion\n\n");
+      const forwarded = await received.promise;
+      if (rewrite) {
+        expect(JSON.parse(zstdDecompressSync(forwarded).toString())).toEqual({
+          ...body,
+          instructions: "native instructions\n\nsynthetic root context",
+        });
+      } else {
+        expect(forwarded).toEqual(wire);
+      }
+      await Promise.all([upload.closed, waitForUpstreamClose()]);
+    },
+  );
+
+  it("keeps replacement decoding for malformed UTF-8 instead of forwarding invalid bytes", async () => {
+    const received = receiveBody();
+    const source = Buffer.concat([
+      Buffer.from('{"input":"'),
+      Buffer.from([0xff]),
+      Buffer.from('","client_metadata":' + JSON.stringify(child.client_metadata) + "}"),
+    ]);
+    const upload = post(source);
+    const response = await upload.response;
+    expect(response.statusCode).toBe(200);
+    await readBody(response);
+    expect((await received).toString()).toBe(JSON.stringify(JSON.parse(source.toString())));
+    await Promise.all([upload.closed, waitForUpstreamClose()]);
+  });
+
+  it.each([
+    // A small zstd frame can decode past the limit; a fresh connection cannot make it fit.
+    [
+      "decodes",
+      () => zstdCompressSync(Buffer.alloc(MAX_BODY_BYTES + 1, 32)),
+      { "content-encoding": "zstd" },
+    ],
+    // An uncompressed upload overflows mid-stream; the refusal must arrive instead of a reset.
+    ["uploads", () => Buffer.alloc(MAX_BODY_BYTES + 1, 32), {}],
+  ] as const)(
+    "rejects a request that %s past the body limit as a terminal size error",
+    async (_kind, body, headers) => {
+      let forwarded = false;
+      handle = (_req, res) => {
+        forwarded = true;
+        res.end("synthetic completion");
+      };
+      const upload = post(body(), headers);
+      const response = await upload.response;
+      // Native Codex retries 5xx and unmapped statuses; a 400 surfaces as a terminal invalid request.
+      expect(response.statusCode).toBe(400);
+      expect(response.headers["content-type"]).toBe("application/json");
+      expect(JSON.parse((await readBody(response)).toString())).toEqual({
+        type: "error",
+        status: 400,
+        error: {
+          type: "invalid_request_error",
+          code: "request_too_large",
+          message: expect.stringContaining("Request exceeds the maximum size"),
+        },
+      });
+      expect(forwarded).toBe(false);
+      await upload.closed;
+    },
+  );
+
+  it("runs a 17th guarded HTTP inference before the first 16 responses complete", async () => {
+    const waiting: ServerResponse[] = [];
+    const admitted = createDeferred<void>();
+    handle = (req, res) => {
+      void readBody(req).then(() => {
+        waiting.push(res);
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write("data: synthetic delta\n\n");
+        if (waiting.length === 17) {
+          admitted.resolve();
+        }
+      }, admitted.reject);
+    };
+    const requests = Array.from({ length: 17 }, () => post());
+    await admitted.promise;
+    expect(waiting.every((res) => !res.writableEnded)).toBe(true);
+    const responses = await Promise.all(requests.map(({ response }) => response));
+    const completed = Promise.all(responses.map(readBody));
+    for (const response of waiting) {
+      response.end("data: synthetic completed\n\n");
+    }
+    expect((await completed).every((body) => body.includes("synthetic completed"))).toBe(true);
+    await Promise.all([...requests.map(({ closed }) => closed), waitForUpstreamClose()]);
+    expect(requests.every(({ req }) => req.socket?.closed)).toBe(true);
+  });
+
+  it("cancels a backpressured upload after early response headers and drains owned sockets", async (context) => {
+    const received = createDeferred<IncomingMessage>();
+    let upstreamSocket: Socket | undefined;
+    let upstreamErrorObserved = false;
+    handle = (req, res) => {
+      req.pause();
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      // The relay exposes downstream headers with the first response body chunk.
+      res.write("data: synthetic early delta\n\n");
+      received.resolve(req);
+    };
+    const blocked = createDeferred<Socket>();
+    const drained = createDeferred<void>();
+    let headersReceived = false;
+    const sendHeaders = channel("undici:client:sendHeaders");
+    const observe = (message: unknown) => {
+      if (
+        !isJsonObject(message) ||
+        !isJsonObject(message.request) ||
+        message.request.origin !== transport.origin ||
+        !(message.socket instanceof Socket)
+      ) {
+        return;
+      }
+      const socket = message.socket;
+      upstreamSocket = socket;
+      const write = socket.write.bind(socket);
+      vi.spyOn(socket, "write").mockImplementation((...args) => {
+        const result = write(...args);
+        if (!result && headersReceived) {
+          blocked.resolve(socket);
+        }
+        return result;
+      });
+      socket.on("drain", () => {
+        drained.resolve();
+      });
+    };
+    sendHeaders.subscribe(observe);
+    context.onTestFinished(() => {
+      sendHeaders.unsubscribe(observe);
+    });
+    const upload = post(json({ ...child, input: "x".repeat(24 * 1024 * 1024) }));
+    const [response, incoming] = await Promise.all([upload.response, received.promise]);
+    await drained.promise;
+    headersReceived = true;
+    if (upstreamSocket?.writableNeedDrain) {
+      blocked.resolve(upstreamSocket);
+    }
+    const upstreamClient = await blocked.promise;
+    expect(upstreamClient.writableNeedDrain).toBe(true);
+    expect(response.statusCode).toBe(200);
+    expect(incoming.readableEnded).toBe(false);
+    const upstreamClosed = createDeferred<boolean>();
+    upstreamClient.once("error", () => {
+      upstreamErrorObserved = true;
+    });
+    upstreamClient.once("close", upstreamClosed.resolve);
+    response.destroy();
+    const [, hadError] = await Promise.all([upload.closed, upstreamClosed.promise]);
+    expect(upstreamClient.closed).toBe(true);
+    if (hadError) {
+      expect(upstreamErrorObserved).toBe(true);
+    }
+    expect(incoming.complete).toBe(false);
+    // The deliberately paused peer must consume EOF only after client teardown.
+    incoming.resume();
+    await waitForUpstreamClose();
+    expect(incoming.complete).toBe(false);
+    expect(upload.req.socket?.closed).toBe(true);
+  });
+});

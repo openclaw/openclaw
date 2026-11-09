@@ -1,11 +1,10 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
-import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import { createApproverRestrictedNativeApprovalCapabilityAsync } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
-  createChannelApproverDmTargetResolver,
-  createChannelNativeOriginTargetResolver,
-  createNativeApprovalChannelRouteGates,
+  createChannelApproverDmTargetResolverAsync,
+  createChannelNativeOriginTargetResolverAsync,
+  createNativeApprovalChannelRouteGatesAsync,
   createNativeApprovalMessagingTargetResolvers,
   shouldSuppressLocalNativeExecApprovalPrompt,
 } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -21,8 +20,9 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveDefaultMSTeamsAccountId, resolveMSTeamsAccount } from "./accounts.js";
 import { getMSTeamsApprovalApprovers, msTeamsApprovalAuth } from "./approval-auth.js";
-import { msteamsConfigAdapter, resolveMSTeamsAccount } from "./channel-config.js";
+import { msteamsConfigAdapter } from "./channel-config.js";
 import { normalizeMSTeamsMessagingTarget } from "./resolve-allowlist.js";
 
 type MSTeamsApprovalRequest =
@@ -34,10 +34,7 @@ function isMSTeamsApprovalTransportEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): boolean {
-  if (params.accountId && normalizeAccountId(params.accountId) !== DEFAULT_ACCOUNT_ID) {
-    return false;
-  }
-  const account = resolveMSTeamsAccount(params.cfg);
+  const account = resolveMSTeamsAccount(params);
   return account.enabled && account.configured && account.tokenStatus === "available";
 }
 
@@ -60,12 +57,12 @@ const msTeamsApprovalTargetResolvers = {
   },
 };
 
-const msTeamsApprovalRouteGates = createNativeApprovalChannelRouteGates({
+const msTeamsApprovalRouteGates = createNativeApprovalChannelRouteGatesAsync({
   channel: "msteams",
   defaultForwardingMode: "session",
   isTransportEnabled: isMSTeamsApprovalTransportEnabled,
   listAccountIds: msteamsConfigAdapter.listAccountIds,
-  resolveDefaultAccountId: () => DEFAULT_ACCOUNT_ID,
+  resolveDefaultAccountId: resolveDefaultMSTeamsAccountId,
   normalizeForwardTarget: msTeamsApprovalTargetResolvers.normalizeForwardTarget,
   resolveTurnSourceTarget: msTeamsApprovalTargetResolvers.resolveTurnSourceTarget,
 });
@@ -82,14 +79,14 @@ export function isMSTeamsNativeApprovalClientEnabled(params: {
   );
 }
 
-export function shouldHandleMSTeamsNativeApprovalRequest(params: {
+export async function shouldHandleMSTeamsNativeApprovalRequest(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   approvalKind?: ChannelApprovalKind;
   request: MSTeamsApprovalRequest;
-}): boolean {
+}): Promise<boolean> {
   return (
-    msTeamsApprovalRouteGates.shouldHandleApprovalRequest(params) &&
+    (await msTeamsApprovalRouteGates.shouldHandleApprovalRequest(params)) &&
     getMSTeamsApprovalApprovers(params).length > 0 &&
     Boolean(msTeamsApprovalTargetResolvers.resolveTurnSourceTarget(params.request))
   );
@@ -107,7 +104,7 @@ export function shouldSuppressLocalMSTeamsExecApprovalPrompt(params: {
   });
 }
 
-const resolveMSTeamsOriginTarget = createChannelNativeOriginTargetResolver({
+const resolveMSTeamsOriginTarget = createChannelNativeOriginTargetResolverAsync({
   channel: "msteams",
   shouldHandleRequest: shouldHandleMSTeamsNativeApprovalRequest,
   resolveTurnSourceTarget: msTeamsApprovalTargetResolvers.resolveTurnSourceTarget,
@@ -115,7 +112,7 @@ const resolveMSTeamsOriginTarget = createChannelNativeOriginTargetResolver({
   normalizeTarget: msTeamsApprovalTargetResolvers.normalizeTarget,
 });
 
-const msTeamsLazyApprovalNativeRuntime = createLazyChannelApprovalNativeRuntimeAdapter({
+const msTeamsLazyApprovalNativeRuntime = createLazyChannelApprovalNativeRuntimeAdapterAsync({
   capabilityBoundary: true,
   eventKinds: ["exec", "plugin", "system-agent"],
   isConfigured: ({ cfg, accountId }) => isMSTeamsNativeApprovalClientEnabled({ cfg, accountId }),
@@ -127,7 +124,7 @@ const msTeamsLazyApprovalNativeRuntime = createLazyChannelApprovalNativeRuntimeA
   },
 });
 
-const resolveMSTeamsApproverDmTargets = createChannelApproverDmTargetResolver({
+const resolveMSTeamsApproverDmTargets = createChannelApproverDmTargetResolverAsync({
   shouldHandleRequest: shouldHandleMSTeamsNativeApprovalRequest,
   resolveApprovers: getMSTeamsApprovalApprovers,
   mapApprover: (approver, params) => ({
@@ -136,11 +133,11 @@ const resolveMSTeamsApproverDmTargets = createChannelApproverDmTargetResolver({
   }),
 });
 
-const msTeamsNativeApprovalCapability = createApproverRestrictedNativeApprovalCapability({
+const msTeamsNativeApprovalCapability = createApproverRestrictedNativeApprovalCapabilityAsync({
   channel: "msteams",
   channelLabel: "Microsoft Teams",
   describeExecApprovalSetup: () =>
-    "Approve it from the Web UI or terminal UI for now. Microsoft Teams supports native approvals when the bot is configured. Configure `channels.msteams.allowFrom` or `channels.msteams.defaultTo` with Microsoft Entra object ID approvers.",
+    "Approve it from the Web UI for now. Microsoft Teams supports native approvals when the bot is configured. Configure `channels.msteams.allowFrom` or `channels.msteams.defaultTo` with Microsoft Entra object ID approvers.",
   listAccountIds: msteamsConfigAdapter.listAccountIds,
   hasApprovers: ({ cfg, accountId }) => getMSTeamsApprovalApprovers({ cfg, accountId }).length > 0,
   isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
@@ -159,7 +156,7 @@ const msTeamsNativeApprovalCapability = createApproverRestrictedNativeApprovalCa
       action: "approve",
       approvalKind: "plugin",
     })?.authorized ?? false,
-  isNativeDeliveryEnabled: isMSTeamsNativeApprovalClientEnabled,
+  isNativeDeliveryEnabled: async (params) => isMSTeamsNativeApprovalClientEnabled(params),
   resolveNativeDeliveryMode: () => "channel",
   requireMatchingTurnSourceChannel: true,
   resolveSuppressionAccountId: ({ target, request }) =>
@@ -167,11 +164,11 @@ const msTeamsNativeApprovalCapability = createApproverRestrictedNativeApprovalCa
     normalizeOptionalString(request.request.turnSourceAccountId),
   resolveOriginTarget: resolveMSTeamsOriginTarget,
   resolveApproverDmTargets: resolveMSTeamsApproverDmTargets,
-  nativeRuntime: msTeamsLazyApprovalNativeRuntime,
+  nativeRuntimeAsync: msTeamsLazyApprovalNativeRuntime,
 });
 
 export const msTeamsApprovalCapability: ChannelApprovalCapability = {
   ...msTeamsNativeApprovalCapability,
   // Preserve implicit same-chat authorization when no explicit approvers exist.
-  authorizeActorAction: (params) => msTeamsApprovalAuth.authorizeActorAction?.(params),
+  authorizeActorActionAsync: async (params) => msTeamsApprovalAuth.authorizeActorAction?.(params),
 };

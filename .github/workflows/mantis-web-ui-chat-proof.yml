@@ -29,7 +29,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.x"
+  NODE_VERSION: "24.22.1"
 
 jobs:
   authorize_actor:
@@ -46,7 +46,7 @@ jobs:
           )
         )
       }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       authorized: ${{ steps.permission.outputs.authorized }}
     steps:
@@ -88,7 +88,6 @@ jobs:
       request-pattern: 'web-ui-chat|web ui chat|(?=[\s\S]*web ui)(?=[\s\S]*chat)|(?=[\s\S]*control ui)(?=[\s\S]*chat)'
       skip-notice: Comment mentioned Mantis but did not request web UI chat proof.
       dispatch-params: ${{ github.event_name == 'workflow_dispatch' && toJSON(inputs) || '{}' }}
-      runner: blacksmith-8vcpu-ubuntu-2404
     secrets:
       MANTIS_GITHUB_APP_ID: ${{ secrets.MANTIS_GITHUB_APP_ID }}
       MANTIS_GITHUB_APP_PRIVATE_KEY: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
@@ -97,7 +96,7 @@ jobs:
     name: Validate selected candidate
     needs: resolve_request
     if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       candidate_revision: ${{ steps.validate.outputs.candidate-revision }}
     steps:
@@ -121,7 +120,7 @@ jobs:
     if: ${{ needs.resolve_request.outputs.should_run == 'true' && inputs.request_id == '' }}
     permissions:
       contents: read
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 60
     outputs:
       artifact_name: ${{ steps.prepare_evidence.outputs.artifact_name }}
@@ -147,7 +146,7 @@ jobs:
           echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
 
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -221,7 +220,7 @@ jobs:
 
       - name: Upload Mantis web UI chat artifacts
         if: ${{ always() && steps.prepare_evidence.outputs.output_dir != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.prepare_evidence.outputs.artifact_name }}
           path: ${{ steps.prepare_evidence.outputs.output_dir }}
@@ -263,6 +262,12 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+
       - name: Verify protected main-ancestry workflow pin
         env:
           GH_TOKEN: ${{ github.token }}
@@ -271,7 +276,7 @@ jobs:
   run_request_proof:
     name: Run request-bound web chat proof
     needs: [admit_bound_request, validate_candidate]
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
       contents: read
@@ -313,7 +318,7 @@ jobs:
         run: node scripts/mantis/telegram-proof-storage.mts cleanup
       - name: Upload independently captured observations
         if: ${{ success() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mantis-request-web-ui-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -350,7 +355,7 @@ jobs:
           CANDIDATE_SHA: ${{ needs.validate_candidate.outputs.candidate_revision }}
         run: node scripts/mantis/finalize-request-proof.mts
       - name: Upload request receipt separately
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mantis-request-receipt-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/mantis-request-finalizer/receipt.json
@@ -370,14 +375,14 @@ jobs:
           persist-credentials: false
 
       - name: Download Mantis web UI chat artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.run_web_ui_chat.outputs.artifact_name }}
           path: .artifacts/qa-e2e/mantis/web-ui-chat-proof
 
       - name: Create Mantis GitHub App token
         id: mantis_app_token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
           private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
@@ -385,6 +390,12 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-issues: write
           permission-pull-requests: write
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
 
       - name: Comment PR with inline QA evidence
         env:

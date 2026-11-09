@@ -58,6 +58,7 @@ export async function recoverEmbeddedRunTimeout(
   const recoveryMarker = markEmbeddedRunRecoveringTimeout({
     sessionId: input.getActiveSession().id,
     runId: input.runParams.runId,
+    operation: input.runParams.replyOperation,
   });
   try {
     const timeoutDiagId = createRunRecoveryDiagId();
@@ -108,6 +109,8 @@ export async function recoverEmbeddedRunTimeout(
         sessionKey: input.runParams.sessionKey,
         sessionId: activeSession.id,
         agentId: input.sessionAgentId,
+        memoryAudience: input.runInput?.hookContext.memoryAudience,
+        sandboxed: input.runInput?.hookContext.sandboxed,
         sessionFile: activeSession.file,
         assertActive: input.assertRecoveryActive,
       });

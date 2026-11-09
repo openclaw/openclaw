@@ -5,15 +5,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   readMigrationArtifactIdentity,
   statMigrationPath,
-} from "./doctor-session-sqlite-artifact.js";
+} from "../infra/session-sqlite-migration-artifact.js";
 import {
   readLegacyPrimaryTranscriptIdentity,
   readOnlySqliteDbStats,
   readOnlySqliteValidationSnapshot,
-} from "./doctor-session-sqlite-readers.js";
+} from "../infra/session-sqlite-migration-readers.js";
+import { verifyCanonicalSessionTranscriptSources } from "../infra/session-sqlite-transcript-verification.js";
 import { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-inventory.js";
 import type { DoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
-import { verifyCanonicalSessionTranscriptSources } from "./doctor-session-sqlite-verification.js";
 
 /** Missing index receipts describe history; only unimported transcript content requires action. */
 export function createMissingSessionIndexVerifier(params: {
@@ -59,7 +59,7 @@ export function createMissingSessionIndexVerifier(params: {
           readMigrationArtifactIdentity(sourcePath);
           const primary = readLegacyPrimaryTranscriptIdentity(sourcePath, sourcePath);
           if (!primary || !snapshot.snapshot.sessionKeysBySessionId.has(primary.sessionId)) {
-            throw new Error("Legacy transcript has no verified canonical owner");
+            throw new Error("Legacy transcript has no verified session owner");
           }
           return { path: sourcePath, sessionId: primary.sessionId };
         },
@@ -89,7 +89,7 @@ export function createMissingSessionIndexVerifier(params: {
       target.validatedTranscriptEvents = verified.events;
       target.issues.push({
         code: "legacy_index_informational",
-        message: `${target.storePath}: Canonical SQLite transcripts are complete. The legacy index source and archive are missing; legacy index entries are informational. No import is needed.`,
+        message: `${target.storePath}: Stored SQLite transcripts are complete. The legacy index source and archive are missing; legacy index entries are informational. No import is needed.`,
       });
       return true;
     } catch {

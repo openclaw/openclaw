@@ -1,416 +1,245 @@
-/**
- * Tests for tool catalog gateway methods and plugin tool visibility.
- */
-
 import { expectDefined } from "@openclaw/normalization-core";
-import { Type } from "typebox";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
-import {
-  ensureStandalonePluginToolRegistryLoaded,
-  resolvePluginTools,
-} from "../../plugins/tools.js";
+import { afterEach, expect, it, vi } from "vitest";
+import * as protocol from "../../../packages/gateway-protocol/src/index.js";
+import { listCoreToolFactoryDescriptors } from "../../agents/tool-catalog.js";
+import { filterToolsByPolicy } from "../../agents/tool-policy-match.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { loadAndActivateRootPluginRegistry } from "../../plugins/loader.js";
+import * as loaderFixtures from "../../plugins/loader.test-fixtures.js";
+import * as manifestEligibility from "../../plugins/manifest-contract-eligibility.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { markPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
+import { clearActivePluginRegistry, createPluginRegistryOwner } from "../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import * as loadContextResolver from "../../plugins/runtime/load-context.resolve.js";
+import * as pluginTools from "../../plugins/tools.js";
+import * as profiles from "../../state/user-profile-list.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { toolsCatalogHandlers } from "./tools-catalog.js";
 
-vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
-  listAgentIds: vi.fn(() => ["main"]),
-  resolveDefaultAgentId: vi.fn(() => "main"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace-main"),
-  resolveAgentDir: vi.fn(() => "/tmp/agents/main/agent"),
-}));
-
-vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: vi.fn(() => ({})),
-}));
-
-vi.mock("../../plugins/tools.js", () => ({
-  ensureStandalonePluginToolRegistryLoaded: vi.fn(),
-  resolvePluginTools: vi.fn(),
-}));
-
-const getActivePluginRegistryMock = vi.hoisted(() => vi.fn<() => unknown>(() => null));
-vi.mock("../../plugins/runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/runtime.js")>();
-  return {
-    ...actual,
-    getActivePluginRegistry: () =>
-      getActivePluginRegistryMock() as ReturnType<typeof actual.getActivePluginRegistry>,
-  };
+const probeKey = "__openclaw_catalog_nonblocking_probe";
+afterEach(async () => {
+  vi.restoreAllMocks();
+  Reflect.deleteProperty(globalThis, probeKey);
+  await clearActivePluginRegistry();
+  clearPluginMetadataLifecycleCaches();
+  loaderFixtures.resetPluginLoaderTestStateForTest();
+  loaderFixtures.cleanupPluginLoaderFixturesForTest();
 });
 
-type RespondCall = [boolean, unknown?, { code: number; message: string }?];
-type CatalogTool = {
-  id: string;
-  source: "core" | "plugin";
-  label?: string;
-  description?: string;
-  pluginId?: string;
-  optional?: boolean;
-  risk?: unknown;
-  tags?: unknown;
-  defaultProfiles?: unknown[];
-};
-type CatalogGroup = {
-  id?: string;
-  source: "core" | "plugin";
-  pluginId?: string;
-  tools: CatalogTool[];
-};
-type CatalogPayload = {
-  agentId?: string;
-  groups: CatalogGroup[];
-};
-
-function createInvokeParams(params: Record<string, unknown>, config: Record<string, unknown> = {}) {
-  const respond = vi.fn();
-  return {
-    respond,
-    invoke: async () =>
-      await expectDefined(
-        toolsCatalogHandlers["tools.catalog"],
-        'toolsCatalogHandlers["tools.catalog"] test invariant',
-      )({
-        params,
-        respond: respond as never,
-        context: { getRuntimeConfig: () => config } as never,
-        client: null,
-        req: { type: "req", id: "req-1", method: "tools.catalog" },
-        isWebchatConnect: () => false,
-      }),
-  };
-}
-
-function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
-  const arg = mock.mock.calls[0]?.[0];
-  if (arg === undefined) {
-    throw new Error(`Expected ${label}`);
+it.each(["success", "retired", "failed", "load", "resolve", "cleanup"] as const)(
+  "preserves catalog projection, responsiveness and cleanup (%s)",
+  async (mode) => {
+    await withOpenClawTestState(
+      {
+        prefix: "openclaw-catalog-",
+        layout: "split",
+        prepareProfileCatalog: true,
+        env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+      },
+      async (state) => {
+        const probe = {
+          progressed: false,
+          progressBeforeRegistration: [] as boolean[],
+          registrations: 0,
+          disposals: 0,
+          workspaces: [] as string[],
+          retire: () => {},
+        };
+        Object.assign(globalThis, { [probeKey]: probe });
+        const files: string[] = [];
+        for (const id of ["catalog-alpha", "catalog-beta"]) {
+          files.push(
+            await state.writeText(
+              `plugins/${id}/index.cjs`,
+              `module.exports = {
+  id: "${id}", register(api) {
+    const probe = globalThis["${probeKey}"];
+    probe.progressBeforeRegistration.push(probe.progressed);
+    probe.registrations++;
+    if (probe.registrations === 1) setImmediate(() => { probe.progressed = true; });
+    api.lifecycle.registerRuntimeLifecycle({ id: "catalog", dispose() { probe.disposals++; } });
+    if (probe.registrations === 2) probe.retire();
+    if (${mode === "failed"} && "${id}" === "catalog-beta") throw new Error("synthetic registration failure");
+    if ("${id}" === "catalog-alpha") api.registerToolMetadata({ toolName: "${id}", displayName: "Alpha", description: "Owned description", risk: "high", tags: ["fixture"] });
+    else api.registerToolMetadata({ toolName: "catalog-alpha", displayName: "Wrong owner" });
+    api.registerTool(() => null, { name: "aaa_${id}", optional: true });
+    api.registerTool(() => null, { names: ["tts", "catalog-alpha"], optional: true });
+    api.registerTool((ctx) => { probe.workspaces.push(ctx.workspaceDir); return Object.freeze({
+      name: "${id}", label: "${id}", description: "Fallback description", displaySummary: "Short summary",
+      parameters: { type: "object", properties: { destination: { type: "string", description: "Call destination." }, note: { type: "string", description: "Optional note.", default: "hidden" } }, required: ["destination"] },
+      async execute() { throw new Error("Catalog must not execute tools"); }
+    }); }, { name: "${id}", optional: true });
   }
-  return arg;
-}
-
-function respondCall(respond: ReturnType<typeof vi.fn>): RespondCall {
-  const call = respond.mock.calls[0] as RespondCall | undefined;
-  if (!call) {
-    throw new Error("expected respond call");
-  }
-  return call;
-}
-
-function expectInvalidRequest(respond: ReturnType<typeof vi.fn>, message: string) {
-  const call = respondCall(respond);
-  expect(call[0]).toBe(false);
-  expect(call[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
-  expect(call[2]?.message).toContain(message);
-}
-
-function expectCatalogPayload(respond: ReturnType<typeof vi.fn>): CatalogPayload {
-  const call = respondCall(respond);
-  expect(call[0]).toBe(true);
-  return call[1] as CatalogPayload;
-}
-
-describe("tools.catalog handler", () => {
-  beforeEach(() => {
-    const voiceCall = {
-      name: "voice_call",
-      label: "voice_call",
-      description: "Plugin calling tool",
-      parameters: Type.Object({}),
-      execute: async () => ({ content: [], details: {} }),
-    };
-    const matrixRoom = {
-      name: "matrix_room",
-      label: "matrix_room",
-      displaySummary: "Summarized Matrix room helper.",
-      description: "Matrix room helper\n\nACTIONS:\n- join\n- leave",
-      parameters: Type.Object({}),
-      execute: async () => ({ content: [], details: {} }),
-    };
-    setPluginToolMeta(voiceCall, { pluginId: "voice-call", optional: true });
-    setPluginToolMeta(matrixRoom, { pluginId: "matrix", optional: false });
-    vi.mocked(resolvePluginTools).mockReturnValue([voiceCall, matrixRoom]);
-    getActivePluginRegistryMock.mockReturnValue(null);
-    vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockReturnValue(undefined);
-  });
-
-  it("rejects invalid params", async () => {
-    const { respond, invoke } = createInvokeParams({ extra: true });
-    await invoke();
-    expectInvalidRequest(respond, "invalid tools.catalog params");
-  });
-
-  it("rejects unknown agent ids", async () => {
-    const { respond, invoke } = createInvokeParams({ agentId: "unknown-agent" });
-    await invoke();
-    expectInvalidRequest(respond, "unknown agent id");
-  });
-
-  it("returns core groups including tts and excludes plugins when includePlugins=false", async () => {
-    const { respond, invoke } = createInvokeParams({ includePlugins: false });
-    await invoke();
-    const payload = expectCatalogPayload(respond);
-    expect(payload.agentId).toBe("main");
-    const groups = payload.groups ?? [];
-    expect(groups.some((group) => group.source === "plugin")).toBe(false);
-    const media = groups.find((group) => group.id === "media");
-    expect(media?.tools.map((tool) => `${tool.source}:${tool.id}`) ?? []).toContain("core:tts");
-    expect(groups.flatMap((group) => group.tools).filter((tool) => tool.id === "openclaw")).toEqual(
-      [
-        {
-          id: "openclaw",
-          label: "openclaw",
-          description: "Delegate OpenClaw setup and repair",
-          source: "core",
-          defaultProfiles: [],
-        },
-      ],
-    );
-  });
-
-  it("includes agents_wait by default and honors an explicit Swarm opt-out", async () => {
-    const disabled = createInvokeParams({ includePlugins: false }, { tools: { swarm: false } });
-    await disabled.invoke();
-    expect(
-      expectCatalogPayload(disabled.respond).groups.flatMap((group) =>
-        group.tools.map((tool) => tool.id),
-      ),
-    ).not.toContain("agents_wait");
-
-    const enabled = createInvokeParams({ includePlugins: false });
-    await enabled.invoke();
-    expect(
-      expectCatalogPayload(enabled.respond).groups.flatMap((group) =>
-        group.tools.map((tool) => tool.id),
-      ),
-    ).toContain("agents_wait");
-  });
-
-  it("includes plugin groups with plugin metadata", async () => {
-    const { respond, invoke } = createInvokeParams({});
-    await invoke();
-    const payload = expectCatalogPayload(respond);
-    const pluginGroups = payload.groups.filter((group) => group.source === "plugin");
-    expect(pluginGroups.length).toBeGreaterThan(0);
-    const voiceCall = pluginGroups
-      .flatMap((group) => group.tools)
-      .find((tool) => tool.id === "voice_call");
-    expect(voiceCall).toEqual({
-      id: "voice_call",
-      label: "voice_call",
-      description: "Plugin calling tool",
-      fullDescription: "Plugin calling tool",
-      source: "plugin",
-      pluginId: "voice-call",
-      optional: true,
-      risk: undefined,
-      tags: undefined,
-      defaultProfiles: [],
-    });
-  });
-
-  it("summarizes plugin tool descriptions the same way as the effective inventory", async () => {
-    const { respond, invoke } = createInvokeParams({});
-    await invoke();
-    const payload = expectCatalogPayload(respond);
-    const matrixRoom = payload.groups
-      .filter((group) => group.source === "plugin")
-      .flatMap((group) => group.tools)
-      .find((tool) => tool.id === "matrix_room");
-    expect(matrixRoom?.description).toBe("Summarized Matrix room helper.");
-  });
-
-  it("sorts private mixed groups without changing source order or metadata aliases", async () => {
-    const registry = createEmptyPluginRegistry();
-    const tags = ["fixture"];
-    const tools = ["resolved_z", "resolved_a"].map((name) => {
-      const tool = {
-        name,
-        label: name,
-        description: name,
-        parameters: Type.Object({}),
-        execute: vi.fn(async () => ({ content: [], details: {} })),
-      };
-      setPluginToolMeta(tool, { pluginId: "z-resolved", optional: true });
-      Object.freeze(tool);
-      return tool;
-    });
-    registry.toolMetadata.push({
-      pluginId: "z-resolved",
-      source: "fixture",
-      metadata: { toolName: "resolved_a", tags },
-    });
-    const factory = vi.fn(() => null);
-    registry.tools.push(
-      {
-        pluginId: "b",
-        pluginName: "Same",
-        source: "fixture",
-        names: ["b_z", "resolved_z", "tts", "b_a"],
-        factory,
-        optional: true,
-      },
-      {
-        pluginId: "c",
-        pluginName: "Same",
-        source: "fixture",
-        names: [],
-        declaredNames: ["b_a", "c_a"],
-        factory,
-        optional: true,
+};`,
+            ),
+          );
+          await state.writeJson(`plugins/${id}/openclaw.plugin.json`, {
+            id,
+            contracts: { tools: [id, `aaa_${id}`, "tts", "catalog-alpha"] },
+            configSchema: { type: "object", properties: {}, additionalProperties: false },
+          });
+        }
+        const config: OpenClawConfig = {
+          agents: {
+            defaults: { workspace: state.workspaceDir },
+            entries: { main: {}, other: { workspace: state.path("other-workspace") } },
+          },
+          plugins: {
+            allow: ["catalog-alpha", "catalog-beta"],
+            load: { paths: files },
+            slots: { memory: "none" },
+          },
+        };
+        const metadataContext = { config, env: process.env, workspaceDir: state.workspaceDir };
+        const metadataSnapshot = resolvePluginMetadataSnapshot(metadataContext);
+        setGatewayPluginMetadataSnapshot(metadataSnapshot, metadataContext);
+        const root = await loadAndActivateRootPluginRegistry({
+          ...metadataContext,
+          metadataSnapshot,
+          onlyPluginIds: [],
+        });
+        const owner = createPluginRegistryOwner(root, state.workspaceDir);
+        const contextPreparation = vi.spyOn(loadContextResolver, "resolvePluginRuntimeLoadContext");
+        const manifestPreparation = vi.spyOn(manifestEligibility, "loadManifestContractSnapshot");
+        const respond = vi.fn();
+        const handler = expectDefined(toolsCatalogHandlers["tools.catalog"], "catalog handler");
+        const invoke = (params = {}, cfg = config) =>
+          withPluginRuntimeRegistryScope(owner.registry, () =>
+            handler({
+              params,
+              respond,
+              context: { getRuntimeConfig: () => cfg } as never,
+              client: null,
+              req: { type: "req", id: "catalog", method: "tools.catalog" },
+              isWebchatConnect: () => false,
+            }),
+          );
+        if (mode === "retired") {
+          probe.retire = () => markPluginRegistryRetired(root);
+        }
+        const failure = new Error("synthetic producer failure");
+        const originalAcquire = pluginTools.acquireStandalonePluginToolRegistry;
+        const acquire = vi.spyOn(pluginTools, "acquireStandalonePluginToolRegistry");
+        if (mode === "load") {
+          acquire.mockRejectedValueOnce(failure);
+        }
+        if (mode === "resolve" || mode === "cleanup") {
+          acquire.mockImplementationOnce(async (params) => {
+            const acquisition = await originalAcquire(params);
+            if (mode === "resolve") {
+              vi.spyOn(acquisition, "resolveTools").mockImplementation(() => {
+                throw failure;
+              });
+            } else {
+              const release = acquisition.release;
+              vi.spyOn(acquisition, "release").mockImplementation(async () => {
+                await release();
+                throw failure;
+              });
+            }
+            return acquisition;
+          });
+        }
+        try {
+          const invocation = invoke({ agentId: "other" });
+          if (["retired", "load", "resolve", "cleanup"].includes(mode)) {
+            await expect(invocation).rejects.toThrow(
+              mode === "retired" ? "Plugin catalog generation is no longer available" : failure,
+            );
+            expect(respond).not.toHaveBeenCalled();
+          } else {
+            await invocation;
+            expect(respond).toHaveBeenCalledOnce();
+            const result = respond.mock.calls[0]?.[1] as protocol.ToolsCatalogResult;
+            const groups = result.groups.filter((group) => group.source === "plugin");
+            expect(groups.map((group) => [group.id, group.tools.map((tool) => tool.id)])).toEqual([
+              ["plugin:catalog-alpha", ["aaa_catalog-alpha", "catalog-alpha"]],
+              ...(mode === "failed"
+                ? []
+                : [["plugin:catalog-beta", ["aaa_catalog-beta", "catalog-beta"]]]),
+            ]);
+            const alpha = groups[0]?.tools.find((tool) => tool.id === "catalog-alpha");
+            expect(alpha).toMatchObject({
+              label: "Alpha",
+              description: "Short summary",
+              fullDescription: "Owned description",
+              optional: true,
+              risk: "high",
+              tags: ["fixture"],
+              defaultProfiles: [],
+            });
+            expect(
+              alpha?.parameters?.map((p) => [p.name, p.required, p.type, p.description]),
+            ).toEqual([
+              ["destination", true, "string", "Call destination."],
+              ["note", false, "string", "Optional note."],
+            ]);
+            if (mode === "success") {
+              expect(groups[1]?.tools.find((tool) => tool.id === "catalog-beta")).toMatchObject({
+                label: "catalog-beta",
+                fullDescription: "Fallback description",
+                description: "Short summary",
+              });
+            }
+          }
+          expect(probe.progressBeforeRegistration).toEqual(mode === "load" ? [] : [false, true]);
+          expect(contextPreparation).not.toHaveBeenCalled();
+          expect(manifestPreparation).not.toHaveBeenCalled();
+          expect(probe.registrations).toBe(mode === "load" ? 0 : 2);
+          expect(probe.disposals).toBe(mode === "load" ? 0 : 2);
+          const factoryCount =
+            mode === "success" || mode === "cleanup" ? 2 : mode === "failed" ? 1 : 0;
+          expect(probe.workspaces).toEqual(Array(factoryCount).fill(state.path("other-workspace")));
+          expect(root.tools).toHaveLength(0);
+          if (mode === "success") {
+            for (const [params, message] of [
+              [{ extra: true }, "invalid tools.catalog params"],
+              [{ agentId: "unknown-agent" }, "unknown agent id"],
+            ] as const) {
+              respond.mockClear();
+              await invoke(params);
+              expect(respond.mock.calls[0]?.[0]).toBe(false);
+              expect(respond.mock.calls[0]?.[2]).toMatchObject({
+                code: protocol.ErrorCodes.INVALID_REQUEST,
+                message: expect.stringContaining(message),
+              });
+            }
+            const configurable = listCoreToolFactoryDescriptors().filter(
+              (tool) => tool.name !== "structured_output",
+            );
+            const core = { agentId: "main", includePlugins: false };
+            for (const swarm of [false, true]) {
+              for (const multipleProfiles of [false, true]) {
+                vi.spyOn(profiles, "hasMultipleResidentSessionSharingIdentities").mockReturnValue(
+                  multipleProfiles,
+                );
+                respond.mockClear();
+                await invoke(core, { ...config, tools: { swarm } });
+                const result = respond.mock.calls[0]?.[1] as protocol.ToolsCatalogResult;
+                const tools = result.groups.flatMap((group) => group.tools),
+                  ids = tools.map((tool) => tool.id);
+                expect(result.agentId).toBe("main");
+                expect(tools.filter((tool) => tool.id === "openclaw")).toEqual([
+                  expect.objectContaining({ source: "core", defaultProfiles: [] }),
+                ]);
+                expect(ids.includes("agents_wait")).toBe(swarm);
+                expect(ids.includes("personal_instructions")).toBe(multipleProfiles);
+                if (swarm && multipleProfiles) {
+                  expect(filterToolsByPolicy(configurable, { allow: ["*"], deny: ids })).toEqual(
+                    [],
+                  );
+                }
+              }
+            }
+            expect(probe.registrations).toBe(2);
+          }
+        } finally {
+          await owner.close();
+        }
       },
     );
-    for (const entry of registry.tools) {
-      Object.freeze(entry.names);
-      if (entry.declaredNames) {
-        Object.freeze(entry.declaredNames);
-      }
-      Object.freeze(entry);
-    }
-    Object.freeze(tags);
-    Object.freeze(tools);
-    Object.freeze(registry.tools);
-    vi.mocked(resolvePluginTools).mockReturnValue(tools);
-    vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockReturnValue(registry);
-    const first = createInvokeParams({});
-    await first.invoke();
-    const groups = expectCatalogPayload(first.respond).groups.filter(
-      (group) => group.source === "plugin",
-    );
-    expect(groups.map((group) => group.id)).toEqual(["plugin:b", "plugin:c", "plugin:z-resolved"]);
-    expect(groups.map((group) => group.tools.map((tool) => tool.id))).toEqual([
-      ["b_a", "b_z"],
-      ["c_a"],
-      ["resolved_a", "resolved_z"],
-    ]);
-    const resolved = expectDefined(groups[2], "resolved group");
-    expect(expectDefined(resolved.tools[0], "resolved_a").tags).toBe(tags);
-    const original = structuredClone(groups);
-    resolved.tools.reverse();
-    expectDefined(groups[0], "declared group").tools.pop();
-    const second = createInvokeParams({});
-    await second.invoke();
-    const repeated = expectCatalogPayload(second.respond).groups.filter(
-      (group) => group.source === "plugin",
-    );
-    expect(repeated).toEqual(original);
-    expect(repeated[0]).not.toBe(groups[0]);
-    expect(expectDefined(repeated[2], "repeated resolved group").tools[0]?.tags).toBe(tags);
-    expect(tools.map((tool) => tool.name)).toEqual(["resolved_z", "resolved_a"]);
-    expect(registry.tools.map((entry) => entry.names)).toEqual([
-      ["b_z", "resolved_z", "tts", "b_a"],
-      [],
-    ]);
-    expect(factory).not.toHaveBeenCalled();
-    for (const tool of tools) {
-      expect(tool.execute).not.toHaveBeenCalled();
-    }
-  });
-
-  it.each(["load", "resolve"] as const)(
-    "propagates %s failure without publishing a partial catalog",
-    async (stage) => {
-      const failure = new Error("synthetic producer failure");
-      vi.mocked(
-        stage === "load" ? ensureStandalonePluginToolRegistryLoaded : resolvePluginTools,
-      ).mockImplementationOnce(() => {
-        throw failure;
-      });
-      const { respond, invoke } = createInvokeParams({});
-      await expect(invoke()).rejects.toBe(failure);
-      expect(respond).not.toHaveBeenCalled();
-    },
-  );
-
-  it("opts plugin tool catalog loads into gateway subagent binding", async () => {
-    const { invoke } = createInvokeParams({});
-
-    await invoke();
-
-    const resolveArgs = firstMockArg(vi.mocked(resolvePluginTools), "resolvePluginTools args") as {
-      allowGatewaySubagentBinding?: boolean;
-      suppressNameConflicts?: boolean;
-      toolAllowlist?: string[];
-      context?: {
-        agentId?: string;
-        workspaceDir?: string;
-        agentDir?: string;
-      };
-      existingToolNames?: Set<string>;
-    };
-    expect(resolveArgs.allowGatewaySubagentBinding).toBe(true);
-    expect(resolveArgs.suppressNameConflicts).toBe(true);
-    expect(resolveArgs.toolAllowlist).toEqual(["group:plugins"]);
-    expect(resolveArgs.context?.agentId).toBe("main");
-    expect(resolveArgs.context?.workspaceDir).toBe("/tmp/workspace-main");
-    expect(resolveArgs.context?.agentDir).toBe("/tmp/agents/main/agent");
-    expect(resolveArgs.existingToolNames).toBeInstanceOf(Set);
-    expect(resolveArgs.existingToolNames?.has("tts")).toBe(true);
-
-    const registryArgs = firstMockArg(
-      vi.mocked(ensureStandalonePluginToolRegistryLoaded),
-      "registry load args",
-    ) as {
-      allowGatewaySubagentBinding?: boolean;
-      toolAllowlist?: string[];
-      context?: {
-        agentId?: string;
-        workspaceDir?: string;
-        agentDir?: string;
-      };
-    };
-    expect(registryArgs.allowGatewaySubagentBinding).toBe(true);
-    expect(registryArgs.toolAllowlist).toEqual(["group:plugins"]);
-    expect(registryArgs.context).toEqual({
-      config: {},
-      workspaceDir: "/tmp/workspace-main",
-      agentDir: "/tmp/agents/main/agent",
-      agentId: "main",
-    });
-  });
-
-  it("projects metadata from the exact tool-discovery registry", async () => {
-    const toolRegistry = createEmptyPluginRegistry();
-    toolRegistry.toolMetadata = [
-      {
-        pluginId: "voice-call",
-        metadata: {
-          toolName: "voice_call",
-          displayName: "Voice Call",
-          description: "Place a voice call",
-          risk: "high",
-          tags: ["calling"],
-        },
-      },
-    ] as never;
-    const activeRegistry = createEmptyPluginRegistry();
-    activeRegistry.toolMetadata = [
-      {
-        pluginId: "voice-call",
-        metadata: {
-          toolName: "voice_call",
-          displayName: "Wrong Workspace Voice Call",
-          risk: "low",
-        },
-      },
-    ] as never;
-    getActivePluginRegistryMock.mockReturnValue(activeRegistry);
-    vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockReturnValue(toolRegistry);
-
-    const { respond, invoke } = createInvokeParams({});
-    await invoke();
-    const payload = expectCatalogPayload(respond);
-    const voiceCall = payload.groups
-      .filter((group) => group.source === "plugin")
-      .flatMap((group) => group.tools)
-      .find((tool) => tool.id === "voice_call");
-    expect(voiceCall?.label).toBe("Voice Call");
-    expect(voiceCall?.risk).toBe("high");
-    expect(voiceCall?.tags).toEqual(["calling"]);
-    expect(vi.mocked(resolvePluginTools)).toHaveBeenCalledWith(
-      expect.objectContaining({ runtimeRegistry: toolRegistry }),
-    );
-  });
-});
+  },
+);

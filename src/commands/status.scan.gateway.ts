@@ -52,7 +52,7 @@ export async function scanStatusJsonGateway(
     () => {
       const timeoutMs = resolveStatusGatewayProbeTimeoutMs(opts);
       if (timeoutMs === 0) {
-        projectionError = "Gateway probe budget exhausted before status projection.";
+        projectionError = "Gateway check budget exhausted before status projection.";
         return Promise.resolve(null);
       }
       return callGateway<StatusSummary>({
@@ -123,10 +123,6 @@ export async function scanStatusJsonGateway(
     includeRegistryUpdate: opts.all === true,
     gatewaySnapshot,
     getAgentLocalStatuses: async () => agentStatus,
-    getTailnetHostname: async (runner) =>
-      (await import("../infra/tailscale.js")).getTailnetHostname(runner),
-    getUpdateCheckResult: async (params) =>
-      (await import("./status.update.js")).getUpdateCheckResult(params),
   });
   const [tailscaleDns, tailscaleHttpsUrl, update] = await Promise.all([
     bootstrap.tailscaleDnsPromise,
@@ -168,11 +164,19 @@ export async function scanStatusJsonGateway(
         ...(!status
           ? [
               {
-                fields: ["agents", "sessions", "heartbeat", "tasks", "taskAudit"],
+                fields: ["agents", "sessions", "heartbeat", "channelSummary"],
                 reason: projectionError,
               },
             ]
-          : []),
+          : summary.channelSummary.length === 0
+            ? [
+                {
+                  fields: ["channelSummary"],
+                  reason:
+                    "Online status skips channel summaries; an empty channelSummary was not collected. Use openclaw channels status, or openclaw channels status --probe for live account checks.",
+                },
+              ]
+            : []),
         ...(!cliProjection
           ? [
               {

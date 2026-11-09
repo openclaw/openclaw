@@ -3,32 +3,24 @@ import type { MeetingBrowserCandidateTab } from "openclaw/plugin-sdk/meeting-run
 // Meet automation scripts match English UI labels. Pin the page language while
 // preserving authuser and every other caller-supplied query parameter.
 export function forceMeetEnglishUi(url: string): string {
-  try {
-    const parsed = new URL(url);
-    parsed.searchParams.set("hl", "en");
-    return parsed.toString();
-  } catch {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     return url;
   }
+  parsed.searchParams.set("hl", "en");
+  return parsed.toString();
 }
 
 export function normalizeMeetUrlForReuse(url: string | undefined): string | undefined {
-  if (!url) {
+  const parsed = URL.parse(url ?? "");
+  if (parsed?.protocol !== "https:" || parsed.hostname.toLowerCase() !== "meet.google.com") {
     return undefined;
   }
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== "meet.google.com") {
-      return undefined;
-    }
-    const match = parsed.pathname.match(/^\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:\/)?$/i);
-    if (!match?.[1]) {
-      return undefined;
-    }
-    return `https://meet.google.com/${match[1].toLowerCase()}`;
-  } catch {
+  const match = parsed.pathname.match(/^\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:\/)?$/i);
+  if (!match?.[1]) {
     return undefined;
   }
+  return `https://meet.google.com/${match[1].toLowerCase()}`;
 }
 
 export function isSameMeetUrlForReuse(a: string | undefined, b: string | undefined): boolean {
@@ -38,30 +30,16 @@ export function isSameMeetUrlForReuse(a: string | undefined, b: string | undefin
 }
 
 export function isEnglishMeetTab(url: string | undefined): boolean {
-  if (!url) {
-    return false;
-  }
-  try {
-    const parsed = new URL(url);
-    return (
-      parsed.protocol === "https:" &&
-      parsed.hostname.toLowerCase() === "meet.google.com" &&
-      parsed.searchParams.get("hl")?.toLowerCase() === "en"
-    );
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(url ?? "");
+  return (
+    parsed?.protocol === "https:" &&
+    parsed.hostname.toLowerCase() === "meet.google.com" &&
+    parsed.searchParams.get("hl")?.toLowerCase() === "en"
+  );
 }
 
 export function readMeetAuthUser(url: string | undefined): string | undefined {
-  if (!url) {
-    return undefined;
-  }
-  try {
-    return new URL(url).searchParams.get("authuser") ?? undefined;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(url ?? "")?.searchParams.get("authuser") ?? undefined;
 }
 
 export function isRecoverableMeetTab(tab: MeetingBrowserCandidateTab, url?: string): boolean {

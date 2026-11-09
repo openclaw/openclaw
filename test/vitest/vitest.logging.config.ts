@@ -7,6 +7,7 @@ export function createLoggingVitestConfig(env?: Record<string, string | undefine
     dir: "src",
     exclude: databaseWorkerCoreTestFiles,
     env,
+    intersectIncludeFile: true,
     name: "logging",
     passWithNoTests: true,
   });

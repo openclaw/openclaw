@@ -2,10 +2,9 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatToolActivity
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.nonBlankString
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 
 internal enum class CompletedToolKind { Command, Read, Edit, Write, Search, Fetch, Progress, Other }
 
@@ -13,7 +12,7 @@ internal fun completedToolKind(name: String): CompletedToolKind =
   when (name.trim().lowercase()) {
     "bash", "exec", "shell", "run_command", "run_terminal_cmd", "terminal", "exec_command" -> CompletedToolKind.Command
     "read", "read_file", "readfile", "notebookread", "notebook_read" -> CompletedToolKind.Read
-    "edit", "edit_file", "multiedit", "multi_edit", "apply_patch", "applypatch", "patch" -> CompletedToolKind.Edit
+    "edit", "edit_file", "multiedit", "multi_edit", "notebookedit", "notebook_edit", "apply_patch", "applypatch", "patch" -> CompletedToolKind.Edit
     "write", "write_file", "create_file" -> CompletedToolKind.Write
     "grep", "find", "glob", "ls", "list", "codebase_search" -> CompletedToolKind.Search
     "web_fetch", "webfetch", "fetch" -> CompletedToolKind.Fetch
@@ -37,7 +36,7 @@ internal fun completedToolGroupSummary(tools: List<ChatToolActivity>): String {
       .values
       .filter { it.isVisible }
   if (items.isEmpty()) return nativeString("Tool details")
-  return items.groupingBy { if (it.status == "failed" || it.status == "blocked") nativeString("\${it.title} (\${it.status})", it.title, it.status) else it.title }.eachCount().entries.joinToString(", ") { (title, count) ->
+  return items.groupingBy { if (it.status == "failed" || it.status == "blocked" || it.status == "skipped") nativeString("\${it.title} (\${it.status})", it.title, it.status) else it.title }.eachCount().entries.joinToString(", ") { (title, count) ->
     if (count == 1) title else nativeString("\$title ×\$count", title, count)
   }
 }
@@ -47,8 +46,8 @@ internal fun completedCommandText(
   singleLine: Boolean = true,
 ): String? {
   val raw =
-    tool.arguments.string("command")
-      ?: tool.arguments.string("cmd")
+    tool.arguments.nonBlankString("command")
+      ?: tool.arguments.nonBlankString("cmd")
       ?: tool.detail?.substringAfter(": ", tool.detail)
   var command = raw?.trim()?.takeIf(String::isNotEmpty) ?: return null
   command = command.replace(Regex("^(?:/bin/)?(?:bash|zsh|sh)\\s+-lc\\s+"), "").trim()
@@ -73,8 +72,12 @@ internal data class CompletedToolResultPresentation(
   val outcome: String?,
 )
 
+internal val ChatToolActivity.hasFailedOutcome: Boolean
+  get() = if (activity != null || activityPrepared) activity?.status == "failed" else isError
+
 internal fun completedToolResultPresentation(tool: ChatToolActivity): CompletedToolResultPresentation {
   val result = tool.result?.takeIf { it.isNotBlank() }
+  val isError = tool.hasFailedOutcome
   val hasDetail =
     if (completedToolKind(tool.name) == CompletedToolKind.Command) {
       completedCommandText(tool, singleLine = false)?.isNotBlank() == true
@@ -82,26 +85,32 @@ internal fun completedToolResultPresentation(tool: ChatToolActivity): CompletedT
       tool.detail?.isNotBlank() == true
     }
   return CompletedToolResultPresentation(
-    expandable = result != null || hasDetail || tool.isError,
-    output = result ?: if (tool.isError) nativeString("No output — tool failed.") else null,
-    outputLabel = if (tool.isError) nativeString("Tool error") else null,
-    outcome = if (tool.isError) nativeString("Failed") else null,
+    expandable = result != null || hasDetail || isError,
+    output = result ?: if (isError) nativeString("No output — tool failed.") else null,
+    outputLabel = if (isError) nativeString("Tool error") else null,
+    outcome =
+      when {
+        tool.activity?.status == "skipped" -> nativeString("Skipped")
+        tool.activity?.status == "blocked" -> nativeString("Blocked")
+        isError -> nativeString("Failed")
+        else -> null
+      },
   )
 }
 
 internal fun progressReceiptLabel(tool: ChatToolActivity): String {
-  if (tool.isError) return nativeString("Progress update failed")
+  if (tool.activity?.status == "skipped") return nativeString("Skipped")
+  if (tool.activity?.status == "blocked") return nativeString("Blocked")
+  if (tool.hasFailedOutcome) return nativeString("Progress update failed")
   val args = tool.arguments
   val steps = (args?.get("plan") as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
   if (steps.isNotEmpty()) {
-    val completed = steps.count { it.string("status") == "completed" }
+    val completed = steps.count { it.nonBlankString("status") == "completed" }
     val current =
-      steps.firstOrNull { it.string("status") == "in_progress" }
-        ?: steps.firstOrNull { it.string("status") == "pending" }
-        ?: steps.lastOrNull { it.string("status") == "completed" }
-    return nativeString("Progress updated — \$completed/\$total · \$step", completed, steps.size, current?.string("step").orEmpty()).trimEnd(' ', '·')
+      steps.firstOrNull { it.nonBlankString("status") == "in_progress" }
+        ?: steps.firstOrNull { it.nonBlankString("status") == "pending" }
+        ?: steps.lastOrNull { it.nonBlankString("status") == "completed" }
+    return nativeString("Progress updated — \$completed/\$total · \$step", completed, steps.size, current?.nonBlankString("step").orEmpty()).trimEnd(' ', '·')
   }
-  return if (!args.string("markdown").isNullOrBlank()) nativeString("Progress note updated") else nativeString("Progress cleared")
+  return if (!args.nonBlankString("markdown").isNullOrBlank()) nativeString("Progress note updated") else nativeString("Progress cleared")
 }
-
-private fun JsonObject?.string(key: String): String? = (this?.get(key) as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotEmpty)

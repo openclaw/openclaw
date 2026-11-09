@@ -9,8 +9,11 @@ import type {
   PluginsInspectResult,
 } from "../lib/plugins/index.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createPluginDeclaredSurface } from "../test-helpers/plugins-e2e-fixtures.test-support.ts";
+import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Plugin request ownership" });
@@ -41,7 +44,7 @@ function detail(id: string, name: string, installed = false): PluginDiscoveryDet
   return {
     plugin: {
       id,
-      catalog: { name, official: true, categories: [] },
+      catalog: { name, official: true, categories: ["productivity"] },
       local: {
         present: installed,
         installed,
@@ -74,18 +77,7 @@ function inspection(skill: string): PluginsInspectResult {
       enabled: true,
     },
     source: { kind: "npm", packageName: "workboard" },
-    declared: {
-      channels: [],
-      providers: [],
-      tools: [],
-      contracts: [],
-      hooks: [],
-      mcpServers: [],
-      cliCommands: [],
-      cliBackends: [],
-      skills: [],
-      dangerousConfigFlags: [],
-    },
+    declared: createPluginDeclaredSurface(),
     components: {
       mapped: ["skills"],
       skills: [skill],
@@ -195,7 +187,7 @@ suite.define(() => {
         .locator(".plugins-settings-breadcrumb")
         .getByRole("link", { name: "Workboard", exact: true })
         .click();
-      const rows = page.locator(".plugin-capability__copy > strong");
+      const rows = page.locator(".plugin-capabilities .settings-row__title");
       await expect.poll(() => rows.allTextContents()).toEqual(["Current skill"]);
 
       await gateway.resolveDeferred(
@@ -208,61 +200,156 @@ suite.define(() => {
     });
   });
 
-  it.each([false, true])(
-    "keeps the selected install wizard after an older detail response (installing=%s)",
-    async (installing) => {
-      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-        const alpha = detail("ch_YWxwaGE", "Alpha");
-        const beta = detail("ch_YmV0YQ", "Beta");
-        const gateway = await installMockGateway(page, {
-          featureMethods,
-          deferredMethods: ["plugins.catalog.get"],
-          methodResponses: {
-            "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
-            "plugins.catalog.browse": {
-              cases: [
-                { match: { intent: "all" }, response: { items: [alpha.plugin, beta.plugin] } },
-                { match: { intent: "featured" }, response: { items: [] } },
-                { match: { intent: "trending" }, response: { items: [] } },
-              ],
-            },
-            "plugins.catalog.categories": { categories: [] },
-            "plugins.catalog.get": beta,
+  it("starts only the latest install after an older catalog detail response", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const alpha = detail("ch_YWxwaGE", "Alpha");
+      const beta = detail("ch_YmV0YQ", "Beta");
+      const gateway = await installMockGateway(page, {
+        featureMethods,
+        deferredMethods: ["plugins.catalog.get", "plugins.install"],
+        methodResponses: {
+          "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
+          "plugins.catalog.browse": { items: [alpha.plugin, beta.plugin] },
+          "plugins.catalog.categories": {
+            categories: [
+              {
+                slug: "productivity",
+                label: "Productivity",
+                description: "Tasks and work organization.",
+                icon: "list-todo",
+                order: 0,
+              },
+            ],
           },
-        });
-        await page.goto(`${suite.server.baseUrl}plugins`);
-        await page.getByRole("button", { name: "Install Alpha", exact: true }).click();
-        await gateway.waitForRequest("plugins.catalog.get", { match: { id: alpha.plugin.id } });
-        await page.getByRole("button", { name: "Install Beta", exact: true }).click();
-        const wizard = page.locator(".plugin-install-wizard");
-        await wizard.getByRole("heading", { name: "Beta", exact: true }).waitFor();
-        try {
-          if (installing) {
-            await gateway.deferNext("plugins.install");
-            await wizard.getByRole("button", { name: "Install Beta", exact: true }).click();
-            const request = await gateway.waitForRequest("plugins.install");
-            expect(request.params).toEqual({ source: "clawhub", packageName: "beta" });
+          "plugins.catalog.get": beta,
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}plugins`);
+      await page.getByRole("button", { name: "Install Alpha", exact: true }).first().click();
+      await gateway.waitForRequest("plugins.catalog.get", { match: { id: alpha.plugin.id } });
+      await page.getByRole("button", { name: "Install Beta", exact: true }).first().click();
+      const request = await gateway.waitForRequest("plugins.install");
+      expect(request.params).toEqual({ source: "clawhub", packageName: "beta" });
+      await gateway.resolveDeferred("plugins.catalog.get", alpha);
+      await captureSettled(page, "plugin-installing-ownership");
+      expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+      expect(await gateway.getRequests("plugins.install")).toHaveLength(1);
+      await gateway.rejectDeferred("plugins.install", {
+        code: "UNAVAILABLE",
+        message: "Synthetic install complete",
+      });
+    });
+  });
+
+  it.each([false, true])(
+    "disables plugin installation with a tooltip throughout update reconciliation (touch detail: %s)",
+    async (touch) => {
+      await suite.withPage(
+        {
+          viewport: touch ? { width: 390, height: 844 } : { width: 1280, height: 900 },
+          hasTouch: touch,
+          isMobile: touch,
+        },
+        async ({ page }) => {
+          const beta = detail("ch_YmV0YQ", "Beta");
+          const run = createUpdateRunFixture();
+          const gateway = await installMockGateway(page, {
+            featureMethods: [...featureMethods, "update.run", "update.status", "update.runs.get"],
+            deferredMethods: ["update.run", "update.runs.get", "plugins.install"],
+            methodResponses: {
+              "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
+              "plugins.catalog.browse": { items: [beta.plugin] },
+              "plugins.catalog.categories": {
+                categories: [
+                  {
+                    slug: "productivity",
+                    label: "Productivity",
+                    description: "Tasks and work organization.",
+                    icon: "list-todo",
+                    order: 0,
+                  },
+                ],
+              },
+              "plugins.catalog.get": beta,
+              "update.status": { activeRun: null, lastRun: null },
+            },
+          });
+          await page.goto(suite.server.baseUrl + "plugins");
+          if (touch) {
+            await page.locator('.plugin-catalog-card[data-plugin-id="ch_YmV0YQ"] a').tap();
           }
-          await gateway.resolveDeferred("plugins.catalog.get", alpha);
+          const install = page
+            .getByRole("button", { name: touch ? "Install" : "Install Beta", exact: true })
+            .first();
+          await expect.poll(() => install.isEnabled()).toBe(true);
+          await evaluateControlUiContext(page, (context) => {
+            void context.overlays.runUpdate();
+          });
+          await gateway.waitForRequest("update.run");
+          await expect.poll(() => install.isDisabled()).toBe(true);
+          await expect
+            .poll(() => install.getAttribute("title"))
+            .toBe("Paused while OpenClaw updates");
+          expect(await page.locator(".oc-banner[role=status]").count()).toBe(0);
+          if (touch) {
+            const bounds = await install.boundingBox();
+            expect(bounds).not.toBeNull();
+            await page.touchscreen.tap(
+              bounds!.x + bounds!.width / 2,
+              bounds!.y + bounds!.height / 2,
+            );
+          }
+          if (!touch) {
+            await install.hover({ force: true });
+            await expect
+              .poll(() =>
+                page
+                  .getByRole("tooltip")
+                  .filter({ hasText: "Paused while OpenClaw updates" })
+                  .isVisible(),
+              )
+              .toBe(true);
+            await install.evaluate((button: HTMLButtonElement) => button.click());
+          }
           await captureSettled(
             page,
-            installing ? "plugin-installing-ownership" : "plugin-review-ownership",
-            page.locator("openclaw-modal-dialog dialog"),
+            touch ? "plugin-update-in-progress-touch" : "plugin-update-in-progress",
           );
-          expect(await wizard.getByRole("heading").textContent()).toBe("Beta");
-          expect(await wizard.getAttribute("data-stage")).toBe(
-            installing ? "installing" : "review",
+          await page.mouse.move(0, 0);
+          expect(await gateway.getRequests("plugins.install")).toHaveLength(0);
+          await gateway.resolveDeferred("update.run", { ok: true, runId: run.runId });
+          await gateway.waitForRequest("update.runs.get");
+          await gateway.rejectDeferred("update.runs.get", {
+            code: "UNAVAILABLE",
+            message: "Synthetic update status temporarily unavailable",
+          });
+          await expect
+            .poll(() => install.getAttribute("title"))
+            .toBe("Paused while OpenClaw updates");
+          await captureSettled(
+            page,
+            touch ? "plugin-update-reconciliation-touch" : "plugin-update-reconciliation",
           );
-          expect(await gateway.getRequests("plugins.install")).toHaveLength(installing ? 1 : 0);
-        } finally {
-          if (installing) {
-            await gateway.rejectDeferred("plugins.install", {
-              code: "UNAVAILABLE",
-              message: "Synthetic install complete",
-            });
-          }
-        }
-      });
+          await expect.poll(() => install.isDisabled()).toBe(true);
+          expect(await gateway.getRequests("plugins.install")).toHaveLength(0);
+          await gateway.setMethodResponse("update.status", {
+            activeRun: null,
+            lastRun: { ...run, status: "failed", finishedAtMs: Date.now() },
+          });
+          await evaluateControlUiContext(page, (context) =>
+            context.overlays.refreshUpdateStatus("completion"),
+          );
+          await expect.poll(() => install.isEnabled()).toBe(true);
+          expect(await install.getAttribute("title")).toBeNull();
+          await install.click();
+          await gateway.waitForRequest("plugins.install");
+          expect(await gateway.getRequests("plugins.install")).toHaveLength(1);
+          await gateway.rejectDeferred("plugins.install", {
+            code: "UNAVAILABLE",
+            message: "Synthetic install complete",
+          });
+        },
+      );
     },
   );
 });

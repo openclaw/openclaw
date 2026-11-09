@@ -5,12 +5,8 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { BOARD_REPORT_WIDGET_KIND } from "../boards/board-report.js";
 import { BOARD_WEBSITE_WIDGET_KIND } from "../boards/board-website.js";
-// Projects plugin "tab" Control UI descriptors into the hello payload so the
-// dashboard renders plugin tabs without hardcoding plugin ids in core.
-// Descriptors follow the current Gateway's registry, including request-local snapshots.
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import type { ControlUiLinkReaderDescriptor } from "../shared/control-ui-link-reader.js";
@@ -24,6 +20,7 @@ import {
   type OperatorScope,
 } from "./method-scopes.js";
 import type { GatewayMethodRegistryView } from "./methods/descriptor.js";
+import { SESSION_READ_SCOPE } from "./operator-scopes.js";
 import { resolvePluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import {
   findMatchingPluginHttpRoutes,
@@ -60,14 +57,8 @@ function findControlUiTabGatewayRoute(
   return route.pluginId === tab.pluginId ? route : null;
 }
 
-type ControlUiDescriptorEntry = {
-  pluginId: string;
-  pluginName?: string;
-  descriptor: PluginControlUiDescriptor;
-};
-
 function visibleDescriptors(
-  entries: readonly ControlUiDescriptorEntry[],
+  entries: Readonly<PluginRegistry["controlUiDescriptors"]>,
   scopes: readonly string[],
 ) {
   return entries.filter(({ descriptor }) =>
@@ -81,27 +72,43 @@ function visibleDescriptors(
 export function listControlUiPluginDescriptors(
   scopes: readonly string[],
 ): WireControlUiDescriptor[] {
-  return visibleDescriptors(getPluginRegistryForContext()?.controlUiDescriptors ?? [], scopes)
-    .map(({ pluginId, pluginName, descriptor }) => ({
-      pluginId,
-      pluginName,
-      id: descriptor.id,
-      surface: descriptor.surface,
-      linkReader: descriptor.linkReader,
-      label: descriptor.label,
-      description: descriptor.description,
-      placement: descriptor.placement,
-      schema: descriptor.schema,
-      requiredScopes: descriptor.requiredScopes,
-      icon: descriptor.icon,
-      path: descriptor.path,
-      group: descriptor.group,
-      order: descriptor.order,
-    }))
-    .toSorted(
-      (left, right) =>
-        left.pluginId.localeCompare(right.pluginId) || left.id.localeCompare(right.id),
-    );
+  const registry = getPluginRegistryForContext();
+  return (
+    visibleDescriptors(registry?.controlUiDescriptors ?? [], scopes)
+      .filter(
+        (entry) =>
+          entry.descriptor.surface !== "inline" ||
+          registry?.plugins.some(
+            (plugin) =>
+              plugin.id === entry.pluginId &&
+              plugin.enabled &&
+              plugin.status === "loaded" &&
+              isControlUiPluginAllowed(plugin),
+          ),
+      )
+      .map(({ pluginId, pluginName, descriptor }) => ({
+        pluginId,
+        pluginName,
+        id: descriptor.id,
+        surface: descriptor.surface,
+        linkReader: descriptor.linkReader,
+        label: descriptor.label,
+        description: descriptor.description,
+        placement: descriptor.placement,
+        schema: descriptor.schema,
+        version: descriptor.version,
+        requiredScopes: descriptor.requiredScopes,
+        icon: descriptor.icon,
+        path: descriptor.path,
+        group: descriptor.group,
+        order: descriptor.order,
+      }))
+      // oxlint-disable-next-line unicorn/no-array-sort -- map created this private array.
+      .sort(
+        (left, right) =>
+          left.pluginId.localeCompare(right.pluginId) || left.id.localeCompare(right.id),
+      )
+  );
 }
 
 export type ControlUiPluginTabAuthGrant = {
@@ -112,9 +119,8 @@ export type ControlUiPluginTabAuthGrant = {
   profileId?: string;
 };
 
-/** Pure projection of tab descriptors visible to the presented scopes. */
 function projectControlUiPluginTabs(
-  entries: readonly ControlUiDescriptorEntry[],
+  entries: Readonly<PluginRegistry["controlUiDescriptors"]>,
   scopes: readonly string[],
 ): ControlUiPluginTab[] {
   const tabs: ControlUiPluginTab[] = [];
@@ -137,7 +143,8 @@ function projectControlUiPluginTabs(
     });
   }
   // Deterministic ordering keeps hello payloads stable across connects.
-  return tabs.toSorted(
+  // oxlint-disable-next-line unicorn/no-array-sort -- tabs is private to this projection.
+  return tabs.sort(
     (left, right) =>
       (left.order ?? 0) - (right.order ?? 0) ||
       left.label.localeCompare(right.label) ||
@@ -145,7 +152,6 @@ function projectControlUiPluginTabs(
   );
 }
 
-/** Lists active plugins' tab descriptors visible to the presented scopes. */
 export function listControlUiPluginTabs(
   scopes: readonly string[],
   opts: { requireGatewayAuthGrant?: boolean } = {},
@@ -180,7 +186,6 @@ export function listControlUiPluginTabs(
   });
 }
 
-/** Lists active plugins' trusted widget kinds visible to the presented scopes. */
 export function listControlUiPluginWidgetKinds(
   scopes: readonly string[],
 ): ControlUiPluginWidgetKind[] {
@@ -191,7 +196,7 @@ export function listControlUiPluginWidgetKinds(
       .filter((plugin) => plugin.controlUi && !isControlUiPluginAllowed(plugin))
       .map((plugin) => plugin.id),
   );
-  const coreEntries = authorizeOperatorScopesForRequiredScope(READ_SCOPE, scopes).allowed
+  const coreEntries = authorizeOperatorScopesForRequiredScope(SESSION_READ_SCOPE, scopes).allowed
     ? CORE_CONTROL_UI_WIDGET_KINDS
     : [];
   const pluginEntries = visibleDescriptors(entries, scopes).flatMap((entry) => {
@@ -207,7 +212,8 @@ export function listControlUiPluginWidgetKinds(
       },
     ];
   });
-  return [...coreEntries, ...pluginEntries].toSorted(
+  // oxlint-disable-next-line unicorn/no-array-sort -- the spread created this private array.
+  return [...coreEntries, ...pluginEntries].sort(
     (left, right) => left.label.localeCompare(right.label) || left.kind.localeCompare(right.kind),
   );
 }
@@ -282,14 +288,19 @@ export function listControlUiLinkReaders(
   if (methods.pluginRegistry && methods.pluginRegistry !== registry) {
     return [];
   }
+  const readers = visibleDescriptors(registry.controlUiDescriptors, scopes).filter(
+    ({ descriptor }) => descriptor.surface === "link-reader" && descriptor.linkReader,
+  );
+  if (readers.length === 0) {
+    return [];
+  }
   const loaded = new Set(
     registry.plugins
       .filter((plugin) => plugin.enabled && plugin.status === "loaded")
       .map((plugin) => plugin.id),
   );
-  const descriptors = new Map(methods.descriptors().map((method) => [method.name, method]));
   const readable = (name: string, pluginId: string) => {
-    const method = descriptors.get(name);
+    const method = methods.getDescriptor(name);
     return (
       method?.owner.kind === "plugin" &&
       method.owner.pluginId === pluginId &&
@@ -298,32 +309,35 @@ export function listControlUiLinkReaders(
       !method.controlPlaneWrite
     );
   };
-  return visibleDescriptors(registry.controlUiDescriptors, scopes)
-    .flatMap((entry) => {
-      const descriptor = entry.descriptor;
-      const metadata = descriptor.linkReader;
-      if (
-        descriptor.surface !== "link-reader" ||
-        !metadata ||
-        !loaded.has(entry.pluginId) ||
-        !readable(metadata.detailMethod, entry.pluginId) ||
-        (metadata.previewMethod && !readable(metadata.previewMethod, entry.pluginId)) ||
-        (metadata.imageMethod && !readable(metadata.imageMethod, entry.pluginId))
-      ) {
-        return [];
-      }
-      return [
-        {
-          pluginId: entry.pluginId,
-          id: descriptor.id,
-          label: descriptor.label,
-          icon: descriptor.icon,
-          linkReader: { ...metadata, hosts: [...metadata.hosts] },
-        },
-      ];
-    })
-    .toSorted(
-      (left, right) =>
-        left.pluginId.localeCompare(right.pluginId) || left.id.localeCompare(right.id),
-    );
+  return (
+    readers
+      .flatMap((entry) => {
+        const descriptor = entry.descriptor;
+        const metadata = descriptor.linkReader;
+        if (
+          descriptor.surface !== "link-reader" ||
+          !metadata ||
+          !loaded.has(entry.pluginId) ||
+          !readable(metadata.detailMethod, entry.pluginId) ||
+          (metadata.previewMethod && !readable(metadata.previewMethod, entry.pluginId)) ||
+          (metadata.imageMethod && !readable(metadata.imageMethod, entry.pluginId))
+        ) {
+          return [];
+        }
+        return [
+          {
+            pluginId: entry.pluginId,
+            id: descriptor.id,
+            label: descriptor.label,
+            icon: descriptor.icon,
+            linkReader: { ...metadata, hosts: [...metadata.hosts] },
+          },
+        ];
+      })
+      // oxlint-disable-next-line unicorn/no-array-sort -- flatMap created this private array.
+      .sort(
+        (left, right) =>
+          left.pluginId.localeCompare(right.pluginId) || left.id.localeCompare(right.id),
+      )
+  );
 }

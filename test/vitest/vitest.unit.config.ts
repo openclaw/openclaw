@@ -13,7 +13,7 @@ import {
 import { getUnitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
 import {
   isBundledPluginDependentUnitTestFile,
-  isUnitConfigTestFile,
+  filterUnitConfigTestFiles,
   unitTestAdditionalExcludePatterns,
   unitTestIncludePatterns,
 } from "./vitest.unit-paths.mjs";
@@ -66,8 +66,8 @@ export function resolveDefaultUnitCoverageIncludePatterns(
   const fastTestFiles = new Set(unitFastTestFiles);
   const sourceFiles = new Set<string>();
   for (const root of defaultUnitCoverageRoots) {
-    for (const testFile of collectTestFiles(resolveRepoRootPath(root))) {
-      if (!isUnitConfigTestFile(testFile) || fastTestFiles.has(testFile)) {
+    for (const testFile of filterUnitConfigTestFiles(collectTestFiles(resolveRepoRootPath(root)))) {
+      if (fastTestFiles.has(testFile)) {
         continue;
       }
       const sourceFile = resolveSiblingSourceFile(testFile);

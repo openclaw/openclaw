@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
-import fsp from "node:fs/promises";
 import {
   withWorkerWorkspaceHashMemo,
   type WorkspaceHashMemo,
 } from "../gateway/worker-environments/workspace-hash-memo.js";
-import { changedPaths } from "../gateway/worker-environments/workspace-manifest-comparison.js";
+import { prepareWorkspaceReconciliation } from "../gateway/worker-environments/workspace-manifest-comparison.js";
 import { overlayWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import type {
   WorkerWorkspaceManifest,
@@ -48,6 +47,7 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
   }
   const capture = async (referenceManifestRef: string, baseManifestRef?: string) =>
     await captureManifest({
+      mode: "eligible",
       workspaceDir: row.workspace_dir,
       manifestHome: row.home_dir,
       baseCommit: source.baseCommit,
@@ -70,12 +70,13 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
     target = overlay.manifest;
   }
   const sourceEntries = new Map(source.entries.map((entry) => [entry.path, entry]));
+  params.signal?.throwIfAborted();
+  const reconciliation = prepareWorkspaceReconciliation(base, target);
   return {
-    changed: changedPaths(base, target, params.signal),
-    materializeSourceFile: async (
+    changed: new Set(reconciliation.preflight.changedPaths),
+    readSourceFile: async (
       entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>,
-      destination: string,
-    ) => {
+    ): Promise<Buffer> => {
       const original = sourceEntries.get(entry.path);
       if (
         original?.type !== "file" ||
@@ -123,13 +124,15 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
         throw new Error("Prepared checkpoint immutable Git content verification failed");
       }
       params.signal?.throwIfAborted();
-      await fsp.writeFile(destination, result.stdout, { mode: entry.mode, flag: "wx" });
+      return result.stdout;
     },
     apply: async (stagingRoot: string): Promise<string> => {
       params.signal?.throwIfAborted();
       // The normal workspace fence holds throughout. After a crash this row is
       // cleanup-only: no in-memory permit survives to resurrect a partial tree.
-      const mutation = store.beginMutation(row);
+      const mutation = await store.beginMutation(row, {
+        assertCurrent: () => params.signal?.throwIfAborted(),
+      });
       let rolledBack = false;
       try {
         await withWorkerWorkspaceHashMemo(
@@ -137,16 +140,17 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
           async () =>
             await applyStagedWorkerWorkspace({
               root: row.workspace_dir,
+              assertCurrent: () => params.signal?.throwIfAborted(),
               stagingRoot,
               baseManifestRef,
               currentManifestRef: targetRef,
-              base,
+              reconciliation,
               current: target,
               journal: {
-                load: () => undefined,
-                begin: () => {},
-                commit: () => {},
-                abort: () => {
+                load: async () => undefined,
+                begin: async () => {},
+                commit: async () => {},
+                abort: async () => {
                   rolledBack = true;
                 },
               },
@@ -161,7 +165,7 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
             }),
         );
         params.signal?.throwIfAborted();
-        mutation.complete();
+        await mutation.complete();
         // Acknowledge the accepted Gateway baseline; its next three-way reconciliation
         // independently captures setup output retained in the verified remote target.
         return params.manifestRef;
@@ -171,7 +175,7 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
           !params.signal?.aborted &&
           (await capture(baseManifestRef)) === baseManifestRef
         ) {
-          mutation.complete();
+          await mutation.complete();
         }
         throw error;
       } finally {

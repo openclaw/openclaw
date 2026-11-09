@@ -9,21 +9,7 @@ function readTokenCount(record: JsonObject, key: string): number | undefined {
   return asSafeIntegerInRange(record[key], { min: 0 });
 }
 
-function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof normalizeUsage> {
-  const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
-  const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
-  return last ? normalizeCodexResponseTokenUsage(last) : undefined;
-}
-
-export function readCodexThreadContextSnapshot(params: JsonObject): {
-  activeContextTokens?: number;
-  cachedInputTokens?: number;
-  cacheWriteInputTokens?: number;
-  inputTokens?: number;
-  modelContextWindow?: number;
-  promptTokens?: number;
-  reasoningOutputTokens?: number;
-} {
+export function readCodexThreadContextSnapshot(params: JsonObject) {
   const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
   const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
   const modelContextWindow = tokenUsage
@@ -46,7 +32,22 @@ export function readCodexThreadContextSnapshot(params: JsonObject): {
   };
 }
 
-function normalizeCodexResponseTokenUsage(record: JsonObject): ReturnType<typeof normalizeUsage> {
+export function codexCompactionContextUsage(tokensAfter?: number) {
+  return tokensAfter === undefined
+    ? { state: "unavailable" as const }
+    : { state: "available" as const, promptTokens: tokensAfter, totalTokens: tokensAfter };
+}
+
+type CodexResponseUsage = Pick<
+  NonNullable<ReturnType<typeof normalizeUsage>>,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "reasoningTokens" | "total"
+> & { promptTokens?: number };
+
+function normalizeCodexResponseTokenUsage(
+  record: JsonObject,
+):
+  | { usage: NonNullable<ReturnType<typeof normalizeUsage>>; observedUsage: CodexResponseUsage }
+  | undefined {
   // v2 TokenUsageBreakdown. inputTokens includes cached input; OpenClaw usage
   // tracks uncached input, cache reads, and cache writes separately.
   const totalTokens = readTokenCount(record, "totalTokens");
@@ -54,10 +55,8 @@ function normalizeCodexResponseTokenUsage(record: JsonObject): ReturnType<typeof
   const cacheRead = readTokenCount(record, "cachedInputTokens");
   const output = readTokenCount(record, "outputTokens");
   const reasoningTokens = readTokenCount(record, "reasoningOutputTokens");
-  const cacheWrite =
-    record.cacheWriteInputTokens === undefined
-      ? 0
-      : readTokenCount(record, "cacheWriteInputTokens");
+  const reportedCacheWrite = readTokenCount(record, "cacheWriteInputTokens");
+  const cacheWrite = record.cacheWriteInputTokens === undefined ? 0 : reportedCacheWrite;
   const hasCoherentInput =
     inputTokens !== undefined &&
     cacheRead !== undefined &&
@@ -82,10 +81,25 @@ function normalizeCodexResponseTokenUsage(record: JsonObject): ReturnType<typeof
   }
 
   return {
-    ...usage,
-    contextUsage: hasCoherentContext
-      ? { state: "available", promptTokens: inputTokens, totalTokens }
-      : { state: "unavailable" },
+    usage: {
+      ...usage,
+      contextUsage: hasCoherentContext
+        ? { state: "available", promptTokens: inputTokens, totalTokens }
+        : { state: "unavailable" },
+    },
+    // Aggregate compatibility defaults are not evidence that the provider
+    // reported a field. Uncached input needs every cache component to be known.
+    observedUsage: {
+      ...(hasCoherentInput && reportedCacheWrite !== undefined
+        ? { input: inputTokens - cacheRead - reportedCacheWrite }
+        : {}),
+      ...(inputTokens !== undefined ? { promptTokens: inputTokens } : {}),
+      ...(output !== undefined ? { output } : {}),
+      ...(cacheRead !== undefined ? { cacheRead } : {}),
+      ...(reportedCacheWrite !== undefined ? { cacheWrite: reportedCacheWrite } : {}),
+      ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+      ...(totalTokens !== undefined ? { total: totalTokens } : {}),
+    },
   };
 }
 
@@ -95,10 +109,11 @@ export class CodexUsageProjection {
   private responseUsage: ReturnType<typeof normalizeUsage>;
   private threadUsage: ReturnType<typeof normalizeUsage>;
   private contextUsage: NonNullable<ReturnType<typeof normalizeUsage>>["contextUsage"];
+  private compactionContext?: { tokensAfter?: number; completed: boolean };
 
   get usage(): ReturnType<typeof normalizeUsage> {
     const usage = this.responseUsage ?? this.threadUsage;
-    return usage ? { ...usage, contextUsage: this.contextUsage } : undefined;
+    return usage || this.contextUsage ? { ...usage, contextUsage: this.contextUsage } : undefined;
   }
 
   get modelIterations(): number {
@@ -109,24 +124,53 @@ export class CodexUsageProjection {
     this.contextUsage = { state: "unavailable" };
   }
 
+  beginCompaction(): void {
+    this.compactionContext = { completed: false };
+  }
+
+  completeCompaction(): number | undefined {
+    const tokensAfter = this.compactionContext?.tokensAfter;
+    this.compactionContext = { tokensAfter, completed: true };
+    this.contextUsage = codexCompactionContextUsage(tokensAfter);
+    return tokensAfter;
+  }
+
   recordThread(params: JsonObject): ReturnType<typeof readCodexThreadContextSnapshot> {
-    const usage = readCodexThreadTokenUsage(params);
+    const snapshot = readCodexThreadContextSnapshot(params);
+    if (this.compactionContext) {
+      // Codex recomputes history with zero input/output and an estimated total.
+      // Repeats after completion must not replace billing before the next response.
+      if (!this.compactionContext.completed) {
+        this.compactionContext.tokensAfter = snapshot.activeContextTokens;
+      }
+      return snapshot;
+    }
+    const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
+    const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
+    const usage = last ? normalizeCodexResponseTokenUsage(last)?.usage : undefined;
     this.threadUsage = usage ?? this.threadUsage;
     if (!this.responseUsage && usage) {
       this.contextUsage = usage.contextUsage;
     }
-    return readCodexThreadContextSnapshot(params);
+    return snapshot;
   }
 
-  record(params: JsonObject, reportOutputTokens?: (outputTokens: number) => void): void {
+  record(
+    params: JsonObject,
+    reportOutputTokens?: (outputTokens: number) => void,
+  ): { responseId: string; usage: CodexResponseUsage | undefined } | undefined {
     const responseId = readString(params, "responseId");
     if (!responseId || this.responseIds.has(responseId)) {
-      return;
+      return undefined;
     }
     this.responseIds.add(responseId);
-    const usage = isJsonObject(params.usage)
+    if (this.compactionContext?.completed) {
+      this.compactionContext = undefined;
+    }
+    const normalized = isJsonObject(params.usage)
       ? normalizeCodexResponseTokenUsage(params.usage)
       : undefined;
+    const usage = normalized?.usage;
     // Billing sums completed calls; context belongs only to the latest call.
     // Missing usage or a retry invalidates context without erasing paid work.
     this.contextUsage = usage?.contextUsage ?? { state: "unavailable" };
@@ -147,5 +191,6 @@ export class CodexUsageProjection {
     if (outputTokens !== undefined) {
       reportOutputTokens?.(outputTokens);
     }
+    return { responseId, usage: normalized?.observedUsage };
   }
 }

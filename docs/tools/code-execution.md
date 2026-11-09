@@ -21,11 +21,11 @@ registered by the bundled `xai` plugin under the `tools` contract.
 | Tool name          | `code_execution`                                                                  |
 | Provider plugin    | `xai` (bundled, `enabledByDefault: true`)                                         |
 | Auth               | xAI auth profile, `XAI_API_KEY`, or `plugins.entries.xai.config.webSearch.apiKey` |
-| Default model      | `grok-4.6`                                                                        |
+| Default model      | `grok-4.7`                                                                        |
 | Default timeout    | 30 seconds                                                                        |
 | Default `maxTurns` | unset (xAI applies its own internal limit)                                        |
 
-Existing installations that omit the tool model setting also use Grok 4.6.
+Existing installations that omit the tool model setting also use Grok 4.7.
 An explicit model setting remains selected.
 
 Use it for calculations, tabulation, quick statistics, and chart-style

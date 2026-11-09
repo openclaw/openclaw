@@ -5,7 +5,6 @@ import android.app.Application
 import android.content.ContentProvider
 import android.content.ContentUris
 import android.content.ContentValues
-import android.content.Context
 import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
@@ -420,22 +419,16 @@ private class FakeContactsDataSource(
   var addedRequest: ContactsAddRequest? = null
     private set
 
-  override fun hasReadPermission(context: Context): Boolean = canRead
+  override fun hasReadPermission(): Boolean = canRead
 
-  override fun hasWritePermission(context: Context): Boolean = canWrite
+  override fun hasWritePermission(): Boolean = canWrite
 
-  override fun search(
-    context: Context,
-    request: ContactsSearchRequest,
-  ): List<ContactRecord> {
+  override fun search(request: ContactsSearchRequest): List<ContactRecord> {
     searchedRequest = request
     return searchResults
   }
 
-  override fun add(
-    context: Context,
-    request: ContactsAddRequest,
-  ): ContactRecord {
+  override fun add(request: ContactsAddRequest): ContactRecord {
     addCalls += 1
     addedRequest = request
     return addResult

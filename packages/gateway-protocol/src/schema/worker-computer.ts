@@ -3,9 +3,8 @@ import { closedObject } from "./closed-object.js";
 import {
   WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
-  WorkerErrorResponseFrameSchema,
-  WorkerFrameIdSchema,
   WorkerIdentifierSchema,
+  workerResponseSchema,
 } from "./worker-protocol-primitives.js";
 
 export const WORKER_COMPUTER_PROTOCOL_FEATURE = "worker-computer-v1";
@@ -23,15 +22,7 @@ export const WorkerComputerResultSchema = closedObject({
   resultJson: Type.String({ minLength: 2, maxLength: WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES }),
 });
 
-export const WorkerComputerResponseFrameSchema = Type.Union([
-  closedObject({
-    type: Type.Literal("res"),
-    id: WorkerFrameIdSchema,
-    ok: Type.Literal(true),
-    payload: WorkerComputerResultSchema,
-  }),
-  WorkerErrorResponseFrameSchema,
-]);
+export const WorkerComputerResponseFrameSchema = workerResponseSchema(WorkerComputerResultSchema);
 
 export type WorkerComputerParams = Static<typeof WorkerComputerParamsSchema>;
 export type WorkerComputerResult = Static<typeof WorkerComputerResultSchema>;

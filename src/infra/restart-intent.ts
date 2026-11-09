@@ -1,28 +1,35 @@
 import { existsSync } from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 // Persists short-lived gateway restart intent for supervisor SIGTERM handoff.
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { gatewayServiceCommandMatchesRoot } from "../daemon/service-layout.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import { readGatewayServiceUpdateOriginalRoot } from "../daemon/service-update-authority.js";
 import { resolveSystemdServiceName } from "../daemon/systemd-service-files.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   getFileLockProcessStartTime,
   isPidAlive,
   isPidDefinitelyDead,
 } from "../shared/pid-alive.js";
+import { artifactPreservingReads } from "../state/artifact-preserving-state-reads.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { prepareOpenClawStateReadSource } from "../state/openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { sleep } from "../utils/sleep.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { readLockPayloadSync, resolveGatewayLockPaths } from "./gateway-lock.js";
-import { readGatewayOwnerLease, readGatewayOwnerLeaseFromDatabase } from "./gateway-owner-lease.js";
+import { readGatewayOwnerLeaseAsync } from "./gateway-owner-lease.js";
+import { readGatewayOwnerLeaseFromDatabase } from "./gateway-owner-lease.read.js";
+import { tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -30,12 +37,24 @@ import {
 } from "./kysely-sync.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { GatewayRestartPreparationError } from "./restart-intent-error.js";
+import {
+  normalizeRestartIntentReason,
+  decodeGatewayRestartIntent,
+} from "./restart-intent-payload.js";
+import type { GatewayRestartIntent } from "./restart-lifecycle.types.js";
 import { spawnPsSync } from "./spawn-ps.js";
+import type { EngineConnection } from "./sql-connection.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
-import { tryAcquireGatewayLifecycleCleanupCoordinator } from "./state-database-coordinator.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  type SqliteWorkerOperationAdmission,
+} from "./sqlite-worker-operation-admission.js";
+
+export { normalizeRestartIntentReason } from "./restart-intent-payload.js";
+export type { GatewayRestartIntent } from "./restart-lifecycle.types.js";
 
 const GATEWAY_RESTART_INTENT_KEY = "gateway-restart";
-const GATEWAY_RESTART_INTENT_TTL_MS = 60_000;
 const schema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "gateway_restart_intent", {
   errorMessage: "Gateway restart intent schema markers are missing",
 });
@@ -43,37 +62,17 @@ const schema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "gateway_rest
 const restartLog = createSubsystemLogger("restart");
 type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;
 
-type GatewayRestartIntentPayload = {
-  kind: "gateway-restart";
-  pid: number;
-  createdAt: number;
-  reason?: string;
-  force?: boolean;
-  waitMs?: number;
-};
-
-export type GatewayRestartIntent = {
-  reason?: string;
-  force?: boolean;
-  waitMs?: number;
-  // Process-local only: persisted restart requests cannot delegate successor ownership.
-  successorOwner?: {
-    kind: "managed-update-handoff";
-    handoffId: string;
-    installRoot: string;
-  };
-};
-
-export function normalizeRestartIntentReason(reason: string | undefined): string | undefined {
-  const normalized = reason?.trim();
-  return normalized ? truncateUtf16Safe(normalized, 200) : undefined;
-}
+type GatewayRestartIntentWriteReceipt = Omit<
+  OpenClawStateKyselyDatabase["gateway_restart_intent"],
+  "intent_key"
+>;
 
 export function writeGatewayRestartIntentSync(opts: {
   env?: NodeJS.ProcessEnv;
   targetPid?: number;
   intent?: GatewayRestartIntent;
   reason?: string;
+  onRecorded?: (clear: () => void) => void;
 }): boolean {
   const targetPid = asPositiveSafeInteger(opts.targetPid) ?? null;
   if (targetPid === null) {
@@ -97,12 +96,13 @@ export async function prepareGatewayRestartIntentLegacyProcess(opts: {
   readRuntime: () => Promise<GatewayServiceRuntime>;
   assertCurrent: () => void;
 }): Promise<GatewayRestartIntentLegacyProcess | undefined> {
+  const signal = resolveSqliteInspectionSignal(getAsyncWorkSignal());
+  signal?.throwIfAborted();
   opts.assertCurrent();
   try {
-    if (
-      readGatewayOwnerLease({ env: opts.env, current: true }) !== undefined ||
-      !existsSync(resolveGatewayLockPaths(opts.env).stateLockPath)
-    ) {
+    const owner = await readGatewayOwnerLeaseAsync({ env: opts.env, signal });
+    opts.assertCurrent();
+    if (owner && owner.state !== "dead") {
       return undefined;
     }
     const pid = asPositiveSafeInteger(opts.runtimePid);
@@ -125,6 +125,8 @@ export async function prepareGatewayRestartIntentLegacyProcess(opts: {
       return undefined;
     }
     const runtime = await opts.readRuntime();
+    opts.assertCurrent();
+    signal?.throwIfAborted();
     if (
       runtime.status !== "running" ||
       runtime.pid !== pid ||
@@ -133,8 +135,40 @@ export async function prepareGatewayRestartIntentLegacyProcess(opts: {
     ) {
       return undefined;
     }
+    // Activation can precede publication, leaving no owner or a dead predecessor.
+    // Wait for fresh evidence; an unpublished native PID never authorizes a signal.
+    const deadline = Date.now() + resolveGatewayStartupTiming().deadlineMs;
+    while (true) {
+      const published = await readGatewayOwnerLeaseAsync({
+        env: opts.env,
+        signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+      });
+      signal?.throwIfAborted();
+      opts.assertCurrent();
+      if (published && published.state !== "dead") {
+        break;
+      }
+      const legacy = readLegacyGatewayRestartLockSync(opts.env);
+      if (
+        legacy &&
+        !isPidDefinitelyDead(legacy.pid) &&
+        (!published || !isLegacyProcessInService(legacy.pid, pid))
+      ) {
+        break;
+      }
+      opts.assertCurrent();
+      if (
+        Date.now() >= deadline ||
+        !isPidAlive(pid) ||
+        getFileLockProcessStartTime(pid, opts.env) !== startTime
+      ) {
+        return undefined;
+      }
+      await sleep(200, signal);
+    }
     return { pid, startTime };
   } catch {
+    signal?.throwIfAborted();
     // Missing legacy evidence remains a typed serving-owner refusal at admission.
     return undefined;
   } finally {
@@ -198,6 +232,14 @@ function readLegacyGatewayRestartLockSync(env: NodeJS.ProcessEnv) {
 
 /** Called only for stopped native service state while physical cleanup exclusion is held. */
 function assertLegacyGatewayStoppedSync(env: NodeJS.ProcessEnv) {
+  // Doctor and embedded agents project this lock too. Killed, they leave it behind, and only a
+  // Gateway can serve; refusing here strands the stopped service an interrupted update must restart.
+  const { role, pid: ownerPid } =
+    readLockPayloadSync(resolveGatewayLockPaths(env).stateLockPath, true) ?? {};
+  const pid = asPositiveSafeInteger(ownerPid);
+  if (role !== undefined && role !== "gateway" && pid !== undefined && isPidDefinitelyDead(pid)) {
+    return;
+  }
   const legacy = readLegacyGatewayRestartLockSync(env);
   if (!legacy) {
     return;
@@ -254,28 +296,42 @@ export function writeGatewayServiceRestartIntentSync(opts: {
   env?: NodeJS.ProcessEnv;
   service: GatewayRestartIntentService;
   nativeStopped: boolean;
+  nativePid?: number;
   legacyProcess?: GatewayRestartIntentLegacyProcess;
   intent?: GatewayRestartIntent;
   reason?: string;
-  assertCurrent: () => void;
+  assertCurrent: (database?: EngineConnection) => void;
+  onRecorded?: (clear: () => void) => void;
 }): boolean {
   if (opts.nativeStopped) {
     try {
       // A stopped wrapper can still have a serving child or an unpublished startup owner.
-      const exclusion = tryAcquireGatewayLifecycleCleanupCoordinator({
-        databasePath: resolveOpenClawStateSqlitePath(opts.env),
-      });
+      const exclusion = tryAcquireGatewayStateOwner(resolveOpenClawStateSqlitePath(opts.env));
       if (exclusion) {
         try {
-          const owner = readGatewayOwnerLease({ env: opts.env, current: true });
-          opts.assertCurrent();
-          if (!owner || owner.state === "dead") {
+          const inactive = exclusion.run(() => {
+            // Exclusive stopped-service custody permits one native current read; never copy
+            // the database merely to decide whether this admitted repair has work to write.
+            const owner = artifactPreservingReads.run(false, () =>
+              withExistingOpenClawStateDatabaseCurrentReadOnly(
+                ({ db }) => readGatewayOwnerLeaseFromDatabase(db),
+                { env: opts.env, allowNativeRead: true },
+              ),
+            );
+            exclusion.assertCurrent();
+            opts.assertCurrent();
+            if (owner && owner.state !== "dead") {
+              return false;
+            }
             assertLegacyGatewayStoppedSync(opts.env ?? process.env);
             opts.assertCurrent();
+            return true;
+          });
+          if (inactive) {
             return false;
           }
         } finally {
-          // The successor must be able to acquire its lifecycle coordinator during startup.
+          // The successor acquires the same process owner during startup.
           exclusion.release();
         }
       }
@@ -287,8 +343,9 @@ export function writeGatewayServiceRestartIntentSync(opts: {
   const written = writeGatewayRestartIntentForTargetSync(
     opts,
     (db) => {
+      let owner: ReturnType<typeof readGatewayOwnerLeaseFromDatabase>;
       try {
-        const owner = readGatewayOwnerLeaseFromDatabase(db);
+        owner = readGatewayOwnerLeaseFromDatabase(db);
         if (owner === undefined) {
           const legacyPid = readLegacyGatewayRestartTargetSync(opts);
           if (legacyPid !== undefined) {
@@ -298,6 +355,7 @@ export function writeGatewayServiceRestartIntentSync(opts: {
         const supervisor = owner?.supervisor;
         if (
           owner?.state === "live" &&
+          (opts.nativePid === undefined || isLegacyProcessInService(owner.pid, opts.nativePid)) &&
           owner.mode === "supervised" &&
           supervisor?.kind === opts.service.kind &&
           supervisor.name !== null &&
@@ -308,10 +366,8 @@ export function writeGatewayServiceRestartIntentSync(opts: {
         ) {
           return owner.pid;
         }
-      } catch {
-        throw new GatewayRestartPreparationError("serving-owner");
-      }
-      throw new GatewayRestartPreparationError("serving-owner");
+      } catch {}
+      throw new GatewayRestartPreparationError("serving-owner", owner?.host);
     },
     opts.assertCurrent,
   );
@@ -322,9 +378,9 @@ export function writeGatewayServiceRestartIntentSync(opts: {
 }
 
 function writeGatewayRestartIntentForTargetSync(
-  opts: { env?: NodeJS.ProcessEnv; intent?: GatewayRestartIntent; reason?: string },
-  resolveTargetPid: (db: DatabaseSync) => number | undefined,
-  assertCurrent?: () => void,
+  opts: Omit<Parameters<typeof writeGatewayRestartIntentSync>[0], "targetPid">,
+  resolveTargetPid: (db: EngineConnection) => number | undefined,
+  assertCurrent?: (database?: EngineConnection) => void,
 ): boolean {
   const env = opts.env ?? process.env;
   try {
@@ -340,17 +396,27 @@ function writeGatewayRestartIntentForTargetSync(
         ? Math.floor(opts.intent.waitMs)
         : null;
     // The old Gateway still owns the schema until the restart hands off.
-    return runExistingOpenClawStateWriteTransaction(
+    let owned: GatewayRestartIntentWriteReceipt | undefined;
+    const written = runExistingOpenClawStateWriteTransaction(
       ({ db }) => {
         // Coordinator/BEGIN admission can block while the supervised owner changes.
-        assertCurrent?.();
+        assertCurrent?.(db);
         const targetPid = asPositiveSafeInteger(resolveTargetPid(db)) ?? null;
-        assertCurrent?.();
+        assertCurrent?.(db);
         if (targetPid === null) {
           return false;
         }
         const createdAt = Date.now();
         const stateDb = getNodeSqliteKysely<GatewayRestartIntentDatabase>(db);
+        const previous = executeSqliteQueryTakeFirstSync(
+          db,
+          stateDb
+            .selectFrom("gateway_restart_intent")
+            .select("updated_at_ms")
+            .where("intent_key", "=", GATEWAY_RESTART_INTENT_KEY),
+        );
+        // Two writes in the same millisecond must still have distinct cleanup ownership.
+        const generation = Math.max(createdAt, (previous?.updated_at_ms ?? 0) + 1);
         const row = {
           kind: "gateway-restart",
           pid: targetPid,
@@ -358,7 +424,7 @@ function writeGatewayRestartIntentForTargetSync(
           reason: reason ?? null,
           force: opts.intent?.force ? 1 : null,
           wait_ms: waitMs,
-          updated_at_ms: createdAt,
+          updated_at_ms: generation,
         };
         executeSqliteQuerySync(
           db,
@@ -367,11 +433,17 @@ function writeGatewayRestartIntentForTargetSync(
             .values({ intent_key: GATEWAY_RESTART_INTENT_KEY, ...row })
             .onConflict((conflict) => conflict.column("intent_key").doUpdateSet(row)),
         );
+        owned = row;
         return true;
       },
       { env },
       { schemaSql: schema, operationLabel: "gateway.restart-intent.write" },
     );
+    if (written && owned) {
+      const receipt = owned;
+      opts.onRecorded?.(() => clearGatewayRestartIntentSync(env, receipt));
+    }
+    return written;
   } catch (err) {
     // Revoked native control authority must not become a best-effort storage warning.
     assertCurrent?.();
@@ -383,93 +455,82 @@ function writeGatewayRestartIntentForTargetSync(
   }
 }
 
-export function clearGatewayRestartIntentSync(env: NodeJS.ProcessEnv = process.env): void {
+export function clearGatewayRestartIntentSync(
+  env: NodeJS.ProcessEnv = process.env,
+  owned?: GatewayRestartIntentWriteReceipt,
+): void {
   try {
     runExistingOpenClawStateWriteTransaction(
       ({ db }) => {
         const stateDb = getNodeSqliteKysely<GatewayRestartIntentDatabase>(db);
-        executeSqliteQuerySync(
-          db,
-          stateDb
-            .deleteFrom("gateway_restart_intent")
-            .where("intent_key", "=", GATEWAY_RESTART_INTENT_KEY),
-        );
+        let removal = stateDb
+          .deleteFrom("gateway_restart_intent")
+          .where("intent_key", "=", GATEWAY_RESTART_INTENT_KEY);
+        if (owned) {
+          // Published writers do not increment same-millisecond timestamps. Compare
+          // their complete payload too, so their successor request remains theirs.
+          removal = removal
+            .where("kind", "=", owned.kind)
+            .where("pid", "=", owned.pid)
+            .where("created_at", "=", owned.created_at)
+            .where("reason", owned.reason === null ? "is" : "=", owned.reason)
+            .where("force", owned.force === null ? "is" : "=", owned.force)
+            .where("wait_ms", owned.wait_ms === null ? "is" : "=", owned.wait_ms)
+            .where("updated_at_ms", "=", owned.updated_at_ms);
+        }
+        executeSqliteQuerySync(db, removal);
       },
       { env },
       { schemaSql: schema, operationLabel: "gateway.restart-intent.clear" },
     );
-  } catch {}
+  } catch (err) {
+    restartLog.warn(`failed to clear gateway restart intent: ${String(err)}`);
+  }
 }
 
-function readGatewayRestartIntentPayloadSync(
-  env: NodeJS.ProcessEnv,
-): GatewayRestartIntentPayload | null {
-  try {
-    const { db } = openOpenClawStateDatabase({ env });
-    const stateDb = getNodeSqliteKysely<GatewayRestartIntentDatabase>(db);
-    const parsed = executeSqliteQueryTakeFirstSync(
-      db,
-      stateDb
-        .selectFrom("gateway_restart_intent")
-        .select(["kind", "pid", "created_at", "reason", "force", "wait_ms"])
-        .where("intent_key", "=", GATEWAY_RESTART_INTENT_KEY),
-    );
-    if (
-      parsed?.kind === "gateway-restart" &&
-      typeof parsed.pid === "number" &&
-      Number.isFinite(parsed.pid) &&
-      typeof parsed.created_at === "number" &&
-      Number.isFinite(parsed.created_at) &&
-      (parsed.reason === null || typeof parsed.reason === "string") &&
-      (parsed.force === null ||
-        (typeof parsed.force === "number" && Number.isFinite(parsed.force))) &&
-      (parsed.wait_ms === null ||
-        (typeof parsed.wait_ms === "number" &&
-          Number.isFinite(parsed.wait_ms) &&
-          parsed.wait_ms >= 0))
-    ) {
-      const reason = normalizeRestartIntentReason(parsed.reason ?? undefined);
-      return {
-        kind: "gateway-restart",
-        pid: parsed.pid,
-        createdAt: parsed.created_at,
-        ...(reason ? { reason } : {}),
-        ...(parsed.force ? { force: true } : {}),
-        ...(typeof parsed.wait_ms === "number" ? { waitMs: Math.floor(parsed.wait_ms) } : {}),
-      };
+/** Consume the exact row once, after the shared writer's earlier accepted work. */
+export function prepareGatewayRestartIntentConsumption(
+  env: NodeJS.ProcessEnv = process.env,
+  now?: number,
+  assertCurrent?: () => void,
+  signal?: AbortSignal,
+): () => Promise<GatewayRestartIntent | null> {
+  const source = prepareOpenClawStateReadSource({ path: resolveOpenClawStateSqlitePath(env), env });
+  return async () => {
+    const context = source.workerContext();
+    const check = () => {
+      signal?.throwIfAborted();
+      context.admission.assertCurrent();
+      assertCurrent?.();
+    };
+    let admission: SqliteWorkerOperationAdmission | undefined;
+    let row: unknown;
+    try {
+      row = await runOpenClawStateWorkerOperation(
+        context,
+        (scope) => scope.execute({ type: "restartLifecycle.consumeIntent", input: undefined }),
+        {
+          existingOnly: true,
+          signal,
+          assertCurrent: check,
+          createAdmission: () => {
+            admission = createSqliteWorkerOperationAdmission((_request, grant) => {
+              check();
+              grant();
+            });
+            return { admission, nativeLocations: [context.admission.databasePath] };
+          },
+        },
+      );
+    } catch (error) {
+      // Native COMMIT can precede a lost ordinary reply. Never replay the consume.
+      const receipt = admission?.committed?.facts;
+      if (!isRecord(receipt) || receipt.kind !== "restart-intent-consumed") {
+        throw error;
+      }
+      row = receipt.row;
     }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-export function consumeGatewayRestartIntentPayloadSync(
-  env: NodeJS.ProcessEnv = process.env,
-  now = Date.now(),
-): GatewayRestartIntent | null {
-  const payload = readGatewayRestartIntentPayloadSync(env);
-  clearGatewayRestartIntentSync(env);
-  if (!payload) {
-    return null;
-  }
-  if (payload.pid !== process.pid) {
-    return null;
-  }
-  const ageMs = now - payload.createdAt;
-  if (ageMs < 0 || ageMs > GATEWAY_RESTART_INTENT_TTL_MS) {
-    return null;
-  }
-  return {
-    ...(payload.reason ? { reason: payload.reason } : {}),
-    ...(payload.force ? { force: true } : {}),
-    ...(typeof payload.waitMs === "number" ? { waitMs: payload.waitMs } : {}),
+    check();
+    return decodeGatewayRestartIntent(row, process.pid, now ?? Date.now());
   };
-}
-
-export function consumeGatewayRestartIntentSync(
-  env: NodeJS.ProcessEnv = process.env,
-  now = Date.now(),
-): boolean {
-  return consumeGatewayRestartIntentPayloadSync(env, now) !== null;
 }

@@ -16,7 +16,7 @@ read_when:
   <Accordion title="Can my team share one OpenClaw?">
     Yes. A shared gateway is a supported, first-class deployment: sessions carry an immutable creator, an assignable owner, and the people who prompted them; the Control UI shows who is viewing and typing in real time; and commits from shared sessions can carry `Co-authored-by` trailers for the people who steered them. [Named operator roles](/gateway/operator-scopes#named-operator-roles) bound what each teammate can do.
 
-    One boundary to respect: a gateway is one trust domain. Share it with people who trust each other; mutually adversarial users need separate gateways. See [Team setup](/start/teams), [Multi-user mode](/concepts/multi-user), and [Security](/gateway/security).
+    One boundary to respect: a gateway is one trust domain. Share it with people who trust each other; mutually adversarial users need separate gateways. See [Multiplayer](/start/multiplayer), [Multi-user mode](/concepts/multi-user), and [Security](/gateway/security).
 
   </Accordion>
 
@@ -82,8 +82,6 @@ read_when:
     - Tool orchestration (browser, files, scheduling, hooks).
     - Always-on Gateway (run on a VPS, interact from anywhere).
     - Nodes for local browser/screen/camera/exec.
-
-    Showcase: [https://openclaw.ai/showcase](https://openclaw.ai/showcase).
 
   </Accordion>
 </AccordionGroup>

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import type { SqliteWorkerStore } from "./sqlite-worker-contract.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
@@ -12,7 +13,9 @@ vi.mock("node:os", async (importOriginal) => ({
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.skipIf(Boolean(process.versions.bun))(
+const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
+
+it.skipIf(!explicitSqliteCloseReleasesNativeResources)(
   "acknowledges an actor's native close while its pooled sibling remains usable",
   async () => {
     const root = dirs.make("sqlite-native-stop-");

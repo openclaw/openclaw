@@ -1,14 +1,14 @@
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { SandboxConfig } from "./types.js";
+import { resolveSandboxConfigForAgent } from "./config.js";
+import { DOCKER_SANDBOX_ENGINE, ensureSandboxContainer } from "./docker.js";
 
 const containerMocks = vi.hoisted(() => ({ execContainer: vi.fn() }));
 const registryMocks = vi.hoisted(() => ({
   readRegistryEntry: vi.fn(),
   removeRegistryEntry: vi.fn(),
   updateRegistry: vi.fn(),
+  completeSandboxRegistryReservation: vi.fn(),
 }));
 
 vi.mock("./container-engine.js", async (importOriginal) => ({
@@ -18,250 +18,159 @@ vi.mock("./container-engine.js", async (importOriginal) => ({
 vi.mock("./registry.js", () => registryMocks);
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-let ensureSandboxContainer: typeof import("./docker.js").ensureSandboxContainer;
+let workspaceDir: string;
+const effects = () => containerMocks.execContainer.mock.calls.map(([, args]) => args[0]);
 
-beforeAll(async () => {
-  ({ ensureSandboxContainer } = await import("./docker.js"));
-});
+function mockEngine(effect: (stage: string) => void | Promise<void>) {
+  containerMocks.execContainer.mockImplementation(async (_engine, args: string[]) => {
+    if (args[0] === "inspect") {
+      return { code: 1, stdout: "", stderr: "No such object" };
+    }
+    await effect(args[0]!);
+    return { code: 0, stdout: "a".repeat(64), stderr: "" };
+  });
+}
 
 beforeEach(() => {
   registryMocks.readRegistryEntry.mockReset().mockResolvedValue(null);
   registryMocks.removeRegistryEntry.mockReset().mockResolvedValue(undefined);
   registryMocks.updateRegistry.mockReset().mockResolvedValue(undefined);
-  containerMocks.execContainer.mockReset().mockImplementation(async (_engine, args: string[]) => {
-    if (args[0] === "inspect") {
-      return { code: 1, stdout: "", stderr: "No such object" };
-    }
-    if (args[0] === "exec") {
+  registryMocks.completeSandboxRegistryReservation.mockReset().mockResolvedValue(undefined);
+  workspaceDir = tempDirs.make("openclaw-partial-create-");
+  containerMocks.execContainer.mockReset();
+  mockEngine((stage) => {
+    if (stage === "exec") {
       throw new Error("setup failed");
     }
-    return { code: 0, stdout: "", stderr: "" };
   });
 });
 
-function config(workspaceDir: string, setupCommand?: string): SandboxConfig {
-  return {
-    mode: "all",
-    backend: "docker",
-    scope: "shared",
-    workspaceAccess: "rw",
-    workspaceRoot: path.join(os.homedir(), ".openclaw", "sandboxes"),
-    dockerTmpfsSource: "default",
-    docker: {
-      image: "openclaw-sandbox:test",
-      containerPrefix: "oc-test-",
-      workdir: "/workspace",
-      readOnlyRoot: true,
-      tmpfs: ["/tmp"],
-      network: "none",
-      capDrop: ["ALL"],
-      binds: [`${workspaceDir}:/workspace:rw`],
-      dangerouslyAllowReservedContainerTargets: true,
-      ...(setupCommand ? { setupCommand } : {}),
+function ensure(
+  overrides: Partial<Parameters<typeof ensureSandboxContainer>[0]> = {},
+  setupCommand?: string,
+) {
+  const defaults = resolveSandboxConfigForAgent();
+  return ensureSandboxContainer({
+    engine: DOCKER_SANDBOX_ENGINE,
+    scopeKey: "partial-create",
+    workspaceDir,
+    agentWorkspaceDir: workspaceDir,
+    cfg: {
+      ...defaults,
+      mode: "all",
+      scope: "shared",
+      workspaceAccess: "rw",
+      docker: {
+        ...defaults.docker,
+        image: "openclaw-sandbox:test",
+        containerPrefix: "oc-test-",
+        tmpfs: ["/tmp"],
+        binds: [`${workspaceDir}:/workspace:rw`],
+        dangerouslyAllowReservedContainerTargets: true,
+        ...(setupCommand ? { setupCommand } : {}),
+      },
     },
-    ssh: {
-      command: "ssh",
-      workspaceRoot: "/tmp/openclaw-sandboxes",
-      strictHostKeyChecking: true,
-      updateHostKeys: true,
-    },
-    browser: {
-      enabled: false,
-      image: "openclaw-browser:test",
-      containerPrefix: "oc-browser-",
-      network: "openclaw-sandbox-browser",
-      cdpPort: 9222,
-      vncPort: 5900,
-      noVncPort: 6080,
-      headless: true,
-      noVncEnabled: false,
-      allowHostControl: false,
-      autoStart: false,
-      autoStartTimeoutMs: 5000,
-    },
-    tools: { allow: [], deny: [] },
-    prune: { idleHours: 24, maxAgeDays: 7 },
-  };
-}
-
-async function expectPartialRuntimeCleanup(params: {
-  workspaceDir: string;
-  cfg: SandboxConfig;
-  expectedError: string;
-}) {
-  await expect(
-    ensureSandboxContainer({
-      scopeKey: "partial-create",
-      workspaceDir: params.workspaceDir,
-      agentWorkspaceDir: params.workspaceDir,
-      cfg: params.cfg,
-    }),
-  ).rejects.toThrow(params.expectedError);
-  expect(containerMocks.execContainer).toHaveBeenCalledWith(
-    expect.anything(),
-    ["rm", "-f", "oc-test-shared"],
-    { allowFailure: true },
-  );
-  expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("oc-test-shared");
+    ...overrides,
+  });
 }
 
 describe("fresh sandbox container cleanup", () => {
-  it.each(["image", "create", "start"])(
-    "fences later runtime effects when authority closes after %s",
+  it.each(["reservation", "create", "start"])(
+    "fences effects after %s revocation",
     async (stage) => {
-      const workspaceDir = tempDirs.make("openclaw-runtime-revoked-");
       let current = true;
-      containerMocks.execContainer.mockImplementation(async (_engine, args: string[]) => {
-        if (args[0] === "inspect") {
-          return { code: 1, stdout: "", stderr: "No such object" };
-        }
-        if (args[0] === stage) {
+      if (stage === "reservation") {
+        registryMocks.updateRegistry.mockImplementationOnce(async () => {
+          await Promise.resolve();
+          current = false;
+        });
+      }
+      mockEngine(async (effect) => {
+        if (effect === stage) {
           await Promise.resolve();
           current = false;
         }
-        return { code: 0, stdout: "", stderr: "" };
       });
-      await expect(
-        ensureSandboxContainer({
-          scopeKey: "revoked",
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-          workspaceSource: "managed-worktree",
-          cfg: config(workspaceDir, "echo should-not-run"),
-          assertCurrent: () => {
-            if (!current) {
-              throw new Error("runtime revoked");
-            }
-          },
-        }),
-      ).rejects.toThrow("runtime revoked");
-      const effects = containerMocks.execContainer.mock.calls.map(([, args]) => args[0]);
-      expect(effects).not.toContain("exec");
-      if (stage === "image") {
-        expect(effects).not.toContain("create");
-        expect(effects).not.toContain("start");
-      }
-      if (stage === "create") {
-        expect(effects).not.toContain("start");
-      }
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("runtime revoked");
+        }
+      };
+      const pending = ensure(
+        { scopeKey: "revoked", workspaceSource: "managed-worktree", assertCurrent },
+        "echo should-not-run",
+      );
+      await expect(pending).rejects.toThrow("runtime revoked");
+      const forbidden = new Set([
+        "exec",
+        ...(stage === "reservation" ? ["create", "start"] : stage === "create" ? ["start"] : []),
+      ]);
+      expect(effects().filter((effect) => forbidden.has(effect))).toEqual([]);
     },
   );
 
-  it("persists a managed mount before allocation and retains ambiguous failures", async () => {
-    const workspaceDir = tempDirs.make("openclaw-managed-runtime-custody-");
-    containerMocks.execContainer.mockImplementation(async (_engine, args: string[]) => {
-      if (args[0] === "inspect") {
-        return { code: 1, stdout: "", stderr: "No such object" };
-      }
-      if (args[0] === "create") {
-        expect(registryMocks.updateRegistry).toHaveBeenLastCalledWith(
-          expect.objectContaining({ workspaceDir }),
-        );
-        throw new Error("allocation response lost");
-      }
-      return { code: 0, stdout: "", stderr: "" };
-    });
+  it.each([
+    ["create", "allocation response lost"],
+    ["binding", "binding unavailable"],
+  ])("preserves custody after %s failure", async (stage, error) => {
+    if (stage === "binding") {
+      registryMocks.updateRegistry.mockRejectedValueOnce(new Error(error));
+    } else {
+      mockEngine((effect) => {
+        if (effect === "create") {
+          expect(registryMocks.updateRegistry).toHaveBeenLastCalledWith(
+            expect.objectContaining({ workspaceDir }),
+          );
+          throw new Error(error);
+        }
+      });
+    }
     await expect(
-      ensureSandboxContainer({
-        scopeKey: "managed-custody",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        workspaceSource: "managed-worktree",
-        cfg: config(workspaceDir),
-      }),
-    ).rejects.toThrow("allocation response lost");
-    expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
+      ensure({ scopeKey: "managed-custody", workspaceSource: "managed-worktree" }),
+    ).rejects.toThrow(error);
+    expect(effects()).not.toContain(stage === "binding" ? "create" : "rm");
+    if (stage === "create") {
+      expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
+    }
   });
 
-  it("never allocates a managed writer if its durable binding cannot be saved", async () => {
-    const workspaceDir = tempDirs.make("openclaw-managed-binding-failure-");
-    registryMocks.updateRegistry.mockRejectedValueOnce(new Error("binding unavailable"));
-    await expect(
-      ensureSandboxContainer({
-        scopeKey: "managed-custody",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        workspaceSource: "managed-worktree",
-        cfg: config(workspaceDir),
-      }),
-    ).rejects.toThrow("binding unavailable");
-    expect(containerMocks.execContainer.mock.calls.some(([, args]) => args[0] === "create")).toBe(
-      false,
+  it.each(["setup", "publication"])("cleans an allocated runtime after %s fails", async (stage) => {
+    const setup = stage === "setup";
+    const expectedError = setup ? "setup failed" : "registry publication failed";
+    if (!setup) {
+      registryMocks.updateRegistry.mockRejectedValueOnce(new Error(expectedError));
+    }
+    await expect(ensure({}, setup ? "exit 1" : undefined)).rejects.toThrow(expectedError);
+    expect(containerMocks.execContainer).toHaveBeenCalledWith(
+      expect.anything(),
+      ["rm", "-f", "a".repeat(64)],
+      { allowFailure: true },
     );
+    expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("oc-test-shared", {
+      preserveRemovalIntent: true,
+    });
+    if (setup) {
+      expect(registryMocks.updateRegistry).toHaveBeenCalledWith(
+        expect.objectContaining({ runtimeState: "pending", workspaceDir }),
+      );
+      expect(registryMocks.completeSandboxRegistryReservation).not.toHaveBeenCalled();
+    }
   });
 
-  it("removes a newly allocated runtime when setup fails before publication", async () => {
-    const workspaceDir = tempDirs.make("openclaw-docker-partial-start-");
-    await expectPartialRuntimeCleanup({
-      workspaceDir,
-      cfg: config(workspaceDir, "exit 1"),
-      expectedError: "setup failed",
+  it("preserves readiness when inspection fails", async () => {
+    registryMocks.readRegistryEntry.mockResolvedValue({
+      runtimeState: "ready",
     });
+    containerMocks.execContainer.mockResolvedValue({
+      code: 125,
+      stdout: "",
+      stderr: "engine connection refused",
+    });
+    await expect(ensure({}, "echo setup")).rejects.toThrow("Unable to inspect Docker sandbox");
     expect(registryMocks.updateRegistry).not.toHaveBeenCalled();
-  });
-
-  it("removes the runtime when registry publication fails", async () => {
-    const workspaceDir = tempDirs.make("openclaw-docker-registry-failure-");
-    registryMocks.updateRegistry.mockRejectedValueOnce(new Error("registry publication failed"));
-    await expectPartialRuntimeCleanup({
-      workspaceDir,
-      cfg: config(workspaceDir),
-      expectedError: "registry publication failed",
-    });
-  });
-
-  it("does not remove an existing runtime when allocation fails", async () => {
-    const workspaceDir = tempDirs.make("openclaw-docker-name-conflict-");
-    containerMocks.execContainer.mockImplementation(async (_engine, args: string[]) => {
-      if (args[0] === "inspect") {
-        return { code: 1, stdout: "", stderr: "inspection failed" };
-      }
-      if (args[0] === "create") {
-        throw new Error("container name already in use");
-      }
-      return { code: 0, stdout: "", stderr: "" };
-    });
-
-    await expect(
-      ensureSandboxContainer({
-        scopeKey: "partial-create",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        cfg: config(workspaceDir),
-      }),
-    ).rejects.toThrow("container name already in use");
-
-    expect(containerMocks.execContainer.mock.calls.some(([, args]) => args[0] === "rm")).toBe(
-      false,
-    );
-    expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
-  });
-
-  it("surfaces a partial-runtime removal failure", async () => {
-    const workspaceDir = tempDirs.make("openclaw-docker-partial-recovery-");
-    containerMocks.execContainer.mockImplementation(async (_engine, args: string[]) => {
-      if (args[0] === "inspect") {
-        return { code: 1, stdout: "", stderr: "No such object" };
-      }
-      if (args[0] === "exec") {
-        throw new Error("setup failed");
-      }
-      if (args[0] === "rm") {
-        return { code: 1, stdout: "", stderr: "permission denied" };
-      }
-      return { code: 0, stdout: "", stderr: "" };
-    });
-
-    await expect(
-      ensureSandboxContainer({
-        scopeKey: "partial-create",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        cfg: config(workspaceDir, "exit 1"),
-      }),
-    ).rejects.toThrow("creation and cleanup both failed");
-
-    expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
-    expect(registryMocks.updateRegistry).not.toHaveBeenCalled();
+    expect(registryMocks.completeSandboxRegistryReservation).not.toHaveBeenCalled();
+    expect(
+      effects().filter((effect) => ["create", "start", "exec", "rm"].includes(effect)),
+    ).toEqual([]);
   });
 });

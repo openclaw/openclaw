@@ -14,11 +14,10 @@ export function shouldSuppressTelegramExecApprovalForwardingFallback(params: {
   request: ExecApprovalRequest;
 }): boolean {
   const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
-  if (channel !== "telegram") {
-    return false;
-  }
-  const requestChannel = normalizeMessageChannel(params.request.request.turnSourceChannel ?? "");
-  if (requestChannel !== "telegram") {
+  if (
+    channel !== "telegram" ||
+    normalizeMessageChannel(params.request.request.turnSourceChannel ?? "") !== "telegram"
+  ) {
     return false;
   }
   const accountId =

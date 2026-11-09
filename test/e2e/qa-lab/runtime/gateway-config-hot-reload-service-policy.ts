@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import { request } from "node:http";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   ConnectErrorDetailCodes,
@@ -15,9 +15,9 @@ import { GatewayClient, GatewayClientRequestError } from "../../../../src/gatewa
 import { discoverGatewayBeacons } from "../../../../src/infra/bonjour-discovery.js";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { stopChildProcess } from "../../../helpers/stop-child-process.js";
 import {
   connectHotReloadClient,
+  createHotReloadConfigPatcher,
   waitForHotReloadFact,
   type HotReloadConnection,
 } from "./gateway-config-hot-reload-fixtures.js";
@@ -98,6 +98,8 @@ function observeBonjourRemovals(port: number) {
   const child = spawn("avahi-browse", ["-prk", "_openclaw-gw._tcp"], {
     stdio: ["ignore", "pipe", "pipe"],
   });
+  const exited = once(child, "exit");
+  void exited.catch(() => {});
   const ownServices = new Set<string>();
   const events: Array<{ kind: "resolved" | "removed"; service: string }> = [];
   let pending = "";
@@ -133,7 +135,10 @@ function observeBonjourRemovals(port: number) {
     },
     stop: async () => {
       if (child.pid) {
-        await stopChildProcess(child, 2_000);
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGTERM");
+        }
+        await exited;
       }
     },
   };
@@ -161,6 +166,7 @@ export async function proveHotReloadServicePolicy({
     async () => {
       const gateway = await owner.start({
         repoRoot,
+        initializeCurrentRuntimeState: true,
         useRepoCli: true,
         command: {
           executablePath: process.execPath,
@@ -208,27 +214,7 @@ export async function proveHotReloadServicePolicy({
       assert(pid && bootId);
       const rpc = <T>(method: string, params: unknown = {}) =>
         primary.client.request<T>(method, params, { timeoutMs: 40_000 });
-      const patch = async (change: unknown) => {
-        const { hash } = await rpc<{ hash: string }>("config.get");
-        const apply = () =>
-          rpc<{ sentinel: { payload: { stats: { requiresRestart: boolean } } } }>("config.patch", {
-            baseHash: hash,
-            raw: JSON.stringify(change),
-          });
-        const result = await apply().catch(async (error: unknown) => {
-          if (
-            !(error instanceof GatewayClientRequestError) ||
-            !error.retryable ||
-            typeof error.retryAfterMs !== "number" ||
-            !error.message.startsWith("rate limit exceeded for config.patch")
-          ) {
-            throw error;
-          }
-          await delay(error.retryAfterMs);
-          return await apply();
-        });
-        assert.equal(result.sentinel.payload.stats.requiresRestart, false);
-      };
+      const patch = createHotReloadConfigPatcher(primary);
       const record = async (prefix: string, observation: string) => {
         assert.equal((await rpc<{ pid: number }>("system.info")).pid, pid);
         assert.equal(primary.hellos, 1);
@@ -394,7 +380,7 @@ export async function proveHotReloadServicePolicy({
         const activeObserver = observer;
         const discover = async () => {
           activeObserver.check();
-          return (await discoverGatewayBeacons({ domains: ["local."], timeoutMs: 5_000 })).filter(
+          return (await discoverGatewayBeacons({ wideAreaDomain: "", timeoutMs: 5_000 })).filter(
             (beacon) => beacon.port === port && beacon.lanHost === `${hostname}.local`,
           );
         };

@@ -16,7 +16,7 @@ export function registerOnnxCli(
 ): void {
   const root = program
     .command("onnx")
-    .description("Download, verify, and probe local ONNX decision models");
+    .description("Download, verify, and check local ONNX decision models");
   const config = (options: { modelDir?: string }) => ({
     ...settings,
     ...(options.modelDir === undefined
@@ -85,7 +85,7 @@ export function registerOnnxCli(
         const start = performance.now();
         await client.warm([id], AbortSignal.timeout(120_000));
         const warmed = performance.now();
-        const timeoutMs = 10_000;
+        const timeoutMs = 30_000;
         const signal = AbortSignal.timeout(timeoutMs);
         const outcome = await createOnnxProvider(client, (message) =>
           console.error(message),
@@ -129,7 +129,7 @@ export function registerOnnxCli(
           ),
         );
         if (outcome.status !== "ok") {
-          throw new Error(`ONNX probe failed: ${outcome.reason}`);
+          throw new Error(`ONNX check failed: ${outcome.reason}`);
         }
       } finally {
         await client.stop();

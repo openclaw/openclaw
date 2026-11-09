@@ -1,5 +1,9 @@
 import { resolveConfiguredAcpBindingRecord } from "openclaw/plugin-sdk/acp-binding-resolve-runtime";
-import { resolveRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-binding-runtime";
+import {
+  inspectConversationBindingAsync,
+  type ConversationBindingInspection,
+} from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
+import { inspectRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   buildAgentSessionKey,
@@ -11,28 +15,7 @@ import { resolveMatrixThreadSessionKeys } from "./threads.js";
 
 type MatrixResolvedRoute = ReturnType<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>;
 
-function resolveMatrixDmSessionKey(params: {
-  accountId: string;
-  agentId: string;
-  roomId: string;
-  dmSessionScope?: "per-user" | "per-room";
-  fallbackSessionKey: string;
-}): string {
-  if (params.dmSessionScope !== "per-room") {
-    return params.fallbackSessionKey;
-  }
-  return buildAgentSessionKey({
-    agentId: params.agentId,
-    channel: "matrix",
-    accountId: params.accountId,
-    peer: {
-      kind: "channel",
-      id: params.roomId,
-    },
-  });
-}
-
-export function resolveMatrixInboundRoute(params: {
+type MatrixInboundRouteParams = {
   cfg: CoreConfig;
   accountId: string;
   roomId: string;
@@ -41,7 +24,28 @@ export function resolveMatrixInboundRoute(params: {
   dmSessionScope?: "per-user" | "per-room";
   threadId?: string;
   resolveAgentRoute: PluginRuntime["channel"]["routing"]["resolveAgentRoute"];
-}): {
+};
+
+export function resolveMatrixBindingRef(params: MatrixInboundRouteParams) {
+  return {
+    channel: "matrix",
+    accountId: params.accountId,
+    conversationId: params.threadId ?? params.roomId,
+    parentConversationId: params.threadId ? params.roomId : undefined,
+  };
+}
+
+export async function resolveMatrixInboundRouteAsync(params: MatrixInboundRouteParams) {
+  return projectMatrixInboundRoute(
+    params,
+    await inspectConversationBindingAsync(resolveMatrixBindingRef(params)),
+  );
+}
+
+export function projectMatrixInboundRoute(
+  params: MatrixInboundRouteParams,
+  inspection: ConversationBindingInspection,
+): {
   route: MatrixResolvedRoute;
   configuredBinding: ReturnType<typeof resolveConfiguredAcpBindingRecord>;
   bindingOwnerAvailable: boolean;
@@ -67,17 +71,7 @@ export function resolveMatrixInboundRoute(params: {
   });
   const bindingConversationId = params.threadId ?? params.roomId;
   const bindingParentConversationId = params.threadId ? params.roomId : undefined;
-  const bindingRef = {
-    channel: "matrix",
-    accountId: params.accountId,
-    conversationId: bindingConversationId,
-    parentConversationId: bindingParentConversationId,
-  };
-  const runtimeRoute = resolveRuntimeConversationBindingRoute({
-    route: baseRoute,
-    conversation: bindingRef,
-    touchBinding: false,
-  });
+  const runtimeRoute = inspectRuntimeConversationBindingRoute({ route: baseRoute, inspection });
   const runtimeBinding = runtimeRoute.bindingRecord;
 
   if (runtimeBinding && runtimeRoute.boundSessionKey) {
@@ -101,7 +95,7 @@ export function resolveMatrixInboundRoute(params: {
       : null;
   const configuredSessionKey = configuredBinding?.record.targetSessionKey?.trim();
 
-  const effectiveRoute =
+  const configuredFallbackRoute =
     configuredBinding && configuredSessionKey
       ? {
           ...baseRoute,
@@ -116,19 +110,24 @@ export function resolveMatrixInboundRoute(params: {
           }),
           matchedBy: "binding.channel" as const,
         }
-      : baseRoute;
+      : runtimeRoute.route;
+  const effectiveRoute = configuredBinding
+    ? inspectRuntimeConversationBindingRoute({ route: configuredFallbackRoute, inspection }).route
+    : configuredFallbackRoute;
 
   const dmSessionKey =
-    params.isDirectMessage && !configuredSessionKey
-      ? resolveMatrixDmSessionKey({
-          accountId: params.accountId,
+    params.isDirectMessage && !configuredSessionKey && params.dmSessionScope === "per-room"
+      ? buildAgentSessionKey({
           agentId: effectiveRoute.agentId,
-          roomId: params.roomId,
-          dmSessionScope: params.dmSessionScope,
-          fallbackSessionKey: effectiveRoute.sessionKey,
+          channel: "matrix",
+          accountId: params.accountId,
+          peer: {
+            kind: "channel",
+            id: params.roomId,
+          },
         })
       : effectiveRoute.sessionKey;
-  const routeWithDmScope =
+  let routeWithDmScope =
     dmSessionKey === effectiveRoute.sessionKey
       ? effectiveRoute
       : {
@@ -144,20 +143,14 @@ export function resolveMatrixInboundRoute(params: {
       threadId: params.threadId,
       parentSessionKey: routeWithDmScope.sessionKey,
     });
-    return {
-      route: {
-        ...routeWithDmScope,
+    routeWithDmScope = {
+      ...routeWithDmScope,
+      sessionKey: threadKeys.sessionKey,
+      mainSessionKey: threadKeys.parentSessionKey ?? routeWithDmScope.sessionKey,
+      lastRoutePolicy: deriveLastRoutePolicy({
         sessionKey: threadKeys.sessionKey,
         mainSessionKey: threadKeys.parentSessionKey ?? routeWithDmScope.sessionKey,
-        lastRoutePolicy: deriveLastRoutePolicy({
-          sessionKey: threadKeys.sessionKey,
-          mainSessionKey: threadKeys.parentSessionKey ?? routeWithDmScope.sessionKey,
-        }),
-      },
-      configuredBinding,
-      bindingOwnerAvailable: runtimeRoute.bindingOwnerAvailable ?? true,
-      runtimeBindingId: runtimeBinding?.bindingId ?? null,
-      pluginId: runtimeRoute.pluginId,
+      }),
     };
   }
 

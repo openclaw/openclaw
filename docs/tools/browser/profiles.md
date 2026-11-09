@@ -27,6 +27,12 @@ For agent browser tool calls:
 
 Set `browser.defaultProfile: "openclaw"` if you want managed mode by default.
 
+Status and profile listing are passive: they never start a browser, attach Chrome
+MCP, or open a CDP WebSocket. Use `browser start` or an explicit browser action
+to attach. Chrome MCP and shared extension-relay tab counts reflect the last
+explicit tab enumeration; locally owned relays report their current tab metadata.
+Live readiness and graphics inspection are available through `browser doctor --deep`.
+
 ## Browser panel in the Control UI
 
 The Browser panel follows the current session's latest successful browser tab,
@@ -34,6 +40,21 @@ including its profile and host or node. Opening a browser preview card selects
 that card's browser and tab. This does not change `browser.defaultProfile` or
 another session's selection. Without a session browser target, the panel uses
 the configured default routing.
+
+The chat side panel shows only this session's tabs: tabs its agent or panel
+opened, plus tabs its conversation used. Other sessions' tabs and tabs opened
+outside OpenClaw stay hidden. The Browser dock outside a chat session lists
+every tab. Tabs opened from a session's panel belong to that session and follow
+the existing session tab cleanup: they close when the session is reset or
+deleted, with idle and per-session limits controlled by `browser.tabCleanup`.
+Tabs opened from a panel before this ownership existed have no recorded
+session, so they stay open but appear only in the Browser dock outside a chat
+session.
+
+The panel fits the viewport of an isolated, locally managed browser to its size.
+For existing-session Chrome, extension-attached browsers, attach-only CDP, and
+remote browsers, the preview scales locally without resizing the browser window
+or page viewport. Explicit browser resize actions remain available.
 
 The panel streams the active tab live as the page repaints. It falls back to
 screenshots for node-routed browsers, Chrome MCP existing-session profiles,

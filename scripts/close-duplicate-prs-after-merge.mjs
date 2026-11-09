@@ -1,19 +1,6 @@
-// Finds duplicate PRs after merge and closes overlapping candidates.
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "./lib/record-shared.mjs";
-function normalizeDuplicatePrListInput(value) {
-  if (
-    typeof value !== "string" &&
-    typeof value !== "number" &&
-    typeof value !== "boolean" &&
-    typeof value !== "bigint"
-  ) {
-    return undefined;
-  }
-  const normalized = String(value).trim();
-  return normalized || undefined;
-}
 const DEFAULT_LABELS = ["duplicate", "close:duplicate", "dedupe:child"];
 // Duplicate PR closure performs multiple sequential gh API reads and writes.
 // Keep enough headroom for GitHub latency while preventing one stalled request
@@ -25,16 +12,15 @@ function usage() {
 Closes explicit duplicate PRs after a landed PR, after verifying the landed PR is merged and
 each duplicate has either a shared referenced issue or overlapping changed hunks. Defaults to dry-run.`;
 }
-/**
- * Parses comma-separated PR numbers from CLI/env input.
- */
 export function parsePrNumberList(value) {
-  const text = normalizeDuplicatePrListInput(value) ?? "";
+  const text = ["string", "number", "boolean", "bigint"].includes(typeof value)
+    ? String(value).trim()
+    : "";
   return [
     ...new Set(
       text
         .split(/[\s,]+/u)
-        .map((part) => part.trim().replace(/^#/u, ""))
+        .map((part) => part.replace(/^#/u, ""))
         .filter(Boolean)
         .map((part) => {
           if (!/^\d+$/u.test(part)) {
@@ -45,9 +31,6 @@ export function parsePrNumberList(value) {
     ),
   ];
 }
-/**
- * Parses duplicate PR close workflow arguments.
- */
 export function parseArgs(argv, env = process.env) {
   let help = false;
   const args = {
@@ -79,7 +62,6 @@ export function parseArgs(argv, env = process.env) {
     } else if (arg === "--labels") {
       args.labels = next()
         .split(/[\s,]+/u)
-        .map((label) => label.trim())
         .filter(Boolean);
     } else if (arg === "--help" || arg === "-h") {
       help = true;
@@ -122,9 +104,6 @@ function issueRefsFromPr(pr) {
 function intersectSets(left, right) {
   return [...left].filter((value) => right.has(value));
 }
-/**
- * Parses changed hunk ranges from unified diff text.
- */
 export function parseUnifiedDiffRanges(diffText) {
   const ranges = new Map();
   let currentPath = null;
@@ -150,9 +129,6 @@ export function parseUnifiedDiffRanges(diffText) {
   }
   return ranges;
 }
-/**
- * Reports whether two PR diffs touch overlapping hunks.
- */
 function hasOverlappingHunks(leftRanges, rightRanges) {
   for (const [path, left] of leftRanges) {
     const right = rightRanges.get(path) ?? [];
@@ -185,9 +161,6 @@ function formatEvidence(evidence) {
   }
   return parts.join("; ");
 }
-/**
- * Builds the close/skip plan for duplicate PR candidates.
- */
 export function buildDuplicateClosePlan({ candidates, diffs, landed, repo }) {
   if (landed.state !== "MERGED" || !landed.mergedAt) {
     throw new Error(`#${landed.number} is not merged`);
@@ -262,9 +235,6 @@ function loadPr(repo, number, runGh) {
 function loadDiff(repo, number, runGh) {
   return runGh(["pr", "diff", String(number), "--repo", repo, "--color=never"]);
 }
-/**
- * Applies labels/comments/closes for planned duplicate PR actions.
- */
 export function applyClosePlan({ labels = DEFAULT_LABELS, plan, repo, runGh }) {
   for (const item of plan) {
     if (!("comment" in item) || typeof item.comment !== "string") {
@@ -279,9 +249,6 @@ export function applyClosePlan({ labels = DEFAULT_LABELS, plan, repo, runGh }) {
     runGh(["pr", "close", number, "--repo", repo]);
   }
 }
-/**
- * Runs the duplicate PR close workflow.
- */
 export function runDuplicateCloseWorkflow(args, runGh = defaultRunGh) {
   if (!args.landedPr) {
     throw new Error("--landed-pr is required");

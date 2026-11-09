@@ -45,38 +45,29 @@ function isDangerousMcpStdioEnvVarName(rawKey: string): boolean {
 
 function toMcpFilteredStringRecord(
   value: unknown,
-  options?: {
-    onDroppedEntry?: (key: string, value: unknown) => void;
-    preserveEmptyWhenKeysDropped?: boolean;
-    shouldDropKey?: (key: string) => boolean;
-  },
+  onDroppedEntry?: (key: string, value: unknown) => void,
+  filterEnv = false,
 ): Record<string, string> | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
   let droppedByKey = false;
-  const entries = Object.entries(value)
-    .map(([key, entry]) => {
-      if (options?.shouldDropKey?.(key)) {
-        droppedByKey = true;
-        // Preserve the distinction between empty config and keys dropped for safety.
-        options?.onDroppedEntry?.(key, entry);
-        return null;
-      }
-      if (typeof entry === "string") {
-        return [key, entry] as const;
-      }
-      if (typeof entry === "number" || typeof entry === "boolean") {
-        return [key, String(entry)] as const;
-      }
-      options?.onDroppedEntry?.(key, entry);
-      return null;
-    })
-    .filter((entry): entry is readonly [string, string] => entry !== null);
-  if (entries.length === 0 && droppedByKey && options?.preserveEmptyWhenKeysDropped) {
-    return {};
+  const entries: Array<[string, string]> = [];
+  for (const [key, entry] of Object.entries(value)) {
+    if (filterEnv && isDangerousMcpStdioEnvVarName(key)) {
+      droppedByKey = true;
+    } else if (
+      typeof entry === "string" ||
+      typeof entry === "number" ||
+      typeof entry === "boolean"
+    ) {
+      entries.push([key, String(entry)]);
+      continue;
+    }
+    onDroppedEntry?.(key, entry);
   }
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  // Preserve the distinction between empty config and env keys dropped for safety.
+  return entries.length > 0 || droppedByKey ? Object.fromEntries(entries) : undefined;
 }
 
 /** Coerces string/number/boolean entries from a config object into strings. */
@@ -84,7 +75,7 @@ export function toMcpStringRecord(
   value: unknown,
   options?: { onDroppedEntry?: (key: string, value: unknown) => void },
 ): Record<string, string> | undefined {
-  return toMcpFilteredStringRecord(value, options);
+  return toMcpFilteredStringRecord(value, options?.onDroppedEntry);
 }
 
 /** Coerces MCP env config while dropping dangerous inherited host env names. */
@@ -92,18 +83,5 @@ export function toMcpEnvRecord(
   value: unknown,
   options?: { onDroppedEntry?: (key: string, value: unknown) => void },
 ): Record<string, string> | undefined {
-  return toMcpFilteredStringRecord(value, {
-    ...options,
-    preserveEmptyWhenKeysDropped: true,
-    shouldDropKey: (key) => isDangerousMcpStdioEnvVarName(key),
-  });
-}
-
-/** Coerces an MCP string-array config value, dropping non-string entries. */
-export function toMcpStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const entries = value.filter((entry): entry is string => typeof entry === "string");
-  return entries.length > 0 ? entries : [];
+  return toMcpFilteredStringRecord(value, options?.onDroppedEntry, true);
 }

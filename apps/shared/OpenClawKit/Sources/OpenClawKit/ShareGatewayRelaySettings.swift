@@ -8,6 +8,9 @@ public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
     public let sessionKey: String
     public let deliveryChannel: String?
     public let deliveryTo: String?
+    public let requiresForegroundSignIn: Bool?
+    public let tlsFingerprintSHA256: String?
+    public let customHeaders: [String: String]?
 
     public init(
         gatewayURLString: String,
@@ -16,7 +19,10 @@ public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
         password: String?,
         sessionKey: String,
         deliveryChannel: String? = nil,
-        deliveryTo: String? = nil)
+        deliveryTo: String? = nil,
+        requiresForegroundSignIn: Bool? = nil,
+        tlsFingerprintSHA256: String? = nil,
+        customHeaders: [String: String]? = nil)
     {
         self.gatewayURLString = gatewayURLString
         self.gatewayStableID = gatewayStableID
@@ -25,12 +31,22 @@ public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
         self.sessionKey = sessionKey
         self.deliveryChannel = deliveryChannel
         self.deliveryTo = deliveryTo
+        self.requiresForegroundSignIn = requiresForegroundSignIn
+        self.tlsFingerprintSHA256 = tlsFingerprintSHA256
+        self.customHeaders = customHeaders
     }
 }
 
 public enum ShareGatewayRelaySettings {
-    private static var suiteName: String {
-        OpenClawAppGroup.identifier
+    public static func webSocketSessionBox(tlsFingerprintSHA256: String?) -> WebSocketSessionBox {
+        WebSocketSessionBox(session: GatewayTLSPinningSession(
+            params: GatewayTLSParams(
+                required: true,
+                expectedFingerprint: tlsFingerprintSHA256,
+                allowTOFU: false,
+                storeKey: nil),
+            allowsRedirects: false,
+            allowsStoredCredentials: false))
     }
 
     private static let relayConfigKey = "share.gatewayRelay.config.v1"
@@ -41,7 +57,7 @@ public enum ShareGatewayRelaySettings {
     private static let lastEventKey = "share.gatewayRelay.event.v1"
 
     private static var defaults: UserDefaults {
-        UserDefaults(suiteName: self.suiteName) ?? .standard
+        UserDefaults(suiteName: OpenClawAppGroup.identifier) ?? .standard
     }
 
     private static var isAppExtension: Bool {
@@ -51,7 +67,7 @@ public enum ShareGatewayRelaySettings {
     public static func loadConfig() -> ShareGatewayRelayConfig? {
         guard let data = self.defaults.data(forKey: self.relayConfigKey) else { return nil }
         guard let config = try? JSONDecoder().decode(ShareGatewayRelayConfig.self, from: data) else { return nil }
-        if config.token != nil || config.password != nil {
+        if config.token != nil || config.password != nil || config.customHeaders != nil {
             return self.resolveLegacyConfig(
                 config,
                 isAppExtension: self.isAppExtension,
@@ -68,9 +84,7 @@ public enum ShareGatewayRelaySettings {
         }
         // Keep relay identity in the Keychain bundle with its secrets. A partial
         // route update must never bind one gateway's credentials to another.
-        let credentials = self.loadCredentials().flatMap { stored in
-            self.credentials(stored, match: config) ? stored : nil
-        }
+        let credentials = self.loadCredentials().flatMap { self.credentials($0, match: config) ? $0 : nil }
         return ShareGatewayRelayConfig(
             gatewayURLString: config.gatewayURLString,
             gatewayStableID: config.gatewayStableID,
@@ -78,7 +92,23 @@ public enum ShareGatewayRelaySettings {
             password: credentials?.password,
             sessionKey: config.sessionKey,
             deliveryChannel: config.deliveryChannel,
-            deliveryTo: config.deliveryTo)
+            deliveryTo: config.deliveryTo,
+            requiresForegroundSignIn: config.requiresForegroundSignIn,
+            tlsFingerprintSHA256: credentials?.tlsFingerprintSHA256,
+            customHeaders: credentials?.customHeaders)
+    }
+
+    /// Re-read the host-owned bundle at every upgrade. A switched, forgotten, or
+    /// reconfigured route cannot reuse a captured proxy credential or pin.
+    public static func currentCustomHeaders(for expected: ShareGatewayRelayConfig) throws -> [String: String] {
+        guard let current = self.loadConfig(),
+              current.requiresForegroundSignIn != true,
+              self.credentials(current, match: expected),
+              current.tlsFingerprintSHA256 == expected.tlsFingerprintSHA256,
+              current.token == expected.token,
+              current.password == expected.password
+        else { throw CancellationError() }
+        return current.customHeaders ?? [:]
     }
 
     /// An endpoint is not a gateway identity. If the extension launches before the
@@ -123,9 +153,7 @@ public enum ShareGatewayRelaySettings {
     }
 
     public static func loadLastEvent() -> String? {
-        let value = self.defaults.string(forKey: self.lastEventKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return value.isEmpty ? nil : value
+        self.defaults.string(forKey: self.lastEventKey)?.trimmedNonEmpty
     }
 
     private static func saveMetadata(_ config: ShareGatewayRelayConfig) {
@@ -136,7 +164,8 @@ public enum ShareGatewayRelaySettings {
             password: nil,
             sessionKey: config.sessionKey,
             deliveryChannel: config.deliveryChannel,
-            deliveryTo: config.deliveryTo)
+            deliveryTo: config.deliveryTo,
+            requiresForegroundSignIn: config.requiresForegroundSignIn)
         guard let data = try? JSONEncoder().encode(metadata) else { return }
         self.defaults.set(data, forKey: self.relayConfigKey)
     }
@@ -170,35 +199,31 @@ public enum ShareGatewayRelaySettings {
         guard let json = GenericPasswordKeychainStore.loadString(
             service: self.relayCredentialService,
             account: self.relayCredentialAccount,
-            accessGroup: self.suiteName),
-            let data = json.data(using: .utf8),
-            let credentials = try? JSONDecoder().decode(ShareGatewayRelayConfig.self, from: data)
+            accessGroup: OpenClawAppGroup.identifier),
+            let credentials = try? JSONDecoder().decode(ShareGatewayRelayConfig.self, from: Data(json.utf8))
         else { return nil }
         return credentials
     }
 
     private static func saveCredentials(_ config: ShareGatewayRelayConfig) -> Bool {
-        guard config.token != nil || config.password != nil else {
+        guard config.token != nil || config.password != nil ||
+            config.tlsFingerprintSHA256 != nil || config.customHeaders?.isEmpty == false
+        else {
             return self.deleteCredentials()
         }
-        guard let data = try? JSONEncoder().encode(config),
-              let json = String(data: data, encoding: .utf8),
-              GenericPasswordKeychainStore.saveString(
-                  json,
-                  service: self.relayCredentialService,
-                  account: self.relayCredentialAccount,
-                  accessGroup: self.suiteName)
-        else {
-            return false
-        }
-        return true
+        guard let data = try? JSONEncoder().encode(config) else { return false }
+        return GenericPasswordKeychainStore.saveString(
+            String(bytes: data, encoding: .utf8)!,
+            service: self.relayCredentialService,
+            account: self.relayCredentialAccount,
+            accessGroup: OpenClawAppGroup.identifier)
     }
 
     private static func deleteCredentials() -> Bool {
         GenericPasswordKeychainStore.delete(
             service: self.relayCredentialService,
             account: self.relayCredentialAccount,
-            accessGroup: self.suiteName)
+            accessGroup: OpenClawAppGroup.identifier)
     }
 
     private static func credentials(
@@ -206,7 +231,8 @@ public enum ShareGatewayRelaySettings {
         match metadata: ShareGatewayRelayConfig) -> Bool
     {
         if let stableID = metadata.gatewayStableID, !stableID.isEmpty {
-            return credentials.gatewayStableID == stableID
+            return credentials.gatewayStableID.map { Array($0.utf8) } == Array(stableID.utf8) &&
+                credentials.gatewayURLString == metadata.gatewayURLString
         }
         return credentials.gatewayStableID?.isEmpty != false &&
             credentials.gatewayURLString == metadata.gatewayURLString

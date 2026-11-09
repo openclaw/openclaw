@@ -1,6 +1,7 @@
 import {
   createControlUiMockGatewayInitScript,
   type ControlUiMockGatewayScenario,
+  type ControlUiMockGateway,
 } from "./control-ui-e2e.ts";
 import { flushMockTimers, mockGatewayTest } from "./mock-gateway-page.test-support.ts";
 
@@ -12,7 +13,7 @@ type Controls = {
   resolveDeferred: (method: string, payload?: unknown) => void;
   rejectDeferred: (method: string) => void;
   setMethodResponse: (method: string, payload: unknown) => void;
-  setSessionsListResponse: (payload: { sessions: unknown[] }) => void;
+  setSessionsListResponse: ControlUiMockGateway["setSessionsListResponse"];
 };
 
 export const sessionGatewayTest = mockGatewayTest.extend<{
@@ -27,6 +28,9 @@ export const sessionGatewayTest = mockGatewayTest.extend<{
   connect: async ({ gatewayPage }, use) => {
     await use(async (scenario = {}) => {
       const { window, execute } = gatewayPage;
+      // These wire-contract tests compare row contents across reads at one sample time.
+      const sampledAt = Date.now();
+      window.Date.now = () => sampledAt;
       execute(createControlUiMockGatewayInitScript(scenario));
       const socket = new window.WebSocket("ws://mock-gateway");
       const frames: Frame[] = [];

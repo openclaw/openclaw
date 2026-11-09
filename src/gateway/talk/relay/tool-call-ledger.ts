@@ -21,8 +21,6 @@ export class RelayToolCallLedger {
   constructor(
     private readonly options: {
       onOverflow: () => void;
-      maxEntries?: number;
-      maxBytes?: number;
     },
   ) {}
 
@@ -35,21 +33,14 @@ export class RelayToolCallLedger {
   }
 
   tryAdmit(callIds: Iterable<string>): boolean {
-    const uniqueCallIds = new Set(callIds);
-    const additions: Array<{ callId: string; bytes: number }> = [];
-    let additionBytes = 0;
-    for (const callId of uniqueCallIds) {
-      if (callId && !this.entries.has(callId)) {
-        const bytes = Buffer.byteLength(callId, "utf8");
-        additions.push({ callId, bytes });
-        additionBytes += bytes;
-      }
-    }
-    const maxEntries = this.options.maxEntries ?? MAX_RELAY_TOOL_CALL_IDENTITIES;
-    const maxBytes = this.options.maxBytes ?? MAX_RELAY_TOOL_CALL_IDENTITY_BYTES;
+    const additions = [...new Set(callIds)].filter((callId) => callId && !this.entries.has(callId));
+    const additionBytes = additions.reduce(
+      (total, callId) => total + Buffer.byteLength(callId, "utf8"),
+      0,
+    );
     if (
-      this.entries.size + additions.length > maxEntries ||
-      this.retainedBytes + additionBytes > maxBytes
+      this.entries.size + additions.length > MAX_RELAY_TOOL_CALL_IDENTITIES ||
+      this.retainedBytes + additionBytes > MAX_RELAY_TOOL_CALL_IDENTITY_BYTES
     ) {
       if (!this.overflowReported) {
         this.overflowReported = true;
@@ -57,10 +48,10 @@ export class RelayToolCallLedger {
       }
       return false;
     }
-    for (const addition of additions) {
-      this.entries.set(addition.callId, {});
-      this.retainedBytes += addition.bytes;
+    for (const callId of additions) {
+      this.entries.set(callId, {});
     }
+    this.retainedBytes += additionBytes;
     return true;
   }
 

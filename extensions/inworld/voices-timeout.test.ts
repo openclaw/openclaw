@@ -3,6 +3,7 @@
 // dispatcher) and passes its timeout abort signal via init.signal, so a
 // never-resolving signal-honoring stub plus fake timers exercises the real
 // abort path with no live sockets or wall-clock bounds to flake on loaded CI.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listInworldVoices } from "./tts.js";
 
@@ -14,10 +15,7 @@ describe("listInworldVoices timeout", () => {
 
   it("aborts a hanging voice list request within the configured timeout", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    let notifyFetchStarted!: () => void;
-    const fetchStarted = new Promise<void>((resolve) => {
-      notifyFetchStarted = resolve;
-    });
+    const { promise: fetchStarted, resolve: notifyFetchStarted } = Promise.withResolvers<void>();
     let rejectFetch: ((error: Error) => void) | undefined;
     const fetchMock = vi.fn(
       (_input: RequestInfo | URL, init?: RequestInit) =>

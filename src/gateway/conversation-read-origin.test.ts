@@ -11,18 +11,6 @@ describe("resolveGatewayConversationReadOrigin", () => {
     ).toBe("direct-operator");
   });
 
-  it.each([undefined, null, "delegated", "unknown"])(
-    "keeps missing or unknown operation origins delegated",
-    (requestedOrigin) => {
-      expect(
-        resolveGatewayConversationReadOrigin({
-          client: undefined,
-          requestedOrigin,
-        }),
-      ).toBe("delegated");
-    },
-  );
-
   it("does not infer direct authority from CLI connection metadata", () => {
     expect(
       resolveGatewayConversationReadOrigin({

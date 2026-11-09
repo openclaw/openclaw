@@ -24,26 +24,24 @@ export function resolveManagedSecretRefRuntimeProviderAuth(params: {
 }): ResolvedProviderAuth | undefined {
   const runtimeConfig = getRuntimeConfigSnapshot();
   const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
-  if (params.cfg && params.cfg !== runtimeConfig && !runtimeSourceConfig) {
+  const sourceConfig = runtimeSourceConfig ?? undefined;
+  if (!runtimeConfig || !authConfig.hasSecretRefProviderApiKey(sourceConfig, params.provider)) {
     return undefined;
   }
-  const applicableConfig = selectApplicableRuntimeConfig({
-    inputConfig: params.cfg,
-    runtimeConfig,
-    runtimeSourceConfig,
-  });
+  // Captured runtime providers usually match even though their full config differs from source.
+  // Check that narrow boundary before comparing the entire fleet config.
   const usesRuntimeProvider =
-    applicableConfig === runtimeConfig ||
     authConfig.providerConfigMatchesRuntimeSnapshot({
       inputConfig: params.cfg,
       runtimeConfig,
       provider: params.provider,
-    });
-  const sourceConfig = usesRuntimeProvider ? (runtimeSourceConfig ?? undefined) : params.cfg;
-  if (!authConfig.hasSecretRefProviderApiKey(sourceConfig, params.provider)) {
-    return undefined;
-  }
-  if (!runtimeConfig || !usesRuntimeProvider) {
+    }) ||
+    selectApplicableRuntimeConfig({
+      inputConfig: params.cfg,
+      runtimeConfig,
+      runtimeSourceConfig,
+    }) === runtimeConfig;
+  if (!usesRuntimeProvider) {
     return undefined;
   }
   const resolved = authConfig.resolveRuntimeProviderConfigApiKeyAuth({

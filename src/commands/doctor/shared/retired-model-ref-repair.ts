@@ -31,7 +31,7 @@ import {
   projectModelProviderConfig,
   resolveMergedModelProviderConfig,
 } from "../../../config/model-provider-config.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
+import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../../../plugins/config-state.js";
 import { createInstalledPluginEnabledPredicate } from "../../../plugins/installed-plugin-index.js";
@@ -44,37 +44,28 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { readModelConfigPrimaryRef } from "./codex-route-model-ref.js";
 import { rewriteModelReferenceSlot } from "./codex-route-model-slots.js";
+import { repairModelRefAuthProfile } from "./model-ref-auth-profile-repair.js";
+import {
+  resolveExplicitModelReplacement,
+  withReplacementAccessProgram,
+} from "./model-replacement-config.js";
+import type { DoctorModelReplacement } from "./model-replacement.js";
+import type {
+  ModelRefRepair,
+  ModelRefRepairResolver,
+  ModelRetirementScope,
+  SessionModelRetirement,
+} from "./retired-model-ref-repair.types.js";
+import {
+  mergeRetiredModelSettings,
+  modelSettingsWithoutAlias,
+  projectRetiredModelSuccessorConfig,
+} from "./retired-model-ref-settings.js";
+import { resolveSuccessorModelRepair } from "./retired-model-successor-guard.js";
 
-type ModelRetirementScope = "route" | "owner" | "provider";
+export type { ModelRefRepair, ModelRefRepairResolver, SessionModelRetirement };
 
-export type ModelRefRepair =
-  | { kind: "unchanged" }
-  | { kind: "replace"; modelRef: string; reason: "reference-preservation" }
-  | {
-      kind: "replace";
-      modelRef: string;
-      reason: "retirement";
-      retirementScope: ModelRetirementScope;
-    }
-  | { kind: "clear"; provider: string; modelRef: string; retirementScope: ModelRetirementScope };
-export type ModelRefRepairResolver = (params: {
-  modelRef: string;
-  agentId?: string;
-  authProfileId?: string;
-  authProfileSource?: SessionEntry["authProfileOverrideSource"];
-  authProfileOnly?: boolean;
-}) => ModelRefRepair;
-
-export function repairModelRefAuthProfile(
-  modelRef: string,
-  profileIdMap: ReadonlyMap<string, string> | undefined,
-): ModelRefRepair {
-  const parsed = splitTrailingAuthProfile(modelRef);
-  const profile = parsed.profile ? profileIdMap?.get(parsed.profile) : undefined;
-  return profile && profile !== parsed.profile
-    ? { kind: "replace", modelRef: `${parsed.model}@${profile}`, reason: "reference-preservation" }
-    : { kind: "unchanged" };
-}
+export { repairModelRefAuthProfile } from "./model-ref-auth-profile-repair.js";
 
 /** Metadata and exact profile views stay scoped to Doctor's pre-transaction planning. */
 export function createRetiredModelRefRepairResolver(params: {
@@ -87,17 +78,18 @@ export function createRetiredModelRefRepairResolver(params: {
   authProfileIdMap?: ReadonlyMap<string, string>;
   /** Persisted overrides cannot grant successor permissions by changing their owner's config. */
   checkModelPolicy?: boolean;
+  modelReplacements?: readonly DoctorModelReplacement[];
 }): ModelRefRepairResolver {
-  const env = params.env ?? process.env;
-  const agents = params.agentIds ?? listAgentIds(params.cfg);
-  const normalizedPluginsConfig = normalizePluginsConfig(params.cfg.plugins);
   const warn = (message: string) => {
     if (params.warnings && !params.warnings.includes(message)) {
       params.warnings.push(message);
     }
   };
+  const env = params.env ?? process.env;
+  const ownerAgentIds = params.agentIds ?? listAgentIds(params.cfg);
+  const normalizedPluginsConfig = normalizePluginsConfig(params.cfg.plugins);
   const owners = new Map(
-    agents.map((agentId) => {
+    ownerAgentIds.map((agentId) => {
       const agentDir = resolveAgentDir(params.cfg, agentId, env);
       const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
       const metadataSnapshot =
@@ -108,9 +100,10 @@ export function createRetiredModelRefRepairResolver(params: {
         params.cfg,
       );
       const authViews = new Map<
-        string | undefined,
-        ReturnType<typeof createModelAuthAvailabilityResolver>
+        OpenClawConfig,
+        Map<string | undefined, ReturnType<typeof createModelAuthAvailabilityResolver>>
       >();
+      const successorConfigs = new Map<string, OpenClawConfig>();
       const prepareModelResolver = (cfg: OpenClawConfig) => {
         const modelOptions = {
           cfg,
@@ -171,22 +164,53 @@ export function createRetiredModelRefRepairResolver(params: {
                 manifestPlugins: metadataSnapshot.plugins,
               })
             : undefined,
-          auth(profileId: string | undefined) {
-            let view = authViews.get(profileId);
+          successorConfig(change: {
+            sourceModelRef: string;
+            successorModelRef: string;
+            retirementScope: ModelRetirementScope;
+          }) {
+            const key = JSON.stringify(change);
+            let config = successorConfigs.get(key);
+            if (!config) {
+              config = projectRetiredModelSuccessorConfig({
+                cfg: params.cfg,
+                agentId,
+                ...change,
+                resolveModelRef: (raw) => {
+                  const ref = model.resolve(raw);
+                  return ref
+                    ? `${ref.provider}/${canonicalizeProviderModelId(ref.provider, ref.model)}`
+                    : undefined;
+                },
+              });
+              successorConfigs.set(key, config);
+            }
+            return config;
+          },
+          auth(profileId: string | undefined, config = params.cfg) {
+            let views = authViews.get(config);
+            if (!views) {
+              views = new Map<
+                string | undefined,
+                ReturnType<typeof createModelAuthAvailabilityResolver>
+              >();
+              authViews.set(config, views);
+            }
+            let view = views.get(profileId);
             if (!view) {
               view = createModelAuthAvailabilityResolver({
-                cfg: params.cfg,
+                cfg: config,
                 agentId,
                 agentDir,
                 workspaceDir,
                 env,
                 metadataSnapshot,
                 authStore: loadAuthProfileStoreForSecretsRuntime(agentDir, {
-                  config: params.cfg,
+                  config,
                   profileId,
                 }),
               });
-              authViews.set(profileId, view);
+              views.set(profileId, view);
             }
             return view;
           },
@@ -202,6 +226,7 @@ export function createRetiredModelRefRepairResolver(params: {
       ];
     }),
   );
+  const agents = [...owners.keys()];
   const resolveForOwner = (
     input: Parameters<ModelRefRepairResolver>[0],
     agentId: string,
@@ -241,11 +266,35 @@ export function createRetiredModelRefRepairResolver(params: {
             modelRef: parsed.profile ? `${canonical}@${parsed.profile}` : canonical,
             reason: "reference-preservation",
           };
+    const explicit = params.modelReplacements?.find((choice) => choice.from === canonical);
+    if (explicit) {
+      return resolveExplicitModelReplacement({
+        choice: explicit,
+        cfg: params.cfg,
+        env,
+        guard: {
+          owner,
+          provider,
+          canonical,
+          agentId,
+          modelRefInput: input.modelRef,
+          authProfileId: input.authProfileId,
+          authProfileSource: input.authProfileSource,
+          preserved,
+          validatePolicy,
+          warn,
+        },
+      });
+    }
     if (!owner.suppression().hasRetirementCandidate({ provider, id })) {
       return validatePolicy(preserved);
     }
     let rule = owner.suppression()({ provider, id, unconditionalOnly: true });
     let retirementScope: ModelRetirementScope = rule?.retirement ? "provider" : "route";
+    // Route context that proved the source retirement. A successor must be
+    // validated against this same owner context before migration (#156155).
+    let successorSuppressionConfig: OpenClawConfig | undefined;
+    let successorBaseUrl: string | undefined;
     if (!rule?.retirement) {
       const pinnedProfileId =
         (input.authProfileSource === "user" || input.authProfileSource === "user-link"
@@ -302,6 +351,8 @@ export function createRetiredModelRefRepairResolver(params: {
             baseUrl,
           });
       rule = owner.suppression(routeConfig)({ provider, id, baseUrl });
+      successorSuppressionConfig = routeConfig;
+      successorBaseUrl = baseUrl;
       if (rule?.retirement) {
         const routes =
           auth.routeResolution?.kind === "routes"
@@ -330,16 +381,21 @@ export function createRetiredModelRefRepairResolver(params: {
     if (!rule?.retirement) {
       return validatePolicy(preserved);
     }
-    const successor = rule.retirement.replacedBy;
-    if (!successor) {
-      return { kind: "clear", provider, modelRef: canonical, retirementScope };
-    }
-    const modelRef = `${provider}/${successor}`;
-    return validatePolicy({
-      kind: "replace",
-      modelRef: parsed.profile ? `${modelRef}@${parsed.profile}` : modelRef,
-      reason: "retirement",
+    return resolveSuccessorModelRepair({
+      owner,
+      provider,
+      canonical,
+      agentId,
+      modelRefInput: input.modelRef,
+      authProfileId: input.authProfileId,
+      authProfileSource: input.authProfileSource,
+      retirement: rule.retirement,
       retirementScope,
+      suppressionConfig: successorSuppressionConfig,
+      suppressionBaseUrl: successorBaseUrl,
+      preserved,
+      validatePolicy,
+      warn,
     });
   };
   return (input) => {
@@ -440,26 +496,21 @@ function createRetiredModelRefRewriter(params: ModelRefRewriteContext) {
   };
 }
 
-function modelSettingsWithoutAlias(value: unknown): unknown {
-  const record = asOptionalRecord(value);
-  if (!record) {
-    return value;
-  }
-  const { alias: _alias, ...settings } = record;
-  return settings;
-}
-
-/** Apply the same retirement decision to config selectors and cron payload selectors. */
-export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
+function createRetiredModelSlotRewriter(params: ModelRefRewriteContext) {
   const rewrite = createRetiredModelRefRewriter(params);
   const rewriteAuth = createRetiredModelRefRewriter({ ...params, authProfileOnly: true });
-  const rewriteSlot = (container: unknown, key: string, path: string, authProfileOnly = false) =>
+  return (container: unknown, key: string, path: string, authProfileOnly = false) =>
     rewriteModelReferenceSlot({
       container: asOptionalRecord(container),
       key,
       path,
       resolve: authProfileOnly ? rewriteAuth : rewrite,
     });
+}
+
+/** Apply the same retirement decision to config selectors and cron payload selectors. */
+export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
+  const rewriteSlot = createRetiredModelSlotRewriter(params);
   // Speech and media generation select their own capability provider routes.
   for (const key of ["model", "utilityModel", "imageModel", "pdfModel"] as const) {
     rewriteSlot(params.owner, key, `${params.path}.${key}`);
@@ -483,11 +534,6 @@ export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
     rewriteSlot(params.owner[key], "model", `${params.path}.${key}.model`);
   }
   rewriteSlot(
-    asOptionalRecord(params.owner.compaction)?.memoryFlush,
-    "model",
-    `${params.path}.compaction.memoryFlush.model`,
-  );
-  rewriteSlot(
     asOptionalRecord(asOptionalRecord(params.owner.tools)?.exec)?.reviewer,
     "model",
     `${params.path}.tools.exec.reviewer.model`,
@@ -500,22 +546,19 @@ export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
       continue;
     }
     const retainAlias = decision.reason === "retirement" && decision.retirementScope === "route";
-    // Local source policy outranks inherited successor settings; an authored local successor wins.
-    // Retained source aliases stay on their original authentication route.
-    const settings = [
-      retainAlias ? modelSettingsWithoutAlias(inherited) : inherited,
-      params.inheritedModels?.[decision.modelRef],
-      retainAlias ? modelSettingsWithoutAlias(models?.[modelRef]) : models?.[modelRef],
-      models?.[decision.modelRef],
-    ]
-      .filter((value) => value !== undefined)
-      .reduce<unknown>(mergeAgentModelEntryForConfig, undefined);
+    const settings = mergeRetiredModelSettings({
+      inheritedSource: inherited,
+      inheritedSuccessor: params.inheritedModels?.[decision.modelRef],
+      source: models?.[modelRef],
+      successor: models?.[decision.modelRef],
+      retainSource: retainAlias,
+    });
     if (JSON.stringify(settings) === JSON.stringify(models?.[decision.modelRef])) {
       continue;
     }
     models ??= {};
     params.owner.models = models;
-    models[decision.modelRef] = settings;
+    models[decision.modelRef] = withReplacementAccessProgram(settings, decision);
     params.changes.push(
       `Preserved inherited ${modelRef} settings in ${params.path}.models.${decision.modelRef}.`,
     );
@@ -546,7 +589,7 @@ export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
     if (retain && JSON.stringify(settings) === JSON.stringify(existing)) {
       continue;
     }
-    models[replacement] = settings;
+    models[replacement] = withReplacementAccessProgram(settings, decision);
     if (!retain) {
       delete models[modelRef];
     }
@@ -651,21 +694,7 @@ export function repairRetiredConfigModelRefs(
       inheritedModelPolicy: asOptionalRecord(defaults?.modelPolicy),
     });
   }
-  const rewrite = createRetiredModelRefRewriter({ path: "", resolve, changes, warnings });
-  const rewriteAuth = createRetiredModelRefRewriter({
-    path: "",
-    resolve,
-    changes,
-    warnings,
-    authProfileOnly: true,
-  });
-  const rewriteSlot = (container: unknown, key: string, path: string, authProfileOnly = false) =>
-    rewriteModelReferenceSlot({
-      container: asOptionalRecord(container),
-      key,
-      path,
-      resolve: authProfileOnly ? rewriteAuth : rewrite,
-    });
+  const rewriteSlot = createRetiredModelSlotRewriter({ path: "", resolve, changes, warnings });
   for (const capability of ["image", "audio", "video"] as const) {
     rewriteSlot(
       config.tools?.media?.[capability],
@@ -693,6 +722,9 @@ export function repairRetiredConfigModelRefs(
   rewriteVoice(discord?.voice, "channels.discord.voice");
   for (const [account, settings] of Object.entries(asOptionalRecord(discord?.accounts) ?? {})) {
     rewriteVoice(asOptionalRecord(settings)?.voice, `channels.discord.accounts.${account}.voice`);
+  }
+  if (changes.length > 0) {
+    copyConfigResolutionFactsThroughRewrite(cfg, config);
   }
   return { config: changes.length ? config : cfg, changes };
 }

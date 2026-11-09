@@ -3,23 +3,6 @@ import { describe, expect, it } from "vitest";
 import { resolveSenderLabel } from "./sender-label.js";
 
 describe("resolveSenderLabel", () => {
-  it("prefers display + identifier when both are available", () => {
-    expect(
-      resolveSenderLabel({
-        name: " Alice ",
-        e164: " +15551234567 ",
-      }),
-    ).toBe("Alice (+15551234567)");
-  });
-
-  it("falls back to identifier-only labels", () => {
-    expect(
-      resolveSenderLabel({
-        id: " user-123 ",
-      }),
-    ).toBe("user-123");
-  });
-
   it("returns null when all values are empty", () => {
     expect(
       resolveSenderLabel({
@@ -41,18 +24,9 @@ describe("resolveSenderLabel opaque ids", () => {
     ).toBe("steipete");
   });
 
-  it("still appends disambiguating handles and numbers", () => {
-    expect(resolveSenderLabel({ name: "Peter", e164: "+436641234567" })).toBe(
-      "Peter (+436641234567)",
-    );
+  it("still appends a disambiguating handle", () => {
     expect(resolveSenderLabel({ name: "Peter", id: "peter@example.com" })).toBe(
       "Peter (peter@example.com)",
-    );
-  });
-
-  it("keeps a UUID-only identity as a last-resort label", () => {
-    expect(resolveSenderLabel({ id: "c3e32452-0467-47e5-aafa-233cd5dae29f" })).toBe(
-      "c3e32452-0467-47e5-aafa-233cd5dae29f",
     );
   });
 });

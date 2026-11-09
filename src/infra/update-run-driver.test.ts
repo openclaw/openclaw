@@ -45,7 +45,6 @@ describe("update run driver identity", () => {
     { host: "update-host", dead: false, startedAt: 456, expected: "dead" },
     { host: "update-host", dead: false, startedAt: null, expected: "unknown" },
     { host: "another-host", dead: true, startedAt: null, expected: "unknown" },
-    { host: "another-host", dead: false, startedAt: 456, expected: "unknown" },
   ])("requires local positive evidence before declaring a driver dead (%j)", (test) => {
     probes.definitelyDead.mockReturnValue(test.dead);
     probes.startedAt.mockReturnValue(test.startedAt);

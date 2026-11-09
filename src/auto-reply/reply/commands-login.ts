@@ -1,15 +1,14 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   cancelProviderLoginFlow,
-  answerProviderLoginModelAccess,
-  offerProviderLoginModelAccess,
-  type PreparedProviderModelAccess,
   decideProviderLoginSessionAdoption,
   createProviderLoginFlowRegistry,
   formatProviderLoginCommand,
@@ -23,9 +22,10 @@ import {
   runProviderChannelLoginFlow,
   type ProviderChannelLoginChoice,
 } from "../../plugin-sdk/provider-auth-login-flow-runtime.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { defaultRuntime } from "../../runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { ReplyPayload } from "../types.js";
+import { commandReply } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
@@ -36,17 +36,7 @@ const WEB_LOGIN_SURFACES = new Set(["control", "control-ui", "dashboard", "inter
 const activeProviderLoginFlows = createProviderLoginFlowRegistry();
 
 function normalizeSurface(value: unknown): string {
-  return normalizeLowercaseStringOrEmpty(normalizeOptionalString(value) ?? "").replace(/_/gu, "-");
-}
-
-function hasPrivateTarget(value: unknown): boolean {
-  const normalized = normalizeSurface(value);
-  return /^(?:direct|dm|im|private|user):/u.test(normalized);
-}
-
-function hasPublicTarget(value: unknown): boolean {
-  const normalized = normalizeSurface(value);
-  return /^(?:channel|forum|group|guild|public|room|topic):/u.test(normalized);
+  return normalizeLowercaseStringOrEmpty(value).replace(/_/gu, "-");
 }
 
 function isPrivateLoginContext(params: HandleCommandsParams): boolean {
@@ -73,13 +63,7 @@ function isPrivateLoginContext(params: HandleCommandsParams): boolean {
     params.command.from,
     params.ctx.From,
   ];
-  if (targets.some(hasPrivateTarget)) {
-    return true;
-  }
-  if (targets.some(hasPublicTarget)) {
-    return false;
-  }
-  return false;
+  return targets.some((value) => /^(?:direct|dm|im|private|user):/u.test(normalizeSurface(value)));
 }
 
 function keyPart(value: unknown, fallback: string): string {
@@ -141,15 +125,12 @@ async function emitLoginMessage(params: HandleCommandsParams, text: string): Pro
 async function switchLoginSessionProfile(params: {
   commandParams: HandleCommandsParams;
   loginProvider: string;
-  nextProfileId: string | undefined;
+  nextProfileId: string;
   signal: AbortSignal;
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
 }): Promise<"unchanged" | "updated" | "failed"> {
   const { commandParams, loginProvider, nextProfileId } = params;
   const currentEntry = commandParams.sessionEntry;
-  if (!nextProfileId) {
-    return "failed";
-  }
   if (!currentEntry) {
     return "unchanged";
   }
@@ -165,13 +146,15 @@ async function switchLoginSessionProfile(params: {
   if (!liveEntry) {
     return "failed";
   }
-  const liveDecision = decideProviderLoginSessionAdoption({
-    currentModelProvider: commandParams.provider,
-    loginProvider,
-    nextProfileId,
-    snapshot: currentEntry,
-    current: liveEntry,
-  });
+  const decideAdoption = (current: SessionEntry) =>
+    decideProviderLoginSessionAdoption({
+      currentModelProvider: commandParams.provider,
+      loginProvider,
+      nextProfileId,
+      snapshot: currentEntry,
+      current,
+    });
+  const liveDecision = decideAdoption(liveEntry);
   if (liveDecision.status === "rejected") {
     return "failed";
   }
@@ -192,20 +175,16 @@ async function switchLoginSessionProfile(params: {
           sessionKey: commandParams.sessionKey,
         },
         (entry) => {
-          persistedDecision = decideProviderLoginSessionAdoption({
-            currentModelProvider: commandParams.provider,
-            loginProvider,
-            nextProfileId,
-            snapshot: currentEntry,
-            current: entry,
-          });
+          persistedDecision = decideAdoption(entry);
           return persistedDecision.status === "patch" ? persistedDecision.patch : null;
         },
         {
-          assertCommitAllowed: () => {
-            params.signal.throwIfAborted();
-            params.assertCurrent();
-          },
+          ...sessionEntryCommitGuardOptions(
+            composeSessionSourceAssertion([params.assertCurrent], (assertSource) => {
+              params.signal.throwIfAborted();
+              assertSource();
+            }),
+          ),
           requireWriteSuccess: true,
           skipMaintenance: true,
         },
@@ -238,25 +217,23 @@ async function switchLoginSessionProfile(params: {
   return "failed";
 }
 
-async function runChannelProviderLogin(params: {
-  commandParams: HandleCommandsParams;
-  choice: ProviderChannelLoginChoice;
-  agentId: string;
-  runtime?: RuntimeEnv;
-}): Promise<ReplyPayload> {
-  const flowKey = buildProviderLoginFlowKey(params.commandParams);
-  const sendReply = params.commandParams.opts?.onBlockReply;
+async function runChannelProviderLogin(
+  commandParams: HandleCommandsParams,
+  choice: ProviderChannelLoginChoice,
+): Promise<ReplyPayload> {
+  const flowKey = buildProviderLoginFlowKey(commandParams);
+  const sendReply = commandParams.opts?.onBlockReply;
   if (!sendReply) {
     return {
-      text: `${params.choice.providerLabel} login needs a live private response path so the code can be shown before it expires. Use the Control UI or a private chat and send \`${formatProviderLoginCommand(params.choice.command)}\` again.`,
+      text: `${choice.providerLabel} login needs a live private response path so the code can be shown before it expires. Use the Control UI or a private chat and send \`${formatProviderLoginCommand(choice.command)}\` again.`,
     };
   }
 
   const reservation = reserveProviderLoginFlow({
     flows: activeProviderLoginFlows,
     flowKey,
-    providerLabel: params.choice.providerLabel,
-    signal: params.commandParams.opts?.abortSignal,
+    providerLabel: choice.providerLabel,
+    signal: commandParams.opts?.abortSignal,
   });
   if (reservation.status === "active") {
     return {
@@ -266,60 +243,50 @@ async function runChannelProviderLogin(params: {
 
   const flowSignal = reservation.record.signal;
   const readConfig =
-    params.commandParams.opts?.getProviderLoginConfig ??
-    (() => getRuntimeConfigSnapshot() ?? params.commandParams.cfg);
+    commandParams.opts?.getProviderLoginConfig ??
+    (() => getRuntimeConfigSnapshot() ?? commandParams.cfg);
   const assertCurrent = (config = readConfig()) => {
-    assertProviderLoginAuthority(params.commandParams, config);
+    assertProviderLoginAuthority(commandParams, config);
   };
-  let modelAccess: PreparedProviderModelAccess | undefined;
   try {
     const loginResult = await runProviderChannelLoginFlow({
-      choice: params.choice,
-      agentId: params.agentId,
-      config: params.commandParams.cfg,
+      choice,
+      agentId: commandParams.agentId,
+      config: commandParams.cfg,
       readConfig,
-      runtime: params.runtime ?? defaultRuntime,
+      runtime: defaultRuntime,
       signal: flowSignal,
       assertCurrent,
-      sendMessage: async (text) => await emitLoginMessage(params.commandParams, text),
+      sendMessage: (text) => emitLoginMessage(commandParams, text),
       sendReply,
-      onModelAccessRequested: (request) => {
-        modelAccess = request;
-      },
       unsupportedPromptMessage:
         "This provider needs input that chat cannot collect. Open Control UI → Models and choose Sign in.",
     });
     flowSignal.throwIfAborted();
     const nextProfileId = loginResult.profiles.find(
-      (profile) =>
-        normalizeSurface(profile.provider) === normalizeSurface(params.choice.providerId),
+      (profile) => normalizeSurface(profile.provider) === normalizeSurface(choice.providerId),
     )?.profileId;
     const switchResult = nextProfileId
       ? await switchLoginSessionProfile({
-          commandParams: params.commandParams,
-          loginProvider: params.choice.providerId,
+          commandParams,
+          loginProvider: choice.providerId,
           nextProfileId,
           signal: flowSignal,
           assertCurrent,
         })
       : "failed";
     const terminalMessage = formatProviderLoginCompletion(
-      params.choice,
+      choice,
       loginResult.authRefresh,
       switchResult === "failed",
-      nextProfileId ? { model: params.commandParams.model, profileId: nextProfileId } : undefined,
+      nextProfileId ? { model: commandParams.model, profileId: nextProfileId } : undefined,
     );
-    return modelAccess
-      ? offerProviderLoginModelAccess({
-          flows: activeProviderLoginFlows,
-          flowKey,
-          prepared: modelAccess,
-          terminalMessage,
-        })
-      : { text: terminalMessage };
+    return {
+      text: [terminalMessage, loginResult.modelAccess?.message].filter(Boolean).join(" "),
+    };
   } catch (error) {
     return {
-      text: formatProviderLoginFailure(params.choice, error),
+      text: formatProviderLoginFailure(choice, error),
     };
   } finally {
     releaseProviderLoginFlow({
@@ -356,48 +323,13 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
         flows: activeProviderLoginFlows,
         flowKey: buildProviderLoginFlowKey(params),
       }),
-    answerChoice: (command) =>
-      answerProviderLoginModelAccess({
-        flows: activeProviderLoginFlows,
-        flowKey: buildProviderLoginFlowKey(params),
-        command,
-        agentId: params.agentId,
-        readConfig:
-          params.opts?.getProviderLoginConfig ?? (() => getRuntimeConfigSnapshot() ?? params.cfg),
-        runtime: defaultRuntime,
-        signal: params.opts?.abortSignal,
-        assertCurrent: (config) =>
-          assertProviderLoginAuthority(
-            params,
-            config ??
-              params.opts?.getProviderLoginConfig?.() ??
-              getRuntimeConfigSnapshot() ??
-              params.cfg,
-          ),
-      }),
   });
   if (!prepared) {
     return null;
   }
-  if (prepared.status !== "ready") {
-    return { shouldContinue: false, reply: prepared.reply };
-  }
-  const reply = await runChannelProviderLogin({
-    commandParams: params,
-    choice: prepared.choice,
-    agentId: params.agentId,
-  });
-  return { shouldContinue: false, reply };
+  return commandReply(
+    prepared.status === "ready"
+      ? await runChannelProviderLogin(params, prepared.choice)
+      : prepared.reply,
+  );
 };
-
-const commandsLoginTestApi = {
-  clearActiveFlows() {
-    activeProviderLoginFlows.logins.clear();
-    activeProviderLoginFlows.modelAccess.clear();
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.commandsLoginTestApi")] =
-    commandsLoginTestApi;
-}

@@ -5,7 +5,6 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildProviderAuthDoctorHintWithPlugin } from "../../plugins/provider-runtime.runtime.js";
 import type { AuthProfileStore } from "./types.js";
 
 const QWEN_PORTAL_OAUTH_MIGRATION_HINT =
@@ -28,12 +27,8 @@ type FormatAuthDoctorHintParams = {
   profileId?: string;
 };
 
-// Keep local short-circuits and the plugin fallback in one seam so focused tests
-// can prove their ordering without loading the full provider runtime.
-async function formatAuthDoctorHintWithPluginBuilder(
-  params: FormatAuthDoctorHintParams,
-  buildPluginHint: typeof buildProviderAuthDoctorHintWithPlugin,
-): Promise<string> {
+/** Formats provider-specific auth doctor guidance for a profile/store. */
+export async function formatAuthDoctorHint(params: FormatAuthDoctorHintParams): Promise<string> {
   const normalizedProvider = normalizeProviderId(params.provider);
   if (
     normalizedProvider === "qwen-portal" &&
@@ -41,22 +36,16 @@ async function formatAuthDoctorHintWithPluginBuilder(
   ) {
     return QWEN_PORTAL_OAUTH_MIGRATION_HINT;
   }
-  const pluginHint = await buildPluginHint({
-    provider: normalizedProvider,
-    context: {
-      config: params.cfg,
-      store: params.store,
-      provider: normalizedProvider,
-      profileId: params.profileId,
-    },
-  });
-  if (typeof pluginHint === "string" && pluginHint.trim()) {
-    return pluginHint;
-  }
-  return "";
-}
-
-/** Formats provider-specific auth doctor guidance for a profile/store. */
-export async function formatAuthDoctorHint(params: FormatAuthDoctorHintParams): Promise<string> {
-  return await formatAuthDoctorHintWithPluginBuilder(params, buildProviderAuthDoctorHintWithPlugin);
+  const { withProviderRuntimePlugin } = await import("../../plugins/provider-hook-runtime.js");
+  const pluginHint = await withProviderRuntimePlugin(
+    { config: params.cfg, provider: normalizedProvider },
+    async (provider) =>
+      await provider?.buildAuthDoctorHint?.({
+        config: params.cfg,
+        store: params.store,
+        provider: normalizedProvider,
+        profileId: params.profileId,
+      }),
+  );
+  return typeof pluginHint === "string" && pluginHint.trim() ? pluginHint : "";
 }

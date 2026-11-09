@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
@@ -6,6 +7,7 @@ import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace
 type Awaitable<T> = T | Promise<T>;
 
 export type GatewayPostReadySidecarHandle = {
+  name?: string;
   stop: () => Awaitable<void>;
   preparePluginReload?: (params: {
     previousRegistry: PluginRegistry;
@@ -45,9 +47,9 @@ export function schedulePostReadySidecarTask(params: {
     })().catch((err: unknown) => {
       params.log.warn(`${params.name} failed after gateway ready: ${String(err)}`);
     });
-  });
-  handle.unref?.();
+  }).unref();
   return {
+    name: params.name,
     stop: async () => {
       // Sidecars get both a synchronous stopped predicate and an AbortSignal so
       // lazy imports and long-running watchers can cooperate with shutdown.
@@ -59,40 +61,38 @@ export function schedulePostReadySidecarTask(params: {
 }
 
 export function scheduleGatewayGenerationTimer(params: {
+  scheduler: GatewayScheduler;
   delayMs: number;
   origin: string;
   run: (isStopped: () => boolean) => Awaitable<void>;
   onError: (err: unknown) => void;
   shouldRun?: () => boolean;
 }): GatewayPostReadySidecarHandle {
-  let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const isStopped = () => stopped || params.shouldRun?.() === false;
-  timer = setTimeout(() => {
-    timer = undefined;
-    if (isStopped()) {
-      return;
-    }
-    void runWithGatewayIndependentRootWorkAdmission(async () => {
+  const scope = params.scheduler.scope();
+  const { signal } = scope;
+  const isStopped = () => signal.aborted || params.shouldRun?.() === false;
+  scope.schedule({
+    id: params.origin,
+    delayMs: params.delayMs,
+    run: () => {
       if (isStopped()) {
-        return;
+        return undefined;
       }
-      await params.run(isStopped);
-    }, params.origin).catch((err: unknown) => {
-      // Closing must not hide errors from callbacks already admitted before it.
-      if (!stopped) {
-        params.onError(err);
-      }
-    });
-  }, params.delayMs);
-  timer.unref?.();
-  return {
-    stop: () => {
-      stopped = true;
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
+      return runWithGatewayIndependentRootWorkAdmission(
+        async () => {
+          if (isStopped()) {
+            return;
+          }
+          await params.run(isStopped);
+        },
+        params.origin,
+        signal,
+      ).catch((err: unknown) => {
+        if (!signal.aborted) {
+          params.onError(err);
+        }
+      });
     },
-  };
+  });
+  return { name: params.origin, stop: scope.stop };
 }

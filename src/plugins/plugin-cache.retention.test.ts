@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { it } from "vitest";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { pluginRetentionEntrypoints } from "./retention-runtime.test-support.js";
 
 it.each([
   "directory",
@@ -24,9 +25,7 @@ it.each([
       process.execPath,
       [
         "--expose-gc",
-        "--import",
-        "tsx",
-        fileURLToPath(new URL("./plugin-cache.retention.test-support.ts", import.meta.url)),
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(pluginRetentionEntrypoints.cache)),
         scenario,
       ],
       { timeout: 20_000 },
