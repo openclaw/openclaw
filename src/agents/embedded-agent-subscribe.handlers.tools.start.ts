@@ -11,6 +11,7 @@ import { isAgentPlanProgressToolName } from "../session-cards/progress-card-inpu
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { resolveCompletedActivityWrappers } from "./agent-activity-presentation.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
+import { TOOL_CALL_RAW_TOOL_NAME } from "./core-tool-facts.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
   ToolCallSummary,
@@ -58,6 +59,7 @@ function reserveQuestionPromptDelivery(
 type ToolStartRecord = {
   startTime: number;
   args: unknown;
+  toolName: string;
   hideFromChannelProgress?: boolean;
   parentToolCallId?: string;
   hasRepliedRef?: { value: boolean };
@@ -204,6 +206,58 @@ export function finalizeToolActivity(ctx: ToolHandlerContext): void {
   }
 }
 
+/**
+ * A deferred dispatcher (dispatch_action) is a pure forwarding wrapper: its nested
+ * target publishes the visible operation under its own item identity. Once that
+ * target starts with a visible activity, the dispatcher's own row is redundant,
+ * so it is retracted from channel progress while it is still running (the terminal
+ * collapse in `finalizeToolActivity` only happens at run termination). The
+ * dispatcher's `hideFromChannelProgress` flag is persisted on its start record so
+ * its terminal event stays hidden too.
+ *
+ * A target whose activity is hidden (for example a routine `progress_card` or a
+ * `wait`/`process.poll` child) does not replace the dispatcher: the shared
+ * activity owner keeps a wrapper visible when none of its children contributes a
+ * visible row, so the dispatcher stays until terminal collapse.
+ */
+function retractDeferredDispatcherFromChannelProgress(
+  ctx: ToolHandlerContext,
+  evt: {
+    lifecycleProvenance?: "nested";
+    parentToolCallId?: string;
+  },
+  targetActivity: AgentItemEventData,
+): void {
+  if (
+    evt.lifecycleProvenance !== "nested" ||
+    !evt.parentToolCallId ||
+    targetActivity.hideFromChannelProgress ||
+    targetActivity.suppressChannelProgress
+  ) {
+    return;
+  }
+  const parentKey = buildToolStartKey(ctx.params.runId, evt.parentToolCallId);
+  const parent = toolStartData.get(parentKey);
+  if (
+    !parent ||
+    parent.hideFromChannelProgress ||
+    normalizeToolPolicyName(parent.toolName) !== TOOL_CALL_RAW_TOOL_NAME
+  ) {
+    return;
+  }
+  parent.hideFromChannelProgress = true;
+  const activity = projectAgentToolActivity({
+    toolCallId: evt.parentToolCallId,
+    name: parent.toolName,
+    phase: "start",
+    args: parent.args,
+  });
+  emitToolActivityEvent(ctx, {
+    stream: "item",
+    data: { ...activity, phase: "update", hideFromChannelProgress: true },
+  });
+}
+
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
   if (!isExecToolName(toolName) || !args || typeof args !== "object") {
     return meta;
@@ -305,6 +359,7 @@ export function handleToolExecutionStart(
     toolStartData.set(buildToolStartKey(runId, toolCallId), {
       startTime: startedAt,
       args,
+      toolName,
       hideFromChannelProgress: evt.hideFromChannelProgress,
       parentToolCallId: evt.parentToolCallId,
       ...(ctx.params.hasRepliedRef
@@ -394,6 +449,7 @@ export function handleToolExecutionStart(
       startedAt,
     };
     emitTrackedItemEvent(ctx, itemData);
+    retractDeferredDispatcherFromChannelProgress(ctx, evt, itemData);
     const createStartEvent = () => ({
       stream: "tool" as const,
       data: {
