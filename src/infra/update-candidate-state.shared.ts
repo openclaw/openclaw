@@ -104,6 +104,7 @@ export async function readUpdateStoreSchemaVersion(
     input.stagingRoot,
     undefined,
     input.preserveSourceArtifacts,
+    { cleanupFailure: "warn" },
   );
   if (userVersion === 0) {
     const { readBackupEngine } = await import("./database-engine/physical-store.js");
