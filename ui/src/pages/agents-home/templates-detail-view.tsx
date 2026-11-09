@@ -151,6 +151,11 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         contents().skills.map((item) => ({
           name: item.name,
           description: item.excerpt,
+          trailing: (
+            <span class="muted">
+              {t("templatesCatalog.dependencyClawHub", { version: item.version })}
+            </span>
+          ),
           onOpen: () => props.view.onOpenPreview("skill", item.name),
         })),
         () => (
@@ -163,10 +168,11 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
           name: item.name,
           description:
             item.kind === "plugin"
-              ? t("templatesCatalog.version", { version: item.version ?? "" })
+              ? t("templatesCatalog.dependencyClawHub", { version: item.version })
               : t("tabs.mcp"),
           trailing:
-            item.kind === "plugin" && props.view.installedPluginPackages.has(item.name) ? (
+            item.kind === "plugin" &&
+            props.view.installedPluginPackages.has(`${item.ref}@${item.version}`) ? (
               <span class="plugin-connection-status" role="status">
                 <Icon name="check" /> {t("templatesCatalog.installed")}
               </span>
@@ -174,7 +180,7 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
           details: (
             <p>
               {item.kind === "plugin" ? t("tabs.plugin") : t("tabs.mcp")}
-              {item.version ? ` · ${item.version}` : ""}
+              {item.kind === "plugin" ? ` · ${item.version}` : ""}
             </p>
           ),
         })),

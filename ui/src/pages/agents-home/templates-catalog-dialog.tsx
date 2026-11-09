@@ -151,11 +151,11 @@ class TemplatesCatalogModel {
         return;
       }
       this.installedPluginPackages = new Set(
-        result.plugins
-          .flatMap((plugin) =>
-            plugin.installed ? [plugin.clawhubPackage, plugin.packageName] : [],
-          )
-          .filter((name): name is string => Boolean(name)),
+        result.plugins.flatMap((plugin) =>
+          plugin.installed && plugin.clawhubPackage && plugin.version
+            ? [`${plugin.clawhubPackage}@${plugin.version}`]
+            : [],
+        ),
       );
     } catch {
       // Contents remain available when the local plugin inventory cannot load.
