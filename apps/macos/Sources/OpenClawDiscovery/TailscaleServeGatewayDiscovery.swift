@@ -13,12 +13,43 @@ enum TailscaleServeGatewayDiscovery {
     private static let probeConcurrency = 6
     private static let defaultProbeTimeoutSeconds: TimeInterval = 1.6
 
-    struct DiscoveryContext {
-        var tailscaleStatus: @Sendable () async -> String?
-        var probeHost: @Sendable (_ host: String, _ timeout: TimeInterval) async -> Bool
+    struct DiscoveryContext: Sendable {
+        let run: @Sendable (_ path: String, _ args: [String], _ timeout: TimeInterval) async -> String?
+        let tailscaleStatus: (@Sendable () async -> String?)?
+        let probeHost: @Sendable (_ host: String, _ timeout: TimeInterval) async -> Bool
+        let now: @Sendable () -> Date
+
+        init(
+            run: @escaping @Sendable (String, [String], TimeInterval) async -> String?,
+            probeHost: @escaping @Sendable (String, TimeInterval) async -> Bool,
+            now: @escaping @Sendable () -> Date = { Date() })
+        {
+            self.run = run
+            self.tailscaleStatus = nil
+            self.probeHost = probeHost
+            self.now = now
+        }
+
+        init(
+            tailscaleStatus: @escaping @Sendable () async -> String?,
+            probeHost: @escaping @Sendable (String, TimeInterval) async -> Bool,
+            now: @escaping @Sendable () -> Date = { Date() })
+        {
+            self.run = { _, _, _ in nil }
+            self.tailscaleStatus = tailscaleStatus
+            self.probeHost = probeHost
+            self.now = now
+        }
 
         static let live = DiscoveryContext(
-            tailscaleStatus: { await readTailscaleStatus() },
+            run: { candidate, args, timeout in
+                guard let executable = resolveExecutablePath(candidate) else { return nil }
+                return await BoundedCommand.run(
+                    path: executable,
+                    arguments: args,
+                    environment: commandEnvironment(),
+                    timeout: timeout)
+            },
             probeHost: { host, timeout in
                 var components = URLComponents()
                 components.scheme = "wss"
@@ -33,7 +64,12 @@ enum TailscaleServeGatewayDiscovery {
         context: DiscoveryContext = .live) async -> [TailscaleServeGatewayBeacon]
     {
         guard timeoutSeconds > 0 else { return [] }
-        guard let statusJson = await context.tailscaleStatus(),
+        // Status lookup and every queued peer probe spend the same discovery budget.
+        let deadline = context.now().addingTimeInterval(timeoutSeconds)
+        let remaining: @Sendable () -> TimeInterval = {
+            deadline.timeIntervalSince(context.now())
+        }
+        guard let statusJson = await self.readTailscaleStatus(remaining: remaining, context: context),
               let status = try? JSONDecoder().decode(TailscaleStatus.self, from: Data(statusJson.utf8))
         else {
             return []
@@ -42,7 +78,6 @@ enum TailscaleServeGatewayDiscovery {
         let candidates = self.collectCandidates(status: status)
         if candidates.isEmpty { return [] }
 
-        let deadline = Date().addingTimeInterval(timeoutSeconds)
         let perProbeTimeout = min(self.defaultProbeTimeoutSeconds, max(0.5, timeoutSeconds * 0.45))
 
         var beacons: [TailscaleServeGatewayBeacon] = []
@@ -55,9 +90,9 @@ enum TailscaleServeGatewayDiscovery {
                 let candidate = candidates[index]
                 index += 1
                 group.addTask {
-                    let remaining = deadline.timeIntervalSinceNow
-                    guard remaining > 0 else { return nil }
-                    let timeout = min(perProbeTimeout, remaining)
+                    let budget = remaining()
+                    guard budget > 0 else { return nil }
+                    let timeout = min(perProbeTimeout, budget)
                     return await context.probeHost(candidate.host, timeout) ? candidate : nil
                 }
             }
@@ -118,14 +153,19 @@ enum TailscaleServeGatewayDiscovery {
         return lower.isEmpty ? nil : lower
     }
 
-    private static func readTailscaleStatus() async -> String? {
-        await BoundedCommand.tailscaleStatus { candidate in
-            guard let executable = self.resolveExecutablePath(candidate) else { return nil }
-            return await BoundedCommand.run(
-                path: executable,
-                arguments: ["status", "--json"],
-                environment: self.commandEnvironment(),
-                timeout: 1.0)
+    private static func readTailscaleStatus(
+        remaining: @Sendable () -> TimeInterval,
+        context: DiscoveryContext) async -> String?
+    {
+        guard remaining() > 0 else { return nil }
+        // A legacy adapter supplies an entire status lookup, not one executable attempt.
+        if let tailscaleStatus = context.tailscaleStatus {
+            return await tailscaleStatus()
+        }
+        return await BoundedCommand.tailscaleStatus { candidate in
+            let budget = min(1.0, remaining())
+            guard budget > 0 else { return nil }
+            return await context.run(candidate, ["status", "--json"], budget)
         }
     }
 
