@@ -633,12 +633,12 @@ describe("ClawHub prepared publication", () => {
   });
 
   it.each(["selected", "all-publishable"])(
-    "retains the %s prepared roster when an exact version is adopted on resume",
+    "retains the native family and exact bytes on %s resume",
     async (selectionMode) => {
       const f = preparedFixture(selectionMode, "cloudflare");
       const [entry] = await resolvePreparedClawHubMatrix(f.resolveOptions);
       expect(entry.alreadyPublished).toBe(true);
-      expect(entry.family).toBe("bundle-plugin");
+      expect(entry.family).toBe("code-plugin");
       expect(entry.publication).toEqual({ state: "published" });
       await restorePreparedClawHubPackage({ ...f.restoreOptions, entry: entry.prepared });
       expect(readFileSync(join(f.restoreOptions.outputDir, "cloudflare.tgz"))).toEqual(f.tarball);
@@ -864,6 +864,31 @@ describe("ClawHub detached postpublish verification", () => {
       if (noChild) {
         expect(result).toMatchObject({ outcome: "no-normal-clawhub-publication" });
       }
+    },
+  );
+
+  it.each([false, true])(
+    "preserves deferred publication as incomplete (conflicting child=%s)",
+    async (conflict) => {
+      const f = retryFixture();
+      replaceJsonArtifact(f, f.dispatchArtifact, "dispatch.json", {
+        ...f.dispatch,
+        clawHubDeferred: true,
+        normalClawHubRunId: conflict ? f.dispatch.normalClawHubRunId : null,
+        normalClawHubRunAttempt: conflict ? f.dispatch.normalClawHubRunAttempt : null,
+      });
+      if (conflict) {
+        await expect(verifyClawHubPostpublish(f.options)).rejects.toThrow(
+          /dispatch record identity/u,
+        );
+      } else {
+        expect(await verifyClawHubPostpublish(f.options)).toMatchObject({
+          complete: false,
+          outcome: "clawhub-deferred",
+          packages: [],
+        });
+      }
+      expect(f.registryReads).toEqual([]);
     },
   );
 

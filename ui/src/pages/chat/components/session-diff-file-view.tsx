@@ -317,7 +317,7 @@ export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
           {desktop() && props.openFile && (
             <button
               type="button"
-              class="btn btn--ghost btn--icon session-diff__open-file"
+              class="oc-icon-button oc-icon-button--28 session-diff__open-file"
               aria-label={t("chat.sessionDiff.openFile")}
               title={t("chat.sessionDiff.openFile")}
               onClick={() => {
@@ -328,7 +328,7 @@ export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
             </button>
           )}
           <button
-            class="btn btn--ghost btn--icon session-diff__file-menu"
+            class="oc-icon-button oc-icon-button--28 session-diff__file-menu"
             type="button"
             aria-label={t("chat.sessionDiff.fileActions", { path: file().path })}
             onClick={(event) => {
@@ -362,7 +362,9 @@ export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
                   desktop() &&
                   Boolean(props.openFileView) &&
                   file().status !== "deleted" &&
-                  file().binary !== true,
+                  file().binary !== true
+                    ? props.canEditFile?.(file().path)
+                    : false,
               });
             }}
           >

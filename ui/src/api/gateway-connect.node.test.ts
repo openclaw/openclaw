@@ -203,6 +203,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
+      GATEWAY_CLIENT_CAPS.CHAT_QUEUE_STATUS,
       GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND,
       GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY,
       GATEWAY_CLIENT_CAPS.HELLO_PRESENCE_SELF,
@@ -214,12 +215,26 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
       GATEWAY_CLIENT_CAPS.MODEL_WAIT_STATUS,
+      GATEWAY_CLIENT_CAPS.UI_AGENT_GITHUB_SETTINGS,
       GATEWAY_CLIENT_CAPS.UI_COMMANDS,
       GATEWAY_CLIENT_CAPS.ULTRAFAST,
       GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
+
+  it.each(["ios", "android"])(
+    "does not offer agent UI commands from native %s",
+    async (platform) => {
+      Object.assign(window, {
+        __OPENCLAW_NATIVE_EMBED__: { platform, formFactor: "phone" },
+      });
+      const { connectFrame } = await startConnect(createClient({ token: "shared-auth-token" }));
+
+      expect(connectFrame.params.caps).not.toContain(GATEWAY_CLIENT_CAPS.UI_COMMANDS);
+      expect(connectFrame.params.caps).not.toContain(GATEWAY_CLIENT_CAPS.UI_AGENT_GITHUB_SETTINGS);
+    },
+  );
 
   it("leaves the native-auth capability list unchanged", async () => {
     client = createClient({

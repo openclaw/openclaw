@@ -1,4 +1,8 @@
-import { isRecord, normalizeOptionalString, readStringValue } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { clampHeight, clampWidth } from "./sidebar-layout-geometry.ts";
 import type { SidebarLayout, SidebarPanel, SidebarSlotId } from "./sidebar-layout-types.ts";
 

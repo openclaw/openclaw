@@ -13,7 +13,8 @@
  * select a frozen stream-wrapper.ts module for paired decorator measurements.
  * --mode promises counts Node promise initialization separately from timing.
  * --mode verify replays a fixed multi-turn recording with all update kinds, async
- * fragments and a blocking tool; compare its outputSha256 across revisions.
+ * fragments and a blocking tool; hashes include provider request contexts.
+ * Compare outputSha256 across revisions.
  * --layer responses-observer selects an isolated real iterator owner instead.
  * --layer all --mode promises inventories real layers using the promise-count
  * slope between 32 and --events reads; see agent-stream-update-measure.md.
@@ -23,6 +24,8 @@
  * an in-memory transcript. Compare to --dispatch loop (the default) to attribute
  * listener promises. Session runs reset agent history before each prompt.
  * --extensions 40 loads unrelated session extensions to measure delta handler scans.
+ * --dispatch tool-end isolates completion delivery to an asynchronous listener;
+ * metrics are per completed tool rather than per streamed update.
  * Accept lower allocation or CPU/update with identical delivery counts; report tradeoffs.
  * this measures the real agent loop, not whole-Gateway throughput or latency.
  */
@@ -44,7 +47,9 @@ import {
   makeTool,
   user,
 } from "../../packages/agent-core/src/agent-loop.test-support.js";
+import { emitToolExecutionEnd } from "../../packages/agent-core/src/agent-stream-response.js";
 import { Agent } from "../../packages/agent-core/src/agent.js";
+import type { AgentEvent } from "../../packages/agent-core/src/types.js";
 import type { AssistantMessageEvent } from "../../packages/llm-core/src/types.js";
 import type { MutableAssistantMessageEventStream } from "../../src/agents/stream-compat.js";
 import { PluginInstance } from "../../src/plugins/plugin-instance.js";
@@ -87,7 +92,7 @@ assert(Number.isSafeInteger(events) && events > 0);
 assert(Number.isSafeInteger(turns) && turns > 0);
 assert(Number.isSafeInteger(warmup) && warmup > 0);
 assert(["timing", "allocation", "verify", "promises"].includes(values.mode));
-assert(values.dispatch === "loop" || values.dispatch === "session");
+assert(["loop", "session", "tool-end"].includes(values.dispatch));
 assert(extensions === 0 || values.dispatch === "session");
 assert(values.dispatch === "loop" || (!values.layer && values.mode !== "verify"));
 if (values.layer) {
@@ -173,6 +178,21 @@ const onEvent = (event: { type: string }) => {
   }
 };
 const session = values.dispatch === "session" ? await createSession() : undefined;
+const completedTool = {
+  toolCall: makeCall("synthetic_0", "completed-call"),
+  result: { content: [{ type: "text" as const, text: "result".repeat(1024) }], details: {} },
+  isError: false,
+  executionStarted: true,
+};
+let lastCompletion: AgentEvent | undefined;
+const completionBatch = {
+  assistantMessage: makeAssistantMessage([completedTool.toolCall]),
+  emit: (event: AgentEvent) => {
+    lastCompletion = event;
+    deliveries++;
+    return Promise.resolve();
+  },
+};
 async function createSession() {
   const agent = new Agent({
     initialState: { model: config.model, tools },
@@ -216,6 +236,12 @@ async function createSession() {
   return result;
 }
 async function run() {
+  if (values.dispatch === "tool-end") {
+    for (let index = 0; index < events; index++) {
+      await emitToolExecutionEnd(completedTool, completionBatch);
+    }
+    return;
+  }
   let responseCount = 0;
   const streamFn: NonNullable<Parameters<typeof runAgentLoop>[5]> = () => {
     const toolResponse = asyncFragments && responseCount === 0;
@@ -318,7 +344,8 @@ async function verifyRecording() {
         emitted++;
       },
       undefined,
-      () => {
+      (_model, context) => {
+        output.update(JSON.stringify(context));
         const replay = request++ === 0 ? recording : continuation;
         assert(request <= 2);
         return decorate({
@@ -397,6 +424,9 @@ if (allocation) {
   allocatedBytes = sum(profile.head);
 }
 assert.equal(deliveries, events * turns);
+if (values.dispatch === "tool-end") {
+  assert.equal(lastCompletion?.type, "tool_execution_end");
+}
 if (!asyncFragments && snapshots) {
   assert.equal(observations, transforms * deliveries);
 }

@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { transferSkillResources } from "../../src/gateway/worker-environments/skill-resource-transfer.js";
 import type { WorkerWorkspaceTunnelHandle } from "../../src/gateway/worker-environments/tunnel-contract.js";
@@ -13,7 +12,8 @@ import { createSyntheticSourceInfo } from "../../src/skills/loading/skill-contra
 import { prepareSkillResourceDelivery } from "../../src/skills/runtime/resources.js";
 import type { SkillSnapshot } from "../../src/skills/types.js";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 // Metadata-shaped synthetic trees, never copies of operator instructions or scripts.
 const supportSizes = [
@@ -33,6 +33,9 @@ const { values } = parseArgs({
     existing: { type: "boolean", default: false },
     functional: { type: "boolean", default: false },
     "gc-log": { type: "string" },
+    "large-catalog": { type: "boolean", default: false },
+    "source-module": { type: "string" },
+    "background-files": { type: "string", default: "0" },
   },
 });
 assert(values["state-dir"]);
@@ -42,22 +45,24 @@ assert(["delivery", "transfer"].includes(values.mode));
 assert(["ascii", "unicode", "binary"].includes(values.content));
 const directory = path.resolve(values["state-dir"]);
 const profilePath = path.join(directory, "skill-resource-profile");
-const marker = (phase: string) =>
-  writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
 const workspace = path.join(directory, "workspace");
 const operations = Number(values.operations);
 const concurrency = Number(values.concurrency);
 assert(Number.isSafeInteger(operations) && operations > 0);
 assert(Number.isSafeInteger(concurrency) && concurrency > 0 && operations % concurrency === 0);
 const snapshot: SkillSnapshot = { prompt: "", skills: [], resolvedSkills: [] };
+const prepareDelivery: typeof prepareSkillResourceDelivery = values["source-module"]
+  ? (await import(pathToFileURL(path.resolve(values["source-module"])).href))
+      .prepareSkillResourceDelivery
+  : prepareSkillResourceDelivery;
 const fileSizes = new Map<string, number>();
-for (const [index, sizes] of [
-  [14411, ...supportSizes],
-  [38687, 8012],
-].entries()) {
+const trees = values["large-catalog"]
+  ? Array.from({ length: 150 }, () => [14411, 65536])
+  : [
+      [14411, ...supportSizes],
+      [38687, 8012],
+    ];
+for (const [index, sizes] of trees.entries()) {
   const name = `synthetic-${index}`;
   const baseDir = path.join(workspace, "skills", name);
   const filePath = path.join(baseDir, "SKILL.md");
@@ -97,6 +102,16 @@ for (const [index, sizes] of [
     disableModelInvocation: false,
   });
 }
+const backgroundFiles = Number(values["background-files"]);
+assert(Number.isSafeInteger(backgroundFiles) && backgroundFiles >= 0);
+if (!values.existing && backgroundFiles) {
+  const background = path.join(workspace, "project");
+  await fs.mkdir(background, { recursive: true });
+  const bytes = Buffer.alloc(18000, "x");
+  for (let index = 0; index < backgroundFiles; index++) {
+    await fs.writeFile(path.join(background, `${index}.txt`), bytes);
+  }
+}
 const remoteDirectories = await Promise.all(
   Array.from({ length: concurrency }, async (_, index) => {
     const target = path.join(directory, `remote-${index}`);
@@ -112,6 +127,8 @@ if (values["prepare-only"]) {
       directory,
       files: fileSizes.size,
       bytes: [...fileSizes.values()].reduce((a, b) => a + b, 0),
+      backgroundFiles,
+      backgroundBytes: backgroundFiles * 18000,
     }),
   );
   process.exit(0);
@@ -143,6 +160,7 @@ const tunnel: Pick<WorkerWorkspaceTunnelHandle, "runWorkspaceCommand"> = {
 type Delivery = Awaited<ReturnType<typeof prepareSkillResourceDelivery>>;
 type Transfer = Awaited<ReturnType<typeof transferSkillResources>>;
 let retained: Array<Delivery | Transfer> = [];
+let deliveryFailures = 0;
 async function batch() {
   for (const item of retained) {
     if (item && "cleanup" in item) {
@@ -160,7 +178,19 @@ async function batch() {
           assertCurrent: () => {},
         });
       }
-      return prepareSkillResourceDelivery(snapshot, () => {}, [], workspace);
+      try {
+        return await prepareDelivery(snapshot, () => {}, [], workspace);
+      } catch (error) {
+        if (
+          !values["large-catalog"] ||
+          !(error instanceof Error) ||
+          error.name !== "SkillResourceDeliveryLimitError"
+        ) {
+          throw error;
+        }
+        deliveryFailures++;
+        return undefined;
+      }
     }),
   );
 }
@@ -171,12 +201,13 @@ for (const item of retained) {
   }
 }
 retained = [];
+deliveryFailures = 0;
 if (values["gc-log"]) {
-  marker("identify-start");
+  writeGatewayGcTraceMarker("identify-start", profilePath);
 }
 globalThis.gc?.();
 if (values["gc-log"]) {
-  marker("identify-stop");
+  writeGatewayGcTraceMarker("identify-stop", profilePath);
 }
 await delay(25);
 globalThis.gc?.();
@@ -274,7 +305,7 @@ if (values.allocations) {
 }
 const stopDiagnostics = startGatewayBenchDiagnostics();
 if (values["gc-log"]) {
-  marker("heap-start");
+  writeGatewayGcTraceMarker("heap-start", profilePath);
 }
 const cpuStart = process.cpuUsage();
 const start = performance.now();
@@ -284,16 +315,13 @@ for (let count = 0; count < operations; count += concurrency) {
 const elapsedMs = performance.now() - start;
 const cpu = process.cpuUsage(cpuStart);
 if (values["gc-log"]) {
-  marker("heap-stop");
+  writeGatewayGcTraceMarker("heap-stop", profilePath);
 }
 const diagnostics = stopDiagnostics();
 let allocationBytes: number | null = null;
-function sumAllocation(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sumAllocation(child), 0);
-}
 if (values.allocations) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
-  allocationBytes = sumAllocation(profile.head);
+  allocationBytes = sumSampledHeapBytes(profile.head);
   inspector.disconnect();
 }
 fs.open = open;
@@ -306,7 +334,9 @@ let payloadCharacters = 0,
   instructionBytes = 0,
   supportBytesConsumed = 0;
 for (const item of retained) {
-  assert(item);
+  if (!item) {
+    continue;
+  }
   if ("skills" in item) {
     payloadCharacters += item.skills.reduce(
       (sum, skill) => sum + skill.files.reduce((n, file) => n + file.content.length, 0),
@@ -329,6 +359,8 @@ console.log(
     content: values.content,
     operations,
     concurrency,
+    deliveryFailures,
+    backgroundFiles,
     reads,
     readBytes,
     callsPerTurn: 1,

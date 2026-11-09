@@ -1,9 +1,11 @@
 import { createComponent, createSignal, flush } from "solid-js";
-import { assert, describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../../api/types.ts";
+import { i18n } from "../../../i18n/index.ts";
+import { formatDateTimeMs } from "../../../lib/format.ts";
 import { useFakeClock } from "../../../test-helpers/fake-clock.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -16,6 +18,8 @@ import {
 import {
   loadedSidebarContent,
   createSidebarContentRecorder,
+  textFile,
+  workspaceFile,
 } from "./chat-session-workspace.test-support.ts";
 import {
   createSessionWorkspaceProps as workspaceProps,
@@ -26,26 +30,6 @@ import {
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-
-function workspaceFile(
-  path: string,
-  overrides: Partial<SessionWorkspaceGetResult["file"]> = {},
-): SessionWorkspaceGetResult["file"] {
-  return { path, name: path.split(/[\\/]/).at(-1)!, kind: "read", missing: false, ...overrides };
-}
-
-function textFile(
-  path: string,
-  content: string,
-  overrides: Partial<SessionWorkspaceGetResult["file"]> = {},
-) {
-  return workspaceFile(path, {
-    previewKind: "text",
-    contentEncoding: "utf8",
-    content,
-    ...overrides,
-  });
-}
 
 function imageFile(mimeType: string) {
   return workspaceFile("screenshots/result.png", {
@@ -80,6 +64,7 @@ function createLoadingHost(sessions: object, overrides: object = {}): SessionWor
     handleOpenSidebar: createSidebarContentRecorder(),
     hello: null,
     sessionKey: "agent:main:current",
+    sessionWorkspaceReadDisabledReason: null,
     sidebarContent: null,
     sessions,
     ...overrides,
@@ -171,6 +156,31 @@ function nextWorkspaceUpdate(state: SessionWorkspaceHost, ready: () => boolean) 
 }
 
 describe("session workspace state", () => {
+  it("waits for workspace access and retires a retained loader when access changes", async () => {
+    const request = vi.fn();
+    let reason: string | null | undefined;
+    const state = createLoadingHost(
+      {},
+      {
+        client: { request },
+        hello: gatewayHelloForMethods(["sessions.diff"]),
+      },
+    );
+    Object.defineProperty(state, "sessionWorkspaceReadDisabledReason", { get: () => reason });
+    expect(resolveSessionDiffSidebarContent(state)).toBeNull();
+    reason = null;
+    const content = resolveSessionDiffSidebarContent(state);
+    assert(content?.kind === "session-diff");
+    reason = "This role requires a sandboxed session.";
+    await expect(content.load({ scope: "uncommitted" })).rejects.toThrow(reason);
+    expect(resolveSessionDiffSidebarContent(state)).toEqual({
+      kind: "unavailable",
+      message: reason,
+      permission: true,
+    });
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("keeps filter changes in the current session and resets them for a new session", () => {
     const state = createLoadingHost({}, { client: null, connected: false });
     const workspace = workspaceProps(state);
@@ -187,6 +197,80 @@ describe("session workspace state", () => {
 
     state.sessionKey = "agent:main:next";
     expect(workspaceProps(state).filter).toBe("all");
+  });
+
+  it("searches a filename once while retaining open previews and draft scope", async () => {
+    useFakeClock();
+    const listFiles = vi.fn().mockResolvedValue(workspaceList("/workspace"));
+    const getFile = vi.fn();
+    const state = createLoadingHost({ listFiles, getFile });
+    const props = workspaceProps(state, { draftScope: "orders-pane" });
+    const workspace = getSessionWorkspace(state);
+    const preview = {
+      id: "notes",
+      label: "notes.md",
+      pinned: true,
+      content: { kind: "file" as const, path: "notes.md", name: "notes.md", content: "notes" },
+    };
+    workspace.previews = [preview];
+    workspace.activePreviewId = preview.id;
+    workspace.browserPath = "nested";
+    workspace.browserSearch = "old query";
+    workspace.filter = "read";
+    workspace.catalogNavigation = {
+      ...props.navigation,
+      browserPath: "nested",
+      browserSearch: "old query",
+      filter: "read",
+    };
+    expect(
+      props.onFindWorkspaceFile({
+        name: "orders-large.zip",
+        sessionKey: state.sessionKey,
+        agentId: "main",
+      }),
+    ).toBe(true);
+    expect(workspace.activePreviewId).toBeNull();
+    expect(workspace.previews[0]).toBe(preview);
+    expect(state.sessionWorkspaceDraftScope).toBe("orders-pane");
+    expect(workspace).toMatchObject({
+      browserPath: "",
+      browserSearch: "orders-large.zip",
+      filter: "all",
+    });
+    expect(listFiles).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(160);
+    expect(listFiles).toHaveBeenCalledExactlyOnceWith(state.sessionKey, {
+      path: "",
+      search: "orders-large.zip",
+      agentId: "main",
+    });
+    expect(getFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { sessionKey: "agent:main:other", agentId: "main" },
+    { sessionKey: "agent:main:current", agentId: "other" },
+  ])("refuses a filename search for another owner %j", (target) => {
+    const listFiles = vi.fn();
+    const state = createLoadingHost({ listFiles });
+    const props = workspaceProps(state);
+    expect(props.onFindWorkspaceFile({ name: "orders-large.zip", ...target })).toBe(false);
+    expect(getSessionWorkspace(state).browserSearch).toBe("");
+    expect(listFiles).not.toHaveBeenCalled();
+  });
+
+  it("retires filename searches with their connection and session", async () => {
+    useFakeClock();
+    const listFiles = vi.fn();
+    const state = createLoadingHost({ listFiles });
+    const retired = workspaceProps(state).onFindWorkspaceFile;
+    state.connectionEpoch += 1;
+    expect(retired({ name: "orders-large.zip" })).toBe(false);
+    expect(workspaceProps(state).onFindWorkspaceFile({ name: "orders-large.zip" })).toBe(true);
+    state.sessionKey = "agent:main:replacement";
+    await vi.advanceTimersByTimeAsync(160);
+    expect(listFiles).not.toHaveBeenCalled();
   });
 
   it("keeps Files loading until files and artifacts both settle", async () => {
@@ -317,6 +401,7 @@ describe("session workspace state", () => {
     expect(content.uncommitted).toBeUndefined();
     await vi.advanceTimersByTimeAsync(500);
     expect(content.uncommitted).toBe(result);
+    expect(request.mock.calls.every(([, params]) => params.summaryOnly === true)).toBe(true);
     stop?.();
     request.mockResolvedValue(computing);
     const stopRefresh = content.requestUncommitted?.();
@@ -333,6 +418,44 @@ describe("session workspace state", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(request).toHaveBeenCalledTimes(4);
     expect(content.uncommitted).toBe(result);
+  });
+
+  it("shares matching uncommitted reads without handing summaries to the diff panel", async () => {
+    useFakeClock();
+    const summary = createDeferred<SessionsDiffResult>();
+    const full = createDeferred<SessionsDiffResult>();
+    const file = { path: "changed.ts", status: "modified" as const, additions: 1, deletions: 0 };
+    const result: SessionsDiffResult = {
+      sessionKey: "agent:main:current",
+      files: [file],
+      additions: 1,
+      deletions: 0,
+    };
+    const patch = { ...result, files: [{ ...file, patch: "+new line" }] };
+    const request = vi.fn((_method: string, params: { summaryOnly?: boolean }) =>
+      params.summaryOnly ? summary.promise : full.promise,
+    );
+    const { content } = diffHost(request);
+    const panel = content.load({ scope: "uncommitted" });
+    const stop = content.requestUncommitted?.();
+    const joined = content.load({ scope: "uncommitted" });
+    const stopJoined = content.requestUncommitted?.();
+    try {
+      expect(joined).toBe(panel);
+      expect(request).toHaveBeenCalledTimes(2);
+      summary.resolve(result);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(content.uncommitted).toBe(result);
+      full.resolve(patch);
+      expect(await panel).toBe(patch);
+      expect(content.uncommitted).toBe(result);
+    } finally {
+      stop?.();
+      stopJoined?.();
+      summary.resolve(result);
+      full.resolve(patch);
+      await panel;
+    }
   });
 
   it("retries a pending visible reload without publishing a retired load failure", async () => {
@@ -464,11 +587,15 @@ describe("openSessionWorkspaceFile", () => {
     const workspace = state.sessionWorkspaceState;
     expect(getFile).toHaveBeenCalledExactlyOnceWith(owner, path, { agentId: "research" });
     expect(workspace?.sessionKey).toBe(state.sessionKey);
-    expect(file.sessionFileSource).toEqual({ sessionKey: owner, agentId: "research", path });
+    expect(file.sessionFileSource).toEqual({
+      sessionKey: owner,
+      agentId: "research",
+      path: "/shared/index.html",
+    });
     await file.edit.fetchLatest();
-    expect(getFile).toHaveBeenLastCalledWith(owner, path, { agentId: "research" });
+    expect(getFile).toHaveBeenLastCalledWith(owner, "/shared/index.html", { agentId: "research" });
     await file.edit.save({ content: "changed", expectedHash: "old" });
-    expect(setFile).toHaveBeenCalledExactlyOnceWith(owner, path, "changed", {
+    expect(setFile).toHaveBeenCalledExactlyOnceWith(owner, "/shared/index.html", "changed", {
       agentId: "research",
       expectedHash: "old",
     });
@@ -779,7 +906,10 @@ describe("openSessionWorkspaceFile", () => {
         title: "result.png",
       });
     } else {
-      await expectUnavailable(state, `Failed to load ${file.path}`);
+      await expectUnavailable(
+        state,
+        `Couldn’t load ${file.path}. Check that the file still exists.`,
+      );
       if (kind === "unencoded text") {
         const diff = resolveSessionDiffSidebarContent(state);
         expect(diff?.kind).toBe("session-diff");
@@ -791,7 +921,7 @@ describe("openSessionWorkspaceFile", () => {
   });
 
   it("keeps an outside-session refusal open with its reason", async () => {
-    const message = "This file is outside Main Session's workspace, and you can't open it.";
+    const message = "This file is outside Main session’s workspace, so you can’t open it.";
     const error = new GatewayRequestError({
       code: "INVALID_REQUEST",
       message: "session file not found",
@@ -805,7 +935,14 @@ describe("openSessionWorkspaceFile", () => {
     await expectUnavailable(state, message);
   });
 
-  it("renders unsupported binary metadata", async () => {
+  it("renders unsupported binary metadata through the active locale catalog", async () => {
+    const previousLocale = i18n.getLocale();
+    onTestFinished(async () => {
+      await i18n.setLocale(previousLocale);
+      vi.restoreAllMocks();
+    });
+    await i18n.setLocale("de");
+    const translate = vi.spyOn(i18n, "t");
     const preview = await readPreview(
       workspaceFile("build/cache.db", {
         mimeType: "application/x-sqlite3",
@@ -815,10 +952,31 @@ describe("openSessionWorkspaceFile", () => {
       }),
     );
     assert(preview.kind === "markdown");
-    expect(preview.content).toContain("This file is not previewable inline.");
+    expect(translate).toHaveBeenCalledWith("chat.detailPanel.filePreviewUnavailable", undefined);
+    expect(preview.content).toContain(i18n.t("chat.detailPanel.filePreviewUnavailable"));
     expect(preview.content).toContain("application/x-sqlite3");
-    expect(preview.content).toContain("8,192 bytes");
-    expect(preview.content).toContain("2023-11-14T22:13:20.000Z");
+    expect(translate).toHaveBeenCalledWith("chat.detailPanel.filePreviewSize", {
+      size: new Intl.NumberFormat(i18n.getLocale(), {
+        style: "unit",
+        unit: "byte",
+        unitDisplay: "long",
+        maximumFractionDigits: 0,
+      }).format(8192),
+    });
+    expect(preview.content).toContain(
+      i18n.t("chat.detailPanel.filePreviewSize", {
+        size: new Intl.NumberFormat(i18n.getLocale(), {
+          style: "unit",
+          unit: "byte",
+          unitDisplay: "long",
+          maximumFractionDigits: 0,
+        }).format(8192),
+      }),
+    );
+    expect(preview.content).toContain(
+      i18n.t("chat.detailPanel.filePreviewUpdated", { date: formatDateTimeMs(1_700_000_000_000) }),
+    );
+    translate.mockRestore();
   });
 
   it("renders unsupported hostile filenames literally without invalid dates", async () => {

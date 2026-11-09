@@ -158,6 +158,7 @@ describe("memory session update sync", () => {
     );
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     try {
       try {
         await expect(

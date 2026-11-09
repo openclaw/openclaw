@@ -4,6 +4,7 @@ import path from "node:path";
 import { parse } from "acorn";
 import { afterEach, describe, expect, it } from "vitest";
 import { createStandaloneArtifactAdapter } from "../../scripts/lib/bun-standalone-artifacts.mjs";
+import { parseStandaloneArguments } from "../../scripts/lib/bun-standalone-contract.mjs";
 import { standaloneEmbeddedPathsExpression } from "../../scripts/lib/bun-standalone-data.mjs";
 import {
   planStandaloneRuntime,
@@ -19,6 +20,7 @@ import {
   publishStandaloneArtifacts,
   STANDALONE_BUILD_MARKER,
 } from "../../scripts/lib/bun-standalone-support.mjs";
+import { collectPackageRootModules } from "../../scripts/lib/package-root-modules.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -47,12 +49,7 @@ if (!process.argv.includes("--debug-child")) {
 }
 console.log(JSON.stringify({ answer, mode: getStandaloneRuntimeBuild()?.mode ?? null, sqliteLibrary: process.env.OPENCLAW_SQLITE_LIBRARY ?? null }));`,
   );
-  for (const filename of [
-    "cli-invocation.mjs",
-    "cli-parent-lifetime.mjs",
-    "gateway-shutdown-budget.mjs",
-    "node-runtime-env.mjs",
-  ]) {
+  for (const filename of collectPackageRootModules(["cli-invocation.mjs"])) {
     fs.copyFileSync(
       new URL(`../../${filename}`, import.meta.url),
       path.join(runtimeRoot, filename),
@@ -146,25 +143,27 @@ async function compile(
 
 describe("matched standalone support artifacts", () => {
   it.skipIf(process.platform === "win32")(
-    "retains requested AOT features and entrypoints without applying them to JIT support",
+    "allows disk plugins and retains AOT features without applying them to JIT support",
     async () => {
       const input = fixture();
       const second = path.join(input.compileRoot, "worker.js");
       fs.writeFileSync(second, "console.log('worker');");
+      const parsed = parseStandaloneArguments([
+        "out",
+        "--compile-aot",
+        "--trim-allow=run,jit",
+        "--trim-locales=en",
+        "--aot-disable=flow-results",
+      ]);
+      if (parsed.help) {
+        throw new Error("Expected AOT build options");
+      }
       await compile(input, {
         compiledEntries: [input.mainEntry, second],
         compileEntries: new Set([input.mainEntry, second]),
         external: ["external-package"],
-        compileFlags: [
-          "--aot",
-          "--trim-allow=run,jit",
-          "--trim-locales=en",
-          "--aot-disable=flow-results",
-        ],
-        aotCompileOptions: {
-          trim: { allow: ["run", "jit"], locales: ["en"] },
-          aotDisable: ["flow-results"],
-        },
+        compileFlags: parsed.compileFlags,
+        aotCompileOptions: parsed.aotCompileOptions,
       });
       const options = JSON.parse(
         fs.readFileSync(path.join(input.outputRoot, "openclaw.options.json"), "utf8"),
@@ -179,7 +178,11 @@ describe("matched standalone support artifacts", () => {
         compile: {
           outfile: path.join(input.outputRoot, "openclaw"),
           aot: true,
-          trim: { allow: ["run", "jit"], locales: ["en"] },
+          allowCodeFromDisk: true,
+          trim: {
+            allow: ["run", "jit", "interpreter", "password", "toml", "yaml", "json5", "jsonc"],
+            locales: ["en"],
+          },
           aotDisable: ["flow-results"],
           autoloadPackageJson: true,
           autoloadDotenv: false,
@@ -190,6 +193,13 @@ describe("matched standalone support artifacts", () => {
         fs.readFileSync(path.join(input.outputRoot, "support-artifact/openclaw"), "utf8"),
       );
       expect(support.aot).toBe(false);
+      const supportOptions = JSON.parse(
+        fs.readFileSync(
+          path.join(input.outputRoot, "support-artifact/openclaw.options.json"),
+          "utf8",
+        ),
+      );
+      expect(supportOptions.compile.allowCodeFromDisk).toBeUndefined();
       expect(fs.existsSync(path.join(input.outputRoot, "compile-standalone.mjs"))).toBe(false);
     },
   );

@@ -593,19 +593,24 @@ it("commits user and custom messages in FIFO order without host writes, and chec
     ]);
     expect(manager.getLeafId()).toBe(lastId);
     expect(beforeFreshMessageCommit).toHaveBeenCalledTimes(3);
-    const beforeRejectedReplay = manager.getPersistedEntries();
-    const refusedReplay = await manager.appendMessageAsync(user("first")).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    expect(refusedReplay).toMatchObject({
-      name: "Error",
-      message: `Session transcript keyed user is outside the current turn: ${first.entryId}`,
+    const beforeReplay = manager.getPersistedEntries();
+    expect(await manager.appendMessageWithTranscriptAnchorAsync(user("first"))).toMatchObject({
+      appended: false,
+      entryId: first.entryId,
+      message: first.message,
     });
-    expect(isRecordedModelFallbackStop(refusedReplay)).toBe(false);
-    expect(manager.getPersistedEntries()).toEqual(beforeRejectedReplay);
-    const afterRefusal = await manager.appendMessageAsync(user("after-replay-refusal"));
-    expect(manager.getLeafEntry()).toMatchObject({ id: afterRefusal, parentId: lastId });
+    for (const conflicting of [
+      { ...user("first"), content: "Different input" },
+      { ...user("first"), __openclaw: { senderId: "different-principal" } },
+    ]) {
+      await expect(manager.appendMessageAsync(conflicting)).rejects.toThrow(
+        "conflicts with the admitted message",
+      );
+    }
+    expect(manager.getPersistedEntries()).toEqual(beforeReplay);
+    expect(manager.getLeafId()).toBe(lastId);
+    const afterReplay = await manager.appendMessageAsync(user("after-replay"));
+    expect(manager.getLeafEntry()).toMatchObject({ id: afterReplay, parentId: lastId });
     expect(hostExec.mock.calls.filter(([sql]) => /^BEGIN\b/iu.test(sql))).toEqual([]);
     expect(await loadTranscriptEvents(target)).toEqual(manager.getPersistedEntries());
   } finally {
@@ -613,7 +618,7 @@ it("commits user and custom messages in FIFO order without host writes, and chec
   }
 });
 
-it("revalidates overtaken keyed replays while retaining fresh committed pending users", async () => {
+it("acknowledges overtaken keyed replays while retaining fresh committed pending users", async () => {
   const { target, manager } = await fixture(state, "overtaken-keyed-replay");
   const originalId = await manager.appendMessageAsync(user("original"));
   let newerId: string | undefined;
@@ -631,15 +636,11 @@ it("revalidates overtaken keyed replays while retaining fresh committed pending 
       spy.mockRestore();
     }
   };
-  const replayFailure = await appendOvertaken(user("original"), "after-replay").then(
-    () => undefined,
-    (error: unknown) => error,
-  );
-  expect(replayFailure).toMatchObject({
-    name: "Error",
-    message: `Session transcript keyed user is outside the current turn: ${originalId}`,
+  expect(await appendOvertaken(user("original"), "after-replay")).toMatchObject({
+    entryId: originalId,
+    appended: false,
+    viewWasSuperseded: true,
   });
-  expect(isRecordedModelFallbackStop(replayFailure)).toBe(false);
   expect(manager.getEntries()).toMatchObject([
     { id: originalId, parentId: null },
     { id: newerId, parentId: originalId },

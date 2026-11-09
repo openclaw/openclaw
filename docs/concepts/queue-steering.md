@@ -8,7 +8,7 @@ read_when:
 title: "Steering queue"
 ---
 
-When a prompt arrives in the same conversation and the queue mode is `steer` (the default, no config needed), OpenClaw tries to send that prompt into the active runtime, including during tool execution. The default personal preset enables collaborative steering; explicit restrictions and the corporate preset can disable it. OpenClaw and the native Codex app-server harness implement the delivery details differently.
+When a prompt arrives in the same conversation and the queue mode is `steer` (the default, no config needed), OpenClaw tries to send that prompt into the active runtime, including during tool execution. Collaborative steering is enabled by default; operators can disable it explicitly. OpenClaw and the native Codex app-server harness implement the delivery details differently.
 
 This page covers queue-mode steering for normal inbound messages in `steer` mode. In `followup` or `collect` mode, normal messages skip this path and wait until the active run finishes. For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
@@ -16,7 +16,7 @@ An older followup does not disable steering for later input. OpenClaw tries each
 
 ## Runtime boundary
 
-Steering does not interrupt a tool call that is already running. An assistant message's tool calls are a committed plan until one of them starts executing:
+Ordinary steering does not interrupt a tool call that is already running. An assistant message's tool calls are a committed plan until one of them starts executing:
 
 1. The assistant asks for tool calls.
 2. In sequential mode, OpenClaw launches the first executable call without checking steering. After a call from that assistant message has started, OpenClaw checks before each later call, including after asynchronous resolution, validation, and pre-execution hooks.
@@ -27,11 +27,36 @@ Steering does not interrupt a tool call that is already running. An assistant me
 
 This keeps every requested tool call paired with a result without discarding a freshly requested plan before any tool executes.
 
+In the Control UI, a waiting steer has a small **Send now** link below its normal
+user bubble. A session writer can use it to interrupt supported running tools
+without aborting the run. Each interrupted tool records that the user interrupted
+it; the steer then reaches the next model decision after those results. Repeated
+clicks do not reinject the message or interrupt later work. When a running tool
+cannot safely stop, or the runtime does not support tool-only interruption, the
+UI shows the steer as **Steering…** instead of offering the link, and its hover
+text explains the wait.
+
+Foreground local `exec` waits for process cleanup before delivery. Interrupting a
+`process` poll only stops that wait; its independently owned background command
+keeps running, and the tool result tells the model how to poll or stop it. Node,
+durable, and explicitly backgrounded execution do not offer this shortcut.
+Code Mode aggregate tools and native or remote backends do not support tool-only
+interruption. Their pending steers keep waiting for the runtime boundary, with
+the same quiet explanation in the UI.
+
 Internal updates, including subagent completion reports, also use this steering boundary. These updates can be hidden from the chat transcript and do not appear in the user message queue. A skipped tool therefore does not necessarily mean a user message is waiting; the agent processes the incoming update before deciding which tools to call next.
 
 In the built-in runtime, each steered user input gets its own delivered answer in order. A later answer does not replace a completed answer to an earlier input, even when steering skipped its pending tools.
 
 Recording a steering receipt while another input is being persisted keeps the active turn running. Accepted inputs remain in order and reach the next available model boundary.
+
+If the built-in runtime reaches its 120-second transcript-delivery deadline and proves that it removed the exact queued message before submission, that input returns to followup custody in its original queue position. Younger steers already accepted by the active run stay there and are not replayed. A timeout without proven withdrawal remains non-replayable because the runtime may still consume the input; this also applies to the native Codex confirmation timeout.
+
+After that fallback, **Send now** stays below the waiting message while the
+original run still has supported, interruptible tools running. Clicking it stops
+those tool calls through the same cleanup path. The queued message keeps its
+place and is delivered once when the run can accept it or the next turn starts.
+The action never targets a later run. Unsupported tools keep the wait explanation.
 
 A steered channel reply carries that message's quoted or forwarded context into
 the model input. Quoted content stays conversation data; commands and answers to
@@ -78,14 +103,14 @@ Messages with separate durable ingress admission, including Discord and Telegram
 
 If several messages arrive while the agent is executing a tool call:
 
-- With collaborative steering enabled, messages from another admitted participant can join the active turn under its original requester and prepared permissions. With `messages.queue.allowCollaborativeSteering: false`, another person’s input queues quietly for their own turn.
+- With collaborative steering enabled, messages from another admitted participant can join the active turn under its original requester and prepared permissions. With an explicit `messages.queue.allowCollaborativeSteering: false`, another person’s input queues quietly for their own turn.
 - For accepted steering, OpenClaw preserves the runtime's configured steering drain mode and FIFO order. One-at-a-time consumers keep later messages for later boundaries; `all` consumers inject the queued FIFO batch together. Codex receives messages collected during its quiet window as one batched `turn/steer`.
 - With `/queue collect`, OpenClaw does not steer. It waits until the active run ends, then creates followup turns after the debounce window, combining only compatible queued messages.
 - With `/queue interrupt`, OpenClaw aborts the active run and starts the newest message instead of steering.
 
 ## Scope
 
-`messages.queue.allowCollaborativeSteering` defaults to `true` in the personal preset and `false` in the corporate preset. Explicit settings override the preset. See [security presets](/gateway/security/presets). When Bob's admitted human input joins Alice's active turn in the same conversation, the execution keeps Alice's identity and prepared permissions. Bob can influence actions using permissions Alice has that Bob does not. Bob remains identified as the message author; steering does not switch the execution to Bob, combine their permissions, or attribute subsequent actions to individual messages.
+`messages.queue.allowCollaborativeSteering` defaults to `true`. Operators can set it to `false` to keep participants’ executions separate. When Bob's admitted human input joins Alice's active turn in the same conversation, the execution keeps Alice's identity and prepared permissions. Bob can influence actions using permissions Alice has that Bob does not. Bob remains identified as the message author; steering does not switch the execution to Bob, combine their permissions, or attribute subsequent actions to individual messages.
 
 With the option set to `false` and quiet fallback selected, another person’s input queues for a separate execution under their identity and current policy. The active turn is unchanged. No warning or queue status message is sent for this expected fallback. Ordinary guidance from the same authenticated requester in the same conversation retains the active execution’s prepared permissions, regardless of this option. Reconnecting with different client capabilities or caller tool bindings does not replace that execution or its permissions. Unidentified input cannot borrow the active execution's authority. Current conversation access, the original execution’s live authority, backend compatibility, cancellation, and current-owner checks always apply.
 
@@ -122,7 +147,30 @@ When steering is unavailable, the message runs automatically after the announcem
 and its cleanup finish. The input remains queued and can still be canceled while
 it waits.
 
-The same signed-in person can steer after reconnecting without reproducing the original connection’s policy snapshot. Browser connections and display names do not define a new requester. The turn keeps its original authority, tool bindings, capabilities, and approval destination; incoming caller differences do not expand or retarget them. This continuation rule applies only to ordinary human guidance in the same channel, account, conversation, and thread. It does not bypass access revocation or authorize a new execution configuration. Explicit execution-setting changes, including a different workspace, execution policy, or selected model, can require a followup.
+The same signed-in person can steer after reconnecting without reproducing the original connection’s policy snapshot. Browser connections and display names do not define a new requester. The turn keeps its original authority, tool bindings, capabilities, approval destination, and reply routing; incoming caller differences do not expand or retarget them.
+
+A verified personal requester can also guide that exact active session from another transport when an administrator has [linked their channel identity](/concepts/user-model#channel-identity-links). This works even if the arriving channel has fewer permissions or collaborative steering is disabled. Normal channel admission and session access still apply, and the incoming identity link must remain current through admission. Shared token/password ownership, display names, and contributor attribution do not establish that two senders are the same person.
+
+Shared-credential WebUI/WebChat access has a separate owner-authorized continuation rule. In the exact same authorized active session, a channel participant can guide a turn started by Shared Owner, and Shared Owner can guide a channel turn. With collaborative steering enabled, ordinary channel admission suffices. With it disabled, the shared WebUI principal must have current `operator.admin` authority and the channel participant must be a current owner through `commands.ownerAllowFrom` or a linked personal identity with effective `operator.admin` and any required access grant. Pairing or channel allowlisting alone does not grant this exception. Owner or grant revocation before final admission blocks injection.
+
+This does not link identities or identify the human behind a shared credential. Message authors stay distinct, and the active execution keeps its original requester, permissions, personal context, and delegation rules. Two different personal administrators do not gain this exception. Other different-person collaboration remains limited to the same channel, account, conversation, and thread.
+
+Authorized cross-transport continuation also retains the active execution's task-suggestion tools and delivery setting. Channel guidance does not remove a WebUI execution's suggestion tools, and WebUI guidance does not add them to a channel execution. A queued new execution uses its submitting transport's setting.
+
+This continuation rule applies to ordinary human guidance. It does not change questions, approvals, cancellation, or explicit cross-session `sessions_send` authorization. It does not bypass access revocation or authorize a new execution configuration. Explicit execution-setting changes, including a different workspace, execution policy, or selected model, can require a followup.
+
+This also applies when a subagent completion resumes the conversation: compatible guidance from the same person joins that completion without changing its capabilities, rather than waiting for a separate turn.
+
+An authenticated Gateway owner with `operator.admin` can steer an active automation,
+loop, or visible subagent turn in the same authorized session, even when collaborative
+steering is disabled. The incoming message keeps the owner's provenance and live
+authorization; the running turn keeps its existing permissions and tool bindings.
+This guidance does not answer pending questions under the automation's authority.
+The owner-guidance exception does not apply to system-authored direct commands in
+a parent conversation, including subagent completion reports. Those commands keep
+normal requester-compatibility checks, so a browser correction to a system-owned
+direct command stays a followup. A child's active execution is distinct from its
+completion report to the parent.
 
 Configured permissions are resolved when each new execution is admitted and remain stable for that execution. Human messages waiting for admission use current policy. Already admitted native work retains its prepared policy while waiting to run. A new delegation resolves current destination policy for the original requester, or for an explicitly selected authenticated participant on a tool that supports `user`. Native delegation retains the original requester. A delegation may intentionally use a more capable agent; selecting a participant does not establish that person’s intent or approval. Cancellation and current-owner checks still apply, and accepted asynchronous work survives normal source-turn completion.
 

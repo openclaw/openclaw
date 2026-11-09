@@ -26,10 +26,11 @@ public enum OpenClawChatOutboxMessageState: Equatable, Sendable {
 /// strictly in createdAt order when health recovers. A gateway ACK only moves
 /// a row to awaiting-confirmation; canonical history owns durable completion.
 extension OpenClawChatViewModel {
-    static func isRestartRejectedSend(_ error: Error) -> Bool {
+    static func isRetryableAdmissionRejection(_ error: Error) -> Bool {
         guard let response = error as? GatewayResponseError else { return false }
-        return response.code == "UNAVAILABLE" && response.detailsReason == "gateway-restarting" &&
-            response.details["retryable"]?.boolValue == true
+        return response.isRetryableStartupAdmissionRefusal ||
+            (response.code == "UNAVAILABLE" && response.detailsReason == "gateway-restarting" &&
+                response.details["retryable"]?.boolValue == true)
     }
 
     /// True when this view model owns a gateway-scoped durable text outbox.
@@ -737,6 +738,7 @@ extension OpenClawChatViewModel {
             self.invalidateSessionMetadataReadiness()
         }
         if ok, !wasHealthy {
+            self.reloadUnsettledComposerCapabilities()
             guard self.outbox != nil else { return }
             if self.hasCurrentSessionMetadata {
                 self.reconcilePendingOutboxBranchScopes()
@@ -955,9 +957,9 @@ extension OpenClawChatViewModel {
                 command, outbox: outbox, retryCount: command.retryCount, reason: error.localizedDescription)
             self.errorText = error.localizedDescription
             return update == .unavailable ? .stop : .continueFlush
-        } catch let error where error is OpenClawChatTransportSendError || Self.isRestartRejectedSend(error) {
-            // Both a local non-send and the restart admission fence prove no
-            // run started. Keep the same command for reconnect without spending retries.
+        } catch let error where error is OpenClawChatTransportSendError || Self.isRetryableAdmissionRejection(error) {
+            // A local non-send or admission refusal proves no run started. Keep the same command for reconnect without
+            // spending retries.
             _ = await outbox.markCommandQueued(
                 id: command.id,
                 attemptVersion: command.attemptVersion,

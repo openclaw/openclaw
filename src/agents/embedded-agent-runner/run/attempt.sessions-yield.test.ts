@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { getAgentToolExecutionContext } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import {
@@ -25,6 +26,10 @@ import {
 import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { createRequesterYieldCallback } from "../../openclaw-tools.requester-yield.js";
+import {
+  captureAgentPluginRuntimeRefresh,
+  createAgentPluginRuntimeRefresh,
+} from "../../plugin-runtime-refresh.js";
 import { Agent, type AgentEvent, type AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -413,4 +418,150 @@ describe("embedded yield tool batch", () => {
       ),
     ).toHaveLength(3);
   });
+});
+
+// Real Agent loop and attempt yield/cleanup; harness collaborators are mocked.
+// Retained-send admission/replay is covered by the Gateway product file.
+describe("conditional handoff yield at the runtime boundary", () => {
+  const { hoisted, runAttempt } = useContextEngineAttemptHarness("agent:main:dashboard:later-work");
+
+  it.each(["none", "async", "tool-refresh"] as const)(
+    "keeps later %s work ahead of normal cleanup",
+    async (kind) => {
+      const refreshOwner = createAgentPluginRuntimeRefresh();
+      const retained = createDeferred();
+      const order: string[] = [];
+      const outcomes: Extract<AgentEvent, { type: "tool_execution_end" }>[] = [];
+      const aborts: unknown[] = [];
+      let requests = 0;
+      hoisted.createOpenClawCodingToolsMock.mockImplementation((options) => {
+        const params = expectDefined(options, "tool options");
+        const refresh = captureAgentPluginRuntimeRefresh();
+        refresh.bindConsumer(() => true);
+        return [
+          {
+            ...createStubTool("retain"),
+            async: false as const,
+            execute: async () => {
+              expect(getAgentToolExecutionContext()?.hasUnobservedAsyncToolResults).toBe(false);
+              expect(refresh.requestSource()).toBeUndefined();
+              await params.onYield?.("retained send", undefined, undefined, { conditional: true });
+              order.push("conditional-yield");
+              retained.resolve();
+              return jsonResult({ status: "started" });
+            },
+          },
+          {
+            ...createStubTool("later"),
+            execute: async () => {
+              await retained.promise;
+              expect(order).toEqual(["conditional-yield"]);
+              params.abortSignal?.throwIfAborted();
+              if (kind === "tool-refresh") {
+                expect(refresh.request("tool")).toBe(true);
+              }
+              order.push("later-result");
+              return jsonResult({ value: "later-result" });
+            },
+          },
+        ].map((tool) => wrapToolWithAbortSignal(tool, params.abortSignal));
+      });
+      try {
+        const result = await refreshOwner.run(() =>
+          runAttempt({
+            attemptOverrides: {
+              disableTools: false,
+              config: { tools: { codeMode: false, toolSearch: false } },
+              sessionManager: SessionManager.inMemory(),
+            },
+            createSession: () => {
+              let agent: Agent;
+              const session = createAgentBackedAttemptSession((model, tools) => {
+                agent = new Agent({
+                  initialState: { model, tools },
+                  streamFn: () => {
+                    requests++;
+                    if (requests > 1) {
+                      expect(outcomes).toMatchObject([
+                        { toolName: "retain", isError: false },
+                        {
+                          toolName: "later",
+                          isError: false,
+                          result: { details: { value: "later-result" } },
+                        },
+                      ]);
+                      order.push("model-observed-results");
+                    }
+                    return streamAttemptAssistant(
+                      model,
+                      requests === 1
+                        ? [
+                            ...attemptToolCall("retain-call", "retain"),
+                            ...(kind === "none"
+                              ? []
+                              : [
+                                  {
+                                    type: "toolCall",
+                                    id: "later-call",
+                                    name: "later",
+                                    arguments: {},
+                                    ...(kind === "async" ? { async: true as const } : {}),
+                                  } as const,
+                                ]),
+                          ]
+                        : [
+                            {
+                              type: "text",
+                              text: "Observed later result; original send stays owned.",
+                            },
+                          ],
+                    );
+                  },
+                });
+                agent.subscribe((event) => {
+                  if (event.type === "tool_execution_end") {
+                    outcomes.push(event);
+                  }
+                });
+                return agent;
+              });
+              session.abort = async (reason?: unknown) => {
+                aborts.push(reason);
+                agent.abort(reason);
+                await agent.waitForIdle();
+              };
+              const dispose = session.dispose.bind(session);
+              session.dispose = () => {
+                order.push("cleanup");
+                return dispose();
+              };
+              return session;
+            },
+          }),
+        );
+        if (kind === "none") {
+          expect(result.yieldDetected).toBe(true);
+          expect(aborts).toHaveLength(1);
+          expect(requests).toBe(1);
+          expect(order).toEqual(["conditional-yield", "cleanup"]);
+          expect(outcomes).toMatchObject([{ toolName: "retain", isError: false }]);
+          return;
+        }
+        expect(result.yieldDetected).toBeUndefined();
+        expect(aborts).toEqual([]);
+        expect(requests).toBe(2);
+        expect(order).toEqual([
+          "conditional-yield",
+          "later-result",
+          "model-observed-results",
+          "cleanup",
+        ]);
+        expect(
+          result.messagesSnapshot.filter((message) => message.role === "toolResult"),
+        ).toHaveLength(2);
+      } finally {
+        refreshOwner.close();
+      }
+    },
+  );
 });

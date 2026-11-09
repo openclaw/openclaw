@@ -1,11 +1,11 @@
 import { note } from "../../packages/terminal-core/src/note.js";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { sanitizeTerminalText, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listChatChannels } from "../channels/chat-meta.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { CONFIG_PATH } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { shortenHomePath } from "../utils.js";
+import { displayPath } from "../utils.js";
 import { configurePrompts as prompts } from "./configure.prompts.js";
 
 type ConfiguredChannelRemovalChoice = {
@@ -88,7 +88,7 @@ export async function removeChannelConfigWizard(cfg: OpenClawConfig): Promise<Op
     const channel = choice.id;
     const label = configured.find((entry) => entry.id === channel)?.label ?? channel;
     const confirmed = await prompts.confirm({
-      message: `Delete ${label} configuration from ${shortenHomePath(CONFIG_PATH)}?`,
+      message: terminalText`Delete ${label} configuration from ${displayPath(CONFIG_PATH)}?`,
       initialValue: false,
     });
     if (!confirmed) {
@@ -105,7 +105,7 @@ export async function removeChannelConfigWizard(cfg: OpenClawConfig): Promise<Op
 
     note(
       [
-        `${label} selected for removal from config.`,
+        terminalText`${label} selected for removal from config.`,
         "Note: credentials/sessions on disk are unchanged.",
       ].join("\n"),
       "Channel removal",

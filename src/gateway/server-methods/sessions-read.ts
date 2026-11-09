@@ -14,11 +14,11 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../../config/sessions/session-canonical-key.js";
-import { SessionTranscriptColdError } from "../../config/sessions/session-cold-storage-state.js";
 import {
   readSessionEntriesFromStoreInWorker,
   readSessionEntrySummariesInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
+import { SessionTranscriptColdError } from "../../config/sessions/session-transcript-cold-error.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import { resolveExistingAgentSessionStoreTargetsAsync } from "../../config/sessions/targets-runtime.js";
 import type { SessionStoreTarget } from "../../config/sessions/targets.js";
@@ -406,7 +406,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           projection,
           (cfg) =>
             requestedKeys.flatMap((key) => {
-              const agent = resolveRequestedGlobalAgentId(cfg, key);
+              const agent = resolveRequestedGlobalAgentId(cfg, key, undefined, "read");
               return agent.ok ? [{ key, agentId: agent.agentId }] : [];
             }),
           consume,
@@ -424,7 +424,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         if (previews.length > 0) {
           await yieldToEventLoop();
         }
-        const requestedAgent = resolveRequestedGlobalAgentId(context.getRuntimeConfig(), key);
+        const requestedAgent = resolveRequestedGlobalAgentId(
+          context.getRuntimeConfig(),
+          key,
+          undefined,
+          "read",
+        );
         if (!requestedAgent.ok) {
           respond(false, undefined, requestedAgent.error);
           return;
@@ -435,7 +440,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           const record = await withPreviewRows([key], (read) => {
             sessionMutationAuthorization?.assertCurrent();
             const { cfg, policyConfig } = read.state;
-            const currentAgent = resolveRequestedGlobalAgentId(cfg, key);
+            const currentAgent = resolveRequestedGlobalAgentId(cfg, key, undefined, "read");
             if (!currentAgent.ok) {
               return undefined;
             }
@@ -490,7 +495,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           sessionMutationAuthorization?.assertCurrent();
           const { cfg, policyConfig } = read.state;
           for (const previous of buffered) {
-            const agent = resolveRequestedGlobalAgentId(cfg, previous.preview.key);
+            const agent = resolveRequestedGlobalAgentId(
+              cfg,
+              previous.preview.key,
+              undefined,
+              "read",
+            );
             const current = agent.ok
               ? read.describe(
                   { key: previous.preview.key, agentId: agent.agentId },

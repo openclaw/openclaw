@@ -5,8 +5,8 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionTranscriptWatermark } from "./session-history-read.types.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { readTranscriptContextFacts } from "./session-transcript-context-facts.js";
 
 export type { SessionTranscriptWatermark } from "./session-history-read.types.js";

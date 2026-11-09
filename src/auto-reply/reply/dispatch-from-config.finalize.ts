@@ -9,7 +9,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
 import { extractTtsDirectiveFacts } from "../../tts/directive-facts.js";
-import { resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
+import { resolveTtsSettingsSnapshotAsync } from "../../tts/tts-settings.js";
+import { isExplicitFollowupCommandTurn } from "../command-turn-context.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
@@ -91,13 +92,19 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   }
   const explicitFollowupQueued =
     queueAdmission?.status === "accepted" && queueAdmission.reason === "explicit-followup";
+  const durableDropOutcome = Boolean(state.params.replyOptions?.turnAdoptionLifecycle?.onDropped);
+  const explicitFollowup = isExplicitFollowupCommandTurn(ctx);
+  const isPolicyDrop = () => {
+    const disposition = state.replyOperationRunState.followupQueueDisposition;
+    return disposition === "queue-cap-old" || disposition === "queue-cap-new";
+  };
   let queuedRequesterNotice: ReplyPayload | undefined;
   if (queueAdmission?.status === "accepted" && queueAdmission.mode === "followup") {
     queuedRequesterNotice = markReplyPayloadForSourceSuppressionDelivery({
       text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
       isStatusNotice: true,
     });
-    setReplyPayloadMetadata(queuedRequesterNotice, { queueAdmissionNotice: true });
+    setReplyPayloadMetadata(queuedRequesterNotice, { queueAdmissionNotice: "queued" });
     replies.push(queuedRequesterNotice);
   }
   const pendingFinalDeliveryIdentity = replies
@@ -148,16 +155,17 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
       // Progress and earlier final deliveries can wait while a later input evicts this followup.
-      if (
-        reply === queuedRequesterNotice &&
-        state.replyOperationRunState.followupQueueDisposition === "queue-cap-old"
-      ) {
-        reply.text =
-          "Your queued message was dropped because the session queue is full. It hasn’t changed the work already in progress. Please send it again after the current response finishes.";
-      } else if (reply === queuedRequesterNotice && !explicitFollowupQueued) {
-        // Automatic fallback is an implementation detail. Only explicit commands
-        // acknowledge queueing; a real overflow still needs the actionable notice above.
-        continue;
+      if (reply === queuedRequesterNotice) {
+        if (isPolicyDrop() && (!durableDropOutcome || explicitFollowup)) {
+          reply.text =
+            "Your queued message was dropped because the session queue is full. It hasn’t changed the work already in progress." +
+            (durableDropOutcome || explicitFollowup
+              ? ""
+              : " Please send it again after the current response finishes.");
+          setReplyPayloadMetadata(reply, { queueAdmissionNotice: true });
+        } else if (isPolicyDrop() || !explicitFollowupQueued) {
+          continue;
+        }
       }
       const laneSuppressed =
         (reply.isReasoning === true && !finalReasoningEnabled) ||
@@ -326,7 +334,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !channelTransformSuppressed &&
     deferredTtsTextPending.trim()
   ) {
-    const { autoMode, config: ttsConfig } = resolveTtsSettingsSnapshot({
+    const { autoMode, config: ttsConfig } = await resolveTtsSettingsSnapshotAsync({
       cfg,
       preparedTtsPreferences: state.preparedTtsPreferences,
       sessionAuto: state.sessionTtsAuto,
@@ -405,6 +413,9 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
 
   await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
   const replyCompletion = () => {
+    if (isPolicyDrop() && durableDropOutcome && !explicitFollowup) {
+      return resolveReplyCompletion("optional", "silent");
+    }
     const delivery = turnLedger.resolveTerminalDelivery();
     const owned = state.replyOperationRunState.replyCompletion;
     return resolveReplyCompletion(
@@ -487,7 +498,12 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     try {
       throwIfDispatchOperationAborted();
       const fallbackPayload: ReplyPayload = queueCapRejected
-        ? { text: QUEUE_CAP_REJECTION_TEXT }
+        ? {
+            text:
+              explicitFollowup || (isPolicyDrop() && durableDropOutcome)
+                ? "This message was not queued because the session queue is full."
+                : QUEUE_CAP_REJECTION_TEXT,
+          }
         : createMissingReplyNotice();
       const result = await routeReplyToOriginating(fallbackPayload, {
         abortSignal: getDispatchAbortSignal(),

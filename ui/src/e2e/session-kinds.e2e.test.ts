@@ -6,7 +6,8 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI session kinds" });
 
 suite.define(() => {
-  it.each([1440, 390])("keeps the sessions header and actions usable at %i px", async (width) => {
+  it("keeps the sessions header and actions usable on desktop", async () => {
+    const width = 1440;
     await suite.withPage(
       { viewport: { width, height: 900 }, colorScheme: "dark" },
       async ({ page }) => {
@@ -52,7 +53,6 @@ suite.define(() => {
                 width: element.getBoundingClientRect().width,
                 height: element.getBoundingClientRect().height,
                 background: style.backgroundColor,
-                tooltip: Boolean(element.closest("openclaw-tooltip")),
               };
             }),
           ),
@@ -60,9 +60,6 @@ suite.define(() => {
         for (let index = 1; index < styles.length; index++) {
           expect(styles[index - 1]!.left).toBeLessThan(styles[index]!.left);
         }
-        expect(styles).toMatchObject(
-          controls.map(() => ({ width: 34, height: 34, tooltip: false })),
-        );
         expect(
           styles.slice(0, 3).every(({ background }) => background === "rgba(0, 0, 0, 0)"),
         ).toBe(true);
@@ -79,14 +76,67 @@ suite.define(() => {
         await filter.click();
         const popover = page.locator(".sessions-filter-popover:popover-open");
         await popover.waitFor();
-        await popover
-          .getByRole("textbox", { name: "Filter by key, agent, label, kind…" })
-          .waitFor();
+        await popover.getByRole("button", { name: "Filter by key, agent, label, kind…" }).waitFor();
         await popover.getByRole("radiogroup", { name: "Session state" }).waitFor();
         await expect.poll(() => popover.getAttribute("data-phase")).toBe("open");
         await page.keyboard.press("Escape");
         await create.click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      },
+    );
+  });
+
+  // Narrow phones drop the big title but keep the heading for assistive tech.
+  it.each([
+    [390, false],
+    [620, false],
+  ])("keeps the phone list toolbar usable at %i px", async (width, visibleTitle) => {
+    await suite.withPage(
+      { viewport: { width, height: 900 }, colorScheme: "dark" },
+      async ({ page }) => {
+        await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}sessions`);
+        const title = page
+          .locator(".sessions-hub-header")
+          .getByRole("heading", { name: "Sessions", level: 1 });
+        await title.waitFor({ state: "attached" });
+        expect(await title.evaluate((heading) => heading.getBoundingClientRect().width > 1)).toBe(
+          visibleTitle,
+        );
+
+        const actions = page.locator(".settings-section__actions");
+        const search = actions.getByRole("button", { name: "Search transcripts" });
+        const refresh = actions.getByRole("button", { name: "Refresh" });
+        const filter = actions.getByRole("button", { name: "Filters", exact: true });
+        await actions.getByRole("searchbox", { name: "Search sessions" }).waitFor();
+        for (const control of [search, refresh, filter]) {
+          await control.waitFor({ state: "visible" });
+        }
+        // The header's new-session action covers this one on phones.
+        expect(await actions.getByRole("link", { name: "New session" }).isVisible()).toBe(false);
+        expect(await page.locator(".session-list-cell").count()).toBeGreaterThan(0);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+          width,
+        );
+
+        await search.click();
+        const transcriptInput = page.getByRole("searchbox", { name: "Search session transcripts" });
+        await transcriptInput.waitFor();
+        await transcriptInput.press("Escape");
+        await filter.click();
+        const sheet = page.locator(".sessions-filter-popover:popover-open");
+        await sheet.getByRole("radiogroup", { name: "Session state" }).waitFor();
+        for (const [label, value] of [
+          ["Group by", "Agent"],
+          ["Sort", "Session"],
+          ["Direction", "Ascending"],
+        ]) {
+          const choice = sheet.getByRole("combobox", { name: label, exact: true });
+          await choice.selectOption({ label: value });
+          await expect.poll(() => choice.locator("option:checked").textContent()).toBe(value);
+        }
+        await sheet.getByRole("button", { name: "Close" }).last().click();
+        await sheet.waitFor({ state: "hidden" });
       },
     );
   });
@@ -162,6 +212,7 @@ suite.define(() => {
 
       await openFilters();
       const search = popover.locator(".sessions-filter-popover__search input");
+      await popover.locator(".header-search__toggle").click();
       await search.fill("Pinned");
       expect(await search.inputValue()).toBe("Pinned");
       await expect

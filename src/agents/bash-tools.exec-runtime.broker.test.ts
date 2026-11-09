@@ -59,6 +59,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("exec tool broker transp
     await using resources = new AsyncDisposableStack();
     vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
     const broker = await startBroker(resources);
+    const brokerSpawn = vi.spyOn(broker, "spawn");
     let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
     resources.defer(async () => {
       run?.kill();
@@ -67,13 +68,22 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("exec tool broker transp
     const runScheduled = runWithSpawnBroker(broker, () => createScheduledGatewayRunner());
     const outcome = await runInDetachedAsyncContext(() =>
       runScheduled(async () => {
-        const command = 'printf "%s" "$PPID"';
+        const command = "printf scheduled-exec-ok";
         run = await exec(command, { execCommand: command });
         return await run.promise;
       }),
     );
-    expect(outcome).toMatchObject({ status: "completed", exitCode: 0 });
-    expect(Number(outcome.aggregated)).toBe(broker.pid);
+    expect(outcome).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+      aggregated: "scheduled-exec-ok",
+    });
+    // Linux memory protection places a native process owner between the broker and shell.
+    expect(brokerSpawn).toHaveReturnedTimes(1);
+    const child = brokerSpawn.mock.results[0]!.value;
+    expect(child.pid).toBeGreaterThan(0);
+    await child.waitForClose();
+    expect(child.exitCode).toBe(0);
     expect(spawn).not.toHaveBeenCalled();
   });
 

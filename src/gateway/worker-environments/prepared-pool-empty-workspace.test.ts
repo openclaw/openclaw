@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { readWorkerPreparation } from "./preparation-identity.schema.js";
 import { usePreparedPoolFixture } from "./prepared-pool.test-support.js";
+import type { PoolOptions } from "./prepared-pool.test-support.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 
 describe("empty workspace prepared worker reserves", () => {
@@ -43,7 +45,11 @@ describe("empty workspace prepared worker reserves", () => {
   const createIntentOwner = () =>
     createWorkerProviderIntent(fixture.intentOwnerOptions("empty-workspace-pool-test"));
 
-  function createPool(owner: ReturnType<typeof createIntentOwner>, warn = vi.fn()) {
+  function createPool(
+    owner: ReturnType<typeof createIntentOwner>,
+    warn = vi.fn(),
+    overrides: Partial<PoolOptions> = {},
+  ) {
     return fixture.pool({
       warn,
       prepareIntent: owner.prepareIntent,
@@ -57,8 +63,115 @@ describe("empty workspace prepared worker reserves", () => {
           await fixture.ready(record);
         }
       },
+      ...overrides,
     });
   }
+
+  it("keeps a restored reserve's original finite deadline despite standing demand", async () => {
+    integrationState.enabled = true;
+    const owner = createIntentOwner();
+    const pool = createPool(owner, vi.fn(), {
+      resolveHumanPresenceDemand: () => ({
+        profileId: "development",
+        executionMode: "worker-turn",
+        repository: { agentId: "main", url: "https://github.com/acme/private-repo.git" },
+      }),
+    });
+    await fixture.schedule(pool);
+    const intent = await owner.prepareIntent("development", {
+      imageReserve: true,
+      executionMode: "worker-turn",
+    });
+    const preparation = readWorkerPreparation(intent.profileSnapshot);
+    if (!preparation) {
+      throw new Error("Fixture image reserve requires its admitted preparation");
+    }
+    const expiresAtMs = fixture.nowMs + 1;
+    const restored = await fixture.store.createIntent({
+      environmentId: "restored-finite-reserve",
+      providerId: intent.providerId,
+      profileId: "development",
+      provisionOperationId: "restored-operation",
+      profileSnapshot: intent.profileSnapshot,
+      preparation: {
+        purpose: "reserve",
+        key: preparation.key,
+        demandAtMs: fixture.nowMs,
+        expiresAtMs,
+      },
+    });
+    await fixture.ready(restored);
+    fixture.nowMs = expiresAtMs + 1;
+    expect(pool.candidates(intent).map((r) => r.environmentId)).not.toContain(
+      restored.environmentId,
+    );
+    await fixture.schedule(pool);
+    expect(fixture.store.get(restored.environmentId)?.state).toBe("destroyed");
+    expect(fixture.store.get(restored.environmentId)?.preparation?.expiresAtMs).toBe(expiresAtMs);
+  });
+
+  it.each(["readyWorkers", "maxTotal"] as const)(
+    "maintains standing image capacity across claims and restart, then drains disabled %s",
+    async (policy) => {
+      integrationState.enabled = true;
+      const fetcher = vi.fn<typeof fetch>(async () => {
+        throw new Error("Reserve must not read repositories");
+      });
+      vi.stubGlobal("fetch", fetcher);
+      const owner = createIntentOwner();
+      const warn = vi.fn();
+      fixture.developmentProfile.readyWorkers = 2;
+      fixture.config.cloudWorkers!.preparedPool = { maxTotal: 2 };
+      const pool = createPool(owner, warn, {
+        resolveHumanPresenceDemand: () => ({
+          profileId: "development",
+          executionMode: "worker-turn",
+          repository: {
+            agentId: "main",
+            url: "https://github.com/acme/private-repo.git",
+            ref: "main",
+          },
+        }),
+      });
+      await fixture.schedule(pool);
+      const ready = () =>
+        fixture.reserves().filter((r) => r.state === "ready" && r.destroyRequestedAtMs === null);
+      expect(ready()).toHaveLength(2);
+      for (const record of ready()) {
+        expect(record.profileSnapshot.project).toBeUndefined();
+        expect(record.profileSnapshot.runtimePreparation).toMatchObject({ source: "image" });
+      }
+      const intent = await owner.prepareIntent("development", {
+        imageReserve: true,
+        executionMode: "worker-turn",
+      });
+      expect(pool.candidates(intent)).toHaveLength(2);
+      const claimed = await fixture.attach(ready()[0]!);
+      await pool.setHumanPresence(false);
+      expect(ready()).toHaveLength(2);
+      expect(fixture.store.get(claimed.environmentId)?.state).toBe("attached");
+      await fixture.reopenStore();
+      const restarted = createPool(createIntentOwner(), warn, {
+        resolveHumanPresenceDemand: () => ({
+          profileId: "development",
+          executionMode: "worker-turn",
+          repository: { agentId: "main", url: "https://github.com/acme/private-repo.git" },
+        }),
+      });
+      await fixture.schedule(restarted);
+      expect(ready()).toHaveLength(2);
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      if (policy === "readyWorkers") {
+        fixture.developmentProfile.readyWorkers = 0;
+      } else {
+        fixture.config.cloudWorkers!.preparedPool = { maxTotal: 0 };
+      }
+      await fixture.schedule(restarted);
+      expect(ready()).toHaveLength(0);
+      expect(fixture.store.get(claimed.environmentId)?.state).toBe("attached");
+    },
+  );
 
   it("refills an activated empty reserve across independent repositories and database reopen", async () => {
     const owner = createIntentOwner();
@@ -174,4 +287,17 @@ describe("empty workspace prepared worker reserves", () => {
       );
     },
   );
+});
+
+const integrationState = vi.hoisted(() => ({
+  enabled: false,
+  policy: { preparedCapacity: "image" as const },
+}));
+vi.mock("../../plugins/repository-integration-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/repository-integration-runtime.js")>()),
+  getRepositoryIntegration: () => (integrationState.enabled ? integrationState.policy : undefined),
+}));
+afterEach(() => {
+  integrationState.enabled = false;
+  vi.unstubAllGlobals();
 });

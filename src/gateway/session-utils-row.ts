@@ -4,12 +4,12 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
+import { countRunningBackgroundProcesses } from "../agents/bash-process-observation.js";
 import { resolveModelContextTokenProjection } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
@@ -25,11 +25,6 @@ import {
 } from "../config/sessions.js";
 import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
-import {
-  resolveSessionCreatorActor,
-  sessionCreatorProfileId,
-  MAX_SESSION_PARTICIPANTS,
-} from "../config/sessions/session-entry-provenance.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -54,15 +49,13 @@ import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
-import {
-  projectSessionActor,
-  projectSessionOwner,
-  projectSessionParticipants,
-} from "./session-identity-projection.js";
+import { projectSessionRowProfiles } from "./session-identity-projection.js";
 import { sessionModelRevision } from "./session-model-revision.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
+import { reuseSessionRowFields } from "./session-row-identity.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { projectSessionRowProviderReview } from "./session-row-provider-review.js";
+import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import type {
@@ -72,6 +65,7 @@ import type {
 } from "./session-utils-contracts.js";
 import {
   resolveEstimatedSessionCostUsd,
+  prepareGatewaySessionBackgroundProcessScope,
   readStoreChildSessionLinks,
   type SessionChildLink,
   resolveSessionChildController,
@@ -90,6 +84,7 @@ import {
 } from "./session-utils-projection.js";
 import { parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
+import { isUnscopedSessionHostWorkspace } from "./session-workspace-roots.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
 export function readSessionRowInputs(params: {
@@ -106,6 +101,7 @@ export function readSessionRowInputs(params: {
   entry?: InternalSessionEntry;
   preparedAcpMeta?: SessionEntry["acp"] | null;
   preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
+  runtimeResolution?: SessionRuntimeResolution;
   preparedModelMetadata?: PluginMetadataSnapshot | null;
   preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
@@ -138,6 +134,7 @@ export function readSessionRowInputs(params: {
       entry,
       preparedAcpMeta: params.preparedAcpMeta,
       preparedRuntimeOwnership: params.preparedRuntimeOwnership,
+      runtimeResolution: params.runtimeResolution,
       preparedModelMetadata: params.preparedModelMetadata,
       source: params.modelSource ?? { entry, readSourceEntry: (parentKey) => store[parentKey] },
       agentId,
@@ -363,54 +360,14 @@ export function resolveGatewaySessionActiveModel(params: {
     : undefined;
 }
 
-/** Profile publications invalidate display facts independently of stored session metadata. */
-function projectSessionRowProfiles(
-  input: Pick<
-    ReturnType<typeof readSessionRowInputs>["inputs"],
-    "entry" | "cfg" | "userProfileIdentityById" | "configuredAgentIds" | "identityProjection"
-  >,
-) {
-  const { entry, cfg, userProfileIdentityById, configuredAgentIds, identityProjection } = input;
-  const owner = (identityProjection?.owner ?? projectSessionOwner)(
-    entry,
-    userProfileIdentityById,
-    cfg,
-    configuredAgentIds,
-  );
-  const projected = (identityProjection?.participants ?? projectSessionParticipants)(
-    entry,
-    userProfileIdentityById,
-    cfg,
-  );
-  const ownerKey = owner?.actor.identity && JSON.stringify(owner.actor.identity);
-  const participants = [...projected].flatMap(([key, participant]) =>
-    key === ownerKey ? [] : [participant],
-  );
-  return {
-    createdActor: projectSessionActor(
-      resolveSessionCreatorActor(entry?.createdActor),
-      userProfileIdentityById,
-      cfg,
-      Boolean(sessionCreatorProfileId(entry?.createdActor)),
-    ),
-    owner,
-    // Keep the released v4 summary stable; expanded identities are additive for newer clients.
-    participants: participants.length
-      ? participants.slice(0, SESSION_PARTICIPANT_LIMIT)
-      : undefined,
-    expandedParticipants: participants.length
-      ? participants.slice(0, MAX_SESSION_PARTICIPANTS)
-      : undefined,
-    participantCount: participants.length || undefined,
-    archivedBy: projectSessionActor(entry?.archivedBy, userProfileIdentityById, cfg),
-  };
-}
-
 export function refreshSessionRowProfiles(materialized: ReturnType<typeof materializeSessionRow>) {
   return replaceSessionRowFacts(materialized, projectSessionRowProfiles(materialized.source));
 }
 
-export function materializeSessionRow(input: ReturnType<typeof readSessionRowInputs>["inputs"]) {
+export function materializeSessionRow(
+  input: ReturnType<typeof readSessionRowInputs>["inputs"],
+  previous?: { publicationIdentity: object; row: Readonly<GatewaySessionRow> },
+) {
   const { cfg, key, entry } = input;
   const observerDigest =
     entry?.observerDigest &&
@@ -517,10 +474,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     lifecycleRevision: entry?.lifecycleRevision,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
-    restartRecoveryStatus: entry?.mainRestartRecovery?.tombstone ? "tombstoned" : undefined,
-    restartRecoveryCycleId: entry?.mainRestartRecovery?.tombstone
-      ? entry.mainRestartRecovery.cycleId
-      : undefined,
     thinkingLevel: input.thinkingProjection.thinkingLevel,
     contextWindow: input.contextWindowProfile.contextWindow,
     contextWindows: input.contextWindowProfile.contextWindows,
@@ -587,9 +540,19 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     pluginExtensions: input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
   });
   return Object.freeze({
-    row: freezeTrustedJsonSnapshot<Readonly<GatewaySessionRow>>(row),
+    publicationIdentity: previous?.publicationIdentity ?? {},
+    row: freezeTrustedJsonSnapshot<Readonly<GatewaySessionRow>>(
+      reuseSessionRowFields(row, previous?.row),
+    ),
     source: Object.freeze({
       parsedKey: parseAgentSessionKey(key),
+      backgroundProcessScope: prepareGatewaySessionBackgroundProcessScope(input),
+      // Materialization already owns config and workspace-entry invalidation.
+      unscopedHostRoot: Boolean(
+        entry &&
+        isUnscopedSessionHostWorkspace({ cfg, agentId: input.agentId, sessionKey: key, entry }),
+      ),
+      agentId: input.agentId,
       cfg,
       entry,
       selectedModel: input.selectedModel,
@@ -624,8 +587,14 @@ export function replaceSessionRowFacts(
   const nextSource = source ? { ...materialized.source, ...source } : materialized.source;
   freezeTrustedJsonSnapshot(nextSource.childLinks);
   return Object.freeze({
+    publicationIdentity: materialized.publicationIdentity,
     row: row
-      ? freezeTrustedJsonSnapshot(omitUndefinedFields({ ...materialized.row, ...row }))
+      ? freezeTrustedJsonSnapshot(
+          reuseSessionRowFields(
+            omitUndefinedFields({ ...materialized.row, ...row }),
+            materialized.row,
+          ),
+        )
       : materialized.row,
     source: Object.freeze(nextSource),
   });
@@ -636,6 +605,8 @@ export function presentSessionRow(
   options: Partial<ReturnType<typeof readSessionRowInputs>["presentation"]> & {
     now: number;
     childActivity?: SessionChildActivity;
+    backgroundProcessCount?: number;
+    preparedRunState?: ReturnType<typeof projectGatewaySessionRunState>;
   },
 ): GatewaySessionRow {
   const row = { ...materialized.row };
@@ -645,19 +616,27 @@ export function presentSessionRow(
   // Stamp the temporal projection, not the reusable materialized inputs.
   // Completed list caches retain this sample when they replay the finished row.
   row.snapshotAt = now;
+  const backgroundProcessCount =
+    options.backgroundProcessCount ??
+    countRunningBackgroundProcesses(source.backgroundProcessScope);
+  if (backgroundProcessCount > 0) {
+    row.backgroundProcessCount = backgroundProcessCount;
+  }
   const subagentRuns =
     options.subagentRuns ?? buildSubagentRunReadIndexFromRuns({ ...source.subagentRunInputs, now });
-  const { subagentRun, fields } = projectGatewaySessionRunState({
-    key: row.key,
-    parsedKey: source.parsedKey,
-    entry,
-    now,
-    rowContext: {
-      subagentRuns,
-      projectedAgentRuns: options.projectedAgentRuns,
-      projectedSubagentActivity: options.projectedSubagentActivity,
-    },
-  });
+  const { subagentRun, fields } =
+    options.preparedRunState ??
+    projectGatewaySessionRunState({
+      key: row.key,
+      parsedKey: source.parsedKey,
+      entry,
+      now,
+      rowContext: {
+        subagentRuns,
+        projectedAgentRuns: options.projectedAgentRuns,
+        projectedSubagentActivity: options.projectedSubagentActivity,
+      },
+    });
   Object.assign(row, fields);
   const usage = source.usageByFallbackModel?.get(subagentRun?.model);
   row.usageReport ??= usage?.usageReport;

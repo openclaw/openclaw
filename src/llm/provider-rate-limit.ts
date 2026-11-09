@@ -8,6 +8,7 @@ import {
 import { AsyncContext } from "../shared/async-context.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import type { AssistantMessage, Model, SimpleStreamOptions } from "./types.js";
 
 type Waiter = {
@@ -79,7 +80,7 @@ function stopWaiting(waiter: Waiter) {
 
 function notify(waiter: Waiter) {
   stopWaiting(waiter);
-  const now = performance.now();
+  const now = monotonicNow();
   if (
     waiter.retryDeadline !== undefined &&
     Math.max(now, waiter.gate.retryAt, waiter.gate.nextAt) >= waiter.retryDeadline
@@ -135,29 +136,29 @@ function schedule(gate: Gate) {
     setTimeout(
       () => {
         for (const waiter of gate.queue.slice()) {
-          if (waiter.retryDeadline !== undefined && performance.now() >= waiter.retryDeadline) {
+          if (waiter.retryDeadline !== undefined && monotonicNow() >= waiter.retryDeadline) {
             gate.queue.splice(gate.queue.indexOf(waiter), 1);
             finish(waiter, retryDeadlineError());
           }
         }
-        if (performance.now() >= gate.expiresAt) {
+        if (monotonicNow() >= gate.expiresAt) {
           for (const key of gate.keys) {
             gates.delete(key);
           }
           gate.queue.splice(0).forEach((waiter) => finish(waiter));
           return;
         }
-        if (performance.now() < admissionAt || !gate.queue.length) {
+        if (monotonicNow() < admissionAt || !gate.queue.length) {
           schedule(gate);
           return;
         }
         const interactive = gate.queue.findIndex((waiter) => waiter.priority === "interactive");
         const released = gate.queue.splice(Math.max(0, interactive), 1);
-        gate.nextAt = performance.now() + randomInt(100, 251);
+        gate.nextAt = monotonicNow() + randomInt(100, 251);
         schedule(gate);
         released.forEach((waiter) => finish(waiter));
       },
-      Math.min(2_147_483_647, Math.max(0, wakeAt - performance.now())),
+      Math.min(2_147_483_647, Math.max(0, wakeAt - monotonicNow())),
     ),
   );
   if (!gate.queue.length) {
@@ -212,7 +213,7 @@ export function getProviderRateLimitState(
   if (!gate) {
     return undefined;
   }
-  const now = performance.now();
+  const now = monotonicNow();
   if (gate.expiresAt <= now) {
     return undefined;
   }
@@ -315,7 +316,7 @@ function observeProviderRateLimit(scope: string, key: string, message: Assistant
     gate.keys.add(orgKey);
     gates.set(orgKey, gate);
   }
-  gate.retryAt = Math.max(gate.retryAt, performance.now() + Math.max(0, delay));
+  gate.retryAt = Math.max(gate.retryAt, monotonicNow() + Math.max(0, delay));
   // Successful traffic must not perpetuate recovery pacing indefinitely.
   gate.expiresAt = gate.retryAt + 60_000;
   // A longer floor can remove waiters whose configured delay cap it exceeds.

@@ -1,11 +1,11 @@
-import type { MediaUnderstandingAttachmentsConfig } from "../config/types.tools.js";
-import { resolveAttachmentKind } from "./attachments.normalize.js";
 import type {
   MediaAttachment,
   MediaAttachmentDisposition,
   MediaUnderstandingCapability,
   MediaUnderstandingDecision,
-} from "./types.js";
+} from "../../packages/media-understanding-common/src/types.js";
+import type { MediaUnderstandingAttachmentsConfig } from "../config/types.tools.js";
+import { resolveAttachmentKind } from "./attachments.normalize.js";
 
 const DEFAULT_MAX_ATTACHMENTS = 1;
 

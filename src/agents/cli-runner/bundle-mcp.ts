@@ -141,11 +141,19 @@ function canonicalizeSystemAgentTurnStateForResume(
 function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMcpConfig {
   // The OpenClaw loopback MCP port changes across runs. Replace it before
   // hashing so resume compatibility tracks config shape, not ephemeral ports.
+  // ToolSearch deferral only flips Claude's upfront-loading hint for the same
+  // tools, and the prompt hash carries discovery, so keep stored bindings' value.
   const canonical = mapMcpServers(config, (server, name) => {
     const canonicalServer = canonicalizeSystemAgentTurnStateForResume(server);
-    return name === "openclaw" && typeof canonicalServer.url === "string"
-      ? { ...canonicalServer, url: normalizeOpenClawLoopbackUrl(canonicalServer.url) }
-      : canonicalServer;
+    if (name !== "openclaw") {
+      return canonicalServer;
+    }
+    const { url, alwaysLoad } = canonicalServer;
+    return {
+      ...canonicalServer,
+      ...(typeof url === "string" ? { url: normalizeOpenClawLoopbackUrl(url) } : {}),
+      ...(alwaysLoad === undefined ? {} : { alwaysLoad: true }),
+    };
   });
   return {
     mcpServers: sortJsonValue(canonical.mcpServers) as BundleMcpConfig["mcpServers"],
@@ -433,7 +441,7 @@ export async function prepareCliBundleMcpConfig(params: {
     });
   const resolvedBearerConfig = await resolveBearerConfig(mergedConfig);
 
-  const preparedDataDirs = prepareOwnedBundleMcpDataDirs({
+  const preparedDataDirs = await prepareOwnedBundleMcpDataDirs({
     config: applyMcpServerOverrides(resolvedBearerConfig.config, params.toolOverrides?.mcpServers),
     prepareDataDirsByServer,
   });

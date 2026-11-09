@@ -334,6 +334,8 @@ describe("auditGatewayServiceConfig systemd", () => {
         "[Unit]",
         ...lines.filter(isUnitKey),
         "[Service]",
+        "Delegate=yes",
+        "DelegateSubgroup=gateway",
         ...lines.filter((line) => !isUnitKey(line)),
         "ExecStart=/usr/bin/node gateway",
         "",
@@ -341,7 +343,9 @@ describe("auditGatewayServiceConfig systemd", () => {
     );
   }
   function manager(lines: string[]) {
-    execSystemctlUserMock.mockResolvedValueOnce(nativeExit(lines.join("\n")));
+    execSystemctlUserMock.mockResolvedValueOnce(
+      nativeExit(["Delegate=yes", "DelegateSubgroup=gateway", ...lines].join("\n")),
+    );
   }
   async function drainingUnit() {
     await writeUnit([...network, "KillMode=mixed", "TimeoutStopSec=330"]);
@@ -349,6 +353,28 @@ describe("auditGatewayServiceConfig systemd", () => {
   const systemdCodes = (result: Awaited<ReturnType<typeof audit>>) =>
     result.issues.filter((issue) => issue.code.startsWith("systemd-")).map((issue) => issue.code);
   it.each([
+    {
+      unit: ["Delegate=yes", "DelegateSubgroup=gateway"],
+      effective: [
+        ...network,
+        "RestartUSec=5s",
+        "KillMode=mixed",
+        "TimeoutStopUSec=330s",
+        "Delegate=no",
+      ],
+      expected: [codes.systemdExecDelegation],
+    },
+    {
+      unit: ["Delegate=yes", "DelegateSubgroup=gateway"],
+      effective: [
+        ...network,
+        "RestartUSec=5s",
+        "KillMode=mixed",
+        "TimeoutStopUSec=330s",
+        "DelegateSubgroup=",
+      ],
+      expected: [codes.systemdExecDelegation],
+    },
     {
       unit: ["KillMode=mixed"],
       effective: ["KillMode=control-group"],
@@ -421,6 +447,15 @@ describe("auditGatewayServiceConfig systemd", () => {
       "KillMode=control-group",
     ]);
     expect(systemdCodes(await auditUnit())).toEqual([]);
+  });
+
+  it("reports an older manager's missing subgroup support as a host repair", async () => {
+    await drainingUnit();
+    execSystemctlUserMock.mockResolvedValueOnce(nativeExit("LoadState=loaded\nDelegate=yes\n"));
+    expectIssue(await auditUnit(), codes.systemdExecDelegation, {
+      repair: "host",
+      message: expect.stringContaining("systemd 254+"),
+    });
   });
 
   it.each([
@@ -566,5 +601,44 @@ describe("managed service environment drift", () => {
       level: "recommended",
     });
     expect(JSON.stringify(result.issues)).not.toMatch(/old-value|new-value|old-token|new-token/);
+  });
+});
+
+describe("auditGatewayServiceConfig node version inspection", () => {
+  it("keeps other findings when a version directory is unreadable", async () => {
+    const home = tempDirs.make("openclaw-node-inspect-");
+    const versionDir = path.join(home, ".nvm/versions/node/v24.16.0");
+    const nodePath = path.join(home, ".nvm/versions/node/v24.22.1/bin/node");
+    const entrypointPath = path.join(versionDir, "lib/node_modules/openclaw/dist/index.js");
+    await fs.mkdir(path.dirname(nodePath), { recursive: true });
+    await fs.writeFile(nodePath, "");
+    await fs.mkdir(versionDir, { recursive: true });
+    const stat = fs.stat.bind(fs);
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      if (args[0] === entrypointPath) {
+        throw Object.assign(new Error("EACCES: fixture version directory is unreadable"), {
+          code: "EACCES",
+        });
+      }
+      return stat(...args);
+    });
+    try {
+      const result = await audit(
+        {
+          programArguments: [nodePath, entrypointPath, "gateway", "--port", "18789"],
+          environment: {},
+        },
+        { platform: "aix" },
+      );
+      expect(result.issues.map((issue) => issue.code)).toEqual(
+        expect.arrayContaining([codes.gatewayPathMissing, codes.gatewayNodeVersionInspectFailed]),
+      );
+      expect(
+        result.issues.find((issue) => issue.code === codes.gatewayNodeVersionInspectFailed)
+          ?.message,
+      ).toContain("EACCES");
+    } finally {
+      statSpy.mockRestore();
+    }
   });
 });

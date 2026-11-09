@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE } from "@openclaw/ai/diagnostics";
 import { APIError } from "openai/core/error";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -12,6 +11,7 @@ import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js
 import { sleepWithAbort } from "../../../infra/backoff.js";
 import { flushDiagnosticsTimeline } from "../../../infra/diagnostics-timeline.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { forceFullGc } from "../../../test-utils/retention.js";
 import {
   buildEmbeddedRunnerAssistant,
   createMockUsage,
@@ -247,6 +247,9 @@ describe("recoverEmbeddedRunAttempt", () => {
       expect(written.filter((event) => event.name === "model.retry.decision")).toEqual([
         expect.objectContaining({
           attributes: {
+            captureId: expect.any(String),
+            sequence: 1,
+            failedWrites: 0,
             decision: retryAvailable ? "accepted" : "rejected",
             reason: retryAvailable ? "backoff_completed" : "retry_budget_exhausted",
             retryCount: 0,
@@ -692,7 +695,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       fixture.continueFromCurrentTranscript.mockClear();
       if (retry === 2 || retry === 8 || retry === 15) {
         await nextTurn();
-        queryObjects(WeakRef);
+        forceFullGc();
         retainedBytes.push(histories.filter((history) => history.deref()).length * imageBytes);
       }
     }

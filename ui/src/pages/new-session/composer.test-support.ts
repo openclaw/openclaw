@@ -62,9 +62,11 @@ export function renderComposer(
   let message = overrides.message ?? "";
   let agentId = overrides.agentId ?? "main";
   let draftOwnerKey = overrides.draftOwnerKey ?? "draft:one";
+  let commandProjectId = overrides.commandProjectId;
   const currentOptions = (): NewSessionComposerOptions => ({
     ...overrides,
     agentId,
+    commandProjectId,
     attachmentDraft,
     canSubmit: overrides.canSubmit ?? true,
     context: overrides.context,
@@ -101,6 +103,10 @@ export function renderComposer(
     },
     rerenderForAgent: (nextAgentId: string) => {
       agentId = nextAgentId;
+      renderCurrent();
+    },
+    rerenderForProject: (nextProjectId: string | undefined) => {
+      commandProjectId = nextProjectId;
       renderCurrent();
     },
     rerenderForDraftRoute: (nextDraftOwnerKey: string, nextMessage: string) => {

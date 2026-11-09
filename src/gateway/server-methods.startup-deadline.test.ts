@@ -38,6 +38,7 @@ function createFixture(method: (typeof methods)[number]) {
   recordAgentDatabaseAdmissions([refusal], { source: "startup" });
   const startup = {
     hasPendingAgents: true,
+    isAgentInputRecoveryPending: () => false,
     waitForAgentPreparation: () => {
       reachedAdmission.resolve();
       return startup.hasPendingAgents ? preparation.promise : undefined;
@@ -203,7 +204,7 @@ it.each(scenarios)("startup $method: $ending", async ({ method, ending }) => {
   }
   fixture.ready();
   if (ending === "ready") {
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersToNextTimerAsync();
     await expect(outcome).resolves.toEqual({ status: "written" });
   }
   await fixture.drain();

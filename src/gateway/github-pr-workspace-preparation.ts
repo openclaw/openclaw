@@ -16,9 +16,18 @@ import {
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { integrateManagedWorkspaceSource } from "./github-publication-base-refresh.js";
+import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
+import {
+  createGitHubPublicationCommandRunner,
+  readGitHubPublicationBaseSha,
+} from "./github-publication-git-transport.js";
 import { inspectOwnGitHubPullRequest } from "./github-publication-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
-import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
+import {
+  captureGitHubPublicationActionAuthority,
+  prepareGitHubPublicationRequesterV2,
+} from "./github-publication-requester.js";
+import { prepareManagedWorkspaceReviewBase } from "./github-publication-workspace-review.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { isSessionOwnRequester } from "./session-sharing-policy.js";
@@ -26,17 +35,18 @@ import { resolveLocalWorkspaceOwner } from "./worker-environments/local-workspac
 
 export async function performSessionGitHubPreparation(
   options: Omit<GatewayRequestHandlerOptions, "params"> & {
-    params: Extract<SessionGitHubActionParams, { action: "prepare_pr" }>;
+    params: Extract<SessionGitHubActionParams, { action: "prepare_pr" | "refresh_base" }>;
   },
 ): Promise<void> {
   const { params, context } = options;
+  const refreshingBase = params.action === "refresh_base";
   const caller = getGatewayToolCallerIdentity();
   let sandbox = caller?.workspaceBaseRefreshSandbox;
   const adopting = sandbox?.workspaceSource !== "managed-worktree";
   if (
     !caller ||
     !canPrepareGitHubPullRequest(sandbox) ||
-    (adopting && !caller.workspacePrAdoptionSessionId)
+    (adopting && (!caller.workspacePrAdoptionSessionId || refreshingBase))
   ) {
     throw new Error(
       sandbox?.workspaceAccess === "ro"
@@ -72,12 +82,22 @@ export async function performSessionGitHubPreparation(
   if (!loaded.entry?.sessionId) {
     throw new Error("The PR preparation session is unavailable.");
   }
+  const pullRequestUrl =
+    params.action === "prepare_pr"
+      ? params.pullRequestUrl
+      : loaded.entry.worktree?.githubPullRequest?.url;
+  if (!pullRequestUrl) {
+    throw new Error("The PR association changed; retry refresh_base in its current workspace.");
+  }
   const session = { agentId: loaded.agentId, sessionKey: loaded.canonicalKey };
+  const publicationSession = { ...session, sessionId: loaded.entry.sessionId };
   const admitted = await prepareGitHubPublicationRequesterV2(options, session);
   using _ = { [Symbol.dispose]: admitted.release };
-  // Publication admits other writers; replacing this conversation's source is its own requester's.
+  const authority = captureGitHubPublicationActionAuthority(admitted.requester);
+  // Guests prepare their own conversation; a current full-write maintainer may assist.
   const { actor } = admitted.requester.snapshot;
   if (
+    !authority.operatorWrite &&
     !isSessionOwnRequester(
       { cfg: context.getRuntimeConfig(), client: options.client },
       { canonicalKey: loaded.canonicalKey, entry: loaded.entry },
@@ -86,12 +106,14 @@ export async function performSessionGitHubPreparation(
         : undefined,
     )
   ) {
-    throw new Error("Only this conversation's owner can prepare a PR in it.");
+    throw new Error(
+      "Only the person who started this conversation can prepare a PR in it without full operator write permission. Assigning a new owner does not transfer this.",
+    );
   }
   const assertSession = () => {
     options.signal?.throwIfAborted();
     selected.readCurrent();
-    admitted.requester.assertCurrent();
+    authority.assertCurrent();
   };
   if (adopting && caller.workspacePrAdoptionSessionId !== loaded.entry.sessionId) {
     throw new Error("The conversation changed before PR preparation handoff.");
@@ -105,8 +127,8 @@ export async function performSessionGitHubPreparation(
   }
   const inspectCurrent = async (assertWorkspace: () => void) => {
     const inspected = await inspectOwnGitHubPullRequest({
-      pullRequestUrl: params.pullRequestUrl,
-      agentId: session.agentId,
+      pullRequestUrl,
+      session: publicationSession,
       requester: admitted.requester,
       assertCurrent: assertWorkspace,
     });
@@ -124,6 +146,7 @@ export async function performSessionGitHubPreparation(
       pullRequest: inspected.result,
       identity,
       assertCurrent,
+      requirePublicRepositories: inspected.requirePublicRepositories,
     });
     return { inspected, identity, assertCurrent };
   };
@@ -151,6 +174,7 @@ export async function performSessionGitHubPreparation(
             pullRequest: eligibility.inspected.result,
             identity: eligibility.identity,
             assertCurrent: eligibility.assertCurrent,
+            requirePublicRepositories: eligibility.inspected.requirePublicRepositories,
           });
         },
         signal: options.signal,
@@ -192,7 +216,8 @@ export async function performSessionGitHubPreparation(
     const pullRequest = { url, host, number, base, head };
     const signal = options.signal;
     const conflictsResolved = params.conflictsResolved;
-    const baseCommit = params.expectedHeadCommit;
+    const baseCommit =
+      params.action === "prepare_pr" ? params.expectedHeadCommit : params.baseCommit;
     const assertEntry = (entry: SessionEntry) => {
       assertCurrent();
       if (
@@ -218,6 +243,7 @@ export async function performSessionGitHubPreparation(
       signal,
       commitGuard: assertCurrent,
     });
+    let projectBase: { repository: string; branch: string } | undefined;
     if (!emptySource) {
       const repository = await prepareGitHubPublicationRepositoryIdentity({
         worktree: owner.worktree,
@@ -235,6 +261,10 @@ export async function performSessionGitHubPreparation(
           "This workspace belongs to another repository. Its existing files and history were preserved.",
         );
       }
+      const branch = parseGitHubPublicationBaseBranch(owner.worktree.baseRef, "");
+      if (branch) {
+        projectBase = { repository: name, branch };
+      }
     }
 
     const scope = {
@@ -251,6 +281,9 @@ export async function performSessionGitHubPreparation(
       throw new Error("The conversation disappeared before PR workspace preparation.");
     }
     const previous = assertEntry(initialEntry).githubPullRequest;
+    // A PR this conversation published continues from its published head, so commits
+    // another writer appended merge into the saved work like any advanced PR head.
+    const preparedHead = previous ? previous.preparedHeadCommit : inspected.publishedHeadCommit;
     if (
       previous &&
       (previous.host !== pullRequest.host ||
@@ -263,12 +296,16 @@ export async function performSessionGitHubPreparation(
         "This workspace already continues another PR or head branch. Its original association and saved work were preserved.",
       );
     }
-    if (previous && previous.base.branch !== pullRequest.base.branch) {
+    if (
+      refreshingBase &&
+      (!previous?.preparedHeadCommit || previous.preparedHeadCommit !== previous.head.commit)
+    ) {
       throw new Error(
-        `The original PR base branch changed. Have the PR author restore its base branch to ${JSON.stringify(previous.base.branch)} on GitHub, then retry prepare_pr. Its original association and saved work were preserved.`,
+        "Finish prepare_pr for the accepted PR head before refreshing its base; saved work was preserved.",
       );
     }
-    if (!previous) {
+    let pendingBase = false;
+    if (!previous || previous.preparedHeadCommit === previous.head.commit) {
       const merge = await withWorktreeGitConfig(
         owner.worktree.path,
         true,
@@ -278,28 +315,60 @@ export async function performSessionGitHubPreparation(
             beforeRun: assertCurrent,
           }),
       );
-      if (merge.code !== 1) {
+      if (merge.code !== 1 && (!refreshingBase || merge.code !== 0)) {
         throw new Error(
           "Workspace base integration is pending or unavailable. Finish refresh_base before preparing a PR; saved work was preserved.",
         );
       }
+      pendingBase = merge.code === 0;
     }
     if (
+      !pendingBase &&
+      (refreshingBase ||
+        (previous?.base.branch === pullRequest.base.branch &&
+          previous.base.commit !== pullRequest.base.commit))
+    ) {
+      // PR details can lag the live ref, including after a completed base refresh.
+      const { run } = createGitHubPublicationCommandRunner(assertCurrent);
+      pullRequest.base = {
+        ...pullRequest.base,
+        commit: await readGitHubPublicationBaseSha(
+          run,
+          pullRequest.base.repository,
+          pullRequest.base.branch,
+          pullRequest.host,
+          identity.env,
+        ),
+      };
+    }
+    if (
+      !refreshingBase &&
       previous &&
       previous.preparedHeadCommit === previous.head.commit &&
-      previous.preparedHeadCommit === pullRequest.head.commit
+      previous.preparedHeadCommit === pullRequest.head.commit &&
+      previous.base.branch === pullRequest.base.branch &&
+      previous.base.commit === pullRequest.base.commit
     ) {
       const reviewBase = await withWorktreeGitConfig(
         owner.worktree.path,
         true,
         { beforeRun: assertCurrent },
         (git) =>
-          git.require(
-            owner.worktree.path,
-            ["merge-base", previous.head.commit, previous.base.commit],
-            { beforeRun: assertCurrent },
-          ),
+          git.require(owner.worktree.path, ["merge-base", "HEAD", previous.base.commit], {
+            beforeRun: assertCurrent,
+          }),
       );
+      // A failed destination adoption may have prepared its review ref before the
+      // binding write. Repair that projection without restaging any guest work.
+      const review = await prepareManagedWorkspaceReviewBase({
+        owner,
+        sandbox: publicationSandbox,
+        reviewCommit: reviewBase,
+        signal,
+        assertCurrent,
+        stageChanges: false,
+        reviewPreparationError: "The PR review base could not be prepared; retry prepare_pr.",
+      });
       initial.readCurrent();
       return {
         status: "prepared" as const,
@@ -308,19 +377,31 @@ export async function performSessionGitHubPreparation(
         headChanged: false,
         changedPaths: [],
         conflictPaths: [],
-        review: { mode: "local" as const, base: reviewBase },
+        review,
       };
     }
+    // Refresh keeps the first association's origin, including legacy absence.
+    const origin = previous
+      ? previous.origin
+      : inspected.ownPublication
+        ? "session-publication"
+        : "external-pr";
     // Finish the accepted source before admitting another head, including after a restart.
     const binding: SessionGitHubPullRequestBinding =
-      previous && previous.preparedHeadCommit !== previous.head.commit
-        ? previous
-        : {
-            ...structuredClone(pullRequest),
-            ...(previous?.preparedHeadCommit
-              ? { preparedHeadCommit: previous.preparedHeadCommit }
-              : {}),
-          };
+      refreshingBase && previous
+        ? {
+            ...previous,
+            // A retry finishes its accepted base before selecting a newer destination.
+            base: pendingBase ? previous.base : structuredClone(pullRequest.base),
+          }
+        : previous && previous.preparedHeadCommit !== previous.head.commit
+          ? { ...previous, base: structuredClone(pullRequest.base) }
+          : {
+              ...structuredClone(pullRequest),
+              ...(origin ? { origin } : {}),
+              ...(preparedHead ? { preparedHeadCommit: preparedHead } : {}),
+            };
+    const reviewOnly = !refreshingBase && preparedHead === binding.head.commit;
     using sourceResources = new DisposableStack();
     let reserved: Awaited<ReturnType<typeof prepareGitHubPublicationSession>> | undefined;
     const assertReserved = () => {
@@ -333,15 +414,19 @@ export async function performSessionGitHubPreparation(
         throw new Error("The accepted PR source changed; saved work was preserved.");
       }
     };
-    const accept = async () => {
-      if (previous?.preparedHeadCommit) {
+    const verify = async () => {
+      if (preparedHead) {
         // Source fetches can outlive a remote head or permission observation.
         await assertExistingPullRequestWriteAccess({
           pullRequest: inspected.result,
           identity,
           assertCurrent,
+          requirePublicRepositories: inspected.requirePublicRepositories,
         });
       }
+      assertReserved();
+    };
+    const accept = async () => {
       assertReserved();
       const committedEntry = await patchSessionEntryCore(
         scope,
@@ -377,20 +462,41 @@ export async function performSessionGitHubPreparation(
       assertCurrent: assertReserved,
       conflictsResolved,
       baseCommit,
-      source: {
-        repository: binding.head.repository,
-        branch: binding.head.branch,
-        commit: binding.head.commit,
-        githubHost: binding.host,
-        review: { repository: binding.base.repository, commit: binding.base.commit },
-        initial: binding.preparedHeadCommit === undefined,
-        emptySource,
-        resuming: previous !== undefined && previous.preparedHeadCommit !== previous.head.commit,
-        accept,
-      },
+      ...(refreshingBase
+        ? {
+            verifiedBase: {
+              repository: binding.base.repository,
+              branch: binding.base.branch,
+              commit: binding.base.commit,
+              githubHost: binding.host,
+              resuming: pendingBase,
+              verify,
+              accept,
+            },
+          }
+        : {
+            source: {
+              repository: binding.head.repository,
+              branch: binding.head.branch,
+              commit: binding.head.commit,
+              githubHost: binding.host,
+              review: { repository: binding.base.repository, commit: binding.base.commit },
+              projectBase,
+              initial: binding.preparedHeadCommit === undefined,
+              reviewOnly,
+              emptySource,
+              resuming:
+                previous !== undefined && previous.preparedHeadCommit !== previous.head.commit,
+              verify,
+              accept,
+            },
+          }),
     });
     assertReserved();
-    if (integration.status !== "conflicts") {
+    if (refreshingBase) {
+      return integration;
+    }
+    if (integration.status !== "conflicts" && !reviewOnly) {
       await patchSessionEntryCore(
         scope,
         (entry) => {

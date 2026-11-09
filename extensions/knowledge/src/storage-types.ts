@@ -51,6 +51,7 @@ export type Prepared = {
   };
   lifecycle?: CorrectInput | WithdrawInput;
   merge?: { operation: "merge" | "unmerge"; targetId: string; reason: string; report: MergeReport };
+  extract?: { targetId: string; reason: string };
   supersede?: {
     operation: "supersede" | "unsupersede";
     by: string;
@@ -71,3 +72,9 @@ export type Row = {
   receipt: string;
 };
 export type PublicationHook = (stage: string) => void;
+/** A page-budget rejection before acceptance; operations that write page prose return its receipt. */
+export class PageBudgetError extends Error {
+  constructor(readonly receipt: Receipt) {
+    super(receipt.message);
+  }
+}

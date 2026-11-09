@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listGoogleMeetCalendarEvents, type GoogleMeetCalendarLookupResult } from "./calendar.js";
 import {
   formatDuration,
@@ -293,7 +294,6 @@ function renderTranscriptMarkdown(result: GoogleMeetArtifactsResult): string {
     lines.push(`## ${entry.conferenceRecord.name}`);
     if (entry.transcriptEntries.length === 0) {
       lines.push("_No transcript entries._");
-      continue;
     }
     for (const transcriptEntries of entry.transcriptEntries) {
       lines.push("");
@@ -446,7 +446,7 @@ export async function writeMeetExportBundle(params: {
   calendarEvent?: GoogleMeetCalendarLookupResult;
 }): Promise<{ outputDir: string; files: string[]; zipFile?: string }> {
   const outputDir =
-    params.outputDir?.trim() ||
+    readNonBlankString(params.outputDir) ??
     `google-meet-export-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   await fsp.mkdir(outputDir, { recursive: true });
   let zipOutputDir = outputDir;

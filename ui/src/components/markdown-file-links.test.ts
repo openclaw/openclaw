@@ -32,6 +32,13 @@ function linkInfo(input: string) {
   }));
 }
 
+it("does not turn ambiguous repository names into file links in prose or code spans", () => {
+  const source = "See openclaw/openclaw.ai and `openclaw/openclaw.ai` for the website repo.";
+  const fragment = render(source);
+  expect(fileLinks(fragment)).toHaveLength(0);
+  expect(fragment.textContent?.trim()).toBe(source.replaceAll("`", ""));
+});
+
 it.each([
   ["see src/lib/foo.ts for details", "src/lib/foo.ts"],
   ["[x](/Users/a/b.ts)", "/Users/a/b.ts"],
@@ -41,8 +48,24 @@ it.each([
 });
 
 it.each<[string, string[], string[]?]>([
+  [
+    "src/index.TS ./assets/logo.ai `../assets/logo.ai` /tmp/logo.ai [website repository](openclaw/openclaw.ai)",
+    [
+      "src/index.TS",
+      "./assets/logo.ai",
+      "../assets/logo.ai",
+      "/tmp/logo.ai",
+      "openclaw/openclaw.ai",
+    ],
+  ],
   ["~/n.md ./x.ts ../y.ts f.ts i.csv", ["~/n.md", "./x.ts", "../y.ts"], ["f.ts", "i.csv"]],
   ["rotated logs/app.log.1 but see src/lib/foo.ts.", ["src/lib/foo.ts"], ["logs/app.log.1"]],
+  [
+    "(src/a.ts) [src/b.ts] {src/c.ts} \"src/d.ts\" 'src/e.ts'",
+    ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts"],
+  ],
+  ["prefix:src/a.ts and see src/b.ts", ["src/b.ts"], ["prefix:src/a.ts"]],
+
   ["bumped 1.1/1.2 and `2026.9.2`, see v1.2/3.4 [part](assets/part.3mf)", ["assets/part.3mf"]],
   ["`a/x.ts` `x.ts` `i.csv` `f.b()` `n.xyz`", ["a/x.ts", "x.ts", "i.csv"], ["f.b()", "n.xyz"]],
   ["`e\u0301.md` and `C:\\文档\\café.md:9`", ["e\u0301.md", "C:\\文档\\café.md"]],
@@ -100,6 +123,48 @@ it("keeps authored URL and session destinations out of workspace file handling",
   expect([...fragment.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual(
     destinations,
   );
+});
+
+it("scopes authored relative file links to document readers without changing message links", () => {
+  const source = [
+    "[Evidence](evidence/log.md#details)",
+    "[Plain](evidence/log.md)",
+    "[Encoded](evidence/hash%23name.md#details)",
+    "[Parent](../summary.md)",
+    "[Extensionless](./evidence/README)",
+    "[Heading](#details)",
+    "[Query](evidence/log.md?raw=1)",
+    "[External](https://example.com/log.md#details)",
+    "[Session](/chat/main/notes/readme.md)",
+    "`evidence/log.md`",
+  ].join("\n\n");
+  const options = { fileLinks: true, sessionLinks: true };
+  const message = render(source, options);
+  const document = render(source, { ...options, documentFileLinks: true });
+  const relative = [
+    ...document.querySelectorAll<HTMLAnchorElement>("[data-file-document-relative]"),
+  ];
+  expect(relative.map((link) => link.dataset.filePath)).toEqual([
+    "evidence/log.md",
+    "evidence/log.md",
+    "evidence/hash#name.md",
+    "../summary.md",
+    "./evidence/README",
+  ]);
+  expect(relative.every((link) => !link.hasAttribute("href"))).toBe(true);
+  expect(
+    [...document.querySelectorAll("a[href]")].map((link) => link.getAttribute("href")),
+  ).toEqual([
+    "#details",
+    "evidence/log.md?raw=1",
+    "https://example.com/log.md#details",
+    "/chat/main/notes/readme.md",
+  ]);
+  expect(fileLinks(document).at(-1)?.dataset.fileDocumentRelative).toBeUndefined();
+  // The render cache must not let either context lend its link behavior to the other.
+  expect(render(source, options).innerHTML).toBe(message.innerHTML);
+  expect(message.querySelector("[data-file-document-relative]")).toBeNull();
+  expect(message.querySelector('a[href="evidence/log.md#details"]')).not.toBeNull();
 });
 
 it.each(["portal.example/service.test", "münich.de/guide.md", "example.xn--p1ai/guide.md"])(

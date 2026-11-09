@@ -17,7 +17,7 @@ import {
 } from "./model-catalog-order.js";
 import type { ModelCatalogRouteProjection } from "./model-catalog-route.js";
 import { createModelCatalogView } from "./model-catalog-view.js";
-import type { ModelCatalogEntry } from "./model-catalog.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import type { ModelRef } from "./model-ref-shared.js";
 import { dedupeModelCatalogEntries } from "./model-selection-shared.js";
 import {

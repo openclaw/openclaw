@@ -25,6 +25,7 @@ export function createSessionRowRefresh(
   owner: Omit<MaterializationOwner, "isActive"> & {
     state: () => {
       cfg: records.Inputs["cfg"];
+      stores: ReadonlyMap<string, records.SessionRowStore>;
       disposed: boolean;
       topologyDirty: boolean;
       registryPrepared: boolean;
@@ -217,6 +218,7 @@ export function createSessionRowRefresh(
     return withSessionRowDatabaseFacts(
       {
         rows: owner.rows,
+        stores: owner.state().stores,
         dirty: owner.dirty,
         selected,
         isActive: () => !owner.state().disposed,

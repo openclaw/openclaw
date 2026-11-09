@@ -194,6 +194,29 @@ describe("RelayFetch uncertain state and retirement", () => {
     expect(f.events).toHaveLength(eventCount);
   });
 
+  it("retires only a request Chromium already ended", async () => {
+    const f = await enabledFixture();
+    const cancelled = f.pause("cancelled");
+    const live = f.pause("live");
+    const retired = new Error("Invalid InterceptionId.");
+    f.send.mockRejectedValueOnce(retired);
+    await expect(f.command("Fetch.continueRequest", { requestId: cancelled })).rejects.toBe(
+      retired,
+    );
+    await expect(f.command("Fetch.continueRequest", { requestId: cancelled })).rejects.toThrow(
+      "Invalid Fetch requestId for this session",
+    );
+    await f.command("Fetch.failRequest", { requestId: live, errorReason: "Aborted" });
+    expect(f.send).toHaveBeenLastCalledWith("Fetch.failRequest", {
+      requestId: "live",
+      errorReason: "Aborted",
+    });
+    f.pause("next");
+    expect(f.events).toHaveLength(3);
+    await f.command("Fetch.disable");
+    expect(f.send).toHaveBeenLastCalledWith("Fetch.disable", undefined);
+  });
+
   it("bounds owner-close to one pause snapshot and disables after cleanup", async () => {
     const started = createDeferred<void>();
     const pending = createDeferred<unknown>();

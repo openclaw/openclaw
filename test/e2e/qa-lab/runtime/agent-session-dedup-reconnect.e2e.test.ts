@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { runCleanups, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   connectOperator,
   messageRole,
   messageText,
-  runCleanups,
   startSessionGateway,
 } from "./agent-session.test-support.js";
 import { MODEL_REF } from "./cloud-worker-midturn-loss-fixture.js";

@@ -1,6 +1,4 @@
 import { AsyncLocalStorage, createHook } from "node:async_hooks";
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
@@ -10,6 +8,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { GatewayScheduler } from "./gateway-scheduler.js";
 
 type Job = Parameters<GatewayScheduler["schedule"]>[0];
@@ -129,12 +128,15 @@ describe("Gateway timed work", () => {
           return owner;
         }
       }
+      const callers: WeakRef<RetiredOwner>[] = [];
       const owners = withNativeErrorStacks(() =>
-        Array.from({ length: 12 }, () => new RetiredOwner().close()),
+        Array.from({ length: 12 }, () => {
+          const caller = new RetiredOwner();
+          callers.push(new WeakRef(caller));
+          return caller.close();
+        }),
       );
-      // Collect after the closing call's execution frame has unwound.
-      await nextTurn();
-      expect(queryObjects(RetiredOwner)).toBe(0);
+      await expectCollected(...callers);
       for (const owner of owners) {
         expect(owner.signal).toMatchObject({ aborted: true, reason: { name: "AbortError" } });
       }

@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { expect, type Mock } from "vitest";
 import type * as SessionEventHandoff from "../auto-reply/reply/session-event-handoff.js";
 import type { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
@@ -10,8 +9,6 @@ import type { loadSessionEntryAsync } from "./session-entry-load.test-support.js
 import type { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 
 type LoadedSessionEntryBase = Awaited<ReturnType<typeof loadSessionEntryAsync>>;
-type MockCalls = { mock: { calls: unknown[][] } };
-type Fields = Record<string, unknown>;
 export type RestartSentinelSessionFixture = Omit<LoadedSessionEntryBase, "agentId"> &
   Partial<Pick<LoadedSessionEntryBase, "agentId">>;
 
@@ -93,41 +90,6 @@ export function expectCapturedQueueContext(stateDir: string) {
   });
 }
 
-export function expectRecordFields(record: unknown, expected: Fields): Fields {
-  assert(record && typeof record === "object", "Expected record");
-  const actual = record as Fields;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
-
-export function mockCallArg(mock: MockCalls, callIndex = 0): unknown {
-  const call = mock.mock.calls[callIndex];
-  assert(call, `Expected mock call ${callIndex}`);
-  return call[0];
-}
-
-export const lastMockCallArg = (mock: MockCalls): unknown =>
-  mockCallArg(mock, mock.mock.calls.length - 1);
-
-export function expectMockCallFields(mock: MockCalls, expected: Fields, callIndex = 0): Fields {
-  return expectRecordFields(mockCallArg(mock, callIndex), expected);
-}
-
-export function expectContinuationDispatchFields(
-  mock: MockCalls,
-  expected: Fields,
-  expectedCtx?: Fields,
-  callIndex = 0,
-): Fields {
-  const params = expectMockCallFields(mock, expected, callIndex);
-  if (expectedCtx) {
-    expectRecordFields(params.ctxPayload, expectedCtx);
-  }
-  return params;
-}
-
 export function expectRestartSentinelTranscriptBroadcast(
   broadcastToConnIds: GatewayBroadcastToConnIdsFn,
   params: { sessionKey: string; report: string; subscribers: ReadonlySet<string> },
@@ -194,8 +156,3 @@ export function configureRestartSessionEventMocks(
 export function createRestartSentinelFixture(payload: RestartSentinelPayload, revision = 123) {
   return { version: 1 as const, revision, payload };
 }
-
-export type RestartSentinelInProcessDispatchMock = (
-  params: Fields,
-  options?: Fields,
-) => Promise<Fields>;

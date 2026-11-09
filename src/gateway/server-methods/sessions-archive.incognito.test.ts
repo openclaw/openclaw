@@ -1,5 +1,5 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
-import "../../claws/tool-policy-runtime.js";
+import "../../templates/tool-policy-runtime.js";
 import assert from "node:assert/strict";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";

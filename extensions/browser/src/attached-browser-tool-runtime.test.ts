@@ -31,7 +31,7 @@ const defaults = { cdpUrl, ensureAttachTarget: async () => {}, workspaceDir: "/t
 
 beforeEach(() => vi.clearAllMocks());
 
-it("exposes only one raw attach-only CDP profile through an authenticated loopback bridge", async () => {
+it("uses the authenticated attach-only bridge and preserves normalized artifact names", async () => {
   const ensureAttachTarget = vi.fn().mockResolvedValue(undefined);
   const workspaceDir = tempDirs.make("attached-workspace-");
   const context = { workspaceDir, agentSessionKey: "agent:w:s", agentDir: "/tmp/w" };
@@ -55,11 +55,11 @@ it("exposes only one raw attach-only CDP profile through an authenticated loopba
     screenshotResultMode: "path",
   });
   const persist = (sourcePath: string) => toolParams.persistScreenshot({ sourcePath, type: "png" });
-  const sourcePath = path.join(workspaceDir, "source.png");
+  const sourcePath = path.join(workspaceDir, "source.jpg");
   await fs.writeFile(sourcePath, "screenshot-bytes");
   const artifactPath = await persist(sourcePath);
   expect(artifactPath.replaceAll("\\", "/")).toMatch(
-    /\.artifacts\/cloud-worker-browser\/screenshot-[a-f0-9]{16}\.png$/u,
+    /\.artifacts\/cloud-worker-browser\/screenshot-[a-f0-9]{16}\.jpg$/u,
   );
   expect(await fs.readFile(artifactPath, "utf8")).toBe("screenshot-bytes");
   if (process.platform !== "win32") {

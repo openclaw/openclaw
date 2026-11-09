@@ -55,6 +55,7 @@ import { SessionParticipationTracker } from "./chat-pane-state.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import type {
   ChatTypingActorState,
   ChatTypingActorView,
@@ -67,7 +68,11 @@ import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { createChatTranscript } from "./components/chat-transcript-controller.ts";
 import type { ComposerActivityLayout } from "./components/chat-transcript-layout-owner.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
-import { canAutoFollowChat, handleChatScrollTakeover } from "./scroll.ts";
+import {
+  canAutoFollowChat,
+  handleChatScrollTakeover,
+  hasPendingManualChatScroll,
+} from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
@@ -356,6 +361,8 @@ export abstract class ChatPaneStateOwner {
   }
   draft?: string = undefined;
   focusComposer = false;
+  /** The active pane for the route's session adopts the document's boot composer. */
+  ownsRouteComposer = false;
   dashboardExpanded = false;
   routeFace?: BoardFace = undefined;
   onFaceChange?: (paneId: string, sessionKey: string, face: BoardFace) => void = undefined;
@@ -436,7 +443,10 @@ export abstract class ChatPaneStateOwner {
     getComposerActivityLayout: () => (this.usesMobileHost ? this.composerActivityLayout : null),
     onViewportResize: () => this.chatState.handleTranscriptResize(),
     canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
+    hasPendingScrollCommand: () =>
+      this.state !== undefined && hasPendingManualChatScroll(this.state),
     onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
+    onNativeScroll: (event) => this.handleTranscriptScroll(event),
   });
   protected get progressCards() {
     return sessionProgressCardsForGateway(this.context.gateway);
@@ -494,6 +504,7 @@ export abstract class ChatPaneStateOwner {
     return {
       subagentSessions: sessions,
       subagentSessionsHydrated: Boolean(target && this.swarm.hydrator?.hydrated),
+      subagentSessionsUnavailable: Boolean(target && this.swarm.hydrator?.childrenUnavailable),
       subagentSessionsPending: Boolean(target && this.swarm.hydrator?.pendingChildRead),
       // Carry the admitted owner forward; route aliases do not identify child ancestry.
       subagentParentKey: target
@@ -505,10 +516,18 @@ export abstract class ChatPaneStateOwner {
   protected isCurrentSessionArchived(state: ChatPageHost): boolean {
     return (
       state.selectedChatSessionArchived ||
+      this.isCurrentSessionArchivePending(state) ||
       state.sessionsResult?.sessions.some(
         (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
       ) === true
     );
+  }
+
+  /** Inside the Undo window the session presents as archived, but its draft is kept
+   * until the archive commits, so Undo returns the conversation untouched. */
+  protected isCurrentSessionArchivePending(state: ChatPageHost): boolean {
+    const key = selectedChatSessionRow(state)?.key ?? state.sessionKey;
+    return this.context.sessions.archiveVisibility(key) === "pending";
   }
   /* Infinity until the first ResizeObserver tick so an unmeasured pane keeps
    * the wide side-by-side layout instead of flashing the stacked one. */
@@ -619,7 +638,6 @@ export abstract class ChatPaneStateOwner {
       config: SessionDiscussionPanelConfig;
     }
   >();
-  protected presentationUserId: string | null = null;
   protected readonly retrySessionPlacementStartup = () => {
     const sessionKey = this.state?.sessionKey;
     if (sessionKey) {
@@ -652,6 +670,7 @@ export abstract class ChatPaneStateOwner {
     catalogMessages: unknown[];
     catalogLoading: boolean;
     loadingOlder: boolean;
+    olderError: string | null;
     catalogCursor: string | undefined;
     catalogSession: SessionCatalogSession | null;
     catalogHost: SessionCatalogHost | null;
@@ -659,6 +678,7 @@ export abstract class ChatPaneStateOwner {
     catalogMessages: [],
     catalogLoading: false,
     loadingOlder: false,
+    olderError: null,
     catalogCursor: undefined,
     catalogSession: null,
     catalogHost: null,
@@ -734,5 +754,6 @@ export abstract class ChatPaneStateOwner {
   protected abstract cancelHeaderRename(): void;
   protected abstract handleArchiveSessionShortcut(event: KeyboardEvent): boolean;
   protected abstract resetOlderMessagesViewport(): void;
+  protected abstract handleTranscriptScroll(event: Event): void;
   protected abstract syncQueuedEditRetention(): void;
 }

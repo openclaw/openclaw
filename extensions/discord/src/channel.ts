@@ -153,6 +153,10 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
   createChatChannelPlugin<ResolvedDiscordAccount, DiscordProbe, unknown, 2>({
     base: {
       ...discordPluginBase,
+      identityLink: {
+        prepare: async (cfg, accountId) =>
+          (await import("./identity-link.js")).discordIdentityLink.prepare(cfg, accountId),
+      },
       allowlist: {
         ...buildLegacyDmAccountAllowlistAdapter({
           channelId: "discord",

@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { resolveStatusUtilityModel } from "../commands/models/list.status-utility.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
+import * as preparedCatalog from "./prepared-model-catalog.js";
+import { resolveSimpleCompletionSelectionForAgent } from "./simple-completion-selection.js";
 import { makeProviderModelsConfigFixture } from "./test-helpers/provider-model-fixture.js";
 import {
   resolveAutomaticUtilityRuntimeOverride,
@@ -8,12 +14,18 @@ import {
   resolveUtilityModelRefForAgent,
 } from "./utility-model.js";
 
-function snapshotWithDefaults(defaults: Record<string, string>) {
+/** A string declares the provider's small model; a map declares a router's per-vendor models. */
+function snapshotWithDefaults(defaults: Record<string, string | Record<string, string>>) {
   return createPluginMetadataSnapshotFixture({
-    plugins: Object.entries(defaults).map(([provider, defaultUtilityModel], index) => ({
+    plugins: Object.entries(defaults).map(([provider, utility], index) => ({
       id: `plugin-${index}`,
       modelCatalog: {
-        providers: { [provider]: { defaultUtilityModel, models: [{ id: defaultUtilityModel }] } },
+        providers: {
+          [provider]:
+            typeof utility === "string"
+              ? { defaultUtilityModel: utility, models: [{ id: utility }] }
+              : { defaultUtilityModels: utility, models: [] },
+        },
       },
     })),
   });
@@ -57,16 +69,10 @@ describe("resolveConfiguredSetupModelForAgent", () => {
     (acp) => {
       const cfg: OpenClawConfig = {
         agents: {
-          defaults: {
-            model: "openai/gpt-5.5@openai:primary",
-            utilityModel: "local-utility/tiny",
-          },
-          entries: {
-            main: acp ? { model: "harness-only", runtime: { type: "acp" } } : {},
-          },
+          defaults: { model: "openai/gpt-5.5@openai:primary", utilityModel: "local-utility/tiny" },
+          entries: { main: acp ? { model: "harness-only", runtime: { type: "acp" } } : {} },
         },
       };
-
       expect(resolveConfiguredSetupModelForAgent({ cfg, agentId: "main" })).toEqual({
         modelRef: "openai/gpt-5.5@openai:primary",
       });
@@ -94,7 +100,6 @@ describe("resolveConfiguredSetupModelForAgent", () => {
         }),
       };
       const original = structuredClone(cfg);
-
       expect(resolveConfiguredSetupModelForAgent({ cfg, agentId: "main" })).toEqual({
         modelRef: "local-utility/tiny",
         implicitPrimary: true,
@@ -111,15 +116,22 @@ describe("resolveUtilityModelRefForAgent", () => {
   const metadataSnapshot = snapshotWithDefaults({
     openai: "gpt-5.6-luna",
     anthropic: "claude-haiku-4-5",
+    router: { openai: "openai/luna", anthropic: "anthropic/haiku", google: "google/flash" },
   });
-  type Scenario = {
-    name: string;
-    cfg: OpenClawConfig;
-    agentId?: string;
-    primaryProvider?: string;
-    primaryModelRef?: string;
-    expected?: string;
+  // The router credential's inventory does not grant google/flash.
+  const catalog = {
+    entries: ["openai/luna", "anthropic/haiku"].map((id) => ({ provider: "router", id })),
   };
+  const sharedWithOptOut = {
+    agents: {
+      defaults: { utilityModel: "openai/gpt-5.4-mini" },
+      entries: { ops: { utilityModel: "" } },
+    },
+  };
+  type Scenario = Omit<
+    Parameters<typeof resolveUtilityModelRefForAgent>[0],
+    "agentId" | "metadataSnapshot"
+  > & { name: string; agentId?: string; expected?: string };
   it.each<Scenario>([
     {
       name: "trimmed explicit reference",
@@ -155,30 +167,355 @@ describe("resolveUtilityModelRefForAgent", () => {
       expected: "openai/gpt-5.6-luna@work",
     },
     { name: "no provider default", cfg: { agents: { defaults: { model: "ollama/llama-4-70b" } } } },
+    { name: "agent opt-out", cfg: sharedWithOptOut, agentId: "ops" },
+    { name: "shared model for others", cfg: sharedWithOptOut, expected: "openai/gpt-5.4-mini" },
+    { name: "router default", cfg: routed("openai/sol"), catalog, expected: "router/openai/luna" },
+    { name: "router vendor without a declaration", cfg: routed("mistral/large"), catalog },
+    { name: "router declaration not granted", cfg: routed("google/pro"), catalog },
+    { name: "router without a known catalog", cfg: routed("openai/sol") },
     {
-      name: "agent opt-out",
-      cfg: {
-        agents: {
-          defaults: { utilityModel: "openai/gpt-5.4-mini" },
-          entries: { ops: { utilityModel: "" } },
-        },
-      },
-      agentId: "ops",
+      name: "router decision-only row",
+      cfg: routed("openai/sol"),
+      catalog: { entries: [{ provider: "router", id: "openai/luna", inference: { chat: false } }] },
     },
     {
-      name: "other agent retains shared model",
-      cfg: {
-        agents: {
-          defaults: { utilityModel: "openai/gpt-5.4-mini" },
-          entries: { ops: { utilityModel: "" } },
-        },
-      },
-      expected: "openai/gpt-5.4-mini",
+      name: "router session vendor and auth profile",
+      cfg: routed("openai/sol"),
+      primaryProvider: "router",
+      primaryModelRef: "router/anthropic/opus@work",
+      catalog,
+      expected: "router/anthropic/haiku@work",
     },
   ])("resolves $name", ({ expected, agentId = "main", ...params }) => {
     expect(resolveUtilityModelRefForAgent({ ...params, agentId, metadataSnapshot })).toBe(expected);
   });
 });
+
+it("retains automatic ownership when a lazy catalog read fails", () => {
+  expect(
+    resolveUtilityModelRefForAgent({
+      cfg: { agents: { defaults: { model: "fixture/primary@work" } } },
+      agentId: "main",
+      catalog: {
+        providerOutcomes: [{ provider: "fixture", profileId: "work", status: "ready" }],
+        get entries(): never {
+          throw new Error("catalog acquisition failed");
+        },
+      },
+      metadataSnapshot: snapshotWithDefaults({ fixture: "small" }),
+    }),
+  ).toBe("fixture/small@work");
+});
+
+it("resolves the shipped supported OpenAI utility default", () => {
+  const loaded = loadPluginManifest(path.join(process.cwd(), "extensions/openai"));
+  if (!loaded.ok) {
+    throw new Error(loaded.error);
+  }
+  expect(
+    resolveUtilityModelRefForAgent({
+      cfg: { agents: { defaults: { model: "openai/gpt-6-sol@work" } } },
+      agentId: "main",
+      metadataSnapshot: createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "openai", modelCatalog: loaded.manifest.modelCatalog }],
+      }),
+    }),
+  ).toBe("openai/gpt-6-luna@work");
+});
+
+it.each([
+  { name: "missing default", ids: ["primary"], expected: "fixture/primary@work" },
+  { name: "available default", ids: ["small", "primary"], expected: "fixture/small@work" },
+  {
+    name: "another account model row",
+    ids: ["small", "primary"],
+    listedIds: ["primary"],
+    expected: "fixture/primary@work",
+  },
+  { name: "no offered recovery", ids: ["other"], expected: "fixture/small@work" },
+  {
+    name: "failed provider with retained rows",
+    ids: ["primary"],
+    unpinned: true,
+    outcomeStatus: "unavailable" as const,
+    expected: "fixture/small",
+  },
+  {
+    name: "unrelated provider failure",
+    ids: ["primary"],
+    foreignFailure: true,
+    expected: "fixture/primary@work",
+  },
+  {
+    name: "another account catalog",
+    ids: ["primary"],
+    catalogProfile: "personal",
+    expected: "fixture/small@work",
+  },
+  {
+    name: "configured unavailable default",
+    ids: ["primary"],
+    unavailable: true,
+    expected: "fixture/primary@work",
+  },
+  {
+    name: "unavailable first fallback",
+    ids: ["backup", "primary"],
+    expected: "fixture/backup@work",
+  },
+  {
+    name: "failed catalog",
+    ids: ["primary"],
+    authoritative: false,
+    expected: "fixture/small@work",
+  },
+  {
+    name: "synthetic default",
+    ids: ["primary"],
+    synthetic: true,
+    expected: "fixture/primary@work",
+  },
+])(
+  "automatic utility selection respects $name",
+  ({
+    ids,
+    authoritative,
+    synthetic,
+    unavailable,
+    catalogProfile,
+    listedIds,
+    unpinned,
+    outcomeStatus,
+    foreignFailure,
+    expected,
+  }) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: unpinned ? "fixture/primary" : "fixture/primary@work",
+          utilityModel: { fallbacks: ["fixture/missing", "fixture/backup"] },
+        },
+      },
+    };
+    const catalog = {
+      entries: [
+        ...ids.map((id) => ({ provider: "fixture", id })),
+        ...(unavailable ? [{ provider: "fixture", id: "small", available: false }] : []),
+        ...(synthetic
+          ? [
+              {
+                provider: "fixture",
+                id: "small",
+                contextCapacitySource: "unaccepted-starter" as const,
+              },
+            ]
+          : []),
+      ],
+      authoritative,
+      providerOutcomes: [
+        {
+          provider: "fixture",
+          profileId: unpinned ? undefined : (catalogProfile ?? "work"),
+          status: outcomeStatus ?? ("ready" as const),
+          listedModelIds: listedIds,
+        },
+        ...(foreignFailure ? [{ provider: "other", status: "unavailable" as const }] : []),
+      ],
+    };
+    expect(
+      resolveUtilityModelRefForAgent({
+        cfg,
+        agentId: "main",
+        catalog,
+        metadataSnapshot: snapshotWithDefaults({ fixture: "small" }),
+      }),
+    ).toBe(expected);
+    cfg.agents!.defaults!.utilityModel = "fixture/missing@explicit";
+    expect(resolveUtilityModelRefForAgent({ cfg, agentId: "main", catalog })).toBe(
+      "fixture/missing@explicit",
+    );
+  },
+);
+
+it.each([
+  { fallback: "gpt-6-luna", provider: "openai", modelId: "gpt-6-luna" },
+  { fallback: "openai/gpt-6-luna", provider: "openai", modelId: "gpt-6-luna" },
+  { fallback: "budget", provider: "openai", modelId: "gpt-6-luna" },
+  {
+    fallback: "gpt-6-luna@backup",
+    provider: "openai",
+    modelId: "gpt-6-luna",
+    profileId: "backup",
+  },
+  { fallback: "anthropic/backup", provider: "anthropic", modelId: "backup", profileId: "session" },
+  { fallback: "gpt-6-luna", provider: "openai", modelId: "gpt-6-luna", agentOverride: true },
+  {
+    fallback: "gpt-6-luna",
+    provider: "anthropic",
+    modelId: "claude-sonnet-4-5",
+    profileId: "session",
+    unavailable: true,
+  },
+])(
+  "executes Auto fallback $fallback in its configured provider context ($agentOverride)",
+  (expected) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: expected.agentOverride ? "other/primary" : "openai/gpt-6-sol@primary",
+          models: { "gpt-6-luna": { alias: "budget" } },
+          utilityModel: { fallbacks: [expected.fallback] },
+        },
+        ...(expected.agentOverride
+          ? { entries: { main: { model: "openai/gpt-6-sol@primary" } } }
+          : {}),
+      },
+    };
+    const metadataSnapshot = snapshotWithDefaults({
+      openai: "gpt-6-luna",
+      anthropic: "claude-haiku-4-5",
+    });
+    const modelRef = resolveUtilityModelRefForAgent({
+      cfg,
+      agentId: "main",
+      primaryProvider: "anthropic",
+      primaryModelRef: "anthropic/claude-sonnet-4-5@session",
+      catalog: {
+        entries: [
+          { provider: "openai", id: "gpt-6-luna", available: !expected.unavailable },
+          ...(expected.unavailable ? [{ provider: "anthropic", id: "gpt-6-luna" }] : []),
+          { provider: "anthropic", id: "claude-sonnet-4-5" },
+          { provider: "anthropic", id: "backup" },
+        ],
+        providerOutcomes: [
+          {
+            provider: "openai",
+            profileId: "backup",
+            status: "ready",
+            listedModelIds: ["gpt-6-luna"],
+          },
+          { provider: "anthropic", profileId: "session", status: "ready" },
+        ],
+      },
+      metadataSnapshot,
+    });
+    expect(
+      resolveSimpleCompletionSelectionForAgent({
+        cfg,
+        agentId: "main",
+        modelRef,
+        useUtilityModel: "required",
+        manifestPlugins: metadataSnapshot,
+      }),
+    ).toMatchObject({
+      provider: expected.provider,
+      modelId: expected.modelId,
+      profileId: expected.profileId,
+    });
+  },
+);
+
+it("keeps an automatically selected configured fallback on its own runtime", () => {
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        model: "anthropic/primary@work",
+        models: { "anthropic/primary": { agentRuntime: { id: "claude-cli" } } },
+        utilityModel: { fallbacks: ["anthropic/backup"] },
+      },
+    },
+  };
+  const metadataSnapshot = snapshotWithDefaults({ anthropic: "small" });
+  const owner = createModelRuntimeChoiceOwnerFixture(cfg, () => true, {
+    metadataSnapshot,
+    modelCatalog: {
+      entries: [{ provider: "anthropic", id: "backup", name: "Backup" }],
+      routeVariants: [],
+      providerOutcomes: [{ provider: "anthropic", profileId: "work", status: "ready" }],
+    },
+  });
+  using published = vi
+    .spyOn(preparedCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")
+    .mockReturnValue(owner);
+  expect(resolveStatusUtilityModel({ cfg, agentId: "main" })).toMatchObject({
+    ref: "anthropic/backup@work",
+    source: "config",
+  });
+  expect(
+    resolveAutomaticUtilityRuntimeOverride({
+      cfg,
+      agentId: "main",
+      utilityProvider: "anthropic",
+      utilityModelId: "backup",
+      metadataSnapshot,
+    }),
+  ).toBeUndefined();
+  published.mockReturnValue({
+    ...owner,
+    modelCatalog: {
+      ...owner.modelCatalog,
+      providerOutcomes: [{ provider: "anthropic", profileId: "personal", status: "ready" }],
+    },
+  });
+  expect(resolveUtilityModelRefForAgent({ cfg, agentId: "main", metadataSnapshot })).toBe(
+    "anthropic/small@work",
+  );
+  expect(
+    resolveAutomaticUtilityRuntimeOverride({
+      cfg,
+      agentId: "main",
+      utilityProvider: "anthropic",
+      utilityModelId: "small",
+      metadataSnapshot,
+    }),
+  ).toBe("claude-cli");
+});
+
+it("normalizes a primary alias only once when Auto recovers to that primary", () => {
+  const cfg: OpenClawConfig = { agents: { defaults: { model: "fixture/entry@work" } } };
+  const metadataSnapshot = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "fixture",
+        providers: ["fixture"],
+        modelIdNormalization: {
+          providers: { fixture: { aliases: { entry: "middle", middle: "final" } } },
+        },
+        modelCatalog: { providers: { fixture: { defaultUtilityModel: "small", models: [] } } },
+      },
+    ],
+  });
+  const owner = createModelRuntimeChoiceOwnerFixture(cfg, () => true, {
+    metadataSnapshot,
+    modelCatalog: {
+      entries: [{ provider: "fixture", id: "middle", name: "Middle" }],
+      routeVariants: [],
+      providerOutcomes: [
+        { provider: "fixture", profileId: "work", status: "ready", listedModelIds: ["middle"] },
+      ],
+    },
+  });
+  using published = vi.spyOn(preparedCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot");
+  published.mockReturnValue(owner);
+  const modelRef = resolveUtilityModelRefForAgent({ cfg, agentId: "main", metadataSnapshot });
+  expect(
+    resolveSimpleCompletionSelectionForAgent({
+      cfg,
+      agentId: "main",
+      modelRef,
+      useUtilityModel: "required",
+      manifestPlugins: metadataSnapshot,
+    }),
+  ).toMatchObject({
+    provider: "fixture",
+    modelId: "middle",
+    profileId: "work",
+  });
+});
+
+function routed(model: string): OpenClawConfig {
+  return { agents: { defaults: { model: `router/${model}` } } };
+}
 
 describe("resolveAutomaticUtilityRuntimeOverride", () => {
   const primary = "anthropic/claude-opus-5";

@@ -1191,6 +1191,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/pages/logs/logs-page.tsx"],
   ),
   pageWatch("ui/src/e2e/logs-layout.e2e.test.ts", ["config", "logs"]),
+  pageWatch("ui/src/e2e/logs-scroll.e2e.test.ts", ["logs"]),
   pageWatch(
     "ui/src/e2e/managed-media-base-path.e2e.test.ts",
     ["chat"],
@@ -1892,7 +1893,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     sessionMenuOwnerRoots,
   ),
   pageWatch("ui/src/e2e/sidebar-refresh-availability.e2e.test.ts", ["new-session"]),
-  pageWatch("ui/src/e2e/sidebar-restart-recovery.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch("ui/src/e2e/sidebar-selection-overflow.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch("ui/src/e2e/sidebar-session-stability.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch(
@@ -2098,6 +2098,11 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts"],
   ),
+  {
+    testFile: "ui/src/lib/openclaw-id/onepassword-save.retention.e2e.test.ts",
+    ownerRoots: ["ui/src/lib/openclaw-id/onepassword-save.ts"],
+    watchGlobs: [],
+  },
 ];
 
 export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = ownerWatches.map((watch) => ({

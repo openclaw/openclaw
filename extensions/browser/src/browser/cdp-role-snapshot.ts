@@ -17,6 +17,7 @@ import {
   type RoleSnapshotOptions,
   type RoleSnapshotResult,
 } from "./pw-role-snapshot.js";
+import { redactSensitiveAXNodeValues } from "./sensitive-field-values.js";
 import { appendRoleSnapshotDepthTruncationMarker } from "./snapshot-depth-limit.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES } from "./snapshot-roles.js";
 import { appendSnapshotUrls, type SnapshotUrlEntry } from "./snapshot-urls.js";
@@ -260,10 +261,9 @@ async function buildCdpRoleSnapshot(params: {
           "Accessibility.getFullAXTree",
           params.frameId ? { frameId: params.frameId } : undefined,
         )) as { nodes?: RawAXNode[] }); // SAFETY: Accessibility commands return native AXNode arrays.
-  const { tree, roots } = buildRoleTree(
-    Array.isArray(res.nodes) ? res.nodes : [],
-    params.rootBackendNodeId,
-  );
+  const nodes = Array.isArray(res.nodes) ? res.nodes : [];
+  await redactSensitiveAXNodeValues(params.send, nodes);
+  const { tree, roots } = buildRoleTree(nodes, params.rootBackendNodeId);
   // Scoped captures preserve role-snapshot membership; page-wide cursor discovery
   // would add controls outside the selected root or from another frame.
   const cursorElements =

@@ -37,7 +37,7 @@ suite.define(() => {
       expect(await prompt.locator(".chat-send-status").count()).toBe(0);
       await expect.poll(() => prompt.locator("time").count()).toBe(1);
       await gateway.resolveDeferred("chat.send", { status: "started", runId });
-      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
       expect(await prompt.locator(".chat-send-status").count()).toBe(0);
       expect(await working.textContent()).not.toContain("Waiting for turn to start");
       await gateway.emitChatFinal({ runId, sessionKey, text: "The workspace checks passed." });
@@ -99,7 +99,7 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const prompt = page.locator(".chat-group.user").filter({ hasText: message });
         const status = page.locator(".chat-working-indicator");
-        const stop = page.getByRole("button", { name: "Stop generating" });
+        const stop = page.getByRole("button", { name: "Stop", exact: true });
         if (first) {
           await prompt.waitFor();
           await status.waitFor();
@@ -120,7 +120,7 @@ suite.define(() => {
             phase: "preparing_context",
             seq: 1,
           });
-          await expect.poll(() => statusText.textContent()).toBe("Preparing this turn…");
+          await expect.poll(() => statusText.textContent()).toBe("Preparing reply…");
           await stop.click();
           expect((await gateway.waitForRequest("chat.abort")).params).toMatchObject({
             sessionKey,

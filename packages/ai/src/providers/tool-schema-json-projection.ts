@@ -72,13 +72,17 @@ export function publishRuntimeToolInputSchema(
   }
   Object.freeze(projection.violations);
   Object.freeze(projection);
+  let canonicalFingerprint: string | undefined;
   publishedSchemas.set(
     projection.schema,
     Object.freeze({
       projection,
       json,
       fingerprint: sha256Hex(json),
-      canonicalFingerprint: sha256Hex(stableStringify(projection.schema)),
+      // Provider variants need publication but not prompt-comparison fingerprints.
+      get canonicalFingerprint() {
+        return (canonicalFingerprint ??= sha256Hex(stableStringify(projection.schema)));
+      },
     }),
   );
   return projection;

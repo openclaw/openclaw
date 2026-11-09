@@ -2,6 +2,7 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { bindOverlayAnchor } from "../../../components/overlay-anchor.ts";
+import { HeaderSearch } from "../../../components/solid/header-search.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import {
   createMenuControls,
@@ -40,7 +41,7 @@ export type SessionDiffMenuDraft =
       desktop?: boolean;
       mobile?: boolean;
       canReadMarkdown?: boolean;
-      canEdit?: boolean;
+      canEdit?: boolean | Promise<boolean>;
       canViewSource?: boolean;
     }
   | {
@@ -137,21 +138,24 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
     void props.menu;
     return "";
   });
+  const [jumpSearching, setJumpSearching] = createSignal(() => {
+    void props.menu;
+    return false;
+  });
   const jumpSearch: MenuEntry = {
     kind: "content",
     id: "jump-search",
     content: (
-      <input
-        ref={controls.ref()}
-        class="session-diff-menu__search"
-        type="search"
-        data-search=""
-        data-initial-focus=""
-        data-form-control=""
-        aria-label={t("chat.sessionDiff.searchFiles")}
-        placeholder={t("chat.sessionDiff.searchFiles")}
-        value={jumpQuery()}
-        onInput={(event) => setJumpQuery(event.currentTarget.value)}
+      <HeaderSearch
+        title={t("chat.sessionDiff.jumpToFile")}
+        label={t("chat.sessionDiff.searchFiles")}
+        inputClass="session-diff-menu__search"
+        query={jumpQuery()}
+        open={jumpSearching()}
+        controlRef={() => controls.ref()}
+        inputProps={{ "data-search": "", "data-form-control": "" }}
+        onOpenChange={setJumpSearching}
+        onQueryChange={setJumpQuery}
       />
     ),
   };
@@ -231,11 +235,13 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
   function rawItems(
     menu: SessionDiffMenuData,
     onCopyButtonRef: (button: HTMLButtonElement) => void,
+    canEdit: boolean,
   ): MenuEntry[] {
     if (menu.kind === "jump") {
-      const query = jumpQuery().trim().toLocaleLowerCase();
+      // Canonical NFC so NFD Git paths (macOS) still match NFC queries.
+      const query = jumpQuery().trim().toLowerCase().normalize("NFC");
       const matches = menu.paths.flatMap((path, index) => {
-        if (!path.toLocaleLowerCase().includes(query)) {
+        if (!path.toLowerCase().normalize("NFC").includes(query)) {
           return [];
         }
         const slash = path.lastIndexOf("/");
@@ -321,7 +327,7 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
             ]
           : []),
       ];
-      const editActions = menu.canEdit ? [menuItem("edit", t("chat.sessionDiff.editFile"))] : [];
+      const editActions = canEdit ? [menuItem("edit", t("chat.sessionDiff.editFile"))] : [];
       const codeActions = [
         menuItem("collapse-code", t("chat.sessionDiff.collapseCode")),
         menuItem("collapse-functions", t("chat.sessionDiff.collapseFunctions")),
@@ -556,11 +562,21 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
           let releaseAnchor: (() => void) | undefined;
           onSettled(() => () => releaseAnchor?.());
           const placement = menu.kind === "scope" ? (menu.placement ?? "top-start") : "bottom-end";
+          const canEdit = createMemo(
+            () => (menu.kind === "file" ? (menu.canEdit ?? false) : false),
+            {
+              loadingValue: false,
+            },
+          );
+          const onCopyButtonRef = (button: HTMLButtonElement) => {
+            copyPathButton = button;
+          };
+          // Keep file content nodes mounted when late eligibility inserts Edit.
+          const fileEntries = menu.kind === "file" ? rawItems(menu, onCopyButtonRef, true) : null;
           const entries = createMemo((): MenuEntry[] => {
-            const onCopyButtonRef: (button: HTMLButtonElement) => void = (button) => {
-              copyPathButton = button;
-            };
-            const rawEntries = rawItems(menu, onCopyButtonRef);
+            const rawEntries = fileEntries
+              ? fileEntries.filter((entry) => entry.id !== "edit" || canEdit())
+              : rawItems(menu, onCopyButtonRef, false);
             const desktop = "desktop" in menu && menu.desktop;
             if (!desktop && (!("mobile" in menu) || !menu.mobile)) {
               return rawEntries;

@@ -14,6 +14,7 @@ export type GatewayStateOwnerVerification = {
   current: boolean;
   error?: string;
 };
+export type GatewayStateOwnerHeartbeatLoss = { type: "lost"; error: string };
 
 type HeartbeatCommand = "stop" | [string, string] | { type: "verify"; id: number; paths: string[] };
 
@@ -156,7 +157,13 @@ export function runGatewayStateOwnerHeartbeat(
         const stamp = new Date(clock === "epoch" ? Number(renewalStartedAt) : Date.now());
         if (!renewGatewayStateOwnerLock(fd, lockPath, raw, stamp)) {
           if (lockPath === rootPath) {
-            data.events.postMessage(`${lockPath}: owner lock was removed or replaced`, []);
+            data.events.postMessage(
+              {
+                type: "lost",
+                error: `${lockPath}: owner lock was removed or replaced`,
+              } satisfies GatewayStateOwnerHeartbeatLoss,
+              [],
+            );
             stop();
             return;
           }
@@ -169,7 +176,13 @@ export function runGatewayStateOwnerHeartbeat(
       } catch (error) {
         if (hasErrnoCode(error, "ENOENT")) {
           if (lockPath === rootPath) {
-            data.events.postMessage(`${lockPath}: owner lock was removed or replaced`, []);
+            data.events.postMessage(
+              {
+                type: "lost",
+                error: `${lockPath}: owner lock was removed or replaced`,
+              } satisfies GatewayStateOwnerHeartbeatLoss,
+              [],
+            );
             stop();
             return;
           }

@@ -1,22 +1,16 @@
-.memory-overview__hero {
-  min-height: 210px;
-  overflow: hidden;
-  display: grid;
-  grid-template-columns: minmax(150px, 0.8fr) minmax(0, 1.4fr);
+/* Is memory working: one row with the pet, the answer, and the one action. */
+.memory-overview__status {
+  display: flex;
   align-items: center;
-  gap: var(--space-5);
-  padding: var(--space-6);
-  border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
-  border-radius: var(--radius-xl);
-  background:
-    radial-gradient(circle at 18% 35%, var(--accent-subtle), transparent 48%),
-    linear-gradient(145deg, var(--card), var(--bg-accent));
+  gap: var(--space-3);
+  padding: var(--space-3) 16px;
+  min-width: 0;
 }
 
 .memory-overview__lobster {
-  width: min(100%, 190px);
+  flex: none;
+  width: 64px;
   aspect-ratio: 120 / 105;
-  margin: 0 auto;
   transform-origin: 50% 82%;
 }
 
@@ -26,35 +20,61 @@
   overflow: visible;
 }
 
-.memory-overview__hero--sleeping .memory-overview__lobster {
+.memory-overview__status--sleeping .memory-overview__lobster {
   opacity: 0.56;
   filter: saturate(0.7);
 }
 
-.memory-overview__hero-copy h2 {
+.memory-overview__status-copy {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.memory-overview__status-copy h2 {
   margin: 0;
   color: var(--text-strong);
-  font-size: clamp(1.55rem, 4vw, 2.2rem);
-  line-height: 1.05;
-  letter-spacing: -0.035em;
+  font-size: var(--control-ui-text-lg);
+  font-weight: 600;
+  line-height: 1.3;
 }
 
-.memory-overview__hero-copy p {
-  max-width: 44ch;
-  margin: var(--space-3) 0 0;
+.memory-overview__status-copy p {
+  margin: 2px 0 0;
   color: var(--muted);
-  line-height: 1.55;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
-.memory-overview__hero-actions {
-  margin-top: var(--space-4);
+.memory-overview__status-copy .memory-overview__status-error {
+  color: var(--danger);
 }
 
-@media (max-width: 640px) {
-  .memory-overview__hero {
-    grid-template-columns: 112px minmax(0, 1fr);
-    min-height: 176px;
-    padding: var(--space-4);
+.memory-overview__status-action {
+  flex: none;
+}
+
+/* A row without a control must not reserve a line for one when it stacks on a phone. */
+.memory-overview .settings-row__control:has(> span:empty) {
+  display: none;
+}
+
+/* A worded action does not fit beside the answer on a phone: it sits under it. */
+@media (max-width: 560px) {
+  .memory-overview__status {
+    flex-wrap: wrap;
+  }
+
+  .memory-overview__status-copy {
+    flex-basis: calc(100% - 64px - var(--space-3));
+  }
+
+  .memory-overview__status-action:has(> .btn--sm) {
+    margin-inline-start: calc(64px + var(--space-3));
+  }
+
+  .memory-overview__status-copy:has(+ .memory-overview__status-action > .refresh-button) {
+    flex-basis: 0;
   }
 }
 

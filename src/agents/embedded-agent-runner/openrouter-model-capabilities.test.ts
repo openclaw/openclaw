@@ -146,7 +146,11 @@ describe("openrouter-model-capabilities", () => {
       maxTokens: 23456,
     });
     expect(maxOutput?.supportsTools).toBeUndefined();
-    expect(module.get("perplexity/sonar-deep-research")?.supportsTools).toBe(false);
+    expect(module.get("perplexity/sonar-deep-research")).toMatchObject({
+      supportsTools: false,
+      contextWindow: 128_000,
+      maxTokens: 32_768,
+    });
   });
 
   it("persists a fetched catalog to the store selected before the network wait", async () => {

@@ -10,6 +10,36 @@ export function encodePowerShell(script: string): string {
   );
 }
 
+export function windowsPackageInstallScript(tgzUrl: string, tempName: string): string {
+  return `$ErrorActionPreference = 'Stop'
+$tgz = Join-Path $env:TEMP ${psSingleQuote(tempName)}
+curl.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${psSingleQuote(tgzUrl)} -o $tgz
+# Windows PowerShell treats native stderr notices as errors under Stop.
+$ErrorActionPreference = 'Continue'
+npm.cmd install -g $tgz --no-fund --no-audit --loglevel=error
+$ErrorActionPreference = 'Stop'
+if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE" }
+$npmPrefix = (& npm.cmd prefix -g | Select-Object -Last 1)
+if ($LASTEXITCODE -ne 0 -or -not $npmPrefix -or -not (Test-Path -LiteralPath (Join-Path $npmPrefix 'openclaw.cmd') -PathType Leaf)) {
+  throw 'npm global prefix does not contain the installed openclaw.cmd'
+}
+# Packed fixtures need the same persistent CLI handoff as the site installer.
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if (-not (@($userPath -split ';') | Where-Object { $_ -ieq $npmPrefix })) {
+  $newUserPath = if ([string]::IsNullOrWhiteSpace($userPath)) { $npmPrefix } else { "$userPath;$npmPrefix" }
+  [Environment]::SetEnvironmentVariable('Path', $newUserPath, 'User')
+}
+$env:PATH = "$npmPrefix;$env:PATH"
+Invoke-OpenClaw --version
+if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LASTEXITCODE" }`;
+}
+
+export const windowsFreshShellVersionScript = `& powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodePowerShell(String.raw`$ErrorActionPreference = 'Stop'
+$env:PATH = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+& openclaw.cmd --version
+if ($LASTEXITCODE -ne 0) { throw "fresh-shell openclaw --version failed with exit code $LASTEXITCODE" }`)}
+if ($LASTEXITCODE -ne 0) { throw "fresh-shell CLI failed with exit code $LASTEXITCODE" }`;
+
 export const windowsScopedEnvFunction = String.raw`function Invoke-WithScopedEnv {
   param(
     [Parameter(Mandatory = $true)][hashtable] $Values,

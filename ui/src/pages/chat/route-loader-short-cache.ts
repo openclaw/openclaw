@@ -17,9 +17,9 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
+import { peekPrewarmedChatSnapshot } from "./chat-snapshot-prewarm.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
-import { peekPrewarmedChatSnapshot } from "./session-snapshot-prewarm.ts";
 
 export function sessionKeyUuid(sessionKey: string): string | null {
   const uuid = parseAgentSessionKey(sessionKey)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
@@ -103,6 +103,7 @@ export function findLocalSessionReference(
 type CachedShortSession = {
   sessionKey: string;
   row?: GatewaySessionRow;
+  fromCurrentNavigation: boolean;
 };
 
 export function findCachedShortSession(
@@ -126,7 +127,11 @@ export function findCachedShortSession(
     const carried = findUiSessionRow(context, carriedKey, target.agentId);
     if (carried && findLocalSessionReference([carried], target)) {
       preserveHandoffForCanonicalReload();
-      return { sessionKey: carried.key, row: carried };
+      return {
+        sessionKey: carried.key,
+        row: carried,
+        fromCurrentNavigation: carriedByCurrentNavigation,
+      };
     }
     const carriedUuid = sessionKeyUuid(carriedKey);
     const carriedAgentId = parseAgentSessionKey(carriedKey)?.agentId;
@@ -137,7 +142,7 @@ export function findCachedShortSession(
       normalizeAgentId(carriedAgentId) === normalizeAgentId(target.agentId)
     ) {
       preserveHandoffForCanonicalReload();
-      return { sessionKey: carriedKey };
+      return { sessionKey: carriedKey, fromCurrentNavigation: true };
     }
   }
   return undefined;

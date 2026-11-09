@@ -16,12 +16,13 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -94,9 +95,6 @@ async function memoryCheckpoint(phase: "afterWarmup" | "beforeClose" | "afterClo
   };
 }
 const memoryCheckpoints: Awaited<ReturnType<typeof memoryCheckpoint>>[] = [];
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 const authority = { assertCurrent() {}, authorize() {} };
 async function prepare(index: number) {
   const scope = {
@@ -222,7 +220,7 @@ async function measure() {
         totalCpuMs += (totalUsed.user + totalUsed.system) / 1000;
         if (values.mode === "allocation") {
           const profile = await inspector.post("HeapProfiler.stopSampling");
-          sampledAllocatedBytes += allocated(profile.profile.head);
+          sampledAllocatedBytes += sumSampledHeapBytes(profile.profile.head);
         }
       } finally {
         for (const item of batch) {

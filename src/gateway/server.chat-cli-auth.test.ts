@@ -1,10 +1,18 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import http from "node:http";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { removeAuthProfilesAcrossOwnerStores } from "../agents/auth-profiles/profiles.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "../agents/auth-profiles/source-check.js";
+import { loadAuthProfileStoreForRuntimeAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import * as cliSessions from "../agents/cli-runner/cli-live-session-registry.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
+import { loadPreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import { createWindowsCmdShimFixture } from "../test-helpers/windows-cmd-shim.js";
 import { setTestEnvValue } from "../test-utils/env.js";
@@ -12,6 +20,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { waitForCatalogPublication } from "./server-methods/models-auth-catalog.test-support.js";
 import {
   createClaudeAuthFixture,
@@ -34,6 +43,7 @@ const cases: {
   order: NonNullable<OpenClawConfig["auth"]>["order"];
   credential?: AuthProfileCredential;
   nativeContinuity?: boolean;
+  hookAccounts?: boolean;
   reply: string;
 }[] = [
   {
@@ -47,6 +57,13 @@ const cases: {
     order: { "claude-cli": [] },
     credential: savedCredential,
     reply: "No managed credential supplied.",
+  },
+  {
+    name: "enforces hook account selection at the real CLI process boundary",
+    order: undefined,
+    nativeContinuity: true,
+    hookAccounts: true,
+    reply: "Native account reply.",
   },
 ];
 
@@ -76,7 +93,7 @@ async function writeProfiles(
   });
 }
 
-describe.for(cases)("chat.send $name", (testCase) => {
+describe.for(cases)("Gateway $name", (testCase) => {
   let fixture: CliAuthFixture;
   let caseWork: Promise<void> | undefined;
 
@@ -96,7 +113,9 @@ describe.for(cases)("chat.send $name", (testCase) => {
   });
 
   it("preserves account selection and session history", { timeout: 90_000 }, ({ signal }) => {
-    caseWork = executeCliAuthCase(fixture, testCase, signal);
+    caseWork = testCase.hookAccounts
+      ? executeHookAuthCase(fixture, signal)
+      : executeCliAuthCase(fixture, testCase, signal);
     return caseWork;
   });
 });
@@ -126,7 +145,8 @@ async function prepareCliAuthFixture(
     order,
     credential,
     nativeContinuity,
-  }: Pick<(typeof cases)[number], "order" | "credential" | "nativeContinuity">,
+    hookAccounts,
+  }: Pick<(typeof cases)[number], "order" | "credential" | "nativeContinuity" | "hookAccounts">,
   signal: AbortSignal,
 ) {
   signal.throwIfAborted();
@@ -172,6 +192,7 @@ async function prepareCliAuthFixture(
     const nativeRoot = path.join(state.home, ".claude");
     setTestEnvValue("CLAUDE_CONFIG_DIR", nativeRoot);
     await fs.mkdir(nativeRoot);
+    await fs.writeFile(path.join(nativeRoot, "execution-launches.log"), "", { flag: "wx" });
     if (nativeContinuity) {
       await fs.writeFile(
         path.join(nativeRoot, ".credentials.json"),
@@ -186,13 +207,31 @@ async function prepareCliAuthFixture(
         }),
       );
     }
-    await writeProfiles(state, credential ? { "anthropic:pasted": credential } : {});
+    // An empty persisted store would hide the hook's no-source shortcut regression.
+    if (!hookAccounts) {
+      await writeProfiles(state, credential ? { "anthropic:pasted": credential } : {});
+    }
     const modelRef = "anthropic/claude-sonnet-4-6";
     const token = "chat-cli-auth-test";
-    const cfg = {
+    const cfg: OpenClawConfig = {
       ...(order ? { auth: { order } } : {}),
       ...createClaudeCliGatewayConfig(workspaceDir, modelRef, token),
-    } satisfies OpenClawConfig;
+    };
+    if (hookAccounts) {
+      cfg.agents!.ownership = "explicit";
+      cfg.agents!.entries = {
+        main: { workspace: workspaceDir },
+        missing: { workspace: workspaceDir, model: `${modelRef}@anthropic:missing` },
+        native: { workspace: workspaceDir, model: `${modelRef}@anthropic:claude-cli` },
+      };
+      cfg.hooks = {
+        enabled: true,
+        token: "hook-cli-auth-test",
+        allowRequestSessionKey: true,
+        allowedSessionKeyPrefixes: ["hook:"],
+        allowedAgentIds: ["main", "missing", "native"],
+      };
+    }
     signal.throwIfAborted();
     expect(resolveExecutablePath("claude")).toBe(executable);
     gateway = await startCliAuthGateway(state, cfg, token);
@@ -203,6 +242,208 @@ async function prepareCliAuthFixture(
   } catch (error) {
     await cleanupCliAuthFixture({ state, gateway });
     throw error;
+  }
+}
+
+async function executeHookAuthCase(fixture: CliAuthFixture, signal: AbortSignal) {
+  const { state, gateway, cfg, nativeRoot, modelRef } = fixture;
+  const requests: Array<string | undefined> = [];
+  const provider = await reserveTestPortListener({
+    offsets: [0],
+    signal,
+    createListener: () =>
+      http.createServer((request, response) => {
+        requests.push(request.headers.authorization);
+        request.resume();
+        response.end("fixture response");
+      }),
+  });
+  try {
+    await fs.writeFile(
+      path.join(nativeRoot, "provider-url.txt"),
+      `http://127.0.0.1:${provider.claim.port}/inference`,
+    );
+    const launchLog = path.join(nativeRoot, "execution-launches.log");
+    const settleCatalogs = async () => {
+      for (const agentId of ["main", "missing", "native"]) {
+        const input = { config: cfg, agentId, agentDir: state.agentDir(agentId) };
+        const owner = await loadPreparedModelRuntimeSnapshot(input);
+        await owner.loadFullModelCatalog?.({ refresh: true, wait: true });
+      }
+    };
+    // Native catalog probes only initialize; saved-credential launches must never be excluded.
+    const launches = async () =>
+      (await fs.readFile(launchLog, "utf8")).split("\n").filter((line) => line === "saved").length;
+    await settleCatalogs();
+    const key = (agentId: string) => `hook:account-proof:${agentId}`;
+    const canonicalKey = (agentId: string) => `agent:${agentId}:${key(agentId)}`;
+    const post = async (agentId: string, model?: string, sessionKey = key(agentId)) => {
+      const response = await fetch(`http://127.0.0.1:${gateway.port}/hooks/agent`, {
+        method: "POST",
+        headers: { authorization: "Bearer hook-cli-auth-test", "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Account isolation",
+          message: "Reply using the selected account.",
+          agentId,
+          sessionKey,
+          sessionMode: "persistent",
+          wakeMode: "next-heartbeat",
+          model,
+          deliver: false,
+          waitForCompletion: true,
+          idempotencyKey: randomUUID(),
+        }),
+        signal,
+      });
+      return { status: response.status, body: await response.json() };
+    };
+    const expectReply = async (agentId: string, credential: string, model?: string) => {
+      const before = requests.length;
+      expect(await post(agentId, model)).toMatchObject({
+        status: 200,
+        body: { ok: true, completion: { status: "ok" } },
+      });
+      expect(requests.slice(before)).toEqual([`Bearer ${credential}`]);
+    };
+    // Fresh persistent hooks create their own session before selecting its agent default.
+    for (const agentId of ["main", "missing"]) {
+      expect(await hasAnyAuthProfileStoreSourceAsync(state.agentDir(agentId))).toBe(false);
+      const before = [await launches(), requests.length];
+      const result = await post(
+        agentId,
+        agentId === "main" ? `${modelRef}@anthropic:missing` : undefined,
+      );
+      // Soft checks expose both independent no-source regressions when run on the base.
+      expect.soft(result).toMatchObject({ status: 502, body: { ok: false } });
+      expect.soft([await launches(), requests.length]).toEqual(before);
+    }
+    for (const agentId of ["main", "native"]) {
+      await expectReply(agentId, "synthetic-native-login-token");
+    }
+
+    for (const agentId of ["main", "native"]) {
+      await state.writeAuthProfiles(
+        { version: 1, profiles: { "anthropic:pasted": savedCredential } },
+        agentId,
+      );
+    }
+    await gateway.client.request("sessions.patch", {
+      key: canonicalKey("main"),
+      model: `${modelRef}@anthropic:claude-cli`,
+    });
+    await expectReply("main", "synthetic-native-login-token");
+    await gateway.client.request("sessions.patch", {
+      key: canonicalKey("native"),
+      model: `${modelRef}@anthropic:pasted`,
+    });
+    expect(
+      (await loadGatewaySessionEntryReadOnlyAsync(canonicalKey("native"))).entry,
+    ).toMatchObject({
+      authProfileOverride: "anthropic:pasted",
+      authProfileOverrideSource: "user",
+    });
+    for (const model of [undefined, `${modelRef}@anthropic:missing`]) {
+      await expectReply("native", "synthetic-pasted-anthropic-token", model);
+    }
+    const healthyStore = await loadAuthProfileStoreForRuntimeAsync(state.agentDir("native"));
+    expect(healthyStore.usageStats?.["anthropic:pasted"]?.lastUsed).toBeGreaterThan(0);
+    let beforeRevocation: number[] = [];
+    const originalMemory = cliSessions.ensureCliLiveSessionMemory;
+    const revokeBeforeLaunch: typeof originalMemory = async (context, runSignal) => {
+      // Remove both owners after credential preparation, before the fresh child starts.
+      for (const agentId of ["main", "native"]) {
+        expect(
+          await removeAuthProfilesAcrossOwnerStores({
+            agentDir: state.agentDir(agentId),
+            profileIds: ["anthropic:pasted"],
+          }),
+        ).toBe(true);
+      }
+      const revokedStore = await loadAuthProfileStoreForRuntimeAsync(state.agentDir("native"), {
+        readOnly: true,
+        allowKeychainPrompt: false,
+      });
+      expect(revokedStore.profiles["anthropic:pasted"]).toBeUndefined();
+      await settleCatalogs();
+      beforeRevocation = [await launches(), requests.length];
+      return originalMemory(context, runSignal);
+    };
+    using gate = vi
+      .spyOn(cliSessions, "ensureCliLiveSessionMemory")
+      .mockImplementationOnce(revokeBeforeLaunch);
+    const terminalEvents: unknown[] = [];
+    const stopEvents = onAgentEvent((event) => {
+      if (event.stream === "lifecycle") {
+        terminalEvents.push(event.data);
+      }
+    });
+    let revoked: Awaited<ReturnType<typeof post>>;
+    try {
+      revoked = await post("native", `${modelRef}@anthropic:pasted`, `${key("native")}:revoked`);
+    } finally {
+      stopEvents();
+    }
+    expect.soft(revoked).toMatchObject({ status: 200, body: { completion: { status: "error" } } });
+    expect.soft(terminalEvents).toContainEqual(
+      expect.objectContaining({
+        phase: "error",
+        error: expect.stringContaining('Saved account "anthropic:pasted" was removed'),
+      }),
+    );
+    expect(gate).toHaveBeenCalledOnce();
+    expect(await post("native")).toMatchObject({ status: 502, body: { ok: false } });
+    expect([await launches(), requests.length]).toEqual(beforeRevocation);
+
+    // Chat uses the reply renderer; hooks above retain their separate cron error surface.
+    for (const agentId of ["main", "native"]) {
+      await state.writeAuthProfiles(
+        { version: 1, profiles: { "anthropic:pasted": savedCredential } },
+        agentId,
+      );
+    }
+    await settleCatalogs();
+    const chatKey = `agent:native:revoked-chat-${randomUUID()}`;
+    await gateway.client.request("sessions.create", {
+      agentId: "native",
+      key: chatKey,
+      model: `${modelRef}@anthropic:pasted`,
+    });
+    gate.mockImplementationOnce(revokeBeforeLaunch);
+    const accepted = await gateway.client.request<{ runId: string }>("chat.send", {
+      sessionKey: chatKey,
+      message: "Reply using the selected account.",
+      deliver: false,
+      idempotencyKey: randomUUID(),
+    });
+    const recoveryText =
+      '⚠️ Saved account "anthropic:pasted" was removed. Select a connected account or sign in again under Models, then retry. OpenClaw did not submit this turn.';
+    expect
+      .soft(
+        await gateway.client.request(
+          "agent.wait",
+          { runId: accepted.runId, timeoutMs: 30_000 },
+          { timeoutMs: 35_000 },
+        ),
+      )
+      .toMatchObject({ status: "error", error: recoveryText });
+    const history = await gateway.client.request<{ messages: unknown[] }>("chat.history", {
+      sessionKey: chatKey,
+    });
+    expect.soft(history.messages).toContainEqual(
+      expect.objectContaining({
+        role: "custom",
+        customType: "run-failed-before-reply",
+        content: recoveryText,
+      }),
+    );
+    expect(gate).toHaveBeenCalledTimes(2);
+    expect([await launches(), requests.length]).toEqual(beforeRevocation);
+  } finally {
+    try {
+      await provider.releaseListener();
+    } finally {
+      await provider.claim.release();
+    }
   }
 }
 
@@ -249,6 +490,45 @@ async function executeCliAuthCase(
     reply,
   );
   if (nativeContinuity) {
+    const turnsBeforeSelection = await fs.readFile(path.join(nativeRoot, "turns.jsonl"), "utf8");
+    const refusedKey = `agent:main:missing-account-${randomUUID()}`;
+    await expect(
+      fixture.gateway.client.request("sessions.create", {
+        agentId: "main",
+        key: refusedKey,
+        model: `${modelRef}@anthropic:missing`,
+      }),
+    ).rejects.toMatchObject({
+      message: `A runtime is not available for ${modelRef}: selected account "anthropic:missing" is unavailable. Restore that account, or change the explicit or default account selection.`,
+    });
+    expect((await loadGatewaySessionEntryReadOnlyAsync(refusedKey)).entry).toBeUndefined();
+    const personalKey = `agent:main:missing-personal-account-${randomUUID()}`;
+    await fixture.gateway.client.request("sessions.create", {
+      agentId: "main",
+      key: personalKey,
+      model: modelRef,
+    });
+    // Removed personal accounts leave their exact session pin behind. Re-selecting
+    // the same model must report recovery without exposing that private locator.
+    const personalProfileId = `personal:${randomUUID()}:${randomUUID()}`;
+    const retainedPin = {
+      authProfileOverride: personalProfileId,
+      authProfileOverrideSource: "user" as const,
+    };
+    expect(
+      await patchSessionEntryCore({ agentId: "main", sessionKey: personalKey }, () => retainedPin),
+    ).toMatchObject(retainedPin);
+    await expect(
+      fixture.gateway.client.request("sessions.patch", { key: personalKey, model: modelRef }),
+    ).rejects.toMatchObject({
+      message: `A runtime is not available for ${modelRef}: selected personal account is unavailable. Restore that account, or change the explicit or default account selection.`,
+    });
+    expect((await loadGatewaySessionEntryReadOnlyAsync(personalKey)).entry).toMatchObject(
+      retainedPin,
+    );
+    expect(await fs.readFile(path.join(nativeRoot, "turns.jsonl"), "utf8")).toBe(
+      turnsBeforeSelection,
+    );
     const original = await readBinding(sessionKey);
     expect(original?.sessionId).toBeTruthy();
     expect(original?.authProfileId).toBeUndefined();

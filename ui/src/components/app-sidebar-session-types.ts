@@ -29,6 +29,7 @@ import {
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
 
@@ -119,6 +120,7 @@ export type SidebarRecentSession = Readonly<{
   active: boolean;
   visuallyActive: boolean;
   hasActiveRun: boolean;
+  backgroundProcessCount?: number;
   /** Defaults to logical activity for rows without a live activity projection. */
   isRunVisuallyActive?: boolean;
   /** Raw Gateway liveness used for operations even when display status is terminal. */
@@ -183,7 +185,6 @@ export type SidebarRecentSession = Readonly<{
     | "unreadHiddenRuns"
     | "queuedChildCount"
     | "runningChildCount"
-    | "failedChildCount"
     | "workspaceConflictCount"
   >;
   agentStatusNote?: string;
@@ -194,6 +195,7 @@ export type SidebarRecentSession = Readonly<{
   spawnedBy?: string;
   forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
   status?: SessionRunStatus;
+  lastRunError?: string;
   createdAt?: number;
   startedAt?: number;
   updatedAt?: number | null;
@@ -208,7 +210,6 @@ export type SidebarRecentSession = Readonly<{
   loadingChildren: boolean;
   containsActiveDescendant: boolean;
   runningChildCount: number;
-  failedChildCount: number;
 }>;
 
 export type SidebarSessionHovercardRow = Pick<
@@ -222,8 +223,10 @@ export type SidebarSessionHovercardRow = Pick<
   | "endedAt"
   | "hasAutomation"
   | "hasActiveRun"
+  | "gatewayHasActiveRun"
+  | "hasActiveSubagentRun"
+  | "lastRunError"
   | "label"
-  | "lastMessagePreview"
   | "expandedParticipants"
   | "participantCount"
   | "participants"
@@ -248,14 +251,14 @@ export function rowDemandsVisibility(
   reason: RowVisibilityReason = RowVisibilityReason.Any,
 ) {
   return reason === RowVisibilityReason.ActiveRun
-    ? row.hasActiveRun
+    ? row.hasActiveRun || (row.backgroundProcessCount ?? 0) > 0 || row.runningChildCount > 0
     : reason === RowVisibilityReason.Attention
       ? row.attention.kind !== "none"
       : row.visuallyActive ||
         row.containsActiveDescendant ||
         row.hasActiveRun ||
+        (row.backgroundProcessCount ?? 0) > 0 ||
         row.runningChildCount > 0 ||
-        row.failedChildCount > 0 ||
         (row.workspaceConflictCount ?? 0) > 0 ||
         row.unread ||
         (row.unreadChildCount ?? 0) > 0 ||
@@ -337,8 +340,17 @@ export type SidebarSessionPatch = Pick<
   | "communication"
 >;
 
-export const SIDEBAR_SESSION_PAGE_SIZE = 10;
-export const SIDEBAR_SESSION_SEE_LESS_THRESHOLD = 30;
+export const SIDEBAR_SESSION_PAGE_SIZE = 15;
+
+export function sidebarSessionPagination(grouping: SidebarSessionsGrouping, sectionId: string) {
+  return {
+    initialLimit: grouping === "none" && sectionId === "ungrouped" ? 30 : SIDEBAR_SESSION_PAGE_SIZE,
+    key:
+      sectionId.startsWith("agent:") || sectionId.startsWith("catalog")
+        ? sectionId
+        : `${grouping}:${sectionId}`,
+  };
+}
 
 export function sidebarSessionMetaId(key: string): string {
   return `sidebar-session-meta-${encodeURIComponent(key)}`;
@@ -571,12 +583,12 @@ export function sessionCatalogHostKey(catalogId: string, hostId: string): string
   return `${catalogId}\u0000${hostId}`;
 }
 
-/** Archived pins leave Pinned so the archived view can still list them in place. */
+/** Hidden pins remain discoverable in their lifecycle views without a duplicate in Pinned. */
 export function isListedInPinnedSection(
-  row: Pick<SidebarRecentSession, "key" | "archived">,
+  row: Pick<SidebarRecentSession, "key" | "archived" | "snoozedUntil">,
   pinnedKeys: ReadonlySet<string>,
 ): boolean {
-  return pinnedKeys.has(row.key) && row.archived !== true;
+  return pinnedKeys.has(row.key) && row.archived !== true && !isSessionSnoozed(row, Date.now());
 }
 
 export type SidebarPinZone = {
