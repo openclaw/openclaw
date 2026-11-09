@@ -1,15 +1,18 @@
 /**
- * Shared-session authority through the real retained-context media preparer.
+ * Shared-session authority through retained media, real Git, or its final authority guard.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-sharing-context-measure.ts \
  *   --mode timing --samples 5 --turns 20 --warmup 20 --items 50 --profiles 1000 --sessions 5000
  * Repeat with --mode allocation; instrumentation is never timed.
+ * Use --operation git for real config reads or --operation authority for owner-only costs.
+ * Add --active-sessions 32 to interleave retained shared-session authorities for those operations.
  * For --mode counts, pass Node --no-opt --no-maglev --no-sparkplug before --expose-gc.
  * Optimized/inlined functions otherwise lose precise-coverage calls after warmup.
  * Add --workspace-files 62000 --workspace-file-bytes 18000 for a 1.1 GB directory.
  * Alternate pinned baseline/candidate checkouts; run baseline twice for A/A controls.
- * Acceptance: lower authority CPU/allocation (>=20%), no >20% total regression,
- * unchanged disclosure and revocation. Setup, warmup and teardown are excluded.
- * This is real owner/media composition, not a model or Gateway transport benchmark.
+ * Media acceptance: lower authority CPU/allocation (>=20%), no >20% total regression.
+ * Git/authority acceptance: allocation reduction outside A/A spread, no >20%
+ * CPU or latency regression, unchanged revocation. Setup/warmup/teardown are excluded.
+ * This is real owner/effect composition, not a model or Gateway transport benchmark.
  */
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
@@ -26,12 +29,14 @@ import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 const { values } = parseArgs({
   options: {
     mode: { type: "string", default: "timing" },
+    operation: { type: "string", default: "media" },
     samples: { type: "string", default: "5" },
     turns: { type: "string", default: "20" },
     warmup: { type: "string", default: "3" },
     items: { type: "string", default: "50" },
     profiles: { type: "string", default: "1000" },
     sessions: { type: "string", default: "5000" },
+    "active-sessions": { type: "string", default: "1" },
     "workspace-files": { type: "string", default: "0" },
     "workspace-file-bytes": { type: "string", default: "18000" },
     revision: { type: "string", default: "unspecified" },
@@ -39,6 +44,7 @@ const { values } = parseArgs({
 });
 assert(globalThis.gc, "Run with --expose-gc");
 assert(["timing", "allocation", "counts"].includes(values.mode));
+assert(["media", "git", "authority"].includes(values.operation));
 assert(
   values.mode !== "counts" ||
     ["--no-opt", "--no-maglev", "--no-sparkplug"].every((flag) => process.execArgv.includes(flag)),
@@ -52,6 +58,13 @@ const warmup = integer(values.warmup, "warmup");
 const itemCount = integer(values.items, "items");
 const profileCount = integer(values.profiles, "profiles");
 const sessionCount = integer(values.sessions, "sessions");
+const activeSessionCount = integer(values["active-sessions"], "active-sessions");
+assert(activeSessionCount <= sessionCount, "Active sessions must fit the stored-session fixture");
+assert(values.operation !== "media" || activeSessionCount === 1, "Media uses one retained session");
+assert(
+  values.operation === "media" || profileCount >= 2,
+  "Shared Git authority needs two profiles",
+);
 const workspaceFiles = integer(values["workspace-files"], "workspace-files", 0);
 const workspaceFileBytes = integer(values["workspace-file-bytes"], "workspace-file-bytes");
 await mkdir(".local", { recursive: true });
@@ -71,7 +84,7 @@ const config: OpenClawConfig = {
         writer: {
           scopes: ["operator.read", "operator.write"],
           agents: "*",
-          sessions: { others: "write" },
+          sessions: { others: values.operation === "media" ? "write" : "view" },
         },
         reader: {
           scopes: ["operator.read"],
@@ -97,19 +110,21 @@ const { resolveOpenClawAgentSqlitePath } =
   await import("../../src/state/openclaw-agent-db.paths.js");
 const { writeSessionEntry } =
   await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
+const { addSessionMemberInWorker } =
+  await import("../../src/config/sessions/session-sharing-store.async.js");
 const { captureSessionEntryCurrentCheckAsyncInternal } =
   await import("../../src/config/sessions/session-entry-current-check.js");
 const { composeSessionSourceAssertion } =
   await import("../../src/config/sessions/session-source-authority.js");
+const { executeGitCommand } = await import("../../src/infra/git-exec.js");
 const { cleanupSessionStateForTest } =
   await import("../../src/test-utils/session-state-cleanup.js");
 const { drainGlobalSingletonLifecycleState } = await import("../../src/shared/global-singleton.js");
 
 const inspector = new Session();
-let admitted: Awaited<ReturnType<typeof prepareSessionPrincipalRunAuthority>> | undefined;
-let sessionSource:
-  | Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsyncInternal>>
-  | undefined;
+const admitted: Awaited<ReturnType<typeof prepareSessionPrincipalRunAuthority>>[] = [];
+const sessionSources: Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsyncInternal>>[] =
+  [];
 let connected = false;
 const scope = { agentId: "main", sessionKey: "agent:main:shared-context" };
 const sessionId = "synthetic-shared-context";
@@ -121,7 +136,7 @@ function allocationSummary(head: HeapProfiler.SamplingHeapProfileNode) {
     const frame = node.callFrame;
     const authority =
       inside ||
-      /\/(?:session-sharing[^/]*|operator-run-authority|user-profile-authority)\.[cm]?[jt]s(?:\?|$)/u.test(
+      /\/src\/(?:gateway\/(?:session-sharing[^/]*|operator-run-authority)|config\/sessions\/session-source-authority|state\/user-profile-authority)\.[cm]?[jt]s(?:\?|$)/u.test(
         frame.url,
       );
     bytes += node.selfSize;
@@ -138,6 +153,12 @@ function allocationSummary(head: HeapProfiler.SamplingHeapProfileNode) {
   return {
     bytesPerTurn: bytes / turns,
     authorityBytesPerTurn: authorityBytes / turns,
+    ...(values.operation === "media"
+      ? {}
+      : {
+          bytesPerCommand: bytes / turns / itemCount,
+          authorityBytesPerCommand: authorityBytes / turns / itemCount,
+        }),
     topAuthoritySites: [...functions]
       .toSorted((left, right) => right[1] - left[1])
       .slice(0, 12)
@@ -152,17 +173,29 @@ try {
     ),
   );
   const person = profiles[0]!;
+  const creator = values.operation === "media" ? person : profiles[1]!;
+  const activeScopes = Array.from({ length: activeSessionCount }, (_, index) => ({
+    ...scope,
+    sessionKey: index === 0 ? scope.sessionKey : `agent:main:shared-context-${index}`,
+    sessionId: index === 0 ? sessionId : `synthetic-shared-context-${index}`,
+  }));
   runOpenClawAgentWriteTransaction((database) => {
     for (let index = 0; index < sessionCount; index++) {
-      writeSessionEntry(database, index === 0 ? scope.sessionKey : `agent:main:other-${index}`, {
-        sessionId: index === 0 ? sessionId : `synthetic-session-${index}`,
+      const active = activeScopes[index];
+      writeSessionEntry(database, active?.sessionKey ?? `agent:main:other-${index}`, {
+        sessionId: active?.sessionId ?? `synthetic-session-${index}`,
         lifecycleRevision: "synthetic-incarnation",
         updatedAt: 1,
         visibility: "shared",
-        createdActor: { type: "human", source: "profile", id: person.id },
+        createdActor: { type: "human", source: "profile", id: creator.id },
       });
     }
   }, scope);
+  if (values.operation !== "media") {
+    for (const active of activeScopes) {
+      await addSessionMemberInWorker(active, { identityId: person.id, addedBy: creator.id });
+    }
+  }
   const body = "Synthetic retained document content.\n".repeat(8);
   const messages: AgentMessage[] = [];
   for (let index = 0; index < itemCount; index++) {
@@ -192,15 +225,24 @@ try {
     getCommittedRuntimeConfig: () => config,
   } as GatewayRequestContext;
   const storePath = resolveOpenClawAgentSqlitePath(scope);
-  sessionSource = await captureSessionEntryCurrentCheckAsyncInternal({ ...scope, storePath });
-  admitted = await prepareSessionPrincipalRunAuthority({
-    ...scope,
-    sessionId,
-    profileId: person.id,
-    storePath,
-    context,
-  });
-  const authority = admitted.authority;
+  const assertions: ReturnType<typeof composeSessionSourceAssertion>[] = [];
+  for (const active of activeScopes) {
+    const source = await captureSessionEntryCurrentCheckAsyncInternal({ ...active, storePath });
+    sessionSources.push(source);
+    const run = await prepareSessionPrincipalRunAuthority({
+      ...active,
+      profileId: person.id,
+      storePath,
+      context,
+    });
+    admitted.push(run);
+    assertions.push(composeSessionSourceAssertion([source.source, run.authority.assertCurrent]));
+  }
+  const authority = admitted[0]!.authority;
+  const assertActive = assertions[0]!;
+  const gitConfig = path.join(workspaceDir, "authority.config");
+  const gitConfigContent = "[proof]\nvalue = synthetic-authorized\n";
+  await writeFile(gitConfig, gitConfigContent);
   const prepare = bindHarnessMedia({
     attempt: {
       ...scope,
@@ -216,15 +258,28 @@ try {
       }),
     },
     config,
-    assertActive: composeSessionSourceAssertion([sessionSource.source, authority.assertCurrent]),
+    assertActive,
     signal: authority.signal ?? new AbortController().signal,
   }).capabilities.prepareContextMedia!;
   let completedItems = 0;
   async function turn() {
     for (const message of messages) {
-      const result = await prepare({ message, maxChars: 4096 });
-      assert(result.text?.includes(body.trim()), "Real file content must reach the consumer");
-      assert.equal(result.images.length, 0);
+      const assertCommandCurrent = assertions[completedItems % assertions.length]!;
+      if (values.operation === "authority") {
+        assertCommandCurrent();
+      } else if (values.operation === "git") {
+        const result = await executeGitCommand(
+          workspaceDir,
+          ["config", "--file", gitConfig, "--get", "proof.value"],
+          { beforeRun: assertCommandCurrent },
+        );
+        assert.equal(result.code, 0);
+        assert.equal(result.stdout.trim(), "synthetic-authorized");
+      } else {
+        const result = await prepare({ message, maxChars: 4096 });
+        assert(result.text?.includes(body.trim()), "Real file content must reach the consumer");
+        assert.equal(result.images.length, 0);
+      }
       completedItems++;
     }
   }
@@ -292,19 +347,32 @@ try {
       JSON.stringify({
         revision: values.revision,
         mode: values.mode,
+        operation: values.operation,
         sample,
         node: process.version,
         turns,
         itemsPerTurn: itemCount,
         profiles: profileCount,
         sessions: sessionCount,
+        activeSessions: activeSessionCount,
         databaseBytes,
         walBytes,
-        workspaceFiles: workspaceFiles + itemCount,
-        workspaceBytes: workspaceFiles * workspaceFileBytes + Buffer.byteLength(body) * itemCount,
+        workspaceFiles: workspaceFiles + itemCount + 1,
+        workspaceBytes:
+          workspaceFiles * workspaceFileBytes +
+          Buffer.byteLength(body) * itemCount +
+          Buffer.byteLength(gitConfigContent),
         wallMsPerTurn: elapsedMs / turns,
         threadCpuMsPerTurn: (threadCpu.user + threadCpu.system) / 1000 / turns,
         processCpuMsPerTurn: (cpu.user + cpu.system) / 1000 / turns,
+        ...(values.operation === "media"
+          ? {}
+          : {
+              commandsPerTurn: itemCount,
+              wallMsPerCommand: elapsedMs / turns / itemCount,
+              threadCpuMsPerCommand: (threadCpu.user + threadCpu.system) / 1000 / turns / itemCount,
+              processCpuMsPerCommand: (cpu.user + cpu.system) / 1000 / turns / itemCount,
+            }),
         allocation,
         countsPerTurn: counts,
         completedItems,
@@ -313,14 +381,21 @@ try {
     );
   }
   setUserProfileRole(person.id, "reader");
-  await assert.rejects(prepare({ message: messages[0]!, maxChars: 4096 }));
+  await assert.rejects(turn());
+  for (const assertion of assertions) {
+    assert.throws(assertion);
+  }
   console.log(JSON.stringify({ revision: values.revision, revocationRejected: true }));
 } finally {
   if (connected) {
     inspector.disconnect();
   }
-  admitted?.release();
-  sessionSource?.release();
+  for (const run of admitted) {
+    run.release();
+  }
+  for (const source of sessionSources) {
+    source.release();
+  }
   await cleanupSessionStateForTest({ stateDir: root, rootPath: root });
   await drainGlobalSingletonLifecycleState();
   await rm(root, { recursive: true, force: true });

@@ -166,27 +166,41 @@ export function createSessionSharingConsumption(params: {
   sharing: PreparedMutationSharing | undefined;
   getProfiles: () => PreparedSessionSharingProfiles | undefined;
 }) {
-  const current = { sharing: params.sharing, profiles: params.getProfiles() };
+  const current: {
+    sharing: PreparedMutationSharing | undefined;
+    profiles: PreparedSessionSharingProfiles | undefined;
+    members: readonly string[] | undefined;
+  } = { sharing: params.sharing, profiles: params.getProfiles(), members: undefined };
+  const isMember = (_target: SessionSharingTarget, id: string) =>
+    current.sharing
+      ? (current.sharing.isMember?.(id) ??
+        current.sharing.members.some((member) => member.identityId === id))
+      : (current.members?.includes(id) ?? false);
   return Object.assign(current, {
-    policy: (cfg: OpenClawConfig, members?: readonly string[]) =>
-      current.sharing || current.profiles
-        ? prepareProjectedSessionSharing({
-            cfg,
-            client: params.client,
-            profiles: current.profiles,
-            isMember: (_target, id) =>
-              current.sharing
-                ? (current.sharing.isMember?.(id) ??
-                  current.sharing.members.some((member) => member.identityId === id))
-                : (members?.includes(id) ?? false),
-          })
-        : undefined,
+    policy: (cfg: OpenClawConfig, members?: readonly string[]) => {
+      const policy =
+        current.sharing || current.profiles
+          ? prepareProjectedSessionSharing({
+              cfg,
+              client: params.client,
+              profiles: current.profiles,
+              isMember,
+              owner: current,
+            })
+          : undefined;
+      current.members = members;
+      return policy;
+    },
     consume: <T>(
       prepared: PreparedMutationSharing | undefined,
       consume: () => T,
       profiles: PreparedSessionSharingProfiles | undefined = params.getProfiles(),
     ): T => {
-      const previous = { sharing: current.sharing, profiles: current.profiles };
+      const previous = {
+        sharing: current.sharing,
+        profiles: current.profiles,
+        members: current.members,
+      };
       Object.assign(current, { sharing: prepared, profiles });
       try {
         profiles?.readCurrent();
@@ -345,7 +359,16 @@ export function createSessionSharingInputAuthority(
   };
 }
 
-const projectedSharingKeys = new WeakMap<object, { facts: readonly unknown[]; key: string }>();
+type ProjectedSessionSharing = ReturnType<typeof prepareSessionSharing> & {
+  policy: ReturnType<typeof resolveOperatorRolePolicy>;
+  getCacheKey: () => string;
+};
+type ProjectedSharingSnapshot = {
+  facts: readonly unknown[];
+  key?: string;
+  sharing?: ProjectedSessionSharing;
+};
+const projectedSharingKeys = new WeakMap<object, ProjectedSharingSnapshot>();
 const emptyProfileAliases: ReadonlySet<string> = new Set();
 
 export function prepareProjectedSessionSharing(params: {
@@ -353,7 +376,9 @@ export function prepareProjectedSessionSharing(params: {
   client: GatewayClient | null;
   isMember: (target: SessionSharingTarget, identityId: string) => boolean;
   profiles?: PreparedSessionSharingProfiles;
-}) {
+  /** Retained consumers lend current membership; viewer facts still revalidate on every call. */
+  owner?: object;
+}): ProjectedSessionSharing {
   const { cfg, client, isMember } = params;
   if (!params.profiles && client?.internal?.syntheticClient) {
     prepareGatewayRecipientProfile(client);
@@ -380,8 +405,67 @@ export function prepareProjectedSessionSharing(params: {
           );
   const ownerEquivalent =
     !identity && Boolean(cfg.gateway?.roles) && isSessionSharingOwnerEquivalent(client, actor);
-  let cacheKey: string | undefined;
-  return {
+  const scopes = client?.connect.scopes;
+  const readSnapshot = (): ProjectedSharingSnapshot => {
+    const viewer = params.owner ?? client ?? cfg;
+    const previous = projectedSharingKeys.get(viewer);
+    const facts = previous?.facts;
+    // Compare live authority directly; only misses need a new fact snapshot.
+    if (
+      facts &&
+      facts[0] === cfg &&
+      facts[1] === getRuntimeConfigSnapshotMetadata() &&
+      facts[2] === readGatewayAccessRevision() &&
+      facts[3] === actor?.kind &&
+      facts[4] === (actor?.kind === "operator" ? actor.profileId : undefined) &&
+      facts[5] === identity?.id &&
+      facts[6] === client?.authenticatedUserProfile?.profileId &&
+      facts[7] === client?.authenticatedUserId &&
+      facts[8] === Boolean(client?.authenticatedGitHubIdentitySync) &&
+      facts[9] === profile &&
+      facts[10] === policy &&
+      facts[11] === Boolean(cfg.gateway?.roles) &&
+      facts[12] === (scopes !== undefined) &&
+      facts[13] === ownerEquivalent &&
+      facts[14] === policy?.sessions.others &&
+      facts[15] === (params.owner ? isMember : undefined) &&
+      facts.length === 16 + (scopes?.length ?? 0)
+    ) {
+      let i = 0;
+      while (i < (scopes?.length ?? 0) && facts[16 + i] === scopes?.[i]) {
+        i++;
+      }
+      if (i === (scopes?.length ?? 0)) {
+        return previous;
+      }
+    }
+    const next: unknown[] = [
+      cfg,
+      getRuntimeConfigSnapshotMetadata(),
+      readGatewayAccessRevision(),
+      actor?.kind,
+      actor?.kind === "operator" ? actor.profileId : undefined,
+      identity?.id,
+      client?.authenticatedUserProfile?.profileId,
+      client?.authenticatedUserId,
+      Boolean(client?.authenticatedGitHubIdentitySync),
+      profile,
+      policy,
+      Boolean(cfg.gateway?.roles),
+      scopes !== undefined,
+      ownerEquivalent,
+      policy?.sessions.others,
+      params.owner ? isMember : undefined,
+    ];
+    const snapshot = { facts: scopes?.length ? next.concat(scopes) : next };
+    projectedSharingKeys.set(viewer, snapshot);
+    return snapshot;
+  };
+  let snapshot = params.owner ? readSnapshot() : undefined;
+  if (snapshot?.sharing) {
+    return snapshot.sharing;
+  }
+  const sharing = {
     ...prepareSessionSharing(params, {
       aliases: profile?.aliases ?? emptyProfileAliases,
       sessionCap: policy?.sessions.others,
@@ -390,41 +474,8 @@ export function prepareProjectedSessionSharing(params: {
     policy,
     /** Connection facts follow config/access publications, independently of row revisions. */
     getCacheKey() {
-      if (cacheKey !== undefined) {
-        return cacheKey;
-      }
-      const viewer = client ?? cfg;
-      const scopes = client?.connect.scopes;
-      const previous = projectedSharingKeys.get(viewer);
-      const facts = previous?.facts;
-      // Compare live authority directly; only misses need a new fact snapshot.
-      if (
-        facts &&
-        facts[0] === cfg &&
-        facts[1] === getRuntimeConfigSnapshotMetadata() &&
-        facts[2] === readGatewayAccessRevision() &&
-        facts[3] === actor?.kind &&
-        facts[4] === (actor?.kind === "operator" ? actor.profileId : undefined) &&
-        facts[5] === identity?.id &&
-        facts[6] === client?.authenticatedUserProfile?.profileId &&
-        facts[7] === client?.authenticatedUserId &&
-        facts[8] === Boolean(client?.authenticatedGitHubIdentitySync) &&
-        facts[9] === profile &&
-        facts[10] === policy &&
-        facts[11] === Boolean(cfg.gateway?.roles) &&
-        facts[12] === (scopes !== undefined) &&
-        facts[13] === ownerEquivalent &&
-        facts.length === 14 + (scopes?.length ?? 0)
-      ) {
-        let i = 0;
-        while (i < (scopes?.length ?? 0) && facts[14 + i] === scopes?.[i]) {
-          i++;
-        }
-        if (i === (scopes?.length ?? 0)) {
-          return (cacheKey = previous.key);
-        }
-      }
-      cacheKey = JSON.stringify([
+      snapshot ??= readSnapshot();
+      return (snapshot.key ??= JSON.stringify([
         actor,
         identity?.id,
         client?.authenticatedUserProfile?.profileId,
@@ -438,31 +489,13 @@ export function prepareProjectedSessionSharing(params: {
         Boolean(cfg.gateway?.roles),
         // Equal effective scopes can retain different source sharing authority.
         ownerEquivalent,
-      ]);
-      const next: unknown[] = [
-        cfg,
-        getRuntimeConfigSnapshotMetadata(),
-        readGatewayAccessRevision(),
-        actor?.kind,
-        actor?.kind === "operator" ? actor.profileId : undefined,
-        identity?.id,
-        client?.authenticatedUserProfile?.profileId,
-        client?.authenticatedUserId,
-        Boolean(client?.authenticatedGitHubIdentitySync),
-        profile,
-        policy,
-        Boolean(cfg.gateway?.roles),
-        scopes !== undefined,
-        ownerEquivalent,
-      ];
-      // Concatenation retains an exact-sized snapshot instead of push's spare capacity.
-      projectedSharingKeys.set(viewer, {
-        facts: scopes?.length ? next.concat(scopes) : next,
-        key: cacheKey,
-      });
-      return cacheKey;
+      ]));
     },
   };
+  if (snapshot) {
+    snapshot.sharing = sharing;
+  }
+  return sharing;
 }
 
 export function createSessionListEntryFilter(

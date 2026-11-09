@@ -1,4 +1,5 @@
 import { mkdirSync, symlinkSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { StatementSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
@@ -13,6 +14,7 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
+import { executeGitCommand } from "../infra/git-exec.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
@@ -136,6 +138,38 @@ function inWriterTransaction(connection: EngineConnection, check: () => void) {
     }
   }
 }
+
+it.each(["membership", "visibility", "replacement"] as const)(
+  "refuses the next git effect after retained run %s authority changes",
+  (change) =>
+    withSharingState(async ({ state, seed }) => {
+      const { scope, shared, identityId, capture } = seed("agent:main:git-authority", "original");
+      const authorization = await capture();
+      const run = authorization.retainForRun!();
+      using _ = { [Symbol.dispose]: run.release };
+      const filename = state.path("git-authority.config");
+      const write = (value: string) =>
+        executeGitCommand(state.root, ["config", "--file", filename, "proof.value", value], {
+          beforeRun: run.assertCurrent,
+        });
+      await expect(write("authorized")).resolves.toMatchObject({ code: 0 });
+      const original = await readFile(filename, "utf8");
+      expect(original).toContain("authorized");
+      if (change === "membership") {
+        removeSessionMember(scope, identityId);
+      } else {
+        replaceSessionEntrySync(scope, {
+          ...shared,
+          ...(change === "visibility" ? { visibility: "draft" } : { sessionId: "replacement" }),
+          updatedAt: 2,
+        });
+      }
+      await expect(write("revoked")).rejects.toThrow(
+        change === "replacement" ? "session changed before chat.send" : "for this connection",
+      );
+      expect(await readFile(filename, "utf8")).toBe(original);
+    }),
+);
 
 it.each(["resident", "fixed", "alias"] as const)(
   "revokes %s worker grants after committed membership changes without main-thread reads",

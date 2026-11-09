@@ -629,13 +629,15 @@ export async function prepareSessionMutationFacts(
         if (!current?.entry) {
           throw new SessionMutationFactsUnavailableError();
         }
-        return {
-          sourcePath: sharing.source.path,
-          sourceAgentId: sharing.source.agentId,
-          readSource,
-          target: { ...target, entry: current.entry },
-          membership: current.membership,
-        };
+        // The retained owner checks its live revision before lending these published facts.
+        if (facts!.target?.entry !== current.entry || facts!.membership !== current.membership) {
+          facts = {
+            ...facts!,
+            target: { ...target, entry: current.entry },
+            membership: current.membership,
+          };
+        }
+        return facts!;
       };
     }
     assertSource = inventoryRead.assertRegistryCurrent;
