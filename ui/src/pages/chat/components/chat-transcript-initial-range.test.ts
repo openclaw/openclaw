@@ -148,6 +148,10 @@ it.each([
     });
     range.presentation(rows);
     range.finish();
+    // The next viewport overlaps ordinary overscan. Prepare its first new row,
+    // not an overscan row whose DOM is already mounted.
+    range.recordReaderMovement(Math.sign(delta) * 240);
+    expect(range.presentation(rows).forecastRowKeys).toContain(delta > 0 ? "34" : "28");
     const distantKey = delta > 0 ? "80" : "1";
     range.preparedRowKeys.add(distantKey);
     range.recordReaderMovement(delta);

@@ -118,7 +118,7 @@ export class TranscriptInitialRange {
       const limit = this.isReaderMoving()
         ? Math.max(this.preparedRowLimit, indexes.size + this.scrollPrepareRowLimit)
         : Infinity;
-      for (const index of this.forecastIndexes(range)) {
+      for (const index of this.forecastIndexes(range, indexes)) {
         indexes.add(index);
         // Keep the forecast alive until arrival instead of remounting it a frame later.
         const key = this.rows[index]!.key;
@@ -224,7 +224,10 @@ export class TranscriptInitialRange {
       : [];
   }
 
-  private forecastIndexes(range: { startIndex: number; endIndex: number }): number[] {
+  private forecastIndexes(
+    range: { startIndex: number; endIndex: number },
+    mounted: ReadonlySet<number>,
+  ): number[] {
     if (this.viewportOnly || this.preparingEnd || !this.hasRetainedRows || !this.isReaderMoving()) {
       return [];
     }
@@ -249,6 +252,7 @@ export class TranscriptInitialRange {
     ) {
       if (
         (direction < 0 ? index < range.startIndex : index > range.endIndex) &&
+        !mounted.has(index) &&
         this.rows[index]?.retainDom
       ) {
         return [index];
