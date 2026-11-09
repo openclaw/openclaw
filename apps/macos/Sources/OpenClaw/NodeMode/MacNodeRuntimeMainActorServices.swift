@@ -21,6 +21,15 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
         fps: Double?,
         includeAudio: Bool?) async throws -> (path: String, durationMs: Int, fps: Double, hasAudio: Bool)
 
+    func startSimulatorCapture() async throws -> SimulatorCaptureService.Frame
+    func readSimulatorCapture(sessionId: String, after sequence: UInt64) async throws
+        -> SimulatorCaptureService.Frame
+    func stopSimulatorCapture(sessionId: String?) async
+    func simulatorInput(
+        sessionId: String, action: OpenClawComputerAction,
+        x: Double?, y: Double?, text: String?, keys: String?) async throws -> OpenClawComputerActParams
+    func activateSimulator(sessionId: String, desktopPermit: MacDesktopAvailabilityCoordinator.Permit) throws
+
     func locationAuthorizationStatus() -> CLAuthorizationStatus
     func locationAccuracyAuthorization() -> CLAccuracyAuthorization
     func currentLocation(
@@ -41,6 +50,7 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
     let desktopAvailability = MacDesktopAvailabilityCoordinator.shared
     private let screenSnapshotter = ScreenSnapshotService()
     private let screenRecorder = ScreenRecordService()
+    private let simulatorCapture = SimulatorCaptureService()
     private let locationService = MacNodeLocationService()
     private let computerAction = ComputerActionService()
 
@@ -77,6 +87,33 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
             durationMs: durationMs,
             fps: fps,
             includeAudio: includeAudio)
+    }
+
+    func startSimulatorCapture() async throws -> SimulatorCaptureService.Frame {
+        try await self.simulatorCapture.start()
+    }
+
+    func readSimulatorCapture(sessionId: String, after sequence: UInt64) async throws
+        -> SimulatorCaptureService.Frame
+    {
+        try await self.simulatorCapture.read(sessionId: sessionId, after: sequence)
+    }
+
+    func stopSimulatorCapture(sessionId: String?) async {
+        await self.simulatorCapture.stop(sessionId: sessionId)
+    }
+
+    func simulatorInput(
+        sessionId: String, action: OpenClawComputerAction,
+        x: Double?, y: Double?, text: String?, keys: String?) async throws -> OpenClawComputerActParams
+    {
+        try await self.simulatorCapture.input(
+            sessionId: sessionId, action: action, x: x, y: y, text: text, keys: keys)
+    }
+
+    func activateSimulator(sessionId: String, desktopPermit: MacDesktopAvailabilityCoordinator.Permit) throws {
+        try self.desktopAvailability.validate(desktopPermit)
+        try self.simulatorCapture.activate(sessionId: sessionId)
     }
 
     func locationAuthorizationStatus() -> CLAuthorizationStatus {

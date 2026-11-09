@@ -133,6 +133,8 @@ export const PLATFORM_DEFAULTS: Record<PlatformId, string[]> = {
     ...CONTACTS_CALENDAR_COMMANDS,
     ...PERSONAL_DATA_COMMANDS,
     ...DESKTOP_COMMANDS,
+    "simulator.capture",
+    "simulator.act",
   ],
   linux: [...DESKTOP_COMMANDS],
   windows: [

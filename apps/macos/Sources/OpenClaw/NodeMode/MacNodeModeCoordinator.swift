@@ -639,7 +639,7 @@ final class MacNodeModeCoordinator: NSObject {
                 let routeStillAuthoritative = await self.routeAuthorityAllowsInvoke(attempt.routeAuthorityGeneration)
                 let currentRoute = await self.session.currentRoute()
                 guard routeStillAuthoritative, currentRoute == installedRoute else { return }
-                let desktopCommands = ["desktop.stream", "screen.snapshot", "computer.act"]
+                let desktopCommands = ["desktop.stream", "screen.snapshot", "computer.act", "simulator.capture", "simulator.act"]
                 if attempt.options.commands.contains(where: desktopCommands.contains) {
                     await self.installDesktopRoute(
                         installedRoute,
@@ -1191,6 +1191,7 @@ extension MacNodeModeCoordinator {
             commands.append(OpenClawScreenCommand.snapshot.rawValue)
         }
         commands.append(OpenClawScreenCommand.record.rawValue)
+        commands.append("simulator.capture")
         commands.append(OpenClawSystemCommand.notify.rawValue)
 
         let capsSet = Set(caps)
@@ -1209,6 +1210,7 @@ extension MacNodeModeCoordinator {
         }
         if capsSet.contains(OpenClawCapability.computer.rawValue) {
             commands.append(OpenClawComputerCommand.act.rawValue)
+            commands.append("simulator.act")
         }
 
         return commands

@@ -5,9 +5,11 @@ import OpenClawKit
 actor MacNodeRuntime {
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
     private static let maxInlineMediaRawBytes = (maxGatewayPayloadBytes / 4) * 3
-    private static let cuaOwnedCommands = Set([
+    private static let desktopOwnedCommands = Set([
         OpenClawScreenCommand.snapshot.rawValue,
         OpenClawComputerCommand.act.rawValue,
+        "simulator.capture",
+        "simulator.act",
     ])
     private let cameraCapture = CameraCaptureService()
     private let cameraPTZ: any CameraPTZServicing
@@ -84,7 +86,7 @@ actor MacNodeRuntime {
     /// One branch per advertised native command keeps command ownership explicit.
     func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let command = req.command
-        if Self.cuaOwnedCommands.contains(command) {
+        if Self.desktopOwnedCommands.contains(command) {
             return await self.handleDesktopInvoke(req)
         }
         if let rejection = Self.canvasCommandRejection(req) {
@@ -189,7 +191,8 @@ actor MacNodeRuntime {
             defer { self.activeDesktopInvokes.removeValue(forKey: req.id) }
             let services = await self.mainActorServices()
             let controlsComputer = req.command == OpenClawComputerCommand.act.rawValue ||
-                self.computerControlProvider() == .cua
+                req.command == "simulator.act" ||
+                (req.command == OpenClawScreenCommand.snapshot.rawValue && self.computerControlProvider() == .cua)
             let capabilities: [Capability] = controlsComputer
                 ? [.accessibility, .eventPosting, .screenRecording, .computerControl] : [.screenRecording]
             if let error = await services.missingPermissions(
@@ -205,8 +208,7 @@ actor MacNodeRuntime {
                 return Self.errorResponse(
                     req, code: .unavailable, message: "UNAVAILABLE: computer control lifecycle changed")
             }
-            if req.command == OpenClawComputerCommand.act.rawValue || self.computerControlProvider() == .cua,
-               !self.computerControlEnabled()
+            if controlsComputer && !self.computerControlEnabled()
             {
                 await desktop.invalidate(permit, reason: "computer-disabled")
                 await desktop.finishInvocation(permit)
@@ -223,7 +225,14 @@ actor MacNodeRuntime {
                     throw MacDesktopAvailabilityCoordinator.AvailabilityError.executionClosed
                 }
                 try Task.checkCancellation()
-                if self.computerControlProvider() == .cua {
+                if req.command == "simulator.capture" {
+                    try await desktop.validate(permit)
+                    response = try await self.handleSimulatorCaptureInvoke(req)
+                } else if req.command == "simulator.act" {
+                    try await desktop.validate(permit)
+                    response = try await self.handleSimulatorInputInvoke(
+                        req, desktopPermit: permit, lifecycleGeneration: generation)
+                } else if self.computerControlProvider() == .cua {
                     guard let nodeHostWorker, await nodeHostWorker.supports(req.command) else {
                         await desktop.finishInvocation(permit)
                         return Self.errorResponse(
@@ -276,6 +285,7 @@ actor MacNodeRuntime {
         _ permits: [MacDesktopAvailabilityCoordinator.Permit],
         reason: String) async
     {
+        await self.cachedMainActorServices?.stopSimulatorCapture(sessionId: nil)
         let desktop = if let desktopAvailability {
             desktopAvailability
         } else {
@@ -760,7 +770,7 @@ extension MacNodeRuntime {
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
-    private func mainActorServices() async -> any MacNodeRuntimeMainActorServices {
+    func mainActorServices() async -> any MacNodeRuntimeMainActorServices {
         if let cachedMainActorServices {
             return cachedMainActorServices
         }
@@ -790,9 +800,11 @@ extension MacNodeRuntime {
         let lifecycleGeneration = self.computerInputReleaseGeneration
         await self.cachedMainActorServices?.releaseHeldInput(
             lifecycleGeneration: lifecycleGeneration)
+        await self.cachedMainActorServices?.stopSimulatorCapture(sessionId: nil)
     }
 
     func shutdown() async {
+        await self.cachedMainActorServices?.stopSimulatorCapture(sessionId: nil)
         await self.codexThreadCatalogClient.shutdown()
         // Terminal stop settles computer actions through releaseHeldComputerInput
         // first, so no window observation can still write a capture.

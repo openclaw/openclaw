@@ -171,6 +171,27 @@ struct MacNodeRuntimeTests {
 
         var permissionStates: [Capability: OpenClawPermissionState] = [:]
 
+        func startSimulatorCapture() async throws -> SimulatorCaptureService.Frame {
+            throw SimulatorCaptureService.CaptureError.noWindow
+        }
+
+        func readSimulatorCapture(sessionId: String, after sequence: UInt64) async throws
+            -> SimulatorCaptureService.Frame
+        {
+            throw SimulatorCaptureService.CaptureError.staleSession
+        }
+
+        func stopSimulatorCapture(sessionId: String?) async {}
+
+        func simulatorInput(
+            sessionId: String, action: OpenClawComputerAction,
+            x: Double?, y: Double?, text: String?, keys: String?) async throws -> OpenClawComputerActParams
+        {
+            throw SimulatorCaptureService.CaptureError.staleSession
+        }
+
+        func activateSimulator(sessionId: String, desktopPermit: MacDesktopAvailabilityCoordinator.Permit) throws {}
+
         func missingPermissions(_ capabilities: [Capability], disabled: [Capability]) async -> OpenClawNodeError? {
             PermissionManager.missingPermission(capabilities.compactMap { capability in
                 if disabled.contains(capability) { return (capability, .disabledInOpenClaw) }
