@@ -61,19 +61,41 @@ _${rootCmd}_completion() {
     local character next_character quote
     local choice_flag choice_prefix choice_completion_prefix short_group short_flag short_index
     local required_value_options options_ended=0 operand_flag="" literal_opts=""
-    local -a words=()
+    local redirection_target=0 redirection_re='(<|>|>>|<<-?|<<<|<>|<&|>&|>[|]|&>|&>>)'
+    local descriptor_re='^[0-9]+$'
+    local -a words=() argument_words=() shell_words=()
+    if ((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 1))); then
+        descriptor_re='^([0-9]+|[{][a-zA-Z_][a-zA-Z0-9_]*[}])$'
+    fi
     # Before Bash 4.3, COMP_POINT is a byte offset; string spans must use the same units.
     if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 3))); then
         local LC_ALL=C
     fi
     COMPREPLY=()
     remaining_line="\${COMP_LINE}"
+    # Readline can group adjacent wordbreaks, including a redirection and '=' or ':'.
+    for word in "\${COMP_WORDS[@]:0:COMP_CWORD+1}"; do
+        if [[ \${word} =~ ^([=:]*)\${redirection_re}([=:]*)$ ]]; then
+            [[ -n \${BASH_REMATCH[1]} ]] && shell_words+=("\${BASH_REMATCH[1]}")
+            shell_words+=("\${BASH_REMATCH[2]}")
+            [[ -n \${BASH_REMATCH[3]} ]] && shell_words+=("\${BASH_REMATCH[3]}")
+        else
+            shell_words+=("\${word}")
+        fi
+    done
     # Rejoin '=' and ':' wordbreaks, preserving redirections and whitespace boundaries.
     # Bash versions split '=' differently; $2 remains the fragment Readline will replace.
-    for ((i = 0; i <= COMP_CWORD; i++)); do
-        word="\${COMP_WORDS[i]}"
+    for ((i = 0; i < \${#shell_words[@]}; i++)); do
+        word="\${shell_words[i]}"
+        # Only an adjacent, unquoted descriptor belongs to the redirection.
+        if [[ \${word} =~ ^\${redirection_re}$ && \${word} != '&'* &&
+            \${remaining_line} == "\${word}"* && \${words[\${#words[@]}-1]} =~ \${descriptor_re} &&
+            ! \${words[\${#words[@]}-2]} =~ ^\${redirection_re}$ ]]; then
+            unset "words[$((\${#words[@]} - 1))]"
+        fi
         if ((i > 0)) && [[ -n "\${word}" && "\${remaining_line}" == "\${word}"* &&
-            ( "\${word}" =~ ^[=:]+$ || "\${COMP_WORDS[i-1]}" =~ ^[=:]+$ ) ]]; then
+            ! \${word} =~ ^\${redirection_re}$ && ! \${shell_words[i-1]} =~ ^\${redirection_re}$ &&
+            ( "\${word}" =~ ^[=:]+$ || "\${shell_words[i-1]}" =~ ^[=:]+$ ) ]]; then
             words[\${#words[@]}-1]+="\${word}"
         else
             words+=("\${word}")
@@ -88,6 +110,20 @@ _${rootCmd}_completion() {
     # Normalize words and the replacement prefix together: Readline keeps quoting
     # in COMP_WORDS, while its replacement span can start inside that quoted word.
     words[cword]="\${cur}"
+    # Rejoined redirection targets are shell syntax, never CLI option operands or commands.
+    for ((i = 0; i <= cword; i++)); do
+        if ((redirection_target)); then
+            ((i == cword)) && return
+            redirection_target=0
+        elif [[ \${words[i]} =~ ^\${redirection_re}$ ]]; then
+            redirection_target=1
+        else
+            argument_words+=("\${words[i]}")
+        fi
+    done
+    ((redirection_target)) && return
+    words=("\${argument_words[@]}")
+    cword=$((\${#words[@]} - 1))
     words+=("\${word_prefix}")
     for ((i = 0; i < \${#words[@]}; i++)); do
         word="\${words[i]}"
