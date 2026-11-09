@@ -1,4 +1,0 @@
-# Muse liveness regressions: an open native turn keeps runtime-owned liveness past the stalled-run
-# watchdog on bounded and unlimited budgets, and every attempt exit (completion or failure) hands liveness back to the host.
-# Exact net growth for this branch.
-66
