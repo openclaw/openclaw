@@ -472,6 +472,45 @@ it("admits explicit piped input without enabling a PTY", async () => {
   await finalize(backend, spec.finalizeToken);
 });
 
+it.skipIf(process.platform === "win32").each([undefined, "/requested/tools"])(
+  "prepends the mounted Git shim after shell startup (requested PATH=%s)",
+  async (requestedPath) => {
+    provision();
+    const backend = await createDockerSandboxBackend(
+      backendParams({
+        readOnlyResourceMounts: [
+          { hostPath: "/host/git-tools", containerPath: "/openclaw/git-tools" },
+        ],
+      }),
+    );
+    const spec = await backend.buildExecSpec({
+      command: 'printf "%s" "$PATH"',
+      env: requestedPath ? { PATH: requestedPath } : {},
+      usePty: false,
+    });
+    try {
+      const staged = Object.fromEntries(
+        fs
+          .readFileSync(envFile(spec), "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => line.split("=")),
+      );
+      const child = spawnSync("/bin/sh", ["-c", spec.argv.at(-1)!], {
+        env: { PATH: "/usr/bin:/bin", ...staged },
+        encoding: "utf8",
+      });
+      expect(child.status).toBe(0);
+      expect(child.stdout).toBe(
+        `/openclaw/git-tools:${requestedPath ? `${requestedPath}:` : ""}/usr/bin:/bin`,
+      );
+      expect(child.stderr).toBe("");
+    } finally {
+      await finalize(backend, spec.finalizeToken);
+    }
+  },
+);
+
 it.skipIf(process.platform === "win32").each([
   { engine: "docker", host: "github.com" },
   { engine: "podman", host: "ghe.example.test" },

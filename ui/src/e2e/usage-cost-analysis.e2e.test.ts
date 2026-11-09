@@ -5,7 +5,11 @@ import type { SessionUsageEntry } from "../../../src/shared/usage-types.js";
 import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
 import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
+import {
+  applyUsageQuery,
+  openUsageFilter,
+  installUsageOverviewGateway as installMockGateway,
+} from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI usage cost analysis mocked Gateway E2E",
@@ -276,8 +280,7 @@ suite.define(() => {
           sessions.map((session) => session.label),
         );
         if (scenario === "filtered") {
-          await page.locator(".usage-query-input").fill("label:Visible");
-          await page.locator(".usage-query-input").press("Enter");
+          await applyUsageQuery(page, "label:Visible");
           await expect.poll(() => list.locator(".session-bar-row").count()).toBe(3);
         }
         if (scenario === "recent-tab") {
@@ -307,8 +310,7 @@ suite.define(() => {
           )
           .toEqual(names.toSorted());
         if (scenario === "filtered") {
-          await page.locator(".usage-query-input").fill("");
-          await page.locator(".usage-query-input").press("Enter");
+          await applyUsageQuery(page, "");
           await expect.poll(() => list.locator(".session-bar-row").count()).toBe(4);
           await expect
             .poll(() =>
@@ -418,34 +420,32 @@ suite.define(() => {
         .poll(async () => (await sessionLabels.allTextContents()).toSorted())
         .toEqual(["Research Review", "Team Planning"]);
 
-      const providerFilter = page.locator(".usage-filter-select").filter({
-        has: page.locator(".usage-filter-trigger", { hasText: "Provider" }),
-      });
-      await providerFilter.locator(".usage-filter-trigger").click();
-      await providerFilter.locator('[data-value="command:select-all"]').click();
-      await expectText(providerFilter.locator(".settings-count")).toBe("2");
+      let providerFilter = await openUsageFilter(page, "Provider");
+      await providerFilter.getByRole("button", { name: "Select all", exact: true }).click();
+      await expectText(page.locator(".usage-filter-chip__value")).toBe("2");
       await expect
         .poll(async () => (await sessionLabels.allTextContents()).toSorted())
         .toEqual(["Research Review", "Team Planning"]);
 
-      const query = page.locator(".usage-query-input");
-      await page.keyboard.press("Escape");
+      const query = page.locator(".usage-filter-menu__query input");
+      await page.locator(".usage-filter-menu__trigger").click();
       for (const token of ["PROVIDER:OpenAI", 'provider:"openai"']) {
-        await query.fill(`${token} provider:anthropic`);
-        await query.press("Enter");
+        await applyUsageQuery(page, `${token} provider:anthropic`);
         await expect
           .poll(async () => (await sessionLabels.allTextContents()).toSorted())
           .toEqual(["Research Review", "Team Planning"]);
-        await providerFilter.locator(".usage-filter-trigger").click();
-        const openai = providerFilter.locator('[data-value="option:openai"]');
+        providerFilter = await openUsageFilter(page, "Provider");
+        const openai = providerFilter.getByRole("menuitemcheckbox", {
+          name: "openai",
+          exact: true,
+        });
         await expect.poll(() => openai.getAttribute("aria-checked")).toBe("true");
         await openai.click();
         await expectTexts(sessionLabels, ["Research Review"]);
         await expect.poll(() => query.inputValue()).toBe("provider:anthropic ");
-        await page.keyboard.press("Escape");
+        await page.locator(".usage-filter-menu__trigger").click();
       }
-      await query.fill('label:"Team Planning"');
-      await query.press("Enter");
+      await applyUsageQuery(page, 'label:"Team Planning"');
       await expectTexts(sessionLabels, ["Team Planning"]);
     });
   });

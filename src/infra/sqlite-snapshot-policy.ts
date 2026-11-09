@@ -3,6 +3,7 @@ import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { hasErrnoCode } from "./errno.js";
 
 export const MAX_SNAPSHOT_ATTEMPTS = 10;
+export const SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS = 30_000;
 
 const SNAPSHOT_RETRY_BASE_MS = 10;
 const SNAPSHOT_RETRY_MAX_MS = 80;

@@ -255,6 +255,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/tools-catalog-copy-measure.ts|no-extend-native|2",
         // The SQLite probe restores both native methods and forwards their original receivers.
         "scripts/perf/trajectory-runtime-append.ts|typescript/unbound-method|2",
+        // The untimed SQL census preserves native statement receivers and restores all methods.
+        "scripts/perf/transcript-maintenance-measure.worker.ts|typescript/unbound-method|1",
         // The browser probe forwards IndexedDB writes with each store receiver and restores both methods.
         "scripts/perf/ui-streaming-render-measure.ts|typescript/unbound-method|2",
         // The pager probe forwards native prepare with its original receiver and restores it.

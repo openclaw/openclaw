@@ -91,6 +91,23 @@ export function isTranscriptProgrammaticScroll(
   );
 }
 
+function hasReachedIssuedEnd(
+  state: TranscriptOffsetState,
+  element: HTMLDivElement | null,
+  tolerance: number,
+): boolean {
+  const command = state.scrollCommand;
+  if (!element || command?.target !== "end" || command.offset === undefined) {
+    return false;
+  }
+  const max = maxTranscriptScrollOffset(element);
+  return (
+    max !== null &&
+    Math.abs(command.offset - element.scrollTop) <= tolerance &&
+    Math.abs(max - element.scrollTop) <= tolerance
+  );
+}
+
 export function scrollTranscriptToEnd(
   state: TranscriptOffsetState,
   instance: Virtualizer<HTMLDivElement, HTMLElement>,
@@ -121,8 +138,7 @@ export function scrollTranscriptToEnd(
     // Instant commands and smooth no-ops can reach their target before any
     // native offset event. Do not let delayed idle reclaim a departed reader.
     const element = instance.scrollElement;
-    const max = maxTranscriptScrollOffset(element);
-    if (element && max !== null && Math.abs(max - element.scrollTop) <= 1) {
+    if (hasReachedIssuedEnd(state, element, 1)) {
       cancelScroll(true);
     }
     // A smooth no-op emits no native idle event to capture the end. Preserve
@@ -509,11 +525,9 @@ export function observeTranscriptOffset(
     // must not stop a smooth animation on its penultimate 1px frame; retain
     // the restore path's rounding tolerance only after native scrolling settles.
     // Reaching the end cannot retire a message reveal awaiting its DOM commit.
-    if (
-      element &&
-      owner.state.scrollCommand?.target === "end" &&
-      Math.abs((maxTranscriptScrollOffset(element) ?? 0) - element.scrollTop) <= (scrolling ? 0 : 1)
-    ) {
+    // Shrinking estimated rows can temporarily clamp the viewport before the
+    // issued destination. Let the virtualizer retarget before retiring it.
+    if (hasReachedIssuedEnd(owner.state, element, scrolling ? 0 : 1)) {
       owner.cancelScroll(true);
     }
   });

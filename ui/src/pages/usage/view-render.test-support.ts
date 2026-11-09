@@ -52,3 +52,37 @@ export function usageState(
   };
   return { base, usage, setFilters, setDisplay, onChange, onDatesChange };
 }
+
+/** Open the desktop Filter menu through its real trigger and optional field submenu. */
+export function openUsageFilter(root: Pick<ParentNode, "querySelector">, field?: string) {
+  const mainTrigger = root.querySelector<HTMLButtonElement>(".usage-filter-menu__trigger")!;
+  const menu = root.querySelector<HTMLElement>(".usage-filter-menu")!;
+  const open = (trigger: HTMLButtonElement) => {
+    if (trigger.getAttribute("aria-expanded") === "true") {
+      return;
+    }
+    menu.addEventListener(
+      "overlay-show",
+      () => {
+        // JSDOM has no scrolling layout; exercise real Menu opening and selection.
+        for (const item of menu.querySelectorAll<HTMLElement>('[role^="menuitem"]')) {
+          item.scrollIntoView = vi.fn();
+        }
+      },
+      { once: true },
+    );
+    trigger.click();
+    flush();
+  };
+  open(mainTrigger);
+  const trigger = field
+    ? menu.querySelector<HTMLButtonElement>(`[role="menuitem"][aria-label="${field}"]`)!
+    : mainTrigger;
+  if (field) {
+    open(trigger);
+  }
+  const surface = root.querySelector<HTMLElement>(
+    `[id="${trigger.getAttribute("aria-controls")}"]`,
+  )!;
+  return { menu, trigger, surface };
+}

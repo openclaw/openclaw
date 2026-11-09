@@ -114,13 +114,16 @@ it("defaults to full and rejects borrowers broader than their connected parent",
     "preset-borrower.mjs",
     `import assert from 'node:assert/strict';
 import { createVitestWorkerRun } from ${JSON.stringify(ownerUrl)};
-const [full, runtime] = JSON.parse(process.argv[2]);
+const [full, runtime, tooling] = JSON.parse(process.argv[2]);
 try {
   for (const [parent, requested, expected] of [
     [{directory: full.directory}, 'runtime', 'full'],
     [full, 'runtime', 'full'],
     [runtime, undefined, 'runtime'],
     [runtime, 'runtime', 'runtime'],
+    [full, 'tooling', 'full'],
+    [tooling, undefined, 'tooling'],
+    [tooling, 'tooling', 'tooling'],
   ]) {
     const owner = createVitestWorkerRun(process.env, parent, requested);
     try {
@@ -132,6 +135,9 @@ try {
   }
   assert.throws(() => createVitestWorkerRun(process.env, runtime, 'full'),
     /Runtime compiled subprocess owner cannot serve a full preset borrower/);
+  for (const [parent, requested] of [[runtime, 'tooling'], [tooling, 'runtime'], [tooling, 'full']]) {
+    assert.throws(() => createVitestWorkerRun(process.env, parent, requested), /cannot serve/);
+  }
 } finally {
   process.disconnect();
 }
@@ -148,10 +154,11 @@ import { createVitestWorkerRun } from ${JSON.stringify(ownerUrl)};
 const full = createVitestWorkerRun();
 const explicit = createVitestWorkerRun(process.env, undefined, 'full');
 const runtime = createVitestWorkerRun(process.env, undefined, 'runtime');
-const owners = [full, explicit, runtime];
+const tooling = createVitestWorkerRun(process.env, undefined, 'tooling');
+const owners = [full, explicit, runtime, tooling];
 try {
-  assert.deepEqual(owners.map(owner => owner.descriptor.preset), ['full', 'full', 'runtime']);
-  const child = spawn(process.execPath, [${JSON.stringify(borrower)}, JSON.stringify([full.descriptor, runtime.descriptor])], {
+  assert.deepEqual(owners.map(owner => owner.descriptor.preset), ['full', 'full', 'runtime', 'tooling']);
+  const child = spawn(process.execPath, [${JSON.stringify(borrower)}, JSON.stringify([full.descriptor, runtime.descriptor, tooling.descriptor])], {
     cwd: ${JSON.stringify(root)}, stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
   });
   await full.borrow(child, once(child, 'close').then(result => assert.deepEqual(result, [0, null])));
@@ -201,19 +208,21 @@ try {
   if (process.platform !== 'win32') assert.equal(fs.statSync(metadataTarget).mode & 0o777, ${0o700 & ~process.umask()});
   const second = reserve();
   if (${reusesReleasedSlot}) {
-    const runtime = createVitestWorkerRun(process.env, undefined, 'runtime');
+    for (const preset of ['runtime', 'tooling']) {
+    const runtime = createVitestWorkerRun(process.env, undefined, preset);
     owners.push(runtime);
-    assert.equal(path.basename(runtime.descriptor.directory), 'run-cache-runtime-0');
+    assert.equal(path.basename(runtime.descriptor.directory), 'run-cache-' + preset + '-0');
     assert.equal(path.basename(first.descriptor.directory), 'run-cache-1');
-    const nextRuntime = createVitestWorkerRun(process.env, undefined, 'runtime');
+    const nextRuntime = createVitestWorkerRun(process.env, undefined, preset);
     owners.push(nextRuntime);
-    assert.equal(path.basename(nextRuntime.descriptor.directory), 'run-cache-runtime-1');
+    assert.equal(path.basename(nextRuntime.descriptor.directory), 'run-cache-' + preset + '-1');
     await runtime.dispose();
-    const reusedRuntime = createVitestWorkerRun(process.env, undefined, 'runtime');
+    const reusedRuntime = createVitestWorkerRun(process.env, undefined, preset);
     owners.push(reusedRuntime);
     assert.equal(reusedRuntime.descriptor.directory, runtime.descriptor.directory);
     assert(fs.existsSync(nextRuntime.descriptor.directory));
     assert(fs.existsSync(first.descriptor.directory));
+    }
   }
   await first.dispose();
   assert.equal(fs.existsSync(first.descriptor.directory), false);

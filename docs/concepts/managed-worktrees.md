@@ -81,15 +81,20 @@ with sandbox mode `all` or `non-main` in the background. Agents with sandbox mod
 still prepare dependencies on first use. A session arriving during preparation
 waits for the same build; later checkouts arrive with `node_modules`. Other selected commits
 still run dependency installation on first use. When the frozen lockfile and Git
-attributes are unchanged, an idle template imports only the new Git objects and
-checks out the source delta before reinstalling into its retained dependencies.
+attributes are unchanged, OpenClaw clones a prepared template into a separate generation,
+imports only the new Git objects, and checks out the source delta before reinstalling
+into its retained dependencies.
 Repeat installation still runs repository lifecycle scripts when manifests and
 lockfiles are unchanged.
 Concurrent requests for that commit share the refresh. Lockfile or attribute changes
-build a fresh template; a template still being cloned cannot be refreshed. Each
+build a fresh template. Refresh never changes the source generation, including while
+another session is cloning it. Each
 clone still receives only the selected source snapshot in its private Git object
 store. Shutdown cancels preparation and
-drains accepted installer cleanup. Before publishing a template, OpenClaw fences
+drains accepted installer cleanup. Validation leaves the last-good generation published;
+refreshes and replacement builds publish atomically after preparation succeeds. An
+interrupted build leaves that previous generation available for requests with matching
+inputs. Before publishing a template, OpenClaw fences
 the disposable installer against restart and verifies that it has stopped. Container
 removal runs serially in the background, so a slow Docker or Podman removal does
 not delay the prepared workspace. Failed removals remain registered, log a warning,
@@ -97,6 +102,20 @@ and retry during housekeeping, including after a Gateway restart. This cleanup
 also runs when ordinary sandbox idle and age pruning are disabled.
 The private checkout storage must support filesystem acceleration, and
 `worktreeAcceleration: false` disables this preparation too.
+
+Sandbox preparation retains up to four recently used generations per repository
+and private template root, across runtime identities. Returning to a retained
+commit reuses its prepared dependencies instead of refreshing the shared template
+back and forth. Every build still passes disk admission. Live clone and installer
+readers can temporarily retain additional generations; cleanup never removes
+their files before those readers settle.
+
+Older runtime identities become eligible for cleanup after six unused hours.
+The most recently used identity keeps the ordinary idle retention window, subject
+to the four-generation limit. Hourly maintenance shares the existing deletion
+spacing and IO-pressure limits without holding the template publication lock while
+waiting. Completed projections have independent Git metadata and COW file references,
+so retiring their original template does not remove their files or dependencies.
 
 Dependency preparation uses the selected sandbox image, network restrictions,
 and guest working directory, without configured credentials, custom bind mounts,
@@ -136,7 +155,21 @@ Publication and base refresh reuse exact commits already stored locally instead
 of fetching them again. Partial clones still fetch missing contents when the
 operation needs those files. Missing publication commits use the cached target
 and default base tips for fetch negotiation when available, avoiding unrelated
-session histories while retaining commit ancestry and trees.
+session histories while retaining commit ancestry and trees. When a cached base
+and an existing promisor registration for the publication URL are available,
+acquisition uses temporary Git metadata and writes directly to the existing
+object store. This avoids scanning every session ref before negotiation; local
+refs and shallow boundaries stay unchanged. The first filtered fetch for a URL
+uses the original repository so Git can register it for later content hydration.
+Managed worktree default-branch refresh uses the same isolated object-store
+transport regardless of origin's configured fetch mappings. It fetches only the
+default branch and publishes its tracking ref; additional PR refspecs and custom
+destinations do not broaden that operation. The shared repository's ref-mutation
+queue is held only for ref publication, so other worktrees can register while
+transport runs. Origin's effective transport settings, other branches, and the
+source `FETCH_HEAD` remain unchanged. An unavailable cached base is fetched through
+the same isolated transport; ordinary explicit fetches still own broader ref
+refresh and repository repair.
 Only sessions with a writable managed sandbox are offered this action; direct
 host sessions merge the base with git in their workspace before publishing.
 Resolve reported conflicts and repeat it with `conflictsResolved: true` and the
@@ -707,6 +740,10 @@ openclaw worktrees retire-snapshot <id> \
   --retained-ref refs/heads/<retained-branch> --retained-oid <source-commit> --json
 ```
 
+The retained source must be an ordinary branch outside `openclaw/*` or a
+remote-tracking ref. Managed branches expire with their worktrees and cannot
+serve as durable source custody after the snapshot's registry row is retired.
+
 Retirement applies only to ordinary snapshots, not exact-state recovery snapshots or
 their retained checkouts. It requires identical source trees and retained snapshot-parent history.
 It refuses a live or reappeared checkout, Git registration, changed identity,
@@ -775,7 +812,12 @@ result includes `recoveryPath` and `recoveryRetainedUntil`. This retains writes
 from processes that already held a working directory or open file descriptor;
 Git index/ref locks alone cannot make deleting those bytes safe. The recovery
 path is not an active workspace. Snapshot expiration deletes this retained
-checkout, so do not continue working there or treat it as permanent storage.
+checkout and retires its managed branch once no other checkout or recovery owner
+needs it, so do not continue working there or treat it as permanent storage.
+If branch deletion fails, cleanup records the failure and keeps the registry entry
+for retry. A checkout retired because its Git metadata is missing keeps its branch
+and registry recovery ownership while source files remain, even after the normal
+snapshot retention period.
 
 Exact-state retirement requires a full, non-sparse checkout with Git file refs
 and supported Git index extensions. It holds native Git index and ref locks while
@@ -896,6 +938,20 @@ openclaw worktrees gc --job <id>
 
 `--json` prints the receipt, including the job state and current cleanup summary. Polling observes the job without starting another pass. Enqueue requests made while a job is queued or running return that same job; only the latest job is retained, and restarting the Gateway discards its receipt. To force reinspection of unchanged deferred checkouts, start a new job with `--retry-deferred` after any current job finishes.
 
+Ordinary GC also removes orphaned local `openclaw/*` branches in repositories
+recorded by the worktree registry or pending creation. It preserves branches
+attached to any Git worktree, referenced by a live or retained registry record, or
+reserved by pending creation. Recovery refs without a matching registry record
+preserve all branch candidates in that repository. Other local branches and
+remote-tracking refs are outside this cleanup's scope.
+
+Cleanup holds the existing allocation lease and revalidates its live authority
+immediately before each native Git deletion. Successful deletion counts appear in
+the worktree log; failures appear in the GC receipt and are retried on a later pass.
+No new persisted cleanup flag is required: existing recovery records protect their
+branches until their recovery obligations expire. Repositories with no remaining
+registry or pending records are not discovered by this sweep.
+
 For partial clones, `openclaw worktrees gc --retry-deferred` also checks the
 objects needed by all Git-registered worktree indexes and current HEAD trees
 during repository maintenance.
@@ -938,7 +994,7 @@ their specific input error and exit with code 1 before cleanup or removal.
 | `worktrees.create`         | Create or reuse a named managed worktree.                               |
 | `worktrees.remove`         | Snapshot and remove a worktree. Forced removals report `snapshotError`. |
 | `worktrees.restore`        | Restore a removed worktree from its snapshot.                           |
-| `worktrees.gc`             | Queue background cleanup or read a job's progress.                      |
+| `worktrees.gc`             | Queue cleanup and read progress.                                        |
 | `worktrees.recoverRemoval` | Complete an interrupted removal from the exact pending snapshot.        |
 | `worktrees.retireSnapshot` | Retire one redundant snapshot with exact retained-source guards.        |
 
@@ -953,7 +1009,7 @@ fields and results are:
 | `worktrees.create`         | `repoRoot`; optional `name`, `baseRef`, `profiles`, `expectedRepoIdentity`                                                | Full worktree record, including any `gcProtection`. The CLI captures the physical repository identity before dispatch. |
 | `worktrees.remove`         | `id`; optional, mutually exclusive `force`, `ifLossless`, or `exactState`                                                 | `removed`, optional `snapshotRef`, `snapshotError`, `recoveryPath`, `recoveryRetainedUntil`, and lossless `cleanup`.   |
 | `worktrees.restore`        | `id`; optional `recoverExactState`                                                                                        | Full restored worktree record.                                                                                         |
-| `worktrees.gc`             | Optional `jobId` to poll; optional `retryDeferred: true` when queuing a new job                                           | Job receipt with the current cleanup summary; see below.                                                               |
+| `worktrees.gc`             | Optional `jobId` to poll; `retryDeferred: true` when queuing                                                              | Job receipt.                                                                                                           |
 | `worktrees.recoverRemoval` | `id`, `snapshot` (the expected pending snapshot OID)                                                                      | `removed: true`, optional `snapshotRef`.                                                                               |
 | `worktrees.retireSnapshot` | `id`, `expectedSnapshotRef`, `expectedSnapshotOid`, `expectedRemovedAt`, `retainedSourceRef`, `expectedRetainedSourceOid` | `retired: true`, `id`.                                                                                                 |
 

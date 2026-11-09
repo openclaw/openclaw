@@ -225,6 +225,17 @@ it("refreshes source changes once, isolates clones, and rebuilds changed lockfil
     "template.priorSourceCommit": sourceCommit.slice(0, 12),
     "template.requestedSourceCommit": changedCommit.slice(0, 12),
   });
+  for (const commit of [baseCommit, sourceCommit, changedCommit]) {
+    const reused = await clone(`return-${commit}`, commit);
+    expect(await git(reused, "rev-parse", "HEAD")).toBe(commit);
+    expect(await read(reused, dependencyFile)).toBe(
+      commit === changedCommit ? secondLock : firstLock,
+    );
+    expect(await read(reused, "node_modules/source-derived.txt")).toBe(
+      commit === baseCommit ? sourceText : "export const version = 'updated';\n",
+    );
+  }
+  expect(mocks.install).toHaveBeenCalledTimes(3);
   const attributes = await clone("attributes", attributeCommit);
   expect(await read(attributes, "source.ts")).toBe("export const version = 'updated';\r\n");
   expect(backend.createTemplate).toHaveBeenCalledTimes(3);
@@ -293,6 +304,7 @@ it.for(["none", "same", "previous"])(
       expect(mocks.install).toHaveBeenCalledOnce();
       vi.stubEnv("GIT_CONFIG_PARAMETERS", undefined);
       expect(await git(projectionPath, "config", "--get-all", "remote.origin.url")).toBe(url);
+      expect(await git(projectionPath, "config", "--get-all", "openclaw.projection")).toBe("true");
       // The same-origin template and its projection each apply the fetch defaults.
       const config = await read(projectionPath, ".git/config");
       for (const remote of ["origin", url.slice(0, -4), url]) {
