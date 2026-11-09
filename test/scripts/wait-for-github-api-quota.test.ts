@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   parseQuotaWaitArgs,
   waitForGithubApiQuota,
@@ -25,6 +25,10 @@ function quotaResponse({
 
 describe("candidate acquisition GitHub API quota wait", () => {
   it("waits for an exhausted installation quota and reports its reset identity", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     let epoch = 2_000_000_000_000;
     const reset = epoch / 1_000 + 60;
     const fetchImpl = vi
@@ -47,6 +51,7 @@ describe("candidate acquisition GitHub API quota wait", () => {
       }),
     ).resolves.toMatchObject({ remaining: 5_000, requestId: "READY" });
 
+    expect(vi.getTimerCount()).toBe(0);
     expect(sleep).toHaveBeenCalledWith(65_000);
     expect(log.mock.calls.flat().join("\n")).toContain(
       "0/5000 remaining; request ID EXHAUSTED; reset 2033-05-18T03:34:20Z",
@@ -77,6 +82,41 @@ describe("candidate acquisition GitHub API quota wait", () => {
     expect(sleep).toHaveBeenCalledWith(65_000);
   });
 
+  it.each(["headers", "body"])("aborts a stalled %s response at the wait budget", async (stage) => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    let failure: unknown;
+    const request = waitForGithubApiQuota({
+      token: "fixture-token",
+      maxWaitMs: 100,
+      fetchImpl: async (_url, options) => {
+        const signal = options?.signal;
+        const aborted = new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+        if (stage === "headers") {
+          return aborted;
+        }
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              void aborted.catch((error: unknown) => controller.error(error));
+            },
+          }),
+        );
+      },
+    }).catch((error: unknown) => {
+      failure = error;
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toContain("wait budget");
+    await request;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("refuses a reset beyond the bounded acquisition wait", async () => {
     const epoch = 2_000_000_000_000;
     await expect(
@@ -91,12 +131,22 @@ describe("candidate acquisition GitHub API quota wait", () => {
   });
 
   it("does not classify authentication or permission responses as quota waits", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    let signal: AbortSignal | null | undefined;
     await expect(
       waitForGithubApiQuota({
         token: "fixture-token",
-        fetchImpl: async () => quotaResponse({ remaining: 0, reset: 1, status: 403 }),
+        fetchImpl: async (_url, options) => {
+          signal = options?.signal;
+          return quotaResponse({ remaining: 0, reset: 1, status: 403 });
+        },
       }),
     ).rejects.toThrow("HTTP 403; request ID REQ-1");
+    expect(signal?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("parses a bounded request reserve", () => {
