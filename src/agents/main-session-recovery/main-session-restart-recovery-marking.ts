@@ -61,7 +61,8 @@ async function markRecoveryStore(params: {
         resetRuntime?: boolean;
         runs?: RestartRecoveryRun[];
       }
-    | { action: "retire_terminal" | "release_killed" }
+    | { action: "retire_terminal" }
+    | { action: "release_killed" }
     | { action: "restore_yielded"; isCurrent: () => boolean }
     | undefined;
 }) {

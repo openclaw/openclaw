@@ -279,16 +279,15 @@ export async function repairRelativeSessionStores(params: {
           const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");
           const { countBlockingSessionSqliteIssues } =
             await import("./doctor-session-sqlite-types.js");
-          const imported = await runDoctorSessionSqlite(
-            {
-              cfg: params.cfg,
-              env: params.env,
-              mode: "import",
-              agent: source.databaseAgentId,
-              store: legacyStorePath,
-            },
-            authority,
-          );
+          authority.assertCurrent();
+          const imported = await runDoctorSessionSqlite({
+            cfg: params.cfg,
+            env: params.env,
+            mode: "import",
+            agent: source.databaseAgentId,
+            store: legacyStorePath,
+          });
+          authority.assertCurrent();
           if (imported.targets.some((target) => countBlockingSessionSqliteIssues(target) > 0)) {
             refuse(`legacy JSON at ${legacyStorePath} has unresolved Doctor import issues`);
           }
