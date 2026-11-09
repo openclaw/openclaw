@@ -1,9 +1,9 @@
-import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import type { ForwardedAvatarOptions } from "../chat-avatar-view.tsx";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
+import type { PendingSteer } from "../chat-pending-inputs.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import type { MessageReplyTarget } from "./chat-message-markdown.types.ts";
@@ -55,5 +55,5 @@ export type RenderMessageGroupOptions = Omit<
     frameContent?: readonly unknown[];
     frameActionOwner?: MessageGroup["messages"][number] | null;
     latestAssistant?: boolean;
-    pendingSteer?: (message: unknown) => ChatPendingInputsPage["items"][number] | undefined;
+    pendingSteer?: (message: unknown) => PendingSteer | undefined;
   } & MessageReactionOptions;

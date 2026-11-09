@@ -46,6 +46,11 @@ visibility, or remote session-link titles. Side Chat is hidden, and session link
 keep their locally available labels. MCP Apps discovery requires general write
 access. The Gateway continues to authorize every request.
 
+**Settings → Devices** displays the current device inventory while refreshing
+configuration separately. Binding controls keep their own loading and error
+state until configuration is available; a slow configuration read does not
+hold the inventory page open.
+
 Connections without general read access also skip CLI session catalogs, plugin
 tool artwork, detailed usage reads, and the separate command catalog. Slash-command
 menus retain permitted chat metadata or built-in commands without requesting a
@@ -120,6 +125,12 @@ Selecting a repository also shows its identity in the workspace control.
 Session-only connections receive the same read-safe repository identity for
 projects they can already discover, without repository URLs, credentials, or host
 checkout paths. This label does not grant access to private repository content.
+
+Without `operator.write` (for example the `guest` and `contributor` roles), the
+picker lists only agent workspaces and saved projects backed by public GitHub
+repositories, and it hides GitHub search and repository URL entry. A saved
+selection the Gateway no longer lists falls back to the agent workspace. See [Operator scopes](/gateway/operator-scopes) for the exact
+rules.
 
 ## Create a nested session
 
@@ -387,14 +398,18 @@ Still-streaming assistant text stays at the bottom of its run, below saved outpu
 takes its transcript position once saved.
 
 While steering waits for a running tool, the message appears as an ordinary user
-bubble with a small **Send now** link underneath. Session writers can click it to
-interrupt supported running tools and deliver the waiting steer sooner, keeping
-the same agent run alive. The model receives a tool result explaining the user
-interruption. The link disappears when the steer is injected. Tools that cannot
-be interrupted safely, and runtimes without tool interruption, show a quiet
-waiting explanation instead of an action.
-This includes Code Mode aggregate tools and native or remote backends, which
-do not support tool-only interruption.
+bubble. Waiting steers are delivered together, so one small **Send now** link
+appears under the newest steer that can interrupt. Session writers can click it
+to interrupt supported running tools and deliver the waiting steers sooner,
+keeping the same agent run alive. The model receives a tool result explaining
+the user interruption. The link sits in the slot the message's footer actions use
+once it is delivered, so spacing stays the same. When nothing can interrupt, for
+viewers without steer access, tools that cannot be interrupted safely, and
+runtimes without tool interruption, the newest waiting message shows a muted
+**Steering…** label instead; hovering it explains what the steer is waiting for.
+A refused **Send now** returns the row to **Steering…** without a separate error.
+Tools that cannot be interrupted safely include Code Mode aggregate tools and
+native or remote backends, which do not support tool-only interruption.
 
 Accepted steering messages keep their saved transcript positions. Earlier saved
 output stays above the message; later answers and live output appear below it,

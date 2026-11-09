@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { listLiveAgentRunIds } from "../../../infra/agent-run-registry.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
@@ -10,6 +11,7 @@ import {
 } from "./subagent-child-owner-match.js";
 import {
   getRecordedSubagentChildAuthority,
+  getSubagentActivationRuns,
   getSubagentChildSessionCandidates,
   getSubagentRunsForChildSession,
   getSubagentSessionReadLookup,
@@ -41,7 +43,11 @@ import {
   copySubagentRunRuntimeOwner,
   latestSubagentRun,
 } from "./subagent-run-generation.js";
-import { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
+import {
+  isSubagentRunLive,
+  isSubagentRunQueued,
+  isYieldedSubagentRun,
+} from "./subagent-run-liveness.js";
 export { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
 
 export type { SubagentRunReadIndex } from "./subagent-registry-queries.js";
@@ -97,6 +103,53 @@ export function listLiveSubagentRootSessions(): SubagentRootRequester[] {
     roots.set(JSON.stringify([root.agentId, root.storePath, root.sessionKey]), root);
   }
   return [...roots.values()];
+}
+
+function isMessageWaitingSubagentRun(entry: SubagentRunRecord): boolean {
+  return entry.waitForMessage === true && !entry.collect && isYieldedSubagentRun(entry);
+}
+
+/** Message waits retain their task across restart, without retaining an execution. */
+export function* listMessageWaitingSubagentSessions() {
+  for (const entry of getSubagentActivationRuns(subagentRuns)) {
+    if (isMessageWaitingSubagentRun(entry)) {
+      yield {
+        sessionKey: entry.childSessionKey,
+        agentId: entry.childAgentId,
+        sessionId: entry.childSessionIdentity?.sessionId,
+        parkedRunId: entry.runId,
+      };
+    }
+  }
+}
+
+export function isMessageWaitingSubagentSession(
+  sessionKey: string,
+  session: Pick<
+    InternalSessionEntry,
+    | "sessionId"
+    | "lifecycleRevision"
+    | "lifecycleRunId"
+    | "activeWriterRunId"
+    | "archivedAt"
+    | "incognito"
+  >,
+  agentId: string,
+): boolean {
+  if (session.archivedAt !== undefined || session.incognito) {
+    return false;
+  }
+  return Boolean(
+    getLatestLiveSubagentRunByChildSessionKey(
+      sessionKey,
+      (run) =>
+        run.runId === session.lifecycleRunId &&
+        (!session.activeWriterRunId || session.activeWriterRunId === run.runId) &&
+        isMessageWaitingSubagentRun(run) &&
+        matchesSubagentChildSessionIdentity(run, session),
+      agentId,
+    ),
+  );
 }
 
 /** Resolve live owners through the existing aliases without scanning retained history. */

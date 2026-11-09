@@ -88,6 +88,10 @@ export function controlUiStableChunkName(id: string): string | undefined {
   }
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/pages/plugins/catalog-grid.tsx":
+    case "ui/src/pages/plugins/plugin-card.tsx":
+      // Catalogs already load both; a lazy skill reader must not split their first visit.
+      return "plugin-catalog-runtime";
     case "ui/src/components/sandbox-host.ts":
     case "ui/src/lib/widget-sandbox-host.ts":
     case "ui/src/lib/reactive/window-message.ts":
@@ -258,6 +262,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/menu-trigger.tsx":
     case "ui/src/components/menu-shortcut-activation.ts":
     case "ui/src/components/solid/refresh-button.tsx":
+    case "ui/src/components/solid/radio-navigation.ts":
       // Share small navigation helpers without coupling their callers to page renderers.
       return "navigation-helpers";
     case "ui/src/components/config-form.analyze.ts":
@@ -271,10 +276,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Lightweight shape readers must not acquire analysis, validation, or Settings copy.
       return "config-form-utils-runtime";
     case "ui/src/components/solid/settings-ui.tsx":
+    case "ui/src/components/solid/switch.tsx":
     case "ui/src/pages/config/settings-section-header.tsx":
     case "ui/src/lib/reactive/live-checked.ts":
     case "ui/src/lib/reactive/observe-state.ts":
-      // Shared controls stay independent of route chrome and optional settings editors.
+      // Keep the switch with its settings consumers and live binding: no cyclic request.
       return "settings-controls-runtime";
     case "ui/src/lib/gateway-page-binding.ts":
     case "ui/src/lib/reactive/gateway-page.ts":
@@ -623,6 +629,8 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("ui/src/i18n/locales/en-session-people.ts");
                 // Placement and delivery share retries without importing either route's bundle.
                 modules.add("ui/src/pages/chat/chat-outbox-retry.ts");
+                // Chat sends and New Session creation quote selections identically.
+                modules.add("ui/src/lib/chat/chat-selection-quote.ts");
                 // Creation still uses the catalog; Chat constructs its capability owner on demand.
                 modules.add("ui/src/pages/chat/composer-capability-catalog.ts");
                 modules.add("ui/src/lib/config/mcp-servers.ts");

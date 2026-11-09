@@ -65,13 +65,12 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly navigationSidebar: HTMLElement;
   readonly onboardingMode: boolean;
   readonly routeState: ShellRouteState;
-  readonly settingsSearchQuery: string;
+  settingsSearchQuery: string;
   readonly storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
   readonly viewCallbacks: ShellViewCallbacks;
   readonly workspaceChromeVisible: boolean;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   readonly handleNativeNewSession: () => void;
-  handleSettingsSearchQueryChange(query: string): Promise<void>;
   nativeNavCollapsed(): boolean;
   readonly openPalette: () => void;
   refreshControlUi: () => Promise<boolean>;
