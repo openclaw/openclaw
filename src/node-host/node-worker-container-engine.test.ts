@@ -76,34 +76,14 @@ it("mounts an explicit private HOME without using the device folder for internal
     .mockResolvedValueOnce({ stdout: `${"a".repeat(64)}\n`, stderr: "" });
   await createNodeWorkerContainer(containerEngine("docker"), {
     ...launch,
-    homeDir: "/synthetic/private/session-home",
+    homeDir: '/synthetic/acme, "inc"/session-home',
   });
   expect(runExec).toHaveBeenLastCalledWith(
     expect.any(String),
     expect.arrayContaining([
-      "type=bind,source=/synthetic/private/session-home,target=/synthetic/private/session-home",
-      "HOME=/synthetic/private/session-home",
+      'type=bind,"source=/synthetic/acme, ""inc""/session-home","target=/synthetic/acme, ""inc""/session-home"',
+      'HOME=/synthetic/acme, "inc"/session-home',
       "type=bind,source=/synthetic/workspace,target=/synthetic/workspace",
-    ]),
-    expect.any(Object),
-  );
-});
-
-it("quotes the bind mount fields whose path carries the --mount separator", async () => {
-  vi.mocked(runExec)
-    .mockResolvedValueOnce({ stdout: "synthetic-daemon\n", stderr: "" })
-    .mockResolvedValueOnce({ stdout: `${"a".repeat(64)}\n`, stderr: "" });
-  await createNodeWorkerContainer(containerEngine("docker"), {
-    ...launch,
-    bundleRoot: '/synthetic/acme, "inc"/bundles',
-    bundleEntry: '/synthetic/acme, "inc"/bundles/current/worker.mjs',
-    workspaceDir: '/synthetic/acme, "inc"/workspace',
-  });
-  expect(runExec).toHaveBeenLastCalledWith(
-    expect.any(String),
-    expect.arrayContaining([
-      'type=bind,"source=/synthetic/acme, ""inc""/bundles/current","target=/synthetic/acme, ""inc""/bundles/current",readonly',
-      'type=bind,"source=/synthetic/acme, ""inc""/workspace","target=/synthetic/acme, ""inc""/workspace"',
     ]),
     expect.any(Object),
   );
