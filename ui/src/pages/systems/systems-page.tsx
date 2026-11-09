@@ -330,9 +330,12 @@ function SystemsWorkspace(props: {
   presented: boolean;
   onDesktopPanel: (panel: HTMLElementTagNameMap["openclaw-desktop-panel"] | undefined) => void;
 }) {
-  const [showSimulator, setShowSimulator] = createSignal(true);
   const controller = () => props.controller;
   const row = () => controller().selected();
+  const availableSimulator = () =>
+    controller().state.rows.find(
+      (entry) => entry.node?.connected && entry.node.commands?.includes("simulator.capture"),
+    );
   const simulatorNode = () => {
     const node = row()?.node;
     return node?.connected && node.commands?.includes("simulator.capture") ? node : undefined;
@@ -348,7 +351,12 @@ function SystemsWorkspace(props: {
       controller().desktopAvailable() &&
       props.presented,
     );
-  const title = () => (row() ? systemName(row()!) : t("systems.select"));
+  const title = () =>
+    simulatorNode() && controller().state.preview === "simulator"
+      ? t("systems.simulator.title")
+      : row()
+        ? systemName(row()!)
+        : t("systems.select");
   const auxiliaryErrors = () => Object.values(controller().state.inventory?.errors ?? {});
   const emptyTitle = () =>
     !controller().connected()
@@ -422,17 +430,43 @@ function SystemsWorkspace(props: {
           class="settings-select systems-mobile-picker"
           aria-label={t("systems.select")}
           title={row() ? systemName(row()!) : undefined}
-          onChange={(event) => controller().select(event.currentTarget.value)}
+          onChange={(event) => {
+            const value = event.currentTarget.value;
+            if (value.startsWith("simulator:")) {
+              controller().select(value.slice("simulator:".length));
+              controller().updatePresentation({ preview: "simulator" });
+            } else {
+              controller().select(value);
+              controller().updatePresentation({ preview: "desktop" });
+            }
+          }}
         >
           <option value="" disabled selected={!row()}>
             {t("systems.select")}
           </option>
+          <Show when={availableSimulator()}>
+            {(entry) => (
+              <option
+                value={`simulator:${entry().environment.id}`}
+                selected={
+                  controller().state.preview === "simulator" &&
+                  controller().state.selectedId === entry().environment.id
+                }
+              >
+                {t("systems.simulator.title")}
+              </option>
+            )}
+          </Show>
           <For each={controller().state.rows}>
             {(entry) => (
               <option
                 value={entry.environment.id}
                 title={systemName(entry)}
-                selected={entry.environment.id === controller().state.selectedId}
+                selected={
+                  entry.environment.id === controller().state.selectedId &&
+                  (controller().state.preview === "desktop" ||
+                    !entry.node?.commands?.includes("simulator.capture"))
+                }
               >
                 {systemName(entry)}
               </option>
@@ -442,16 +476,16 @@ function SystemsWorkspace(props: {
         <Show when={simulatorNode()}>
           <button
             class="systems-text-button"
-            aria-pressed={showSimulator() ? "true" : "false"}
-            onClick={() => setShowSimulator(true)}
+            aria-pressed={controller().state.preview === "simulator" ? "true" : "false"}
+            onClick={() => controller().updatePresentation({ preview: "simulator" })}
           >
             {t("systems.simulator.title")}
           </button>
           <Show when={canView()}>
             <button
               class="systems-text-button"
-              aria-pressed={!showSimulator() ? "true" : "false"}
-              onClick={() => setShowSimulator(false)}
+              aria-pressed={controller().state.preview === "desktop" ? "true" : "false"}
+              onClick={() => controller().updatePresentation({ preview: "desktop" })}
             >
               {t("systems.desktop")}
             </button>
@@ -555,7 +589,9 @@ function SystemsWorkspace(props: {
       </div>
       <div class="systems-body">
         <div class="systems-desktop">
-          {simulatorNode() && showSimulator() && controller().context.gateway.snapshot.client ? (
+          {simulatorNode() &&
+          controller().state.preview === "simulator" &&
+          controller().context.gateway.snapshot.client ? (
             <SimulatorPreview
               nodeId={simulatorNode()!.nodeId}
               client={controller().context.gateway.snapshot.client!}

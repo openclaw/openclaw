@@ -53,6 +53,7 @@ type SystemsState = {
   inventory: SystemsInventory | null;
   rows: SystemsInventoryRow[];
   selectedId: string | null;
+  preview: "simulator" | "desktop";
   query: string;
   sortMode: SystemsSortMode;
   statusFilter: SystemsStatusFilter;
@@ -72,6 +73,7 @@ export function createSystems(context: ApplicationContext) {
     inventory: null,
     rows: [],
     selectedId: null,
+    preview: "simulator",
     query: "",
     sortMode: "online-first",
     statusFilter: "all",
@@ -521,7 +523,10 @@ export function createSystems(context: ApplicationContext) {
     },
     updatePresentation(
       patch: Partial<
-        Pick<SystemsState, "query" | "sortMode" | "statusFilter" | "showStats" | "showDetails">
+        Pick<
+          SystemsState,
+          "query" | "sortMode" | "statusFilter" | "showStats" | "showDetails" | "preview"
+        >
       >,
     ): void {
       Object.assign(state, patch);

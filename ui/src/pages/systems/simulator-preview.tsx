@@ -162,7 +162,7 @@ export function SimulatorPreview(props: {
         inputQueue.retire();
         controller.abort();
         frameSession = undefined;
-        previousStop = (async () => {
+        previousStop = previousStop.then(async () => {
           let startedSession = sessionId;
           if (!startedSession && startedRequest) {
             try {
@@ -178,7 +178,7 @@ export function SimulatorPreview(props: {
               executionId,
             }).catch(() => undefined);
           }
-        })();
+        });
       };
       endCapture = end;
       void (async () => {
