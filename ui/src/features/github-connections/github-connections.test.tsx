@@ -210,7 +210,11 @@ it("shows the shared and agent accounts to an admin without a personal profile",
   await waitText(["@system-account"]);
   await waitForFast(() => expectText(query('[data-agent-id="research"]'), ["@system-account"]));
   text(["Personal sign-in required"], ["Connect My GitHub"]);
-  expectText(row("system"), ["Shared agent account", "Used by agents without their own account"]);
+  // The shared account's row names everything it serves, not only agents.
+  expectText(row("system"), [
+    "Shared agent account",
+    "Agents without their own account, dashboards, and Publish PR by default",
+  ]);
   expect(request.mock.calls.map(([, params]) => params)).toEqual(
     expect.arrayContaining([
       statusParams("main"),

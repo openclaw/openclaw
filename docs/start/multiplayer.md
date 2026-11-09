@@ -558,8 +558,9 @@ take effect before their normal expiry.
 #### Configure GitHub access for repository work
 
 Install `gh` for the Gateway service account. In **Settings → Profile → GitHub
-accounts**, an administrator changes the **Shared agent account** that every
-agent without its own account uses. To give one agent a different account, such
+accounts**, an administrator changes the **Shared agent account**. It serves
+every agent without its own account, authenticated dashboard data, and **Publish
+PR** unless you choose My GitHub. To give one agent a different account, such
 as a token limited to a fork, choose **Give its own account** on that agent's row;
 the shared account and other agents stay unchanged. Verify the account before
 publishing.

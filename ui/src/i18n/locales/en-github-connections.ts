@@ -9,14 +9,14 @@ const enGitHubConnections = {
     descriptionMore: "Check the accounts used for agent commands, dashboard data, and publishing.",
     agentsTitle: "Agent GitHub accounts",
     agentsDescription:
-      "Agents without their own account use the shared agent account. Changes apply to new replies; active replies keep their current account.",
+      "The shared agent account serves agents without their own account, dashboard GitHub data, and Publish PR unless you choose My GitHub. Changes apply to new replies; active replies keep their current account.",
     mine: en.githubConnections.mine,
     system: en.githubConnections.system,
     personalUse: "Only when you publish a PR with it. Agents never use it.",
     personalDescription: "Your account when you choose it to publish a PR.",
-    systemUse: "Used by agents without their own account",
+    systemUse: "Agents without their own account, dashboards, and Publish PR by default",
     systemDescription:
-      "Used by every agent without its own account for agent commands, authenticated dashboards, and publishing.",
+      "Used for agent commands by every agent without its own account, for authenticated dashboard data, and by Publish PR unless you choose My GitHub.",
     unboundDescription:
       "Sign in with a personal profile to connect My GitHub. Admins can still manage the shared agent account.",
     signInRequired: "Personal sign-in required",
@@ -44,7 +44,7 @@ const enGitHubConnections = {
     forSystem: en.githubConnections.forSystem,
     personalSetupHint: "Only My GitHub changes. Agents keep their accounts.",
     systemSetupHint:
-      "Agents without their own account use the new account for new replies. Agents with their own account keep it.",
+      "Agents without their own account, dashboard data, and Publish PR by default switch to the new account; agents use it for new replies. Agents with their own account keep it.",
     continue: "Continue with GitHub",
     usage: "Where these accounts are used",
     usageDescription:
