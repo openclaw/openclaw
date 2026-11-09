@@ -202,6 +202,8 @@ export async function scanActualWorkspaceManifest(
     onEntry: (entry: ActualWorkspaceNode, identity?: string) => void;
     // Only repair candidates authenticated against a saved root may retain this former input.
     includeLegacyPnpmStore?: boolean;
+    unchangedProbe?: boolean;
+    // Return only an accepted baseline node whose exact file identity still matches.
     reuseFile?: (
       entryPath: string,
       identity: string,
@@ -355,10 +357,9 @@ export async function scanActualWorkspaceManifest(
           ? hashContext?.memo.get(identity)
           : undefined);
       if (sha256) {
-        // Included paths can cross a replaced parent directory even when the
-        // leaf inode still matches a prior content hash.
-        // This scan runs in the computation worker; avoid a per-file pool round trip.
-        if (realpathSync.native(absolute) !== absolute) {
+        // Accepted nodes add no changed bytes. Generic memo hits still need to
+        // reject paths crossing a replaced parent before admitting their hash.
+        if (!reusable && realpathSync.native(absolute) !== absolute) {
           throw new Error("Gateway workspace file changed while it was being read");
         }
         addEntry(
@@ -375,6 +376,9 @@ export async function scanActualWorkspaceManifest(
         if (hashContext?.metrics) {
           hashContext.metrics.memoHitCount += 1;
         }
+      } else if (params.unchangedProbe) {
+        // Stop at the first changed file instead of finishing the metadata walk.
+        await addFile(relative);
       } else {
         filePaths.push(relative);
       }
@@ -514,8 +518,8 @@ export async function scanActualWorkspaceManifest(
       await walk("");
     });
   }
-  // No file readers overlap metadata selection; failures stop new admission
-  // and join all opened handles before any manifest can be returned.
+  // Captures defer file reads; probes hash misses during discovery. Both paths
+  // stop admission and join opened handles before returning or failing.
   await runScans(0, filePaths.length, (index) => addFile(filePaths[index]!));
   scanSignal.throwIfAborted();
 }

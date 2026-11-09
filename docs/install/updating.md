@@ -53,6 +53,17 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor recovers interrupted legacy heartbeat runs through cron's startup
+recovery owner before converting them to automations, while holding offline
+maintenance custody. Live or unproved runtime ownership leaves the conversion and
+configuration pending with an update warning. Runs needing startup notifications
+are converted with their original run marker, history, and receipt intact so the
+Gateway can recover them and deliver their notifications without quarantining the
+retired payload. Conversion preserves pending execution facts even when it disables
+the monitor; startup still restores the recorded result without re-enabling it.
+The candidate must contain this fix; published updaters need no
+new marker or schema change.
+
 Candidate Doctor repairs retained ISO-8601 session `endedAt` strings before
 canonical session admission, preserving the original database backup and updating
 indexed timing together. This repair must be present in the candidate Doctor;
@@ -1392,6 +1403,12 @@ maintenance custody within the existing update allowance. If that wait expires,
 contention alone preserves automatic Gateway recovery; an actual data-at-risk
 refusal still blocks recovery. Doctor publishes its completion result only after
 its maintenance resources have been released.
+
+Gateway process respawn and launchd restart scheduling respect active offline
+maintenance ownership. During Doctor restoration, a busy port still refuses an
+unverified listener, but the preserved LaunchAgent is reloaded so launchd can
+retry after that listener exits. This requires the Gateway and restoring CLI to
+contain the fix; an already scheduled restart helper is not cancelled by it.
 
 Source updates also admit build-artifact ownership and runtime staging access in
 the installed checkout before stopping the Gateway. A retained

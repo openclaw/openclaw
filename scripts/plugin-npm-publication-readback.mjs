@@ -429,7 +429,8 @@ export async function createPluginNpmPublicationReadback(options) {
           Number.isSafeInteger(receipt.artifactId) &&
           receipt.artifactId > 0 &&
           receipt.workflowEvent === "workflow_dispatch" &&
-          receipt.workflowSha === workflowSha &&
+          (receipt.workflowSha === workflowSha ||
+            (receipt.runId !== runId && receipt.workflowSha === sourceSha)) &&
           receipt.targetSha === sourceSha &&
           receipt.packageName === packageName &&
           receipt.packageDir === entry.packageDir &&
@@ -451,7 +452,7 @@ export async function createPluginNpmPublicationReadback(options) {
         repository,
         workflowPath: WORKFLOW,
         workflowEvent: "workflow_dispatch",
-        workflowSha,
+        workflowSha: receipt.workflowSha,
         workflowHeadBranch: receipt.workflowHeadBranch,
         runId: receipt.runId,
         runAttempt: receipt.runAttempt,
@@ -501,7 +502,16 @@ export async function createPluginNpmPublicationReadback(options) {
           policyId: "plugin-npm-release-workflow",
           sha256: createHash("sha256")
             .update(
-              readFileSync(new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url)),
+              // The authenticated P receipt records the original producer, not
+              // a new publication authority. Q's archive retains Q's policy.
+              receipt.workflowSha === workflowSha
+                ? readFileSync(
+                    new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url),
+                  )
+                : readBoundedRegularFile(join(sourceRoot, WORKFLOW), {
+                    label: "frozen source npm publisher policy",
+                    maxBytes: 1024 * 1024,
+                  }),
             )
             .digest("hex"),
         },

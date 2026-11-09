@@ -7,7 +7,7 @@ import { hasErrnoCode, isMissingPathError } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
 
 /** Why a path has no canonical spelling; callers treat all of these as outside. */
-export type UncanonicalReason = "parent-after-missing" | "unreadable" | "link-loop";
+type UncanonicalReason = "parent-after-missing" | "unreadable" | "link-loop";
 
 export type ContainmentPath =
   | {
@@ -129,7 +129,7 @@ export async function canonicalizeForContainment(candidate: string): Promise<Con
 }
 
 /** Synchronous counterpart for callers whose surrounding contract is synchronous. */
-export function canonicalizeForContainmentSync(candidate: string): ContainmentPath {
+function canonicalizeForContainmentSync(candidate: string): ContainmentPath {
   const walk = walkForContainment(candidate, MAX_DANGLING_LINK_HOPS);
   let step = walk.next();
   while (!step.done) {

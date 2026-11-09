@@ -62,9 +62,13 @@ An outcome the yield already recorded stays: a collector an earlier version left
 `ok` settles as done with the reply its yielded turn ended on, the same result a
 collector that yields now gets. Only a run with no recorded outcome settles as an
 `error` that says why, and its collector completion carries
-`reason: "yielded_without_result"`. Every other paused run stays continuable however long it has been
-paused: a declared message wait, a leaf that an earlier version left paused, and an
-orchestrator waiting on descendants are not bounded by this settlement. A kill
+`reason: "yielded_without_result"`. A declared message wait retains its requester
+dependency after its pause notice is consumed. When that requester finishes or
+is released, the completion owner closes the wait with a recorded error. The
+sweeper also reconciles waits whose requester ended before the child parked.
+Waiting for a live requester or owned descendants has no elapsed-time limit.
+A leaf that an earlier version left paused without a recorded wait keeps its
+existing continuation behavior. A kill
 claim on a paused run is never settled over; cancellation stays with the kill path.
 
 Session rows show a continuable paused run as `subagentRunState: "paused"`
