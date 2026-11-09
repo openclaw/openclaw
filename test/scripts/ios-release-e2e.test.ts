@@ -1430,9 +1430,9 @@ it.each([
         throw commandFailure("ETIMEDOUT", "unknown");
       }
       if (scenario === "test-exit") {
-        stdout.write("IOS_RELEASE_CHECKPOINT pairing-launching\n");
-        stdout.write("IOS_RELEASE_CHECKPOINT pairing-launched\n");
-        stdout.write("IOS_RELEASE_CHECKPOINT pairing-code-field\n");
+        stdout.write("IOS_RELEASE_CHECKPOINT paired\n");
+        stdout.write("IOS_RELEASE_CHECKPOINT first\n");
+        stdout.write("IOS_RELEASE_CHECKPOINT second\n");
         stdout.write("IOS_RELEASE_CHECKPOINT private-credential\n");
         nativeCommandActive = true;
         stdout.write(
@@ -2008,11 +2008,11 @@ it.each([
         "xctest-location:OpenClawSnapshotUITests+Helpers.swift:401",
       ]);
       expect(proof.phases).toEqual(
-        containing([matching({ operation: "native-test", checkpoint: "pairing-code-field" })]),
+        containing([matching({ operation: "native-test", checkpoint: "second" })]),
       );
-      expect(
-        progressSnapshots.some((snapshot) => snapshot.includes('"checkpoint":"pairing-launched"')),
-      ).toBe(true);
+      expect(progressSnapshots.some((snapshot) => snapshot.includes('"checkpoint":"first"'))).toBe(
+        true,
+      );
       expect(historyReadBeforeCommandExit).toBe(true);
       expect(JSON.stringify(report)).not.toMatch(/private|OPENCLAW_E2E_|metadata/);
       return;
