@@ -1429,9 +1429,9 @@ describe("followup queue collect routing", () => {
       "room_event",
     );
     expect(getExistingFollowupQueue(q.key)?.summarySources[0]?.turnAdoptionLifecycle).toBeDefined();
-    expect(
-      getExistingFollowupQueue(q.key)?.summarySources[0]?.currentInboundContext,
-    ).toBeUndefined();
+    expect(getExistingFollowupQueue(q.key)?.summarySources[0]?.currentInboundContext).toEqual({
+      text: "dropped context",
+    });
     q.start(runFollowup);
     releaseRetry.resolve();
     await q.done.promise;

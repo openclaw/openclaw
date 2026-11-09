@@ -1,5 +1,6 @@
 import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { RuntimeContextFragment } from "../../../agents/internal-runtime-context.js";
 import { withSandboxRuntimeStatusesInWorker } from "../../../agents/sandbox/runtime-status.js";
 import { withPreparedSessionCapabilityRead } from "../../../agents/subagents/spawn/subagent-session-store.js";
 import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
@@ -293,7 +294,7 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
   const contexts = items.flatMap((item, index) =>
     item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
   );
-  if (contexts.length <= 1) {
+  if (items.length <= 1) {
     return contexts[0]?.context;
   }
   const renderField = (field: "text" | "resumableText") => {
@@ -314,10 +315,15 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
   return {
     text,
     ...(resumableText ? { resumableText } : {}),
-    fragments: contexts.flatMap(
-      ({ context }) =>
-        context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }],
-    ),
+    fragments: contexts.flatMap(({ context, index }) => {
+      const label: RuntimeContextFragment = {
+        kind: "runtime-instruction",
+        text: `Queued #${index + 1} context:`,
+      };
+      return [label].concat(
+        context.fragments ?? [{ kind: "conversation-data", text: context.text }],
+      );
+    }),
     promptJoiner: "\n\n",
     ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
   };
@@ -459,6 +465,7 @@ export function getFollowupOriginRouting(source: FollowupRun) {
 export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
   return {
     prompt: source.prompt,
+    currentInboundContext: source.currentInboundContext,
     sourceTurnId: source.sourceTurnId,
     admissionSessionId: source.admissionSessionId,
     operatorAuthority: source.operatorAuthority,
