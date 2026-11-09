@@ -320,8 +320,6 @@ describe("ClawHub fixture server", () => {
     const download = await fetch(`${baseUrl}${versionPath}/artifact/download`);
     expect(download.headers.get("x-clawhub-artifact-sha256")).toBe(sha256);
     expect(Buffer.from(await download.arrayBuffer())).toEqual(archive);
-    // Older CLI generations omit the optional catalog-detail tail.
-    expect(assertRequests().status).toBe(0);
     expect((await fetch(`${baseUrl}${whatsappPath}/detail`)).status).toBe(404);
     expect((await fetchJson(baseUrl, "/__fixture__/requests")).requests).toEqual(
       completeRequestPaths.map((requestPath) => `GET ${requestPath}`),
@@ -332,16 +330,14 @@ describe("ClawHub fixture server", () => {
       "expected 2-16 complete ClawHub artifact audit sequences",
     );
     expectFailure(noRequests(), "unexpected ClawHub fixture requests");
-    const requestSequence = async (url = baseUrl, includeDetail = true) => {
-      const paths = includeDetail ? completeRequestPaths : completeRequestPaths.slice(0, -1);
-      for (const [index, requestPath] of paths.entries()) {
+    const requestSequence = async (url = baseUrl) => {
+      for (const [index, requestPath] of completeRequestPaths.entries()) {
         const response = await fetch(`${url}${requestPath}`);
         expect(response.status).toBe(index === completeRequestPaths.length - 1 ? 404 : 200);
         await response.arrayBuffer();
       }
     };
-    // Recovery may mix generations with and without the optional detail tail.
-    await requestSequence(baseUrl, false);
+    await requestSequence();
     expect(assertRequests(2).status).toBe(0);
     expect(assertRequests().status).toBe(1);
     const complete = assertRequests("complete", 2);
@@ -371,34 +367,6 @@ describe("ClawHub fixture server", () => {
       assertRequests("complete", 2, maximumBaseUrl),
       "expected 2-16 complete ClawHub artifact audit sequences",
     );
-    // Optional metadata must not make security, identity, ordering, or count optional.
-    const coreRequests = completeRequestPaths.slice(0, -1);
-    const detailPath = completeRequestPaths[4];
-    const invalidSequences = [
-      coreRequests.filter((_, index) => index !== 2), // missing security
-      coreRequests.filter((_, index) => index !== 1), // missing artifact metadata
-      coreRequests.slice(0, -1), // missing download
-      [coreRequests[0], coreRequests[2], coreRequests[1], coreRequests[3]], // reordered audit
-      [detailPath, ...coreRequests], // metadata before installation
-      [...coreRequests, detailPath, detailPath], // duplicate metadata
-      [...coreRequests, `${detailPath}?version=${version}`], // unapproved query
-      [...coreRequests, `${whatsappPath}/versions/other/security`],
-      [...coreRequests, "/api/v1/packages/%40openclaw%2Fforeign"],
-      [...coreRequests, coreRequests[0]], // incomplete second install
-    ];
-    for (const requests of invalidSequences) {
-      const { baseUrl: invalidBaseUrl } = await startFixtureServer(
-        "prepublish-artifacts",
-        signal,
-        [manifestPath],
-        isolatedCwd,
-      );
-      for (const requestPath of requests) {
-        await (await fetch(`${invalidBaseUrl}${requestPath}`)).arrayBuffer();
-      }
-      const invalid = assertRequests("complete", undefined, invalidBaseUrl);
-      expect(invalid.status, JSON.stringify(requests)).toBe(1);
-    }
     expect((await fetch(`${baseUrl}/api/v1/packages/%40openclaw%2Fai`)).status).toBe(404);
   });
 

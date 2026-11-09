@@ -51,33 +51,23 @@ async function assertPrepublishRequests(
   const requests = await readRequests(baseUrl);
   const packagePath = `/api/v1/packages/${encodeURIComponent(requestedPackage)}`;
   const versionPath = `${packagePath}/versions/${encodeURIComponent(version)}`;
-  // Artifact lookup, security audit, and download are the required install sequence.
-  // Some CLI generations then make a best-effort catalog detail read (404 here).
-  // Accept that exact optional tail, not arbitrary requests or partial audits.
+  // Installation concludes with a best-effort package detail read. This fixture
+  // intentionally returns 404 for that endpoint but still fences the exact request.
   const expected = [
     `GET ${packagePath}`,
     `GET ${versionPath}/artifact`,
     ...(securityMode === "required" ? [`GET ${versionPath}/security`] : []),
     `GET ${versionPath}/artifact/download`,
+    `GET ${packagePath}/detail`,
   ];
   // Multi-command upgrade recovery can stage an artifact in several convergence
   // phases. Every request must still belong to a complete authorized install sequence.
-  let count = 0;
-  let offset = 0;
-  while (offset < requests.length) {
-    if (!expected.every((request, index) => requests[offset + index] === request)) {
-      throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(requests)}`);
-    }
-    offset += expected.length;
-    if (requests[offset] === `GET ${packagePath}/detail`) {
-      offset += 1;
-    }
-    count += 1;
-  }
+  const count = attempts === "complete" ? requests.length / expected.length : Number(attempts);
   if (!Number.isInteger(count) || count < minimumCount || count > 16) {
     throw new Error(`expected ${minimumCount}-16 complete ClawHub artifact audit sequences`);
   }
-  if (attempts !== "complete" && count !== Number(attempts)) {
+  const expectedRequests = Array.from({ length: count }, () => expected).flat();
+  if (JSON.stringify(requests) !== JSON.stringify(expectedRequests)) {
     throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(requests)}`);
   }
   console.log(`Verified ${count} complete ClawHub artifact audit sequence(s).`);

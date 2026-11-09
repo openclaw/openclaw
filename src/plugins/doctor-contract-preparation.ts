@@ -1,4 +1,3 @@
-import { UPDATE_PLUGIN_ASSET_RECEIPT_ENV } from "../infra/update-candidate-plugin-assets.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import {
@@ -158,12 +157,7 @@ export async function preparePluginDoctorMigrationBackupResources(
   return await withPluginSetupPreparation(params, ({ assertCurrent }) =>
     withArtifactPreservingStateReads(() =>
       withPluginSourceCaptureStorage(
-        {
-          stateDir: params.stateDir,
-          placement: "temporary",
-          // Doctor supplies its complete environment selection, including absent authority.
-          privateAssetReceipt: params.env[UPDATE_PLUGIN_ASSET_RECEIPT_ENV],
-        },
+        { stateDir: params.stateDir, placement: "temporary" },
         async () => {
           const records = resolvePluginDoctorStateMigrationRecords({
             ...params,

@@ -1,2 +1,0 @@
-152
-# Guard settings, real Node absence, activated private ownership, and exact staged Bun lifecycle evidence.

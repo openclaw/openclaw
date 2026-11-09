@@ -173,47 +173,6 @@ function stripBunLifecyclePaths(pathEntries, cwd, pathApi, platform, dependencyL
   return null;
 }
 
-function stripBunPostinstallPathLayout(pathEntries, cwd, pathApi, platform) {
-  const resolvedCwd = pathApi.resolve(cwd);
-  const firstExpected = pathApi.join(resolvedCwd, "node_modules", ".bin");
-  if (
-    normalizePathForComparison(pathEntries[0] ?? "", pathApi, platform) !==
-    normalizePathForComparison(firstExpected, pathApi, platform)
-  ) {
-    return null;
-  }
-
-  const expectedSuffix = [];
-  for (let directory = pathApi.dirname(resolvedCwd); ; directory = pathApi.dirname(directory)) {
-    expectedSuffix.push(pathApi.join(directory, "node_modules", ".bin"));
-    if (pathApi.dirname(directory) === directory) {
-      break;
-    }
-  }
-  const bunShimIndex = pathEntries.length - expectedSuffix.length - 1;
-  const nodeGypIndex = bunShimIndex - 1;
-  if (nodeGypIndex <= 0) {
-    return null;
-  }
-  for (const [index, expected] of expectedSuffix.entries()) {
-    if (
-      normalizePathForComparison(pathEntries[bunShimIndex + 1 + index] ?? "", pathApi, platform) !==
-      normalizePathForComparison(expected, pathApi, platform)
-    ) {
-      return null;
-    }
-  }
-  if (
-    !/^bun-node-(?:[0-9a-f]+|[0-9]+-(?:[0-9a-f]+|debug)(?:-[0-9a-f]{16})?)$/u.test(
-      pathApi.basename(pathEntries[bunShimIndex] ?? ""),
-    ) ||
-    !/^\.[0-9a-f]+-[0-9]+\.node-gyp$/u.test(pathApi.basename(pathEntries[nodeGypIndex] ?? ""))
-  ) {
-    return null;
-  }
-  return pathEntries.slice(1, nodeGypIndex);
-}
-
 /**
  * Finds persistent Node, or an explicit Bun launcher after exhausting the lifecycle PATH.
  *
@@ -257,21 +216,20 @@ export function probePackageCliNodeRuntime(options = {}) {
     patch: 4,
   });
   const localPrefix = normalizeEnvValue(env.npm_config_local_prefix);
-  const validLocalPrefix = isStableAbsolutePath(localPrefix, pathApi, platform);
-  if (reorderedLifecycle && !validLocalPrefix && !allowUnavailableNodeFallback) {
+  if (reorderedLifecycle && !isStableAbsolutePath(localPrefix, pathApi, platform)) {
     return null;
   }
   const dependencyLifecycle =
     reorderedLifecycle &&
-    validLocalPrefix &&
     normalizePathForComparison(localPrefix, pathApi, platform) !==
       normalizePathForComparison(pathApi.resolve(cwd), pathApi, platform);
-  const rawPathEntries = pathEnv.split(delimiter);
-  const pathEntries =
-    stripBunLifecyclePaths(rawPathEntries, cwd, pathApi, platform, dependencyLifecycle) ??
-    (allowUnavailableNodeFallback
-      ? stripBunPostinstallPathLayout(rawPathEntries, cwd, pathApi, platform)
-      : null);
+  const pathEntries = stripBunLifecyclePaths(
+    pathEnv.split(delimiter),
+    cwd,
+    pathApi,
+    platform,
+    dependencyLifecycle,
+  );
   if (!pathEntries) {
     return null;
   }

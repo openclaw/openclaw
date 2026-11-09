@@ -7,18 +7,11 @@ import { root } from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 
 const identity = { dev: z.string(), ino: z.string() };
-export const UpdateCandidatePluginCodeLinkSchema = z.object({
+const UpdateCandidatePluginCodeLinkSchema = z.object({
   path: z.string(),
   ...identity,
   link: z.string(),
   target: z.object({ path: z.string(), ...identity }).nullable(),
-  asset: z
-    .object({
-      root: z.object({ path: z.string(), ...identity }),
-      sha256: z.string().regex(/^[a-f0-9]{64}$/u),
-      bytes: z.number().int().nonnegative(),
-    })
-    .optional(),
 });
 export type UpdateCandidatePluginCodeLink = z.infer<typeof UpdateCandidatePluginCodeLinkSchema>;
 

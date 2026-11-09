@@ -5,7 +5,6 @@ import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { hashFileMutationSnapshotSync, sameFileMutationMetadata } from "./file-descriptor.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
-import { captureUpdateCandidatePluginAsset } from "./update-candidate-plugin-assets.js";
 import {
   captureUpdateCandidatePluginCodeLink,
   type UpdateCandidatePluginCodeLink,
@@ -237,12 +236,7 @@ export async function verifyUpdateCandidatePluginTree(
     // Inspect the entry before traversal, including standalone module aliases;
     // following a copied root link can otherwise accept an entirely live tree.
     if (link !== undefined) {
-      params.onCodeLink?.(
-        captureUpdateCandidatePluginAsset(
-          captureUpdateCandidatePluginCodeLink(file, stat, link),
-          params.privateRoot,
-        ),
-      );
+      params.onCodeLink?.(captureUpdateCandidatePluginCodeLink(file, stat, link));
       return;
     }
     if (stat.isDirectory()) {

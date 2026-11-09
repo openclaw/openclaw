@@ -9,15 +9,13 @@ import {
 } from "@openclaw/fs-safe/advanced";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside, normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
-import { assertUpdateCandidatePluginAsset } from "../infra/update-candidate-plugin-assets.js";
-import type { UpdateCandidatePluginCodeLink } from "../infra/update-candidate-plugin-code-links.js";
 import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
 import { acquirePluginSource, createPluginSourceValidationError } from "./plugin-instance-error.js";
 import type { createPluginNativeAdmission } from "./plugin-native-admission.js";
 import type { createPluginSourceCapture } from "./plugin-package-metadata-capture.js";
-import { copyPluginSourceFile, hashPluginSourceFile } from "./plugin-source-file.js";
+import { copyPluginSourceFile } from "./plugin-source-file.js";
 import {
   readPluginSourceDirectory,
   type PluginCapturedSourceFact,
@@ -162,7 +160,6 @@ export function createPluginGenerationFileCapture({
   sourceLinks,
   deferExternalLinks,
   nativeAdmission,
-  privateAssets,
   sourceOnly = false,
   retainedSnapshotSource = false,
   receipt,
@@ -184,7 +181,6 @@ export function createPluginGenerationFileCapture({
   sourceLinks: ReturnType<typeof createPluginSourceLinkCapture>;
   deferExternalLinks: boolean;
   nativeAdmission: ReturnType<typeof createPluginNativeAdmission>;
-  privateAssets?: ReadonlyMap<string, UpdateCandidatePluginCodeLink>;
   sourceOnly?: boolean;
   retainedSnapshotSource?: boolean;
   receipt: ReturnType<typeof createPluginGenerationReceipt>;
@@ -207,16 +203,12 @@ export function createPluginGenerationFileCapture({
     if (capturedPaths.get(path.resolve(source)) === target || hostModuleLinks?.has(target)) {
       return;
     }
-    const edge = privateAssets?.get(path.resolve(source));
-    if (edge) {
-      assertUpdateCandidatePluginAsset(edge);
-    }
     const prepared = nativeAdmission.resolvePreparedSource(source);
-    const input = prepared?.path ?? edge?.target?.path ?? source;
-    const inputBoundary = prepared?.boundary ?? edge?.asset?.root.path ?? boundary;
+    const input = prepared?.path ?? source;
+    const inputBoundary = prepared?.boundary ?? boundary;
     // Directory recursion shares child metadata and the real parent; only links need a path walk.
     const entry =
-      !prepared && !edge && realParent
+      !prepared && realParent
         ? (sourceEntry ?? acquirePluginSource(() => fs.lstatSync(input, { bigint: true })))
         : undefined;
     const ordinary = entry && !entry.isSymbolicLink();
@@ -236,16 +228,6 @@ export function createPluginGenerationFileCapture({
     const stat = ordinary
       ? entry
       : acquirePluginSource(() => fs.statSync(real, { bigint: true }), !prepared);
-    if (
-      edge &&
-      !prepared &&
-      (!stat.isFile() ||
-        real !== edge.target!.path ||
-        stat.dev.toString() !== edge.target!.dev ||
-        stat.ino.toString() !== edge.target!.ino)
-    ) {
-      throw new Error("Private plugin asset identity changed before capture");
-    }
     const captured = capturedPaths.get(real);
     capturedPaths.set(path.resolve(source), target);
     originalSources.set(target, path.resolve(source));
@@ -277,7 +259,6 @@ export function createPluginGenerationFileCapture({
             : undefined;
         if (
           !childEntry ||
-          privateAssets?.has(path.resolve(childSource)) ||
           !sourceLinks.defer(childInput, inputBoundary, childSource, childEntry, !prepared)
         ) {
           copy(childSource, path.join(target, name), copyFile, openFile, real, childEntry);
@@ -312,19 +293,9 @@ export function createPluginGenerationFileCapture({
         // The fork owns this validated reference; the new lease must admit its own native owner.
         fs.unlinkSync(target);
       }
-      // An external asset receipt admits one file, never a native companion directory.
-      // In-package native aliases keep the original package boundary and native owner.
-      const externalPrivateAsset = edge && !prepared && !isPathInside(boundary, real);
-      const native =
-        sourceOnly || externalPrivateAsset
-          ? undefined
-          : nativeAdmission.materialize(
-              real,
-              edge && !prepared ? boundary : inputBoundary,
-              target,
-              stat,
-              source,
-            );
+      const native = sourceOnly
+        ? undefined
+        : nativeAdmission.materialize(real, inputBoundary, target, stat, source);
       let copiedContent: PluginCapturedSourceFact | undefined;
       if (!native && retainedFile && !retainedReference) {
         // The receipt verifies the private copy against these retained content facts.
@@ -342,20 +313,6 @@ export function createPluginGenerationFileCapture({
             ...(captured ? { preserveSourceMode: true } : {}),
           },
         );
-      }
-      if (edge) {
-        assertUpdateCandidatePluginAsset(edge);
-        // Native admission owns a separate immutable copy; do not require the ordinary-copy result.
-        const assetContent = native
-          ? hashPluginSourceFile(native.path, native.boundary, undefined, undefined, openFile)
-          : copiedContent;
-        if (
-          !assetContent ||
-          assetContent.contentHash !== edge.asset!.sha256 ||
-          assetContent.sizeBytes !== edge.asset!.bytes
-        ) {
-          throw new Error("Private plugin asset copy does not match its producer receipt");
-        }
       }
       receipt.file(
         {

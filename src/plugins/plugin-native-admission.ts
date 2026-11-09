@@ -3,7 +3,6 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
-import type { UpdateCandidatePluginCodeLink } from "../infra/update-candidate-plugin-code-links.js";
 import { getPluginCache } from "./plugin-cache.js";
 import type { PluginCache } from "./plugin-cache.types.js";
 import {
@@ -236,7 +235,6 @@ export function createPluginNativeAdmission(
   entryFiles?: readonly string[],
   recovery?: PluginNativeRecovery,
   outputRoot?: string,
-  privateAssets?: ReadonlyMap<string, UpdateCandidatePluginCodeLink>,
 ) {
   recovery?.retain(getPluginCache());
   const state = nativeAdmissionStateFor();
@@ -323,7 +321,6 @@ export function createPluginNativeAdmission(
     const { fact, changed } = capturePluginNativeNamespace({
       sourceDirectory,
       boundary,
-      privateAssets,
       managed,
       copyOnly: state.captureStorage.placement === "temporary",
       previous,

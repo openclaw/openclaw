@@ -15,10 +15,6 @@ import {
   resolveUpdateCandidateAvatar,
   resolveUpdateCandidateStatePath,
 } from "./update-candidate-paths.js";
-import {
-  sealUpdateCandidatePluginAssets,
-  UPDATE_PLUGIN_ASSET_RECEIPT_ENV,
-} from "./update-candidate-plugin-assets.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
@@ -238,7 +234,6 @@ export async function prepareUpdateCandidateRehearsal(params: {
     // These selectors name the serving owner's service or files outside copied
     // state. Rehearsal must never inherit its update continuation authority.
     for (const key of [
-      UPDATE_PLUGIN_ASSET_RECEIPT_ENV,
       ...SUPERVISOR_HINT_ENV_VARS,
       CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
       UPDATE_RUN_ID_ENV,
@@ -286,10 +281,6 @@ export async function prepareUpdateCandidateRehearsal(params: {
     }
   };
   try {
-    env[UPDATE_PLUGIN_ASSET_RECEIPT_ENV] = await sealUpdateCandidatePluginAssets(
-      tempDir,
-      pluginCodeLinks,
-    );
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
     const port = await tryListenOnPort({

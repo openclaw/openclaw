@@ -149,7 +149,7 @@ function main() {
         .object({ total_count: z.number().int().nonnegative(), jobs: z.array(jobSchema) })
         .parse(
           JSON.parse(
-            api(`actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=50&page=${page}`),
+            api(`actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100&page=${page}`),
           ),
         );
       if (total !== undefined && total !== payload.total_count) {

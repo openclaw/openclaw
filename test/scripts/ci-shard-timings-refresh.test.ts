@@ -56,9 +56,7 @@ function log(shard_name: string, timing_key?: string, files?: string[]) {
 }
 function execute(
   options: {
-    initial?: typeof run;
     after?: typeof run;
-    pageTotalDelta?: number;
     jobs?: readonly (typeof job)[];
     logs?: Record<string, string>;
   } = {},
@@ -71,16 +69,15 @@ function execute(
   files.write(
     "fixture.json",
     JSON.stringify({
-      run: options.initial ?? run,
-      after: options.after ?? options.initial ?? run,
-      pageTotalDelta: options.pageTotalDelta ?? 0,
+      run,
+      after: options.after ?? run,
       jobs: options.jobs ?? [job],
       logs: options.logs ?? { "1": log("fixture") },
     }),
   );
   files.write(
     "gh",
-    `#!${process.execPath}\nconst fs = require('node:fs'); const path = require('node:path'); const root = __dirname; const fixture = JSON.parse(fs.readFileSync(path.join(root, 'fixture.json'))); const endpoint = process.argv[3]; if (endpoint === '--help') { process.stdout.write('--allow-escape-sequences'); process.exit(0); } let result; if (endpoint.endsWith('/actions/runs/321')) { const counter = path.join(root, 'read'); result = fs.existsSync(counter) ? fixture.after : fixture.run; fs.writeFileSync(counter, '1'); } else if (endpoint.includes('/attempts/')) { const url = new URL(endpoint, 'https://api.github.com/'); const attempt = Number(url.pathname.split('/attempts/')[1].split('/')[0]); const page = Number(url.searchParams.get('page')); const size = Number(url.searchParams.get('per_page')); if (size !== 50) process.exit(8); const jobs = fixture.run.run_attempt === 1 ? fixture.jobs : fixture.jobs.filter(job => job.run_attempt === attempt); result = { total_count: jobs.length + (page > 1 ? fixture.pageTotalDelta : 0), jobs: jobs.slice((page - 1) * size, page * size) }; } else { const id = /jobs\\/(\\d+)\\/logs$/.exec(endpoint)?.[1]; if (!id || !fixture.logs[id]) process.exit(7); process.stdout.write(fixture.logs[id]); process.exit(0); } process.stdout.write(JSON.stringify(result));\n`,
+    `#!${process.execPath}\nconst fs = require('node:fs'); const path = require('node:path'); const root = __dirname; const fixture = JSON.parse(fs.readFileSync(path.join(root, 'fixture.json'))); const endpoint = process.argv[3]; if (endpoint === '--help') { process.stdout.write('--allow-escape-sequences'); process.exit(0); } let result; if (endpoint.endsWith('/actions/runs/321')) { const counter = path.join(root, 'read'); result = fs.existsSync(counter) ? fixture.after : fixture.run; fs.writeFileSync(counter, '1'); } else if (endpoint.includes('/attempts/1/jobs?')) { result = { total_count: fixture.jobs.length, jobs: fixture.jobs }; } else { const id = /jobs\\/(\\d+)\\/logs$/.exec(endpoint)?.[1]; if (!id || !fixture.logs[id]) process.exit(7); process.stdout.write(fixture.logs[id]); process.exit(0); } process.stdout.write(JSON.stringify(result));\n`,
   );
   chmodSync(files.path("gh"), 0o755);
   const script = "scripts/ci-shard-timings-refresh.mts";
@@ -193,47 +190,5 @@ it.each([
   const { result, before, bytes } = execute(options);
   expect(result.status).toBe(1);
   expect(result.stderr).toMatch(error);
-  expect(bytes).toBe(before);
-});
-
-it("collects every page of every attempt using transport-safe page sizes", () => {
-  const jobs = [1, 2, 3].flatMap((attempt) =>
-    Array.from({ length: 252 }, (_, index) => ({
-      ...job,
-      id: attempt * 1000 + index,
-      run_attempt: attempt,
-      conclusion: index === 251 ? "success" : "failure",
-      completed_at: `2026-09-01T01:${15 + attempt}:00Z`,
-    })),
-  );
-  const { result, bytes } = execute({
-    initial: { ...run, run_attempt: 3 },
-    jobs,
-    logs: Object.fromEntries(
-      [1, 2, 3].map((attempt) => [String(attempt * 1000 + 251), log(`attempt-${attempt}`)]),
-    ),
-  });
-  expect(result.status, result.stderr).toBe(0);
-  expect(JSON.parse(bytes).compactGroupSeconds.github).toEqual({
-    ...baseline.compactGroupSeconds.github,
-    "release-full-attempt-1": 960,
-    "release-full-attempt-2": 1020,
-    "release-full-attempt-3": 1080,
-  });
-  expect(JSON.parse(bytes).source).toContain("Release CI 321 attempt 3");
-});
-
-it.each([
-  ["changed total", { pageTotalDelta: 1 }, "inventory changed"],
-  ["duplicate job on a later page", {}, "identity or attempt"],
-] as const)("keeps timing bytes untouched for %s", (_name, options, error) => {
-  const jobs = Array.from({ length: 51 }, (_, index) => ({
-    ...job,
-    id: index === 50 ? 1 : index + 1,
-    conclusion: "failure",
-  }));
-  const { result, before, bytes } = execute({ jobs, ...options });
-  expect(result.status).toBe(1);
-  expect(result.stderr).toContain(error);
   expect(bytes).toBe(before);
 });

@@ -1,2 +1,0 @@
-916
-# Exact main-integrated closeout budget: 824 net recovery, isolation, snapshot, launcher and real-proof guard lines plus 92 inherited main test-line debt. The prior 793 grant used 31 lines of old-base slack that current main no longer has. No spare headroom; shared scalar unchanged.

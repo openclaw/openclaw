@@ -362,62 +362,6 @@ describe("install runtime enforcement", () => {
     expect(runtime?.bunVersion).toBe("1.4.4");
   });
 
-  it("accepts Bun 1.4.4's generated postinstall PATH layout only for recovery", () => {
-    const pathEnv = [
-      "/work/openclaw/node_modules/.bin",
-      "/opt/sentinel/bin",
-      "/usr/bin",
-      "/tmp/.ade21d781aa39b9e-375.node-gyp",
-      "/tmp/bun-node-0-191755ec1",
-      "/work/node_modules/.bin",
-      "/node_modules/.bin",
-    ].join(":");
-    const run = vi.fn((command: string) =>
-      command === "/opt/sentinel/bin/node"
-        ? { status: 127, stdout: "" }
-        : {
-            status: 0,
-            stdout: JSON.stringify({
-              version: "24.3.0",
-              bunVersion: "1.4.4",
-              execPath: command,
-            }),
-          },
-    );
-
-    const runtime = probePackageCliNodeRuntime({
-      cwd: "/work/openclaw",
-      bunVersion: "1.4.4",
-      access: (candidate) => {
-        if (candidate === "/usr/bin/node") {
-          throw Object.assign(new Error("absent executable"), { code: "ENOENT" });
-        }
-      },
-      pathEnv,
-      platform: "linux",
-      env: { OPENCLAW_PACKAGE_BUN_LAUNCHER: "/opt/bun/bin/bun" },
-      allowUnavailableNodeFallback: true,
-      run,
-    });
-
-    expect(run.mock.calls.map(([command]) => command)).toEqual([
-      "/opt/sentinel/bin/node",
-      "/opt/bun/bin/bun",
-    ]);
-    expect(runtime?.bunVersion).toBe("1.4.4");
-    expect(
-      probePackageCliNodeRuntime({
-        cwd: "/work/openclaw",
-        bunVersion: "1.4.4",
-        access: () => {},
-        pathEnv,
-        platform: "linux",
-        env: { OPENCLAW_PACKAGE_BUN_LAUNCHER: "/opt/bun/bin/bun" },
-        run,
-      }),
-    ).toBeNull();
-  });
-
   it("keeps preinstall fail-closed on an unavailable Node sentinel", () => {
     const run = vi.fn(() => ({ status: 127, stdout: "" }));
     expect(

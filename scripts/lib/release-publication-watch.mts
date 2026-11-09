@@ -212,13 +212,11 @@ function isOwnedChild(
   const title = typeof run.display_title === "string" ? run.display_title : "";
   const tooling = run.head_branch === identity.toolingTag && run.head_sha === identity.toolingSha;
   if (path === PLUGIN_NPM_WORKFLOW) {
-    const match = /^Plugin NPM Release \[(?:default|extended-stable)\] ([a-f0-9]{40})$/u.exec(
-      title,
-    );
     return (
       tooling &&
-      match !== null &&
-      (target.releaseSha === undefined || match[1] === target.releaseSha)
+      (target.releaseSha
+        ? title === `Plugin NPM Release [default] ${target.releaseSha}`
+        : /^Plugin NPM Release \[default\] [a-f0-9]{40}$/u.test(title))
     );
   }
   const match = /^(\S+) \[(v[^\]\s]+)\] publish parent=([1-9][0-9]*)\/([1-9][0-9]*)$/u.exec(title);
@@ -330,12 +328,12 @@ async function readPendingApprovals(
   });
 }
 
-async function readJobObservations(
+async function readFailedJobs(
   run: ReleaseRunner,
   repo: string,
   observed: RunObservation,
   deadlineAt?: number,
-): Promise<{ failedJobs: JobObservation[]; dockerOnly: boolean }> {
+): Promise<JobObservation[]> {
   const jobs: unknown[] = [];
   // Matrix children such as ClawHub publish hundreds of jobs; page to the bounded total.
   for (let page = 1; page <= MAX_JOB_PAGES; page++) {
@@ -363,7 +361,7 @@ async function readJobObservations(
       throw new Error(`Job inventory for ${observed.id} exceeds ${MAX_JOB_PAGES * 100} jobs.`);
     }
   }
-  const failedJobs = jobs.flatMap((job) => {
+  return jobs.flatMap((job) => {
     if (
       !isRecord(job) ||
       !positiveInteger(job.id) ||
@@ -387,22 +385,6 @@ async function readJobObservations(
         ]
       : [];
   });
-  // These jobs come from the authenticated parent's exact attempt. Only the
-  // Docker-only route skips plugin publication and verifies an existing package.
-  const hasConclusion = (name: string, conclusion: string) =>
-    jobs.some(
-      (job) =>
-        isRecord(job) &&
-        job.name === name &&
-        job.status === "completed" &&
-        job.conclusion === conclusion,
-    );
-  return {
-    failedJobs,
-    dockerOnly:
-      hasConclusion("Publish plugins, then OpenClaw", "skipped") &&
-      hasConclusion("Verify already-published core npm package", "success"),
-  };
 }
 
 async function observePublication(
@@ -425,24 +407,16 @@ async function observePublication(
     children.push(runObservation(child, candidateId));
   }
   children.sort((a, b) => Number(a.id) - Number(b.id));
-  const pendingApprovals: ApprovalObservation[] = [];
-  const failedJobs: JobObservation[] = [];
-  let dockerOnly = false;
-  for (const observed of [parent, ...children]) {
-    pendingApprovals.push(...(await readPendingApprovals(run, target.repo, observed, deadlineAt)));
-    const jobs = await readJobObservations(run, target.repo, observed, deadlineAt);
-    failedJobs.push(...jobs.failedJobs);
-    if (observed === parent) {
-      dockerOnly = jobs.dockerOnly;
+  if (parent.status === "completed" && parent.conclusion === "success") {
+    if (!children.some((child) => child.workflow === PLUGIN_NPM_WORKFLOW)) {
+      throw new Error("Completed publish parent has no observable plugin npm child.");
     }
   }
-  if (
-    parent.status === "completed" &&
-    parent.conclusion === "success" &&
-    !dockerOnly &&
-    !children.some((child) => child.workflow === PLUGIN_NPM_WORKFLOW)
-  ) {
-    throw new Error("Completed publish parent has no observable plugin npm child.");
+  const pendingApprovals: ApprovalObservation[] = [];
+  const failedJobs: JobObservation[] = [];
+  for (const observed of [parent, ...children]) {
+    pendingApprovals.push(...(await readPendingApprovals(run, target.repo, observed, deadlineAt)));
+    failedJobs.push(...(await readFailedJobs(run, target.repo, observed, deadlineAt)));
   }
   const finalCandidates = await listOwnedChildren(run, target, identity, parent, deadlineAt);
   if (

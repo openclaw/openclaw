@@ -2,7 +2,6 @@ import { lstatSync, type Stats } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { assertUpdateCandidatePluginAsset } from "../infra/update-candidate-plugin-assets.js";
 import {
   assertUpdateCandidatePluginCodeLink,
   type UpdateCandidatePluginCodeLink,
@@ -62,11 +61,7 @@ export function createRehearsalPathInspector(
       }
       const codeLink = allowCodeLink && current === filename ? codeLinks.get(current) : undefined;
       if (codeLink) {
-        if (codeLink.asset) {
-          assertUpdateCandidatePluginAsset(codeLink);
-        } else {
-          assertUpdateCandidatePluginCodeLink(codeLink);
-        }
+        assertUpdateCandidatePluginCodeLink(codeLink);
       }
       if (
         (last.isSymbolicLink() && !codeLink) ||

@@ -753,62 +753,6 @@ describe("sealed ClawHub recovery manifest", () => {
     expect(responses).toEqual([]);
   });
 
-  it("bootstraps ClawHub packing from trusted tooling before checking out package data", () => {
-    const workflow = parse(readFileSync(".github/workflows/plugin-clawhub-release.yml", "utf8"));
-    const job = workflow.jobs.pack_plugins_clawhub_artifacts;
-    expect(job["runs-on"]).toBe("ubuntu-latest");
-    expect(job.env.PACK_CONTAINER_NAME).toBe(
-      "clawhub-pack-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}",
-    );
-    const steps = job.steps;
-    const named = (name: string) => steps.find((step: { name?: string }) => step.name === name);
-    const index = (name: string) => steps.indexOf(named(name));
-    expect(named("Checkout").with.path).toBe(".release-source");
-    expect(named("Checkout").with["persist-credentials"]).toBe(false);
-    for (const name of [
-      "Checkout trusted artifact tooling",
-      "Setup trusted Node for artifact packing",
-      "Setup trusted pnpm for artifact packing",
-      "Install trusted plugin tooling dependencies",
-      "Install pinned ClawHub CLI",
-      "Acquire pinned isolated pack image",
-    ]) {
-      expect(index(name)).toBeGreaterThanOrEqual(0);
-      expect(index(name)).toBeLessThan(index("Checkout"));
-    }
-    const pnpm = named("Setup trusted pnpm for artifact packing");
-    expect(pnpm.uses).toBe("./.release-tooling/.github/actions/setup-pnpm-store-cache");
-    expect(pnpm.with["package-manager-file"]).toBe(".release-tooling/package.json");
-    expect(pnpm.with["cache-mode"]).toBe("off");
-    expect(named("Install trusted plugin tooling dependencies")["working-directory"]).toBe(
-      ".release-tooling",
-    );
-    const cli = named("Install pinned ClawHub CLI");
-    expect(cli["working-directory"]).toBe(".release-tooling");
-    expect(cli.run).toContain("npm install --prefix");
-    expect(cli.run).not.toContain("npm exec");
-    expect(cli.run).toContain("--ignore-scripts");
-    expect(
-      steps.some((step: { uses?: string }) => step.uses === "./.github/actions/setup-node-env"),
-    ).toBe(false);
-    const pack = named("Pack ClawHub package artifact");
-    expect(pack["working-directory"]).toBeUndefined();
-    expect(pack.run).toContain("node .release-tooling/scripts/plugin-clawhub-pack-isolated.mjs");
-    expect(pack.run).toContain('"$GITHUB_WORKSPACE/.release-source"');
-    expect(pack.run).toContain('"$GITHUB_WORKSPACE/.release-tooling"');
-    expect(pack.run).not.toContain("bash ");
-    const cleanup = named("Remove isolated pack container");
-    expect(cleanup.if).toBe("always() && inputs.prepared_artifact == ''");
-    expect(cleanup.run).toContain('rm --force "$PACK_CONTAINER_NAME"');
-    expect(cleanup.run).not.toContain("--filter");
-    expect(index("Remove isolated pack container")).toBeGreaterThan(
-      index("Pack ClawHub package artifact"),
-    );
-    expect(index("Remove isolated pack container")).toBeLessThan(
-      index("Upload ClawHub package artifact"),
-    );
-  });
-
   it("keeps automated recovery behind approval and preserves the manifest before cancellation", () => {
     const workflow = (name: string) =>
       parse(readFileSync(`.github/workflows/${name}.yml`, "utf8")).jobs;

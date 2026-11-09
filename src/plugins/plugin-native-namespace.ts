@@ -3,8 +3,6 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { assertUpdateCandidatePluginAsset } from "../infra/update-candidate-plugin-assets.js";
-import type { UpdateCandidatePluginCodeLink } from "../infra/update-candidate-plugin-code-links.js";
 import {
   capturePluginDependencies,
   createPluginDependencyResolver,
@@ -28,7 +26,6 @@ type NamespaceMember = {
   stat: fs.BigIntStats;
   boundary: string;
   linkTo?: string;
-  asset?: UpdateCandidatePluginCodeLink;
 };
 export const pluginNativeNamespaceDirectory = (fact: PluginNativeNamespaceFact) =>
   fact.referenceRoot ? fact.sourceDirectory : path.join(fact.capturedRoot, "content");
@@ -104,7 +101,6 @@ function inspectDirectory(
   boundary: string,
   outputRoot?: string,
   sourceDependencies = true,
-  privateAssets?: ReadonlyMap<string, UpdateCandidatePluginCodeLink>,
 ) {
   const members = new Map<string, NamespaceMember>();
   const directories = new Map<string, string>();
@@ -116,27 +112,14 @@ function inspectDirectory(
     packageBoundary: string,
     admittedDependency = false,
   ) => {
-    const asset = privateAssets?.get(path.resolve(filename));
-    if (asset) {
-      assertUpdateCandidatePluginAsset(asset);
-    }
     const source = fs.realpathSync(filename);
     if (outputRoot && isPathInside(outputRoot, source)) {
       return;
     }
-    if (!isPathInside(packageBoundary, source) && !asset) {
+    if (!isPathInside(packageBoundary, source)) {
       throw new Error(`Native plugin companion leaves its package: ${filename}`);
     }
     const stat = fs.statSync(source, { bigint: true });
-    if (
-      asset &&
-      (!stat.isFile() ||
-        source !== asset.target!.path ||
-        stat.dev.toString() !== asset.target!.dev ||
-        stat.ino.toString() !== asset.target!.ino)
-    ) {
-      throw new Error("Private native companion asset identity changed");
-    }
     if (!stat.isDirectory() && !stat.isFile()) {
       throw new Error(`Native plugin companion is not a regular file: ${filename}`);
     }
@@ -148,8 +131,7 @@ function inspectDirectory(
       source,
       identity: pluginSourceStatIdentity(stat),
       stat,
-      boundary: asset?.asset?.root.path ?? packageBoundary,
-      ...(asset ? { asset } : {}),
+      boundary: packageBoundary,
       ...(linkTo === undefined ? {} : { linkTo }),
     });
     if (stat.isDirectory()) {
@@ -255,7 +237,6 @@ export function capturePluginNativeNamespace(params: {
   inspectedFiles?: readonly string[];
   retainedRoot?: string;
   managedRoots?: readonly string[];
-  privateAssets?: ReadonlyMap<string, UpdateCandidatePluginCodeLink>;
 }) {
   const { sourceDirectory, boundary, capturedRoot, managed, outputRoot, previous } = params;
   const from = previous ? pluginNativeNamespaceDirectory(previous) : sourceDirectory;
@@ -265,7 +246,6 @@ export function capturePluginNativeNamespace(params: {
     fromBoundary,
     previous ? undefined : outputRoot,
     !previous || Boolean(previous.referenceRoot),
-    previous ? undefined : params.privateAssets,
   );
   const inspectedEntries = [...before.values()].map((member) => ({
     path: member.source,
@@ -290,14 +270,6 @@ export function capturePluginNativeNamespace(params: {
   }
   const directory = path.join(capturedRoot, "content");
   const linkedSources = new Set<string>();
-  // The ordinary pathname and every alias share the same physical inode. Keep
-  // all admitted asset targets private even when this member is not the edge.
-  const privateAssetTargets = new Set(
-    [...(params.privateAssets?.values() ?? [])]
-      .filter((edge) => edge.asset && edge.target)
-      .map((edge) => edge.target!.path),
-  );
-  const assetContent = new Map<string, { contentHash: string; sizeBytes: number }>();
   const captureDevice = fs.statSync(capturedRoot, { bigint: true }).dev;
   let referenceRoot: string | undefined;
   try {
@@ -312,22 +284,8 @@ export function capturePluginNativeNamespace(params: {
         );
       } else if (member.stat.isDirectory()) {
         fs.mkdirSync(target, { recursive: true, mode: 0o700 });
-      } else if (member.asset) {
-        const content = copyPluginSourceFile(member.source, member.boundary, target, {
-          hashCopiedContent: true,
-        });
-        assertUpdateCandidatePluginAsset(member.asset);
-        if (
-          !content ||
-          content.contentHash !== member.asset.asset!.sha256 ||
-          content.sizeBytes !== member.asset.asset!.bytes
-        ) {
-          throw new Error("Native companion asset does not match its producer receipt");
-        }
-        assetContent.set(relative, content);
       } else if (
         !params.copyOnly &&
-        !privateAssetTargets.has(member.source) &&
         member.stat.dev === captureDevice &&
         (previous ||
           (managed &&
@@ -345,7 +303,6 @@ export function capturePluginNativeNamespace(params: {
   } catch (error) {
     if (
       params.copyOnly ||
-      [...before.values()].some((member) => member.asset) ||
       !managed ||
       previous ||
       !params.retainedRoot ||
@@ -361,15 +318,13 @@ export function capturePluginNativeNamespace(params: {
     fs.symlinkSync(sourceDirectory, directory, "junction");
     referenceRoot = params.retainedRoot;
   }
-  const content = new Map<string, { contentHash?: string; sizeBytes: number }>(assetContent);
+  const content = new Map<string, { contentHash?: string; sizeBytes: number }>();
   for (const [relative, member] of before) {
     if (!member.stat.isFile()) {
       continue;
     }
     if (!previous) {
-      if (!content.has(relative)) {
-        content.set(relative, { sizeBytes: Number(member.stat.size) });
-      }
+      content.set(relative, { sizeBytes: Number(member.stat.size) });
       continue;
     }
     const filename = path.join(directory, relative);
@@ -392,7 +347,6 @@ export function capturePluginNativeNamespace(params: {
     fromBoundary,
     previous ? undefined : outputRoot,
     !previous || Boolean(previous.referenceRoot),
-    previous ? undefined : params.privateAssets,
   );
   const captured = inspectDirectory(
     referenceRoot ? sourceDirectory : directory,
