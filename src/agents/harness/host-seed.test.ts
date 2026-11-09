@@ -29,6 +29,7 @@ import {
 import { withSessionCompactionPersistenceAsync as persistCompaction } from "../sessions/session-compaction-persistence.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { prepareHarnessContextMedia } from "./context-media-runtime.js";
 import type { AgentHarnessContextMediaRequest } from "./host-capability-types.js";
 import { bindBoundedSeed } from "./host-seed.js";
@@ -486,3 +487,47 @@ it.each(["throws", "rejects"] as const)(
       expect(onAgentEvent).toHaveBeenCalledOnce();
     }),
 );
+
+const smallWindowModel = makeProviderModelFixture({
+  id: "small-window",
+  provider: "openai",
+  api: "openai-responses",
+  baseUrl: "https://example.invalid/v1",
+  contextWindow: 128,
+  maxTokens: 64,
+});
+
+it("caps a bounded seed to the model window when contextTokenBudget is omitted", () =>
+  withOpenClawTestState({ label: "native-seed-model-window" }, async (state) => {
+    const fixture = await seedFixture(state, "model-window");
+    const manager = await fixture.open();
+    await appendUser(manager, "old".repeat(1000), 1);
+    const prepare = expectDefined(
+      fixture.bind({
+        config: seedConfig(8192, false),
+        model: smallWindowModel,
+      })?.prepareBoundedSeed,
+      "seed capability",
+    );
+    const seed = await prepare({ assertCurrent: () => {} });
+    expect(Buffer.byteLength(JSON.stringify(seed))).toBeLessThanOrEqual(128 * 4);
+  }));
+
+it("lets an explicit contextTokenBudget override a smaller model window for the bounded seed", () =>
+  withOpenClawTestState({ label: "native-seed-budget-override" }, async (state) => {
+    const fixture = await seedFixture(state, "budget-override");
+    const manager = await fixture.open();
+    await appendUser(manager, "old".repeat(1000), 1);
+    const prepare = expectDefined(
+      fixture.bind({
+        config: seedConfig(8192, false),
+        model: smallWindowModel,
+        contextTokenBudget: 2048,
+      })?.prepareBoundedSeed,
+      "seed capability",
+    );
+    const seed = await prepare({ assertCurrent: () => {} });
+    const bytes = Buffer.byteLength(JSON.stringify(seed));
+    expect(bytes).toBeGreaterThan(128 * 4);
+    expect(bytes).toBeLessThanOrEqual(8192);
+  }));

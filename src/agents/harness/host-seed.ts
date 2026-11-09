@@ -60,7 +60,10 @@ export function bindBoundedSeed(
     return undefined;
   }
   const hostTokenBudget =
-    floorPositiveFiniteNumber(input.contextTokenBudget) || DEFAULT_CONTEXT_TOKENS;
+    floorPositiveFiniteNumber(input.contextTokenBudget) ||
+    floorPositiveFiniteNumber(input.model?.contextWindow) ||
+    floorPositiveFiniteNumber(input.model?.maxTokens) ||
+    DEFAULT_CONTEXT_TOKENS;
   const sessionTarget = { ...target, agentId, sessionId, sessionKey, storePath };
   const attempt = {
     ...input,
