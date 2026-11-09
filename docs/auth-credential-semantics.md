@@ -114,6 +114,15 @@ Agent auth inheritance is read-through. When an agent has no local profile, it r
 
 When `agents.defaults.authInheritance.agentId` names another agent, Doctor relocates that agent's credentials if `main` has none. If both stores contain credentials, Doctor leaves both untouched and reports a recoverable warning: keep the credentials agents should share in one store, then rerun `openclaw doctor --fix`. Agent-private credentials stay local. This repair applies during relocation; it does not change stores that have already completed the shared-state cutover.
 
+After the shared owner has left the agent roster, an explicit
+`openclaw models auth login --agent main --provider <id>` can reconnect that shared
+account when `agents.defaults.authInheritance.agentId` explicitly names `main`.
+The sign-in targets the canonical shared credential owner, including its relocated
+state database, and refreshes the configured agents that inherit it. Provider
+workspace discovery still uses the configured system agent. This shared operation
+preserves each agent's model and model policy, rejects `--set-default`, and leaves
+agent-private credentials in place. Other missing agent IDs remain invalid.
+
 OAuth sibling synchronization writes the selected primary profile first, then the discovered shared owner before other siblings. This preserves read-through inheritance regardless of filesystem directory order. A shared owner outside the selected agents tree is not added to the synchronization targets.
 
 Auth usage and cooldown updates wait for write admission on their actual agent
