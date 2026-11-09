@@ -1,2 +1,2 @@
 # Local and browser Template installation: integrity, authority, unsafe archive, CLI ownership, review consent and diagnostics regressions.
-628
+649

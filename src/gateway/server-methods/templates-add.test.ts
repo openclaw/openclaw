@@ -7,6 +7,7 @@ import {
   TemplateGatewayPlanBlockedError,
   TemplateGatewayPlanChangedError,
 } from "../../templates/gateway-add-apply.js";
+import type { TemplateAddSource } from "../../templates/gateway-add-source.js";
 import { TemplateGatewayConsentError } from "../../templates/gateway-plugin-consent.js";
 import { TemplateSkillConsentError } from "../../templates/gateway-skill-consent.js";
 import { TemplateProjectError } from "../../templates/project.js";
@@ -85,7 +86,7 @@ async function callAdd(
   getRuntimeConfig: () => unknown = () => enabled,
   options: {
     hasCurrentClientAuthority?: () => boolean;
-    source?: typeof source | { kind: "local"; path: string };
+    source?: TemplateAddSource;
     cron?: unknown;
     applyPluginLifecycleChange?: unknown;
   } = {},

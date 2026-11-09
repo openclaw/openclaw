@@ -283,7 +283,7 @@ export async function runTemplatesAddCommand(
         throw new Error("Online Template Add currently requires a local project directory.");
       }
       const source = { kind: "local", path: path.resolve(sourcePath) };
-      const input = { source, ...(opts.agentId ? { agentId: opts.agentId } : {}) };
+      const input = { source, ...(opts.agentId !== undefined ? { agentId: opts.agentId } : {}) };
       const plan = await requestOwner<TemplateLifecyclePlanResult>("templates.add.plan", input);
       if (plan.blockers.length) {
         throw new Error(plan.blockers.map((blocker) => blocker.message).join("\n"));

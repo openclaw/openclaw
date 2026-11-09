@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { templatesAddHandlers } from "../gateway/server-methods/templates-add.js";
 import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { defaultRuntime } from "../runtime.js";
 import { useLocalStateOwnerFixture } from "./local-state-owner.fixture.test-support.js";
@@ -41,6 +42,25 @@ describe("Template Add CLI state ownership", () => {
       runTemplatesAddCommand(source, { json: true, workspace: path.join(root, "custom") }),
     ).rejects.toThrow("does not support --workspace");
     expect(fixture.transport.request).not.toHaveBeenCalled();
+  });
+
+  it("rejects an explicitly empty agent ID through the live owner without creating an agent", async () => {
+    await fs.writeFile(
+      process.env.OPENCLAW_CONFIG_PATH!,
+      JSON.stringify({ gateway: { controlUi: { experimental: { templates: true } } } }),
+    );
+    await fixture.startOwner();
+    Object.assign(fixture.config.gateway, { controlUi: { experimental: { templates: true } } });
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "@proof/demo", version: "1.0.0", openclaw: { template: "CLAW.md" } }),
+    );
+    Object.assign(fixture.handlers, templatesAddHandlers);
+    const before = await snapshotTree(root);
+    await expect(runTemplatesAddCommand(source, { json: true, agentId: "" })).rejects.toThrow(
+      /agentId/,
+    );
+    expect(await snapshotTree(root)).toEqual(before);
   });
 
   it("routes local Add through the live owner while preview stays read-only", async () => {
