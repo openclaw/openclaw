@@ -163,4 +163,4 @@ else
   cat "$tmp" >"$out"
 fi
 
-echo "$out"
+printf '%s\n' "$out"

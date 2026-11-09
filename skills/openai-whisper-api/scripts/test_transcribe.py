@@ -78,6 +78,10 @@ class TestTranscribeOutput(unittest.TestCase):
                     ("json", "-recording.wav", ["--json"], "-recording.json", response),
                     ("ordinary", "voice.wav", [], "voice.txt", b"Local transcript"),
                 ]
+                cases.extend(
+                    (option, "voice.wav", ["--out", option], option, b"Local transcript")
+                    for option in ("-n", "-e", "-E")
+                )
                 for label, filename, flags, output, expected in cases:
                     with self.subTest(case=label):
                         root = Path(temporary) / label
