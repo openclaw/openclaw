@@ -103,6 +103,11 @@ Scribes run as you, with your private access to the store, and use the agent's
 default model. Read everything a scribe did by opening its conversation. Ongoing
 scribes also appear on the Automations page.
 
+Setup and repair manage only this agent's scribes. Other
+agents can use the same scribe declaration keys without replacing or removing
+each other's automations. Setup preserves a paused automation; repair explicitly
+turns its own automation back on.
+
 ### Example prompt
 
 Turning on **Knowledge Consolidation** with the weekly default sends:
@@ -117,16 +122,17 @@ Settings:
 
 Steps:
 1. Call knowledge_status. Go on when the scope is private and writes are enabled, or the store is unprovisioned (...). Otherwise stop: ...
-2. With the automations tool, list automations including disabled ones and take those with declaration key `knowledge:scribe:claim-consolidation`. Remove each one owned by another conversation, ...
+2. With the automations tool, list automations for this agent (pass `agentId` from Runtime), including disabled ones, and find those with declaration key `knowledge:scribe:claim-consolidation`. Get each match. Only consider automations whose recorded `owner.agentId` equals this agent’s ID from Runtime; leave automations with another or missing owner agent unchanged. Never remove another agent’s automation. Remove each one owned by another conversation, ...
 3. Add the automation with the automations tool:
    - name: Knowledge scribe · Knowledge Consolidation
+   - agentId: this agent's ID from Runtime
    - declaration key: `knowledge:scribe:claim-consolidation`
    - schedule: the cron expression and time zone in the settings
    - session target: `session:` followed by this conversation's session key (from Runtime)
    - payload: an agent turn whose message is the run message below, exactly as written inside the fence
    - delivery: none; failure alert after 2 failed runs
    ...
-4. Get the automation and check that it targets this conversation.
+4. Get the automation and check that `owner.agentId` equals this agent’s ID from Runtime and it targets this conversation.
 5. Don't start a run from this turn: a run started here is skipped when the turn ends. The Scribes page starts the first run.
 6. Report the automation's ID and next run time. End your reply with one line: `Scribe status: on — <one sentence: the automation and its next run>`.
 
