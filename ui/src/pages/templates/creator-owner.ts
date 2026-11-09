@@ -1,14 +1,18 @@
 import { createLazyImportLoader } from "../../../../src/shared/lazy-promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { registerTemplateCreatorEnglish } from "../../i18n/locales/en-template-creator.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { showToast } from "../../lib/toast.ts";
 import {
   templateCreatorOwner,
   type CreatorOwner,
   type TemplateReviewTarget,
 } from "./creator-publication.ts";
-import { canCreateTemplateDraft } from "./draft-navigation.ts";
+import { canCreateTemplateDraft, templateDraftUnavailableReason } from "./draft-navigation.ts";
+
+registerEnglishCatalog(registerTemplateCreatorEnglish);
 
 const runtime = createLazyImportLoader(() => import("./creator-flow.ts"));
 
@@ -66,7 +70,24 @@ function requestTemplateCreator(
   review?: Omit<TemplateReviewTarget, "agentId">,
 ) {
   const client = context.gateway.snapshot.client;
-  if (!client || !canCreateTemplateDraft(context)) {
+  const unavailable = templateDraftUnavailableReason(context);
+  if (!client || unavailable) {
+    if (review) {
+      showToast({
+        severity: "warning",
+        message: t(
+          unavailable === "disabled"
+            ? "templatesDraft.reviewDisabled"
+            : "templatesDraft.reviewUnavailable",
+        ),
+        ...(unavailable === "disabled"
+          ? {
+              actionLabel: t("templatesDraft.openLabs"),
+              onAction: () => context.navigate("labs"),
+            }
+          : {}),
+      });
+    }
     return;
   }
   const owner = templateCreatorOwner(context);

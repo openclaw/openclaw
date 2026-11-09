@@ -9,25 +9,6 @@ vi.mock("../pages/templates/creator-owner.ts", async (importOriginal) => ({
   openTemplateCreator: vi.fn(),
 }));
 
-it("hands the exact draft, agent, and source conversation to the existing review owner", async () => {
-  const { context, owner } = createProfileAppearanceGateway(null);
-  const target = {
-    agentId: "research",
-    sessionKey: "agent:research:dashboard:source",
-    draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
-  };
-  owner.handleGatewayEvent({
-    type: "event",
-    event: "ui.command",
-    payload: {
-      command: { kind: "template-review", draftId: target.draftId },
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-    },
-  });
-  await vi.waitFor(() => expect(openTemplateCreator).toHaveBeenCalledWith(context, target));
-});
-
 it("drops a deferred review handoff after its application context retires", async () => {
   vi.mocked(openTemplateCreator).mockClear();
   const { host, owner } = createProfileAppearanceGateway(null);

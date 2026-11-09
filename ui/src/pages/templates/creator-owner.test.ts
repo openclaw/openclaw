@@ -103,6 +103,35 @@ it("opens a chat-authored draft after lazy loading without creating another draf
   expect(f.request.mock.calls.every(([method]) => method === "templates.drafts.read")).toBe(true);
 });
 
+it.each(["Labs", "role"])(
+  "explains a chat review blocked by %s without touching its draft",
+  async (reason) => {
+    const f = await fixture();
+    if (reason === "Labs") {
+      Object.assign(f.context.runtimeConfig.state.configSnapshot!, {
+        sourceConfig: { gateway: { controlUi: { experimental: { templates: false } } } },
+      });
+    } else {
+      f.context.gateway.snapshot.hello!.auth!.scopes = ["operator.write"];
+    }
+    const { openTemplateCreator } = await import("./creator-owner.ts");
+    openTemplateCreator(f.context, {
+      agentId: "research",
+      draftId: "draft-request",
+      sessionKey: "agent:research:dashboard:source",
+    });
+    expect(f.owner.loading).toBe(false);
+    expect(f.request).not.toHaveBeenCalled();
+    const notice = toast.mock.calls[0]?.[0];
+    expect(notice?.message).toContain(reason === "Labs" ? "Settings → Labs" : "administrator");
+    expect(notice?.message).toContain("private draft");
+    if (reason === "Labs") {
+      notice!.onAction!();
+      expect(f.context.navigate).toHaveBeenCalledWith("labs");
+    }
+  },
+);
+
 it("drops a chat review handoff when its connection changes during lazy loading", async () => {
   const f = await fixture();
   const { openTemplateCreator } = await import("./creator-owner.ts");

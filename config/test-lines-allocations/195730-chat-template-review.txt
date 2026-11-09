@@ -1,4 +1,5 @@
 # Exact net regression growth for PR #195730: request-specific draft CLI,
 # requesting-client screen delivery, conversation/lifetime isolation, and
-# production-browser review without duplicate model/draft/publish actions.
-414
+# production-browser review without duplicate model/draft/publish actions,
+# plus visible Labs/role rejection and its browser recovery action.
+457

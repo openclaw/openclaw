@@ -21,9 +21,9 @@ function connectCreatorBrowser() {
     ? chromium.connect(wsEndpoint, { timeout: 30_000 })
     : chromium.launch({ executablePath });
 }
-it.skipIf(!chromiumAvailable)(
-  "opens chat-origin review in the requesting conversation without creating or publishing again",
-  async () => {
+it.skipIf(!chromiumAvailable).each([true, false])(
+  "handles chat-origin review with Templates enabled=%s without creating or publishing again",
+  async (templatesEnabled) => {
     const prebuilt = inject("controlUiE2ePrebuiltAssets");
     const server = prebuilt
       ? await startBuiltControlUiE2eServer(prebuilt.root)
@@ -39,9 +39,11 @@ it.skipIf(!chromiumAvailable)(
         output: "Brief",
         authority: "Read only",
       };
-      const config = { gateway: { controlUi: { experimental: { templates: true } } } };
+      const config = { gateway: { controlUi: { experimental: { templates: templatesEnabled } } } };
       const gateway = await installMockGateway(page, {
         assistantName: "Harbor",
+        agentModel: "openai/gpt-4o",
+        models: [{ id: "gpt-4o", name: "GPT-4o", provider: "openai" }],
         serverBuildId: prebuilt?.buildInfo.buildId,
         serverVersion: prebuilt?.buildInfo.version ?? undefined,
         sessionKey,
@@ -96,7 +98,9 @@ it.skipIf(!chromiumAvailable)(
       await waitForControlUiGatewayReady(page);
       const artifact =
         process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-          ? createControlUiE2eArtifactDir("chat-template-handoff")
+          ? createControlUiE2eArtifactDir(
+              `chat-template-handoff-${templatesEnabled ? "enabled" : "disabled"}`,
+            )
           : null;
       if (artifact) {
         const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
@@ -116,6 +120,35 @@ it.skipIf(!chromiumAvailable)(
         agentId: "main",
         sessionKey,
       });
+      if (!templatesEnabled) {
+        const notice = page.getByText(
+          "Your private draft is saved. Turn on Templates in Settings → Labs to review it.",
+          { exact: true },
+        );
+        try {
+          await notice.waitFor({ state: "visible", timeout: 5_000 });
+        } finally {
+          if (artifact) {
+            const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+            const frame = await takeControlUiScreenshotFrame(page, composer, [composer], {
+              animations: "disabled",
+            });
+            await writeFile(path.join(artifact, "after.png"), frame.png);
+          }
+        }
+        for (const method of [
+          "chat.send",
+          "templates.drafts.create",
+          "templates.drafts.read",
+          "templates.drafts.publish",
+        ]) {
+          expect(await gateway.getRequests(method)).toHaveLength(0);
+        }
+        expect(await page.getByRole("dialog", { name: "Review your Template" }).count()).toBe(0);
+        await page.getByRole("button", { name: "Open Labs", exact: true }).click();
+        await waitForControlUiRoute(page, { routeId: "labs" });
+        return;
+      }
       const dialog = page.getByRole("dialog", { name: "Review your Template" });
       await dialog.waitFor({ state: "visible" });
       expect(await dialog.getByLabel("Name").inputValue()).toBe("Research Brief");
