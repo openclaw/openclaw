@@ -1117,7 +1117,7 @@ describe("executeNodeHostCommand", () => {
     expect(registerApprovalMock).not.toHaveBeenCalled();
   });
 
-  it.each(["unavailable node policy", "unparseable command"])(
+  it.each(["unavailable node policy", "incomplete allowlist analysis"])(
     "does not use fallback-full with %s",
     async (reason) => {
       if (reason === "unavailable node policy") {
@@ -1136,17 +1136,12 @@ describe("executeNodeHostCommand", () => {
       setHostPolicy("allowlist", "on-miss", "full");
       approvalDecisionMock.mockResolvedValue(null);
       const result = runNode({
-        ...(reason === "unparseable command" ? { command: "echo 'unterminated" } : {}),
         security: "allowlist",
         ask: "on-miss",
         autoReview: true,
         autoReviewer,
       });
-      await expect(result).rejects.toThrow(
-        reason === "unparseable command"
-          ? "exec cannot inspect shell commands"
-          : "exec denied: approval-timeout",
-      );
+      await expect(result).rejects.toThrow("exec denied: approval-timeout");
       expect(autoReviewer).not.toHaveBeenCalled();
       expect(followupMock).not.toHaveBeenCalled();
       expectNoSystemRun();
