@@ -9,6 +9,7 @@
  * Optimized/inlined functions otherwise lose precise-coverage calls after warmup.
  * Add --workspace-files 62000 --workspace-file-bytes 18000 for a 1.1 GB directory.
  * Alternate pinned baseline/candidate checkouts; run baseline twice for A/A controls.
+ * Give both checkouts the same --fixture-parent so path validation has identical path lengths.
  * Media acceptance: lower authority CPU/allocation (>=20%), no >20% total regression.
  * Git/authority acceptance: allocation reduction outside A/A spread, no >20%
  * CPU or latency regression, unchanged revocation. Setup/warmup/teardown are excluded.
@@ -40,6 +41,7 @@ const { values } = parseArgs({
     "workspace-files": { type: "string", default: "0" },
     "workspace-file-bytes": { type: "string", default: "18000" },
     revision: { type: "string", default: "unspecified" },
+    "fixture-parent": { type: "string", default: ".local" },
   },
 });
 assert(globalThis.gc, "Run with --expose-gc");
@@ -67,8 +69,9 @@ assert(
 );
 const workspaceFiles = integer(values["workspace-files"], "workspace-files", 0);
 const workspaceFileBytes = integer(values["workspace-file-bytes"], "workspace-file-bytes");
-await mkdir(".local", { recursive: true });
-const root = await mkdtemp(path.resolve(".local/session-sharing-context-"));
+const fixtureParent = path.resolve(values["fixture-parent"]);
+await mkdir(fixtureParent, { recursive: true });
+const root = await mkdtemp(path.join(fixtureParent, "session-sharing-context-"));
 const workspaceDir = path.join(root, "workspace");
 await mkdir(workspaceDir);
 process.env.OPENCLAW_STATE_DIR = root;
