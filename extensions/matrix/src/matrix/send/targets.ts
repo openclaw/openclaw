@@ -35,6 +35,10 @@ function resolveDirectRoomCache(client: MatrixClient): Map<string, string> {
   return created;
 }
 
+function describeMatrixReadError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function resolveDirectRoomId(
   client: MatrixClient,
   userId: string,
@@ -78,6 +82,23 @@ async function resolveDirectRoomId(
     }
     setBoundedMap(directRoomCache, cacheKey, inspection.activeRoomId, MAX_DIRECT_ROOM_CACHE_SIZE);
     return inspection.activeRoomId;
+  }
+
+  // A failed homeserver read is not a missing mapping: keep the operator pointed at the real cause.
+  if (inspection.directReadError) {
+    throw new Error(
+      `Could not read m.direct for ${trimmed} from the homeserver: ${describeMatrixReadError(inspection.directReadError)}`,
+    );
+  }
+  if (inspection.joinedRoomsReadError) {
+    throw new Error(
+      `Could not read joined rooms for ${trimmed} from the homeserver: ${describeMatrixReadError(inspection.joinedRoomsReadError)}`,
+    );
+  }
+  if (inspection.mappedRoomIds.length > 0) {
+    throw new Error(
+      `No direct room found for ${trimmed} (${inspection.mappedRoomIds.length} mapped room(s) could not be verified as direct)`,
+    );
   }
 
   throw new Error(`No direct room found for ${trimmed} (m.direct missing)`);

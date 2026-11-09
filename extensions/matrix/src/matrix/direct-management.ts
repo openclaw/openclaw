@@ -141,16 +141,24 @@ export async function inspectMatrixDirectRooms(params: {
       source,
     };
   };
+  let directReadError: unknown = null;
   const directContent: MatrixDirectAccountData = await readMatrixDirectAccountData(
     params.client,
-  ).catch(() => ({}));
+  ).catch((error: unknown) => {
+    directReadError = error;
+    return {};
+  });
   const mappedRoomIds = normalizeUniqueTrimmedStringList(directContent[remoteUserId]);
   const mappedRooms = await Promise.all(
     mappedRoomIds.map(async (roomId) => await classifyRoom(roomId, "account-data")),
   );
   const mappedStrict = mappedRooms.find((room) => room.strict);
 
-  const joinedRooms = await params.client.getJoinedRooms().catch(() => []);
+  let joinedRoomsReadError: unknown = null;
+  const joinedRooms = await params.client.getJoinedRooms().catch((error: unknown) => {
+    joinedRoomsReadError = error;
+    return [];
+  });
   const discoveredStrictRooms: MatrixDirectRoomCandidate[] = [];
   for (const roomId of normalizeUniqueTrimmedStringList(joinedRooms)) {
     if (mappedRoomIds.includes(roomId)) {
@@ -170,6 +178,8 @@ export async function inspectMatrixDirectRooms(params: {
     mappedRoomIds,
     mappedRooms,
     discoveredStrictRoomIds,
+    directReadError,
+    joinedRoomsReadError,
     activeRoomId:
       mappedStrict?.roomId ?? discoveredExplicit?.roomId ?? discoveredStrictRoomIds[0] ?? null,
   };
