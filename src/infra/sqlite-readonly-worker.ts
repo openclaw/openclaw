@@ -11,6 +11,7 @@ import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import type { PreservedOrphanTaskDelivery } from "../state/openclaw-state-db-task-delivery-recovery-preservation.js";
+import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import {
   assertChildRuntimeAvailable,
   classifyChildRuntimeFailure,
@@ -213,6 +214,16 @@ function sqliteReadOnlyWorkerArgv(pathname: string, options: SqliteReadOnlyWorke
   };
 }
 
+function resolveSqliteReadOnlyWorkerEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const library = ensureSqliteLibrarySelected();
+  const runtimeEnv = resolveNodeCompileCacheEnv(env);
+  // Projected read contexts omit initialization env. A new process must still
+  // load the runtime owner's selected library rather than repeat discovery.
+  return library.source === "runtime"
+    ? runtimeEnv
+    : { ...runtimeEnv, OPENCLAW_SQLITE_LIBRARY: library.path };
+}
+
 /** Capture launch facts before awaiting another session's retirement. */
 export function captureSqliteReadOnlyWorkerLaunch(
   env?: NodeJS.ProcessEnv,
@@ -225,7 +236,7 @@ export function captureSqliteReadOnlyWorkerLaunch(
       resolveRuntimeProcessEntrypointUrl("sqliteReadOnly"),
     ).runtimeGeneration,
     env: {
-      ...resolveNodeCompileCacheEnv(env),
+      ...resolveSqliteReadOnlyWorkerEnv(env),
       // Auth readers pin this default explicitly; equivalent roots share one child.
       OPENCLAW_STATE_DIR: resolveStateDir(env),
     },
@@ -443,7 +454,7 @@ export function runOneShotSqliteInspection<T>(params: {
       {
         encoding: "utf8",
         windowsHide: true,
-        env: params.env ?? resolveNodeCompileCacheEnv(),
+        env: resolveSqliteReadOnlyWorkerEnv(params.env),
         cwd: params.cwd,
         maxBuffer: SQLITE_READONLY_WORKER_MAX_BUFFER,
         timeout: params.deadlineOwnedByCaller ? undefined : timeoutMs,
@@ -543,7 +554,7 @@ export function runSqliteReadOnlyWorkerSync(
       encoding: "utf8",
       windowsHide: true,
       stdio: "pipe",
-      env: resolveNodeCompileCacheEnv(),
+      env: resolveSqliteReadOnlyWorkerEnv(),
       maxBuffer: SQLITE_READONLY_WORKER_MAX_BUFFER,
       timeout: timeoutMs,
       killSignal: "SIGKILL",

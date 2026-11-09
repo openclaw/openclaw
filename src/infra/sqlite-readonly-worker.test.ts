@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as sqliteLibrary from "./bun-sqlite-library.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
@@ -55,6 +56,22 @@ function createDatabase(sql = ""): string {
   }
   return source;
 }
+
+it("carries the selected native library when the read context omits initialization env", () => {
+  const selection = vi.spyOn(sqliteLibrary, "ensureSqliteLibrarySelected").mockReturnValue({
+    source: "env",
+    path: "/selected/runtime/libsqlite3.dylib",
+    version: "3.53.0",
+    extensionLoadingSupported: true,
+  });
+  try {
+    const launch = captureSqliteReadOnlyWorkerLaunch({ OPENCLAW_STATE_DIR: "/selected/state" });
+    expect(launch.env.OPENCLAW_SQLITE_LIBRARY).toBe("/selected/runtime/libsqlite3.dylib");
+    expect(launch.env.OPENCLAW_STATE_DIR).toBe("/selected/state");
+  } finally {
+    selection.mockRestore();
+  }
+});
 
 async function withWorker<T>(
   run: (worker: Worker) => Promise<T>,
