@@ -116,7 +116,6 @@ suite.define(() => {
               await result();
             }
           }
-          await page.locator(".chat-activity-group__summary").click();
           await page.locator(".chat-tool-msg-summary").click();
           const screenshot = page.locator("img.chat-message-image");
           await screenshot.waitFor({ state: "visible" });
@@ -136,7 +135,6 @@ suite.define(() => {
             expect(await stop.isVisible()).toBe(true);
           } else {
             await page.reload();
-            await page.locator(".chat-activity-group__summary").click();
             await page.locator(".chat-tool-msg-summary").click();
             await page.locator("img.chat-message-image").waitFor({ state: "visible" });
             expect(await omitted.count()).toBe(0);
