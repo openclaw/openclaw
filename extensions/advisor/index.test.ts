@@ -19,6 +19,9 @@ async function startAdvisor(
   reply = "NO_CHANGE",
   runTrigger = "user",
   options: {
+    config?: Record<string, unknown>;
+    agentId?: string;
+    prompt?: string;
     sessionKey?: string;
     entries?: Record<
       string,
@@ -34,6 +37,20 @@ async function startAdvisor(
   const on = vi.fn<Api["on"]>();
   const registerService = vi.fn<Api["registerService"]>();
   const runtime = createPluginRuntimeMock();
+  const config = { everyToolCalls, everyMinutes: 0, ...options.config };
+  vi.spyOn(runtime.config, "current").mockReturnValue({
+    plugins: { entries: { advisor: { config } } },
+  });
+  const llmResult = {
+    text: reply,
+    provider: "example",
+    model: "reviewer",
+    agentId: options.agentId ?? "main",
+    usage: {},
+    execution: { mode: "direct-provider", owner: { kind: "provider", id: "example" } },
+    audit: { caller: { kind: "plugin", id: "advisor" } },
+  } satisfies Awaited<ReturnType<Api["runtime"]["llm"]["complete"]>>;
+  const llmComplete = vi.spyOn(runtime.llm, "complete").mockResolvedValue(llmResult);
   const forkSession = vi.spyOn(runtime.subagent, "forkSession").mockResolvedValue({ text: reply });
   vi.spyOn(runtime.agent.session, "getSessionEntryAsync").mockImplementation(async ({ sessionKey }) => {
     if (options.lookupThrows) {
@@ -42,12 +59,12 @@ async function startAdvisor(
     const entry = options.entries?.[sessionKey];
     return entry ? { sessionId: "session", updatedAt: 0, ...entry } : undefined;
   });
-  vi.spyOn(runtime.subagent, "getSessionMessages").mockResolvedValue({
+  const getSessionMessages = vi.spyOn(runtime.subagent, "getSessionMessages").mockResolvedValue({
     messages: options.messages ?? [],
   });
   const api = createTestPluginApi({
     id: "advisor",
-    pluginConfig: { everyToolCalls, everyMinutes: 0 },
+    pluginConfig: config,
     runtime,
     registerService,
     on,
@@ -101,7 +118,10 @@ async function startAdvisor(
   };
   const startRun = async (runId = "run-1", trigger = "user") => {
     const beforeReply = on.mock.calls[0]?.[1] as Hook | undefined;
-    await beforeReply?.({}, { sessionKey: options.sessionKey ?? "agent:main:main", runId, trigger });
+    await beforeReply?.(
+      { cleanedBody: options.prompt ?? "Check the gateway" },
+      { agentId: options.agentId ?? "main", sessionKey: options.sessionKey ?? "agent:main:main", runId, trigger },
+    );
     await send("lifecycle", "start", {}, undefined, runId);
     const beforePrompt = on.mock.calls.find(([name]) => name === "before_prompt_build")?.[1] as
       | Hook
@@ -115,7 +135,7 @@ async function startAdvisor(
   };
   await service?.start({ config: {}, stateDir: "/tmp/advisor-test", logger, scheduler });
   await startRun("run-1", runTrigger);
-  return { forkSession, steer, warn, service, send, flush, startRun, tool };
+  return { forkSession, llmComplete, llmResult, getSessionMessages, steer, warn, service, send, flush, startRun, tool };
 }
 
 it("reviews complete tools at the threshold, rechecking queued and native calls", async () => {
@@ -287,4 +307,81 @@ it("retains sessions_send provenance after its input leaves the recent window", 
     messages: Array.from({ length: 300 }, () => ({ role: "toolResult", content: "done" })),
   });
   await run.tool(0);
+});
+
+it("reviews on the configured model with the admitted agent and a bounded transcript", async () => {
+  const run = await startAdvisor(1, "NO_CHANGE", "user", {
+    agentId: "research",
+    config: { model: "example/reviewer", thinking: "low" },
+    messages: [{ role: "user", content: "Check the gateway" }],
+  });
+  await run.tool();
+  await run.flush();
+  expect(run.forkSession).not.toHaveBeenCalled();
+  expect(run.llmComplete).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    model: "example/reviewer",
+    agentId: "research",
+    reasoning: "low",
+    messages: [expect.objectContaining({ content: expect.stringContaining("USER: Check the gateway") })],
+  }));
+});
+
+it("logs and skips the review when the review model fails", async () => {
+  const run = await startAdvisor(1, "NO_CHANGE", "user", { config: { model: "example/reviewer" } });
+  run.llmComplete.mockRejectedValue(new Error("LLM_COMPLETION_NOT_AUTHORIZED"));
+  await run.tool();
+  await run.flush();
+  expect(run.forkSession).not.toHaveBeenCalled();
+  expect(run.steer).not.toHaveBeenCalled();
+  expect(run.warn).toHaveBeenCalledWith(expect.stringContaining("review_model_failed (example/reviewer)"));
+});
+
+it.each(["error", "aborted"] as const)("does not steer partial %s completions", async (stopReason) => {
+  const run = await startAdvisor(1, "NO_CHANGE", "user", { config: { model: "example/reviewer" } });
+  run.llmComplete.mockResolvedValue({ ...run.llmResult, text: "CORRECTION\nStop.", stopReason });
+  await run.tool();
+  await run.flush();
+  expect(run.forkSession).not.toHaveBeenCalled();
+  expect(run.steer).not.toHaveBeenCalled();
+  expect(run.warn).toHaveBeenCalledWith(expect.stringContaining("review_model_failed (example/reviewer)"));
+});
+
+it("keeps the session-model fork when no model is configured", async () => {
+  const run = await startAdvisor(1);
+  await run.tool(1);
+  expect(run.llmComplete).not.toHaveBeenCalled();
+});
+
+it("caps the transcript while retaining the first available user and current request", async () => {
+  const run = await startAdvisor(1, "NO_CHANGE", "user", {
+    config: { model: "example/reviewer" },
+    prompt: "Changed request: inspect only",
+    messages: [
+      { role: "user", content: "Old request" },
+      { role: "user", content: "Changed request: inspect only" },
+      ...Array.from({ length: 300 }, () => ({ role: "toolResult", toolName: "exec", content: "x".repeat(1200) })),
+    ],
+  });
+  await run.tool();
+  await run.flush();
+  const transcript = run.llmComplete.mock.calls[0]?.[0].messages[0]?.content;
+  expect(transcript).toContain("USER: Old request");
+  expect(transcript).toContain("Changed request: inspect only");
+  expect(transcript).toContain("earlier entries omitted");
+  expect(transcript?.length).toBeLessThanOrEqual(60_000);
+});
+
+it("does not dispatch a review canceled during history retrieval", async () => {
+  const run = await startAdvisor(1, "NO_CHANGE", "user", { config: { model: "example/reviewer" } });
+  const history = Promise.withResolvers<{ messages: unknown[] }>();
+  run.getSessionMessages.mockReturnValue(history.promise);
+  await run.tool();
+  const pending = run.flush();
+  await vi.waitFor(() => expect(run.getSessionMessages).toHaveBeenCalledOnce());
+  await run.send("lifecycle", "end", { aborted: true });
+  history.resolve({ messages: [] });
+  await pending;
+  expect(run.llmComplete).not.toHaveBeenCalled();
+  expect(run.forkSession).not.toHaveBeenCalled();
+  expect(run.warn).not.toHaveBeenCalled();
 });

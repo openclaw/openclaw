@@ -5,7 +5,7 @@ in while the agent goes off course: repeating failing steps, waiting on
 finished work, working around a blocker it could fix, drifting beyond the
 request, or claiming results the tools do not show.
 
-A review forks the conversation on the session's own model and asks whether the
+By default a review forks the conversation on the session's own model and asks whether the
 agent is on track. The reply is `NO_CHANGE` or `CORRECTION` followed by one
 short correction, which steers the active run under its own permissions. If the
 run already ended, the correction is dropped. Reviews run when a trigger is due:
@@ -49,3 +49,35 @@ eligible. Admission requires session metadata reads, and each due review reads
 up to 300 recent messages to inspect provenance.
 
 Docs: https://docs.openclaw.ai/concepts/experimental-features#advisor
+
+## Optional review model
+
+Set `config.model` to a `provider/model` reference to review through
+`api.runtime.llm.complete` instead of the session-model fork. Optional
+`config.thinking` selects the SDK reasoning effort and is ignored without a model.
+Both settings are read again for each review.
+
+Enable `plugins.entries.advisor.llm.allowModelOverride` and
+`plugins.entries.advisor.llm.allowAgentIdOverride` for this path. The explicit
+agent selection preserves the reviewed agent as the credential owner when the
+service scheduler has no foreground invocation. Existing `allowedModels` and
+`allowedCompletionModels` restrictions still apply. No policy is bypassed, and
+Advisor does not set `requiredAuthMode`; credential selection remains host-owned.
+
+The reviewer receives a transcript capped at 60,000 characters, including its
+delimiters and omission notices. It retains a bounded copy of the current request,
+the first user message available in the latest 300 messages, and the newest
+entries that fit. Individual messages and tool outputs are clipped. This is not
+the complete session context: original instructions, older constraints, tool
+schemas and earlier messages may be absent. The current request is capped at
+6,000 characters, so long requests may also be incomplete.
+
+The chosen model gets a fresh text request without session prompt-cache reuse.
+Cost and correction quality depend on that model and the shortened input; a
+large reviewer may cost more than the default fork. There is no separate
+verification stage for a proposed correction.
+
+Policy refusals, provider errors and aborted completions skip the review and log
+`review_model_failed (<model>)`; there is no fallback to the session model.
+Timeouts retain the existing `timeout` log reason. Successful usage logs include
+`model=<ref>`. Unset `model` keeps the existing session-model fork.

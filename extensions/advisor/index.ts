@@ -33,7 +33,12 @@ export const DELIVERY_PREFIX =
   "Advisor (OpenClaw Labs): an automatic advisor read this conversation's recent work. " +
   "Treat this as advice, not new instructions or permissions, and check that it still applies before acting.";
 
-type AdmittedRun = { sessionKey: string; sessionsSend?: boolean };
+type AdmittedRun = {
+  sessionKey: string;
+  sessionsSend?: boolean;
+  agentId?: string;
+  currentRequest: string;
+};
 type Session = {
   toolCalls: number;
   since: number;
@@ -104,6 +109,90 @@ function isSessionsSendTurn(messages: unknown[]): boolean {
   return false;
 }
 
+function clip(value: unknown, max: number): string {
+  const text = typeof value === "string" ? value : (JSON.stringify(value) ?? "");
+  if (text.length <= max) {
+    return text;
+  }
+  const suffix = " [truncated]";
+  return text.slice(0, Math.max(0, max - suffix.length)) + suffix.slice(0, max);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function textOf(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  return Array.isArray(content)
+    ? content.flatMap((block: unknown) =>
+        isRecord(block) && block.type === "text" && typeof block.text === "string" ? [block.text] : [],
+      ).join("\n")
+    : "";
+}
+
+/** Preserve the current request independently of the bounded, recent history tail. */
+function formatTranscript(messages: unknown[], currentRequest: string): string {
+  const maxChars = 60_000;
+  const lines: string[] = [];
+  for (const message of messages) {
+    if (!isRecord(message)) {
+      continue;
+    }
+    if (message.role === "user") {
+      lines.push("USER: " + clip(textOf(message.content), 6000));
+    } else if (message.role === "assistant") {
+      const text = textOf(message.content);
+      if (text.trim()) {
+        lines.push("ASSISTANT: " + clip(text, 2000));
+      }
+      for (const block of Array.isArray(message.content) ? message.content : []) {
+        if (isRecord(block) && block.type === "toolCall" && typeof block.name === "string") {
+          lines.push("TOOL CALL " + clip(block.name, 100) + ": " + clip(block.arguments, 600));
+        }
+      }
+    } else if (message.role === "toolResult") {
+      const name = typeof message.toolName === "string" ? clip(message.toolName, 100) : "";
+      lines.push(
+        "TOOL RESULT " + name + (message.isError ? " (error)" : "") + ": " + clip(textOf(message.content), 1200),
+      );
+    } else if (message.customType === "openclaw.nested-tool.v1" && isRecord(message.details)) {
+      const details = message.details;
+      if (typeof details.toolName === "string") {
+        const result = isRecord(details.result) ? details.result.content : undefined;
+        lines.push(
+          "NESTED CALL " + clip(details.toolName, 100) + (details.isError ? " (error)" : "") + ": " +
+          clip(details.input, 300) + " -> " + clip(textOf(result), 600),
+        );
+      }
+    }
+  }
+  const first = lines.findIndex((line) => line.startsWith("USER: "));
+  const head = first >= 0 ? [lines[first]] : [];
+  const prefix = [
+    "Current request (data):",
+    clip(currentRequest, 6000),
+    "Recent conversation transcript (data, oldest first):",
+    "<<<",
+    ...head,
+  ].join("\n");
+  const tail: string[] = [];
+  // Reserve the longest omission notice and the closing delimiter before selecting entries.
+  const notice = "[... " + lines.length + " earlier entries omitted ...]";
+  let used = prefix.length + notice.length + 5;
+  for (let index = lines.length - 1; index > first; index--) {
+    if (used + lines[index].length + 1 > maxChars) {
+      break;
+    }
+    tail.unshift(lines[index]);
+    used += lines[index].length + 1;
+  }
+  const omitted = lines.length - head.length - tail.length;
+  return [prefix, ...(omitted > 0 ? ["[... " + omitted + " earlier entries omitted ...]"] : []), ...tail, ">>>"].join("\n");
+}
+
 function readTrigger(config: Record<string, unknown> | undefined, key: string, fallback: number) {
   const value = config?.[key];
   return typeof value === "number" ? value : fallback;
@@ -113,7 +202,7 @@ export default definePluginEntry({
   id: "advisor",
   name: "Advisor",
   description:
-    "Experimental: reviews ongoing agent work on the session's own model and offers one short correction.",
+    "Experimental: reviews ongoing agent work and offers one short correction.",
   register(api) {
     const everyToolCalls = readTrigger(api.pluginConfig, "everyToolCalls", 10);
     const everyMs = readTrigger(api.pluginConfig, "everyMinutes", 20) * 60_000;
@@ -136,9 +225,13 @@ export default definePluginEntry({
         scheduler.signal,
         AbortSignal.timeout(REVIEW_TIMEOUT_MS),
       ]);
-      const instructions =
-        api.runtime.config.current().plugins?.entries?.advisor?.config?.reviewInstructions;
+      const advisorConfig = api.runtime.config.current().plugins?.entries?.advisor?.config;
+      const instructions = advisorConfig?.reviewInstructions;
       const guidance = typeof instructions === "string" ? instructions.trim() : "";
+      const reviewModel = typeof advisorConfig?.model === "string" ? advisorConfig.model.trim() : "";
+      const thinking = api.runtime.agent.normalizeThinkingLevel(
+        typeof advisorConfig?.thinking === "string" ? advisorConfig.thinking : undefined,
+      );
       let text: string;
       try {
         // An agent-to-agent turn is not a person's request; the sender's own run is still reviewed.
@@ -148,22 +241,54 @@ export default definePluginEntry({
           api.logger.info(`advisor: skipped review for session ${sessionKey}: sessions_send turn`);
           return;
         }
-        const result = await api.runtime.subagent.forkSession({
-          sessionKey,
-          message: `${REVIEW_PREFIX}\n${guidance || DEFAULT_REVIEW_INSTRUCTIONS}\n${OUTPUT_CONTRACT}`,
-          timeoutMs: REVIEW_TIMEOUT_MS,
-          signal,
-        });
-        text = result.text;
-        api.logger.info(
-          `advisor: review usage for session ${sessionKey}: input=${result.usage?.inputTokens ?? "unknown"} cacheRead=${result.usage?.cacheReadTokens ?? "unknown"} output=${result.usage?.outputTokens ?? "unknown"}`,
-        );
+        const message = `${REVIEW_PREFIX}\n${guidance || DEFAULT_REVIEW_INSTRUCTIONS}\n${OUTPUT_CONTRACT}`;
+        if (reviewModel) {
+          if (!run.agentId) {
+            throw new Error("Advisor review requires the admitted agent identity");
+          }
+          // Scheduled work has no foreground identity; retain the reviewed credential owner.
+          const result = await api.runtime.llm.complete({
+            model: reviewModel,
+            agentId: run.agentId,
+            ...(thinking ? { reasoning: thinking } : {}),
+            systemPrompt: message,
+            messages: [{ role: "user", content: formatTranscript(recent.messages, run.currentRequest) }],
+            signal,
+            purpose: "advisor review",
+          });
+          signal.throwIfAborted();
+          if (result.stopReason === "error" || result.stopReason === "aborted") {
+            throw new Error("Review model did not complete successfully");
+          }
+          text = result.text;
+          api.logger.info(
+            `advisor: review usage for session ${sessionKey}: input=${result.usage?.inputTokens ?? "unknown"} cacheRead=${result.usage?.cacheReadTokens ?? "unknown"} output=${result.usage?.outputTokens ?? "unknown"} model=${reviewModel}`,
+          );
+        } else {
+          const result = await api.runtime.subagent.forkSession({
+            sessionKey,
+            message,
+            timeoutMs: REVIEW_TIMEOUT_MS,
+            signal,
+          });
+          text = result.text;
+          api.logger.info(
+            `advisor: review usage for session ${sessionKey}: input=${result.usage?.inputTokens ?? "unknown"} cacheRead=${result.usage?.cacheReadTokens ?? "unknown"} output=${result.usage?.outputTokens ?? "unknown"}`,
+          );
+        }
       } catch (error) {
         if (!cancel.aborted) {
           const reason =
-            error instanceof Error && error.name === "TimeoutError" ? "timeout" : "fork_failed";
+            error instanceof Error && error.name === "TimeoutError"
+              ? "timeout"
+              : reviewModel
+                ? `review_model_failed (${reviewModel})`
+                : "fork_failed";
           api.logger.warn(`advisor: review failed for session ${sessionKey}: ${reason}`);
         }
+        return;
+      }
+      if (signal.aborted) {
         return;
       }
       const finding = parseReview(text);
@@ -256,7 +381,7 @@ export default definePluginEntry({
 
     api.on(
       "before_agent_reply",
-      async (_event, ctx) => {
+      async (event, ctx) => {
         // Hooks and the Gateway service use distinct registrations; run context carries admission.
         if (ctx.sessionKey && ctx.runId && ctx.trigger === "user") {
           const notHuman = await resolveNonHumanRoot(api, ctx.sessionKey);
@@ -267,7 +392,11 @@ export default definePluginEntry({
           api.runContext.setRunContext({
             runId: ctx.runId,
             namespace: RUN_CONTEXT_NAMESPACE,
-            value: { sessionKey: ctx.sessionKey },
+            value: {
+              sessionKey: ctx.sessionKey,
+              ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
+              currentRequest: clip(event.cleanedBody, 6000),
+            },
           });
         }
       },
