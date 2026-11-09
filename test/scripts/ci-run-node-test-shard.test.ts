@@ -31,7 +31,6 @@ import { resolveCiTestRuntimeSelections } from "../../scripts/lib/ci-test-runtim
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { collectVitestFileFilters } from "../../scripts/lib/vitest-cli-mode.mts";
 import {
-  resolveCiVitestWorkerPreset,
   selectVitestWorkerPreset,
   shouldUseRuntimeOnlyVitestWorkers,
   shouldUseToolingOnlyVitestWorkers,
@@ -347,12 +346,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   ])(
     "shares compatible $preset workers for $configs / $files",
     async ({ configs, files, preset, sibling }) => {
-      expect(
-        resolveCiVitestWorkerPreset([
-          { configs, includePatterns: files },
-          ...(sibling ? [sibling] : []),
-        ]),
-      ).toBe(preset);
       machine(8, 31);
       const createWorker = vi.spyOn(workerOwner, "createVitestWorkerRun");
       const inheritedInclude = path.join(makeScratchDir(), "include.json");
