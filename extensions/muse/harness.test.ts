@@ -17,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type * as ProviderAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import type * as TranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import catalogOriginal from "../../test/fixtures/model-catalog/muse-meta-account.json" with { type: "json" };
 import catalogExpected from "../../test/fixtures/model-catalog/muse-meta-expected.json" with { type: "json" };
@@ -563,6 +564,53 @@ describe("Muse native MSP harness", () => {
       await harness.dispose?.();
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "closes a host cancelled during initialization",
+    async ({ signal }) => {
+      const { harness, run, log, bindings } = setup(true);
+      await using server = createServer();
+      const gatePath = join(workspace, "attempt-initialize.sock");
+      await once(server.listen(gatePath), "listening");
+      const connected = once(server, "connection");
+      vi.stubEnv("MUSE_FIXTURE_INITIALIZE_GATE", gatePath);
+      const controller = new AbortController();
+      const cancelled = new Error("fixture caller cancelled initialization");
+      const attempt = run({ abortSignal: controller.signal }).then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      );
+      let socket: Socket | undefined;
+      try {
+        socket = (
+          await withinTest(
+            awaitGateBeforeSettlement(connected, attempt, "Muse did not reach initialize"),
+            signal,
+          )
+        )[0];
+        const [pid] = await withinTest(once(socket!, "data"), signal);
+        controller.abort(cancelled);
+        // Keep initialize withheld: Stop must settle without a successful handshake.
+        const outcome = await withinTest(attempt, signal);
+        if ("result" in outcome) {
+          expect(terminal(outcome.result).kind).toBe("aborted");
+        } else {
+          expect(outcome.error).toBe(cancelled);
+        }
+        expect(bindings.size).toBe(0);
+        expect((await readRequests(log)).some((request) => request.method === "turn/start")).toBe(
+          false,
+        );
+        expect(() => process.kill(Number(pid), 0)).toThrow();
+      } finally {
+        // Also drain the intentionally broken baseline after the test deadline.
+        socket?.write("resume");
+        await attempt;
+        socket?.destroy();
+        await harness.dispose();
+      }
+    },
+  );
 
   it("interrupts the real MSP transport when the caller aborts", async () => {
     const { run } = setup();
