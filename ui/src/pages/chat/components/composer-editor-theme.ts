@@ -40,7 +40,6 @@ export const composerEditorTheme = EditorView.theme({
     userSelect: "text",
     WebkitUserSelect: "text",
   },
-  "& ~ .agent-chat__composer-placeholder": { display: "none" },
   ".cm-line": { padding: "0" },
   ".cm-placeholder": { color: "var(--muted)" },
 });

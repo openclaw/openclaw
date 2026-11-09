@@ -428,5 +428,10 @@ suite.define(() => {
     await pollCount(mark).toBe(0);
     await expect.poll(() => backing.inputValue()).toBe("Edited without a mention");
     await pollCount(surface.getByRole("textbox")).toBe(1);
+    await textbox.fill("");
+    await pollCount(surface.locator(".cm-placeholder")).toBe(1);
+    await expect
+      .poll(() => surface.locator(".agent-chat__composer-placeholder").isVisible())
+      .toBe(false);
   });
 });

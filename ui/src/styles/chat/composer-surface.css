@@ -497,7 +497,9 @@
   pointer-events: none;
 }
 
-.agent-chat__composer-combobox > :placeholder-shown ~ .agent-chat__composer-placeholder {
+.agent-chat__composer-combobox
+  > :placeholder-shown:not([hidden])
+  ~ .agent-chat__composer-placeholder {
   display: block;
 }
 
