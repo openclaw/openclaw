@@ -156,43 +156,6 @@ describe("worktrees cli", () => {
     expect(gc).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "routes orphan branch cleanup and reports its dry-run mode: %s",
-    async (dryRun) => {
-      const repoRoot = await fs.realpath(tempDirs.make("openclaw-orphan-branches-cli-"));
-      const result = {
-        repoRoot,
-        dryRun,
-        branches: [
-          {
-            branch: "openclaw/retired",
-            outcome: dryRun ? ("would-delete" as const) : ("deleted" as const),
-          },
-        ],
-      };
-      const prune = vi.spyOn(owner, "pruneOrphanBranches").mockResolvedValue(result);
-      const gc = vi.spyOn(owner, "gc");
-      const output = muteOutput(dryRun);
-      await run(["gc", "--orphan-branches", repoRoot, ...(dryRun ? ["--dry-run", "--json"] : [])]);
-      expect(prune).toHaveBeenCalledWith({ repoRoot, dryRun, ...admission });
-      expect(gc).not.toHaveBeenCalled();
-      expect(output).toHaveBeenCalledWith(dryRun ? result : "deleted openclaw/retired");
-    },
-  );
-
-  it.each([
-    ["--dry-run"],
-    ["--orphan-branches", ""],
-    ["--orphan-branches", "/repo", "--job", "job"],
-    ["--orphan-branches", "/repo", "--retry-deferred"],
-  ])("rejects conflicting branch cleanup arguments %j", async (...args) => {
-    const prune = vi.spyOn(owner, "pruneOrphanBranches");
-    const gc = vi.spyOn(owner, "gc");
-    await expect(run(["gc", ...args])).rejects.toThrow();
-    expect(prune).not.toHaveBeenCalled();
-    expect(gc).not.toHaveBeenCalled();
-  });
-
   it.each([false, true])("reports cleanup and signals partial failure: %s", async (partial) => {
     setRuntimeConfigSnapshot({}, {});
     const result = {

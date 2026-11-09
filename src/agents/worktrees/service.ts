@@ -30,10 +30,6 @@ import { createWorktreeGcPrefilter, lockState, unlockWorktree } from "./git-lock
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
 import { commandError, worktreePathExists, runGit } from "./git.js";
 import { validateName } from "./name.js";
-import {
-  pruneManagedWorktreeBranches,
-  type PruneWorktreeBranchesParams,
-} from "./orphan-branches.js";
 import { worktreeOwnerMatches } from "./owner.js";
 import { readPendingWorktrees, reservePendingWorktree } from "./pending-slots.js";
 import {
@@ -936,10 +932,6 @@ export class ManagedWorktreeService {
     if (record) {
       await this.release(record.id, guard);
     }
-  }
-
-  pruneOrphanBranches(params: PruneWorktreeBranchesParams) {
-    return pruneManagedWorktreeBranches(params, this.env);
   }
 
   async gc(params: ManagedWorktreeGcParams = {}): Promise<ManagedWorktreeGcResult> {

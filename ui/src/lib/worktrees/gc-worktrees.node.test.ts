@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { expect, it, onTestFinished, vi } from "vitest";
-import type { WorktreesGcReceipt } from "../../../../packages/gateway-protocol/src/schema/worktrees.js";
+import type { WorktreesGcResult } from "../../../../packages/gateway-protocol/src/schema/worktrees.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { WorktreesModel } from "../../pages/worktrees/worktrees-model.ts";
@@ -12,7 +12,7 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { GatewayPageBinding } from "../gateway-page-binding.ts";
 
-const completed: WorktreesGcReceipt = {
+const completed: WorktreesGcResult = {
   jobId: "cleanup-job",
   state: "completed",
   outcome: "completed",
@@ -20,12 +20,12 @@ const completed: WorktreesGcReceipt = {
   orphansDeleted: 0,
   snapshotsPruned: 0,
 };
-const queued: WorktreesGcReceipt = { ...completed, state: "queued", removed: [] };
-const failed: WorktreesGcReceipt = { ...completed, state: "failed", error: "owner stopped" };
+const queued: WorktreesGcResult = { ...completed, state: "queued", removed: [] };
+const failed: WorktreesGcResult = { ...completed, state: "failed", error: "owner stopped" };
 const issue = { stage: "idle", outcome: "failed", reason: "offline" } as const;
-const partial: WorktreesGcReceipt = { ...completed, outcome: "partial", issues: [issue] };
+const partial: WorktreesGcResult = { ...completed, outcome: "partial", issues: [issue] };
 
-function setup(...responses: (WorktreesGcReceipt | Promise<WorktreesGcReceipt>)[]) {
+function setup(...responses: (WorktreesGcResult | Promise<WorktreesGcResult>)[]) {
   vi.useFakeTimers();
   const request = vi.fn<Parameters<typeof createTestGatewayClient>[0]>();
   responses.forEach((response) => request.mockReturnValueOnce(Promise.resolve(response)));
@@ -67,7 +67,7 @@ function setup(...responses: (WorktreesGcReceipt | Promise<WorktreesGcReceipt>)[
 }
 
 it("enqueues once, polls the same job serially, and settles only when cleanup completes", async () => {
-  const slowPoll = createDeferred<WorktreesGcReceipt>();
+  const slowPoll = createDeferred<WorktreesGcResult>();
   const { request, list, model } = setup(queued, slowPoll.promise, completed);
   const settled = vi.fn();
   const pending = model.gc().then(settled);
@@ -103,7 +103,7 @@ it.each([
 it.each(["before enqueue", "during enqueue", "between polls", "during poll"] as const)(
   "ignores the old Gateway epoch %s",
   async (phase) => {
-    const response = createDeferred<WorktreesGcReceipt>();
+    const response = createDeferred<WorktreesGcResult>();
     const { request, list, model, reconnect, notify } = setup(
       ...(phase === "during enqueue" ? [response.promise] : [queued, response.promise]),
     );

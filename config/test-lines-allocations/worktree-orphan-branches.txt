@@ -1,2 +1,2 @@
-# Native Git lifecycle, recovery retention, orphan safety, CLI/RPC and churn regressions.
-263
+# Native Git lifecycle, orphan GC, real authority, stable-record upgrade and churn regressions.
+422

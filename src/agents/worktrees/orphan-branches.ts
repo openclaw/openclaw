@@ -1,21 +1,8 @@
 import { formatErrorMessage } from "../../infra/errors.js";
-import { withWorktreeAllocationLease } from "./allocation.js";
-import {
-  commandError,
-  listGitWorktrees,
-  requireGit,
-  resolveGitRepositoryPaths,
-  runGit,
-} from "./git.js";
+import { commandError, listGitWorktrees, requireGit, runGit } from "./git.js";
 import { readPendingWorktrees } from "./pending-slots.js";
 import { readRegistryWorktrees } from "./registry-read.js";
-import { withWorktreeRunEnd } from "./run-end-lifecycle.js";
-import type { CreateManagedWorktreeParams, ManagedWorktreeRecord } from "./types.js";
-
-export type PruneWorktreeBranchesParams = { repoRoot: string; dryRun?: boolean } & Pick<
-  CreateManagedWorktreeParams,
-  "signal" | "commitGuard"
->;
+import type { ManagedWorktreeRecord } from "./types.js";
 
 function branchCleanupEnvironment() {
   // Inherited repository/config overrides must not redirect destructive cleanup.
@@ -24,33 +11,29 @@ function branchCleanupEnvironment() {
   );
 }
 
-export async function pruneManagedWorktreeBranches(
-  params: PruneWorktreeBranchesParams,
-  env: NodeJS.ProcessEnv,
-) {
-  return withWorktreeRunEnd(env, () =>
-    withWorktreeAllocationLease({ ...params, env }, async (guard) => {
-      const { canonicalRoot: repoRoot, commonDir } = await resolveGitRepositoryPaths(
-        params.repoRoot,
-        {
-          baseEnv: branchCleanupEnvironment(),
-          signal: guard.signal,
-          beforeRun: guard.commitGuard,
-        },
-      );
-      return collectOrphanWorktreeBranches({
-        env,
-        repoRoot,
-        commonDir,
-        dryRun: params.dryRun,
-        signal: guard.signal,
-        commitGuard: guard.commitGuard,
-      });
-    }),
+/** Negative preflight only; a positive result still needs inventory under custody. */
+export async function hasUnregisteredManagedBranches(
+  repoRoot: string,
+  records: readonly ManagedWorktreeRecord[],
+  beforeRun: () => void,
+): Promise<boolean> {
+  const owned = new Set(
+    records
+      .filter((record) => record.repoRoot === repoRoot)
+      .map((record) => `refs/heads/${record.branch}`),
   );
+  const refs = await requireGit(
+    repoRoot,
+    ["for-each-ref", "--format=%(refname)", "refs/heads/openclaw/"],
+    {
+      baseEnv: branchCleanupEnvironment(),
+      beforeRun,
+    },
+  );
+  return refs.split("\n").some((ref) => ref !== "" && !owned.has(ref));
 }
 
-export type WorktreeBranchCleanupResult = {
+type WorktreeBranchCleanupResult = {
   repoRoot: string;
   dryRun: boolean;
   branches: {
@@ -65,18 +48,16 @@ export async function collectOrphanWorktreeBranches(params: {
   env: NodeJS.ProcessEnv;
   repoRoot: string;
   dryRun?: boolean;
-  commonDir?: string;
   retiring?: ManagedWorktreeRecord;
   signal?: AbortSignal;
   commitGuard: () => void;
 }): Promise<WorktreeBranchCleanupResult> {
   const { repoRoot, retiring } = params;
-  const options = {
+  const options: NonNullable<Parameters<typeof runGit>[2]> = {
     baseEnv: branchCleanupEnvironment(),
     signal: params.signal,
     beforeRun: params.commitGuard,
     killProcessTree: true,
-    refMutationDirectory: params.commonDir,
     env: { GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1", GIT_OPTIONAL_LOCKS: "0" },
   };
   const refs = await requireGit(
@@ -154,8 +135,17 @@ export async function collectOrphanWorktreeBranches(params: {
       candidates.push(branch);
     }
   }
+  if (candidates.length > 0) {
+    options.refMutationDirectory = await requireGit(
+      repoRoot,
+      ["rev-parse", "--git-common-dir"],
+      options,
+    );
+  }
   // Native branch deletion checks linked worktrees once per command. Bound argv
   // size without repeating that repository-wide inventory for every orphan.
+  // beforeRun revalidates this same live guard after ref-queue admission, directly
+  // before each native command; a prepared candidate list never grants authority.
   for (let offset = 0; offset < candidates.length; offset += 128) {
     const batch = candidates.slice(offset, offset + 128);
     const deleted = await runGit(repoRoot, ["branch", "-D", "--", ...batch], options);

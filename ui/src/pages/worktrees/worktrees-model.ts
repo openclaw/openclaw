@@ -2,7 +2,7 @@ import { sleepWithAbort } from "@openclaw/retry";
 import type {
   WorktreeRecord,
   WorktreesBranchesResult,
-  WorktreesGcReceipt,
+  WorktreesGcResult,
   WorktreesListResult,
   WorktreesRemoveResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -222,7 +222,7 @@ export class WorktreesModel {
       if (!this.gateway.isCurrent(scope)) {
         return;
       }
-      let result = await scope.client.request<WorktreesGcReceipt>("worktrees.gc", {});
+      let result = await scope.client.request<WorktreesGcResult>("worktrees.gc", {});
       const jobId = result.jobId;
       while (result.state === "queued" || result.state === "running") {
         if (!this.gateway.isCurrent(scope)) {
@@ -235,7 +235,7 @@ export class WorktreesModel {
         if (!this.gateway.isCurrent(scope)) {
           return;
         }
-        result = await scope.client.request<WorktreesGcReceipt>("worktrees.gc", { jobId });
+        result = await scope.client.request<WorktreesGcResult>("worktrees.gc", { jobId });
       }
       if (!this.gateway.isCurrent(scope)) {
         return;

@@ -23,12 +23,6 @@ import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 type JsonOption = { json?: boolean };
-type GcOptions = JsonOption & {
-  job?: string;
-  retryDeferred?: boolean;
-  orphanBranches?: string;
-  dryRun?: boolean;
-};
 
 function mutateWorktree<T>(
   method: string,
@@ -398,49 +392,10 @@ export function registerWorktreesCli(program: Command): void {
     .description("Queue background managed worktree cleanup or inspect its progress")
     .option("--job <id>", "Show progress for a previously queued cleanup job")
     .option("--retry-deferred", "Reinspect deferred checkouts and retry Git maintenance", false)
-    .addOption(
-      new Option(
-        "--orphan-branches <repoRoot>",
-        "Delete unreferenced managed branches in a repository",
-      ).conflicts(["job", "retryDeferred"]),
-    )
-    .option("--dry-run", "Inspect orphan branches without deleting them", false)
     .option("--json", "Output JSON", false)
-    .action(async (opts: GcOptions) => {
+    .action(async (opts: JsonOption & { job?: string; retryDeferred?: boolean }) => {
       if (opts.job === "") {
         throwExpectedCliError("--job must not be empty.");
-      }
-      if (opts.dryRun && !opts.orphanBranches) {
-        throwExpectedCliError("--dry-run requires --orphan-branches <repoRoot>.");
-      }
-      if (opts.orphanBranches !== undefined) {
-        if (!opts.orphanBranches.trim()) {
-          throwExpectedCliError("--orphan-branches must not be empty.");
-        }
-        const input = { repoRoot: realpathSync.native(opts.orphanBranches), dryRun: opts.dryRun };
-        const result = await mutateWorktree(
-          "worktrees.gc",
-          GATEWAY_SERVER_CAPS.WORKTREES_GC_OWNER,
-          { orphanBranches: input },
-          (service, guard) => service.pruneOrphanBranches({ ...input, ...guard }),
-        );
-        if (opts.json) {
-          defaultRuntime.writeJson(result);
-        } else {
-          defaultRuntime.log(
-            terminalText`Managed branch cleanup${result.dryRun ? " (dry run)" : ""}: ${result.repoRoot}`,
-          );
-          for (const item of result.branches) {
-            defaultRuntime.log(
-              terminalText`${item.outcome} ${item.branch}${item.reason ? `: ${item.reason}` : ""}`,
-            );
-          }
-        }
-        if (result.branches.some((item) => item.outcome === "failed")) {
-          const { exitCliAfterOutput } = await import("./one-shot-exit.js");
-          exitCliAfterOutput(defaultRuntime, 1);
-        }
-        return;
       }
       const { formatWorktreeGcResult } = await import("../agents/worktrees/gc-result.js");
       const result = await mutateWorktree<ManagedWorktreeGcResult | ManagedWorktreeGcReceipt>(

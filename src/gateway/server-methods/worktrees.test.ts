@@ -231,43 +231,6 @@ it("returns queued, running and completed GC receipts", async () => {
   }
 });
 
-it("routes orphan cleanup only through the selected administrator-owned lifecycle", async () => {
-  const result = {
-    repoRoot: "/repo",
-    dryRun: true,
-    branches: [{ branch: "openclaw/retired", outcome: "would-delete" as const }],
-  };
-  const prune = vi.spyOn(managedWorktrees, "pruneOrphanBranches").mockResolvedValue(result);
-  const gc = vi.spyOn(managedWorktrees, "gc");
-  // mock-isolation: Exercise RPC admission and delegation with an accepted local owner.
-  const guard = vi.fn();
-  vi.spyOn(localStateOwner, "captureLocalStateMutationGuard").mockReturnValue(guard);
-  const invoke = requests(admin);
-  const params = { expectedOwnerId: "owner", orphanBranches: { repoRoot: "/repo", dryRun: true } };
-  await expectResult(invoke("gc", params), result);
-  expect(Value.Check(WorktreesGcResultSchema, result)).toBe(true);
-  expect(prune).toHaveBeenCalledWith({
-    ...params.orphanBranches,
-    commitGuard: guard,
-    signal: undefined,
-  });
-  expect(gc).not.toHaveBeenCalled();
-  prune.mockClear();
-  expectForbidden(await invoke("gc", params, writer));
-  for (const invalid of [
-    { ...params, expectedOwnerId: undefined },
-    { ...params, jobId: "job" },
-    { ...params, retryDeferred: true },
-    { ...params, orphanBranches: { repoRoot: "" } },
-  ]) {
-    expect((await invoke("gc", invalid))?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      details: { mutationAccepted: false },
-    });
-  }
-  expect(prune).not.toHaveBeenCalled();
-});
-
 it("maps snapshot failures onto a structured removed=false result", async () => {
   vi.spyOn(managedWorktrees, "remove").mockRejectedValue(
     new WorktreeSnapshotError("nested gitlink"),

@@ -117,7 +117,16 @@ assert.equal(
 );
 console.log(JSON.stringify({ phase: "prepared", ...shape, orphans: orphanCount }));
 
-const { ManagedWorktreeService } = await import("../../src/agents/worktrees/service.js");
+const { collectOrphanWorktreeBranches } =
+  await import("../../src/agents/worktrees/orphan-branches.js");
+const { withWorktreeAllocationLease } = await import("../../src/agents/worktrees/allocation.js");
+const { withWorktreeRunEnd } = await import("../../src/agents/worktrees/run-end-lifecycle.js");
+const prune = (dryRun: boolean) =>
+  withWorktreeRunEnd(process.env, () =>
+    withWorktreeAllocationLease({ env: process.env }, (guard) =>
+      collectOrphanWorktreeBranches({ env: process.env, repoRoot, dryRun, ...guard }),
+    ),
+  );
 const { insertRegistryWorktree } = await import("../../src/agents/worktrees/registry.js");
 const { resolveRepository } = await import("../../src/agents/worktrees/repository-paths.js");
 const { drainGlobalSingletonLifecycleState } = await import("../../src/shared/global-singleton.js");
@@ -144,7 +153,6 @@ fs.writeFileSync(
   { mode: 0o755 },
 );
 process.env.PATH = `${path.join(output, "bin")}:${process.env.PATH}`;
-const service = new ManagedWorktreeService({ env: process.env });
 type Measurement = {
   label: string;
   wallMs: number;
@@ -166,7 +174,7 @@ async function measure(label: string, dryRun: boolean, expectedRemoved: number) 
   const allocatedBefore = getHeapStatistics().total_allocated_bytes;
   const cpuBefore = process.cpuUsage();
   const started = performance.now();
-  const result = await service.pruneOrphanBranches({ repoRoot, dryRun });
+  const result = await prune(dryRun);
   const wallMs = performance.now() - started;
   const cpu = process.cpuUsage(cpuBefore);
   const mainAllocatedBytes = getHeapStatistics().total_allocated_bytes - allocatedBefore;
@@ -214,7 +222,7 @@ async function measure(label: string, dryRun: boolean, expectedRemoved: number) 
 }
 try {
   // Warm long-lived state/Git worker startup before A/A controls.
-  await service.pruneOrphanBranches({ repoRoot, dryRun: true });
+  await prune(true);
   for (let index = 0; index < 5; index++) {
     await measure(`control-${index}`, true, 0);
   }
