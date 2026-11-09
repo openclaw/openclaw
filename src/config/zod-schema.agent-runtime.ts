@@ -396,6 +396,8 @@ const ToolSearchSchema = z
       searchDefaultLimit: z.number().int().positive().optional(),
       /** Maximum search result count. Runtime clamps to 1..50. */
       maxSearchLimit: z.number().int().positive().optional(),
+      /** Maximum characters for network-sourced Tool Search control results ("auto" scales with the active model's live tool-result cap; default: 20000). */
+      maxResultChars: z.union([z.number().int().positive(), z.literal("auto")]).optional(),
     }),
   ])
   .optional();

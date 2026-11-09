@@ -150,6 +150,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Default number of Tool Search results returned when the model omits a limit. Runtime clamps this to `maxSearchLimit`.",
   "tools.toolSearch.maxSearchLimit":
     "Maximum number of Tool Search results a model can request. Runtime clamps values to the supported 1..50 range.",
+  "tools.toolSearch.maxResultChars":
+    'Maximum characters for network-sourced Tool Search results before external-content wrapping. Defaults to 20000 when unset; set "auto" to scale with the active model\'s live tool-result cap (less wrapper overhead), or a positive integer capped at the live tool-result budget.',
   "tools.codeMode":
     'Generic OpenClaw Code Mode. When omitted globally, defaults to `"auto"`; an authored object without `enabled` remains off. Engaged agent runs expose only `exec` and `wait` to the model and access normal tools through the catalog bridge.',
   "tools.codeMode.enabled":

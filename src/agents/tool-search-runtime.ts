@@ -42,6 +42,7 @@ import {
 } from "./tool-search-catalog.js";
 import {
   renderToolSearchControlText,
+  resolveToolSearchResultMaxChars,
   serializeToolSearchControlResult,
 } from "./tool-search-control-result.js";
 import { getToolSearchLexicalIndex } from "./tool-search-index.js";
@@ -553,6 +554,13 @@ export class ToolSearchRuntime {
     }
   };
 
+  resolveMaxResultChars(): number {
+    return resolveToolSearchResultMaxChars({
+      maxResultChars: this.config.maxResultChars,
+      modelContextWindowTokens: this.ctx.modelContextWindowTokens,
+    });
+  }
+
   telemetry() {
     return readToolSearchCatalogTelemetry(this.ctx);
   }
@@ -571,7 +579,11 @@ export function formatToolSearchControlResult<T>(
 ): AgentToolResult<T> {
   const serialized = serializeToolSearchControlResult(payload, options.compact);
   const networkContent = runtime?.hasNetworkContent(options.parentToolCallId) ?? false;
-  const { text } = renderToolSearchControlText(serialized, networkContent);
+  const { text } = renderToolSearchControlText(
+    serialized,
+    networkContent,
+    runtime?.resolveMaxResultChars(),
+  );
   const result = textResult(text, payload);
   if (networkContent) {
     // The control tool has no static source; finalization reads this per-call fact.

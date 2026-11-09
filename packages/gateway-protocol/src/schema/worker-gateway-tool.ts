@@ -49,6 +49,7 @@ export const AgentToolSurfacePresentationSchema = closedObject({
     exclude: Type.Optional(Type.Array(ToolSearchSelectorSchema)),
     searchDefaultLimit: Type.Integer({ minimum: 1 }),
     maxSearchLimit: Type.Integer({ minimum: 1 }),
+    maxResultChars: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Literal("auto")])),
   }),
   toolSearchDirectoryLean: Type.Optional(Type.Boolean()),
   forceDirectMessageTool: Type.Boolean(),

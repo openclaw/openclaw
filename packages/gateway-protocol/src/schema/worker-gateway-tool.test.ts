@@ -15,6 +15,11 @@ describe("worker Gateway tool transport", () => {
     const schema = AgentToolSurfacePresentationSchema.properties.toolSearch;
     const base = { enabled: true, mode: "tools", searchDefaultLimit: 8, maxSearchLimit: 20 };
     expect(Value.Check(schema, base)).toBe(true);
+    expect(Value.Check(schema, { ...base, maxResultChars: "auto" })).toBe(true);
+    expect(Value.Check(schema, { ...base, maxResultChars: 32_000 })).toBe(true);
+    for (const maxResultChars of [0, -1, 1.5, "unlimited"]) {
+      expect(Value.Check(schema, { ...base, maxResultChars })).toBe(false);
+    }
     for (const key of ["include", "exclude"]) {
       for (const selectors of [
         [],

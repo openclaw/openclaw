@@ -43,9 +43,14 @@ describe("Tool Search activation defaults", () => {
     expect(
       resolveToolSearchConfig({ tools: { toolSearch: { include: [], exclude: [] } } }),
     ).toMatchObject({ include: [], exclude: [] });
+    expect(resolveToolSearchConfig()).not.toHaveProperty("maxResultChars");
+    expect(
+      resolveToolSearchConfig({ tools: { toolSearch: { maxResultChars: "auto" } } }),
+    ).toMatchObject({ enabled: true, maxResultChars: "auto" });
     const selection = {
       include: [{ source: "mcp" as const }],
       exclude: [{ source: "mcp" as const, name: "github_read_*" }],
+      maxResultChars: 32_000,
     };
     expect(resolveToolSearchConfig({ tools: { toolSearch: selection } })).toMatchObject(selection);
   });
