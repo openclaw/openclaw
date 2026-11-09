@@ -9,15 +9,22 @@ import {
   captureAgentPluginRuntimeRefresh,
   createAgentPluginRuntimeRefresh,
 } from "../../plugin-runtime-refresh.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
+import { registerHeadlessToolSearchCatalog } from "../../tool-search-catalog.js";
+import { resolveToolSearchConfig } from "../../tool-search-config.js";
+import type { ToolSearchCatalogRef } from "../../tool-search-types.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
 import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
 import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 import { createSubscriptionMock } from "./attempt-spawn-workspace.subscription-mock.test-support.js";
 import { createSettledStreamResult } from "./attempt-stream.test-helpers.js";
-import { resolveSettledToolTerminalContinuation } from "./incomplete-turn-recovery.js";
+import {
+  resolveNonVisibleTurnRetryInstructions,
+  resolveSettledToolTerminalContinuation,
+} from "./incomplete-turn-recovery.js";
 import { buildPayloads } from "./payloads.test-helpers.js";
 import { normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
 import type { EmbeddedRunAttemptResult, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
@@ -77,6 +84,7 @@ function createResultFixture(params: ResultInput = {}) {
     toolMetas: params?.toolMetas ?? [],
   };
   const hookRunner = createHookRunner({ hooks: [], typedHooks: [], plugins: [] });
+  const toolSearchCatalogRef: ToolSearchCatalogRef = {};
   const input = {
     attempt: {
       runId: "run-1",
@@ -92,8 +100,14 @@ function createResultFixture(params: ResultInput = {}) {
     setup: { sessionAgentId: "main" },
     lifecycle: { readYieldState: () => ({ yieldDetected: false }) },
     prepared: {
+      toolBase: {
+        toolSearchControlsEnabledForRun: false,
+        toolSearchConfig: resolveToolSearchConfig({ tools: { toolSearch: false } }),
+        toolSearchCatalogRef,
+      },
       toolCatalog: {
         toolSearchRunPlan: {
+          visibleAllowedToolNames: new Set(params?.allowedToolNames),
           liveAllowedToolNames: new Set(params?.allowedToolNames),
           capabilityToolNames: new Set(params?.capabilityToolNames),
         },
@@ -217,6 +231,146 @@ describe("attempt result projection", () => {
         capabilityToolNames: available ? ["skills_read"] : [],
       }).textToolCallAttempt,
     ).toBe(available ? true : undefined);
+  });
+
+  function deferredTextFixture() {
+    const fixture = createResultFixture({
+      currentAttemptCompletedAssistant: textAssistant(
+        "<tool_call><function=web_fetch><parameter=url>https://example.com/</parameter></function></tool_call>",
+      ),
+      allowedToolNames: ["dispatch_action", "tool_describe"],
+      capabilityToolNames: ["web_fetch"],
+    });
+    const base = fixture.input.prepared.toolBase;
+    base.toolSearchControlsEnabledForRun = true;
+    base.toolSearchConfig = resolveToolSearchConfig({ tools: { toolSearch: { mode: "tools" } } });
+    registerHeadlessToolSearchCatalog({
+      catalogRef: base.toolSearchCatalogRef,
+      tools: [createStubTool("web_fetch")],
+    });
+    return fixture;
+  }
+
+  function textRetryInstruction(fixture: ReturnType<typeof deferredTextFixture>) {
+    return resolveNonVisibleTurnRetryInstructions({
+      attempt: completeFixture(fixture),
+      aborted: false,
+      timedOut: false,
+      payloadCount: 0,
+      settledToolPayloadCount: 0,
+      replyDeliveryState: "missing",
+    })[1];
+  }
+
+  it.each([true, false])(
+    "routes deferred text recovery through the offered dispatcher (describe=%s)",
+    (describeAvailable) => {
+      const fixture = deferredTextFixture();
+      if (!describeAvailable) {
+        fixture.input.prepared.toolCatalog.toolSearchRunPlan.visibleAllowedToolNames.delete(
+          "tool_describe",
+        );
+      }
+      const instruction = textRetryInstruction(fixture);
+      expect(instruction).toContain("dispatch_action");
+      expect(instruction).toContain('id set to "web_fetch"');
+      expect(instruction).toContain("args");
+      expect(instruction?.includes("tool_describe")).toBe(describeAvailable);
+    },
+  );
+
+  it.each<[string, string[], boolean]>([
+    ["Read_Public_Item", [], true],
+    ["functions.Read_Public_Item", [], true],
+    ["Read_Public_Item", ["read_public_item"], true],
+    ["functions.Read_Public_Item", ["read_public_item"], true],
+    ["Read_Public_Item", ["Read_Public_Item"], false],
+    ["functions.Read_Public_Item", ["functions.Read_Public_Item"], false],
+  ])("preserves the registered target of %s (direct=%j)", (name, direct, deferred) => {
+    const fixture = deferredTextFixture();
+    fixture.settled.currentAttemptCompletedAssistant = textAssistant(
+      JSON.stringify({ name, arguments: {} }),
+    );
+    const { toolBase, toolCatalog } = fixture.input.prepared;
+    toolCatalog.toolSearchRunPlan.capabilityToolNames.clear();
+    toolCatalog.toolSearchRunPlan.capabilityToolNames.add("read_public_item");
+    registerHeadlessToolSearchCatalog({
+      catalogRef: toolBase.toolSearchCatalogRef,
+      tools: [createStubTool("Read_Public_Item"), createStubTool("read_public_item")],
+    });
+    for (const offered of direct) {
+      toolCatalog.toolSearchRunPlan.visibleAllowedToolNames.add(offered);
+      toolCatalog.toolSearchRunPlan.liveAllowedToolNames.add(offered);
+    }
+    const instruction = textRetryInstruction(fixture);
+    if (deferred) {
+      expect(instruction).toContain('id set to "Read_Public_Item"');
+    } else {
+      expect(instruction).not.toContain("dispatch_action");
+    }
+  });
+
+  it.each<[string, (fixture: ReturnType<typeof deferredTextFixture>) => void]>([
+    [
+      "direct exposure",
+      ({ input }) =>
+        input.prepared.toolCatalog.toolSearchRunPlan.visibleAllowedToolNames.add("web_fetch"),
+    ],
+    [
+      "directory mode",
+      ({ input }) => {
+        input.prepared.toolBase.toolSearchConfig.mode = "directory";
+      },
+    ],
+    [
+      "disabled controls",
+      ({ input }) => {
+        input.prepared.toolBase.toolSearchControlsEnabledForRun = false;
+      },
+    ],
+    [
+      "hidden dispatcher",
+      ({ input }) => {
+        input.prepared.toolCatalog.toolSearchRunPlan.visibleAllowedToolNames.delete(
+          "dispatch_action",
+        );
+      },
+    ],
+    [
+      "late policy restriction",
+      ({ input }) => {
+        input.prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames.clear();
+      },
+    ],
+    [
+      "retired catalog",
+      ({ input }) => {
+        input.prepared.toolBase.toolSearchCatalogRef.current = undefined;
+      },
+    ],
+    [
+      "execution restriction",
+      ({ input }) => {
+        Object.assign(input.attempt, { toolExecutionAllow: ["read"] });
+      },
+    ],
+    [
+      "ambiguous catalog name",
+      ({ input }) => {
+        const entries = input.prepared.toolBase.toolSearchCatalogRef.current!.entries;
+        entries.push({ ...entries[0]!, id: "client:other:web_fetch", source: "client" });
+      },
+    ],
+    [
+      "exact ID required",
+      ({ input }) => {
+        input.prepared.toolBase.toolSearchCatalogRef.current!.entries[0]!.requiresExactId = true;
+      },
+    ],
+  ])("does not invent dispatcher guidance after %s", (_label, change) => {
+    const fixture = deferredTextFixture();
+    change(fixture);
+    expect(textRetryInstruction(fixture) ?? "").not.toContain("dispatch_action");
   });
 
   it("keeps the settled result snapshot when an output hook replaces live state", () => {

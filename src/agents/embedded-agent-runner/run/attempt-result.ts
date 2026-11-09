@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { isPlainTextToolCallAttempt } from "../../../../packages/tool-call-repair/src/index.js";
+import { resolvePlainTextToolCallAttemptName } from "../../../../packages/tool-call-repair/src/index.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
 import { extractAssistantTranscriptSourceText } from "../../../shared/chat-message-content.js";
@@ -15,6 +15,12 @@ import {
 import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import type { AgentRuntimeModelAttempt } from "../../runtime-plan/types.js";
+import { isToolExecutionAllowed, normalizeToolPolicyName } from "../../tool-policy-shared.js";
+import { resolveToolSearchCatalogTool } from "../../tool-search-directory.js";
+import {
+  TOOL_CALL_RAW_TOOL_NAME,
+  TOOL_DESCRIBE_RAW_TOOL_NAME,
+} from "../../tool-search-protocol.js";
 import { markCoreTtsAttemptResult } from "../../tools/tts-tool-result-provenance.js";
 import { log } from "../logger.js";
 import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
@@ -278,21 +284,63 @@ export function completeEmbeddedAttemptResult(
   const keptReply = keptAnswer ? prepareTerminalAssistantReply(keptAnswer.assistant) : closingReply;
   const assistant = resolveCurrentAttemptAssistant(state);
   let textToolCallAttempt = false;
+  let textToolCallRecovery: EmbeddedRunAttemptResult["textToolCallRecovery"];
   if (
     state.terminal.kind === "ok" &&
     assistant?.stopReason === "stop" &&
     !assistant.content.some(isRunnerToolCallBlock)
   ) {
-    const { liveAllowedToolNames, capabilityToolNames } =
+    const { liveAllowedToolNames, capabilityToolNames, visibleAllowedToolNames } =
       input.prepared.toolCatalog.toolSearchRunPlan;
     // Deferred names need native correction too; detection never executes text.
     const allowedToolNames = new Set([...liveAllowedToolNames, ...capabilityToolNames]);
-    textToolCallAttempt =
-      allowedToolNames.size > 0 &&
-      isPlainTextToolCallAttempt(extractAssistantTranscriptSourceText(assistant) ?? "", (name) =>
-        Boolean(resolveToolCallName(name, allowedToolNames, undefined, true)),
-      );
+    const attemptedName =
+      allowedToolNames.size > 0
+        ? resolvePlainTextToolCallAttemptName(
+            extractAssistantTranscriptSourceText(assistant) ?? "",
+            (name) => Boolean(resolveToolCallName(name, allowedToolNames, undefined, true)),
+          )
+        : undefined;
+    textToolCallAttempt = attemptedName !== undefined;
+    const { toolBase } = input.prepared;
+    if (
+      attemptedName &&
+      toolBase.toolSearchControlsEnabledForRun &&
+      toolBase.toolSearchConfig.mode === "tools" &&
+      visibleAllowedToolNames.has(TOOL_CALL_RAW_TOOL_NAME)
+    ) {
+      const catalogRef = toolBase.toolSearchCatalogRef;
+      // Policy names are folded. Preserve registered spelling and direct-name precedence.
+      const registeredNames = new Set([
+        ...visibleAllowedToolNames,
+        ...(catalogRef?.current?.entries ?? [])
+          .filter(
+            (entry) =>
+              entry.source === "openclaw" &&
+              capabilityToolNames.has(normalizeToolPolicyName(entry.name)),
+          )
+          .map((entry) => entry.name),
+      ]);
+      const name = resolveToolCallName(attemptedName, registeredNames, undefined, true);
+      // Use the current authorized catalog; ambiguous or retired names stay generic.
+      const tool =
+        name &&
+        !visibleAllowedToolNames.has(name) &&
+        (!attempt.toolExecutionAllow || isToolExecutionAllowed(attempt.toolExecutionAllow, name))
+          ? resolveToolSearchCatalogTool({ catalogRef }, name)
+          : undefined;
+      if (tool) {
+        textToolCallRecovery = {
+          toolName: tool.name,
+          dispatcherName: TOOL_CALL_RAW_TOOL_NAME,
+          ...(visibleAllowedToolNames.has(TOOL_DESCRIBE_RAW_TOOL_NAME)
+            ? { describeToolName: TOOL_DESCRIBE_RAW_TOOL_NAME }
+            : {}),
+        };
+      }
+    }
   }
+
   const accessProgram = asOptionalRecord(
     sessionRuntime.transport.effectiveExtraParams.accessPrograms,
   )?.cyber;
@@ -303,6 +351,7 @@ export function completeEmbeddedAttemptResult(
       ? { cyberAccessProgram: accessProgram }
       : {}),
     ...(textToolCallAttempt ? { textToolCallAttempt: true } : {}),
+    ...(textToolCallRecovery ? { textToolCallRecovery } : {}),
     ...state,
     ...evidence,
     ...(attempt.inputAlreadyDelivered ? { inputAlreadyDelivered: true as const } : {}),

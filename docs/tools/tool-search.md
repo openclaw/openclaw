@@ -582,6 +582,12 @@ Tool Search should reject unavailable or disallowed tools:
 - if policy or approval blocks execution, the call result should report that
   block instead of bypassing it
 
+In structured `tools` mode, if an embedded run ends with a deferred tool call
+written as text, the bounded native-call correction names `dispatch_action` and its
+`id`/`args` fields. It mentions `tool_describe` only when that tool is exposed.
+This guidance uses the current authorized catalog; it never executes the text
+or adds another retry.
+
 ## Related
 
 - [Tools and plugins](/tools)

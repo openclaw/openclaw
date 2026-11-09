@@ -400,6 +400,12 @@ export type EmbeddedRunAttemptResult = {
   assistantTexts: string[];
   /** A registered tool was requested as structured text without a native call. */
   textToolCallAttempt?: boolean;
+  /** Authorized deferred target and native controls available for corrective guidance. */
+  textToolCallRecovery?: {
+    toolName: string;
+    dispatcherName: string;
+    describeToolName?: string;
+  };
   /** Immutable delivery facts prepared before a remote harness releases its file reader. */
   preparedReplyMedia?: import("../../../auto-reply/reply/reply-media-paths.js").PreparedReplyMedia;
   latestMcpAppChannelView?: McpAppChannelView;

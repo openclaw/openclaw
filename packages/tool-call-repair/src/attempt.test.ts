@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { detectToolCallShapedText, isPlainTextToolCallAttempt } from "./attempt.js";
+import {
+  detectToolCallShapedText,
+  isPlainTextToolCallAttempt,
+  resolvePlainTextToolCallAttemptName,
+} from "./attempt.js";
 
 const hasToolName = (name: string) => name === "write" || name === "read";
 const call = '{"name":"write","arguments":{"path":"proof.txt","content":"OK"}}';
@@ -117,4 +121,17 @@ it.each([
   const started = performance.now();
   expect(run()).toBe(expected);
   expect(performance.now() - started).toBeLessThan(500);
+});
+
+it.each([
+  [call, "write"],
+  [fenced, "write"],
+  [`I'll call read now.\n${fenced}`, "write"],
+  [`read\n${fenced}`, "write"],
+  [wrappedXml, "read"],
+  [react, "read"],
+  [legacy, "read"],
+  [`[{"name":"unknown","arguments":{}},${call}]`, "write"],
+])("identifies the accepted call rather than its announcement: %s", (text, name) => {
+  expect(resolvePlainTextToolCallAttemptName(text, hasToolName)).toBe(name);
 });

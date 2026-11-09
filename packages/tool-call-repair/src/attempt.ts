@@ -257,22 +257,25 @@ function unwrapToolCallTag(text: string): string | undefined {
   return text.slice(open[0].length, text.length - close.length).trim();
 }
 
-function isStructuredCall(
+function resolveStructuredCallName(
   text: string,
   hasToolName: PlainTextToolCallNameMatcher["hasExactName"],
-): boolean {
+): string | undefined {
   const body = unwrapToolCallTag(text) ?? text;
   const detection = classifyJsonValue(safeParseJson(body), hasToolName);
   if (detection?.toolName) {
-    return true;
+    return detection.toolName;
   }
-  if (parseStandalonePlainTextToolCallBlocks(body)?.some((block) => hasToolName(block.name))) {
-    return true;
+  const callBlock = parseStandalonePlainTextToolCallBlocks(body)?.find((block) =>
+    hasToolName(block.name),
+  );
+  if (callBlock) {
+    return callBlock.name;
   }
   const invoke =
     /^<(invoke|tool_call|function_call)\s+name=["']([^"']+)["']\s*>[\s\S]*<\/\1>$/i.exec(body);
   if (invoke && hasToolName(invoke[2] ?? "")) {
-    return true;
+    return invoke[2];
   }
   const action =
     /^Action[ \t]*:[ \t]*([A-Za-z_][A-Za-z0-9_.:-]{0,119})[ \t]*\r?\n[ \t]*Action Input[ \t]*:[ \t]*([\s\S]+)$/i.exec(
@@ -281,19 +284,19 @@ function isStructuredCall(
   if (action) {
     const input = action[2]?.trim() ?? "";
     // JSON-shaped input must be complete; multiline prose is not a ReAct call.
-    return (
-      hasToolName(action[1] ?? "") &&
+    return hasToolName(action[1] ?? "") &&
       Boolean(input) &&
       (!/^[{["]|[\r\n]/.test(input) || safeParseJson(input) !== undefined)
-    );
+      ? action[1]
+      : undefined;
   }
   const legacy =
     /^\[\s*TOOL_CALL\s*\]\s*\{\s*tool\s*=>\s*(["'])([A-Za-z_][A-Za-z0-9_.:-]{0,119})\1\s*,\s*args\s*=>\s*(\{[\s\S]*\})\s*\}\s*\[\s*\/TOOL_CALL\s*\]$/i.exec(
       body,
     );
-  return Boolean(
-    legacy && hasToolName(legacy[2] ?? "") && asOptionalRecord(safeParseJson(legacy[3] ?? "")),
-  );
+  return legacy && hasToolName(legacy[2] ?? "") && asOptionalRecord(safeParseJson(legacy[3] ?? ""))
+    ? legacy[2]
+    : undefined;
 }
 
 // Text ending in a fenced block: `prefix`, then the earliest opening fence line whose
@@ -339,17 +342,18 @@ function splitTrailingFence(text: string): { prefix: string; body: string } | un
   return undefined;
 }
 
-/** Detects a non-executable near miss; this must never be used to dispatch a tool. */
-export function isPlainTextToolCallAttempt(
+/** Identifies a non-executable near miss for correction, never for tool dispatch. */
+export function resolvePlainTextToolCallAttemptName(
   text: string,
   hasToolName: PlainTextToolCallNameMatcher["hasExactName"],
-): boolean {
+): string | undefined {
   const trimmed = text.trim();
   if (!trimmed || trimmed.length > 256_000) {
-    return false;
+    return undefined;
   }
-  if (isStructuredCall(trimmed, hasToolName)) {
-    return true;
+  const name = resolveStructuredCallName(trimmed, hasToolName);
+  if (name) {
+    return name;
   }
   const fence = splitTrailingFence(trimmed);
   const trailing = /^([^\n]+)\n\s*((?:<|\{|\[|Action\s*:)[\s\S]*)$/i.exec(trimmed);
@@ -368,7 +372,15 @@ export function isPlainTextToolCallAttempt(
   const toolLabel = /^[A-Za-z_][A-Za-z0-9_.:-]*$/.test(prefix) && hasToolName(prefix);
   // Accept only a tool label or complete action announcement, not explanatory prose.
   if (!body || (prefix && !toolLabel && !hasToolName(announcedTool ?? "") && !fileAnnouncement)) {
-    return false;
+    return undefined;
   }
-  return isStructuredCall(body.trim(), hasToolName);
+  return resolveStructuredCallName(body.trim(), hasToolName);
+}
+
+/** Detects a non-executable near miss; this must never be used to dispatch a tool. */
+export function isPlainTextToolCallAttempt(
+  text: string,
+  hasToolName: PlainTextToolCallNameMatcher["hasExactName"],
+): boolean {
+  return resolvePlainTextToolCallAttemptName(text, hasToolName) !== undefined;
 }
