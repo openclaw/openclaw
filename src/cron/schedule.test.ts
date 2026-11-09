@@ -87,6 +87,41 @@ describe("cron schedule", () => {
     );
   });
 
+  describe("day-of-month beyond a crossed month's length", () => {
+    it.each([
+      [
+        "leap-day anniversary keeps its previous occurrence",
+        "0 0 29 2 *",
+        "2028-06-01T00:00:00.000Z",
+        "2032-02-29T00:00:00.000Z",
+        "2028-02-29T00:00:00.000Z",
+      ],
+      [
+        "leap-day anniversary right after it fired",
+        "0 0 29 2 *",
+        "2028-03-01T00:00:01.000Z",
+        "2032-02-29T00:00:00.000Z",
+        "2028-02-29T00:00:00.000Z",
+      ],
+      [
+        "impossible February 31 never matches",
+        "0 0 31 2 *",
+        "2028-03-02T00:00:00.000Z",
+        undefined,
+        undefined,
+      ],
+      [
+        "impossible February 30 never matches",
+        "0 0 30 2 *",
+        "2028-03-02T00:00:00.000Z",
+        undefined,
+        undefined,
+      ],
+    ] as const)("%s", (_label, expr, now, next, previous) => {
+      expectOccurrences({ kind: "cron", expr, tz: "UTC" }, now, next, previous);
+    });
+  });
+
   it("rejects every schedule numbers outside the ECMAScript Date range", () => {
     for (const fields of [
       { everyMs: MAX_DATE_TIMESTAMP_MS + 1 },
