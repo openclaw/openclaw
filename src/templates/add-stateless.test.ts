@@ -6,6 +6,7 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import * as mcpMutation from "../agents/mcp-config-mutation.js";
+import { ensureAgentWorkspace } from "../agents/workspace.js";
 import * as mcpConfig from "../config/mcp-config.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -160,8 +161,7 @@ describe("stateless Template Add", () => {
       runOpenClawAgentWriteTransaction(() => undefined, { agentId, env: process.env }),
     ).toThrow(`agent ${agentId} is deleted`);
 
-    const plan = await buildPlan();
-    const result = await apply(plan);
+    const result = await apply(await buildPlan());
 
     expect(result.status).toBe("complete");
     expect(readAgentDeletionJournal(agentId, {}, "runtime")).toBeUndefined();
@@ -183,8 +183,7 @@ describe("stateless Template Add", () => {
     const agentId = source.manifest.agent.id;
     beginDeletion("pending-deletion");
 
-    const plan = await buildPlan();
-    const result = await apply(plan);
+    const result = await apply(await buildPlan());
 
     expect(result).toMatchObject({
       status: "partial",
@@ -258,12 +257,12 @@ describe("stateless Template Add", () => {
       expect(existsSync(plan.agent.workspace)).toBe(false);
 
       const retryPlan = await buildPlan();
-      expect(retryPlan.agent.workspace).toBe(plan.agent.workspace);
-      const retried = await apply(retryPlan);
-      expect(retried.status).toBe("complete");
-      expect(await readFile(path.join(retryPlan.agent.workspace, "BOOTSTRAP.md"), "utf8")).toBe(
-        bootstrap,
-      );
+      const dir = retryPlan.agent.workspace;
+      expect(dir).toBe(plan.agent.workspace);
+      expect((await apply(retryPlan)).status).toBe("complete");
+      const prepared = await ensureAgentWorkspace({ dir, ensureBootstrapFiles: true });
+      expect(prepared.bootstrapPending).toBe(true);
+      expect(await readFile(path.join(dir, "BOOTSTRAP.md"), "utf8")).toBe(bootstrap);
     },
   );
 
@@ -588,10 +587,7 @@ it.each([
         manifest: source.manifest,
         source: source.source,
         openClawProfile: profile.profile,
-        context: {
-          config: baseConfig(),
-          workspace: fixture.statePath("added-workspace"),
-        },
+        context: { config: baseConfig(), workspace: fixture.statePath("added-workspace") },
       });
       const jobs = plan.actions.flatMap((action) => (action.automation ? [action.automation] : []));
       expect(jobs).toHaveLength(2);

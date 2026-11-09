@@ -170,20 +170,19 @@ export async function fileDiffersFromTemplate(
   }
 }
 
+const isAccessible = (filePath: string) =>
+  fs.access(filePath).then(
+    () => true,
+    () => false,
+  );
+
 async function hasWorkspaceUserContentEvidence(
   dir: string,
   opts?: { includeGit?: boolean },
 ): Promise<boolean> {
-  const indicators = [path.join(dir, "memory")];
-  if (opts?.includeGit) {
-    indicators.push(path.join(dir, ".git"));
-  }
-  for (const indicator of indicators) {
-    try {
-      await fs.access(indicator);
+  for (const indicator of opts?.includeGit ? ["memory", ".git"] : ["memory"]) {
+    if (await isAccessible(path.join(dir, indicator))) {
       return true;
-    } catch {
-      // continue
     }
   }
   if (await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME)) {
@@ -199,11 +198,8 @@ async function hasWorkspaceSkillEvidence(dir: string): Promise<boolean> {
       if (!entry.isDirectory()) {
         continue;
       }
-      try {
-        await fs.access(path.join(dir, "skills", entry.name, "SKILL.md"));
+      if (await isAccessible(path.join(dir, "skills", entry.name, "SKILL.md"))) {
         return true;
-      } catch {
-        // continue
       }
     }
   } catch {
@@ -320,9 +316,11 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   const beforeFileMutation = createWorkspaceFileMutationGuard(params.guard);
   const { bootstrapExists } = params;
 
+  // A supplied BOOTSTRAP.md completes only when the agent removes it.
   if (
     bootstrapExists
-      ? !(await workspaceProfileLooksConfigured({
+      ? params.state.bootstrapSupplied ||
+        !(await workspaceProfileLooksConfigured({
           dir: params.dir,
           generatedHashes: params.generatedHashes,
         }))
@@ -679,12 +677,7 @@ async function ensureAgentWorkspaceOwned(
   const userPath = path.join(dir, DEFAULT_USER_FILENAME);
 
   const existing = await Promise.all(
-    [agentsPath, soulPath, identityPath, userPath, path.join(dir, "memory")].map((filePath) =>
-      fs.access(filePath).then(
-        () => true,
-        () => false,
-      ),
-    ),
+    [agentsPath, soulPath, identityPath, userPath, path.join(dir, "memory")].map(isAccessible),
   );
   const isBrandNewWorkspace =
     existing.every((exists) => !exists) && !(await hasWorkspaceUserContentEvidence(dir));

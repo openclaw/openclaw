@@ -136,9 +136,7 @@ async function seedWorkspaceBootstrapOwned(
     assertSeedCurrent();
     await (params.mergeSetupState ?? mergeWorkspaceSetupState)(
       dir,
-      {
-        bootstrapSeededAt: new Date(nowMs).toISOString(),
-      },
+      { bootstrapSeededAt: new Date(nowMs).toISOString(), bootstrapSupplied: true },
       nowMs,
       { ...params.stateOptions, assertCurrent: assertSeedCurrent },
     );

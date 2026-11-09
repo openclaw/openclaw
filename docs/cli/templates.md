@@ -159,7 +159,7 @@ workspace:
       path: reference/policy.md
 ```
 
-An optional package-root `BOOTSTRAP.md` supplies first-run instructions.
+An optional package-root `BOOTSTRAP.md` supplies first-run instructions. Setup stays pending until the agent deletes it, so its last step should say to ([bootstrapping](/start/bootstrapping)).
 The package may also declare exact ClawHub skill and plugin requirements,
 MCP servers, and scheduled automations:
 

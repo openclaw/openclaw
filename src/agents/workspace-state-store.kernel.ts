@@ -291,6 +291,10 @@ export function readWorkspaceStateSnapshotFromDatabase(params: {
     setup: {
       version: WORKSPACE_SETUP_STATE_VERSION,
       ...(setupRow?.bootstrap_seeded_at ? { bootstrapSeededAt: setupRow.bootstrap_seeded_at } : {}),
+      // An older build's rollback can clear the seed but leave the flag; it belongs to the seed.
+      ...(setupRow?.bootstrap_seeded_at && setupRow.bootstrap_supplied
+        ? { bootstrapSupplied: true }
+        : {}),
       ...(setupRow?.setup_completed_at ? { setupCompletedAt: setupRow.setup_completed_at } : {}),
     },
     ...(attestationPresent

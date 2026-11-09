@@ -22,7 +22,7 @@ export function executeTemplateAddStateCommand(
       : mergeWorkspaceSetupStateInDatabase(
           database,
           command.input.workspaceDir,
-          { bootstrapSeededAt: command.input.bootstrapSeededAt },
+          { bootstrapSeededAt: command.input.bootstrapSeededAt, bootstrapSupplied: true },
           command.input.nowMs,
         );
   const { leases } = command.input;

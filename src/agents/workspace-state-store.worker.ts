@@ -107,9 +107,12 @@ export function mergeWorkspaceSetupStateInDatabase(
   const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
   const bootstrapSeededAt = snapshot.setup.bootstrapSeededAt ?? next.bootstrapSeededAt;
   const setupCompletedAt = snapshot.setup.setupCompletedAt ?? next.setupCompletedAt;
+  // Provenance belongs to the write that wins the initial seed; later writers cannot change it.
+  const supplied = (snapshot.setup.bootstrapSeededAt ? snapshot.setup : next).bootstrapSupplied;
   const merged: WorkspaceSetupState = {
     version: WORKSPACE_SETUP_STATE_VERSION,
     ...(bootstrapSeededAt ? { bootstrapSeededAt } : {}),
+    ...(bootstrapSeededAt && supplied ? { bootstrapSupplied: true } : {}),
     ...(setupCompletedAt ? { setupCompletedAt } : {}),
   };
   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
@@ -117,6 +120,7 @@ export function mergeWorkspaceSetupStateInDatabase(
     workspace_path: identity.workspacePath,
     version: WORKSPACE_SETUP_STATE_VERSION,
     bootstrap_seeded_at: merged.bootstrapSeededAt ?? null,
+    bootstrap_supplied: merged.bootstrapSupplied ? 1 : null,
     setup_completed_at: merged.setupCompletedAt ?? null,
     updated_at: nowMs,
   };
@@ -154,7 +158,7 @@ export function rollbackWorkspaceBootstrapSeedInDatabase(
     database.db,
     getNodeSqliteKysely<WorkspaceStateDatabase>(database.db)
       .updateTable("workspace_setup_state")
-      .set({ bootstrap_seeded_at: null })
+      .set({ bootstrap_seeded_at: null, bootstrap_supplied: null })
       .where("workspace_key", "=", identity.workspaceKey),
   );
   workspaceStatePublication.stagePostimages(database.db, [

@@ -43,7 +43,8 @@ export async function mergeWorkspaceBootstrapSetupStateForAdd(
 ): Promise<WorkspaceSetupState> {
   if (options.stateMode !== "worker") {
     options.assertCurrent?.();
-    return mergeWorkspaceSetupState(workspaceDir, { bootstrapSeededAt }, nowMs, options);
+    const next = { bootstrapSeededAt, bootstrapSupplied: true } as const;
+    return mergeWorkspaceSetupState(workspaceDir, next, nowMs, options);
   }
   return execute(options, {
     type: "templates.add.mergeBootstrapSetupState",

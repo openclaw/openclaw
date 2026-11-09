@@ -33,6 +33,8 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 afterEach(() => vi.unstubAllEnvs());
 const bootstrapSeededAt = "2026-10-28T03:00:00.000Z";
 const nowMs = Date.parse(bootstrapSeededAt);
+const lease = (scope: string) =>
+  ({ scope, key: "bootstrap-worker", leaseMs: 60_000, waitMs: 0, heartbeat: "worker" }) as const;
 
 type Fixture = {
   workspaceDir: string;
@@ -56,34 +58,18 @@ async function withAddLeases(run: (fixture: Fixture) => Promise<void>) {
   await withExistingOpenClawStateSchema({ path: database.path }, async () => {
     const context = captureOpenClawStateWorkerContext({ env });
     await withOpenClawStateLeaseAsync(
-      {
-        scope: "core:template-add-allocation",
-        key: "bootstrap-worker",
-        leaseMs: 60_000,
-        waitMs: 0,
-        heartbeat: "worker",
-      },
+      lease("core:template-add-allocation"),
       context,
       async (allocation) =>
-        withOpenClawStateLeaseAsync(
-          {
-            scope: "core:agent-deletion",
-            key: "bootstrap-worker",
-            leaseMs: 60_000,
-            waitMs: 0,
-            heartbeat: "worker",
-          },
-          context,
-          async (agent) => {
-            await Promise.all([allocation.assertOwned(), agent.assertOwned()]);
-            await run({
-              workspaceDir,
-              context,
-              leases: [allocation, agent],
-              read: () => readWorkspaceStateSnapshot(workspaceDir, { env, readOnly: true }),
-            });
-          },
-        ),
+        withOpenClawStateLeaseAsync(lease("core:agent-deletion"), context, async (agent) => {
+          await Promise.all([allocation.assertOwned(), agent.assertOwned()]);
+          await run({
+            workspaceDir,
+            context,
+            leases: [allocation, agent],
+            read: () => readWorkspaceStateSnapshot(workspaceDir, { env, readOnly: true }),
+          });
+        }),
     );
   });
 }
@@ -95,10 +81,10 @@ it("persists bootstrap setup through the real worker under both live Add leases"
         stateMode: "worker",
         leaseSet: fixture,
       }),
-    ).resolves.toEqual({ version: 1, bootstrapSeededAt });
+    ).resolves.toEqual({ version: 1, bootstrapSeededAt, bootstrapSupplied: true });
     expect(await fixture.read()).toMatchObject({
       setupExists: true,
-      setup: { version: 1, bootstrapSeededAt },
+      setup: { version: 1, bootstrapSeededAt, bootstrapSupplied: true },
     });
   });
 });
@@ -137,7 +123,7 @@ it.each(["owned", "different", "completed"] as const)(
       expect(snapshot.attestation).toEqual({ attestedAtMs: nowMs, generatedHashes: new Map() });
       expect(snapshot.setup).toEqual({
         version: 1,
-        ...(mode !== "owned" ? { bootstrapSeededAt } : {}),
+        ...(mode !== "owned" ? { bootstrapSeededAt, bootstrapSupplied: true } : {}),
         ...(mode === "completed" ? { setupCompletedAt: bootstrapSeededAt } : {}),
       });
     });
@@ -154,14 +140,12 @@ it.each(["missing", "mismatched", "duplicate", "stale"] as const)(
         (scope, identities) => {
           const first = expectDefined(identities[0], "allocation identity");
           const second = expectDefined(identities[1], "agent identity");
-          const leases: readonly OpenClawStateLeaseIdentity[] | undefined =
-            mode === "missing"
-              ? undefined
-              : mode === "mismatched"
-                ? [second, first]
-                : mode === "duplicate"
-                  ? [first, first]
-                  : [{ ...first, owner: "retired-owner" }, second];
+          const leases: readonly OpenClawStateLeaseIdentity[] | undefined = {
+            missing: undefined,
+            mismatched: [second, first],
+            duplicate: [first, first],
+            stale: [{ ...first, owner: "retired-owner" }, second],
+          }[mode];
           return scope.execute({
             type: "templates.add.mergeBootstrapSetupState",
             input: {
@@ -192,10 +176,7 @@ it.each(["seed", "rollback"] as const)(
           fixture.workspaceDir,
           bootstrapSeededAt,
           nowMs,
-          {
-            stateMode: "worker",
-            leaseSet: fixture,
-          },
+          { stateMode: "worker", leaseSet: fixture },
         );
       }
       let current = true;

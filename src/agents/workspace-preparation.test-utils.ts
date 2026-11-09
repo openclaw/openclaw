@@ -178,9 +178,11 @@ export function registerWorkspacePreparationTests({
       expect(await fs.readFile(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME), "utf8")).toBe(
         "# Consented bootstrap\n",
       );
-      expect(
-        (await readWorkspaceStateSnapshot(tempDir, { path: statePath })).setup.bootstrapSeededAt,
-      ).toBe(new Date(seededAt).toISOString());
+      expect((await readWorkspaceStateSnapshot(tempDir, { path: statePath })).setup).toEqual({
+        version: 1,
+        bootstrapSeededAt: new Date(seededAt).toISOString(),
+        bootstrapSupplied: true,
+      });
       await expectPathMissing(redirectedPath);
     });
 

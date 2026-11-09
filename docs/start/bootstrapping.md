@@ -43,6 +43,8 @@ diverged from its starter template, or a `memory/` folder exists.
 When OpenClaw has recorded a file as generated, an unchanged copy of that starter
 file keeps onboarding pending even if an update changes the bundled template.
 
+A `BOOTSTRAP.md` seeded by [Template Add](/cli/templates) is the exception: profile edits never complete it, and setup completes only once the agent deletes the file.
+
 <Note>
 `BOOTSTRAP.md` covers the full identity conversation. See its contents at
 [BOOTSTRAP.md template](/reference/templates/BOOTSTRAP).
