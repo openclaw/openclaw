@@ -555,7 +555,7 @@ async function readClawHubTemplateContents(
                   kind: "mcpServer" as const,
                 })),
               ],
-              automations: manifest.cronJobs.map((job) => ({
+              automations: manifest.automations.map((job) => ({
                 name: job.name || job.id,
                 schedule: job.schedule.cron,
                 timezone: job.schedule.timezone,
