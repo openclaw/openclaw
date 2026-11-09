@@ -69,6 +69,7 @@ export async function prepareCliMcpToolProjection(
       McpScope,
       | "cfg"
       | "skillLibraryAuthoring"
+      | "toolDiscovery"
       | "bundledTools"
       | "authProfileStore"
       | "authProfileStoreAgentDir"
@@ -133,7 +134,7 @@ export function resolveCliMcpToolOwnership(
       options.nodePlacement &&
       !options.skipPreparation &&
       run.disableTools !== true &&
-      run.skillLibraryAuthoring !== undefined,
+      (run.skillLibraryAuthoring !== undefined || run.toolDiscovery?.workshop !== undefined),
   };
 }
 

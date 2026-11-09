@@ -34,7 +34,6 @@ import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/age
 import { updateChatRunProvider } from "../chat-abort.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { recordSessionOperatorSource } from "../session-operator-sources.js";
-import { prepareGatewaySkillLibraryTurn } from "../skill-library-authoring.js";
 import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatDelta } from "./chat-broadcast.js";
@@ -56,6 +55,7 @@ import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 import { finalizeChatSendDispatchedReplies } from "./chat-send-reply-finalization.js";
 import { createAcceptedChatSendRetry, waitForAcceptedChatSendRetry } from "./chat-send-retry.js";
 import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
+import { prepareChatSendSkillLibraryTurn } from "./chat-send-tool-discovery.js";
 import { registerChatSendToolEventRecipients } from "./chat-send-tool-event-recipients.js";
 import { createChatSendTurnAdoptionLifecycle } from "./chat-send-turn-adoption.js";
 import { applyChatSendManagedMedia } from "./chat-send-user-turn.js";
@@ -318,14 +318,13 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
               };
             }
           }
-          phase?.mark("preparation");
-          const skillLibraryAuthoring = await prepareGatewaySkillLibraryTurn(
-            skillLibrary,
-            turn.prepareSessionCreation,
-            () => phase?.mark("authoring"),
-          );
-          admission.assertWorkAdmissionCurrent();
-          phase?.mark("preparation");
+          const { skillLibraryAuthoring, toolDiscoveryCapture } =
+            await prepareChatSendSkillLibraryTurn(
+              skillLibrary,
+              turn.prepareSessionCreation,
+              admission.assertWorkAdmissionCurrent,
+              phase,
+            );
           const pluginBoundMedia = await pluginBoundMediaPromise;
           assertWorkspaceRunOwnership?.();
           applyChatSendManagedMedia(ctx, pluginBoundMedia, managedMediaApplyMode);
@@ -384,6 +383,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   providerReviewAcknowledgment: request.providerReviewAcknowledgment,
                   dashboardReadAdmission,
                   skillLibraryAuthoring,
+                  toolDiscoveryCapture,
                   ...(cronCreatorAuthority
                     ? { cronCreatorAuthorityCapability: cronCreatorAuthority }
                     : {}),

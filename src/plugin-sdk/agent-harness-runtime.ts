@@ -190,6 +190,7 @@ type EmbeddedRunAttemptParamsBase = Omit<
   CoreEmbeddedRunAttemptParams,
   | "thinkingExplicit"
   | "admittedRunContext"
+  | "toolDiscoveryCapture"
   | "disableToolSearch"
   | "sessionReadScopeKey"
   | "blindPrompt"

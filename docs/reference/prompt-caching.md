@@ -67,6 +67,21 @@ including Control UI formatting, without borrowing its delivery route or authori
 Scheduled turns inside an existing conversation retain its full automations
 definition; job-scoped execution still rejects actions outside the current job.
 
+For authenticated, profile-bound Gateway conversations, the session also records
+the personal skill library's shape (whether `skill_library` is declared, its
+profile-selection wording, and whether Workshop stays listed beside it), alongside
+the independent ordinary or management Automations declaration. Internal and
+recovery turns can reuse these declarations after storage reopens. A new human
+request replaces or clears the saved presentation; a fresh human message from a
+channel clears it, while unaddressed group room events leave it unchanged.
+Changes to the profile, role configuration, session audience, or session
+incarnation invalidate it. Revoking a device or token does not; the next human
+request replaces the presentation, and execution checks apply in the meantime.
+Sessions without a valid saved presentation use their existing tool-discovery
+behavior. The saved facts carry no execution authority: `skill_library` calls
+still require current authoring authority, Workshop keeps its ordinary access
+rules, and Automations calls retain their current execution checks.
+
 Restart and scheduled-turn orphan recovery use the same bounded model-history
 selection as session startup. Transcript-only metadata does not replace that
 history with a shorter navigation window or remove its earlier provider inputs.

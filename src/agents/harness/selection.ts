@@ -287,6 +287,7 @@ export async function runAgentHarnessAttempt(
           );
     try {
       modelExecution?.assertCurrent();
+      internalParams.toolDiscoveryPreparation?.assertCurrent();
       const result = await runAgentHarnessLifecycleAttempt(
         harness,
         modelExecution
@@ -428,6 +429,7 @@ export async function runAgentHarnessAttempt(
                 nativeSessionRuntime?.auth === "native"
                   ? (nativeSessionRuntime.modelRef ?? null)
                   : undefined,
+                pluginAttempt.setToolPolicyScope,
               );
           const effectiveAttemptParams =
             hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
@@ -567,6 +569,8 @@ function withoutPluginHarnessPrivateState(
   // The released replyOperation reference delegates to the same controller owner.
   const {
     admittedRunContext: _admittedRunContext,
+    toolDiscoveryCapture: _toolDiscoveryCapture,
+    toolDiscoveryPreparation: _toolDiscoveryPreparation,
     thinkingExplicit: _thinkingExplicit,
     runtimePluginToolGrant: _runtimePluginToolGrant,
     assistantErrorTranscript: _assistantErrorTranscript,
@@ -625,6 +629,7 @@ function withoutInternalHarnessAuthority(
   params: import("./types.js").AgentHarnessAttemptParamsV2;
   closeHostCapabilities: () => void;
   setInputAttachmentReadAllowed: (allowed: boolean) => void;
+  setToolPolicyScope: (scope: "conversation" | "turn" | undefined) => void;
   runWithHostScope: <T>(run: () => Promise<T>) => Promise<T>;
 } {
   if (builtIn) {
@@ -636,12 +641,15 @@ function withoutInternalHarnessAuthority(
       }) as import("./types.js").AgentHarnessAttemptParamsV2,
       closeHostCapabilities: () => {},
       setInputAttachmentReadAllowed: () => {},
+      setToolPolicyScope: () => {},
       runWithHostScope: (run) => run(),
     };
   }
   const pluginParams = withoutPluginHarnessPrivateState(params);
+  let toolPolicyScope: "conversation" | "turn" | undefined;
   const host = createAgentHarnessHostCapabilities({
     attempt: params,
+    readToolPolicyScope: () => toolPolicyScope,
     requiredNodeCommands: harness.cloudPlacement?.devicePlacement?.requiredNodeCommands,
     nativeModelPolicySupport: harness.nativeModelPolicySupport,
     pluginId:
@@ -662,6 +670,9 @@ function withoutInternalHarnessAuthority(
     },
     closeHostCapabilities: host.close,
     setInputAttachmentReadAllowed: host.setInputAttachmentReadAllowed,
+    setToolPolicyScope: (scope) => {
+      toolPolicyScope = scope;
+    },
     runWithHostScope: host.runWithScope,
   };
 }

@@ -75,6 +75,7 @@ export function resolveStrandedReplyRecovery(params: {
         ...params.base.run,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
         suppressNextUserMessagePersistence: true,
+        toolDiscoveryCapture: undefined,
         skillLibraryAuthoring: expireSkillLibraryAuthoring(
           params.base.run.skillLibraryAuthoring,
           "Skill authoring is unavailable while retrying an undelivered reply. Send a fresh message requesting the change.",

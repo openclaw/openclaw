@@ -3,7 +3,7 @@ import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { bindAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { rewrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
-import type { OpenClawCodingToolsOptions } from "./agent-tools.options.js";
+import type { InternalCodingToolsOptions } from "./agent-tools.options.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./before-tool-call-metadata.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
@@ -14,6 +14,7 @@ import {
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
   normalizeToolPolicyName,
+  toolPolicyRestrictsTools,
 } from "./tool-policy.js";
 import {
   getGatewayToolCallerIdentity,
@@ -22,7 +23,7 @@ import {
 
 /** Carries the coding surface's prepared policy and requesting route into plugin delegation. */
 export function createCodingToolsGatewayCaller(params: {
-  options?: OpenClawCodingToolsOptions;
+  options?: InternalCodingToolsOptions;
   agentId?: string;
   sessionKey?: string;
   accountId?: string;
@@ -68,6 +69,26 @@ export function createCodingToolsGatewayCaller(params: {
               ? (activeCaller.requesterOrigin ?? capabilityProfile.requesterOrigin)
               : capabilityProfile.requesterOrigin,
           sessionEventToolsAllow: params.sessionEventSourcePolicy?.toolsAllow,
+          // Same-session follow-ups re-derive conversation policy. Inbound restrictions remain caps.
+          ...(options.sessionEventSourcePolicy?.conversationScope
+            ? {
+                sessionEventToolsAllowSessionScoped:
+                  options.sessionEventSourcePolicy.conversationScope,
+              }
+            : !options.sessionEventSourcePolicy &&
+                options.toolPolicyScope === "conversation" &&
+                options.sessionId &&
+                !toolPolicyRestrictsTools(capabilityProfile.policy.groupPolicy) &&
+                !toolPolicyRestrictsTools(capabilityProfile.policy.senderPolicy)
+              ? {
+                  // Bound to this incarnation, like the CLI conversation scope.
+                  sessionEventToolsAllowSessionScoped: {
+                    agentId,
+                    sessionKey: sessionKey.trim(),
+                    sessionId: options.sessionId,
+                  },
+                }
+              : {}),
           sessionEventSettings: params.sessionEventSourcePolicy?.settings ?? {
             permissionMode: options.sessionPermissionPolicy?.mode,
           },

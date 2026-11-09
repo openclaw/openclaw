@@ -126,6 +126,7 @@ export async function resolveGatewayScopedTools(
     nodeExecAvailable?: (node?: string) => boolean;
     pairedNodeComputerUse?: import("../agents/computer-use-node-capabilities.js").PreparedPairedComputerUse;
     skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+    toolDiscovery?: import("../config/sessions/tool-discovery.types.js").SessionToolDiscoveryPresentation;
     /**
      * Configured MCP tools owned by the caller: a run for an exclusive CLI grant,
      * or one standalone invocation. They enter the same policy pipeline as
@@ -435,6 +436,7 @@ export async function resolveGatewayScopedTools(
     inputProvenance: params.inputProvenance,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     skillLibraryAuthoring: params.skillLibraryAuthoring,
+    toolDiscovery: params.toolDiscovery,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
     disablePluginTools: params.disablePluginTools,
     agentDir: params.agentDir,

@@ -42,6 +42,7 @@ import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import { prepareSessionWorkspaceForRun } from "../server-methods/session-create-project.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { prepareGatewaySkillAuthoring } from "../skill-library-authoring.js";
+import { captureGatewayToolDiscovery } from "../tool-discovery.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
 import { yieldAfterAgentAcceptedAck } from "./agent-handler-helpers.js";
 import { captureAgentJobSession } from "./agent-job.js";
@@ -377,27 +378,38 @@ async function executeAgentRun(
           params.client?.connect.scopes?.includes("operator.admin") === true &&
           hasGatewayClientCap(clientCaps, GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS);
         const gatewayContext = params.context.resolveGatewayContext?.();
+        const isHumanAuthoringTurn =
+          !params.inputProvenance &&
+          !params.restoredCronContinuation &&
+          !params.isOneShotModelRun &&
+          !params.request.internalEvents &&
+          !params.request.internalRuntimeHandoffId &&
+          !params.request.execApprovalFollowupExpectedSessionId &&
+          params.sessionEffects !== "internal" &&
+          !params.request.suppressPromptPersistence &&
+          !params.request.swarmCollector &&
+          params.request.lane !== "subagent";
+        const discoveryOwner = gatewayContext
+          ? {
+              client: params.client,
+              context: gatewayContext,
+              sessionMutationCommitGuard: assertDispatchCurrent,
+            }
+          : undefined;
         const skillLibraryAuthoring =
-          gatewayContext && params.resolvedSessionKey
+          discoveryOwner && params.resolvedSessionKey
             ? await prepareGatewaySkillAuthoring(
                 {
-                  client: params.client,
-                  context: gatewayContext,
+                  ...discoveryOwner,
                   sessionMutationCommitGuard: params.assertGatewayLifetimeCurrent,
                 },
                 params.resolvedSessionKey,
-                !params.inputProvenance &&
-                  !params.restoredCronContinuation &&
-                  !params.isOneShotModelRun &&
-                  !params.request.internalEvents &&
-                  !params.request.internalRuntimeHandoffId &&
-                  !params.request.execApprovalFollowupExpectedSessionId &&
-                  params.sessionEffects !== "internal" &&
-                  !params.request.suppressPromptPersistence &&
-                  !params.request.swarmCollector &&
-                  params.request.lane !== "subagent",
+                isHumanAuthoringTurn,
               )
             : undefined;
+        const toolDiscoveryCapture = discoveryOwner
+          ? captureGatewayToolDiscovery(discoveryOwner, isHumanAuthoringTurn, skillLibraryAuthoring)
+          : undefined;
         finalizePreparedAgentRunUserTurn(prepared.userTurn);
         await dispatchAdmittedAgentRun(
           withAgentRunDispatchExecutionIdentity(
@@ -421,6 +433,7 @@ async function executeAgentRun(
                     ])
                   : params.executionSource,
                 skillLibraryAuthoring,
+                toolDiscoveryCapture,
                 message,
                 images: params.images,
                 imageOrder: params.imageOrder,

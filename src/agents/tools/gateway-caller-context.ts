@@ -1,5 +1,6 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import type { SessionEventSourcePolicy } from "../../auto-reply/reply/session-event-contract.js";
 import { narrowSessionEventSettings } from "../../auto-reply/reply/session-event-policy.js";
 import type { SessionEntriesCurrentCheck } from "../../config/sessions/session-entry-current.types.js";
 import {
@@ -46,6 +47,7 @@ import {
 } from "../requester-origin.js";
 import { readToolStringParam, type AnyAgentTool } from "./common.js";
 import type { GatewayToolCallerReceiptAdmission } from "./gateway-caller-receipt.types.js";
+import { inheritSessionScopedToolsAllow } from "./gateway-caller-session-scope.js";
 
 type ReceiptAuthority = (() => boolean | void) &
   Pick<SessionSourceAssertion, keyof SessionSourceAssertion>;
@@ -61,6 +63,8 @@ type GatewayToolCallerIdentity = {
   requesterOrigin?: RequesterOrigin;
   /** Restrict-only executable surface captured for internal follow-ups. */
   sessionEventToolsAllow?: readonly string[];
+  /** This list restates the caller session's own policy, not an inbound execution cap. */
+  sessionEventToolsAllowSessionScoped?: SessionEventSourcePolicy["conversationScope"];
   /** An object with no mode retains the producer's default permission posture. */
   sessionEventSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   /** Follow-ups cannot add automatic delivery to a message-tool-only source. */
@@ -618,6 +622,7 @@ export async function withGatewayToolCallerIdentity<T>(
               inheritedOwner.sessionEventToolsAllow!.includes(name),
             )
           : (identity.sessionEventToolsAllow ?? inheritedOwner?.sessionEventToolsAllow),
+      sessionEventToolsAllowSessionScoped: inheritSessionScopedToolsAllow(inheritedOwner, identity),
       workspaceBaseRefreshSandbox: inheritedValue("workspaceBaseRefreshSandbox"),
       workspacePrAdoptionSessionId: inheritedValue("workspacePrAdoptionSessionId"),
       workspaceEvidenceSandbox: inheritedValue("workspaceEvidenceSandbox"),

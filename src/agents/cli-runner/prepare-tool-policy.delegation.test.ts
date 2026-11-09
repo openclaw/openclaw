@@ -71,6 +71,52 @@ it.each([base, ordinary])("mediates delegated and ordinary Claude turns: %j", as
   await expectPolicy(request, emptyTools, ["*"]);
 });
 
+it("labels only the ordinary Claude projection with its original conversation incarnation", async () => {
+  const result = await resolveCliRuntimeToolPolicy(ordinary);
+  expect(result.conversationSourceScope).toEqual({
+    agentId: "coder",
+    sessionKey: ordinary.params.sessionKey,
+    sessionId: "coding",
+  });
+  expect((await resolveCliRuntimeToolPolicy(base)).conversationSourceScope).toBeUndefined();
+});
+
+it.each<Overrides>([
+  { params: { toolsAllow: ["read"] } },
+  { params: { toolsAllow: ["*"] } },
+  { params: { cliToolAvailability: nativeSelection } },
+  { params: { disableTools: true } },
+  { params: { controlOperation: "compact" } },
+  { params: { isolatedCompletion: true } },
+  { params: { scheduledToolPolicy: { version: 1, mode: "trusted" } } },
+  {
+    params: {
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:coder:discord:group:ops",
+        ownerAccountId: "default",
+      },
+    },
+  },
+  { params: { inputProvenance: { kind: "internal_system", sourceTool: "exec" } } },
+  { params: { spawnedBy: "agent:main:main" } },
+  { params: { runtimePolicySessionKey: "agent:coder:other" } },
+  { params: { sessionEntry: { sessionId: "replaced", updatedAt: 1 } } },
+  { isSideQuestion: true },
+  { skipsTurnPreparation: true },
+  {
+    params: {
+      messageProvider: "discord",
+      senderId: "guest",
+      config: { tools: { toolsBySender: { "id:guest": { deny: ["exec"] } } } },
+    },
+  },
+])("preserves explicit and transient CLI event ceilings: %j", async (overrides) => {
+  const result = await resolveCliRuntimeToolPolicy(makeInput(overrides, ordinary));
+  expect(result.conversationSourceScope).toBeUndefined();
+});
+
 it("refuses a backend that cannot enforce live delegated authority", async () => {
   await expect(
     resolveCliRuntimeToolPolicy(makeInput({ canEnforceExactToolAvailability: false })),
@@ -136,6 +182,10 @@ const completion: Partial<RunCliAgentParams> = {
     model: "fixture",
   },
 };
+it("retains completion restrictions instead of labeling them as conversation projections", async () => {
+  const result = await resolveCliRuntimeToolPolicy(makeInput({ params: completion }, ordinary));
+  expect(result.conversationSourceScope).toBeUndefined();
+});
 function withManagedNative(overrides: Overrides, defaults = ordinary): Input {
   return makeInput(
     {

@@ -11,6 +11,7 @@ import { resolveWidgetPresenters } from "../plugins/widget-presenters.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { resolvePresentedSkillLibraryAuthoring } from "../skills/library/presented-authoring.js";
 import { hasMultipleSessionSharingIdentitiesNative } from "../state/user-profile-list.native.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { hasConfiguredWebSearchProvider } from "../web-search/runtime.js";
@@ -201,6 +202,12 @@ function* createOpenClawToolsSteps(
   AnyAgentTool[],
   AnyAgentTool[]
 > {
+  // Library and plugin tools follow the saved presentation; it grants no authoring.
+  const skillLibraryAuthoring = resolvePresentedSkillLibraryAuthoring(
+    options?.skillLibraryAuthoring,
+    options?.toolDiscovery?.workshop,
+  );
+  options = skillLibraryAuthoring ? { ...options, skillLibraryAuthoring } : options;
   const resolvedConfig = options?.config;
   const sessionConfig = options?.sessionConfigSource === "runtime" ? undefined : resolvedConfig;
   const activeProjectKeys = options?.preparedModelRuntime?.activeProjectKeys ?? [];
@@ -513,6 +520,7 @@ function* createOpenClawToolsSteps(
               }),
           createCronTool({
             ...options,
+            discovery: options?.toolDiscovery?.automations,
             // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,

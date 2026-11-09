@@ -151,6 +151,8 @@ export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
   additionalInheritedToolNamesRef?: string[];
   /** The host owns continuation policy when this factory builds only part of its tool surface. */
   sessionEventSourcePolicy?: SessionEventSourcePolicy;
+  /** Host-owned policy lifetime; omitted keeps the current-turn follow-up ceiling. */
+  toolPolicyScope?: "conversation" | "turn";
 };
 
 export type PluginCodingToolsOptions = Omit<

@@ -94,6 +94,7 @@ import {
 } from "./registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./runtime-plugin.js";
 import { registerSelectionContextCases } from "./selection.context.cases.js";
+import { registerSelectionDiscoveryCases } from "./selection.discovery.cases.js";
 import {
   resolveAvailableAgentHarnessPolicy,
   runAgentHarnessAttempt,
@@ -104,6 +105,7 @@ import {
 import { registerSelectionQueueInputCases } from "./selection.queue-input.cases.js";
 import {
   createHarnessAttemptParams,
+  registerHarness,
   createAttemptResult,
   createHarnessCompactionFixture,
   privateHarnessParamCases,
@@ -296,6 +298,12 @@ function createAttemptParams(config?: OpenClawConfig): EmbeddedRunAttemptParams 
   return createHarnessAttemptParams(selectionAdmittedRunContext, config);
 }
 
+registerSelectionDiscoveryCases({
+  readState: () => generationState,
+  createAttemptParams,
+  providerRuntimeConfig,
+});
+
 function createTranscriptAnchor(
   entryId: string,
   rawSeq: number,
@@ -312,19 +320,6 @@ function createTranscriptAnchor(
     rawSeq,
     activeMessagePosition,
   };
-}
-
-function registerHarness(overrides: Partial<AgentHarness> = {}) {
-  const id = overrides.id ?? "codex";
-  const harness: AgentHarness = {
-    id,
-    label: id,
-    supports: () => ({ supported: true, priority: 100 }),
-    runAttempt: async () => createAttemptResult(id),
-    ...overrides,
-  };
-  registerAgentHarness(harness, { ownerPluginId: id });
-  return harness;
 }
 
 function registerFailingCodexHarness(): void {

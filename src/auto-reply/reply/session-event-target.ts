@@ -40,7 +40,7 @@ import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deleti
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import type { PreparedCommandOwnerAuthority } from "../command-auth.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
-import type { SessionEventTarget } from "./session-event-contract.js";
+import type { SessionEventSourcePolicy, SessionEventTarget } from "./session-event-contract.js";
 import { narrowSessionEventSettings } from "./session-event-policy.js";
 
 const targetScopes = resolveGlobalSingleton(
@@ -102,7 +102,7 @@ export async function captureSessionEventTargetForHost(
     /** Submitting invocation authority ends after capture/acceptance, not event settlement. */
     assertCaptureCurrent?: () => void;
     /** Prepared host policy survives adapters that translate or clear the original tool cap. */
-    producerPolicy?: Readonly<Pick<SessionEventTarget, "toolsAllow" | "settings">>;
+    producerPolicy?: SessionEventSourcePolicy;
     /** Original host-issued source; the producer owns its lifetime until enqueue. */
     operatorAuthority?: AdmittedRunOperatorAuthority;
     /** The producing turn held command-owner authority under `operatorAuthority`. */
@@ -183,10 +183,18 @@ export async function captureSessionEventTargetForHost(
         return read.value;
       },
     );
+    const isOwnConversation = (scope: SessionEventSourcePolicy["conversationScope"]) =>
+      scope !== undefined &&
+      scope.agentId === agentId &&
+      resolveSessionEventKey(agentId, scope.sessionKey) === sessionKey &&
+      entry?.sessionId === scope.sessionId;
     let toolsAllow: string[] | undefined;
     if (caller && callerAgentMatches) {
       assertCaptureCurrent();
-      if (caller.sessionEventToolsAllow) {
+      const sessionScopedSurface =
+        isOwnConversation(caller.sessionEventToolsAllowSessionScoped) &&
+        resolveSessionEventKey(agentId, caller.sessionKey) === sessionKey;
+      if (caller.sessionEventToolsAllow && !sessionScopedSurface) {
         if (
           caller.sessionEventToolsAllow.length > 512 ||
           caller.sessionEventToolsAllow.some((name) => name.length > 256)
@@ -196,7 +204,12 @@ export async function captureSessionEventTargetForHost(
         toolsAllow = intersectSessionEventToolsAllow(caller.sessionEventToolsAllow);
       }
     }
-    toolsAllow = intersectSessionEventToolsAllow(toolsAllow, options.producerPolicy?.toolsAllow);
+    toolsAllow = intersectSessionEventToolsAllow(
+      toolsAllow,
+      isOwnConversation(options.producerPolicy?.conversationScope)
+        ? undefined
+        : options.producerPolicy?.toolsAllow,
+    );
     const destinationSettings = entry
       ? { permissionMode: entry.permissionMode, toolOverrides: entry.toolOverrides }
       : undefined;
