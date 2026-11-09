@@ -5,7 +5,7 @@ import { ProviderCredentialsSavedError } from "../../shared/provider-auth-result
 
 export async function promotePersistedAuthProfile(params: {
   config: OpenClawConfig;
-  agentDir: string;
+  agentDir?: string;
   provider: string;
   profileId: string;
   assertCurrent?: () => void;

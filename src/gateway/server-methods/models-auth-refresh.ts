@@ -1,6 +1,7 @@
 import { validateModelsAuthRefreshParams } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/runtime-snapshots.js";
+import { resolveSharedMainAuthLoginTarget } from "../../agents/auth-profiles/shared-login-target.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { respondUnavailableOnThrow } from "./response.js";
@@ -13,12 +14,15 @@ export const modelsAuthRefreshHandlers: GatewayRequestHandlers = {
     validateModelsAuthRefreshParams,
     async ({ params, respond, context }) => {
       const config = context.getRuntimeConfig();
-      const scope = resolveModelAuthAgentScope(
-        config,
-        params.agentId === undefined || params.agentId === ""
-          ? tryResolveAmbientOwnerAgentId(config)
-          : params.agentId,
-      );
+      const sharedTarget = resolveSharedMainAuthLoginTarget(config, params.agentId);
+      const scope = sharedTarget
+        ? { ok: true as const, ...sharedTarget }
+        : resolveModelAuthAgentScope(
+            config,
+            params.agentId === undefined || params.agentId === ""
+              ? tryResolveAmbientOwnerAgentId(config)
+              : params.agentId,
+          );
       if (!scope.ok) {
         respond(false, undefined, scope.error);
         return;
