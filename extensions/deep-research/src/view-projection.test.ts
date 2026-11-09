@@ -20,8 +20,8 @@ const job: ResearchJob = {
 
 describe("retained research view projection", () => {
   it("keeps unknown counts absent, distinguishes cancellation requests, and never resumes unknown submission", () => {
-    const queued = projectResearchJob(job);
-    expect(queued.counts).toBeUndefined();
+    const queued = projectResearchJob({ ...job, request: { question: `${"x".repeat(159)}🙂` } });
+    expect([queued.title, queued.counts]).toEqual(["x".repeat(159), undefined]);
     expect(queued.actions).toEqual(["cancel"]);
     const pending = projectResearchJob({ ...job, state: "paused", cancelRequested: true });
     expect(pending.state).toBe("paused");
@@ -113,16 +113,5 @@ describe("retained research view projection", () => {
       view.sources.every((source) => source.provenance === "provider-cited" && !source.excerpt),
     ).toBe(true);
     expect(view.citations).toEqual([{ sourceId: "P1", startByte: 6, endByte: 9 }]);
-  });
-  it("truncates the title without splitting a surrogate pair at the 160-unit boundary", () => {
-    // 159 ASCII units + an astral character (emoji, 2 UTF-16 units) straddles the
-    // boundary. A raw slice(0, 160) would cut the emoji in half and emit a lone
-    // surrogate that JSON/terminal/UI render as U+FFFD.
-    const question = "x".repeat(159) + "🙂";
-    expect(question.length).toBe(161);
-    const view = projectResearchJob({ ...job, request: { question } });
-    expect(view.title).toBe("x".repeat(159));
-    expect(view.title.length).toBe(159);
-    expect([...view.title].pop()).toBe("x");
   });
 });
