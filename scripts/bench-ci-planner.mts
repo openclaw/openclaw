@@ -252,7 +252,13 @@ export async function measurePlannerStage(options: {
       ? null
       : "failed, interrupted, or unverified descendant cleanup",
     error: failure
-      ? redact(String(failure))
+      ? redact(
+          failure instanceof Error
+            ? `${failure.name}: ${failure.message}`
+            : typeof failure === "string"
+              ? failure
+              : "Process failed with a non-Error value",
+        )
       : overflow.signal.aborted
         ? "output limit exceeded"
         : null,
@@ -412,20 +418,20 @@ async function main() {
       selection: "all",
     },
     {
-      "--workload": (options, value) => {
-        options.workload = value;
+      "--workload": (parsedOptions, value) => {
+        parsedOptions.workload = value;
       },
-      "--workload-sha": (options, value) => {
-        options.expectedRevision = value;
+      "--workload-sha": (parsedOptions, value) => {
+        parsedOptions.expectedRevision = value;
       },
-      "--output": (options, value) => {
-        options.output = value;
+      "--output": (parsedOptions, value) => {
+        parsedOptions.output = value;
       },
-      "--repetitions": (options, value) => {
-        options.repetitions = parseBenchmarkInteger(value, "--repetitions", 1, 5);
+      "--repetitions": (parsedOptions, value) => {
+        parsedOptions.repetitions = parseBenchmarkInteger(value, "--repetitions", 1, 5);
       },
-      "--case": (options, value) => {
-        options.selection = value;
+      "--case": (parsedOptions, value) => {
+        parsedOptions.selection = value;
       },
     },
   );
