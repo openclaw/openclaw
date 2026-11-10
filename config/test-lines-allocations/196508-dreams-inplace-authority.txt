@@ -1,0 +1,5 @@
+# Exact net test-line growth from the #196508 fix (DREAMS.md in-place fallback
+# reusing the MEMORY.md writer, with live mutation-authority revalidation and
+# offset-zero restore): regression coverage for the fallback, revoked-authority
+# rejection, and exact-byte recovery after a partial write.
+152
