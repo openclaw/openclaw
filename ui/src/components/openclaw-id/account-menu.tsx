@@ -125,48 +125,39 @@ function keyAttentionEntries(
   publication: OpenClawIdPublication | null | undefined,
 ): MenuEntry[] {
   const failed = publication?.state === "failed" ? publication.code : undefined;
-  if (status.status.state === "keys_refused") {
-    const label =
-      status.status.reason === "key_mismatch"
-        ? t("openclawId.keysMismatch")
-        : t("openclawId.keysMissing");
-    return [
-      statusRow(
-        "keys-refused",
-        label,
-        "alertTriangle",
-        t("openclawId.keysRefusedDetail"),
-        undefined,
-        true,
-      ),
-    ];
+  const refused = status.status.state === "keys_refused";
+  const warning = refused
+    ? "keys-refused"
+    : failed === "binding_superseded"
+      ? "binding-superseded"
+      : failed === "needs_link_code"
+        ? "needs-link-code"
+        : null;
+  if (!warning) {
+    return [];
   }
-  if (failed === "binding_superseded") {
-    return [
-      statusRow(
-        "binding-superseded",
-        t("openclawId.bindingSuperseded"),
-        "alertTriangle",
-        t("openclawId.bindingSupersededDetail"),
-        undefined,
-        true,
-      ),
-    ];
+  const label = refused
+    ? status.status.reason === "key_mismatch"
+      ? "keysMismatch"
+      : "keysMissing"
+    : failed === "binding_superseded"
+      ? "bindingSuperseded"
+      : "needsLinkCode";
+  const detail = refused ? "keysRefusedDetail" : `${label}Detail`;
+  const entries = [
+    statusRow(
+      warning,
+      t(`openclawId.${label}`),
+      "alertTriangle",
+      t(`openclawId.${detail}`),
+      undefined,
+      true,
+    ),
+  ];
+  if (warning === "needs-link-code") {
+    entries.push(renderSidebarMenuAction(PUBLISH_KEYS, t("openclawId.publishNewKeys"), "radio"));
   }
-  if (failed === "needs_link_code") {
-    return [
-      statusRow(
-        "needs-link-code",
-        t("openclawId.needsLinkCode"),
-        "alertTriangle",
-        t("openclawId.needsLinkCodeDetail"),
-        undefined,
-        true,
-      ),
-      renderSidebarMenuAction(PUBLISH_KEYS, t("openclawId.publishNewKeys"), "radio"),
-    ];
-  }
-  return [];
+  return entries;
 }
 
 /**

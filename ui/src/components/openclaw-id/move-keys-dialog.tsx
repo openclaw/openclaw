@@ -1,7 +1,6 @@
 // "Move to new keys" from the account menu, on the computer that runs the claw: the recovery
 // code typed here signs the new binding in this browser (lib/openclaw-id/rebind.ts), the
 // owner confirms the key fingerprints, and the Gateway stores it and publishes the new keys.
-import "./move-keys-dialog.css";
 import { createSignal, Match, onSettled, Show, Switch } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
@@ -48,12 +47,12 @@ export function rebindRefusalMessage(refusal: RebindRefusal, hostname: string): 
 
 function KeyRow(props: { label: string; from: string; to: string }) {
   return (
-    <div class="openclaw-id-move-keys__row">
-      <dt>{props.label}</dt>
-      <dd>
-        <span class="openclaw-id-move-keys__fp">{props.from}</span> →{" "}
-        <span class="openclaw-id-move-keys__fp">{props.to}</span>
-      </dd>
+    <div class="openclaw-id-move-keys__row exec-approval-meta-row">
+      <span>{props.label}</span>
+      <span>
+        <span class="openclaw-id-move-keys__fp mono">{props.from}</span> →{" "}
+        <span class="openclaw-id-move-keys__fp mono">{props.to}</span>
+      </span>
     </div>
   );
 }
@@ -210,13 +209,13 @@ export function showMoveKeysDialog(params: {
                 {(current) => (
                   <>
                     <h3>{t("openclawId.moveKeysConfirm")}</h3>
-                    <dl class="openclaw-id-move-keys__keys">
-                      <div class="openclaw-id-move-keys__row">
-                        <dt>{t("openclawId.moveKeysRoot")}</dt>
-                        <dd>
-                          <span class="openclaw-id-move-keys__fp">{current().root}</span>{" "}
+                    <div class="openclaw-id-move-keys__keys exec-approval-meta">
+                      <div class="openclaw-id-move-keys__row exec-approval-meta-row">
+                        <span>{t("openclawId.moveKeysRoot")}</span>
+                        <span>
+                          <span class="openclaw-id-move-keys__fp mono">{current().root}</span>{" "}
                           <span class="muted">{t("openclawId.moveKeysRootMatches")}</span>
-                        </dd>
+                        </span>
                       </div>
                       <KeyRow
                         label={t("openclawId.moveKeysBinding")}
@@ -233,7 +232,7 @@ export function showMoveKeysDialog(params: {
                         from={current().gateway.from}
                         to={current().gateway.to}
                       />
-                    </dl>
+                    </div>
                   </>
                 )}
               </Match>
