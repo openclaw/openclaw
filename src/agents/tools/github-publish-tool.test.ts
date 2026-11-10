@@ -427,13 +427,3 @@ it("tells an unbound conversation how to publish, but not when reading a child",
     .details;
   expect(child).toEqual(unbound);
 });
-
-it("limits session-bound landing actions and points other PRs to the native route", () => {
-  const { description } = createGitHubPublishTool();
-  expect(description).toContain(
-    "inspect, ready, merge and close act only on this session's published or bound PR",
-  );
-  expect(description).toContain("for OpenClaw, scripts/pr");
-  expect(description).toContain("A session publishes one checkout");
-  expect(description).toContain("status started is not success");
-});

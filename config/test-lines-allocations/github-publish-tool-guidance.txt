@@ -1,2 +1,2 @@
-# github_publish guidance: placeholder-field errors, unbound readiness next step, landing-scope description.
-42
+# github_publish guidance: placeholder-field errors, unbound readiness next step.
+32
