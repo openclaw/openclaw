@@ -82,7 +82,7 @@ on:
         required: false
         type: string
       publish_openclaw_npm:
-        description: Publish the OpenClaw npm package under npm_dist_tag after plugin npm succeeds; ClawHub may still run
+        description: Publish OpenClaw under npm_dist_tag after plugins publish or record exact OIDC-auth deferrals; ClawHub may still run
         required: true
         default: true
         type: boolean
@@ -106,6 +106,11 @@ on:
           - beta
           - stable
           - full
+      defer_clawhub:
+        description: Recovery only; defer ClawHub dispatch while resuming an authenticated already-published core (release remains incomplete)
+        required: false
+        default: false
+        type: boolean
       wait_for_clawhub:
         description: Wait for and auto-approve ClawHub staging; public verification follows terminal parent success
         required: true
@@ -123,7 +128,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
 
 jobs:
   resolve_release_target:
@@ -138,6 +143,7 @@ jobs:
       preflight_artifact_run_id: ${{ steps.preflight_artifact.outputs.run_id }}
       preflight_tarball_sha256: ${{ steps.manifest.outputs.tarball_sha256 }}
       full_release_validation_run_attempt: ${{ steps.full_run.outputs.attempt }}
+      plugin_npm_artifact: ${{ steps.full_manifest.outputs.plugin_npm_artifact }}
       focused_release_evidence_run_attempt: ${{ steps.focused_run.outputs.attempt }}
       focused_release_evidence_workflow_full_ref: ${{ steps.focused_run.outputs.workflow_full_ref }}
       focused_release_evidence_workflow_sha: ${{ steps.focused_run.outputs.workflow_sha }}
@@ -165,6 +171,8 @@ jobs:
           FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ inputs.focused_release_evidence_run_attempt }}
           OPENCLAW_NPM_RESUME_RUN_ID: ${{ inputs.openclaw_npm_resume_run_id }}
+          DEFER_CLAWHUB: ${{ inputs.defer_clawhub && 'true' || 'false' }}
+          WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
           FINALIZE_RELEASE_BEFORE_DOCKER: ${{ inputs.finalize_release_before_docker }}
           PREPARED_PLUGINS: ${{ inputs.prepared_plugins }}
@@ -254,6 +262,10 @@ jobs:
           fi
           if [[ -n "${OPENCLAW_NPM_RESUME_RUN_ID}" && "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
             echo "openclaw_npm_resume_run_id requires publish_openclaw_npm=true." >&2
+            exit 1
+          fi
+          if [[ "${DEFER_CLAWHUB:-false}" == "true" && ( -z "${OPENCLAW_NPM_RESUME_RUN_ID}" || "${PUBLISH_OPENCLAW_NPM}" != "true" || -n "${PREPARED_PLUGINS}" || "${WAIT_FOR_CLAWHUB}" == "true" ) ]]; then
+            echo "defer_clawhub requires direct core resume with openclaw_npm_resume_run_id and wait_for_clawhub=false." >&2
             exit 1
           fi
           if [[ "${FINALIZE_RELEASE_BEFORE_DOCKER:-false}" == "true" && ( "${PUBLISH_OPENCLAW_NPM}" != "true" || -n "${PREPARED_PLUGINS:-}" ) ]]; then
@@ -476,7 +488,7 @@ jobs:
 
       - name: Download full release validation manifest
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && (inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '') }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}
           path: ${{ runner.temp }}/full-release-validation-manifest
@@ -485,7 +497,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -545,10 +557,24 @@ jobs:
           node --input-type=module <<'NODE'
           import { appendFileSync, readFileSync } from 'node:fs';
           import { preparedDockerEvidenceFromFullRelease } from './.release-validation-tooling/scripts/docker-release-artifacts.mjs';
+          import { validatePreparedNpmArtifactDescriptor } from './.release-validation-tooling/scripts/plugin-npm-prepared-release.mjs';
           const env = process.env;
-          const prepared = preparedDockerEvidenceFromFullRelease({ manifest: JSON.parse(readFileSync(`${env.RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json`, 'utf8')), sourceSha: env.EXPECTED_SHA, runId: env.FULL_RELEASE_VALIDATION_RUN_ID, runAttempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT });
+          const manifest = JSON.parse(readFileSync(`${env.RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json`, 'utf8'));
+          const prepared = preparedDockerEvidenceFromFullRelease({ manifest, sourceSha: env.EXPECTED_SHA, runId: env.FULL_RELEASE_VALIDATION_RUN_ID, runAttempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT });
           if (prepared) {
             appendFileSync(env.GITHUB_OUTPUT, `prepared_docker_run_id=${prepared.preparedRunId}\nprepared_docker_run_attempt=${prepared.preparedRunAttempt}\nprepared_docker_artifact_name=${prepared.preparedArtifactName}\nprepared_docker_manifest_sha256=${prepared.preparedManifestSha256}\n`);
+          }
+          if (env.PLUGIN_PUBLISH_SCOPE === 'all-publishable' && env.PUBLISH_DOCKER_ONLY !== 'true') {
+            const descriptor = manifest.publicationArtifacts?.pluginNpm;
+            if (!descriptor && manifest.sourceAdmission?.qualificationAdmission) {
+              throw new Error('Candidate-owned all-plugin publication requires the original FRV npm artifact; repacking is not allowed.');
+            }
+            if (descriptor) {
+              const npm = validatePreparedNpmArtifactDescriptor(descriptor, {
+                repository: env.GITHUB_REPOSITORY, sourceSha: env.EXPECTED_SHA, workflowSha: manifest.workflowSha,
+              });
+              appendFileSync(env.GITHUB_OUTPUT, `plugin_npm_artifact=${JSON.stringify(npm)}\n`);
+            }
           }
           NODE
 
@@ -681,9 +707,16 @@ jobs:
           }
           const archivesDir = join(env.RUNNER_TEMP, 'openclaw-npm-preflight-archives');
           mkdirSync(archivesDir, { recursive: true });
-          for (const [artifact, directory, expectedEntries] of [
-            [preflight[0], 'openclaw-npm-preflight-manifest', undefined],
-            [sdk[0], 'openclaw-plugin-sdk-api-evidence', ['plugin-sdk-api-release-diff.json', 'plugin-sdk-api-release-evidence.json']],
+          const sdkRequiredEntries = ['plugin-sdk-api-release-diff.json', 'plugin-sdk-api-release-evidence.json'];
+          // Preflights also upload the readable diff summary; older ones carry only the JSON pair.
+          const sdkAllowedEntries = new Set([...sdkRequiredEntries, 'plugin-sdk-api-release-diff.md']);
+          for (const [artifact, directory, entryPolicy] of [
+            [preflight[0], 'openclaw-npm-preflight-manifest', { minEntries: 1, maxEntries: 1024, allowPath: () => true }],
+            [sdk[0], 'openclaw-plugin-sdk-api-evidence', {
+              minEntries: sdkRequiredEntries.length,
+              maxEntries: sdkAllowedEntries.size,
+              allowPath: (name) => sdkAllowedEntries.has(name),
+            }],
           ]) {
             const outputDir = join(env.RUNNER_TEMP, directory);
             const archivePath = join(archivesDir, `${artifact.id}.zip`);
@@ -723,10 +756,7 @@ jobs:
                 runStatePolicy: 'completed-success',
               },
               archivePolicy: {
-                expectedEntries,
-                minEntries: 1,
-                maxEntries: 1024,
-                allowPath: () => true,
+                ...entryPolicy,
                 maxEntryBytes: () => 256 * 1024 * 1024,
               },
             };
@@ -735,6 +765,13 @@ jobs:
             const files = qualified
               ? inspectActionsArtifactZipWithPolicy((await downloadExactActionsArtifactArchive(download)).archiveBytes, download.archivePolicy)
               : (await readPublicationArtifactArchive(download)).files;
+            if (artifact === sdk[0]) {
+              const names = new Set([...files].map(([name]) => name));
+              const missing = sdkRequiredEntries.filter((name) => !names.has(name));
+              if (missing.length > 0) {
+                throw new Error(`${artifact.name} is missing ${missing.join(', ')}.`);
+              }
+            }
             rmSync(outputDir, { recursive: true, force: true });
             mkdirSync(outputDir, { recursive: true });
             for (const [name, bytes] of files) {
@@ -926,7 +963,7 @@ jobs:
 
       - name: Download focused release evidence
         if: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: authorized-beta-focused-v1-${{ inputs.focused_release_evidence_run_id }}-${{ steps.focused_run.outputs.attempt }}
           path: ${{ runner.temp }}/authorized-beta-focused-evidence
@@ -1049,7 +1086,7 @@ jobs:
           (Path(env["RUNNER_TEMP"]) / "openclaw-release-children" / "dispatch.json").write_text(json.dumps(record) + "\n")
           PYTHON
       - name: Upload exact release child dispatch record
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-release-children-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-release-children/dispatch.json
@@ -1119,7 +1156,7 @@ jobs:
           wait_for_run ci.yml "${run_id}" "${PARENT_WORKFLOW_SHA}" "" false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -1175,7 +1212,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -1232,7 +1269,7 @@ jobs:
           subject-path: ${{ runner.temp }}/android-release-approval/approval.json
 
       - name: Upload Android release approval
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-release-approval-${{ github.run_id }}
           path: ${{ runner.temp }}/android-release-approval/approval.json
@@ -1283,6 +1320,7 @@ jobs:
       RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
       PLUGINS: ${{ inputs.plugins }}
       WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
+      DEFER_CLAWHUB: ${{ inputs.defer_clawhub && 'true' || 'false' }}
       NPM_TELEGRAM_RUN_ID: ${{ inputs.npm_telegram_run_id }}
       RELEASE_EVIDENCE_MODE: ${{ inputs.release_evidence_mode }}
       FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -1315,7 +1353,7 @@ jobs:
 
       - name: Download full release validation manifest
         if: ${{ inputs.publish_openclaw_npm && inputs.release_evidence_mode == 'full-release-validation' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
           path: ${{ runner.temp }}/full-release-validation-manifest
@@ -1325,7 +1363,7 @@ jobs:
 
       - name: Download focused release evidence
         if: ${{ inputs.publish_openclaw_npm && inputs.release_evidence_mode == 'authorized-beta-focused-v1' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: authorized-beta-focused-v1-${{ inputs.focused_release_evidence_run_id }}-${{ needs.resolve_release_target.outputs.focused_release_evidence_run_attempt }}
           path: ${{ runner.temp }}/authorized-beta-focused-evidence
@@ -1335,7 +1373,7 @@ jobs:
 
       - name: Setup supported Node runtime
         if: ${{ always() }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -1420,10 +1458,39 @@ jobs:
           subject-path: ${{ runner.temp }}/openclaw-release-approval/approval.json
 
       - name: Upload release approval receipt
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.approval_receipt.outputs.artifact_name }}
           path: ${{ runner.temp }}/openclaw-release-approval/approval.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Write Windows release approval
+        id: windows_approval
+        if: ${{ inputs.publish_openclaw_npm && inputs.npm_dist_tag != 'extended-stable' }}
+        continue-on-error: true
+        env:
+          SIGNED_RELEASE_TAG_OBJECT_SHA: ${{ needs.resolve_release_target.outputs.signed_tag_object_sha }}
+          WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
+          WINDOWS_NODE_INSTALLER_DIGESTS: ${{ inputs.windows_node_installer_digests }}
+        run: |
+          node .release-harness/scripts/windows-release-promotion.mjs create \
+            --receipt "$RUNNER_TEMP/openclaw-release-approval/approval.json" \
+            --output "$RUNNER_TEMP/windows-release-approval/approval.json"
+      - name: Attest Windows release approval
+        id: windows_attestation
+        if: ${{ steps.windows_approval.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/windows-release-approval/approval.json
+      - name: Upload Windows release approval
+        if: ${{ steps.windows_attestation.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-release-approval-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-release-approval/approval.json
           if-no-files-found: error
           retention-days: 30
 
@@ -1436,6 +1503,9 @@ jobs:
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
         run: |
           node --input-type=module <<'NODE'
           import { prefetchPreparedPlugins } from './.release-harness/scripts/openclaw-release-ready.mjs';
@@ -1444,8 +1514,12 @@ jobs:
             throw new Error('Prepared publication must retain the complete selected roster.');
           }
           await prefetchPreparedPlugins({
-            plugins: JSON.parse(env.PREPARED_PLUGINS), inputs: { npm_dist_tag: env.RELEASE_NPM_DIST_TAG },
-            sourceSha: env.TARGET_SHA, toolingSha: env.GITHUB_WORKFLOW_SHA, sourceRoot: process.cwd(),
+            plugins: JSON.parse(env.PREPARED_PLUGINS), inputs: {
+              tag: env.RELEASE_TAG, npm_dist_tag: env.RELEASE_NPM_DIST_TAG,
+              full_release_validation_run_id: env.FULL_RELEASE_VALIDATION_RUN_ID,
+              full_release_validation_run_attempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
+            },
+            sourceSha: env.TARGET_SHA, toolingSha: env.GITHUB_WORKFLOW_SHA, toolingFullRef: env.GITHUB_REF, sourceRoot: process.cwd(),
             outputDir: `${env.RUNNER_TEMP}/prepared-release-packages`, token: env.GH_TOKEN,
           });
           NODE
@@ -1491,7 +1565,7 @@ jobs:
           if [[ -n "${PLUGINS// }" ]]; then
             plan_args+=(--plugins "${PLUGINS}")
           fi
-          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then
+          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" || "${DEFER_CLAWHUB:-false}" == "true" ]]; then
             plan_args+=(--skip-clawhub)
           fi
           if [[ -n "${PREPARED_PLUGINS}" ]]; then
@@ -1566,7 +1640,7 @@ jobs:
 
       - name: Upload ClawHub bootstrap approval
         if: ${{ steps.clawhub_plan.outputs.bootstrap_should_dispatch == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: clawhub-bootstrap-approval-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/clawhub-bootstrap-approval/approval.json
@@ -1626,7 +1700,7 @@ jobs:
 
       - name: Upload stable npm bootstrap approval
         if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full') }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm-stable-bootstrap-approval-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/npm-stable-bootstrap-approval/approval.json
@@ -1676,6 +1750,7 @@ jobs:
           FOCUSED_RELEASE_EVIDENCE_DIR: ${{ runner.temp }}/authorized-beta-focused-evidence
           CLAWHUB_PLAN_PATH: ${{ runner.temp }}/openclaw-release-clawhub-plan.json
           PREPARED_PLUGINS: ${{ inputs.prepared_plugins }}
+          QUALIFIED_PLUGIN_NPM: ${{ needs.resolve_release_target.outputs.plugin_npm_artifact }}
         run: |
           set -euo pipefail
           source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
@@ -1686,13 +1761,15 @@ jobs:
             echo "- Release tag: \`${RELEASE_TAG}\`"
             echo "- Release SHA: \`${TARGET_SHA}\`"
             echo "- Release approval: this workflow job"
-            if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then
+            if [[ "${DEFER_CLAWHUB:-false}" == "true" ]]; then
+              echo "- ClawHub: deferred to independent recovery; full release remains incomplete"
+            elif [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then
               echo "- ClawHub: skipped by release track"
             else
               echo "- ClawHub: dispatched in parallel"
             fi
             if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
-              echo "- OpenClaw npm publish: starts after plugin npm succeeds"
+              echo "- OpenClaw npm publish: starts after plugins publish, already exist, or record exact OIDC-auth deferrals"
             else
               echo "- OpenClaw npm publish: skipped by input"
             fi
@@ -1725,6 +1802,10 @@ jobs:
             guard_existing_public_release
           fi
           resolve_openclaw_npm_publish_state
+          if [[ "${DEFER_CLAWHUB:-false}" == "true" && "${openclaw_npm_already_published}" != "true" ]]; then
+            echo "defer_clawhub requires an authenticated already-published core." >&2
+            exit 1
+          fi
           resolve_clawhub_release_plan
 
           bootstrap_workflow_sha=""
@@ -1749,6 +1830,11 @@ jobs:
           npm_args+=(-f defer_registry_verification="${PUBLISH_OPENCLAW_NPM}")
           if [[ -n "${PREPARED_PLUGINS}" ]]; then
             npm_args+=(-f prepared_artifact="$(jq -cer '.npm' <<< "$PREPARED_PLUGINS")")
+          elif [[ -n "${QUALIFIED_PLUGIN_NPM}" ]]; then
+            npm_args+=(-f prepared_artifact="$QUALIFIED_PLUGIN_NPM")
+          fi
+          if [[ -n "${PREPARED_PLUGINS}" || -n "${QUALIFIED_PLUGIN_NPM}" ]]; then
+            npm_args+=(-f full_release_validation_run_id="$FULL_RELEASE_VALIDATION_RUN_ID" -f full_release_validation_run_attempt="$FULL_RELEASE_VALIDATION_RUN_ATTEMPT")
           fi
           if [[ "${RELEASE_NPM_DIST_TAG}" == extended-stable ]]; then
             npm_args+=(-f npm_dist_tag=extended-stable)
@@ -1829,13 +1915,14 @@ jobs:
             parentWorkflow: '.github/workflows/openclaw-release-publish.yml',
             toolingRef: env.GITHUB_REF_NAME, toolingFullRef: env.GITHUB_REF,
             toolingSha: env.GITHUB_WORKFLOW_SHA, candidateSha: env.TARGET_SHA,
+            ...(env.DEFER_CLAWHUB === 'true' ? { clawHubDeferred: true } : {}),
             normalClawHubRunId: env.NORMAL_CLAWHUB_RUN_ID || null,
             normalClawHubRunAttempt: env.NORMAL_CLAWHUB_RUN_ID ? '1' : null,
           }) + '\n', { flag: 'wx' });
           NODE
 
       - name: Upload exact release child dispatch record
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-release-children-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-release-children/dispatch.json
@@ -1931,7 +2018,7 @@ jobs:
         id: ledger_token
         if: ${{ !cancelled() && inputs.publish_openclaw_npm && inputs.npm_dist_tag == 'latest' && steps.core_start.outcome == 'success' }}
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -1955,7 +2042,7 @@ jobs:
       - name: Upload immutable ClawHub parent authorization
         id: clawhub_receipt
         if: steps.children.outputs.plugin_clawhub_run_id != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.clawhub_authorization.outputs.artifact_name }}
           path: ${{ runner.temp }}/clawhub-parent-authorization/authorization.json
@@ -2021,7 +2108,10 @@ jobs:
           resolve_clawhub_release_plan
           failed=0
           clawhub_failed=0
-          clawhub_authorized=true
+          clawhub_authorized=false
+          if [[ -n "${plugin_clawhub_run_id}" ]]; then
+            clawhub_authorized=true
+          fi
           release_target_current=true
           if ! (verify_release_tag_target); then
             failed=1
@@ -2156,7 +2246,7 @@ jobs:
       - name: Upload postpublish diagnostics
         if: ${{ always() }}
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-release-postpublish-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-release-postpublish-evidence/release-postpublish-diagnostics.json
@@ -2164,7 +2254,7 @@ jobs:
 
       - name: Upload postpublish evidence
         if: ${{ always() && inputs.publish_openclaw_npm && (steps.complete.outcome == 'success' || steps.complete.outputs.postpublish_evidence_ready == 'true') }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-release-postpublish-evidence-${{ inputs.tag }}
           path: ${{ runner.temp }}/openclaw-release-postpublish-evidence/release-postpublish-evidence.json
@@ -2194,7 +2284,7 @@ jobs:
       contents: read
     steps:
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -2314,7 +2404,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -2382,7 +2472,7 @@ jobs:
 
       - name: Retain Linux updater continuity evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-updater-continuity-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
           path: |
@@ -2436,7 +2526,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -2460,7 +2550,7 @@ jobs:
           echo "- Legacy Linux bridge: degraded; dispatch acceptance is not mirror success." >> "$GITHUB_STEP_SUMMARY"
       - name: Retain Linux mirror dispatch evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-mirror-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/linux-mirror-dispatch.json
@@ -2487,14 +2577,14 @@ jobs:
           persist-credentials: false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
 
       - name: Create Linux release request token
         id: linux_request_token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -2523,7 +2613,7 @@ jobs:
 
       - name: Retain Linux request evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-release-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/linux-dispatch.json
@@ -2552,6 +2642,8 @@ jobs:
 
       - name: Dispatch detached Windows promotion
         env:
+          RELEASE_PUBLISH_RUN_ID: ${{ github.run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ github.run_attempt }}
           GH_TOKEN: ${{ github.token }}
           PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
           RELEASE_TAG: ${{ inputs.tag }}
@@ -2582,7 +2674,7 @@ jobs:
 
       - name: Upload Windows dispatch evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-release-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/windows-dispatch.json
@@ -2607,7 +2699,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -2616,7 +2708,7 @@ jobs:
         id: recovery_manifest
         if: ${{ needs.publish.outputs.clawhub_run_id != '' && needs.publish.outputs.clawhub_receipt != 'success' }}
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: openclaw-clawhub-recovery-manifest-${{ needs.publish.outputs.clawhub_run_id }}-1
           path: ${{ runner.temp }}/clawhub-recovery-manifest
@@ -2653,7 +2745,7 @@ jobs:
 
       - name: Upload sealed cleanup evidence
         id: cleanup_evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: clawhub-cleanup-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

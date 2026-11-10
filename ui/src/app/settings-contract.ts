@@ -1,9 +1,11 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import {
   normalizeUiAppearancePreference,
   type TabIconPreference,
 } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import type { BoardSessionViews } from "../lib/board/settings.ts";
+import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import type {
   SidebarSessionActivePanels,
   SidebarSessionLayouts,
@@ -43,6 +45,61 @@ export type CatalogOpenTarget = (typeof CATALOG_OPEN_TARGETS)[number];
 
 export const normalizeCatalogOpenTarget = normalizeChoice(CATALOG_OPEN_TARGETS, "viewer");
 
+const DASHBOARDS_VIEWS = ["grid", "list"] as const;
+const DASHBOARDS_SORTS = ["updated", "title"] as const;
+const DASHBOARDS_GROUPS = ["none", "updated", "author"] as const;
+export type DashboardsDisplay = {
+  view: (typeof DASHBOARDS_VIEWS)[number];
+  sort: (typeof DASHBOARDS_SORTS)[number];
+  group: (typeof DASHBOARDS_GROUPS)[number];
+};
+export const DASHBOARDS_DISPLAY_DEFAULTS: DashboardsDisplay = {
+  view: "grid",
+  sort: "updated",
+  group: "none",
+};
+
+/** Browser-local gallery display; the defaults are not stored. */
+export function normalizeDashboardsDisplay(value: unknown): DashboardsDisplay | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const display: DashboardsDisplay = {
+    view: normalizeChoice(DASHBOARDS_VIEWS, "grid")(value.view),
+    sort: normalizeChoice(DASHBOARDS_SORTS, "updated")(value.sort),
+    group: normalizeChoice(DASHBOARDS_GROUPS, "none")(value.group),
+  };
+  return display.view === "grid" && display.sort === "updated" && display.group === "none"
+    ? undefined
+    : display;
+}
+
+const SESSION_FILES_VIEWS = ["list", "grid"] as const;
+const SESSION_FILES_SORTS = ["default", "date", "name", "type"] as const;
+export type SessionFilesDisplay = {
+  view: (typeof SESSION_FILES_VIEWS)[number];
+  sort: (typeof SESSION_FILES_SORTS)[number];
+};
+export const SESSION_FILES_DISPLAY_DEFAULTS: SessionFilesDisplay = {
+  view: "list",
+  sort: "default",
+};
+
+/** Browser-local Files panel display for session files and attachments; the defaults are not stored. */
+export function normalizeSessionFilesDisplay(value: unknown): SessionFilesDisplay | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const display: SessionFilesDisplay = {
+    view: normalizeChoice(SESSION_FILES_VIEWS, SESSION_FILES_DISPLAY_DEFAULTS.view)(value.view),
+    sort: normalizeChoice(SESSION_FILES_SORTS, SESSION_FILES_DISPLAY_DEFAULTS.sort)(value.sort),
+  };
+  return display.view === SESSION_FILES_DISPLAY_DEFAULTS.view &&
+    display.sort === SESSION_FILES_DISPLAY_DEFAULTS.sort
+    ? undefined
+    : display;
+}
+
 const CHAT_WORKSPACE_DOCKS = ["right", "bottom"] as const;
 type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
 
@@ -50,6 +107,49 @@ export const normalizeChatWorkspaceDock = normalizeChoice(CHAT_WORKSPACE_DOCKS, 
 
 export function normalizeAccentColor(value: unknown): string | undefined {
   return normalizeUiAppearancePreference("ui.accent", value);
+}
+
+const CSS_WIDTH_KEYWORDS = new Set(["none", "min-content", "max-content"]);
+const CSS_WIDTH_FUNCTIONS = new Set(["calc", "clamp", "fit-content", "max", "min"]);
+const CSS_WIDTH_UNITS = new Set(["ch", "em", "rem", "vh", "vmax", "vmin", "vw", "px"]);
+const CSS_WIDTH_ALLOWED_CHARS = /^[0-9A-Za-z.%+\-*/(),\s]+$/;
+const CSS_WIDTH_IDENTIFIER_RE = /[A-Za-z][A-Za-z0-9-]*/g;
+const CSS_WIDTH_SIMPLE_RE = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|ch|vw|vh|vmin|vmax|%)$/i;
+const CSS_WIDTH_MAX_LENGTH = 96;
+
+function hasAllowedWidthIdentifiers(value: string): boolean {
+  for (const match of value.matchAll(CSS_WIDTH_IDENTIFIER_RE)) {
+    const identifier = match[0].toLowerCase();
+    if (
+      !CSS_WIDTH_FUNCTIONS.has(identifier) &&
+      !CSS_WIDTH_KEYWORDS.has(identifier) &&
+      !CSS_WIDTH_UNITS.has(identifier)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function normalizeChatMessageMaxWidth(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (normalized.length === 0 || normalized.length > CSS_WIDTH_MAX_LENGTH) {
+    return undefined;
+  }
+  if (CSS_WIDTH_KEYWORDS.has(normalized.toLowerCase()) || CSS_WIDTH_SIMPLE_RE.test(normalized)) {
+    return normalized;
+  }
+  if (
+    !CSS_WIDTH_ALLOWED_CHARS.test(normalized) ||
+    !CSS.supports("max-width", normalized) ||
+    !hasAllowedWidthIdentifiers(normalized)
+  ) {
+    return undefined;
+  }
+  return /^(?:calc|clamp|fit-content|max|min)\(.+\)$/i.test(normalized) ? normalized : undefined;
 }
 
 export function normalizeTextScale(value: unknown): TextScaleStop {
@@ -113,6 +213,8 @@ export type UiSettings = {
   chatSplitLayout?: ChatSplitLayout;
   chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
   boardSessionViews?: BoardSessionViews; // Per-device active dashboard tab and dock state
+  dashboardsDisplay?: DashboardsDisplay; // Dashboards gallery view, ordering and grouping
+  sessionFilesDisplay?: SessionFilesDisplay; // Files panel session files view and ordering
   sidebarSessionLayouts?: SidebarSessionLayouts; // Sidebar columns and widths per session
   sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state
@@ -120,7 +222,9 @@ export type UiSettings = {
   sidebarAgentsMode?: "chip" | "roster";
   sidebarPreTeamScope?: string | null; // null remembers All agents; undefined means unset.
   sidebarCollapsedAgentIds?: string[];
+  sidebarRecentlyCreatedAgentId?: string;
   sidebarEntries: string[]; // Ordered personal navigation references
+  personalSessionGroups?: PersonalSessionGroup[]; // Personal labels and references, not shared groups
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
   chatBubbleDisabledSessionKeys?: string[]; // Explicit per-session opt-outs, retained when the lab is off
@@ -136,6 +240,9 @@ export type UiSettings = {
   // opting out on one browser must not lower the bar on the operator's others,
   // so this stays out of the synced ui.prefs set in server-prefs-state.ts.
   sessionDeleteConfirm?: boolean;
+  chatModelChangeConfirm?: boolean;
+  // Browser-local, Gateway-scoped acknowledgement; changed notices become visible again.
+  dismissedReadOnlyConfigNotice?: string;
   // Device-local opt-in: route eligible external links into the Gateway browser panel.
   openLinksInControlUiBrowser?: boolean;
   // Browser-local opt-in; absence preserves native panels and plugin readers.

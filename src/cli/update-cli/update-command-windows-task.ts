@@ -1,7 +1,8 @@
 import {
   resumeScheduledTaskAutoStartAfterUpdate,
   suspendScheduledTaskAutoStartForUpdate,
-} from "../../daemon/schtasks.js";
+} from "../../daemon/schtasks-control.js";
+import { sendUpdateResultTelemetry } from "../../infra/update-result-telemetry.js";
 import { finishUpdateRun } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -20,6 +21,24 @@ export class UpdateCommandAbort extends Error {
 }
 
 export type WindowsTaskAutoStartRecovery = ReturnType<typeof createWindowsTaskAutoStartRecovery>;
+
+export async function abortWindowsTaskUpdateIfInterrupted(
+  recovery: WindowsTaskAutoStartRecovery,
+): Promise<void> {
+  if (!recovery.interrupted()) {
+    return;
+  }
+  await restoreAndCompleteWindowsTask(recovery);
+  throw new UpdateCommandAbort();
+}
+
+export async function restoreAndCompleteWindowsTask(recovery: WindowsTaskAutoStartRecovery) {
+  try {
+    await recovery.restore();
+  } finally {
+    await recovery.complete();
+  }
+}
 
 export function createWindowsTaskAutoStartRecovery(params: {
   serviceEnv: NodeJS.ProcessEnv;
@@ -155,7 +174,8 @@ export function createWindowsTaskAutoStartRecovery(params: {
                   ? "update-failed"
                   : "cancelled",
             },
-            { env: params.updateRun.env },
+            params.updateRun,
+            (payload) => void sendUpdateResultTelemetry(payload, { env: params.updateRun?.env }),
           );
         }
       } catch (cause) {

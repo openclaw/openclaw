@@ -42,82 +42,6 @@ export type WebPushAuthority = {
   sessions: Map<string, PreparedSessionMutationFacts>;
 };
 
-function resolveCurrentWebPushTarget(params: {
-  subscription: BoundWebPushSubscription;
-  device: PairedDevice | undefined;
-  cfg: OpenClawConfig;
-  requiredScopes: readonly string[];
-  visibilityScopes?: readonly string[];
-  profile: GatewayClient["preparedSessionProfile"];
-  preferences: Map<string, unknown>;
-}): CurrentWebPushTarget | null {
-  const { device, subscription, cfg } = params;
-  if (!device || !hasEffectivePairedDeviceRole(device, OPERATOR_ROLE)) {
-    return null;
-  }
-  const operatorToken = device.tokens?.[OPERATOR_ROLE];
-  const approvedScopes = device.approvedScopes ?? device.scopes;
-  if (
-    !operatorToken ||
-    operatorToken.revokedAtMs ||
-    !approvedScopes ||
-    !roleScopesAllow({
-      role: OPERATOR_ROLE,
-      requestedScopes: operatorToken.scopes,
-      allowedScopes: approvedScopes,
-    })
-  ) {
-    return null;
-  }
-
-  const storedProfileId = subscription.userProfileId;
-  const userProfileId = params.profile?.profileId ?? null;
-  if ((storedProfileId && !userProfileId) || (cfg.gateway?.roles && !userProfileId)) {
-    return null;
-  }
-  const rolePolicy = userProfileId
-    ? resolveOperatorRolePolicyForAssignment(
-        userProfileId,
-        params.profile?.role ?? null,
-        cfg,
-        params.profile?.githubLogin ?? null,
-      )
-    : undefined;
-  if (cfg.gateway?.roles && !rolePolicy) {
-    return null;
-  }
-  const scopesAllowed = (requestedScopes: readonly string[]) =>
-    roleScopesAllow({
-      role: OPERATOR_ROLE,
-      requestedScopes,
-      allowedScopes: operatorToken.scopes,
-    }) &&
-    (!rolePolicy ||
-      roleScopesAllow({
-        role: OPERATOR_ROLE,
-        requestedScopes,
-        allowedScopes: rolePolicy.scopes,
-      }));
-  if (!scopesAllowed(params.requiredScopes)) {
-    return null;
-  }
-  // Only targeted callers request extra visibility. Both current authorities must
-  // grant it; generic pushes retain their deliberately narrow required scopes.
-  const visibilityScopes = rolePolicy
-    ? (params.visibilityScopes ?? []).filter((scope) => scopesAllowed([scope]))
-    : [];
-  return {
-    subscription,
-    scopes: [...new Set([...params.requiredScopes, ...visibilityScopes])],
-    userProfileId,
-    profile: params.profile,
-    preferences: resolveEffectiveWebPushPreferences({
-      user: userProfileId ? params.preferences.get(userProfileId) : undefined,
-      device: subscription.devicePreferences,
-    }),
-  };
-}
-
 /** Resolve current recipients from the pairing owner's prepared authority facts. */
 export function listCurrentWebPushTargets(
   params: WebPushAuthority & {
@@ -127,18 +51,78 @@ export function listCurrentWebPushTargets(
 ): CurrentWebPushTarget[] {
   const pairedByDeviceId = new Map(params.pairedDevices.map((device) => [device.deviceId, device]));
   return params.subscriptions.flatMap((subscription) => {
-    const target = resolveCurrentWebPushTarget({
-      subscription,
-      device: pairedByDeviceId.get(subscription.deviceId),
-      cfg: params.cfg,
-      requiredScopes: params.requiredScopes,
-      visibilityScopes: params.visibilityScopes,
-      profile: subscription.userProfileId
-        ? params.profile?.readCurrentIdentity(subscription.userProfileId)
-        : undefined,
-      preferences: params.preferences,
-    });
-    return target ? [target] : [];
+    const device = pairedByDeviceId.get(subscription.deviceId);
+    const { cfg, requiredScopes, visibilityScopes: requestedVisibilityScopes } = params;
+    const profile = subscription.userProfileId
+      ? params.profile?.readCurrentIdentity(subscription.userProfileId)
+      : undefined;
+    const preferences = params.preferences;
+    if (!device || !hasEffectivePairedDeviceRole(device, OPERATOR_ROLE)) {
+      return [];
+    }
+    const operatorToken = device.tokens?.[OPERATOR_ROLE];
+    const approvedScopes = device.approvedScopes ?? device.scopes;
+    if (
+      !operatorToken ||
+      operatorToken.revokedAtMs ||
+      !approvedScopes ||
+      !roleScopesAllow({
+        role: OPERATOR_ROLE,
+        requestedScopes: operatorToken.scopes,
+        allowedScopes: approvedScopes,
+      })
+    ) {
+      return [];
+    }
+
+    const storedProfileId = subscription.userProfileId;
+    const userProfileId = profile?.profileId ?? null;
+    if ((storedProfileId && !userProfileId) || (cfg.gateway?.roles && !userProfileId)) {
+      return [];
+    }
+    const rolePolicy = userProfileId
+      ? resolveOperatorRolePolicyForAssignment(
+          userProfileId,
+          profile?.role ?? null,
+          cfg,
+          profile?.githubLogin ?? null,
+        )
+      : undefined;
+    if (cfg.gateway?.roles && !rolePolicy) {
+      return [];
+    }
+    const scopesAllowed = (requestedScopes: readonly string[]) =>
+      roleScopesAllow({
+        role: OPERATOR_ROLE,
+        requestedScopes,
+        allowedScopes: operatorToken.scopes,
+      }) &&
+      (!rolePolicy ||
+        roleScopesAllow({
+          role: OPERATOR_ROLE,
+          requestedScopes,
+          allowedScopes: rolePolicy.scopes,
+        }));
+    if (!scopesAllowed(requiredScopes)) {
+      return [];
+    }
+    // Only targeted callers request extra visibility. Both current authorities must
+    // grant it; generic pushes retain their deliberately narrow required scopes.
+    const visibilityScopes = rolePolicy
+      ? (requestedVisibilityScopes ?? []).filter((scope) => scopesAllowed([scope]))
+      : [];
+    return [
+      {
+        subscription,
+        scopes: [...new Set([...requiredScopes, ...visibilityScopes])],
+        userProfileId,
+        profile,
+        preferences: resolveEffectiveWebPushPreferences({
+          user: userProfileId ? preferences.get(userProfileId) : undefined,
+          device: subscription.devicePreferences,
+        }),
+      },
+    ];
   });
 }
 

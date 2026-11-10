@@ -6,6 +6,7 @@ import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveOpenClawCliInvocation, resolveOpenClawCliRespawn } from "./cli-invocation.mjs";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
 import {
   enableOpenClawCompileCache,
@@ -19,22 +20,26 @@ import {
   isNativeHookRelayInvocation,
   recoverNodeRuntime,
   runRespawnedChild,
+  watchCliRespawnParent,
 } from "./node-runtime-recovery.mjs";
 import {
   canRunOpenClawNodeDiagnostics,
   classifyUnsupportedNodeCommand,
+  emitNodeSecurityWarning,
   formatUnsupportedNodeDiagnosticWarning,
+  SUPPORTED_NODE_VERSION_RANGE,
 } from "./node-version.mjs";
+
+watchCliRespawnParent();
 
 const isSourceCheckoutLauncher = () =>
   existsSync(new URL("./.git", import.meta.url)) ||
   existsSync(new URL("./src/entry.ts", import.meta.url));
 
-const { detectCurrentSqliteCapabilities, nodeRuntimeFailure, nodeRuntimeNote } =
-  await import("./node-sqlite.mjs");
+const { detectCurrentSqliteCapabilities, nodeRuntimeFailure } = await import("./node-sqlite.mjs");
 
 const RECOMMENDED_NODE_MAJOR = 26;
-const SUPPORTED_NODE_RANGE = ">=24.16.0 <25, or >=26.1.0";
+const SUPPORTED_NODE_RANGE = SUPPORTED_NODE_VERSION_RANGE.replace(" || ", ", or ");
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
 const ensureSupportedRuntimeVersion = async () => {
@@ -60,11 +65,7 @@ const ensureSupportedRuntimeVersion = async () => {
   const probe = await detectCurrentSqliteCapabilities();
   const failure = nodeRuntimeFailure(process.versions.node, probe);
   if (!failure) {
-    const note = nodeRuntimeNote(process.versions.node, probe);
-    if (note) {
-      process.stderr.write(`${note}\n`);
-    }
-    return false;
+    return await recoverNodeRuntime();
   }
   const unsupportedCommand = classifyUnsupportedNodeCommand(process.argv);
   const canRunDiagnostics = canRunOpenClawNodeDiagnostics(process.versions.node, probe.available);
@@ -130,9 +131,10 @@ const respawnWithoutCompileCacheIfNeeded = () => {
   };
   delete env.NODE_COMPILE_CACHE;
   return runRespawnedChild(
-    process.execPath,
-    [...process.execArgv, resolveCompileCacheRespawnLauncher(), ...process.argv.slice(2)],
-    env,
+    resolveOpenClawCliRespawn({
+      entryPath: resolveCompileCacheRespawnLauncher(),
+      env,
+    }),
   );
 };
 
@@ -142,15 +144,18 @@ const respawnWithPackagedCompileCacheIfNeeded = (directory) => {
   if (!env) {
     return false;
   }
-  const args = [
-    ...process.execArgv,
-    resolveCompileCacheRespawnLauncher(),
-    ...process.argv.slice(2),
-  ];
+  const { command, args } = resolveOpenClawCliInvocation({
+    entryPath: resolveCompileCacheRespawnLauncher(),
+  });
   if (foregroundGateway && process.platform !== "win32" && process.execve) {
-    process.execve(process.execPath, [process.execPath, ...args], env);
+    process.execve(command, [command, ...args], env);
   }
-  return runRespawnedChild(process.execPath, args, env);
+  return runRespawnedChild(
+    resolveOpenClawCliRespawn({
+      entryPath: resolveCompileCacheRespawnLauncher(),
+      env,
+    }),
+  );
 };
 
 const getErrorMessage = (err) =>
@@ -372,7 +377,9 @@ const resolveLauncherConfigPaths = () => {
 };
 
 const shouldDeferRootHelpToRuntimeEntry = () => {
+  const profile = process.env.OPENCLAW_PROFILE?.trim();
   if (
+    (profile && profile.toLowerCase() !== "default") ||
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim() ||
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS?.trim()
   ) {
@@ -619,6 +626,9 @@ if (isBrowserNativeHostInvocation) {
     if (!supported) {
       process.exitCode = 1;
     } else {
+      if (!process.versions.bun) {
+        emitNodeSecurityWarning(process.versions.node);
+      }
       await installProcessWarningFilter();
       // Fixed package artifact, not a path selected by argv, config or plugin discovery.
       // Its async entry owns stdin and drains the single response before process exit.
@@ -674,6 +684,9 @@ async function runLauncher() {
       }
     }
     if (tryOutputLauncherVersion(process.argv)) {
+      if (!process.versions.bun && !currentNodeRuntimeFailure) {
+        emitNodeSecurityWarning(process.versions.node);
+      }
       if (currentNodeRuntimeFailure) {
         process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
       }
@@ -707,11 +720,16 @@ async function runLauncher() {
 
   if (!waitingForCompileCacheRespawn) {
     if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
+      if (!process.versions.bun && !currentNodeRuntimeFailure) {
+        emitNodeSecurityWarning(process.versions.node);
+      }
       if (currentNodeRuntimeFailure) {
         process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
       }
     } else if (!isHelpFastPathDisabled() && tryOutputPrecomputedCommandHelp()) {
-      // OK
+      if (!process.versions.bun && !currentNodeRuntimeFailure) {
+        emitNodeSecurityWarning(process.versions.node);
+      }
     } else {
       await installProcessWarningFilter();
       if (await tryImport("./dist/entry.js")) {

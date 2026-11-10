@@ -1,11 +1,12 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { NODE_WORKER_WORKSPACE_PREPARE_COMMAND } from "../../infra/node-commands.js";
 import type { WorkerProfile } from "../../plugins/types.js";
-import { EnvironmentRecipeSchema, type EnvironmentRecipe } from "./environment-recipe.js";
+import type { WorkerRetentionPolicy } from "../../plugins/worker-retention.types.js";
+import type { EnvironmentRecipe } from "./environment-recipe.js";
 import {
-  WorkerPreparationArtifactsSchema,
   WorkerPreparationTargetSchema,
+  type WorkerRuntimePreparationIdentity,
   type WorkerPreparationArtifacts,
   type WorkerProjectPreparationIdentity,
 } from "./preparation-identity.schema.js";
@@ -13,8 +14,15 @@ import type { WorkerProjectSnapshot } from "./workspace-git-base.js";
 
 export type WorkerProviderPreparedIntent = {
   providerId: string;
-  profileSnapshot: WorkerProfile;
-  preparationKey?: string;
+  retainedPolicy?: WorkerRetentionPolicy;
+  profileSnapshot: WorkerProfile &
+    (
+      | {
+          project?: WorkerProjectSnapshot & { preparation?: WorkerProjectPreparationIdentity };
+          runtimePreparation?: never;
+        }
+      | { project?: never; runtimePreparation: WorkerRuntimePreparationIdentity }
+    );
 };
 
 export function createWorkerPreparationIdentity(params: {
@@ -23,20 +31,23 @@ export function createWorkerPreparationIdentity(params: {
   profileId: string;
   profileSnapshot: WorkerProfile;
   project?: WorkerProjectSnapshot;
+  imageReserve?: true;
   target: WorkerProjectPreparationIdentity["target"];
   artifacts: WorkerPreparationArtifacts;
   setupRecipe?: string;
   runSetupScript?: boolean;
   recipe?: EnvironmentRecipe;
 }): WorkerProjectPreparationIdentity {
-  const artifacts = WorkerPreparationArtifactsSchema.parse(params.artifacts);
-  artifacts.enabledPluginIds = [...new Set(artifacts.enabledPluginIds)].toSorted();
-  artifacts.protocolFeatures = [...new Set(artifacts.protocolFeatures)].toSorted();
+  const artifacts = {
+    ...params.artifacts,
+    enabledPluginIds: [...new Set(params.artifacts.enabledPluginIds)].toSorted(),
+    protocolFeatures: [...new Set(params.artifacts.protocolFeatures)].toSorted(),
+  };
   // Skipping an executable recipe owns a separate cache; absent recipes do no setup.
   const facts = {
     contractVersion: 2 as const,
     ...(params.setupRecipe ? { setupRecipe: params.setupRecipe } : {}),
-    ...(params.recipe ? { recipe: EnvironmentRecipeSchema.parse(params.recipe) } : {}),
+    ...(params.recipe ? { recipe: params.recipe } : {}),
     ...(params.setupRecipe && params.runSetupScript === false
       ? { runSetupScript: false as const }
       : {}),
@@ -62,13 +73,14 @@ export function createWorkerPreparationIdentity(params: {
     // Providers own the disk fingerprint; unknown providers conservatively retain
     // their settings. Installation and execution mode belong to runtime readiness.
     profile: facts.target.profileKey ?? params.profileSnapshot.settings,
-    project: params.project ? { key: params.project.key } : { source: "empty" },
+    project: params.project
+      ? { key: params.project.key }
+      : { source: params.imageReserve ? "image" : "empty" },
     workspaceProtocol: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
   };
-  const digest = (value: unknown) =>
-    createHash("sha256").update(stableStringify(value)).digest("hex");
-  // Ready workers still bind exact runtime, profile and commit facts; reusable
-  // disks only need compatible setup and boot inputs.
+  const digest = (value: unknown) => sha256Hex(stableStringify(value));
+  // Ready workers bind exact runtime and profile facts. Their unbound checkout
+  // can advance through the same content preparation used by snapshot forks.
   return {
     key: digest({
       ...compatibility,
@@ -78,10 +90,6 @@ export function createWorkerPreparationIdentity(params: {
         ...profile,
         machineClass: facts.target.machineClass,
         executionMode: params.profileSnapshot.executionMode ?? "worker-turn",
-      },
-      project: {
-        ...compatibility.project,
-        ...(params.project ? { baseCommit: params.project.baseCommit } : {}),
       },
     }),
     cacheKey: digest(compatibility),

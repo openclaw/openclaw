@@ -1,25 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../packages/gateway-protocol/src/client-info.js";
-import type {
-  SkillsWorkshopChangeResult,
-  SkillsWorkshopChangesResult,
-  SkillsWorkshopListResult,
-  SkillsWorkshopReadResult,
-} from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import {
-  listAgentIds,
-  resolveConfiguredAgentId,
-  resolveAgentIdByWorkspacePath,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentIds } from "../agents/agent-scope.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
-import { resolveGatewayPort } from "../config/paths.js";
 import { CLAWHUB_TRUST_ERROR_CODE } from "../infra/clawhub-install-trust.js";
 import {
   CLAWHUB_SKILLS_SH_REF_PREFIX,
@@ -40,33 +23,23 @@ import {
   installSkillFromSource,
   isSkillSourceInstallSpec,
 } from "../skills/lifecycle/source-install.js";
-import {
-  archiveWorkshopSkill,
-  listWorkshopChanges,
-  restoreWorkshopSkill,
-  viewWorkshopSkill,
-} from "../skills/workshop/library.js";
-import { buildSkillsWorkshopListResult } from "../skills/workshop/workshop-list.js";
 import { CONFIG_DIR } from "../utils.js";
 import { resolveClawHubInstallConfirmation } from "./clawhub-install-confirmation.js";
 import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js";
-import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
 import { formatDocsHelp } from "./help-format.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
-import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
-import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
-import { buildSkillVerificationOutput } from "./skills-cli-verification-output.js";
 import {
-  formatSkillInfo,
-  formatSkillsCheck,
-  formatSkillsList,
-  formatSkillsWorkshopChanges,
-  formatSkillsWorkshopList,
-} from "./skills-cli.format.js";
+  callSkillsGateway,
+  normalizeExplicitAgentId,
+  resolveSkillsWorkspace,
+  type ResolvedSkillsWorkspace,
+} from "./skills-cli-gateway.js";
+import { buildSkillVerificationOutput } from "./skills-cli-verification-output.js";
+import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 import { registerSkillsLibraryCli } from "./skills-library-cli.js";
 import { isSkillsMachineOutput } from "./skills-output-mode.js";
 import { registerSkillsSearchCli } from "./skills-search-cli.js";
@@ -85,32 +58,7 @@ function isClawHubSkillBlockedCliFailure(result: { code?: string; warning?: stri
   );
 }
 
-type ResolveSkillsWorkspaceOptions = {
-  agentId?: string;
-  skipPluginValidation?: boolean;
-};
-
-type ResolvedSkillsWorkspace = Awaited<ReturnType<typeof resolveSkillsWorkspace>>;
-
-const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
 const GATEWAY_SKILLS_REFRESH_TIMEOUT_MS = 120_000;
-const GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS = 250;
-const GATEWAY_SKILLS_WORKSHOP_MUTATION_TIMEOUT_MS = 30_000;
-
-async function callSkillsGateway<T>(params: {
-  config: ResolvedSkillsWorkspace["config"];
-  method: string;
-  params: Record<string, unknown>;
-  timeoutMs?: number;
-}): Promise<T> {
-  const { callGateway } = await import("../gateway/call.js");
-  return await callGateway<T>({
-    timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
-    clientName: GATEWAY_CLIENT_NAMES.CLI,
-    mode: GATEWAY_CLIENT_MODES.CLI,
-    ...params,
-  });
-}
 
 async function refreshLocalGatewaySkills(
   target: Pick<ResolvedSkillsWorkspace, "config"> & { agentId?: string },
@@ -137,36 +85,8 @@ async function refreshLocalGatewaySkills(
   }
 }
 
-function normalizeExplicitAgentId(agentId?: string): string | undefined {
-  const normalizedAgentId = agentId?.trim();
-  if (agentId !== undefined && !normalizedAgentId) {
-    throw new Error("--agent must not be blank");
-  }
-  return normalizedAgentId;
-}
-
-async function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {
-  // Prefer explicit --agent, then infer from cwd, then fall back to configured default agent.
-  const config = await captureRuntimeConfigAsyncReader(
-    options?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
-  )();
-  const explicitAgentId = normalizeExplicitAgentId(options?.agentId);
-  const inferredAgentId = explicitAgentId
-    ? undefined
-    : resolveAgentIdByWorkspacePath(config, process.cwd());
-  const agentId = explicitAgentId
-    ? resolveConfiguredAgentId(config, explicitAgentId)
-    : (inferredAgentId ??
-      resolveDefaultAgentId(config, { surface: "the skills command", hint: "Pass --agent <id>." }));
-  return {
-    config,
-    agentId,
-    workspaceDir: resolveAgentWorkspaceDir(config, agentId),
-  };
-}
-
 async function loadSkillsStatusReport(agentId: string | undefined): Promise<SkillStatusReport> {
-  const resolved = await resolveSkillsWorkspace({ agentId, skipPluginValidation: true });
+  const resolved = await resolveSkillsWorkspace({ agentId, bestEffort: true });
   try {
     return await callSkillsGateway<SkillStatusReport>({
       config: resolved.config,
@@ -243,53 +163,7 @@ function readVerifiedSkillCardUrl(
   return { ok: true, url };
 }
 
-async function callSkillsWorkshop<T>(
-  resolved: ResolvedSkillsWorkspace,
-  method: "list" | "changes" | "read" | "archive" | "restore",
-  params: Record<string, unknown>,
-  loadLocal: () => Promise<T>,
-): Promise<T> {
-  const request = {
-    config: resolved.config,
-    method: `skills.workshop.${method}`,
-    params: { agentId: resolved.agentId, ...params },
-  };
-  if (method === "archive" || method === "restore") {
-    // A dispatched mutation may already have committed, so choose the route before sending
-    // and never replay it locally: run here only while no Gateway owns the state lock.
-    const { isImplicitLocalGatewayTarget } = await import("../gateway/call.js");
-    const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
-    const lock = (await isImplicitLocalGatewayTarget({ config: resolved.config }))
-      ? await acquireGatewayLock({
-          allowInTests: true,
-          port: resolveGatewayPort(resolved.config, process.env),
-          role: "sqlite-maintenance",
-          timeoutMs: GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS,
-        }).catch(() => undefined)
-      : undefined;
-    if (!lock) {
-      return await callSkillsGateway<T>({
-        ...request,
-        timeoutMs: GATEWAY_SKILLS_WORKSHOP_MUTATION_TIMEOUT_MS,
-      });
-    }
-    try {
-      return await lock.run(loadLocal);
-    } finally {
-      await lock.release();
-    }
-  }
-  try {
-    return await callSkillsGateway<T>(request);
-  } catch (error) {
-    if (!(await canFallbackToImplicitLocalGateway({ config: resolved.config, error }))) {
-      throw error;
-    }
-    return await loadLocal();
-  }
-}
-
-export function registerSkillsCli(program: Command) {
+export async function registerSkillsCli(program: Command, argv: readonly string[] = process.argv) {
   const skills = program
     .command("skills")
     .description("List and inspect available skills")
@@ -306,7 +180,9 @@ export function registerSkillsCli(program: Command) {
         resolveOptionFromCommand<string>(command, "agent"),
       );
   const runSkillsList = reportAction(formatSkillsList);
-  setCommandJsonMode(skills, "output", ({ argv, command }) => isSkillsMachineOutput(argv, command));
+  setCommandJsonMode(skills, "output", ({ argv: commandArgv, command }) =>
+    isSkillsMachineOutput(commandArgv, command),
+  );
   registerSkillsLibraryCli(skills);
 
   registerSkillsSearchCli(skills);
@@ -385,11 +261,6 @@ export function registerSkillsCli(program: Command) {
               }),
               logger: skillInstallLogger,
             });
-            if (!result.ok) {
-              defaultRuntime.error(result.error);
-              defaultRuntime.exit(1);
-              return;
-            }
             await refreshLocalGatewaySkills(target);
             defaultRuntime.log(
               `Installed ${result.slug} from ${result.source} -> ${result.targetDir}`,
@@ -631,165 +502,6 @@ export function registerSkillsCli(program: Command) {
       },
     );
 
-  const workshop = skills
-    .command("workshop")
-    .description("Inspect, archive, and restore learned Workshop skills")
-    .option("--agent <id>", "Target agent (defaults to cwd-inferred, then default agent)");
-
-  const runWorkshopAction = async <T>(
-    opts: { agent?: string; json?: boolean },
-    command: Command,
-    action: (resolved: ResolvedSkillsWorkspace) => Promise<T>,
-    format: (result: T) => string,
-  ): Promise<void> => {
-    await runCommandWithRuntime(defaultRuntime, async () => {
-      const result = await action(
-        await resolveSkillsWorkspace({
-          agentId: resolveOptionFromCommand<string>(command, "agent"),
-        }),
-      );
-      if (hasJsonOutput(opts)) {
-        defaultRuntime.writeJson(result);
-        return;
-      }
-      defaultRuntime.writeStdout(format(result));
-    });
-  };
-
-  workshop
-    .command("list")
-    .description("List learned skills and archived skills")
-    .option("--json", "Output as JSON", false)
-    .action((opts: { json?: boolean; agent?: string }, command: Command) =>
-      runWorkshopAction(
-        opts,
-        command,
-        (resolved) =>
-          callSkillsWorkshop<SkillsWorkshopListResult>(resolved, "list", {}, () =>
-            buildSkillsWorkshopListResult(resolved),
-          ),
-        formatSkillsWorkshopList,
-      ),
-    );
-
-  workshop
-    .command("changes")
-    .description("Show recent learned-skill changes")
-    .option("--limit <n>", "Max changes", (value) => parseStrictPositiveIntOption(value, "--limit"))
-    .option("--json", "Output as JSON", false)
-    .action((opts: { limit?: number; json?: boolean; agent?: string }, command: Command) =>
-      runWorkshopAction(
-        opts,
-        command,
-        (resolved) =>
-          callSkillsWorkshop<SkillsWorkshopChangesResult>(
-            resolved,
-            "changes",
-            opts.limit === undefined ? {} : { limit: opts.limit },
-            async () => ({
-              changes: await listWorkshopChanges(resolved.agentId, { limit: opts.limit }),
-            }),
-          ),
-        formatSkillsWorkshopChanges,
-      ),
-    );
-
-  workshop
-    .command("show")
-    .description("Print a learned skill file")
-    .argument("<name>", "Skill name")
-    .option("--file <path>", "Skill file to print (default SKILL.md)")
-    .option("--version <id>", "Print a saved version instead of the live skill")
-    .option("--json", "Output as JSON", false)
-    .action(
-      (
-        name: string,
-        opts: { file?: string; version?: string; json?: boolean; agent?: string },
-        command: Command,
-      ) =>
-        runWorkshopAction(
-          opts,
-          command,
-          (resolved) =>
-            callSkillsWorkshop<SkillsWorkshopReadResult>(
-              resolved,
-              "read",
-              {
-                name,
-                ...(opts.file ? { filePath: opts.file } : {}),
-                ...(opts.version ? { versionId: opts.version } : {}),
-              },
-              () =>
-                viewWorkshopSkill(resolved.config, resolved.agentId, name, opts.file, opts.version),
-            ),
-          (skill) => (skill.content.endsWith("\n") ? skill.content : `${skill.content}\n`),
-        ),
-    );
-
-  workshop
-    .command("archive")
-    .description("Archive a learned skill so its agent no longer sees it")
-    .argument("<name>", "Skill name")
-    .option("--reason <text>", "Why the skill is archived")
-    .option("--json", "Output as JSON", false)
-    .action(
-      (name: string, opts: { reason?: string; json?: boolean; agent?: string }, command: Command) =>
-        runWorkshopAction(
-          opts,
-          command,
-          (resolved) =>
-            callSkillsWorkshop<SkillsWorkshopChangeResult>(
-              resolved,
-              "archive",
-              { name, ...(opts.reason ? { reason: opts.reason } : {}) },
-              async () => ({
-                change: await archiveWorkshopSkill(
-                  { config: resolved.config, agentId: resolved.agentId, actor: "user" },
-                  { name, reason: opts.reason },
-                ),
-              }),
-            ),
-          ({ change }) =>
-            `Archived ${change.skillName}. Undo with: ${formatCliCommand(`openclaw skills workshop restore ${change.skillName}`)}\n`,
-        ),
-    );
-
-  workshop
-    .command("restore")
-    .description("Restore an archived skill or a saved version")
-    .argument("<name>", "Skill name")
-    .option("--version <id>", "Version to restore (default newest)")
-    .option("--json", "Output as JSON", false)
-    .action(
-      (
-        name: string,
-        opts: { version?: string; json?: boolean; agent?: string },
-        command: Command,
-      ) =>
-        runWorkshopAction(
-          opts,
-          command,
-          (resolved) =>
-            callSkillsWorkshop<SkillsWorkshopChangeResult>(
-              resolved,
-              "restore",
-              { name, ...(opts.version ? { versionId: opts.version } : {}) },
-              async () => ({
-                change: await restoreWorkshopSkill(
-                  { config: resolved.config, agentId: resolved.agentId, actor: "user" },
-                  { name, versionId: opts.version },
-                ),
-              }),
-            ),
-          ({ change }) => `Restored ${change.skillName}.\n`,
-        ),
-    );
-
-  for (const command of workshop.commands) {
-    command.option("--agent <id>", "Target agent (defaults to cwd-inferred, then default agent)");
-  }
-  applyParentDefaultHelpAction(workshop);
-
   skills
     .command("list")
     .description("List all available skills")
@@ -830,5 +542,37 @@ export function registerSkillsCli(program: Command) {
     .action(reportAction(formatSkillsCheck));
 
   skills.action(runSkillsList);
+  await registerSkillsPluginSubcommands(program, skills, argv);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+/**
+ * Plugins add subcommand groups under `skills` (manifest `activation.onCommands`). Built-ins
+ * and completion never load the plugin runtime; bare `skills --help` lists plugin groups.
+ */
+async function registerSkillsPluginSubcommands(
+  program: Command,
+  skills: Command,
+  argv: readonly string[],
+): Promise<void> {
+  const { resolveCliArgvInvocation } = await import("./argv-invocation.js");
+  const { commandPath } = resolveCliArgvInvocation([...argv]);
+  if (
+    commandPath[0] !== "skills" ||
+    skills.commands.some((command) => command.name() === commandPath[1])
+  ) {
+    return;
+  }
+  const { hasFlag } = await import("./argv.js");
+  const { withConsoleLogsRoutedToStderrForJson } = await import("./json-output-mode.js");
+  const { registerPluginCliCommandsFromValidatedConfig } = await import("../plugins/cli.js");
+  const parentHelp =
+    commandPath.length === 1 && (hasFlag([...argv], "--help") || hasFlag([...argv], "-h"));
+  await withConsoleLogsRoutedToStderrForJson(
+    argv,
+    async () =>
+      await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
+        mode: parentHelp ? "metadata" : "lazy",
+        primary: "skills",
+      }),
+  );
+}

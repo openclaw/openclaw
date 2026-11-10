@@ -45,7 +45,7 @@ grep, regex, or parser per file kind. The same `oc://` path can be validated,
 resolved, searched, dry-run, and written from the terminal, which keeps narrow
 automation reviewable and replayable. It preserves the rest of the file, so
 writing one leaf does not disturb its comments, line endings, or nearby
-formatting.
+formatting. YAML edits also retain an existing UTF-8 byte order mark (BOM).
 
 Use it when the thing you want has a logical address, but the file shape
 varies:
@@ -129,6 +129,11 @@ matches you can inspect before choosing one to write.
 | `validate <oc-path>`    | Parse-only; print the structural breakdown (file / section / item / field). |
 | `emit <file>`           | Round-trip a file through parse + emit (byte-fidelity diagnostic).          |
 
+When updating an existing YAML numeric field, `set` accepts finite decimal
+values, including scientific notation such as `1e-7` or `2.5E+3`. You can
+write the numeric `valueText` returned by `resolve` back to the same field.
+Malformed or non-finite numeric values are rejected without changing the file.
+
 ## Global flags
 
 | Flag            | Applies to                       | Purpose                                                                  |
@@ -153,10 +158,15 @@ oc://FILE/SECTION/ITEM/FIELD?session=SCOPE
 Slot rules: `field` requires `item`, and `item` requires `section`. Across
 all four slots:
 
-- **Quoted segments** — `"a/b.c"` survives `/` and `.` separators. Content is
-  byte-literal; `"` and `\` are not allowed inside quotes. The file slot is
+- **Quoted segments** — `"a/b.c"` survives `/` and `.` separators. Quoting makes
+  special tokens literal keys, including `"$first"`, `"*"`, `"+key"`, and `"[k=v]"`.
+  Inside quotes, use `\"` for a literal quote and `\\` for a literal backslash;
+  other backslash escapes are rejected. The file slot is
   also quote-aware: `oc://"skills/email-drafter"/Tools/$last` treats
   `skills/email-drafter` as a single file path.
+  Use `""` for an empty-string object key in JSONC, JSONL, or YAML, for example
+  `oc://sample.jsonc/""/value`. It is distinct from a missing segment and is not
+  an array index.
 - **Predicates** — `[k=v]`, `[k!=v]`, `[k<v]`, `[k<=v]`, `[k>v]`, `[k>=v]`.
   Numeric operators require both sides to coerce to finite numbers.
 - **Unions** — `{a,b,c}` matches any of the alternatives.
@@ -164,7 +174,7 @@ all four slots:
   recursive). `find` accepts these; `resolve` and `set` reject them as
   ambiguous.
 - **Positional** — `$first` / `$last` resolve to the first / last index or
-  declared key.
+  declared key. Quote them (`"$first"` / `"$last"`) to address literal keys with those names.
 - **Ordinal** — `#N` for the Nth match by document order.
 - **Insertion markers** — `+`, `+key`, `+nnn` for keyed / indexed insertion
   (use with `set`).
@@ -176,9 +186,13 @@ Reserved characters (`?`, `&`, `%`) outside quoted, predicate, or union
 segments are rejected. Control characters (U+0000-U+001F, U+007F) are
 rejected anywhere, including the `session` query value.
 
-`formatOcPath(parseOcPath(path)) === path` is guaranteed for normalized paths.
+`formatOcPath(parseOcPath(path)) === path` is guaranteed for canonical paths.
 Other query parameters are ignored except for the first non-empty
 `session=` value.
+
+File names, literal keys, and session values preserve their Unicode code points;
+canonically equivalent spellings remain distinct. Markdown section and item
+addresses still use their existing slug rules.
 
 Hard limits: a path caps at 4096 bytes, at most 4 slots (file/section/item/
 field), at most 64 dotted sub-segments per slot, and at most 256 nested
@@ -196,42 +210,77 @@ the `OC_JSONC_INPUT_TOO_LARGE` diagnostic; other file kinds use
 | JSONL         | `.jsonl`, `.ndjson`         | Top-level line addresses (`L1`, `L2`, `$first`, `$last`), then JSONC-style descent inside the line. |
 | YAML/.lobster | `.yaml`, `.yml`, `.lobster` | Map keys and sequence indexes; comments and flow style are handled by the YAML document API.        |
 
+Markdown bullet fields and frontmatter keys are terminal: `name.absent` cannot
+match a `name` field or key.
+For concrete frontmatter writes, `name/absent` is likewise unresolved.
+Insert keys directly into `[frontmatter]` with `+key`; insertion below a key,
+such as `name/+added`, is not writable. Rejected writes leave the file unchanged.
+Recursive wildcards may consume zero segments, so `name.**` and `**.name` can
+still match it. A quoted `"**"` addresses a literal field key.
+Union alternatives keep their selector semantics: `{missing,*}` and
+`{missing,[name=value]}` can select a matching bullet field.
+For JSONL, `**` can span both the physical line and nested value keys:
+`oc://session.jsonl/**/event` finds nested `event` values inside each line.
+
 `resolve` returns a structured match: `root`, `node`, `leaf`, or
 `insertion-point`, with a 1-based line number. Leaf values are surfaced as
 text plus a `leafType` so plugin authors can render previews without
 depending on the per-kind AST shape.
+
+Markdown frontmatter string reads decode YAML quoting and inline comments:
+`key: value # note` resolves to `value`. A quoted `#` or adjacent hash such as
+`a#b` remains part of the string, and non-string scalar spelling such as
+`00123` is preserved. Reads leave the source bytes unchanged.
+Block-style lists and maps resolve to YAML text, and multi-line string scalars
+retain YAML folding and chomping. Cross-key aliases remain alias text.
 
 ## Mutation contract
 
 `set` writes one concrete target:
 
 - Markdown frontmatter values and `- key: value` item fields are string
-  leaves. Values are literal, including `$1`, `$&`, and `$$`. Markdown
-  insertions append sections, frontmatter keys, or section items and render a
-  standard Markdown format for the changed file. Section bodies are not
-  writable as a whole through `set`.
+  leaves. Item field replacements must contain non-whitespace text; blank
+  replacements are rejected without writing. Frontmatter values may be empty.
+  Values are literal, including `$1`, `$&`, and `$$`. Markdown
+  insertions append sections, frontmatter keys, or section items. New frontmatter
+  keys must start with an ASCII letter or underscore and contain only ASCII
+  letters, digits, underscores, or hyphens; unsupported keys are rejected before
+  writing. Edits replace
+  only the selected source range: body edits preserve the original frontmatter,
+  and frontmatter edits preserve the body, including comments, quoting, blank
+  lines, CRLF, and a missing final newline. Frontmatter uses `---` delimiters;
+  `+++` is ordinary body text. Section bodies are not writable as a whole
+  through `set`.
 - JSONC leaf writes coerce the string value to the existing leaf type
-  (`string`, finite `number`, `true`/`false`, or `null`). Use `--value-json`
+  (`string`, finite `number`, `true`/`false`, or `null`). Blank numeric replacements
+  are rejected; use `0` to write zero. Use `--value-json`
   when a JSONC/JSON/JSONL leaf replacement should parse `<value>` as JSON and
   may change shape, such as replacing a string secret-ref shorthand with an
   object. JSONC object and array insertions parse `<value>` as JSON and use
   the `jsonc-parser` edit path for ordinary leaf writes, preserving comments
   and nearby formatting.
 - JSONL leaf writes coerce like JSONC inside a line. Whole-line replacement
-  and append parse `<value>` as JSON. Rendered JSONL preserves the file's
-  dominant LF/CRLF line-ending convention (majority vote across the file's
-  newlines, so a mostly-CRLF file stays CRLF even with a few stray LFs).
+  and append parse `<value>` as JSON. Edits replace only the selected value's
+  source text, preserving untouched numbers, comments, whitespace, and each
+  existing line ending, including a missing final newline. Appends retain all
+  existing bytes and the final-newline convention; an unterminated file uses
+  its dominant LF/CRLF convention to separate the new record.
 - YAML leaf writes coerce to the existing scalar type (`string`, finite
   `number`, `true`/`false`, or `null`). YAML insertions use the bundled
   `yaml` package's document API for map/sequence updates. Malformed YAML
   documents with parser errors are refused before mutation with
   `parse-error`.
+  Leaf replacement through object-valued mapping keys, such as YAML 1.1
+  timestamp keys, is refused with `unresolved` and leaves the file unchanged.
+
+`--value-json` is refused for Markdown and YAML without changing the file.
+Pass a plain `<value>` without that flag to use their existing string/scalar
+write behavior.
 
 Use `--dry-run` before user-visible writes when the exact bytes matter. JSONC
 and YAML edits patch the existing document (via `jsonc-parser` or the `yaml`
-document API), so untouched bytes usually survive; markdown rebuilds the file
-from its parsed structure on any edit, which can normalize incidental
-formatting outside the changed leaf. Add `--diff` when you want the preview
+document API); Markdown and JSONL edits preserve untouched source ranges.
+Add `--diff` when you want the preview
 as a focused before/after patch instead of the full rendered file.
 The patch records line-ending changes and missing final newlines, so applying
 it produces the same bytes as the write.
@@ -296,6 +345,9 @@ openclaw path set 'oc://workflow.yaml/steps/$last/id' 'classify-renamed' --dry-r
 
 # Address markdown frontmatter
 openclaw path resolve 'oc://AGENTS.md/[frontmatter]/name'
+
+# Find several markdown frontmatter keys
+openclaw path find 'oc://AGENTS.md/[frontmatter]/{name,description}'
 
 # Insert markdown frontmatter
 openclaw path set 'oc://AGENTS.md/[frontmatter]/+description' 'Agent instructions' --dry-run
@@ -375,6 +427,12 @@ JSONC edits go through `jsonc-parser`, so comments and whitespace survive a
 `set`. Run with `--dry-run` first to inspect the bytes before committing.
 `.json` files use the same adapter and edit path as `.jsonc`.
 
+For named object keys, JSON, JSONC, and JSONL reads, searches, and replacements
+use the last duplicate occurrence, matching runtime parsing. Replacements preserve
+earlier shadowed copies. Insertion beneath a duplicated parent is refused:
+consolidate the duplicate parents into one, retaining the last effective value,
+then retry.
+
 ### JSONL
 
 ```text
@@ -427,6 +485,12 @@ parser, so ordinary parse/emit round-trips preserve comments and authoring
 shape while resolved paths use the same map-key / sequence-index model as
 JSONC. The same adapter handles `.yaml`, `.yml`, and `.lobster` files.
 
+`resolve` and `find` follow aliases to their anchored values, including
+predicate fields. Reported lines refer to the anchor. `set` can replace an alias
+slot without changing its anchor, but writes through an alias remain refused.
+Recursive searches stop at cyclic alias edges while retaining distinct logical
+paths. YAML merge keys (`<<`) are not expanded.
+
 ## Subcommand reference
 
 ### `resolve <oc-path>`
@@ -445,6 +509,7 @@ openclaw path resolve 'oc://gateway.jsonc/server/port' --json
 Enumerate every match for a wildcard / predicate / union pattern. Exits `0`
 on at least one match, `1` on zero. File-slot wildcards are rejected with
 `OC_PATH_FILE_WILDCARD_UNSUPPORTED` and exit `2` — pass a concrete file path.
+Quote a literal `?` in a filename, for example `oc://"report?.jsonc"/items/*`.
 
 ```bash
 openclaw path find 'oc://AGENTS.md/tools/**/risk'
@@ -512,6 +577,10 @@ openclaw path emit ./gateway.jsonc --json
 `openclaw path` is TTY-aware: human-readable output on a terminal, JSON when
 stdout is piped or redirected. `--json` and `--human` override the
 auto-detection.
+
+Path/file parse errors and refused patterns in JSON mode write one error object to stdout, with `ok: false`
+and an `error` containing `type: "cli_error"`, the domain `code`, and `message`.
+Human-mode diagnostics remain on stderr. Refusals still return a nonzero exit code.
 
 ## Notes
 

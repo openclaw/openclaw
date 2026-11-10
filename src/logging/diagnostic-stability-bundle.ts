@@ -7,6 +7,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import {
   DIAGNOSTIC_MEMORY_PRESSURE_METRICS,
+  isMemoryPressureReason,
   type DiagnosticMemoryPressureFields,
 } from "../infra/diagnostic-process-types.js";
 import {
@@ -14,14 +15,21 @@ import {
   formatErrorMessage,
   isMissingPathError,
 } from "../infra/errors.js";
-import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
+import { setFatalErrorHook } from "../infra/fatal-error-hooks.js";
+import { resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { readMemoryUsage } from "./diagnostic-memory-bundle.js";
 import {
   assignOptionalFields,
+  readCodeString,
   readObject,
+  readOptionalCodeString,
   readOptionalNumber,
   readOptionalPositiveInteger,
   readRequiredNumber,
+  readRequiredString,
+  readTimestampMs,
+  readTimestampString,
+  SAFE_REASON_CODE,
 } from "./diagnostic-stability-readers.js";
 import {
   getDiagnosticStabilitySnapshot,
@@ -31,11 +39,10 @@ import {
 import { redactSensitiveText } from "./redact.js";
 import { formatDiagnosticFilenameTimestamp } from "./timestamps.js";
 
-export const DIAGNOSTIC_STABILITY_BUNDLE_VERSION = 1;
+const DIAGNOSTIC_STABILITY_BUNDLE_VERSION = 1;
 const DIAGNOSTIC_STABILITY_BUNDLE_RETENTION = 20;
 export const MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES = 5 * 1024 * 1024;
 
-const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const BUNDLE_PREFIX = "openclaw-stability-";
 const BUNDLE_SUFFIX = ".json";
 const REDACTED_HOSTNAME = "<redacted-hostname>";
@@ -105,6 +112,9 @@ export type DiagnosticStabilityBundle = {
     arch: string;
     node: string;
     uptimeMs: number;
+    openclawVersion?: string;
+    buildId?: string;
+    commit?: string;
   };
   host: {
     hostname: string;
@@ -131,21 +141,12 @@ type DiagnosticStabilityBundleLocationOptions = {
   stateDir?: string;
 };
 
-type DiagnosticStabilityBundleFile = {
-  path: string;
-  mtimeMs: number;
-};
-
 export type ReadDiagnosticStabilityBundleResult =
   | { status: "found"; path: string; mtimeMs: number; bundle: DiagnosticStabilityBundle }
   | { status: "missing"; dir: string }
   | { status: "failed"; path?: string; error: unknown };
 
-type DiagnosticStabilityBundleFailureWriteOutcome =
-  | { status: "written"; message: string; path: string }
-  | { status: "failed"; message: string; error: unknown };
-
-let fatalHookUnsubscribe: (() => void) | null = null;
+let fatalHookInstalled = false;
 
 function normalizeReason(reason: string): string {
   return SAFE_REASON_CODE.test(reason) ? reason : "unknown";
@@ -231,43 +232,24 @@ function isBundleFile(name: string): boolean {
   return name.startsWith(BUNDLE_PREFIX) && name.endsWith(BUNDLE_SUFFIX);
 }
 
-function readTimestampMs(value: unknown, label: string): number {
-  const timestamp = readRequiredNumber(value, label);
-  if (Number.isNaN(new Date(timestamp).getTime())) {
-    throw new Error(`Invalid stability bundle: ${label} must be a valid timestamp`);
+function readProcessBuildIdentity(source: Record<string, unknown>) {
+  const identity: Pick<
+    DiagnosticStabilityBundle["process"],
+    "openclawVersion" | "buildId" | "commit"
+  > = {};
+  // Preserve SemVer metadata and generated build IDs without importing paths,
+  // terminal controls, or unbounded strings from externally supplied bundles.
+  for (const [field, pattern] of [
+    ["openclawVersion", /^[A-Za-z0-9.+_-]{1,256}$/u],
+    ["buildId", /^[A-Za-z0-9._-]{1,96}$/u],
+    ["commit", /^[0-9a-f]{7,40}$/iu],
+  ] as const) {
+    const value = source[field];
+    if (typeof value === "string" && pattern.test(value)) {
+      identity[field] = value;
+    }
   }
-  return timestamp;
-}
-
-function readRequiredString(value: unknown, label: string): string {
-  if (typeof value !== "string") {
-    throw new Error(`Invalid stability bundle: ${label} must be a string`);
-  }
-  return value;
-}
-
-function readTimestampString(value: unknown, label: string): string {
-  const timestamp = readRequiredString(value, label);
-  if (Number.isNaN(new Date(timestamp).getTime())) {
-    throw new Error(`Invalid stability bundle: ${label} must be a valid timestamp`);
-  }
-  return timestamp;
-}
-
-function readCodeString(value: unknown, label: string): string {
-  const code = readRequiredString(value, label);
-  if (!SAFE_REASON_CODE.test(code)) {
-    throw new Error(`Invalid stability bundle: ${label} must be a safe diagnostic code`);
-  }
-  return code;
-}
-
-function readOptionalCodeString(value: unknown, label: string): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const code = readRequiredString(value, label);
-  return SAFE_REASON_CODE.test(code) ? code : undefined;
+  return identity;
 }
 
 function readHeapStatistics(value: unknown): DiagnosticHeapStatisticsSummary | undefined {
@@ -680,6 +662,7 @@ function parseDiagnosticStabilityBundle(value: unknown): DiagnosticStabilityBund
       arch: readCodeString(processInfo.arch, "process.arch"),
       node: readCodeString(processInfo.node, "process.node"),
       uptimeMs: readRequiredNumber(processInfo.uptimeMs, "process.uptimeMs"),
+      ...readProcessBuildIdentity(processInfo),
     },
     host: {
       hostname: REDACTED_HOSTNAME,
@@ -714,21 +697,13 @@ function sanitizeSessionEvidenceFileName(fileName: string): string {
   return "<session>";
 }
 
-function isMemoryPressureReason(
-  reason: string,
-): reason is DiagnosticMemoryPressureFields["reason"] {
-  return (
-    reason === "rss_threshold" ||
-    reason === "heap_threshold" ||
-    reason === "worker_heap_threshold" ||
-    reason === "rss_growth"
-  );
-}
-
 function listDiagnosticStabilityBundleFilesSync(
   dir: string,
   statFailure: "throw" | "use-zero",
-): DiagnosticStabilityBundleFile[] {
+): {
+  path: string;
+  mtimeMs: number;
+}[] {
   try {
     return fs
       .readdirSync(dir, { withFileTypes: true })
@@ -819,7 +794,7 @@ export function writeDiagnosticStabilityBundleForFailureSync(
   reason: string,
   error?: unknown,
   options: WriteDiagnosticStabilityBundleForFailureOptions = {},
-): DiagnosticStabilityBundleFailureWriteOutcome {
+): { status: "written"; message: string; path: string } | { status: "failed"; message: string } {
   try {
     const now = options.now ?? new Date();
     const snapshot = getDiagnosticStabilitySnapshot({
@@ -846,6 +821,13 @@ export function writeDiagnosticStabilityBundleForFailureSync(
         arch: process.arch,
         node: process.versions.node,
         uptimeMs: Math.round(process.uptime() * 1000),
+        // These values were captured when the runtime loaded, before an updater
+        // could replace the installation that this failing process still runs.
+        ...readProcessBuildIdentity({
+          openclawVersion: VERSION,
+          buildId: resolveRuntimeServiceBuildId(),
+          commit: resolveRuntimeServiceCommit(),
+        }),
       },
       host: {
         hostname: REDACTED_HOSTNAME,
@@ -872,7 +854,6 @@ export function writeDiagnosticStabilityBundleForFailureSync(
   } catch (writeError) {
     return {
       status: "failed",
-      error: writeError,
       message: `failed to write stability bundle: ${String(writeError)}`,
     };
   }
@@ -881,18 +862,18 @@ export function writeDiagnosticStabilityBundleForFailureSync(
 export function installDiagnosticStabilityFatalHook(
   options: WriteDiagnosticStabilityBundleForFailureOptions = {},
 ): void {
-  if (fatalHookUnsubscribe) {
+  if (fatalHookInstalled) {
     return;
   }
-  fatalHookUnsubscribe = registerFatalErrorHook(({ reason, error }) => {
-    const result = writeDiagnosticStabilityBundleForFailureSync(reason, error, options);
-    return result.message;
+  fatalHookInstalled = true;
+  setFatalErrorHook(({ reason, error }) => {
+    return writeDiagnosticStabilityBundleForFailureSync(reason, error, options).message;
   });
 }
 
 export function uninstallDiagnosticStabilityFatalHook(): void {
-  fatalHookUnsubscribe?.();
-  fatalHookUnsubscribe = null;
+  setFatalErrorHook(undefined);
+  fatalHookInstalled = false;
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

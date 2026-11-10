@@ -63,6 +63,11 @@ enum CLIInstallPolicy {
 }
 
 struct ManagedCLIUpdateSummary: Decodable, Equatable {
+    enum CoreUpdate: String, Decodable {
+        case completed
+        case pending
+    }
+
     struct Version: Decodable, Equatable {
         let version: String?
     }
@@ -74,6 +79,7 @@ struct ManagedCLIUpdateSummary: Decodable, Equatable {
     }
 
     let status: String
+    let coreUpdate: CoreUpdate?
     let reason: String?
     let before: Version?
     let after: Version?
@@ -633,7 +639,10 @@ enum CLIInstaller {
         let summary = self.parseManagedUpdateSummary(response.stdout)
 
         let reportedStatus = summary?.status
-        guard response.success, reportedStatus != "error", reportedStatus != "warning" else {
+        let acceptableStatus = repair
+            ? reportedStatus == "ok" || reportedStatus == "warning"
+            : reportedStatus != "error" && reportedStatus != "warning"
+        guard response.success, acceptableStatus, !repair || summary?.coreUpdate == .completed else {
             let reason = summary?.reason?.trimmingCharacters(in: .whitespacesAndNewlines)
             // Another updater can win between the version probe and CLI dispatch.
             // The CLI's downgrade refusal preserves that newer installation; verify it
@@ -658,8 +667,8 @@ enum CLIInstaller {
                 String(localized: "Gateway update failed.")
             }
             let details = [
+                failedStep.map { "\($0.name): \($0.stderrTail?.nonEmpty ?? "exit \($0.exitCode ?? -1)")" },
                 reason,
-                failedStep.map { "\($0.name): \($0.stderrTail ?? "exit \($0.exitCode ?? -1)")" },
                 response.stderr,
                 response.errorMessage,
                 response.stdout,

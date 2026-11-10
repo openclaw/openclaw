@@ -66,6 +66,10 @@ export function createSessionActorMemoryHistoryNavigation(window: SessionActorMe
       ? [row]
       : [],
   );
+  // Reset-window reads keep every retained role, so tool calls arrive with their results.
+  const retainedMessages = candidates.flatMap(({ row, event }) =>
+    retained.has(event) && row.messagePosition !== null ? [row] : [],
+  );
   const afterReset = reset ? active.slice(reset.activePosition + 1) : active;
   const visibleMessages = [
     ...keptMessages,
@@ -86,7 +90,12 @@ export function createSessionActorMemoryHistoryNavigation(window: SessionActorMe
     visibleMessages,
     visibleHistory,
     latestResetRawSeq: reset?.rawSeq ?? null,
+    latestResetId:
+      reset && isRecord(reset.event) && typeof reset.event.id === "string"
+        ? reset.event.id
+        : undefined,
     keptMessages,
+    retainedMessages,
     boundaryActivePosition: reset?.activePosition,
   };
 }

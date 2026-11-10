@@ -25,6 +25,7 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import { readBrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { ToolCard, ToolCardOutcome, ToolOutputMetadata } from "./chat-types.ts";
+import { getMessageDerivations } from "./message-derivations.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
 import { readLiveDiffStat } from "./tool-call-diff.ts";
 import { readPreparedActivity } from "./tool-call-grouping.ts";
@@ -136,6 +137,11 @@ export function resolveToolCardOutcome(
   if (card.toolOutput?.outcome === "unknown") {
     return isToolCardError(card) ? "failed" : "unknown";
   }
+  if (card.activity?.unpairedCall) {
+    return runActive === true && card.live === true && card.completed !== true
+      ? "running"
+      : "unrecorded";
+  }
   if (card.activity) {
     const { status, phase } = card.activity;
     if (status === "failed" || status === "blocked") {
@@ -159,7 +165,18 @@ export function resolveToolCardOutcome(
   if (card.completed === true || (card.live !== true && card.outputText !== undefined)) {
     return "succeeded";
   }
-  return "unknown";
+  return "unrecorded";
+}
+
+/** Preserve view incompleteness when adapting card outcomes to shared activity. */
+export function projectToolCardActivityOutcome(
+  outcome: ToolCardOutcome,
+): Pick<NonNullable<ToolCard["activity"]>, "status" | "unpairedCall"> {
+  return outcome === "unrecorded"
+    ? { unpairedCall: true }
+    : {
+        status: outcome === "succeeded" ? "completed" : outcome === "unknown" ? undefined : outcome,
+      };
 }
 
 export function extractToolPreview(outputText: string | undefined): CanvasToolPreview | undefined {
@@ -231,11 +248,7 @@ function serializeToolInput(args: unknown): string | undefined {
   if (typeof args === "string") {
     return args;
   }
-  try {
-    return JSON.stringify(args, null, 2);
-  } catch {
-    return typeof args === "bigint" ? String(args) : Object.prototype.toString.call(args);
-  }
+  return JSON.stringify(args, null, 2);
 }
 
 /** Rendering only: extraction and result retrieval retain the original card. */
@@ -325,6 +338,8 @@ export function isToolCallContentBlock(item: {
 
 function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
+  const catalogMetadata = asNullableRecord(m["__openclaw"]);
+  const catalogSource = catalogMetadata?.catalogSource === true;
   const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
   const isStandaloneToolMessage =
     isToolResultMessage(message) ||
@@ -348,17 +363,21 @@ function extractToolCards(message: unknown): ToolCard[] {
     const text = extractToolText(item);
     const details = item.details ?? m.details;
     const metadata = asNullableRecord(item["__openclaw"]);
-    const isError = readToolErrorFlag(item) ?? messageIsError;
+    // Recorded catalog prose cannot establish an execution outcome.
+    const isError =
+      readToolErrorFlag(item) ?? messageIsError ?? (catalogSource ? false : undefined);
     const exitCode = readToolExitCode(
       item,
       details,
-      text ? safeParseJsonRecord(text.trim()) : undefined,
+      !catalogSource && text ? safeParseJsonRecord(text.trim()) : undefined,
       standalone ? undefined : m,
     );
     return {
       outputText: text,
-      resultMessageId:
-        !standalone && metadata && Object.hasOwn(metadata, "id")
+      ...(catalogSource && metadata?.catalogTruncated === true ? { catalogTruncated: true } : {}),
+      resultMessageId: catalogSource
+        ? undefined
+        : !standalone && metadata && Object.hasOwn(metadata, "id")
           ? readNonBlankString(metadata.id)
           : transcriptMessageId,
       outputTruncated:
@@ -370,7 +389,7 @@ function extractToolCards(message: unknown): ToolCard[] {
       ...(details !== undefined ? { details } : {}),
       ...(isError !== undefined ? { isError } : {}),
       ...(exitCode !== undefined ? { exitCode } : {}),
-      ...extractToolPresentation(details, text, browserToolName),
+      ...(catalogSource ? {} : extractToolPresentation(details, text, browserToolName)),
     };
   };
 
@@ -480,6 +499,9 @@ function extractToolCards(message: unknown): ToolCard[] {
   );
   let revision: number | undefined;
   for (const [index, card] of cards.entries()) {
+    if (catalogSource && catalogMetadata?.catalogTruncated === true) {
+      card.catalogTruncated = true;
+    }
     const activity = card.callId ? activityByCall.get(card.callId) : undefined;
     if (activity) {
       card.activity = activity;
@@ -493,18 +515,17 @@ function extractToolCards(message: unknown): ToolCard[] {
   return cards;
 }
 
-const toolCardsByMessage = new WeakMap<object, ToolCard[]>();
-
 export function extractToolCardsCached(message: unknown): ToolCard[] {
   if (!message || typeof message !== "object") {
     return extractToolCards(message);
   }
-  const cached = toolCardsByMessage.get(message);
+  const facts = getMessageDerivations(message);
+  const cached = facts.toolCards;
   if (cached) {
     return cached;
   }
   const cards = extractToolCards(message);
-  toolCardsByMessage.set(message, cards);
+  facts.toolCards = cards;
   return cards;
 }
 

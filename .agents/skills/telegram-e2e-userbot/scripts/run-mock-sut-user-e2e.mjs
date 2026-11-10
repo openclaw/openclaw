@@ -122,6 +122,7 @@ function parseArgs(argv) {
     chat: "",
     dm: false,
     createForum: false,
+    createDmTopic: false,
     // Messages posted as the QA user before the driven turn, so history-scoped
     // scenarios (historyLimit, context visibility) have prior turns to scope.
     preSend: [],
@@ -162,7 +163,9 @@ function parseArgs(argv) {
     } else if (arg === "--chat") args.chat = argv[++i] || "";
     else if (arg === "--dm") args.dm = true;
     else if (arg === "--create-forum") args.createForum = true;
-    else if (arg === "--pre-send") args.preSend.push(argv[++i] || "");
+    else if (arg === "--create-dm-topic") {
+      args.createDmTopic = true;
+    } else if (arg === "--pre-send") args.preSend.push(argv[++i] || "");
     else if (arg === "--scenario") args.scenarioPath = argv[++i] || "";
     else if (arg === "--source-gateway") args.sourceGateway = true;
     else if (arg === "--gateway-ready-timeout-ms") {
@@ -220,6 +223,14 @@ function parseArgs(argv) {
       throw new Error("--create-forum sends every scenario message to its created topic.");
     }
   }
+  if (args.createDmTopic) {
+    if (!args.scenario || !args.dm || args.chat || args.createForum) {
+      throw new Error("--create-dm-topic requires --dm and a --scenario.");
+    }
+    if (args.scenario.actions.some((action) => action.forumTopicId !== undefined)) {
+      throw new Error("--create-dm-topic sends every scenario message to its created topic.");
+    }
+  }
   if (!args.expectPassed) args.expect.push("OPENCLAW_E2E_OK");
   return args;
 }
@@ -260,6 +271,8 @@ Chat selection:
   --chat TARGET       TDLib id, username, or supported Telegram link
   --create-forum      create a run-owned forum and topic for a --scenario, send its
                       messages to that topic, and delete the forum during cleanup
+  --create-dm-topic   enable the leased bot's Threaded Mode, create a DM topic for a
+                      --dm --scenario, then delete it and disable Threaded Mode at cleanup
   Scenario send actions accept forumTopicId for a specific forum topic.
   Scenario forwardBurst actions require --dm and forward bot-authored text and photo in one TDLib call.
 
@@ -998,8 +1011,11 @@ async function checkScenarioCredential(credential, { signal, args }) {
     signal,
     dm: args?.dm,
     chat: args?.chat,
-    requireForum: args?.scenario?.actions.some((action) => action.forumTopicId !== undefined),
+    requireForum:
+      !args?.createDmTopic &&
+      args?.scenario?.actions.some((action) => action.forumTopicId !== undefined),
     createForum: args?.createForum,
+    createDmTopic: args?.createDmTopic,
   });
 }
 
@@ -1020,7 +1036,8 @@ export async function runTelegramTestScenario({
         scope.observeLease(credential);
         await checkCredential(credential, { signal: scope.signal, args });
         scope.assertActive();
-        const forumTopicId = credential.testForum?.setup.forumTopicId;
+        const forumTopicId =
+          credential.testForum?.setup.forumTopicId ?? credential.testDmTopic?.setup.forumTopicId;
         if (forumTopicId) {
           for (const action of args.scenario.actions) {
             if (action.type === "send") action.forumTopicId = forumTopicId;
@@ -1046,10 +1063,15 @@ export async function runTelegramTestScenario({
       fs.mkdirSync(evidenceDir, { recursive: true });
       writePrivateJson(path.join(evidenceDir, "test-group.json"), credential.testGroup);
     }
-    if (args?.output && credential?.testForum) {
-      // Release has run: the evidence holds both the created ids and the deletion result.
-      const summaryPath = resolve(args.output);
-      writePrivateJson(summaryPath, { ...readJson(summaryPath), testForum: credential.testForum });
+    for (const fixtureKey of ["testForum", "testDmTopic"]) {
+      if (args?.output && credential?.[fixtureKey]) {
+        // Release has run: preserve both creation and restoration evidence.
+        const summaryPath = resolve(args.output);
+        writePrivateJson(summaryPath, {
+          ...readJson(summaryPath),
+          [fixtureKey]: credential[fixtureKey],
+        });
+      }
     }
   }
 }

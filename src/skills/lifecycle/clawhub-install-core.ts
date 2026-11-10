@@ -27,7 +27,6 @@ import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
 import type { PackageDirInstallTransaction } from "../../infra/install-package-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
-import { markClawPackageIndependentlyOwned } from "../../state/claw-package-adoption.js";
 import {
   CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
   installExtractedSkillRoot,
@@ -68,9 +67,10 @@ export type ClawHubInstallParams = ClawHubSkillRef & {
   logger?: Logger;
   config?: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  /** True when a Claw lifecycle caller already owns package coordination. */
-  clawManaged?: boolean;
+  /** True when a Template lifecycle caller already owns package coordination. */
+  templateManaged?: boolean;
   beforePersistentApply?: () => void;
+  beforePersistentEffect?: () => void | Promise<void>;
   assertOwned?: () => void;
   expectedClawHubState?: ClawHubSkillFileState | null;
   deferCommit?: boolean;
@@ -248,7 +248,7 @@ export async function checkClawHubSkillTrust(
     baseUrl: params.baseUrl,
     logger: params.logger,
     mode: params.force ? "update" : "install",
-    confirmOnUpdate: params.clawManaged === true,
+    confirmOnUpdate: params.templateManaged === true,
     confirmInstall: params.confirmInstall,
   });
   return result.ok
@@ -271,9 +271,12 @@ export async function performClawHubSkillInstall(
         : normalizeExpectedArtifactIntegrity(params.expectedIntegrity);
     if (
       params.deferCommit &&
-      (!params.clawManaged || !params.force || !params.expectedClawHubState || !params.assertOwned)
+      (!params.templateManaged ||
+        !params.force ||
+        !params.expectedClawHubState ||
+        !params.assertOwned)
     ) {
-      throw new Error("Deferred skill replacement requires a guarded Claw-managed update.");
+      throw new Error("Deferred skill replacement requires a guarded Template-managed update.");
     }
     const files = resolveWorkspaceClawHubSkills(params.workspaceDir);
     const registry = resolveClawHubBaseUrl(params.baseUrl);
@@ -429,6 +432,7 @@ export async function performClawHubSkillInstall(
               : rootDir,
             mode: installParams.force ? "update" : "install",
             beforePersistentApply: installParams.beforePersistentApply,
+            beforePersistentEffect: installParams.beforePersistentEffect,
             assertOwned: installParams.assertOwned,
             deferCommit: installParams.deferCommit,
             logger: installParams.logger,
@@ -475,6 +479,7 @@ export async function performClawHubSkillInstall(
                 ...(result.replacementBlocked !== undefined
                   ? { replacementBlocked: result.replacementBlocked }
                   : {}),
+                ...(result.recoveryIncomplete ? { recoveryIncomplete: true } : {}),
               } satisfies InstallClawHubSkillResult);
         },
       });
@@ -543,6 +548,7 @@ export async function performClawHubSkillInstall(
           installedVersion: version,
         };
         installedLockEntry = clawHubSkillLockEntry(origin, verification);
+        await params.beforePersistentEffect?.();
         await (files?.recordClawHubSkillInstall ?? recordClawHubSkillInstall)({
           workspaceDir: params.workspaceDir,
           skillDir: install.targetDir,
@@ -565,15 +571,6 @@ export async function performClawHubSkillInstall(
         };
         if (!directoryTransaction) {
           await refreshDiscovery();
-        }
-        if (!params.clawManaged) {
-          await markClawPackageIndependentlyOwned({
-            kind: "skill",
-            source: "clawhub",
-            ref: formatClawHubSkillRef(params),
-            version,
-            workspace: params.workspaceDir,
-          });
         }
         await reportClawHubSkillInstallTelemetry({
           baseUrl: params.baseUrl,

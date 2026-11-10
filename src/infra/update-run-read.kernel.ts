@@ -43,6 +43,13 @@ export function decodeRun(row: UpdateRuns) {
   if (record.origin.admission) {
     record.admission = record.origin.admission;
   }
+  if (record.verification.recovery?.serviceRestartSafe === false) {
+    const dataAtRisk = record.steps.find((step) => step.step === "finalize:data-at-risk")
+      ?.failureFacts?.[0]?.code;
+    if (dataAtRisk) {
+      record.verification.recovery.dataAtRisk = dataAtRisk;
+    }
+  }
   return record;
 }
 
@@ -140,7 +147,12 @@ export function canReconcileUpdateRunCandidates(
 ): boolean {
   return (
     candidates.some(
-      ({ rule }) => rule && (!input.legacyOnly || rule === LEGACY_UPDATE_RUN_EXPIRED_REASON),
+      ({ rule }) =>
+        rule &&
+        (!input.legacyOnly || rule === LEGACY_UPDATE_RUN_EXPIRED_REASON) &&
+        (!input.statusOnly ||
+          rule === LEGACY_UPDATE_RUN_EXPIRED_REASON ||
+          rule === "handoff-terminated"),
     ) &&
     !(input.explicit && candidates.some(({ record, rule }) => record.status === "running" && !rule))
   );

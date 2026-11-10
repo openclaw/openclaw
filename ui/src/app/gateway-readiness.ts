@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./context.ts";
 
 export function readSuspensionPhase(
@@ -34,7 +35,7 @@ export function waitForGatewayClient(
   return new Promise((resolve, reject) => {
     const cleanup = () => {
       unsubscribe();
-      signal.removeEventListener("abort", onAbort);
+      stopAbort();
     };
     const onAbort = () => {
       cleanup();
@@ -47,6 +48,6 @@ export function waitForGatewayClient(
         resolve(snapshot.client);
       }
     });
-    signal.addEventListener("abort", onAbort, { once: true });
+    const stopAbort = listen(signal, "abort", onAbort, { once: true });
   });
 }

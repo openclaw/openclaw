@@ -8,13 +8,13 @@ import { maskApiKey } from "../security/secret-mask.js";
 import { shortenHomePath } from "../utils.js";
 import { formatRemainingShort } from "./auth-health.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
-import { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
+import { formatAuthProfileOAuthLabel } from "./auth-profiles/display.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
   resolveAuthProfileOrder,
 } from "./auth-profiles/order.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { isProfileInCooldown } from "./auth-profiles/usage-state.js";
+import { resolveProfileUnusableUntilForDisplay } from "./auth-profiles/usage-state.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 import { resolveUsableCustomProviderApiKey } from "./model-auth-provider-config.js";
 import { findNormalizedProviderValue } from "./model-selection-normalize.js";
@@ -79,13 +79,9 @@ export function formatModelCatalogAuthLabel(
     if (lastGood === profileId) {
       flags.push("lastGood");
     }
-    if (isProfileInCooldown(store, profileId)) {
-      const until = store.usageStats?.[profileId]?.cooldownUntil;
-      flags.push(
-        typeof until === "number" && Number.isFinite(until) && until > now
-          ? `cooldown ${formatRemainingShort(until - now, { underMinuteLabel: "soon" })}`
-          : "cooldown",
-      );
+    const until = resolveProfileUnusableUntilForDisplay(store, profileId);
+    if (until && until > now) {
+      flags.push(`cooldown ${formatRemainingShort(until - now, { underMinuteLabel: "soon" })}`);
     }
     const profile = store.profiles[profileId];
     const expires =
@@ -124,14 +120,7 @@ function captureProfileLabel(
   if (profile.type === "token") {
     return `${profileId}=token:${resolveStoredCredentialLabel({ value: profile.token, refValue: profile.tokenRef })}`;
   }
-  const display = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
-  const suffix =
-    display === profileId
-      ? ""
-      : display.startsWith(profileId)
-        ? display.slice(profileId.length).trim()
-        : `(${display})`;
-  return `${profileId}=OAuth${suffix ? ` ${suffix}` : ""}`;
+  return formatAuthProfileOAuthLabel({ cfg, store, profileId });
 }
 
 function captureFallbackLabel(

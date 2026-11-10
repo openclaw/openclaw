@@ -1,12 +1,10 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { t } from "../../i18n/index.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
-import {
-  normalizeRoleForGrouping,
-  resolveMessageRole,
-  resolveMessageSenderLabel,
-} from "../../lib/chat/message-normalizer.ts";
+import { normalizeRoleForGrouping, resolveMessageRole } from "../../lib/chat/message-normalizer.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
+import { pluginInlineViewItems } from "../../lib/chat/plugin-inline-views.ts";
+import { resolveMessageSenderLabel } from "../../lib/chat/sender-label.ts";
 import { downloadTextFile } from "../../lib/download.ts";
 
 export type ChatExportResult = "downloaded" | "empty";
@@ -23,8 +21,17 @@ export function exportChatMarkdown(messages: unknown[], assistantName: string): 
 export function buildChatMarkdown(messages: unknown[], assistantName: string): string | null {
   const history = visibleChatHistoryMessages(messages);
   const lines: string[] = [];
-  for (const msg of history) {
-    const content = extractTextCached(msg) ?? "";
+  const seen = new Set<string>();
+  for (const [index, msg] of history.entries()) {
+    const text = extractTextCached(msg) ?? "";
+    const views = pluginInlineViewItems(
+      { kind: "message", key: "export:" + index, message: msg },
+      seen,
+    );
+    const summaries = views
+      .map((view) => extractTextCached(view.message) ?? "")
+      .filter((summary) => summary !== text.trim());
+    const content = summaries.length ? [text, ...summaries].filter(Boolean).join("\n\n") : text;
     if (!content.trim()) {
       continue;
     }

@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import { formatStateLeaseLoss } from "../shared/state-lease-loss.js";
 import type {
   UpdateDestinationFailureSchema,
   UpdateFailureFactSchema,
@@ -42,5 +43,5 @@ export function formatUpdateFailureFact(fact: UpdateFailureFact): string {
   const message = fact.destination
     ? formatUpdateDestinationFailure(fact.destination)
     : fact.message;
-  return `Failing check ${fact.check} (${fact.code})${fact.location ? ` at ${fact.location}` : ""}${fact.pluginId ? `; plugin ${fact.pluginId}` : ""}${fact.affectedKey ? `; key ${fact.affectedKey}` : ""}${message ? `: ${message}` : ""}`;
+  return `Failing check ${fact.check} (${fact.code})${fact.location ? ` at ${fact.location}` : ""}${fact.pluginId ? `; plugin ${fact.pluginId}` : ""}${fact.affectedKey ? `; key ${fact.affectedKey}` : ""}${message ? `: ${message}` : ""}${fact.leaseLoss ? `; ${formatStateLeaseLoss(fact.leaseLoss)}` : ""}`;
 }

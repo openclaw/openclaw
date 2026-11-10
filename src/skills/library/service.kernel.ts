@@ -37,12 +37,20 @@ export function resolveSkillLibraryPresentationInDatabase(
   db: EngineConnection,
   authority: SkillLibraryAuthority,
   actor = resolveSkillLibraryActor(db, authority),
+) {
+  return projectSkillLibraryPresentation(
+    actor,
+    tableExists(db, "user_profiles") && selectHasMultipleSessionSharingIdentities(db),
+  );
+}
+
+export function projectSkillLibraryPresentation(
+  actor: ReturnType<typeof resolveSkillLibraryActor>,
+  multipleProfiles: boolean,
 ): Pick<
   SkillsLibraryListResult,
   "profileId" | "multipleProfiles" | "defaultTarget" | "canManageWorkspace"
 > {
-  const multipleProfiles =
-    tableExists(db, "user_profiles") && selectHasMultipleSessionSharingIdentities(db);
   return {
     profileId: actor.profileId ?? null,
     multipleProfiles,
@@ -214,6 +222,7 @@ export function mutateSkillLibraryInDatabase(db: EngineConnection, input: SkillL
   const current = requireSkillLibraryEntry(db, params.skillId, authority, true);
   const actor = requireSkillLibraryProfile(db, authority);
   assertSkillLibraryRevision(current, params.expectedRevision);
+  const updated = { ...current, updatedAt: Date.now() };
   const changes: {
     shared?: number;
     owner_profile_id?: null;
@@ -230,7 +239,8 @@ export function mutateSkillLibraryInDatabase(db: EngineConnection, input: SkillL
           "Team-owned skills cannot become personal through unshare.",
         );
       }
-      changes.shared = Number(params.action === "share");
+      updated.shared = params.action === "share";
+      changes.shared = Number(updated.shared);
       break;
     case "transfer":
       if (!resolveSkillLibraryActor(db, authority).admin) {
@@ -242,32 +252,42 @@ export function mutateSkillLibraryInDatabase(db: EngineConnection, input: SkillL
       assertSkillLibraryNameAvailable(db, null, current.slug, current.skillId);
       changes.owner_profile_id = null;
       changes.shared = 1;
+      updated.ownerProfileId = null;
+      updated.ownerLabel = "Team";
+      updated.shared = true;
+      updated.canEdit = authority.namespace !== "personal";
       break;
     case "enable":
     case "disable":
-      changes.enabled = Number(params.action === "enable");
+      updated.enabled = params.action === "enable";
+      changes.enabled = Number(updated.enabled);
       break;
     case "remove":
       changes.removed = 1;
+      updated.removed = true;
       break;
-    case "rollback":
-      if (
-        !params.revision ||
-        !selectSkillLibraryRevisionMetadata(db, current.skillId, params.revision)
-      ) {
+    case "rollback": {
+      const revision = params.revision;
+      const metadata = revision
+        ? selectSkillLibraryRevisionMetadata(db, current.skillId, revision)
+        : undefined;
+      if (!revision || !metadata) {
         throw new SkillLibraryError(
           "NOT_FOUND",
           "Choose a published revision from this skill's history.",
         );
       }
-      changes.current_revision = params.revision;
+      changes.current_revision = revision;
+      updated.revision = revision;
+      updated.description = metadata.description;
       break;
+    }
   }
   executeSqliteQuerySync(
     db,
     skillLibraryDb(db)
       .updateTable("skill_library_entries")
-      .set({ ...changes, updated_at: Date.now() })
+      .set({ ...changes, updated_at: updated.updatedAt })
       .where("skill_id", "=", current.skillId),
   );
   recordSkillLibraryEvent(
@@ -277,8 +297,5 @@ export function mutateSkillLibraryInDatabase(db: EngineConnection, input: SkillL
     params.action,
     actor,
   );
-  return skillLibraryReceipt(
-    requireSkillLibraryEntry(db, current.skillId, authority),
-    params.action === "remove" ? "removed" : "published",
-  );
+  return skillLibraryReceipt(updated, params.action === "remove" ? "removed" : "published");
 }

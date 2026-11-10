@@ -19,9 +19,13 @@ const baseTime = 1_900_000_000_000;
 type MeasuredPane = HTMLElement & {
   state: Pick<
     ChatPageHost,
-    "sessionKey" | "chatMessages" | "chatAvatarStatus" | "modelAuthStatusResult"
+    | "sessionKey"
+    | "chatMessages"
+    | "chatAvatarStatus"
+    | "modelAuthStatusResult"
+    | "chatBranchesSessionKey"
   >;
-  presencePayload?: PresencePayload;
+  presence: { readonly snapshot: PresencePayload | undefined };
   render: () => unknown;
   updateComplete: Promise<boolean>;
 };
@@ -34,11 +38,9 @@ async function observePaneRenders(page: Page) {
         const pane = document.querySelector<MeasuredPane>(
           "openclaw-chat-pane.chat-pane-cache__pane--active",
         );
-        const sidebar = document.querySelector<
-          HTMLElement & {
-            updateComplete: Promise<boolean>;
-          }
-        >("openclaw-app-sidebar");
+        const sidebar = document.querySelector<HTMLElement & Pick<MeasuredPane, "updateComplete">>(
+          "openclaw-app-sidebar",
+        );
         const sessions = appContext.sessions;
         if (!pane || !sidebar || !sessions) {
           throw new Error("The mounted conversation and shared roster must be ready");
@@ -62,7 +64,7 @@ async function observePaneRenders(page: Page) {
                 ?.label,
               selectedKey: pane.state.sessionKey,
               messages: pane.state.chatMessages.length,
-              panePresenceTs: pane.presencePayload?.presence[0]?.ts,
+              panePresenceTs: pane.presence.snapshot?.presence[0]?.ts,
             };
           },
           restore() {
@@ -85,7 +87,7 @@ suite.define(() => {
       let selected = createControlUiSessionRow(selectedKey, "Foreground conversation", baseTime);
       let foreign = createControlUiSessionRow(foreignKey, "Background conversation", baseTime);
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["agent.identity.get", "models.authStatus"],
+        deferredMethods: ["agent.identity.get", "models.authStatus", "sessions.branches.list"],
         sessionKey: selectedKey,
         sessions: [selected, foreign],
         historyMessages: [
@@ -105,64 +107,63 @@ suite.define(() => {
       await page.getByText("The retained conversation is ready.", { exact: true }).waitFor();
       const backgroundRow = page.locator(`[data-session-key="${foreignKey}"]`);
       await backgroundRow.waitFor({ state: "visible" });
-      await gateway.waitForRequest("agent.identity.get");
-      expect(
-        await page.evaluate(
-          () =>
-            document.querySelector<MeasuredPane>("openclaw-chat-pane.chat-pane-cache__pane--active")
-              ?.state.chatAvatarStatus,
-        ),
-      ).toBeNull();
-      await gateway.resolveDeferred("agent.identity.get");
-      // Transcript paint precedes the idle avatar read. Its accepted status owns
-      // completion; virtual time alone cannot settle an outstanding identity request.
-      await page.waitForFunction(
-        () =>
-          document.querySelector<MeasuredPane>("openclaw-chat-pane.chat-pane-cache__pane--active")
-            ?.state.chatAvatarStatus === "none",
+      const mountedPane = await page.evaluateHandle(() =>
+        document.querySelector<MeasuredPane>("openclaw-chat-pane.chat-pane-cache__pane--active"),
       );
+      // Await both accepted results; virtual time cannot settle their outstanding requests.
+      await gateway.waitForRequest("agent.identity.get");
+      expect(await mountedPane.evaluate((pane) => pane?.state.chatAvatarStatus)).toBeNull();
+      await gateway.resolveDeferred("agent.identity.get");
+      await page.waitForFunction((pane) => pane?.state.chatAvatarStatus === "none", mountedPane);
       await gateway.waitForRequest("models.authStatus", { match: { agentId: "main" } });
-      expect(
-        await page.evaluate(
-          () =>
-            document.querySelector<MeasuredPane>("openclaw-chat-pane.chat-pane-cache__pane--active")
-              ?.state.modelAuthStatusResult,
-        ),
-      ).toBeNull();
+      expect(await mountedPane.evaluate((pane) => pane?.state.modelAuthStatusResult)).toBeNull();
       await gateway.resolveDeferred("models.authStatus");
-      // Identity completion does not join auth startup. Observe the accepted pane
-      // result before attributing its final render to unrelated session events.
       await page.waitForFunction(
-        () =>
-          document.querySelector<MeasuredPane>("openclaw-chat-pane.chat-pane-cache__pane--active")
-            ?.state.modelAuthStatusResult?.providers.length === 0,
+        (pane) => pane?.state.modelAuthStatusResult?.providers.length === 0,
+        mountedPane,
       );
       await pauseVirtualClock(page);
       // Advance delayed swarm scheduling and queued render frames before measuring events.
       await page.clock.runFor(1_000);
+      await gateway.waitForRequest("sessions.branches.list");
+      expect(
+        await page.evaluate(
+          () =>
+            document.querySelector<MeasuredPane>("openclaw-chat-pane.chat-pane-cache__pane--active")
+              ?.state.chatBranchesSessionKey,
+        ),
+      ).toBeNull();
+      await gateway.resolveDeferred("sessions.branches.list");
+      // Branch discovery starts after transcript paint and publishes pane state.
+      // Join its accepted result before attributing renders to foreign events.
+      await page.waitForFunction(
+        (key) =>
+          document.querySelector<MeasuredPane>("openclaw-chat-pane.chat-pane-cache__pane--active")
+            ?.state.chatBranchesSessionKey === key,
+        selectedKey,
+      );
       const probe = await observePaneRenders(page);
       const counts = { foreign: [] as number[], presence: 0, selected: 0, viewer: 0 };
       try {
         const initial = await probe.evaluate((owner) => owner.read());
         expect(initial).toMatchObject({ selectedKey, messages: 2 });
-        for (let revision = 1; revision <= 3; revision++) {
-          const label = `Background revision ${revision}`;
-          foreign = Object.assign({}, foreign, {
-            label,
-            displayName: label,
-            updatedAt: baseTime + revision,
-          });
+        const publishTitle = async (session: typeof selected) => {
           await gateway.setSessionsListResponse({ sessions: [selected, foreign] });
           await gateway.emitGatewayEvent("sessions.changed", {
-            key: foreignKey,
-            sessionKey: foreignKey,
+            key: session.key,
+            sessionKey: session.key,
             agentId: "main",
             reason: "chat.title",
-            session: foreign,
+            session,
             ancestorSessions: [],
           });
-          // Advance the real frame/debounce owners using virtual time, without wall-clock sleeps.
+          // Advance the real frame/debounce owners without wall-clock sleeps.
           await page.clock.runFor(1_000);
+        };
+        for (let revision = 1; revision <= 3; revision++) {
+          const label = `Background revision ${revision}`;
+          foreign = createControlUiSessionRow(foreignKey, label, baseTime + revision);
+          await publishTitle(foreign);
           const observation = await probe.evaluate((owner) => owner.read());
           counts.foreign.push(observation.renders);
           expect(observation).toMatchObject({ sharedLabel: label, selectedKey, messages: 2 });
@@ -174,7 +175,7 @@ suite.define(() => {
         expect.soft(counts.foreign.slice(1)).toEqual([0, 0]);
 
         const heartbeat = await probe.evaluate((owner) => ({
-          presence: owner.pane.presencePayload!.presence.map((entry) =>
+          presence: owner.pane.presence.snapshot!.presence.map((entry) =>
             Object.assign({}, entry, {
               ts: 1_900_000_000_010,
               lastInputSeconds: (entry.lastInputSeconds ?? 0) + 10,
@@ -190,22 +191,8 @@ suite.define(() => {
         });
         expect.soft(counts.presence).toBe(0);
 
-        selected = {
-          ...selected,
-          label: "Foreground renamed",
-          displayName: "Foreground renamed",
-          updatedAt: baseTime + 11,
-        };
-        await gateway.setSessionsListResponse({ sessions: [selected, foreign] });
-        await gateway.emitGatewayEvent("sessions.changed", {
-          key: selectedKey,
-          sessionKey: selectedKey,
-          agentId: "main",
-          reason: "chat.title",
-          session: selected,
-          ancestorSessions: [],
-        });
-        await page.clock.runFor(1_000);
+        selected = createControlUiSessionRow(selectedKey, "Foreground renamed", baseTime + 11);
+        await publishTitle(selected);
         counts.selected = (await probe.evaluate((owner) => owner.read())).renders;
         expect(counts.selected).toBeGreaterThan(0);
         expect(await page.locator(".chat-pane__session-title-text").textContent()).toBe(
@@ -222,22 +209,18 @@ suite.define(() => {
         await page.clock.runFor(1_000);
         counts.viewer = (await probe.evaluate((owner) => owner.read())).renders;
         expect(counts.viewer).toBeGreaterThan(0);
-        expect(
-          await page.locator('.chat-pane__presence [data-viewer-id="collaborator"]').count(),
-        ).toBe(1);
-        await expect
-          .poll(() =>
-            page
-              .locator(
-                `openclaw-app-sidebar [data-session-key="${selectedKey}"] [data-viewer-id="collaborator"]`,
-              )
-              .count(),
-          )
-          .toBe(1);
+        const collaborator = '[data-viewer-id="collaborator"]';
+        const paneViewer = page.locator(`.chat-pane__presence ${collaborator}`);
+        const sidebarViewer = page.locator(
+          `openclaw-app-sidebar [data-session-key="${selectedKey}"] ${collaborator}`,
+        );
+        expect(await paneViewer.count()).toBe(1);
+        await expect.poll(() => sidebarViewer.count()).toBe(1);
         console.info(JSON.stringify({ proof: "idle-conversation-event-renders", ...counts }));
       } finally {
         await probe.evaluate((owner) => owner.restore());
         await probe.dispose();
+        await mountedPane.dispose();
       }
     });
   });

@@ -3,35 +3,45 @@ import {
   bindIngressLifecycleToReplyOptions,
   createChannelIngressError,
   createChannelIngressMonitor,
+  sendDurableMessageBatch,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
+import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { resolveXAccount, type ResolvedXAccount } from "./accounts.js";
 import { openXAllowlist, XAllowlistChangedError } from "./allowlist.js";
 import { parseXPostEnvelope, type XPostEnvelope } from "./api.js";
 import { getXApi, getXTokenState } from "./client.js";
 import { runXEvents, waitForXBudgetReset, type XCursorState, type XEventStatus } from "./events.js";
-import {
-  formatXSenderLine,
-  resolveXGuestSettings,
-  resolveXGuestToolPolicy,
-} from "./guest-policy.js";
+import { formatXSenderLine, resolveXGuestSettings } from "./guest-policy.js";
 import { openXGuestUsage, XGuestUsageUnavailableError } from "./guest-usage.js";
 import { getXGuestStatus, resolveXGuestContainmentError } from "./guests.js";
 import { createXPublicationPreparation, resolveXIngress, xMentionFacts } from "./ingress.js";
+import { readXReplyOutcome, type XReplyOutcome } from "./outcome.js";
 import { verifyPublicXThread } from "./public-thread.js";
 import { resolveXRecipient } from "./recipient.js";
-import type { XVisibleWorkSession } from "./reply.js";
 import { getXRuntime } from "./runtime.js";
+import type { XVisibleWorkSession } from "./send.js";
 import { sendXDelivery } from "./send.js";
 import { XBudgetExceededError } from "./spend.js";
 import { assembleXThread } from "./thread.js";
-import { openXWorkOrigins } from "./work-origin.js";
+import { buildXWorkSessionContext, openXWorkOrigins } from "./work-origin.js";
 
 const InvalidXEvent = createChannelIngressError("InvalidXEvent");
+const SUMMARY_MAX_CHARS = 500;
+type XWithheldReason = "failure" | "error" | "unclassified";
+const REASON_LABELS: Record<XWithheldReason, string> = {
+  failure: "reported failure",
+  error: "error reply",
+  unclassified: "no success tag",
+};
 type IngressPayload = { version: number; rawEvent: string };
 type Stats = XEventStatus & {
   droppedMentions: number;
+  lastConnectedAt: number | null;
+  lastDisconnect: { at: number } | null;
   lastDroppedAuthor?: string;
   guestModeBlockedReason?: string;
   guests?: Awaited<ReturnType<typeof getXGuestStatus>>;
@@ -43,13 +53,24 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
   const readConfig = createRuntimeConfigReader(ctx.cfg);
   const api = await getXApi(account.accountId, ctx.cfg);
   const log = core.logging.getChildLogger({ channel: "x", accountId: account.accountId });
-  const stats: Stats = { droppedMentions: 0 };
+  const stats: Stats = { droppedMentions: 0, lastConnectedAt: null, lastDisconnect: null };
   const guestUsage = openXGuestUsage(core);
   const publish = (next: Partial<Stats> = {}) => {
     if (next.message && next.message !== stats.message && !next.message.startsWith("X API ")) {
       log.info(next.message);
     }
+    if (next.streamConnected === true) {
+      stats.lastConnectedAt = Date.now();
+      stats.lastDisconnect = null;
+    } else if (next.streamConnected === false && stats.streamConnected === true) {
+      stats.lastDisconnect = { at: Date.now() };
+    }
     Object.assign(stats, next);
+    if (stats.eventMode === "poll") {
+      stats.lastDisconnect = null;
+    }
+    const connected =
+      !stats.terminalDisconnect && (stats.eventMode === "poll" || stats.streamConnected);
     ctx.setStatus({
       ...ctx.getStatus(),
       ...stats,
@@ -64,7 +85,12 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
         : {}),
       accountId: account.accountId,
       mode: stats.eventMode,
-      connected: stats.eventMode === "poll" || stats.streamConnected,
+      connected,
+      lifecycle: stats.terminalDisconnect
+        ? "blocked"
+        : stats.lastDisconnect
+          ? "recovering"
+          : "ready",
       tokenStatus: getXTokenState(account.accountId),
       lastInboundAt: stats.lastEventAt,
     });
@@ -322,15 +348,21 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
       if (guest && !(await admitGuest(authorization, cfg))) {
         return;
       }
+      const workSessionContext = guest
+        ? ""
+        : await buildXWorkSessionContext({
+            runtime: core,
+            cfg,
+            accountId: account.accountId,
+            conversationId: post.conversation_id,
+            requesterSessionKey: sessionKey,
+          });
       const author = thread.users.find((user) => user.id === post.author_id);
       const handle = author?.username ?? post.author_id;
       const ctxPayload = core.channel.inbound.buildContext({
         channelIngress,
         access: {
           mentions: { ...xMentionFacts, requireMention: true, explicitlyMentionedBot: true },
-          ...(guest
-            ? { toolPolicy: resolveXGuestToolPolicy(resolveXAccount(cfg, account.accountId)) }
-            : {}),
         },
         channel: "x",
         accountId: account.accountId,
@@ -358,10 +390,46 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
             post.author_id,
             thread.users.find((user) => user.id === post.author_id),
             authorization.github,
-          )}\n${thread.bodyForAgent}`,
+          )}\n${thread.bodyForAgent}${workSessionContext ? `\n\n${workSessionContext}` : ""}`,
         },
       });
       const sessions: XVisibleWorkSession[] = [];
+      const postUrl = `https://x.com/${handle}/status/${post.id}`;
+      // Untagged later finals inherit the turn's declared outcome; failure is sticky.
+      let turnOutcome: XReplyOutcome = "unclassified";
+      const withhold = async (reason: XWithheldReason, text: string) => {
+        const currentCfg = readConfig();
+        const failureRoute = resolveXAccount(currentCfg, account.accountId).config.failureRoute;
+        let routed = " route=none";
+        if (failureRoute) {
+          const routeLabel = ` route=${failureRoute.channel} result=`;
+          const redacted = redactSensitiveText(text).replace(/\s+/gu, " ").trim();
+          const chars = Array.from(redacted);
+          const clipped =
+            chars.length > SUMMARY_MAX_CHARS
+              ? chars.slice(0, SUMMARY_MAX_CHARS).join("") + "…"
+              : redacted;
+          // Model-authored text must not ping the route's audience (for example @everyone).
+          const summary = clipped.replaceAll("@", "@\u200b") || "(no text)";
+          const report = `X reply withheld (${REASON_LABELS[reason]}) for @${handle}: ${postUrl}\n${summary}`;
+          let result: string;
+          try {
+            const sent = await sendDurableMessageBatch({
+              cfg: currentCfg,
+              channel: failureRoute.channel,
+              to: failureRoute.to,
+              ...(failureRoute.accountId ? { accountId: failureRoute.accountId } : {}),
+              payloads: [{ text: report }],
+              signal: lifecycle.abortSignal,
+            });
+            result = sent.status;
+          } catch (error) {
+            result = `failed: ${error instanceof Error ? error.message : "unknown error"}`;
+          }
+          routed = `${routeLabel}${result}`;
+        }
+        log.info(`reply withheld post=${post.id} reason=${reason}${routed}`);
+      };
       log.info(`mention post=${post.id} author=${post.author_id} allowed`);
       assertAdmissionCurrent();
       await core.channel.inbound.dispatch({
@@ -387,7 +455,7 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
                 await openXWorkOrigins(core).registerIfAbsent(childKey, {
                   accountId: account.accountId,
                   postId: post.id,
-                  postUrl: `https://x.com/${handle}/status/${post.id}`,
+                  postUrl,
                   authorHandle: handle,
                   conversationId: post.conversation_id,
                   senderTier: authorization.tier,
@@ -402,7 +470,32 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
           },
         },
         delivery: {
-          preparePayload: (payload, info) => (info.kind === "final" ? payload : null),
+          // Runtime status notices need no model outcome. Model failures remain withheld.
+          preparePayload: async (payload, info) => {
+            if (info.kind !== "final") {
+              return null;
+            }
+            const { outcome, text } = readXReplyOutcome(payload.text ?? "");
+            if (payload.isError || outcome === "failure") {
+              turnOutcome = "failure";
+            } else if (outcome === "success" && turnOutcome !== "failure") {
+              turnOutcome = "success";
+            }
+            if (payload.isError) {
+              await withhold("error", text);
+              return null;
+            }
+            const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+            if (!hasMedia && (!text || isSilentReplyText(text))) {
+              log.info(`reply dropped post=${post.id} reason=${text ? "silent" : "empty"}`);
+              return null;
+            }
+            if (turnOutcome !== "success" && !payload.isStatusNotice) {
+              await withhold(turnOutcome, text);
+              return null;
+            }
+            return { ...payload, text };
+          },
           observeMessageSent: true,
           deliver: async (payload) => {
             if (!payload.text?.trim() && !payload.mediaUrl && !payload.mediaUrls?.length) {
@@ -415,6 +508,7 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
               text: payload.text ?? "",
               mediaUrl: payload.mediaUrl,
               mediaUrls: payload.mediaUrls,
+              mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, route.agentId),
               mention: post,
               visibleWorkSessions: guest ? undefined : sessions,
               senderTier: authorization.tier,
@@ -470,6 +564,8 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
       signal: ctx.abortSignal,
       onStatus: publish,
       onWarning: (message) => log.warn(message),
+      onStreamTiming: (step, elapsedMs) =>
+        log.info(`activity stream timing step=${step} elapsedMs=${Math.round(elapsedMs)}`),
       getCursor: async () => (await cursor.lookup(account.accountId)) ?? {},
       setCursor: async (next) => {
         await cursor.register(

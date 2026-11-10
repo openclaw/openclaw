@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TabAccessEpoch, TabAccessPolicy } from "./tab-access.js";
 import type { BrowserTabSnapshot } from "./tab-eligibility.js";
 
@@ -9,14 +9,8 @@ type TabDocumentNavigation = {
   accept(result: unknown): void;
 };
 
-type TabDocumentAccess = {
+type TabDocumentAccess = Pick<TabAccessPolicy, "invalidateTab" | "requireTab"> & {
   readonly fileAccessAllowed: boolean;
-  invalidateTab(tabId: number): void;
-  requireTab(
-    tabId: number,
-    epoch: TabAccessEpoch,
-    afterNavigation?: boolean,
-  ): Promise<BrowserTabSnapshot>;
   provenTabIsCurrent(tabId: number, epoch: TabAccessEpoch): boolean;
   recordRootCommit(tabId: number, url: string): void;
 };
@@ -31,19 +25,16 @@ type TabDocumentProvenance = Pick<TabAccessPolicy, "forwardDocumentEvent" | "nav
   invalidateGroup(group?: { id: number }): void;
 };
 
-type TabDocumentProvenanceModule = {
-  createTabDocumentProvenance: (options: { access: TabDocumentAccess }) => TabDocumentProvenance;
-};
-
 // Browser-serialized modules remain plain JavaScript. Keep test-only typing local
 // so direct owner coverage does not alter the packaged resolution topology.
-const { createTabDocumentProvenance } = await vi.importActual<TabDocumentProvenanceModule>(
-  "./tab-document-provenance.js",
-);
+const { createTabDocumentProvenance } = await vi.importActual<{
+  createTabDocumentProvenance: (options: { access: TabDocumentAccess }) => TabDocumentProvenance;
+}>("./tab-document-provenance.js");
 
 const originalUrl = "https://example.com/existing";
 const blankResult = { frameId: "root", loaderId: "blank-loader" };
 const blankFrame = { id: "root", loaderId: "blank-loader", url: "about:blank" };
+type FrameChange = Partial<typeof blankFrame> & { parentId?: string; urlFragment?: string };
 const frameEvent = (frame = blankFrame, sessionId?: string) => ({
   type: "cdpEvent",
   tabId: 7,
@@ -64,7 +55,7 @@ function createHarness() {
   const proven = new Set([epoch, attachmentEpoch]);
   const isAttached = vi.fn<() => TabAccessEpoch | undefined>(() => attachmentEpoch);
   const isCurrent = vi.fn(() => true);
-  const tab: BrowserTabSnapshot = { id: 7, url: originalUrl, groupId: 7, windowId: 1 };
+  const tab = { id: 7, url: originalUrl, groupId: 7, windowId: 1 };
   const access = {
     fileAccessAllowed: false,
     provenTabIsCurrent: (tabId: number, candidate: TabAccessEpoch) =>
@@ -98,6 +89,16 @@ function createHarness() {
     );
     return documents.navigateTab(7, epoch, params, isAttached, isCurrent, sendCommand);
   };
+  const duringNavigation = (effect: () => void) =>
+    navigate(async () => {
+      effect();
+      return blankResult;
+    });
+  const confirmBlank = () => duringNavigation(commitBlank);
+  const expectRetired = () => {
+    expect(documents.get(7)).toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
+  };
   return {
     documents,
     access,
@@ -113,24 +114,30 @@ function createHarness() {
     emit,
     commitBlank,
     navigate,
+    duringNavigation,
+    confirmBlank,
+    expectRetired,
   };
 }
+
+let h: ReturnType<typeof createHarness>;
+beforeEach(() => {
+  h = createHarness();
+});
 
 describe("commanded tab document provenance", () => {
   it.each(["before response", "after response"])(
     "flushes ordered native events only when the root commits %s",
     async (order) => {
-      const h = createHarness();
       h.tab.url += "#section";
       Object.assign(h.tree.frameTree.frame, { urlFragment: "#section" });
       await expect(
-        h.navigate(async () => {
+        h.duringNavigation(() => {
           if (order === "before response") {
             h.commitBlank();
           }
           expect(h.send).not.toHaveBeenCalled();
           expect(h.documents.get(7)?.navigation.confirmed).toBe(false);
-          return blankResult;
         }),
       ).resolves.toEqual(blankResult);
       if (order === "after response") {
@@ -150,57 +157,54 @@ describe("commanded tab document provenance", () => {
     },
   );
 
-  it.each([
-    { name: "child root tree", frame: { parentId: "parent" } },
-    { name: "missing root id", frame: { id: "" } },
-    { name: "source URL disagreement", frame: { url: "https://other.example/" } },
-  ])("rejects preflight $name", async ({ frame }) => {
-    const h = createHarness();
+  it.each<[string, FrameChange]>([
+    ["child root tree", { parentId: "parent" }],
+    ["missing root id", { id: "" }],
+    ["source URL disagreement", { url: "https://other.example/" }],
+    ["root commit", {}],
+    ["attachment revision", {}],
+  ])("rejects preflight %s", async (name, frame) => {
     Object.assign(h.tree.frameTree.frame, frame);
-    await expect(h.navigate()).rejects.toThrow("current authorized root document");
+    const navigating = h.navigate();
+    if (name === "root commit") {
+      h.emit(frameEvent({ ...blankFrame, url: originalUrl }));
+    }
+    if (name === "attachment revision") {
+      h.documents.retireAttachment(7);
+    }
+    await expect(navigating).rejects.toThrow("current authorized root document");
     expect(h.sendCommand).toHaveBeenCalledExactlyOnceWith("Page.getFrameTree", {});
     expect(h.documents.get(7)).toBeUndefined();
   });
 
   it("does not mint provenance for a caller-constrained child frame", async () => {
-    const h = createHarness();
     const params = { url: "about:blank", frameId: "child" };
     await expect(h.navigate(async () => blankResult, params)).resolves.toEqual(blankResult);
     expect(h.sendCommand).toHaveBeenLastCalledWith("Page.navigate", params);
     expect(h.documents.get(7)).toBeUndefined();
   });
 
-  it.each(["child frame", "child session", "wrong root", "uncommanded fragment"])(
-    "does not accept %s as root proof",
-    async (source) => {
-      const h = createHarness();
-      const event = frameEvent(
-        {
-          ...blankFrame,
-          ...(source === "child frame" ? { parentId: "parent" } : {}),
-          ...(source === "wrong root" ? { id: "other" } : {}),
-          ...(source === "uncommanded fragment" ? { urlFragment: "#other" } : {}),
-        },
-        source === "child session" ? "child" : undefined,
-      );
-      const navigating = h.navigate(async () => {
-        h.emit(event);
-        return blankResult;
-      });
-      if (source === "child frame" || source === "child session") {
-        await expect(navigating).resolves.toEqual(blankResult);
-        expect(h.documents.get(7)?.navigation.confirmed).toBe(false);
-        expect(h.documents.rootRevision(7)).toBe(0);
-        expect(h.access.recordRootCommit).not.toHaveBeenCalled();
-        expect(h.send).not.toHaveBeenCalled();
-        h.documents.invalidateAll();
-      } else {
-        await expect(navigating).rejects.toThrow("access was revoked");
-      }
-      expect(h.documents.get(7)).toBeUndefined();
+  it.each<[string, FrameChange, string?]>([
+    ["child frame", { parentId: "parent" }],
+    ["child session", {}, "child"],
+    ["wrong root", { id: "other" }],
+    ["uncommanded fragment", { urlFragment: "#other" }],
+  ])("does not accept %s as root proof", async (source, frame, sessionId) => {
+    const navigating = h.duringNavigation(() =>
+      h.emit(frameEvent({ ...blankFrame, ...frame }, sessionId)),
+    );
+    if (source === "child frame" || source === "child session") {
+      await expect(navigating).resolves.toEqual(blankResult);
+      expect(h.documents.get(7)?.navigation.confirmed).toBe(false);
+      expect(h.documents.rootRevision(7)).toBe(0);
+      expect(h.access.recordRootCommit).not.toHaveBeenCalled();
       expect(h.send).not.toHaveBeenCalled();
-    },
-  );
+      h.documents.invalidateAll();
+    } else {
+      await expect(navigating).rejects.toThrow("access was revoked");
+    }
+    h.expectRetired();
+  });
 
   it.each([
     { name: "wrong frame", result: { ...blankResult, frameId: "child" } },
@@ -211,7 +215,6 @@ describe("commanded tab document provenance", () => {
     { name: "rejected", result: blankResult },
     { name: "competing commit", result: blankResult },
   ])("discards early events after native $name", async ({ name, result }) => {
-    const h = createHarness();
     await expect(
       h.navigate(async () => {
         h.commitBlank();
@@ -224,15 +227,13 @@ describe("commanded tab document provenance", () => {
         return result;
       }),
     ).rejects.toThrow(name === "rejected" ? "native failure" : /confirm|revoked/);
-    expect(h.documents.get(7)).toBeUndefined();
-    expect(h.send).not.toHaveBeenCalled();
+    h.expectRetired();
     expect(h.access.invalidateTab).toHaveBeenCalledWith(7);
   });
 
   it.each(["wrong loader", "missing loader", "competing document"])(
     "revokes a responded navigation on %s",
     async (change) => {
-      const h = createHarness();
       await h.navigate();
       h.emit(contextEvent);
       h.emit(
@@ -242,8 +243,7 @@ describe("commanded tab document provenance", () => {
           url: change === "competing document" ? originalUrl : "about:blank",
         }),
       );
-      expect(h.documents.get(7)).toBeUndefined();
-      expect(h.send).not.toHaveBeenCalled();
+      h.expectRetired();
     },
   );
 
@@ -256,59 +256,45 @@ describe("commanded tab document provenance", () => {
     { phase: "before response", reason: "retireAttachment" },
     { phase: "before response", reason: "invalidateAll" },
     { phase: "before response", reason: "invalidateGroup" },
-  ])("discards authority and queued events on $reason $phase", async ({ phase, reason }) => {
-    const h = createHarness();
-    let navigation: TabDocumentNavigation;
-    const revoke = () => {
-      switch (reason) {
-        case "connection":
-          h.isCurrent.mockReturnValue(false);
-          break;
-        case "attachment":
-          h.isAttached.mockReturnValue(undefined);
-          break;
-        case "command access":
-          h.proven.delete(h.epoch);
-          break;
-        case "attachment access":
-          h.proven.delete(h.attachmentEpoch);
-          break;
-        case "retireAttachment":
-          h.documents.retireAttachment(7);
-          break;
-        case "invalidateAll":
-          h.documents.invalidateAll();
-          break;
-        default:
-          h.documents.invalidateGroup({ id: 7 });
-      }
-    };
-    const navigating = h.navigate(async () => {
-      h.commitBlank();
-      const document = h.documents.get(7);
-      assert(document);
-      navigation = document.navigation;
+  ] as const)(
+    "discards authority and queued events on $reason $phase",
+    async ({ phase, reason }) => {
+      let navigation: TabDocumentNavigation;
+      const revocations = {
+        connection: () => h.isCurrent.mockReturnValue(false),
+        attachment: () => h.isAttached.mockReturnValue(undefined),
+        "command access": () => h.proven.delete(h.epoch),
+        "attachment access": () => h.proven.delete(h.attachmentEpoch),
+        retireAttachment: () => h.documents.retireAttachment(7),
+        invalidateAll: () => h.documents.invalidateAll(),
+        invalidateGroup: () => h.documents.invalidateGroup({ id: 7 }),
+      };
+      const revoke = revocations[reason];
+      const navigating = h.duringNavigation(() => {
+        h.commitBlank();
+        const document = h.documents.get(7);
+        assert(document);
+        navigation = document.navigation;
+        if (phase === "before response") {
+          revoke();
+        }
+      });
       if (phase === "before response") {
+        await expect(navigating).rejects.toThrow("access was revoked");
+      } else {
+        await navigating;
+        h.send.mockClear();
         revoke();
+        expect(() => navigation.observe(contextEvent, h.send)).toThrow("access was revoked");
       }
-      return blankResult;
-    });
-    if (phase === "before response") {
-      await expect(navigating).rejects.toThrow("access was revoked");
-    } else {
-      await navigating;
-      h.send.mockClear();
-      revoke();
+      h.isCurrent.mockReturnValue(true);
+      h.isAttached.mockReturnValue(h.attachmentEpoch);
+      h.proven.add(h.epoch).add(h.attachmentEpoch);
+      expect(() => navigation.accept(blankResult)).toThrow("access was revoked");
       expect(() => navigation.observe(contextEvent, h.send)).toThrow("access was revoked");
-    }
-    h.isCurrent.mockReturnValue(true);
-    h.isAttached.mockReturnValue(h.attachmentEpoch);
-    h.proven.add(h.epoch).add(h.attachmentEpoch);
-    expect(() => navigation.accept(blankResult)).toThrow("access was revoked");
-    expect(() => navigation.observe(contextEvent, h.send)).toThrow("access was revoked");
-    expect(h.documents.get(7)).toBeUndefined();
-    expect(h.send).not.toHaveBeenCalled();
-  });
+      h.expectRetired();
+    },
+  );
 
   it.each([
     { name: "group move", tab: { groupId: -1 } },
@@ -319,11 +305,7 @@ describe("commanded tab document provenance", () => {
     { name: "lookalike blank", tab: { url: "about:blank#other" } },
     { name: "user blank", tab: {} },
   ])("retires controlled blank on $name", async ({ name, tab }) => {
-    const h = createHarness();
-    await h.navigate(async () => {
-      h.commitBlank();
-      return blankResult;
-    });
+    await h.confirmBlank();
     const document = h.documents.get(7);
     assert(document);
     const navigation = document.navigation;
@@ -333,30 +315,12 @@ describe("commanded tab document provenance", () => {
     } else {
       h.documents.observeTab(Object.assign(h.tab, tab));
     }
-    expect(h.documents.get(7)).toBeUndefined();
     expect(h.access.invalidateTab).toHaveBeenCalledWith(7);
     expect(() => navigation.observe(contextEvent, h.send)).toThrow("access was revoked");
-    expect(h.send).not.toHaveBeenCalled();
+    h.expectRetired();
   });
 
-  it.each(["root commit", "attachment revision"])(
-    "rejects a preflight overtaken by %s",
-    async (change) => {
-      const h = createHarness();
-      const navigating = h.navigate();
-      if (change === "root commit") {
-        h.emit(frameEvent({ ...blankFrame, url: originalUrl }));
-      } else {
-        h.documents.retireAttachment(7);
-      }
-      await expect(navigating).rejects.toThrow("current authorized root document");
-      expect(h.sendCommand).toHaveBeenCalledExactlyOnceWith("Page.getFrameTree", {});
-      expect(h.documents.get(7)).toBeUndefined();
-    },
-  );
-
   it.each(["event count", "event bytes"])("rejects native %s overflow", async (limit) => {
-    const h = createHarness();
     const events: Record<string, unknown>[] = [frameEvent()];
     if (limit === "event count") {
       for (let index = 1; index < 129; index++) {
@@ -368,27 +332,19 @@ describe("commanded tab document provenance", () => {
       event.params.value = "x".repeat(256 * 1024 - overhead + 1);
       events.push(event);
     }
-    const navigating = h.navigate(async () => {
+    const navigating = h.duringNavigation(() => {
       for (const event of events) {
         h.emit(event);
       }
       expect(h.send).not.toHaveBeenCalled();
-      return blankResult;
     });
     await expect(navigating).rejects.toThrow("access was revoked");
-    expect(h.documents.get(7)).toBeUndefined();
-    expect(h.send).not.toHaveBeenCalled();
+    h.expectRetired();
   });
 
   it("stops flushing immediately when the receiver revokes attachment authority", async () => {
-    const h = createHarness();
     h.send.mockImplementationOnce(() => h.documents.retireAttachment(7));
-    await expect(
-      h.navigate(async () => {
-        h.commitBlank();
-        return blankResult;
-      }),
-    ).rejects.toThrow("access was revoked");
+    await expect(h.confirmBlank()).rejects.toThrow("access was revoked");
     expect(h.send.mock.calls).toEqual([[contextEvent]]);
     expect(h.documents.get(7)).toBeUndefined();
   });

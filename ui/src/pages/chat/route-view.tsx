@@ -1,10 +1,17 @@
 import type { RouteMatch } from "@openclaw/uirouter";
-import { For, Match, Switch } from "solid-js";
+import { For, Match, Show, Switch } from "solid-js";
+import { bootComposerElement } from "../../app/boot-composer.ts";
+import { HomeSessionUnavailable } from "../../components/home-session-unavailable.tsx";
 import { PanelErrorState } from "../../components/solid/lazy-view-error.tsx";
-import { t } from "../../lib/reactive/i18n.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
-import { ChatPageView } from "./chat-page.ts";
+import { LoadingSkeleton } from "../../components/solid/loading-skeleton.tsx";
+import { registerSessionNavigationEnglish } from "../../i18n/locales/en-session-navigation.ts";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import "./chat-page.tsx";
+import type { ElementProperties } from "../../types/solid-elements.d.ts";
+import type { ChatPageProps } from "./chat-page-types.ts";
 import type { ChatRouteData } from "./route-loader.ts";
+
+registerEnglishCatalog(registerSessionNavigationEnglish);
 
 const CHAT_PAGE_OWNER_KEY = "chat-page";
 
@@ -13,12 +20,30 @@ function navigateTo(href: string) {
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
-function ChatRouteView(props: { data?: ChatRouteData; presented: boolean }) {
-  const ambiguous = () => (props.data?.kind === "ambiguous" ? props.data : undefined);
-  const error = () => (props.data?.kind === "route-error" ? props.data : undefined);
-  const missing = () => (props.data?.kind === "missing-session" ? props.data : undefined);
-  const session = () => (props.data?.kind === "session" ? props.data : undefined);
-  return (
+export function ChatRouteView(props: { data?: unknown; presented?: boolean }) {
+  // SAFETY: This renderer receives only this route's colocated ChatRouteData loader result.
+  const routeData = () => props.data as ChatRouteData | undefined;
+  const ambiguous = () => {
+    const value = routeData();
+    return value?.kind === "ambiguous" ? value : undefined;
+  };
+  const error = () => {
+    const value = routeData();
+    return value?.kind === "route-error" ? value : undefined;
+  };
+  const missing = () => {
+    const value = routeData();
+    return value?.kind === "missing-session" ? value : undefined;
+  };
+  const unavailableHome = () => {
+    const value = routeData();
+    return value?.kind === "unavailable-home" ? value : undefined;
+  };
+  const session = () => {
+    const value = routeData();
+    return value?.kind === "session" ? value : undefined;
+  };
+  const renderRoute = () => (
     <Switch>
       <Match when={ambiguous()}>
         {(data) => (
@@ -79,16 +104,42 @@ function ChatRouteView(props: { data?: ChatRouteData; presented: boolean }) {
           />
         )}
       </Match>
+      <Match when={unavailableHome()}>
+        {(data) => <HomeSessionUnavailable agentId={data().agentId} />}
+      </Match>
       <Match when={session()}>
-        {(data) => <ChatPageView data={data()} presented={props.presented} />}
+        {(data) => (
+          <openclaw-chat-page prop:data={data()} prop:presented={props.presented !== false} />
+        )}
       </Match>
     </Switch>
   );
+  return (
+    <Show when={routeData() && !session() && bootComposerElement()} fallback={renderRoute()}>
+      {/* A terminal route result has no chat pane to take the early input. */}
+      <div class="lazy-view-state lazy-view-state--loading lazy-view-state--route" data-chat="">
+        <LoadingSkeleton
+          composer
+          header={false}
+          renderContent={() => (
+            <>
+              {renderRoute()}
+              <p class="muted">{t("chat.sessionRoute.bootDraftRecovery")}</p>
+            </>
+          )}
+        />
+      </div>
+    </Show>
+  );
 }
 
-export function renderChatRoute(data: unknown, _loaderPending = false, presented = true) {
-  // SAFETY: This renderer receives only this route's colocated ChatRouteData loader result.
-  return solidContent(ChatRouteView, { data: data as ChatRouteData | undefined, presented });
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-page": HTMLAttributes<HTMLElement> &
+        ElementProperties<Pick<ChatPageProps, "data" | "presented">>;
+    }
+  }
 }
 
 export function sessionRenderOwnerKey(

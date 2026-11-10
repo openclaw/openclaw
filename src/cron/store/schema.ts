@@ -17,6 +17,7 @@ type CronStoreDatabase = Pick<
 export const CRON_JOB_READ_COLUMNS = [
   "job_id",
   "declaration_key",
+  "name",
   "enabled",
   "agent_id",
   "payload_kind",
@@ -30,11 +31,11 @@ export const CRON_JOB_READ_COLUMNS = [
 
 // Writable opens install the additive projections before callers use this shape.
 export const CRON_JOB_GENERATION_READ_COLUMNS = [
-  ...CRON_JOB_READ_COLUMNS.slice(0, 6),
+  ...CRON_JOB_READ_COLUMNS.slice(0, 7),
   "grant_definition_revision",
   "grant_definition_generation",
   "grant_definition_updated_at",
-  ...CRON_JOB_READ_COLUMNS.slice(6),
+  ...CRON_JOB_READ_COLUMNS.slice(7),
 ] as const;
 
 /** Complete stored row used by independent cron inventories. */

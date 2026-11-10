@@ -1,48 +1,28 @@
-import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import type { AssistantMessage, Context } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { convertResponsesMessages as convertProviderResponsesMessages } from "../providers/openai-responses-shared.js";
-import { createZeroUsage } from "../usage.test-support.js";
 import { buildOpenAIResponsesReasoningReplayMetadata } from "./openai-responses-compaction-replay.js";
+import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
 
-const model = {
-  id: "gpt-5.6-luna",
-  name: "GPT-5.6 Luna",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 1_000_000,
-  maxTokens: 8192,
-} satisfies Model<"openai-responses">;
+const model = fixtures.createReplayModel();
 const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const metadata = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
+const thinking = (item: object) => ({
+  type: "thinking" as const,
+  thinking: "",
+  thinkingSignature: JSON.stringify(item),
+});
 
-function createAssistant(content: AssistantMessage["content"]): AssistantMessage {
-  return {
-    role: "assistant",
-    content,
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: createZeroUsage(),
-    stopReason: "stop",
-    timestamp: 0,
-  };
-}
+const createAssistant = (content: AssistantMessage["content"]) =>
+  fixtures.createAssistant(model, content);
 
+const converter = (convert: typeof convertResponsesMessages) => (context: Context) =>
+  convert(model, context, new Set(["openai"]), replayIdentity);
 const responseConverters = [
-  {
-    name: "transport-owned",
-    convert: (context: Context) =>
-      convertResponsesMessages(model, context, new Set(["openai"]), replayIdentity),
-  },
-  {
-    name: "provider-owned",
-    convert: (context: Context) =>
-      convertProviderResponsesMessages(model, context, new Set(["openai"]), replayIdentity),
-  },
+  { name: "transport-owned", convert: converter(convertResponsesMessages) },
+  { name: "provider-owned", convert: converter(convertProviderResponsesMessages) },
 ] as const;
 
 describe("OpenAI Responses reasoning replay", () => {
@@ -53,11 +33,7 @@ describe("OpenAI Responses reasoning replay", () => {
         const input = convert({
           messages: [
             createAssistant([
-              {
-                type: "thinking",
-                thinking: "",
-                thinkingSignature: JSON.stringify({ type: "reasoning", id, summary: [] }),
-              },
+              thinking({ type: "reasoning", id, summary: [] }),
               { type: "toolCall", id: "call_probe|fc_probe", name: "probe", arguments: {} },
             ]),
           ],
@@ -76,10 +52,8 @@ describe("OpenAI Responses reasoning replay", () => {
     "$name omits orphan function item ids without changing paired transcript ids",
     ({ convert }) => {
       const reasoning = {
-        type: "thinking" as const,
-        thinking: "",
-        thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_tool", summary: [] }),
-        openclawReasoningReplay: buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
+        ...thinking({ type: "reasoning", id: "rs_tool", summary: [] }),
+        openclawReasoningReplay: metadata,
       };
       const toolCall = {
         type: "toolCall" as const,
@@ -96,14 +70,7 @@ describe("OpenAI Responses reasoning replay", () => {
             { type: "text", text: "Between calls" },
             { ...toolCall, id: "call_two|fc_two" },
           ]),
-          {
-            role: "toolResult",
-            toolCallId: "call_one|fc_one",
-            toolName: "probe",
-            content: [{ type: "text", text: "Done" }],
-            isError: false,
-            timestamp: 1,
-          },
+          makeTextToolResult("call_one|fc_one", "probe", "Done", false, 1),
           createAssistant([{ ...toolCall, id: "call_orphan|fc_orphan" }]),
           createAssistant([
             { ...reasoning, thinkingSignature: "malformed" },
@@ -114,40 +81,19 @@ describe("OpenAI Responses reasoning replay", () => {
       };
       const original = structuredClone(context);
       const input = convert(context);
-      expect(input.filter((item) => item.type === "function_call")).toEqual([
-        {
-          type: "function_call",
-          id: "fc_one",
-          call_id: "call_one",
-          name: "probe",
-          arguments: '{"input":"synthetic"}',
-        },
-        {
-          type: "function_call",
-          id: "fc_two",
-          call_id: "call_two",
-          name: "probe",
-          arguments: '{"input":"synthetic"}',
-        },
-        {
-          type: "function_call",
-          call_id: "call_orphan",
-          name: "probe",
-          arguments: '{"input":"synthetic"}',
-        },
-        {
-          type: "function_call",
-          call_id: "call_invalid",
-          name: "probe",
-          arguments: '{"input":"synthetic"}',
-        },
-        {
-          type: "function_call",
-          call_id: "call_late",
-          name: "probe",
-          arguments: '{"input":"synthetic"}',
-        },
-      ]);
+      expect(input.filter((item) => item.type === "function_call")).toEqual(
+        ["one", "two", "orphan", "invalid", "late"].map((suffix, index) =>
+          Object.assign(
+            {
+              type: "function_call",
+              call_id: `call_${suffix}`,
+              name: "probe",
+              arguments: '{"input":"synthetic"}',
+            },
+            index < 2 ? { id: `fc_${suffix}` } : {},
+          ),
+        ),
+      );
       expect(input.find((item) => item.type === "function_call_output")).toMatchObject({
         call_id: "call_one",
         output: "Done",
@@ -166,15 +112,7 @@ describe("OpenAI Responses reasoning replay", () => {
           summary: [],
           ...(encryptedContent === undefined ? {} : { encrypted_content: encryptedContent }),
         };
-        const block = {
-          type: "thinking" as const,
-          thinking: "",
-          thinkingSignature: JSON.stringify(item),
-          openclawReasoningReplay: buildOpenAIResponsesReasoningReplayMetadata(
-            model,
-            replayIdentity,
-          ),
-        };
+        const block = { ...thinking(item), openclawReasoningReplay: metadata };
         const input = convert({ messages: [createAssistant([block])] });
         expect(input).toEqual(encryptedContent ? [item] : []);
 
@@ -189,7 +127,6 @@ describe("OpenAI Responses reasoning replay", () => {
   it.each(responseConverters)(
     "$name removes standalone reasoning when replay identity strips its ciphertext",
     ({ name, convert }) => {
-      const metadata = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
       const item = {
         type: "reasoning",
         id: "rs_foreign",
@@ -207,9 +144,7 @@ describe("OpenAI Responses reasoning replay", () => {
         { ...metadata, authProfileHash: "other-auth" },
       ]) {
         const block = {
-          type: "thinking" as const,
-          thinking: "",
-          thinkingSignature: JSON.stringify(item),
+          ...thinking(item),
           ...(replayMetadata === undefined ? {} : { openclawReasoningReplay: replayMetadata }),
         };
         const input = convert({ messages: [createAssistant([block])] });

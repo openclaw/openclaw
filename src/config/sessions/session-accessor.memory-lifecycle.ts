@@ -8,10 +8,8 @@ import type {
   ResetSessionEntryLifecycleResult,
 } from "./session-accessor.sqlite-contract.js";
 import { withSqliteSessionDeletions } from "./session-accessor.sqlite-deletion.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 
@@ -48,7 +46,7 @@ export function resetMemorySessionEntryLifecycle(
             type: "session.lifecycle.reset",
             input: {
               expected,
-              nextEntry: structuredClone(nextEntry),
+              nextEntry,
               resetBoundary: params.resetBoundary,
             },
           },
@@ -166,12 +164,13 @@ export function deleteMemorySessionEntryLifecycle(
                   companions.settlement = capture([
                     { sessionKey: scope.sessionKey, entry: receipt.value.deletedEntry },
                   ]);
-                  companions.settlement.beforeCommit();
+                  return companions.settlement.beforeCommit();
                 }
+                return undefined;
               },
+              settled: (settledOutcome) => companions.settlement?.settle(settledOutcome.kind),
             },
           );
-          companions.settlement?.settle(outcome.kind);
           if (outcome.kind === "rolled-back") {
             if (authorityError) {
               throw toErrorObject(

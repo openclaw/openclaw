@@ -19,7 +19,7 @@ export class DiscordRealtimeRecordingInput {
   unavailable: boolean;
   private readonly sealed = { audio: false, batch: false };
   private pending = 0;
-  private readonly listeners = new Set<() => void>();
+  onChange: (() => void) | undefined;
 
   constructor(batchDisabled: boolean) {
     this.unavailable = batchDisabled;
@@ -38,7 +38,7 @@ export class DiscordRealtimeRecordingInput {
     if (!receipt?.capture || receipt.capture !== this.capture) {
       this.eligible = false;
     }
-    this.notify();
+    this.onChange?.();
   }
 
   observeBatch(result: Promise<DiscordVoiceSegmentOutcome>): void {
@@ -58,39 +58,28 @@ export class DiscordRealtimeRecordingInput {
       )
       .finally(() => {
         this.pending -= 1;
-        this.notify();
+        this.onChange?.();
       });
   }
 
   exclude(): void {
     this.eligible = false;
-    this.notify();
+    this.onChange?.();
   }
 
   seal(input: "audio" | "batch"): void {
     this.sealed[input] = true;
-    this.notify();
+    this.onChange?.();
   }
 
   get complete(): boolean {
     return this.sealed.audio && this.sealed.batch && this.pending === 0;
   }
-
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  private notify(): void {
-    for (const listener of this.listeners) {
-      listener();
-    }
-  }
 }
 
 /** Realtime text is usable only when the whole provider generation has one recording owner. */
 export class DiscordRealtimeRecording {
-  private readonly inputs = new Map<DiscordRealtimeRecordingInput, () => void>();
+  private readonly inputs = new Set<DiscordRealtimeRecordingInput>();
   private capture: Capture;
   private speaker: { id: string; label: string } | undefined;
   private firstStartedAt: number | undefined;
@@ -137,12 +126,13 @@ export class DiscordRealtimeRecording {
           return;
         }
         this.unavailable ||= input.hasAudio && input.unavailable;
-        this.inputs.get(input)?.();
+        input.onChange = undefined;
         this.inputs.delete(input);
       }
       void this.publish();
     };
-    this.inputs.set(input, input.subscribe(changed));
+    this.inputs.add(input);
+    input.onChange = changed;
     changed();
   }
 
@@ -185,8 +175,8 @@ export class DiscordRealtimeRecording {
 
   close(): void {
     this.stopped = true;
-    for (const unsubscribe of this.inputs.values()) {
-      unsubscribe();
+    for (const input of this.inputs) {
+      input.onChange = undefined;
     }
     this.inputs.clear();
     this.bytes -= this.finals.reduce((total, final) => total + final.bytes, 0);

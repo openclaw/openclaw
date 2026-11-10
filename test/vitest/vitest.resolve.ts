@@ -3,6 +3,7 @@ import acpCorePackageJson from "../../packages/acp-core/package.json" with { typ
 import normalizationCorePackageJson from "../../packages/normalization-core/package.json" with { type: "json" };
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mts";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
+import { createVitestSourcePackageAliases } from "./vitest.source-package-alias.ts";
 
 const sourcePluginSdkSubpaths = [
   ...new Set([...pluginSdkSubpaths, ...privateLocalOnlyPluginSdkSubpaths]),
@@ -10,28 +11,8 @@ const sourcePluginSdkSubpaths = [
 
 // Native fixture configs need aliases without loading the test runner plugins.
 export function createVitestResolveConfig(repoRoot: string) {
-  function sourcePackageAlias(packageId: string, subpath?: string) {
-    return {
-      find: `@openclaw/${packageId}${subpath ? `/${subpath}` : ""}`,
-      replacement: path.join(
-        repoRoot,
-        "packages",
-        packageId,
-        "src",
-        ...(subpath ? subpath.split("/") : ["index"]).map((part, index, parts) =>
-          index === parts.length - 1 ? `${part}.ts` : part,
-        ),
-      ),
-    };
-  }
-
-  function sourcePackageAliasesFromExports(packageId: string, exports: Record<string, unknown>) {
-    return Object.keys(exports)
-      .map((exportKey) => (exportKey === "." ? undefined : exportKey.slice(2)))
-      .filter((subpath) => subpath === undefined || (subpath && !subpath.includes("..")))
-      .toSorted((a, b) => (a ?? "").localeCompare(b ?? ""))
-      .map((subpath) => sourcePackageAlias(packageId, subpath));
-  }
+  const { sourcePackageAlias, sourcePackageAliasesFromExports } =
+    createVitestSourcePackageAliases(repoRoot);
 
   return {
     alias: [
@@ -169,6 +150,16 @@ export function createVitestResolveConfig(repoRoot: string) {
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "schema.ts"),
       },
       {
+        find: "@openclaw/gateway-protocol/session-row-deltas",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "session-row-deltas.ts",
+        ),
+      },
+      {
         find: "@openclaw/gateway-protocol/startup-unavailable",
         replacement: path.join(
           repoRoot,
@@ -195,6 +186,17 @@ export function createVitestResolveConfig(repoRoot: string) {
       {
         find: "@openclaw/gateway-protocol",
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "index.ts"),
+      },
+      {
+        find: "@openclaw/ai/internal/model-request-body",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "ai",
+          "src",
+          "transports",
+          "model-request-body.ts",
+        ),
       },
       {
         find: /^@openclaw\/ai\/internal\/(.+)$/,
@@ -277,6 +279,7 @@ export function createVitestResolveConfig(repoRoot: string) {
         ),
       },
       sourcePackageAlias("model-catalog-core", "model-catalog-pricing"),
+      sourcePackageAlias("model-catalog-core", "model-inference-capabilities"),
       {
         find: "@openclaw/model-catalog-core/model-catalog-types",
         replacement: path.join(
@@ -372,6 +375,8 @@ export function createVitestResolveConfig(repoRoot: string) {
       sourcePackageAlias("session-url-contract", "public-share"),
       sourcePackageAlias("session-url-contract"),
       sourcePackageAlias("workboard-contract"),
+      sourcePackageAlias("openclaw-id-protocol", "testing"),
+      sourcePackageAlias("openclaw-id-protocol"),
       ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,

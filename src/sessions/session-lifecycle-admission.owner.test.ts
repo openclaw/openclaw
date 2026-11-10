@@ -1,18 +1,19 @@
 import { expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  beginSessionWorkAdmission,
-  getSessionWorkAdmissionOwnerRelease,
-} from "./session-lifecycle-admission.js";
+import { selectedEffects } from "./session-controller.lifecycle-projections.js";
+import { captureSessionControllerEffects } from "./session-controller.lifecycle-work.js";
+import { beginSessionEffect } from "./session-controller.lifecycle.js";
+import { targetFrom } from "./session-controller.target.js";
 
 it("captures acquired owners without waiting for pending successors", async () => {
   const scope = "store-named-owner";
   const identities = ["agent:main:named-owner", "session-named-owner"];
+  const target = targetFrom({ scope, identities });
   const owner = Symbol.for("openclaw.test.namedSessionWorkAdmissionOwner");
-  const unrelated = await beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {} });
+  const unrelated = await beginSessionEffect({ scope, identities, assertAllowed: () => {} });
   const started = createDeferred();
   const allowed = createDeferred();
-  const admissionPromise = beginSessionWorkAdmission({
+  const admissionPromise = beginSessionEffect({
     scope,
     identities,
     owner,
@@ -23,44 +24,49 @@ it("captures acquired owners without waiting for pending successors", async () =
   });
   try {
     await started.promise;
-    const release = getSessionWorkAdmissionOwnerRelease({ scope, identities, owner });
-    expect(release).toBeInstanceOf(Promise);
+    const pending = [...selectedEffects([target])].find((effect) => effect.owner === owner);
+    expect(pending).toBeDefined();
+    const release = pending!.ref.released;
     expect(
-      getSessionWorkAdmissionOwnerRelease({ scope, identities, owner, phase: "acquired" }),
-    ).toBeUndefined();
+      captureSessionControllerEffects({ scope, identities }).map(({ effect }) => effect.ref),
+    ).toEqual([unrelated]);
     unrelated.release();
-    expect(getSessionWorkAdmissionOwnerRelease({ scope, identities, owner })).toBeInstanceOf(
-      Promise,
-    );
+    expect(pending!.ref.isActive()).toBe(true);
+    expect(captureSessionControllerEffects({ scope, identities })).toEqual([]);
     allowed.resolve();
     const admission = await admissionPromise;
+    expect(admission).toBe(pending!.ref);
+    const laterStarted = createDeferred();
     const laterAllowed = createDeferred();
-    const laterAdmission = beginSessionWorkAdmission({
+    const laterAdmission = beginSessionEffect({
       scope,
       identities,
       owner,
       serializeOwner: true,
-      assertAllowed: () => laterAllowed.promise,
+      assertAllowed: () => {
+        laterStarted.resolve();
+        expect(admission.isActive()).toBe(false);
+        return laterAllowed.promise;
+      },
     });
-    const acquiredRelease = getSessionWorkAdmissionOwnerRelease({
-      scope,
-      identities,
-      owner,
-      phase: "acquired",
-    });
-    expect(acquiredRelease).toBeInstanceOf(Promise);
+    const acquired = captureSessionControllerEffects({ scope, identities });
+    expect(acquired.map(({ effect }) => effect.ref)).toEqual([admission]);
+    const acquiredRelease = acquired[0]!.released;
+    expect(acquiredRelease).toBe(release);
     admission.release();
     try {
       await acquiredRelease;
       await release;
-      expect(getSessionWorkAdmissionOwnerRelease({ scope, identities, owner })).toBeInstanceOf(
-        Promise,
-      );
+      await laterStarted.promise;
+      expect(captureSessionControllerEffects({ scope, identities })).toEqual([]);
+      expect(selectedEffects([target]).size).toBe(1);
     } finally {
       laterAllowed.resolve();
-      (await laterAdmission).release();
+      const later = await laterAdmission;
+      later.release();
+      await later.released;
     }
-    expect(getSessionWorkAdmissionOwnerRelease({ scope, identities, owner })).toBeUndefined();
+    expect(selectedEffects([target]).size).toBe(0);
   } finally {
     unrelated.release();
     allowed.resolve();

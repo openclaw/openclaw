@@ -127,7 +127,6 @@ export async function readWorkerPlacementModelSource(
     "cfg" | "agentId" | "sessionKey" | "assertCurrent"
   > & {
     initialTarget?: GatewaySessionStoreTargetWithStore;
-    onSelected?: (target: GatewaySessionStoreTargetWithStore) => void;
   },
   key: string,
 ): Promise<SessionEntry | undefined> {
@@ -158,20 +157,8 @@ export async function readWorkerPlacementModelSource(
       ],
       ([read]) => {
         params.assertCurrent?.();
-        const entry = read!.result.entries.find((row) => row.sessionKey === key)?.entry;
-        params.onSelected?.({
-          agentId: target.agentId,
-          storePath: read!.database.path,
-          canonicalKey: key,
-          storeKeys: [key],
-          store: entry ? { [key]: entry } : {},
-          readSource: read!.result.source,
-          capturedReadSource: read!.result.source,
-          capturedReadSources: read!.result.source ? [read!.result.source] : [],
-        });
-        return entry;
+        return read!.result.entries.find((row) => row.sessionKey === key)?.entry;
       },
-      { ordered: params.onSelected !== undefined },
     );
   }
   const agentId = parseAgentSessionKey(key)?.agentId ?? params.agentId;
@@ -187,7 +174,6 @@ export async function readWorkerPlacementModelSource(
     key: storedKey,
     preserveQualifiedAddress: true,
     assertActive: params.assertCurrent,
-    onSelected: params.onSelected,
   });
   const entry = stored.store[storedKey];
   if (entry || isIncognitoSessionKey(storedKey)) {
@@ -206,7 +192,6 @@ export async function readWorkerPlacementModelSource(
     agentId: params.agentId,
     key,
     assertActive: params.assertCurrent,
-    onSelected: params.onSelected,
   });
   return aliased.store[aliased.canonicalKey];
 }
@@ -217,6 +202,7 @@ export function resolveWorkerPlacementModelRuntime(
     model: string;
     preparedEnvironment?: NodeJS.ProcessEnv;
     metadataSnapshot?: PluginMetadataSnapshot | null;
+    resolveEmbeddedRuntime?: () => string;
   },
 ): string {
   const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider(params);
@@ -264,14 +250,15 @@ export function resolveWorkerPlacementModelRuntime(
       isCliProvider(cliExecutionProvider ?? params.provider, params.cfg, params.metadataSnapshot));
   return useCliExecution
     ? (cliExecutionProvider ?? params.provider)
-    : resolveEffectiveAgentRuntime({
-        cfg: params.cfg,
-        provider: params.provider,
-        modelId: params.model,
-        agentScope: { kind: "prepared", agentId: params.agentId },
-        sessionKey: params.sessionKey,
-        sessionEntry: params.entry,
-      });
+    : (params.resolveEmbeddedRuntime?.() ??
+        resolveEffectiveAgentRuntime({
+          cfg: params.cfg,
+          provider: params.provider,
+          modelId: params.model,
+          agentScope: { kind: "prepared", agentId: params.agentId },
+          sessionKey: params.sessionKey,
+          sessionEntry: params.entry,
+        }));
 }
 
 export function resolveWorkerPlacementExecutionMode(
@@ -309,7 +296,8 @@ export function projectWorkerPlacementAgentRuntime(
   const workspaceEnvironment = getRegisteredAgentHarness(runtime.id)?.harness.workspaceEnvironment;
   return {
     ...identity,
-    ...(workspaceEnvironment ? { workspaceEnvironment } : {}),
+    // Registered harness metadata can be a managed view; rows own the JSON they freeze.
+    ...(workspaceEnvironment ? { workspaceEnvironment: { ...workspaceEnvironment } } : {}),
     cloudPlacementSupported: executionMode !== undefined,
     ...(executionMode ? { cloudPlacementExecutionMode: executionMode } : {}),
     ...(devicePlacement ? { devicePlacement } : {}),

@@ -208,3 +208,16 @@ export function canUseDeviceFolder(
     ),
   );
 }
+
+/** The selected device-folder host when its folders can be listed through node `fs.listDir`. */
+export function findBrowsableDeviceFolderHost(
+  deviceId: string,
+  devices: readonly DevicePlacementOption[],
+): DevicePlacementOption | undefined {
+  return devices.find(
+    (device) =>
+      device.deviceId === deviceId &&
+      device.workerHost?.deviceFolders === true &&
+      device.invocableCommands?.includes("fs.listDir"),
+  );
+}

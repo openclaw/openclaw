@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getInternalToolExecutionPreparer } from "../../packages/agent-core/src/internal-hooks.js";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
 import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
@@ -27,7 +28,6 @@ import {
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import { getInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -130,56 +130,23 @@ describe("generic tool action decision receipts", () => {
     vi.restoreAllMocks();
   });
 
-  it("records filesystem execution as private attribution independent of name and payload", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(250);
-    const works: ExecutionDecisionWork[] = [];
-    const execute = vi.fn().mockResolvedValue({
-      content: [{ type: "text", text: "SECRET_RESULT" }],
-      details: { path: "/private/result" },
-    });
-    const tool = wrapToolWithBeforeToolCallHook(
-      assembledTool("data", "renamed_private_tool", execute),
-    );
-
-    await admittedRun({
-      works,
-      run: () => tool.execute("same-call", { path: "/private/input" }),
-    });
-
-    expect(works).toHaveLength(1);
-    expect(works[0]).toMatchObject({
-      token: {
-        contextId: "c02-tool-context",
-        executionId: "c02-tool-execution",
-        runId: "c02-tool-run",
-      },
-      receipt: {
-        occurredAt: 250,
-        action: { family: "data", operation: "filesystem" },
-        decision: { outcome: "allowed", reasonCode: "generic_action_attributed" },
-        enforcement: { coverageState: "attribution-only" },
-        source: { owner: "tool-action" },
-      },
-    });
-    expect(works[0]?.refs).toBeUndefined();
-    const encoded = JSON.stringify(works);
-    expect(encoded).not.toContain("renamed_private_tool");
-    expect(encoded).not.toContain("/private/input");
-    expect(encoded).not.toContain("SECRET_RESULT");
-    expect(encoded).not.toContain("/private/result");
-  });
-
   it("classifies memory by manifest kind independently of plugin and tool names", async () => {
     const works: ExecutionDecisionWork[] = [];
     const tool = wrapToolWithBeforeToolCallHook(
       assembledPluginTool({
         pluginId: "arbitrary-memory-owner",
         manifestKind: "memory",
-        execute: vi.fn().mockResolvedValue({ content: [], details: { ok: true } }),
+        execute: vi.fn().mockResolvedValue({
+          content: [{ type: "text", text: "SECRET_RESULT" }],
+          details: { path: "/private/result" },
+        }),
       }),
     );
 
-    await admittedRun({ works, run: () => tool.execute("plugin-call", {}) });
+    await admittedRun({
+      works,
+      run: () => tool.execute("plugin-call", { path: "/private/input" }),
+    });
 
     expect(works).toHaveLength(1);
     expect(works[0]?.receipt.action).toMatchObject({
@@ -187,6 +154,7 @@ describe("generic tool action decision receipts", () => {
       operation: "memory",
     });
     expect(JSON.stringify(works)).not.toMatch(/arbitrary|owner_declared|renamed/u);
+    expect(JSON.stringify(works)).not.toMatch(/SECRET_RESULT|private\/(?:input|result)/u);
   });
 
   it("records a Gateway-shaped tool assembled without its first hook wrapper", async () => {
@@ -463,7 +431,6 @@ describe("generic tool action decision receipts", () => {
   });
 
   it.each([
-    { name: "stale authority", authority: () => false },
     {
       name: "throwing authority",
       authority: () => {

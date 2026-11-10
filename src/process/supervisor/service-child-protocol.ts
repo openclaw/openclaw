@@ -1,8 +1,11 @@
 import type { ChildProcess } from "node:child_process";
 import type { NodeWorkerCleanupBinding } from "../../node-host/node-worker-launch-receipt.js";
+import type { ProcessExecutionIntent } from "../linux-exec-cgroup.js";
 import type { BrokerError } from "../spawn-broker/protocol.js";
 
 export type ServiceChildStart = {
+  executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
   type: "start" | "prepare";
   generation: string;
   command: string;
@@ -81,6 +84,7 @@ export type ServiceChildAnchorPayload =
       type: "startup-error";
       error: string;
       errorDetails?: BrokerError;
+      anchorPid?: number;
     };
 
 export type ServiceChildAnchorMessage = ServiceChildAnchorPayload & {

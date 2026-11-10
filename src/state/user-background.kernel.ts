@@ -10,7 +10,7 @@ import type {
   UsersBackgroundResult,
 } from "../../packages/gateway-protocol/src/schema/users-background.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   deleteUserBackgroundImage,
@@ -59,12 +59,11 @@ export function readUserBackgroundCommand(
   db: EngineConnection,
   command: UserBackgroundReadCommand,
 ): UserBackgroundReadReply {
-  return runSqliteDeferredTransactionSync(db, () => {
+  return runSqliteReadSnapshotSync(db, () => {
     const owner = resolveProfile(db, command.profileId);
     if (command.type === "userBackground.snapshot") {
       return {
         type: command.type,
-        profileId: owner,
         result: owner ? readSnapshot(db, owner) : { status: "no_durable_identity" },
       };
     }
@@ -134,5 +133,18 @@ export function commitUserBackgroundInDatabase(
     // Roll back the asset too, including a quota failure after first upload.
     throw new Error(`Failed to save background preference: ${result.error.code}`);
   }
-  return readSnapshot(db, profileId);
+  return {
+    status: "ok",
+    asset:
+      image && assetId
+        ? {
+            assetId,
+            width: image.width,
+            height: image.height,
+            mime: "image/jpeg",
+            byteLength: image.image.byteLength,
+          }
+        : null,
+    preference,
+  };
 }

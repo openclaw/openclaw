@@ -1,11 +1,18 @@
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { AgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import type { FailoverReason } from "./failover/signal.js";
 
 export const MODEL_FALLBACK_SKIPPED_CODE = "MODEL_FALLBACK_SKIPPED";
 
-export type ModelCandidate = {
-  provider: string;
-  model: string;
-};
+export type ModelCandidate = ProviderModelRef;
+
+export type ModelFallbackAvailability =
+  // `source` records whether an explicit fallbacks override owns the ladder or the
+  // models were inherited from defaults; the run-override projection depends on it.
+  | { kind: "active"; models: string[]; source: "explicit" | "inherited" }
+  | { kind: "none_configured"; source: "explicit" | "inherited" }
+  | { kind: "disabled_by_model_override" }
+  | { kind: "disabled_by_model_selection_lock" };
 
 export type ModelFallbackRouteOrigin = "requested" | "configured-fallback" | "configured-primary";
 export type ModelFallbackRouteResolution = "raw" | "resolved";
@@ -34,3 +41,19 @@ export type ModelFallbackAttemptProvenance = {
   selectionChanged?: boolean;
   fallbackReason?: FailoverReason;
 };
+
+export type ModelFallbackResultClassification =
+  | {
+      agentTerminal?: AgentTerminalSnapshot;
+      message: string;
+      reason?: FailoverReason;
+      status?: number;
+      code?: string;
+      rawError?: string;
+      rateLimitRetriesExhausted?: number;
+      preserveResultOnExhaustion?: boolean;
+      preserveResultPriority?: number;
+    }
+  | { error: unknown }
+  | null
+  | undefined;

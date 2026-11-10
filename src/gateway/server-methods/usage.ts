@@ -5,20 +5,14 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
-  errorShape,
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveUsageCostWorkerDayBucket } from "../../infra/session-cost-usage-worker-runtime.js";
 import { loadSessionLogs, loadSessionUsageTimeSeries } from "../../infra/session-cost-usage.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { isIncognitoSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import { readSessionRowChangeRevision } from "../../sessions/session-row-changes.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
-import {
-  createUsageAggregateAccumulator,
-  UNKNOWN_USAGE_CREATOR_KEY,
-} from "../../shared/usage-aggregates.js";
+import { createUsageAggregateAccumulator } from "../../shared/usage-aggregates.js";
 import { buildUsageOverview, selectUsageOverviewPage } from "../../shared/usage-overview.js";
 import { extractQueryTerms } from "../../shared/usage-query.js";
 import type {
@@ -27,6 +21,7 @@ import type {
   SessionsUsageAggregates,
   SessionsUsageResult,
   UsageOverviewOptions,
+  UsageOverviewSlice,
 } from "../../shared/usage-types.js";
 import {
   sessionDeliveryChannel,
@@ -34,9 +29,12 @@ import {
 } from "../../utils/delivery-context.read.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
-import { projectSessionActor } from "../session-identity-projection.js";
+import type { projectSessionActor } from "../session-identity-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
 import {
   prepareSessionMutationFacts,
   SessionMutationFactsUnavailableError,
@@ -48,23 +46,30 @@ import {
 import { createSessionListEntryFilter, isGatewayAdmin } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { respondError } from "./response.js";
+import type { GatewayRequestHandlers } from "./types.js";
+import { formatDateLabel, resolveDayBucket } from "./usage-date-range.js";
 import {
-  formatDateLabel,
-  resolveDateInterpretation,
-  resolveDateRange,
-  resolveDayBucket,
-  type DateInterpretation,
-  type DateRange,
-} from "./usage-date-range.js";
+  createUsageOverviewReporter,
+  prepareUsageOverviewUsage,
+  withVisibleUsageOverviewRows,
+} from "./usage-overview-report.js";
+import {
+  resolveSessionUsageFileOrRespond,
+  resolveUsageDateRangeOrRespond,
+} from "./usage-request.js";
 import {
   loadCostUsageSummaryCached,
   loadSessionsUsageSnapshotCached,
 } from "./usage-result-cache.js";
-import { loadUsageSessionSummaries, withUsageRequestBudget } from "./usage-session-loading.js";
+import {
+  loadUsageOverviewSummaries,
+  loadUsageSessionSummaries,
+  withUsageRequestBudget,
+} from "./usage-session-loading.js";
 import {
   loadUsageSessionContext,
-  resolveSessionUsageTarget,
+  projectUsageCreator,
   selectUsageSessions,
   UsageSessionInvalidRequestError,
   type UsageGroupingMode,
@@ -72,110 +77,7 @@ import {
 } from "./usage-session-selection.js";
 import { assertValidParams } from "./validation.js";
 
-async function resolveSessionUsageFileOrRespond(
-  params: { key?: unknown; agentId?: unknown } | undefined,
-  detail: "timeseries" | "logs",
-  respond: RespondFn,
-  config: OpenClawConfig,
-) {
-  const key = normalizeOptionalString(params?.key);
-  if (!key) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `key is required for ${detail}`),
-    );
-    return null;
-  }
-  const sessionOwner = resolveRequestedSessionAgentId(
-    config,
-    key,
-    normalizeOptionalString(params?.agentId),
-  );
-  if (!sessionOwner.ok) {
-    respond(false, undefined, sessionOwner.error);
-    return null;
-  }
-  let resolved: Awaited<ReturnType<typeof resolveSessionUsageTarget>>;
-  try {
-    resolved = await resolveSessionUsageTarget(key, config, sessionOwner.agentId);
-  } catch {
-    getAsyncWorkSignal()?.throwIfAborted();
-    resolved = undefined;
-  }
-  if (!resolved) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `Invalid session key: ${key}`),
-    );
-    return null;
-  }
-  return { config, key, ...resolved };
-}
-
-function resolveUsageDateRangeOrRespond(
-  params: Parameters<typeof resolveDateRange>[0],
-  respond: RespondFn,
-): { interpretation: DateInterpretation; range: DateRange } | null {
-  const interpretation = resolveDateInterpretation(params);
-  if (!interpretation.ok) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, interpretation.error));
-    return null;
-  }
-
-  const range = resolveDateRange(params, interpretation.value);
-  if (!range.ok) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, range.error));
-    return null;
-  }
-  return { interpretation: interpretation.value, range: range.value };
-}
-
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
-
-function projectUsageCreator(
-  session: UsageSessionSelection,
-  profiles: Parameters<typeof projectSessionActor>[1],
-  config: OpenClawConfig,
-): SessionUsageCreator {
-  const entry = session.storeEntry ?? session.creatorEntry;
-  const actor = entry?.createdActor;
-  if (!actor) {
-    return { key: UNKNOWN_USAGE_CREATOR_KEY };
-  }
-  const projected = projectSessionActor(
-    actor,
-    profiles,
-    config,
-    Boolean(sessionCreatorProfileId(actor)),
-  );
-  if (!projected?.id && actor.type !== "system") {
-    return { key: UNKNOWN_USAGE_CREATOR_KEY };
-  }
-  const identity = projected?.identity;
-  const origin = sessionDeliveryOrigin(entry);
-  const channel = sessionDeliveryChannel(entry);
-  if (actor.type === "human" && actor.source !== "profile" && !channel) {
-    return { key: UNKNOWN_USAGE_CREATOR_KEY };
-  }
-  const key =
-    identity?.type === "profile"
-      ? JSON.stringify(["profile", identity.id])
-      : actor.type === "human"
-        ? JSON.stringify([
-            "human",
-            actor.source,
-            session.agentId,
-            channel ?? null,
-            origin?.accountId ?? null,
-            projected?.id,
-          ])
-        : actor.type === "agent"
-          ? JSON.stringify([identity?.type ?? "agent", identity?.id ?? projected?.id])
-          : JSON.stringify(["system", projected?.id ?? null]);
-  return { key, ...(projected ? { actor: projected } : {}) };
-}
 
 export const usageHandlers: GatewayRequestHandlers = {
   "usage.status": async ({ respond, context, client }) => {
@@ -203,28 +105,38 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
     const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
-    if (!isGatewayAdmin(client ?? null) && operatorSessionCap(client ?? null, config) === "none") {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.FORBIDDEN,
-          "Aggregate usage includes sessions hidden by your operator role; ask an administrator to review Gateway-wide usage.",
-        ),
+    if (
+      !isGatewayAdmin(client ?? null) &&
+      ["none", "invited"].includes(operatorSessionCap(client ?? null, config) ?? "")
+    ) {
+      respondError(
+        respond,
+        ErrorCodes.FORBIDDEN,
+        "Aggregate usage includes sessions hidden by your operator role; ask an administrator to review Gateway-wide usage.",
       );
       return;
     }
     const { startMs, endMs } = range;
-    const agentId = normalizeOptionalString(params?.agentId);
-    if (params?.agentScope === "all" && agentId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "agentScope=all cannot be combined with agentId"),
+    const requestedAgentId = params?.agentId;
+    const requestedAgentScope = params?.agentScope;
+    if (requestedAgentId !== undefined && typeof requestedAgentId !== "string") {
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "agentId must be a string");
+      return;
+    }
+    if (requestedAgentScope !== undefined && requestedAgentScope !== "all") {
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "agentScope must be 'all' when provided");
+      return;
+    }
+    const agentId = normalizeOptionalString(requestedAgentId);
+    if (requestedAgentScope === "all" && agentId) {
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "agentScope=all cannot be combined with agentId",
       );
       return;
     }
-    const agentScope = params?.agentScope === "all" ? "all" : undefined;
+    const agentScope = requestedAgentScope === "all" ? "all" : undefined;
     let effectiveAgentId = agentId;
     if (!agentScope && !effectiveAgentId) {
       const requestedAgent = resolveRequestedSessionAgentId(config, "main");
@@ -257,9 +169,21 @@ export const usageHandlers: GatewayRequestHandlers = {
     const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
     const sessionCap = operatorSessionCap(client ?? null, config);
-    const visibilityFilter =
-      sessionCap === "none"
-        ? createSessionListEntryFilter({ client: client ?? null, cfg: config })
+    const visibilityFilter: Parameters<typeof selectUsageSessions>[0]["visibilityFilter"] =
+      sessionCap === "none" || sessionCap === "invited"
+        ? (key, entry, target) =>
+            createSessionListEntryFilter({
+              client: client ?? null,
+              cfg: context.getRuntimeConfig(),
+              membership:
+                target && !isIncognitoSessionKey(key)
+                  ? getSessionRowProjection(context)?.readMembership({
+                      agentId: target.agentId,
+                      key: target.storeKey ?? key,
+                      storePath: target.storeTarget.storePath,
+                    })
+                  : undefined,
+            })?.(key, entry) !== false
         : undefined;
     const profileId = gatewayClientSessionCreator(client ?? null)?.id;
     const visibilityIdentity = sessionCap && profileId ? `${profileId}:${sessionCap}` : undefined;
@@ -290,18 +214,18 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
       : undefined;
     const includeContextWeight = p.includeContextWeight ?? false;
+    const includeAllContext = extractQueryTerms(overviewOptions?.query ?? "").some(
+      (term) => term.key?.toLowerCase() === "has" && term.value.toLowerCase() === "context",
+    );
     const creatorKey = normalizeOptionalString(p.creatorKey);
     const specificKey = normalizeOptionalString(p.key) ?? null;
     const requestedAgentId = normalizeOptionalString(p.agentId);
     const requestedAllAgents = p.agentScope === "all";
     if (requestedAllAgents && (requestedAgentId || specificKey)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "agentScope=all cannot be combined with key or agentId",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "agentScope=all cannot be combined with key or agentId",
       );
       return;
     }
@@ -337,14 +261,14 @@ export const usageHandlers: GatewayRequestHandlers = {
         endMs,
         includeUntimestamped,
         dayBucket,
-        limit,
         groupingMode,
         specificKey,
         includeContextWeight,
         creatorKey,
-        ...(overviewOptions
-          ? { overviewKey: JSON.stringify([p.projection, overviewOptions]) }
-          : {}),
+        // Paging, sorting, and usage filters derive from the same source snapshot.
+        overview: overviewOptions !== undefined,
+        projection: p.projection === "overview" ? "overview" : "detail",
+        includeAllContext,
         ...(visibilityIdentity ? { visibilityIdentity } : {}),
         load: async () => {
           const now = Date.now();
@@ -354,6 +278,7 @@ export const usageHandlers: GatewayRequestHandlers = {
             () =>
               selectUsageSessions({
                 config,
+                projection: requireSessionRowProjection(context),
                 agentId: effectiveAgentId,
                 specificKey,
                 groupingMode,
@@ -378,18 +303,14 @@ export const usageHandlers: GatewayRequestHandlers = {
           }
 
           // Context queries need the saved report for every candidate; ordinary reads hydrate the page.
-          if (
-            extractQueryTerms(overviewOptions?.query ?? "").some(
-              (term) => term.key?.toLowerCase() === "has" && term.value.toLowerCase() === "context",
-            )
-          ) {
+          if (includeAllContext) {
             await budget.read(
               () => loadUsageSessionContext(mergedEntries, visibilityFilter),
               () => undefined,
             );
           }
           const sessions: SessionUsageEntry[] = [];
-          const { summaries, computing, cacheStatus } = await loadUsageSessionSummaries({
+          const summaryParams = {
             entries: mergedEntries,
             read: budget.read,
             config,
@@ -397,7 +318,20 @@ export const usageHandlers: GatewayRequestHandlers = {
             endMs,
             includeUntimestamped,
             dayBucket,
-          });
+          };
+          const overviewSummaries =
+            p.projection === "overview"
+              ? await loadUsageOverviewSummaries(summaryParams)
+              : undefined;
+          const { summaries, computing, cacheStatus } =
+            overviewSummaries ?? (await loadUsageSessionSummaries(summaryParams));
+          // Unsummarized instances (refresh or upgrade backfill) make every total a lower bound.
+          const summarizing: SessionsUsageResult["partial"] = overviewSummaries?.summarizing
+            ? {
+                reason: "summarizing",
+                message: `Usage is still being summarized for ${overviewSummaries.summarizing} of ${overviewSummaries.instances} sessions; totals are incomplete and update automatically.`,
+              }
+            : undefined;
 
           const usageByEntry = new Map(
             mergedEntries.map((entry, index) => [
@@ -431,10 +365,24 @@ export const usageHandlers: GatewayRequestHandlers = {
               modelProvider: merged.storeEntry?.modelProvider,
               model: merged.storeEntry?.model,
               usage,
-              ...(!usage || loaded?.computing ? { computing: true } : {}),
+              // Overview loads mark rows without packed usage as computing themselves.
+              ...((!usage && !overviewSummaries) || loaded?.computing ? { computing: true } : {}),
               hasContextWeight: Boolean(merged.contextWeight),
               contextWeight: includeContextWeight ? (merged.contextWeight ?? null) : undefined,
             });
+          }
+
+          // Prepare reusable cohorts only once the overview is fully summarized.
+          if (overviewSummaries && !summarizing) {
+            await budget.read(
+              () =>
+                prepareUsageOverviewUsage({
+                  usage: overviewSummaries.usage,
+                  rows: sessions.filter((row) => !creatorKey || row.creatorKey === creatorKey),
+                  dayBucket: resolveUsageCostWorkerDayBucket(dayBucket),
+                }),
+              () => undefined,
+            );
           }
 
           return {
@@ -449,7 +397,13 @@ export const usageHandlers: GatewayRequestHandlers = {
                   status: "partial" as const,
                 }
               : cacheStatus,
+            ...(budget.exhausted()
+              ? { partial: { reason: "time-budget" as const, message: budget.hint } }
+              : summarizing
+                ? { partial: summarizing }
+                : {}),
             sources: visibleEntries,
+            ...(overviewSummaries ? { overviewUsage: overviewSummaries.usage } : {}),
             accessRevision: loadedAccessRevision,
             sessionRevision: loadedSessionRevision,
           };
@@ -457,7 +411,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       });
     } catch (err) {
       if (err instanceof UsageSessionInvalidRequestError) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, err.message));
+        respondError(respond, ErrorCodes.INVALID_REQUEST, err.message);
         return;
       }
       throw err;
@@ -536,11 +490,21 @@ export const usageHandlers: GatewayRequestHandlers = {
           const source = sourceFor(session);
           const committed = source && committedEntry(source);
           let current = committed?.entry;
+          let membership =
+            source?.contextTarget && !isIncognitoSessionKey(source.key)
+              ? getSessionRowProjection(context)?.readMembership({
+                  agentId: source.agentId,
+                  key: source.contextTarget.storedKey,
+                  storePath: source.contextTarget.storeTarget.storePath,
+                })
+              : undefined;
           if (committed === undefined && source) {
             const prepared = contextReads.get(source);
             if (prepared) {
               try {
-                current = prepared.readCurrent(currentConfig).target?.entry;
+                const facts = prepared.readCurrent(currentConfig);
+                current = facts.target?.entry;
+                membership = facts.membership;
               } catch (error) {
                 if (!(error instanceof SessionMutationFactsUnavailableError)) {
                   throw error;
@@ -553,8 +517,14 @@ export const usageHandlers: GatewayRequestHandlers = {
           // Cached reports are data; current receipt metadata owns publication authority.
           if (
             source?.storeEntry
-              ? !current || (currentFilter && !currentFilter(session.key, current))
-              : currentSessionCap === "none"
+              ? !current ||
+                (currentFilter &&
+                  !currentFilter(
+                    session.key,
+                    current,
+                    Boolean(profileId && membership?.has(profileId)),
+                  ))
+              : currentSessionCap === "none" || currentSessionCap === "invited"
           ) {
             return [];
           }
@@ -569,21 +539,31 @@ export const usageHandlers: GatewayRequestHandlers = {
             : [session];
         });
       };
+      const selectRows = (rows: SessionUsageEntry[]) =>
+        rows.filter((row) => !creatorKey || row.creatorKey === creatorKey);
+      const reportDayBucket = resolveUsageCostWorkerDayBucket(dayBucket);
+      // Overview projections aggregate packed usage off the Gateway thread.
+      const reportFor = createUsageOverviewReporter({
+        usage: overviewOptions && result.overviewUsage,
+        options: overviewOptions,
+        dayBucket: reportDayBucket,
+      });
       // Refill once after an access change. Continued churn may shorten the page, never extend the scan.
       let visible: SessionUsageEntry[] | undefined;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         await budget.read(prepareUnavailableSources, () => undefined);
         visible = readVisibleRows();
-        const selected = visible.filter((row) => !creatorKey || row.creatorKey === creatorKey);
-        const pageSources = (
-          overviewOptions
+        const selected = selectRows(visible);
+        const page = reportFor
+          ? (await reportFor.run(selected)).sessions
+          : overviewOptions
             ? selectUsageOverviewPage({
                 rows: selected,
                 options: overviewOptions,
-                dayBucket: resolveUsageCostWorkerDayBucket(dayBucket),
+                dayBucket: reportDayBucket,
               })
-            : selected.slice(0, limit)
-        ).flatMap((row) => {
+            : selected.slice(0, limit);
+        const pageSources = page.flatMap((row) => {
           const source = sourceFor(row);
           return source && !hydratedSources.has(source) ? [source] : [];
         });
@@ -621,32 +601,52 @@ export const usageHandlers: GatewayRequestHandlers = {
         await budget.read(prepareUnavailableSources, () => undefined);
         visible = readVisibleRows();
       }
-      const creatorOptions = new Map<string, SessionUsageCreator>();
-      for (const row of visible) {
-        if (row.creatorKey) {
-          creatorOptions.set(row.creatorKey, { key: row.creatorKey, actor: row.createdActor });
-        }
-      }
-      const selected = visible.filter((row) => !creatorKey || row.creatorKey === creatorKey);
+      let selected = selectRows(visible);
       const accumulator = createUsageAggregateAccumulator();
       if (!overviewOptions) {
         selected.forEach((row) => accumulator.add(row));
       }
-      const slice = overviewOptions
-        ? buildUsageOverview({
-            rows: selected,
-            options: overviewOptions,
-            dayBucket: resolveUsageCostWorkerDayBucket(dayBucket),
-            compact: p.projection === "overview",
-          })
-        : {
-            sessions: selected.slice(0, limit),
-            totals: accumulator.totals,
-            aggregates: accumulator.finish(),
-          };
+      let slice:
+        | UsageOverviewSlice
+        | Pick<UsageOverviewSlice, "sessions" | "totals" | "aggregates">;
+      if (reportFor) {
+        const report = await reportFor.run(selected);
+        // Access can change while the worker aggregates. Publish only what the current
+        // authority permits: re-read visibility with no await before the response.
+        visible = readVisibleRows();
+        selected = selectRows(visible);
+        slice = withVisibleUsageOverviewRows(
+          reportFor.covers(selected) ? report : reportFor.local(selected),
+          visible,
+        );
+      } else {
+        slice = overviewOptions
+          ? buildUsageOverview({
+              rows: selected,
+              options: overviewOptions,
+              dayBucket: reportDayBucket,
+              compact: p.projection === "overview",
+            })
+          : {
+              sessions: selected.slice(0, limit),
+              totals: accumulator.totals,
+              aggregates: accumulator.finish(),
+            };
+      }
+      const creatorOptions = new Map<string, SessionUsageCreator & { sessionCount: number }>();
+      for (const row of visible) {
+        if (row.creatorKey) {
+          const option = creatorOptions.get(row.creatorKey);
+          creatorOptions.set(row.creatorKey, {
+            key: row.creatorKey,
+            actor: row.createdActor,
+            sessionCount: (option?.sessionCount ?? 0) + 1,
+          });
+        }
+      }
       const partial = budget.exhausted()
         ? { reason: "time-budget" as const, message: budget.hint }
-        : undefined;
+        : (result.partial ?? result.cacheStatus?.partial);
       if (partial && "overview" in slice) {
         slice.overview.queryWarnings.push(partial.message);
       }
@@ -694,10 +694,10 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
 
     if (!timeseries) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `No transcript found for session: ${resolved.key}`),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        `No transcript found for session: ${resolved.key}`,
       );
       return;
     }

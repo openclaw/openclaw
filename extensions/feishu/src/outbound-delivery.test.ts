@@ -1,7 +1,10 @@
-// Feishu tests cover the shared outbound delivery path.
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  deliverInboundReplyWithMessageSendContext,
+  deriveDurableFinalDeliveryRequirements,
+  sendDurableMessageBatch,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   createOutboundTestPlugin,
   createTestRegistry,
@@ -13,8 +16,10 @@ import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runti
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
-const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
+const sendMediaFeishuMock = vi.hoisted(() => vi.fn<typeof import("./media.js").sendMediaFeishu>());
+const sendMessageFeishuMock = vi.hoisted(() =>
+  vi.fn<typeof import("./send.js").sendMessageFeishu>(),
+);
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./media.js", () => ({
@@ -35,18 +40,13 @@ vi.mock("./send.js", async (importOriginal) => ({
 import { feishuPlugin } from "./channel.js";
 import { feishuChannelRuntime } from "./channel.runtime.js";
 import { feishuOutbound } from "./outbound.js";
+import { toFeishuSendResult } from "./send-result.js";
 
 type DeliveryQueueRow = {
   status: string;
   recovery_state: string | null;
   platform_send_started_at: number | null;
 };
-
-const completionRetention = {
-  idPrefix: "feishu-direct-",
-  maxAgeMs: 60_000,
-  maxEntries: 10,
-} as const;
 
 function readDeliveryQueueRow(stateDir: string, id: string): DeliveryQueueRow | undefined {
   const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
@@ -65,30 +65,22 @@ function readDeliveryQueueRow(stateDir: string, id: string): DeliveryQueueRow | 
   }
 }
 
+const sendBatch = (
+  options: Omit<Parameters<typeof sendDurableMessageBatch>[0], "cfg" | "channel" | "to">,
+) => sendDurableMessageBatch({ cfg: {}, channel: "feishu", to: "chat_1", ...options });
+const sendResult = (messageId: string, kind: "text" | "media") =>
+  toFeishuSendResult({ data: { message_id: messageId } }, "chat_1", kind);
+
 describe("Feishu outbound shared delivery", () => {
   beforeEach(() => {
     let textMessageIndex = 0;
-    sendMediaFeishuMock.mockReset().mockResolvedValue({
-      messageId: "media-1",
-      chatId: "chat_1",
-    });
-    sendMessageFeishuMock.mockReset().mockImplementation(async () => ({
-      messageId: `text-${String(++textMessageIndex)}`,
-      chatId: "chat_1",
-    }));
-    sendCardFeishuMock.mockReset().mockResolvedValue({
-      messageId: "card-1",
-      chatId: "chat_1",
-    });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "feishu",
-          plugin: createOutboundTestPlugin({ id: "feishu", outbound: feishuOutbound }),
-          source: "test",
-        },
-      ]),
-    );
+    sendMediaFeishuMock.mockReset().mockResolvedValue(sendResult("media-1", "media"));
+    sendMessageFeishuMock
+      .mockReset()
+      .mockImplementation(async () => sendResult(`text-${String(++textMessageIndex)}`, "text"));
+    sendCardFeishuMock.mockReset().mockResolvedValue({ messageId: "card-1", chatId: "chat_1" });
+    const plugin = createOutboundTestPlugin({ id: "feishu", outbound: feishuOutbound });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "feishu", plugin, source: "test" }]));
     resetGlobalHookRunner();
   });
 
@@ -105,10 +97,7 @@ describe("Feishu outbound shared delivery", () => {
       workspaceDir: "/approved/workspace",
       readFile,
     };
-    await sendDurableMessageBatch({
-      cfg: {},
-      channel: "feishu",
-      to: "chat_1",
+    await sendBatch({
       skipQueue: true,
       mediaAccess,
       payloads: [
@@ -135,28 +124,21 @@ describe("Feishu outbound shared delivery", () => {
       ],
     });
 
-    const textChunks = sendMessageFeishuMock.mock.calls.map((call) => {
-      const text = (call[0] as { text?: unknown } | undefined)?.text;
-      return typeof text === "string" ? text : "";
-    });
+    const textChunks = sendMessageFeishuMock.mock.calls.map(([params]) => params.text);
     const deliveredText = textChunks.join("\n");
 
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
     expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
-    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mediaUrl: "pipeline.png",
-        mediaAccess,
-        mediaLocalRoots: mediaAccess.localRoots,
-        mediaReadFile: readFile,
-        to: "chat_1",
-      }),
-    );
-    const sentMedia = sendMediaFeishuMock.mock.calls[0]?.[0] as {
-      mediaAccess?: { localRoots?: readonly string[]; readFile?: typeof readFile };
-    };
-    expect(sentMedia.mediaAccess?.localRoots).toBe(mediaAccess.localRoots);
-    expect(sentMedia.mediaAccess?.readFile).toBe(readFile);
+    const sentMedia = sendMediaFeishuMock.mock.calls[0]?.[0];
+    expect(sentMedia).toMatchObject({
+      mediaUrl: "pipeline.png",
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile: readFile,
+      to: "chat_1",
+    });
+    expect(sentMedia?.mediaAccess?.localRoots).toBe(mediaAccess.localRoots);
+    expect(sentMedia?.mediaAccess?.readFile).toBe(readFile);
     expect(textChunks.length).toBeGreaterThan(1);
     expect(textChunks.every((chunk) => Array.from(chunk).length <= 4000)).toBe(true);
     expect(deliveredText).toContain("account-0-");
@@ -164,109 +146,130 @@ describe("Feishu outbound shared delivery", () => {
     expect(deliveredText).toContain(`- ${label}: \`/open-run\``);
   });
 
-  it("replays a queued direct message after Feishu runtime availability is restored", async () => {
-    const originalSendText = feishuChannelRuntime.feishuOutbound.sendText;
-    if (!originalSendText) {
-      throw new Error("Expected Feishu runtime sendText");
-    }
-    const deliveryIntentId = "feishu-direct-runtime-availability";
+  it.each(["reply", "thread", "card"] as const)(
+    "delivers a durable final with %s context",
+    async (route) => {
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "feishu", plugin: feishuPlugin, source: "test" }]),
+      );
+      await withStateDirEnv("openclaw-feishu-final-", async () => {
+        const payload = {
+          text: "Final answer",
+          ...(route === "thread" ? { mediaUrl: "https://example.com/image.png" } : {}),
+          ...(route === "card"
+            ? { presentation: { blocks: [{ type: "text" as const, text: "Card answer" }] } }
+            : {}),
+        };
+        const replyToId = route === "thread" ? undefined : "om_parent";
+        const threadId = route === "thread" ? "om_topic" : undefined;
+        const result = await deliverInboundReplyWithMessageSendContext({
+          cfg: {},
+          channel: "feishu",
+          accountId: "default",
+          agentId: "main",
+          ctxPayload: {
+            CommandAuthorized: true,
+            CommandTurn: { kind: "normal", source: "message", authorized: false },
+            OriginatingTo: "chat_1",
+          },
+          info: { kind: "final" },
+          payload,
+          replyToId,
+          threadId,
+          requiredCapabilities: deriveDurableFinalDeliveryRequirements({
+            payload,
+            replyToId,
+            threadId,
+            payloadTransport: route === "card",
+          }),
+        });
+        expect(result.status).toBe("handled_visible");
+        const transport =
+          route === "card"
+            ? sendCardFeishuMock
+            : route === "thread"
+              ? sendMediaFeishuMock
+              : sendMessageFeishuMock;
+        expect(transport).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            to: "chat_1",
+            replyToMessageId: route === "thread" ? "om_topic" : "om_parent",
+            replyInThread: route === "thread",
+          }),
+        );
+      });
+    },
+  );
 
+  it.each(
+    [
+      { phase: "runtime unavailability", started: false },
+      { phase: "an ambiguous provider result", started: true },
+    ].flatMap(({ phase, started }) =>
+      (["text", "payload"] as const).map((kind) => ({ phase, started, kind })),
+    ),
+  )("recovers queued $kind after $phase without duplicate dispatch", async ({ started, kind }) => {
+    const originalSenders = {
+      sendText: feishuChannelRuntime.feishuOutbound.sendText,
+      sendPayload: feishuChannelRuntime.feishuOutbound.sendPayload,
+    };
+    const method = kind === "payload" ? "sendPayload" : "sendText";
+    const transport = kind === "payload" ? sendCardFeishuMock : sendMessageFeishuMock;
+    const deliveryIntentId = `feishu-direct-${kind}-${started ? "ambiguous" : "unavailable"}`;
+    if (started) {
+      transport.mockRejectedValueOnce(new Error("Feishu provider result was lost"));
+    }
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "feishu", plugin: feishuPlugin, source: "test" }]),
     );
-    feishuChannelRuntime.feishuOutbound.sendText = undefined;
+    if (!started) {
+      feishuChannelRuntime.feishuOutbound[method] = undefined;
+    }
 
     try {
-      await withStateDirEnv("openclaw-feishu-runtime-availability-", async ({ stateDir }) => {
-        const initial = await sendDurableMessageBatch({
-          cfg: {},
-          channel: "feishu",
-          to: "chat_1",
+      await withStateDirEnv("openclaw-feishu-recovery-", async ({ stateDir }) => {
+        const initial = await sendBatch({
           accountId: "default",
           durability: "required",
           deliveryIntentId,
-          completionRetention,
+          completionRetention: { idPrefix: "feishu-direct-", maxAgeMs: 60_000, maxEntries: 10 },
           maxRetries: 2,
-          payloads: [{ text: "retry after runtime restoration" }],
+          replyToId: "om_parent",
+          payloads: [
+            {
+              text: "queued reply",
+              ...(kind === "payload"
+                ? { presentation: { blocks: [{ type: "text" as const, text: "queued card" }] } }
+                : {}),
+            },
+          ],
         });
-
         expect(initial.status).toBe("failed");
-        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+        expect(transport).toHaveBeenCalledTimes(started ? 1 : 0);
         expect(readDeliveryQueueRow(stateDir, deliveryIntentId)).toMatchObject({
           status: "pending",
-          recovery_state: null,
-          platform_send_started_at: null,
+          recovery_state: started ? "send_attempt_started" : null,
+          platform_send_started_at: started ? expect.any(Number) : null,
         });
 
-        feishuChannelRuntime.feishuOutbound.sendText = originalSendText;
+        Object.assign(feishuChannelRuntime.feishuOutbound, originalSenders);
         await drainPendingDeliveries({
           drainKey: "feishu:default",
-          logLabel: "Feishu runtime availability recovery",
+          logLabel: "Feishu delivery recovery",
           cfg: {},
           stateDir,
           log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-          selectEntry: (entry) => ({
-            match: entry.channel === "feishu",
-            bypassBackoff: true,
-          }),
+          selectEntry: (entry) => ({ match: entry.channel === "feishu", bypassBackoff: true }),
         });
-
-        expect(sendMessageFeishuMock).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            to: "chat_1",
-            text: "retry after runtime restoration",
-          }),
+        expect(transport).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ to: "chat_1", replyToMessageId: "om_parent" }),
         );
-        expect(readDeliveryQueueRow(stateDir, deliveryIntentId)?.status).toBe("completed");
+        if (!started) {
+          expect(readDeliveryQueueRow(stateDir, deliveryIntentId)?.status).toBe("completed");
+        }
       });
     } finally {
-      feishuChannelRuntime.feishuOutbound.sendText = originalSendText;
+      Object.assign(feishuChannelRuntime.feishuOutbound, originalSenders);
     }
-  });
-
-  it("does not replay a Feishu provider call after dispatch may have begun", async () => {
-    const deliveryIntentId = "feishu-direct-ambiguous-provider-result";
-    sendMessageFeishuMock.mockRejectedValueOnce(new Error("Feishu provider result was lost"));
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "feishu", plugin: feishuPlugin, source: "test" }]),
-    );
-
-    await withStateDirEnv("openclaw-feishu-ambiguous-provider-", async ({ stateDir }) => {
-      const initial = await sendDurableMessageBatch({
-        cfg: {},
-        channel: "feishu",
-        to: "chat_1",
-        accountId: "default",
-        durability: "required",
-        deliveryIntentId,
-        completionRetention,
-        maxRetries: 2,
-        payloads: [{ text: "do not replay an ambiguous provider call" }],
-      });
-
-      expect(initial.status).toBe("failed");
-      expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
-      expect(readDeliveryQueueRow(stateDir, deliveryIntentId)).toMatchObject({
-        status: "pending",
-        recovery_state: "send_attempt_started",
-      });
-      expect(readDeliveryQueueRow(stateDir, deliveryIntentId)?.platform_send_started_at).toEqual(
-        expect.any(Number),
-      );
-
-      await drainPendingDeliveries({
-        drainKey: "feishu:default",
-        logLabel: "Feishu ambiguous provider recovery",
-        cfg: {},
-        stateDir,
-        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        selectEntry: (entry) => ({
-          match: entry.channel === "feishu",
-          bypassBackoff: true,
-        }),
-      });
-
-      expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
-    });
   });
 });

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND } from "../infra/node-commands.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import type { NodeHostClient } from "./client.js";
 import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
@@ -10,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   checkWorkspaceAdmission: vi.fn(async () => undefined),
   closeWorkerSupervisor: vi.fn<() => Promise<void>>(async () => undefined),
   initializeWorkerSupervisor: vi.fn(async () => undefined),
-  handleInvoke: vi.fn(async () => undefined),
+  handleInvoke: vi.fn<typeof import("./invoke.js").handleInvoke>(async () => undefined),
   resolveContainerEngine: vi.fn(async (_options?: { env?: NodeJS.ProcessEnv }) => ({
     id: "docker" as const,
     command: "docker",
@@ -60,6 +62,7 @@ const client = { request: vi.fn(async () => ({})) } as unknown as NodeHostClient
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockProcessPlatform("linux");
   mocks.checkWorkspaceAdmission.mockReset().mockResolvedValue(undefined);
   mocks.closeWorkerSupervisor.mockReset().mockResolvedValue(undefined);
   mocks.initializeWorkerSupervisor.mockReset().mockResolvedValue(undefined);
@@ -67,6 +70,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 function prepareWorkerRuntime(
@@ -74,15 +78,16 @@ function prepareWorkerRuntime(
   options: {
     enabled?: boolean;
     forceWorkerRuns?: boolean;
-    platform?: NodeJS.Platform;
     containerImage?: string;
   } = {},
 ) {
   const { enabled = true, containerImage, ...runtimeOptions } = options;
+  const workerRuns = { enabled, isolation, containerImage };
   return prepareNodeHostRuntime({
-    config: {
-      nodeHost: { skills: { enabled: false }, workerRuns: { enabled, isolation, containerImage } },
-    },
+    config:
+      !enabled || isolation === "container"
+        ? configThatRejectsModelAccess(workerRuns)
+        : { nodeHost: { skills: { enabled: false }, workerRuns } },
     env: { PATH: "/usr/bin" },
     ...runtimeOptions,
   });
@@ -91,6 +96,7 @@ function prepareWorkerRuntime(
 function configThatRejectsModelAccess(workerRuns: {
   enabled: boolean;
   isolation?: "container";
+  containerImage?: string;
 }): OpenClawConfig {
   const config: OpenClawConfig = {
     nodeHost: { skills: { enabled: false }, workerRuns },
@@ -104,30 +110,63 @@ function configThatRejectsModelAccess(workerRuns: {
 }
 
 describe("node-host worker manifest", () => {
-  it.each([
-    { name: "disabled worker hosting", enabled: false },
-    { name: "rejected worker hosting", enabled: true, admissionFailure: true },
-    { name: "container-isolated worker hosting", enabled: true, isolation: "container" as const },
-  ])(
-    "does not inspect models or advertise native inference for $name",
-    async ({ enabled, isolation, admissionFailure }) => {
-      if (admissionFailure) {
-        mocks.checkWorkspaceAdmission.mockRejectedValueOnce(
-          new Error("workspace admission failed"),
-        );
-      }
-      const prepared = await prepareNodeHostRuntime({
-        config: configThatRejectsModelAccess({ enabled, isolation }),
-        env: { PATH: "/usr/bin" },
-        platform: "linux",
-      });
-      expect(prepared.nativeInferenceEnabled).toBe(false);
-
-      const runtime = prepared.start({ client });
+  it("captures MCP permission when a launch arrives before queued command dispatch", async () => {
+    const prepared = await prepareNodeHostRuntime({
+      config: {
+        nodeHost: {
+          workerRuns: { enabled: true },
+          mcp: { servers: { fixture: { command: "fixture-mcp" } } },
+        },
+      },
+      env: { PATH: "/usr/bin" },
+      receivesLocalMcpPolicy: true,
+    });
+    expect(prepared.localMcpEnabled).toBe(true);
+    const ready = createDeferred();
+    const runtime = prepared.start({ client, onInventoryChanged: () => ready.resolve() });
+    try {
+      await ready.promise;
+      const launch = {
+        id: "queued",
+        nodeId: "worker",
+        command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+      };
+      runtime.setLocalMcpAllowed(true);
+      const pending = runtime.invoke(launch);
+      expect(mocks.handleInvoke).not.toHaveBeenCalled();
+      runtime.setLocalMcpAllowed(false);
+      runtime.setLocalMcpAllowed(true);
+      await pending;
+      await runtime.invoke({ ...launch, id: "fresh" });
+      const contexts = mocks.handleInvoke.mock.calls.map((call) => call[4]);
+      expect(contexts.map((ctx) => ctx?.localMcp?.signal.aborted)).toEqual([true, false]);
+      expect(contexts.map((ctx) => ctx?.signal?.aborted)).toEqual([false, false]);
+    } finally {
       await runtime.close();
-    },
-  );
+    }
+  });
 
+  it.each([
+    { enabled: false, isolation: "none" as const },
+    { enabled: true, isolation: "container" as const },
+  ])("does not capture dedicated transport for %j", async (workerRuns) => {
+    const prepared = await prepareNodeHostRuntime({
+      config: { nodeHost: { skills: { enabled: false }, workerRuns } },
+      ephemeral: true,
+      // Incomplete ambient transport must not be inspected outside dedicated native hosting.
+      env: { PATH: "/usr/bin", IDENTITY_HEADER: "synthetic-unadmitted-header" },
+    });
+    const runtime = prepared.start({ client });
+    try {
+      expect(prepared.workerHostingEnabled).toBe(workerRuns.enabled);
+      for (const [options] of vi.mocked(createNodeWorkerSupervisor).mock.calls) {
+        expect(options?.managedIdentityTransport).toBeUndefined();
+        expect(options?.platformTrust).toBeUndefined();
+      }
+    } finally {
+      await runtime.close();
+    }
+  });
   it("advertises native inference after unisolated worker hosting is admitted", async () => {
     const prepared = await prepareNodeHostRuntime({
       config: {
@@ -157,7 +196,6 @@ describe("node-host worker manifest", () => {
         },
       },
       env: { PATH: "/usr/bin" },
-      platform: "linux",
     });
     expect(prepared.nativeInferenceEnabled).toBe(true);
 
@@ -171,6 +209,7 @@ describe("node-host worker manifest", () => {
     const runtime = prepared.start({ client, onWorkerHostingDisabled });
     try {
       expect(prepared.workerHostingEnabled).toBe(false);
+      expect(prepared.nativeInferenceEnabled).toBe(false);
       expect(prepared.workerHostingDisabledReason).toBeUndefined();
       expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
       expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
@@ -186,6 +225,7 @@ describe("node-host worker manifest", () => {
     mocks.checkWorkspaceAdmission.mockRejectedValueOnce(new Error(reason));
     const prepared = await prepareWorkerRuntime("container");
     expect(prepared.workerHostingEnabled).toBe(false);
+    expect(prepared.nativeInferenceEnabled).toBe(false);
     expect(prepared.workerHostingDisabledReason).toBe(reason);
     expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
     const runtime = prepared.start({ client });
@@ -194,7 +234,8 @@ describe("node-host worker manifest", () => {
   });
 
   it("disables container-isolated hosting on Windows before probing or advertising an engine", async () => {
-    const prepared = await prepareWorkerRuntime("container", { platform: "win32" });
+    mockProcessPlatform("win32");
+    const prepared = await prepareWorkerRuntime("container");
 
     expect(prepared.workerHostingEnabled).toBe(false);
     expect(prepared.workerHostingDisabledReason).toMatch(/windows.*(?:linux|macos)/iu);
@@ -216,6 +257,7 @@ describe("node-host worker manifest", () => {
     });
 
     expect(prepared.workerHostingEnabled).toBe(true);
+    expect(prepared.nativeInferenceEnabled).toBe(false);
     expect(mocks.resolveContainerEngine).toHaveBeenCalledOnce();
     expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledOnce();
     const onRunnerCapacityChanged = vi.fn();

@@ -11,7 +11,6 @@ export type {
   WorkerTaskOptions,
   WorkerTaskResponse,
   OwnedWorkerTaskOptions,
-  RetainedWorkerTask,
 } from "@openclaw/worker-runtime";
 
 export type WorkerTaskPoolOptions<Output> = RuntimePoolOptions<Output> & {

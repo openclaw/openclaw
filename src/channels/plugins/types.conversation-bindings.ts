@@ -1,7 +1,37 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SessionBindingRecord } from "../../infra/outbound/session-binding.types.js";
 
 export type ChannelConversationBindingSupport = {
+  /** Qualifies a native source and retains its channel-owned sibling-placement operation. */
+  prepareFork?: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    source: { conversationId: string; parentConversationId?: string; threadId?: string };
+    sourceMessageId?: string;
+    isGroup: boolean;
+    senderId?: string;
+    title?: string;
+    /** Host command authority; rechecked before native creation and binding publication. */
+    assertCurrent: () => void;
+    signal?: AbortSignal;
+  }) => Promise<
+    | { ok: false; reason: string }
+    | {
+        ok: true;
+        /** Channel account/access authority retained through recap delivery. */
+        assertCurrent?: () => void;
+        /** Native rendering only; shared core owns excerpt selection and literal delivery. */
+        formatRecap?: (text: string) => Pick<ReplyPayload, "text" | "channelData" | "presentation">;
+        create: (targetSessionKey: string) => Promise<{
+          binding: SessionBindingRecord;
+          /** Provider-owned continuation URL; never an invitation or access grant. */
+          url?: string;
+          /** Explicit audience information, such as a requester-only private fork. */
+          notice?: string;
+        }>;
+      }
+  >;
   supportsCurrentConversationBinding?: boolean;
   isCurrentConversationBindingSupported?: (params: { accountId: string }) => boolean;
   /** Declares that live bindings come from a channel-registered adapter, never generic storage. */
@@ -51,7 +81,7 @@ export type ChannelConversationBindingSupport = {
       threadId?: string | number;
     };
   }) => boolean;
-  /** @deprecated Use setIdleTimeoutBySessionKeyAsync; removal follows a stable deprecation period. */
+  /** @deprecated Use setIdleTimeoutBySessionKeyAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   setIdleTimeoutBySessionKey?: (params: {
     targetSessionKey: string;
     accountId?: string | null;
@@ -62,7 +92,7 @@ export type ChannelConversationBindingSupport = {
     idleTimeoutMs?: number;
     maxAgeMs?: number;
   }>;
-  /** @deprecated Use setMaxAgeBySessionKeyAsync; removal follows a stable deprecation period. */
+  /** @deprecated Use setMaxAgeBySessionKeyAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   setMaxAgeBySessionKey?: (params: {
     targetSessionKey: string;
     accountId?: string | null;

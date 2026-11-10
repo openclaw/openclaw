@@ -1,9 +1,11 @@
 // Gateway WebSocket connect completion sends hello-ok and commits post-handshake state.
+import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   GATEWAY_SERVER_CAPS,
   ErrorCodes,
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { WORKER_LOCAL_MCP_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { resolveControlUiLinkLocation } from "../../../config/control-ui-link-base.js";
 import { sha256Base64Url } from "../../../infra/crypto-digest.js";
@@ -15,11 +17,19 @@ import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
+import { recordPairedDeviceAccess } from "../../../infra/device-pairing.js";
 import { formatErrorMessage as formatError } from "../../../infra/errors.js";
+import { NODE_MCP_ELICITATION_CAPABILITY } from "../../../infra/node-commands.js";
 import { commitPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
+import { isOpenClawIdEnabled } from "../../../shared/openclaw-id-policy.js";
 import { hasMultipleResidentSessionSharingIdentities } from "../../../state/user-profile-list.js";
-import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
+import {
+  resolveRuntimeServiceBuildId,
+  resolveRuntimeServiceCommit,
+  resolveRuntimeServiceBuiltAt,
+  resolveRuntimeServiceVersion,
+} from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
 import { resolveControlUiIdentity } from "../../control-ui-identity.js";
 import {
@@ -36,10 +46,16 @@ import {
   type SetupHandoff,
 } from "../../device-pair-setup-completion.js";
 import { canReadDetailedUpdateMetadata } from "../../events.js";
+import { projectHealthSummary } from "../../health/presentation.js";
 import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
-import { operatorSessionCap } from "../../operator-role-policy.js";
+import {
+  resolveGatewayOperatorRoleActor,
+  resolveOperatorRolePolicy,
+  resolveOperatorRolePolicyForProfile,
+} from "../../operator-role-policy.js";
+import { broadcastRejectedNodePairing } from "../../pairing-events.js";
 import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
 import { resolveBrowserAuthOrigin } from "../../provider-browser-auth.js";
 import {
@@ -47,6 +63,7 @@ import {
   TICK_INTERVAL_MS,
   WEBSOCKET_OPEN_READY_STATE,
 } from "../../server-constants.js";
+import { resolveProfileActivityViewerId } from "../../session-profile-activity-policy.js";
 import { getSessionRowProjection } from "../../session-row-projection-access.js";
 import { allowedSessionVisibilities } from "../../session-sharing.js";
 import { formatForLog, logWs } from "../../ws-log.js";
@@ -122,6 +139,7 @@ export async function sendGatewayHello(
       ? sha256Base64Url(JSON.stringify(recoveryScopeMaterial))
       : undefined;
   const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
+  const snapshotStartedAt = performance.now();
   const sessionRowProjection = getSessionRowProjection(buildRequestContext());
   const snapshot = buildGatewaySnapshot({
     client: context.handler.getClient(),
@@ -130,11 +148,20 @@ export async function sendGatewayHello(
     revisionProjector: buildRequestContext().configRevisionProjector,
     sessionRowProjection,
   });
+  if (scopes.includes(ADMIN_SCOPE)) {
+    // What this process runs with, which startup flags can set apart from the config file.
+    snapshot.authMode = resolvedAuth.mode;
+    Object.assign(snapshot, context.handler.gatewayExposure);
+  }
   const cachedHealth = getHealthCache();
-  if (cachedHealth) {
-    snapshot.health = cachedHealth;
+  if (cachedHealth && !connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND)) {
+    snapshot.health = connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY)
+      ? projectHealthSummary(cachedHealth)
+      : cachedHealth;
     snapshot.stateVersion.health = getHealthVersion();
   }
+  context.recordAttachTiming?.("snapshotMs", snapshotStartedAt);
+  const descriptorsStartedAt = performance.now();
   const controlUiTabs = listControlUiPluginTabs(scopes, {
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
@@ -144,11 +171,11 @@ export async function sendGatewayHello(
     buildRequestContext().getGatewayMethodRegistry?.(),
   );
   const ingress = getRemoteControlUiIngressContext(context.handler.upgradeReq);
+  const controlUiBasePath = normalizeControlUiBasePath(
+    context.configSnapshot.gateway?.controlUi?.basePath,
+  );
   const controlUiLocation = ingress
-    ? {
-        origin: ingress.publicOrigin,
-        basePath: normalizeControlUiBasePath(context.configSnapshot.gateway?.controlUi?.basePath),
-      }
+    ? { origin: ingress.publicOrigin, basePath: controlUiBasePath }
     : resolveControlUiLinkLocation(context.configSnapshot);
   // Gateway runtime provenance is independent of the UI artifact source.
   // Consumers use the source field to decide whether UI build comparison applies.
@@ -156,9 +183,26 @@ export async function sendGatewayHello(
     ? ("configured" as const)
     : ("bundled" as const);
   const serverBuildId = resolveRuntimeServiceBuildId();
-  const sessionCap =
+  const serverCommit = resolveRuntimeServiceCommit();
+  const serverBuiltAt = resolveRuntimeServiceBuiltAt();
+  const rolePolicy =
     role === "operator"
-      ? operatorSessionCap(context.handler.getClient(), context.configSnapshot)
+      ? resolveOperatorRolePolicy(context.handler.getClient(), context.configSnapshot)
+      : undefined;
+  const sessionCap = rolePolicy?.sessions.others;
+  const activityClient = context.handler.getClient();
+  const profileActivityViewerId =
+    role === "operator" && activityClient
+      ? resolveProfileActivityViewerId(
+          activityClient,
+          resolveGatewayOperatorRoleActor(activityClient)?.kind === "system"
+            ? undefined
+            : resolveOperatorRolePolicyForProfile(
+                activityClient.authenticatedUserProfile?.profileId,
+                buildRequestContext().getCommittedRuntimeConfig?.() ?? context.configSnapshot,
+              )?.scopes,
+          activityClient.authenticatedUserProfile?.profileId,
+        )
       : undefined;
   const helloOk = {
     type: "hello-ok",
@@ -167,18 +211,30 @@ export async function sendGatewayHello(
     server: {
       version: resolveRuntimeServiceVersion(process.env),
       ...(serverBuildId ? { buildId: serverBuildId } : {}),
+      ...(serverCommit ? { commit: serverCommit } : {}),
+      ...(serverBuiltAt ? { builtAt: serverBuiltAt } : {}),
       bootId,
       controlUiBuildSource,
       connId,
     },
     features: {
-      methods: resolveBrowserAuthOrigin(context.browserOrigin, new AbortController().signal)
-        ? gatewayMethods
-        : gatewayMethods.filter((method) => method !== "mcp.authLogin"),
-      events,
+      methods: gatewayMethods.filter(
+        (method) =>
+          (method !== "mcp.authLogin" ||
+            Boolean(
+              resolveBrowserAuthOrigin(context.browserOrigin, { authPolicy: state.authPolicy }),
+            )) &&
+          (isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId) ||
+            !method.startsWith("openclawId.")),
+      ),
+      events: isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId)
+        ? events
+        : events.filter((event) => !event.startsWith("openclawId.")),
       capabilities: [
+        GATEWAY_SERVER_CAPS.AGENT_SESSION_ID_CREATE,
         SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY,
         GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
+        GATEWAY_SERVER_CAPS.CHAT_INPUT_CUSTODY,
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
         // Configured UI roots may serve an older route contract than this Gateway.
         ...(controlUiBuildSource === "bundled" &&
@@ -193,6 +249,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_APPROVE_OWNER,
         GATEWAY_SERVER_CAPS.EXEC_APPROVALS_GET_OWNER,
         GATEWAY_SERVER_CAPS.EXEC_APPROVALS_SET_OWNER,
+        GATEWAY_SERVER_CAPS.EXEC_APPROVALS_NATIVE_COMMIT,
         GATEWAY_SERVER_CAPS.WORKTREES_REMOVE_OWNER,
         GATEWAY_SERVER_CAPS.WORKTREES_RESTORE_OWNER,
         GATEWAY_SERVER_CAPS.WORKTREES_GC_OWNER,
@@ -200,16 +257,20 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.WORKTREES_RETIRE_SNAPSHOT_OWNER,
         GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_DEVICE_FOLDERS,
+        ...(context.configSnapshot.mcp?.apps?.enabled ? [NODE_MCP_ELICITATION_CAPABILITY] : []),
         GATEWAY_SERVER_CAPS.NODE_PERMISSION_ERRORS,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH,
         GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
         GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_RESULT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_HOST_DIAGNOSTICS,
         GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES,
         GATEWAY_SERVER_CAPS.NODE_WORKER_NATIVE_INFERENCE,
+        WORKER_LOCAL_MCP_PROTOCOL_FEATURE,
         GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
         GATEWAY_SERVER_CAPS.NODE_WORKER_PROMPT_CONTEXT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT,
@@ -233,6 +294,9 @@ export async function sendGatewayHello(
     ...(controlUiLocation
       ? { controlUiUrl: `${controlUiLocation.origin}${controlUiLocation.basePath}` }
       : {}),
+    ...(controlUiBasePath && context.configSnapshot.gateway?.controlUi?.enabled !== false
+      ? { controlUiBasePath }
+      : {}),
     ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
     ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),
     ...(controlUiLinkReaders.length > 0 ? { controlUiLinkReaders } : {}),
@@ -241,7 +305,11 @@ export async function sendGatewayHello(
       method: authMethod,
       role,
       scopes,
+      ...(role === "operator"
+        ? { roleAllowsAdmin: !rolePolicy || rolePolicy.scopes.includes(ADMIN_SCOPE) }
+        : {}),
       ...(sessionCap !== undefined ? { sessionCap } : {}),
+      ...(profileActivityViewerId !== undefined ? { profileActivityViewerId } : {}),
       ...(recoveryScope ? { recoveryScope } : {}),
       ...(canMigrateRecovery ? { recoveryMigrationAllowed: true as const } : {}),
       ...(deviceToken
@@ -263,6 +331,12 @@ export async function sendGatewayHello(
       hasMultipleSessionSharingIdentities: hasMultipleResidentSessionSharingIdentities(),
     },
   };
+  // Capture the advertised fact before bootstrap bookkeeping can await. Committed
+  // policy changes must retire this hello, never overwrite it with a newer claim.
+  if (role === "operator" && activityClient) {
+    activityClient.profileActivity = { viewerId: profileActivityViewerId };
+  }
+  context.recordAttachTiming?.("helloDescriptorsMs", descriptorsStartedAt);
   advanceHandshakePhase("hello_payload_prepared");
 
   let bootstrapHandoff: SetupHandoff | undefined;
@@ -358,6 +432,16 @@ export async function sendGatewayHello(
     return;
   }
   onHelloDelivered();
+  const metadata = context.pendingDeviceMetadata;
+  if (metadata) {
+    context.runDetachedConnectWork(
+      () => recordPairedDeviceAccess(metadata.deviceId, metadata.patch, metadata.identity),
+      (err) =>
+        logGateway.warn(
+          `device access metadata refresh failed conn=${connId}: ${formatForLog(err)}`,
+        ),
+    );
+  }
   try {
     const client = context.handler.getClient();
     if (
@@ -465,16 +549,7 @@ export async function sendGatewayHello(
         : await finalizeNodePairingCleanupClaim(cleanupClaim);
       const resolvedAt = Date.now();
       for (const resolved of resolvedPairings) {
-        requestContext.broadcast(
-          "node.pair.resolved",
-          {
-            requestId: resolved.requestId,
-            nodeId: resolved.nodeId,
-            decision: "rejected",
-            ts: resolvedAt,
-          },
-          { dropIfSlow: true },
-        );
+        broadcastRejectedNodePairing(requestContext.broadcast, resolved, resolvedAt);
       }
     } catch (error) {
       logGateway.warn(

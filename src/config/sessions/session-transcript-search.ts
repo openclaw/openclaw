@@ -2,14 +2,19 @@
 // inside the accessor's write transactions (session-transcript-index.ts);
 // this module owns the query path and schedules the shared reconcile owner
 // when doctor imports or out-of-band writes leave derived rows behind.
-import { sql } from "kysely";
+import { expressionBuilder, sql } from "kysely";
+import { admitStoreSearch } from "../../infra/database-engine/adapters.js";
+import { DatabaseSearchCapabilityUnavailableError } from "../../infra/database-engine/capability-unavailable.js";
+import { engineStringPosition } from "../../infra/database-engine/scalar.js";
+import { hasFullTextWordTokens } from "../../infra/database-engine/text-tokens.worker.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
@@ -20,15 +25,15 @@ import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
+import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
 import {
   captureLifecycleDatabaseScope,
+  prepareSqliteScope,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
@@ -93,7 +98,7 @@ export async function searchSessionTranscripts(
           path: preparedDatabase.path,
           env: params.env,
         }
-      : resolveSqliteReadScope(params),
+      : await prepareSqliteScope({ ...params, sessionKey: params.sessionKey ?? "" }),
   );
   const options = toDatabaseOptions(scope);
   const request = {
@@ -176,21 +181,36 @@ export function searchSessionTranscriptsReadOnlySync(
   const databaseOptions = preparedDatabase ?? toDatabaseOptions(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) => ({
-      ...runSqliteDeferredTransactionSync(
+      ...runSqliteReadSnapshotSync(
         database.db,
         () => {
           const limit = sessionTranscriptSearchLimit(params.limit);
           // Shared databases hold multiple logical agents. Filter before LIMIT;
           // reserved global/unknown sentinels retain their store-wide scope.
           const db = getNodeSqliteKysely<DB>(database.db);
+          const search = admitStoreSearch(database.db, agentTranscriptSearchSchema);
+          const fullText = search.fullText;
+          if (!fullText) {
+            throw new DatabaseSearchCapabilityUnavailableError(
+              "fullText",
+              search.diagnostics.join("; "),
+            );
+          }
+          const textIndex = search.text.transcript!;
+          const fullQuery = sessionTranscriptSearchFtsQuery(query, params.match);
+          const agentPrefix = toAgentStoreSessionKey({
+            agentId: scope.agentId,
+            requestKey: "*",
+          }).slice(0, -1);
           const selectedWindows = db
             .selectFrom("session_windows")
             .select(["session_id", "session_key"])
             .where((eb) =>
               params.sessionKeys === undefined
                 ? eb.or([
-                    /* kysely-allow-raw: GLOB preserves literal underscores in SQLite agent namespaces. */
-                    sql<boolean>`${eb.ref("session_key")} GLOB ${toAgentStoreSessionKey({ agentId: scope.agentId, requestKey: "*" })}`,
+                    isPostgresSqlConnection(database.db)
+                      ? /* kysely-allow-raw: starts_with keeps underscores literal and, unlike left(), has planner selectivity, so the GIN match can drive the join. The prefix is a literal so reused prepared statements keep that estimate in their generic plan. */ sql<boolean>`${eb.ref("session_key")} ^@ ${sql.lit(agentPrefix)}`
+                      : /* kysely-allow-raw: GLOB preserves literal underscores in SQLite agent namespaces. */ sql<boolean>`${eb.ref("session_key")} GLOB ${toAgentStoreSessionKey({ agentId: scope.agentId, requestKey: "*" })}`,
                     eb("session_key", "in", ["global", "unknown"]),
                   ])
                 : params.sessionKeys.length > 0
@@ -208,110 +228,174 @@ export function searchSessionTranscriptsReadOnlySync(
                 .innerJoin(selectedWindows.as("window"), "window.session_id", "cold.session_id")
                 .select((eb) => eb.fn.countAll<number>().as("count")),
             )?.count ?? 0;
-          const match =
-            /* kysely-allow-raw: FTS5 table MATCH with a bound search query. */
-            sql<boolean>`session_transcript_fts MATCH ${sessionTranscriptSearchFtsQuery(query, params.match)}`;
-          /* kysely-allow-raw: Shared FTS ordering, including SQLite-only rowid for recent ties. */
-          const order =
-            params.order === "recent"
-              ? sql`session_transcript_fts.timestamp desc, fts_rowid desc`
-              : sql`rank asc, session_transcript_fts.timestamp desc, session_transcript_fts.message_id asc`;
-          // MATCH, snippet(), and bm25() are FTS5 primitives without a Kysely
-          // representation. session_key lives on the window row so key renames
-          // never leave stale keys inside the index. Sessions flagged needs_rebuild
-          // are excluded: their rows may still hold rewound-away branch text that
-          // sessions_history no longer exposes, so they stay hidden until reconcile
-          // rebuilds them (indexing=true tells the caller to retry).
-          const candidates = db
-            .selectFrom("session_transcript_fts")
-            // Keep MATCH outermost; the narrow map rejects excluded content before hydration.
-            .crossJoin("session_transcript_fts_rows as mapped")
-            .crossJoin(selectedWindows.as("window"))
-            .where(
-              "mapped.id",
-              "=",
-              /* kysely-allow-raw: FTS5 implicit rowid stays inside SQLite, including 64-bit identities. */
-              sql<number>`session_transcript_fts.rowid`,
-            )
-            .whereRef("window.session_id", "=", "mapped.session_id")
-            .where(match)
-            // Depend on the scoped window so SQLite cannot read role before excluding sessions.
-            .$if(Boolean(params.role), (builder) =>
-              builder.where((eb) =>
-                eb
-                  .case()
-                  .when("window.session_key", "is not", null)
-                  .then(eb("role", "=", params.role!))
-                  .else(false)
-                  .end(),
+          let substringTerms: string[] = [];
+          let hits: SessionTranscriptSearchResult["hits"];
+          do {
+            const literalQuery = {
+              ...fullQuery,
+              clauses: fullQuery.clauses.filter((clause) => !substringTerms.includes(clause.text)),
+            };
+            const useFts =
+              literalQuery.clauses.length > 0 &&
+              (substringTerms.length === 0 ||
+                hasFullTextWordTokens(
+                  database.db,
+                  literalQuery.clauses.map((clause) => clause.text).join(" "),
+                ));
+            const ranking = fullText.rank(textIndex, literalQuery);
+            const expression = expressionBuilder<DB, "session_transcript_fts">();
+            const match = expression.and([
+              ...(useFts ? [fullText.match(textIndex, literalQuery)] : []),
+              ...substringTerms.map((term) =>
+                expression(
+                  engineStringPosition(
+                    database.db,
+                    expression.fn<string>("lower", ["text"]),
+                    expression.val(term.toLowerCase()),
+                  ),
+                  ">",
+                  0,
+                ),
               ),
+            ]);
+            const order =
+              params.order === "recent"
+                ? sql`session_transcript_fts.timestamp desc, fts_rowid desc`
+                : sql`rank ${/* kysely-allow-raw: Capability order is the closed asc/desc union. */ sql.raw(ranking.order)}, session_transcript_fts.timestamp desc, session_transcript_fts.message_id asc`;
+            // session_key lives on the window row so key renames
+            // never leave stale keys inside the index. Sessions flagged needs_rebuild
+            // are excluded: their rows may still hold rewound-away branch text that
+            // sessions_history no longer exposes, so they stay hidden until reconcile
+            // rebuilds them (indexing=true tells the caller to retry).
+            // MATCH drives indexed reads; substring scans scope map rows before reading text.
+            const candidates = (
+              useFts
+                ? db
+                    .selectFrom("session_transcript_fts")
+                    .crossJoin("session_transcript_fts_rows as mapped")
+                    .crossJoin(selectedWindows.as("window"))
+                : db
+                    .selectFrom("session_transcript_fts_rows as mapped")
+                    .crossJoin(selectedWindows.as("window"))
+                    .crossJoin("session_transcript_fts")
             )
-            .where(
-              "mapped.session_id",
-              "not in",
-              db
-                .selectFrom("session_transcript_index_state")
-                .select("session_id")
-                .where("needs_rebuild", "!=", 0),
-            )
-            .select([
-              "window.session_key",
-              /* kysely-allow-raw: FTS5 implicit rowid is not a generated schema column. */
-              sql`session_transcript_fts.rowid`.as("fts_rowid"),
-              /* kysely-allow-raw: FTS5 ranking primitive. */
-              sql`bm25(session_transcript_fts)`.as("rank"),
-            ])
-            .orderBy(order)
-            .limit(limit + 1);
-          const rows = executeSqliteQuerySync(
-            database.db,
-            db
-              .with(
-                (cte) => cte("hits").materialized(),
-                () => candidates,
-              )
-              .selectFrom("hits")
-              .crossJoin("session_transcript_fts")
-              /* kysely-allow-raw: Bound FTS5 hydration only visits the retained candidate rowids. */
-              .where((eb) => eb(sql`session_transcript_fts.rowid`, "=", eb.ref("hits.fts_rowid")))
+              .where("mapped.id", "=", fullText.identity(textIndex))
+              .whereRef("window.session_id", "=", "mapped.session_id")
               .where(match)
+              // Depend on the scoped window so SQLite cannot read role before excluding sessions.
+              .$if(Boolean(params.role), (builder) =>
+                isPostgresSqlConnection(database.db)
+                  ? builder.where("role", "=", params.role!)
+                  : builder.where((eb) =>
+                      eb
+                        .case()
+                        .when("window.session_key", "is not", null)
+                        .then(eb("role", "=", params.role!))
+                        .else(false)
+                        .end(),
+                    ),
+              )
+              .where(
+                "mapped.session_id",
+                "not in",
+                db
+                  .selectFrom("session_transcript_index_state")
+                  .select("session_id")
+                  .where("needs_rebuild", "!=", 0),
+              )
               .select([
-                "hits.session_key",
-                "session_transcript_fts.session_id",
-                "message_id",
-                "role",
-                "timestamp",
-                "hits.rank as rank",
-                /* kysely-allow-raw: Materialization bounds snippet tokenization to limit + 1 rows. */
-                sql`snippet(session_transcript_fts, 0, '', '', ' … ', 48)`.as("snippet"),
-              ])
-              .orderBy(order),
-          ).rows;
-          const hits = rows.flatMap((row): SessionTranscriptSearchResult["hits"] => {
-            if (
-              typeof row.session_key !== "string" ||
-              typeof row.session_id !== "string" ||
-              typeof row.message_id !== "string" ||
-              (row.role !== "user" && row.role !== "assistant") ||
-              typeof row.snippet !== "string"
-            ) {
-              return [];
+                "window.session_key",
+                fullText.identity(textIndex).as("fts_rowid"),
+                useFts ? ranking.value.as("rank") : expression.val(0).as("rank"),
+              ]);
+            const selectedHits =
+              params.order === "recent" || !useFts
+                ? candidates.orderBy(order).limit(limit + 1)
+                : db
+                    .with(
+                      (cte) => cte("scores").materialized(),
+                      () => candidates,
+                    )
+                    .selectFrom("scores")
+                    .crossJoin("session_transcript_fts")
+                    .where((eb) =>
+                      eb(fullText.identity(textIndex), "=", eb.ref("scores.fts_rowid")),
+                    )
+                    // Keep every tie at the cutoff before reading metadata for the final ordering.
+                    .where("scores.rank", "in", (eb) =>
+                      eb
+                        .selectFrom("scores")
+                        .select("rank")
+                        .orderBy("rank", ranking.order)
+                        .limit(limit + 1),
+                    )
+                    .select(["scores.session_key", "scores.fts_rowid", "scores.rank"])
+                    .orderBy("scores.rank", ranking.order)
+                    .orderBy("session_transcript_fts.timestamp", "desc")
+                    .orderBy("session_transcript_fts.message_id", "asc")
+                    .limit(limit + 1);
+            const rows = executeSqliteQuerySync(
+              database.db,
+              db
+                .with(
+                  (cte) => cte("hits").materialized(),
+                  () => selectedHits,
+                )
+                .selectFrom("hits")
+                .crossJoin("session_transcript_fts")
+                .where((eb) => eb(fullText.identity(textIndex), "=", eb.ref("hits.fts_rowid")))
+                .where(match)
+                .select([
+                  "hits.session_key",
+                  "session_transcript_fts.session_id",
+                  "message_id",
+                  "role",
+                  "timestamp",
+                  "hits.rank as rank",
+                  substringTerms.length
+                    ? expression.ref("text").as("snippet")
+                    : fullText.snippet(textIndex, "text", 48, literalQuery).as("snippet"),
+                ])
+                .orderBy(order),
+            ).rows;
+            hits = rows.flatMap((row): SessionTranscriptSearchResult["hits"] => {
+              if (
+                typeof row.session_key !== "string" ||
+                typeof row.session_id !== "string" ||
+                typeof row.message_id !== "string" ||
+                (row.role !== "user" && row.role !== "assistant") ||
+                typeof row.snippet !== "string"
+              ) {
+                return [];
+              }
+              const timestamp =
+                typeof row.timestamp === "number" ? row.timestamp : Number(row.timestamp);
+              const rank = typeof row.rank === "number" ? row.rank : Number(row.rank);
+              return [
+                {
+                  sessionKey: row.session_key,
+                  sessionId: row.session_id,
+                  messageId: row.message_id,
+                  role: row.role,
+                  timestamp: Number.isFinite(timestamp) ? timestamp : 0,
+                  snippet: boundSessionTranscriptSearchSnippet(row.snippet, substringTerms[0]),
+                  score: ranking.toRank(rank),
+                },
+              ];
+            });
+            if (hits.length > 0 || substringTerms.length > 0) {
+              break;
             }
-            const timestamp =
-              typeof row.timestamp === "number" ? row.timestamp : Number(row.timestamp);
-            const rank = typeof row.rank === "number" ? row.rank : Number(row.rank);
-            return [
-              {
-                sessionKey: row.session_key,
-                sessionId: row.session_id,
-                messageId: row.message_id,
-                role: row.role,
-                timestamp: Number.isFinite(timestamp) ? timestamp : 0,
-                snippet: boundSessionTranscriptSearchSnippet(row.snippet),
-                score: Number.isFinite(rank) ? -rank : 0,
-              },
-            ];
-          });
+            // unicode61 cannot address interior CJK text. Retry only misses; changing
+            // the persisted tokenizer would rebuild every existing transcript index.
+            substringTerms = fullQuery.clauses
+              .map((clause) => clause.text)
+              .filter((term) =>
+                /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(
+                  term,
+                ),
+              );
+          } while (substringTerms.length > 0);
           return {
             found: true,
             hits: hits.slice(0, limit),

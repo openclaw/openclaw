@@ -3,7 +3,6 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
   pauseVirtualClock,
-  startControlUiE2eServer,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -16,7 +15,6 @@ declare global {
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat session read coalescing",
-  startServer: () => startControlUiE2eServer(),
 });
 
 suite.define(() => {
@@ -43,9 +41,7 @@ suite.define(() => {
           },
           "controlUi.sessionPullRequests.subscribe": { ok: true },
         },
-        sessionKey: "agent:main:main",
         sessions: [],
-        historyMessages: [],
         agentModel: "fixture/echo",
         models: [{ id: "echo", name: "Echo", provider: "fixture", contextWindow: 128_000 }],
       });
@@ -62,30 +58,31 @@ suite.define(() => {
           ]);
         const instrument = (Base: typeof WebSocket) =>
           class extends Base {
-            override send(data: Parameters<WebSocket["send"]>[0]) {
-              if (typeof data === "string") {
-                const frame = JSON.parse(data) as MockGatewayRequest & { type: string };
-                if (frame.type === "req") {
-                  const key = signature(frame);
-                  if (
-                    methods.has(frame.method) &&
-                    [...wire.pending.values()].some((other) => signature(other) === key)
-                  ) {
-                    wire.duplicates.push(key);
+            constructor(...args: ConstructorParameters<typeof WebSocket>) {
+              super(...args);
+              const send = this.send.bind(this);
+              this.send = (data) => {
+                if (typeof data === "string") {
+                  const frame = JSON.parse(data) as MockGatewayRequest & { type: string };
+                  if (frame.type === "req") {
+                    const key = signature(frame);
+                    if (
+                      methods.has(frame.method) &&
+                      [...wire.pending.values()].some((other) => signature(other) === key)
+                    ) {
+                      wire.duplicates.push(key);
+                    }
+                    wire.pending.set(frame.id, frame);
                   }
-                  wire.pending.set(frame.id, frame);
                 }
-              }
-              return super.send(data);
-            }
-            override dispatchEvent(event: Event) {
-              if (event instanceof MessageEvent) {
+                return send(data);
+              };
+              this.addEventListener("message", (event) => {
                 const frame = JSON.parse(String(event.data)) as { type: string; id: string };
                 if (frame.type === "res") {
                   wire.pending.delete(frame.id);
                 }
-              }
-              return super.dispatchEvent(event);
+              });
             }
           };
         // Init-script order is unspecified; instrument the mock's replacement too.
@@ -144,17 +141,27 @@ suite.define(() => {
           lastRunId: runId,
         },
       });
-      // The swarm owner connects after 250 ms; its initial read must settle too.
+      // The roster starts independently of the branch query scheduled after transcript paint.
       await expect
         .poll(async () => {
           await page.clock.runFor(20);
           return count("sessions.list", { spawnedBy: key });
         })
         .toBeGreaterThan(0);
-      await settle();
       await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+      await expect
+        .poll(async () => {
+          await page.clock.runFor(20);
+          return count("sessions.branches.list", { sessionKey: key });
+        })
+        .toBeGreaterThan(0);
+      await settle();
+      // Startup invalidations may supersede pending descriptors. Observe overlaps
+      // from the same settled boundary as the controlled burst's request counts.
+      await page.evaluate(() => {
+        window.readCoalescingWire.duplicates.length = 0;
+      });
       expect(await count("board.get")).toBeGreaterThan(0);
-      expect(await count("sessions.branches.list", { sessionKey: key })).toBeGreaterThan(0);
       expect(await count("sessions.describe", { key: "agent:main:main" })).toBeGreaterThan(0);
       const describes = () => count("sessions.describe", { key });
       const before = await describes();
@@ -164,12 +171,7 @@ suite.define(() => {
       const emit = async (event: string, extra: Record<string, unknown>) => {
         const now = await page.evaluate(() => Date.now());
         row = { ...row, snapshotAt: now, updatedAt: now };
-        await gateway.setSessionsListResponse({
-          sessions: [row],
-          count: 1,
-          totalCount: 1,
-          ts: now,
-        });
+        await gateway.setSessionsListResponse({ sessions: [row], totalCount: 1, ts: now });
         await gateway.setHistoryMessages(messages);
         await gateway.emitGatewayEvent(event, {
           sessionKey: key,
@@ -239,8 +241,27 @@ suite.define(() => {
       // The startup fixture omitted commands; acquire them beside the pending catalog once.
       expect(await count("chat.metadata", metadataScope)).toBe(metadataBefore + 1);
       expect(await count("models.list", scope)).toBe(modelsBefore + 1);
+      const heldCatalogRequest = (await gateway.getRequests("models.list", scope)).at(-1);
+      if (!heldCatalogRequest) {
+        throw new Error("expected the existing held catalog request");
+      }
+      expect
+        .soft(
+          await page.evaluate(
+            (id) => window.readCoalescingWire.pending.has(id),
+            heldCatalogRequest.id,
+          ),
+          "records the existing held catalog request",
+        )
+        .toBe(true);
       await gateway.resolveDeferred("models.list");
       await settle();
+      expect(
+        await page.evaluate(
+          (id) => window.readCoalescingWire.pending.has(id),
+          heldCatalogRequest.id,
+        ),
+      ).toBe(false);
       expect
         .soft(await count("models.list", scope), "no replacement catalog read")
         .toBe(modelsBefore + 1);

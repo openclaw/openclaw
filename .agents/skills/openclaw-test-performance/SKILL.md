@@ -24,7 +24,7 @@ guesswork.
    - Prefer `pnpm test:perf:groups --full-suite --allow-failures --output <file>`
      for full-suite ranking.
    - For bundled plugin breadth, run the smallest relevant `pnpm
-test:extensions:batch <plugin[,plugin...]>` or plugin-inspector command
+     test:extensions:batch <plugin[,plugin...]>` or plugin-inspector command
      before jumping to the full extension sweep.
    - For a scoped hotspot use:
      `/usr/bin/time -l pnpm test <file-or-files> --maxWorkers=1 --reporter=verbose`
@@ -226,10 +226,9 @@ pnpm test:perf:groups --report <vitest-json> \
 ## Verification
 
 - Always run the targeted test surface that proves the change.
-- Source changes: focused local tests + targeted typecheck/lint/format before push; `pnpm check:changed` optional. PR CI = broad proof. Testbox only for CI/local gaps, immediate grant; warmed Testbox reuse when selected.
-- For test-only changes, run `pnpm test:changed` or the exact edited tests.
-- Run `pnpm build` when touching lazy-loading, bundled artifacts, package
-  boundaries, dynamic imports, build output, or public surfaces.
+- Follow [OpenClaw testing](../openclaw-testing/SKILL.md) for focused tests,
+  required builds, proof routing, and publication timing.
+- For test-only changes, run the exact edited tests through that owner's supported command.
 - For plugin SDK/barrel/runtime changes, compare exact commits with
   `pnpm plugin-sdk:api:diff -- --base <base-sha> --head <head-sha>` when the
   public API surface may drift. For PR-local proof, use the branch merge base
@@ -237,8 +236,8 @@ pnpm test:perf:groups --report <vitest-json> \
 - For plugin-suite perf fixes, verify at least one representative plugin batch
   plus the changed gate; use Package Acceptance if the bug only exists in a
   packed artifact.
-- If deps are missing/stale, run `pnpm install` and retry the exact failed
-  command once.
+- For missing or stale dependencies, follow [Source dependencies](../../../CONTRIBUTING.md#source-dependencies)
+  and the current worktree's owner instructions. Use a qualified proof route.
 - Use the report format:
 
 ```markdown

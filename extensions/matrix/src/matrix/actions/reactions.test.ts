@@ -1,44 +1,35 @@
-// Matrix tests cover reactions plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { listMatrixEmojis, listMatrixReactions, removeMatrixReactions } from "./reactions.js";
 
-function createReactionsClient(params: {
-  chunk: Array<{
-    event_id?: string;
-    sender?: string;
-    key?: string;
-  }>;
-  userId?: string | null;
-}) {
-  const doRequest = vi.fn(
-    async (
-      _method: string,
-      _path: string,
-      _query: unknown,
-    ): Promise<{ chunk: Array<Record<string, unknown>>; next_batch?: string }> => ({
-      chunk: params.chunk.map((item) => ({
-        event_id: item.event_id ?? "",
-        sender: item.sender ?? "",
-        content: item.key
-          ? {
-              "m.relates_to": {
-                rel_type: "m.annotation",
-                event_id: "$target",
-                key: item.key,
-              },
-            }
-          : {},
-      })),
-    }),
-  );
-  const getUserId = vi.fn(async () => params.userId ?? null);
+const ROOM = "!room:example.org";
+const REACTIONS_PATH =
+  "/_matrix/client/v1/rooms/!room%3Aexample.org/relations/%24msg/m.annotation/m.reaction";
+type ReactionPage = { chunk: ReturnType<typeof reaction>[]; next_batch?: string };
+
+function emotePack(images: unknown, state_key = "", pack?: { usage: string[] }) {
+  return { type: "im.ponies.room_emotes", state_key, content: { images, pack } };
+}
+
+function reaction(event_id: string, sender: string, key?: string) {
+  return {
+    event_id,
+    sender,
+    content: key ? { "m.relates_to": { rel_type: "m.annotation", event_id: "$target", key } } : {},
+  };
+}
+
+function createReactionsClient(
+  chunk: ReturnType<typeof reaction>[] = [],
+  userId: string | null = null,
+) {
+  const doRequest = vi.fn(async (): Promise<ReactionPage> => ({ chunk }));
   const redactEvent = vi.fn(async () => undefined);
 
   return {
     client: {
       doRequest,
-      getUserId,
+      getUserId: vi.fn(async () => userId),
       redactEvent,
       stop: vi.fn(),
     } as unknown as MatrixClient,
@@ -50,32 +41,23 @@ function createReactionsClient(params: {
 describe("matrix reaction actions", () => {
   it("lists sorted room and personal MSC2545 emoticons while rejecting malformed and sticker-only images", async () => {
     const doRequest = vi.fn(async () => [
-      {
-        type: "im.ponies.room_emotes",
-        state_key: "",
-        content: {
-          images: {
-            zebra: { url: "mxc://example.org/zebra" },
-            sticker: { url: "mxc://example.org/sticker", usage: ["sticker"] },
-            wrongUrl: { url: "https://example.org/wrong" },
-            incompleteMxc: { url: "mxc://example.org" },
-            wrongUsage: { url: "mxc://example.org/wrong-usage", usage: "emoticon" },
-            malformed: null,
-          },
+      emotePack({
+        zebra: { url: "mxc://example.org/zebra" },
+        sticker: { url: "mxc://example.org/sticker", usage: ["sticker"] },
+        wrongUrl: { url: "https://example.org/wrong" },
+        incompleteMxc: { url: "mxc://example.org" },
+        wrongUsage: { url: "mxc://example.org/wrong-usage", usage: "emoticon" },
+        malformed: null,
+      }),
+      emotePack(
+        {
+          hidden: { url: "mxc://example.org/hidden" },
+          alpha: { url: "mxc://example.org/alpha", usage: ["emoticon", "sticker"] },
         },
-      },
-      {
-        type: "im.ponies.room_emotes",
-        state_key: "extra-pack",
-        content: {
-          pack: { usage: ["sticker"] },
-          images: {
-            hidden: { url: "mxc://example.org/hidden" },
-            alpha: { url: "mxc://example.org/alpha", usage: ["emoticon", "sticker"] },
-          },
-        },
-      },
-      { type: "im.ponies.room_emotes", state_key: "broken", content: { images: [] } },
+        "extra-pack",
+        { usage: ["sticker"] },
+      ),
+      emotePack([], "broken"),
       { type: "m.room.name", state_key: "", content: { images: { ignored: {} } } },
     ]);
     const getAccountData = vi.fn(async () => ({
@@ -83,7 +65,7 @@ describe("matrix reaction actions", () => {
     }));
     const client = { doRequest, getAccountData, stop: vi.fn() } as unknown as MatrixClient;
 
-    await expect(listMatrixEmojis("!room:example.org", { client })).resolves.toStrictEqual([
+    await expect(listMatrixEmojis(ROOM, { client })).resolves.toStrictEqual([
       { name: "alpha", identifier: "alpha", url: "mxc://example.org/alpha" },
       { name: "middle", identifier: "middle", url: "mxc://example.org/middle" },
       { name: "zebra", identifier: "zebra", url: "mxc://example.org/zebra" },
@@ -102,103 +84,71 @@ describe("matrix reaction actions", () => {
       stop: vi.fn(),
     } as unknown as MatrixClient;
 
-    await expect(listMatrixEmojis("!room:example.org", { client })).rejects.toThrow(
+    await expect(listMatrixEmojis(ROOM, { client })).rejects.toThrow(
       "Matrix room state response is invalid.",
     );
   });
 
   it("aggregates reactions by key and unique sender", async () => {
-    const { client, doRequest } = createReactionsClient({
-      chunk: [
-        { event_id: "$1", sender: "@alice:example.org", key: "👍" },
-        { event_id: "$2", sender: "@bob:example.org", key: "👍" },
-        { event_id: "$3", sender: "@alice:example.org", key: "👎" },
-        { event_id: "$4", sender: "@bot:example.org" },
+    const { client, doRequest } = createReactionsClient(
+      [
+        reaction("$1", "@alice:example.org", "👍"),
+        reaction("$2", "@bob:example.org", "👍"),
+        reaction("$3", "@alice:example.org", "👎"),
+        reaction("$4", "@bot:example.org"),
       ],
-      userId: "@bot:example.org",
-    });
-
-    const result = await listMatrixReactions("!room:example.org", "$msg", { client, limit: 2.9 });
-
-    expect(doRequest).toHaveBeenCalledWith(
-      "GET",
-      "/_matrix/client/v1/rooms/!room%3Aexample.org/relations/%24msg/m.annotation/m.reaction",
-      { dir: "b", limit: 2 },
+      "@bot:example.org",
     );
+
+    const result = await listMatrixReactions(ROOM, "$msg", { client, limit: 2.9 });
+
+    expect(doRequest).toHaveBeenCalledWith("GET", REACTIONS_PATH, { dir: "b", limit: 2 });
     expect(result).toStrictEqual([
-      {
-        key: "👍",
-        count: 2,
-        users: ["@alice:example.org", "@bob:example.org"],
-      },
-      {
-        key: "👎",
-        count: 1,
-        users: ["@alice:example.org"],
-      },
+      { key: "👍", count: 2, users: ["@alice:example.org", "@bob:example.org"] },
+      { key: "👎", count: 1, users: ["@alice:example.org"] },
     ]);
   });
 
   it("removes only matching current-user reactions, including later pages", async () => {
-    const { client, doRequest, redactEvent } = createReactionsClient({
-      chunk: [
-        { event_id: "$1", sender: "@me:example.org", key: "👍" },
-        { event_id: "$2", sender: "@me:example.org", key: "👎" },
-        { event_id: "$3", sender: "@other:example.org", key: "👍" },
+    const { client, doRequest, redactEvent } = createReactionsClient(
+      [
+        reaction("$1", "@me:example.org", "👍"),
+        reaction("$2", "@me:example.org", "👎"),
+        reaction("$3", "@other:example.org", "👍"),
       ],
-      userId: "@me:example.org",
-    });
+      "@me:example.org",
+    );
     doRequest.mockResolvedValueOnce({ chunk: [], next_batch: "older-reactions" });
 
-    const result = await removeMatrixReactions("!room:example.org", "$msg", {
-      client,
-      emoji: "👍",
+    await expect(removeMatrixReactions(ROOM, "$msg", { client, emoji: "👍" })).resolves.toEqual({
+      removed: 1,
     });
-
-    expect(result).toEqual({ removed: 1 });
     expect(redactEvent).toHaveBeenCalledTimes(1);
-    expect(redactEvent).toHaveBeenCalledWith("!room:example.org", "$1");
-    expect(doRequest).toHaveBeenNthCalledWith(
-      2,
-      "GET",
-      "/_matrix/client/v1/rooms/!room%3Aexample.org/relations/%24msg/m.annotation/m.reaction",
-      { dir: "b", limit: 200, from: "older-reactions" },
-    );
+    expect(redactEvent).toHaveBeenCalledWith(ROOM, "$1");
+    expect(doRequest).toHaveBeenNthCalledWith(2, "GET", REACTIONS_PATH, {
+      dir: "b",
+      limit: 200,
+      from: "older-reactions",
+    });
   });
 
   it("continues listing across empty relation pages", async () => {
-    const { client, doRequest } = createReactionsClient({
-      chunk: [],
-      userId: "@me:example.org",
-    });
+    const { client, doRequest } = createReactionsClient();
     doRequest
       .mockResolvedValueOnce({ chunk: [], next_batch: "older-reactions" })
-      .mockResolvedValueOnce({
-        chunk: [
-          {
-            event_id: "$mine",
-            sender: "@me:example.org",
-            content: {
-              "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: "👍" },
-            },
-          },
-        ],
-      });
+      .mockResolvedValueOnce({ chunk: [reaction("$mine", "@me:example.org", "👍")] });
 
-    await expect(listMatrixReactions("!room:example.org", "$msg", { client })).resolves.toEqual([
+    await expect(listMatrixReactions(ROOM, "$msg", { client })).resolves.toEqual([
       { key: "👍", count: 1, users: ["@me:example.org"] },
     ]);
     expect(doRequest).toHaveBeenCalledTimes(2);
   });
 
   it("fails visibly when the relations server repeats a pagination cursor", async () => {
-    const { client, doRequest, redactEvent } = createReactionsClient({
-      chunk: [],
-      userId: "@me:example.org",
-    });
+    const { client, doRequest, redactEvent } = createReactionsClient([], "@me:example.org");
     doRequest.mockResolvedValue({ chunk: [], next_batch: "same-cursor" });
 
-    await expect(removeMatrixReactions("!room:example.org", "$msg", { client })).rejects.toThrow(
+    await expect(removeMatrixReactions(ROOM, "$msg", { client })).rejects.toThrow(
       "repeated cursor",
     );
     expect(doRequest).toHaveBeenCalledTimes(2);
@@ -206,26 +156,18 @@ describe("matrix reaction actions", () => {
   });
 
   it("returns removed=0 when current user id is unavailable", async () => {
-    const { client, redactEvent } = createReactionsClient({
-      chunk: [{ event_id: "$1", sender: "@me:example.org", key: "👍" }],
-      userId: null,
-    });
+    const { client, redactEvent } = createReactionsClient([
+      reaction("$1", "@me:example.org", "👍"),
+    ]);
 
-    const result = await removeMatrixReactions("!room:example.org", "$msg", { client });
-
-    expect(result).toEqual({ removed: 0 });
+    await expect(removeMatrixReactions(ROOM, "$msg", { client })).resolves.toEqual({ removed: 0 });
     expect(redactEvent).not.toHaveBeenCalled();
   });
 
   it("rejects blank message ids before querying Matrix relations", async () => {
-    const { client, doRequest } = createReactionsClient({
-      chunk: [],
-      userId: "@me:example.org",
-    });
+    const { client, doRequest } = createReactionsClient();
 
-    await expect(listMatrixReactions("!room:example.org", "   ", { client })).rejects.toThrow(
-      "messageId",
-    );
+    await expect(listMatrixReactions(ROOM, "   ", { client })).rejects.toThrow("messageId");
     expect(doRequest).not.toHaveBeenCalled();
   });
 });

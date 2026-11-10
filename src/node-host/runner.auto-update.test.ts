@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { GatewayClientOptions } from "../gateway/client.js";
 import { VERSION } from "../version.js";
 import type { PreparedNodeRuntimeUpdate } from "./auto-update-install.js";
 import "./auto-update.js";
 import {
-  lastCapturedOptions,
+  expectCalls,
   mocks,
+  receiveHello,
   resetRunnerTestState,
-  runNodeHost,
+  withReadyNodeHost,
 } from "./runner.test-support.js";
 
 const updateMocks = vi.hoisted(() => ({
@@ -43,9 +43,8 @@ vi.mock("../infra/update-check.js", async (importOriginal) => ({
   resolveNpmChannelTag: updateMocks.discover,
 }));
 
-vi.mock("./auto-update-install.js", () => ({
-  prepareNodeRuntimeUpdate: updateMocks.prepare,
-}));
+// mock-isolation: update tests supply prepared candidates without installing a real runtime.
+vi.mock("./auto-update-install.js", () => ({ prepareNodeRuntimeUpdate: updateMocks.prepare }));
 
 vi.mock("./auto-update-compatibility.js", () => ({
   assertNodeRuntimeUpdateCompatible: updateMocks.assertCompatible,
@@ -63,60 +62,26 @@ const candidate: PreparedNodeRuntimeUpdate = {
   integrity: "sha512-test",
 };
 
-function hello() {
-  const response: Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0] = {
-    type: "hello-ok",
-    protocol: 1,
-    server: { version: VERSION, connId: "node-update-test" },
-    features: { methods: [], events: [] },
-    snapshot: { presence: [], health: {}, stateVersion: { presence: 0, health: 0 }, uptimeMs: 0 },
-    auth: { role: "node", scopes: [] },
-    policy: { maxPayload: 1_000_000, maxBufferedBytes: 1_000_000, tickIntervalMs: 30_000 },
-  };
-  lastCapturedOptions()?.onHelloOk?.(response);
-}
-
 async function withRunningNodeHost(
-  options: Partial<Parameters<typeof runNodeHost>[0]>,
-  runTest: (host: {
-    running: Promise<void>;
-    stop: () => (() => void) | undefined;
-  }) => Promise<void>,
+  options: Parameters<typeof withReadyNodeHost>[1],
+  runTest: Parameters<typeof withReadyNodeHost>[0],
 ) {
-  const processOnSpy = vi.spyOn(process, "on");
-  const previousExitCode = process.exitCode;
-  const running = runNodeHost({ gatewayHost: "gateway.example", gatewayPort: 443, ...options });
-  const stop = () => {
-    const listener = processOnSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
-    listener?.("SIGTERM");
-    return listener;
-  };
-  try {
-    await vi.waitFor(() =>
-      expect(mocks.startGatewayClientWhenEventLoopReady).toHaveBeenCalledOnce(),
-    );
-    expect(updateMocks.discover).not.toHaveBeenCalled();
-    expect(updateMocks.send).not.toHaveBeenCalled();
-    await runTest({ running, stop });
-  } finally {
-    process.emit("message", {
-      type: "openclaw.node.restart-result",
-      ok: false,
-      error: "test cleanup",
-    });
-    stop();
-    try {
-      await running;
-    } finally {
-      for (const [event, listener] of processOnSpy.mock.calls) {
-        if (event === "SIGINT" || event === "SIGTERM") {
-          process.off(event, listener);
-        }
-      }
-      process.exitCode = previousExitCode;
-      processOnSpy.mockRestore();
-    }
-  }
+  await withReadyNodeHost(
+    async (host) => {
+      expect(mocks.startGatewayClientWhenEventLoopReady).toHaveBeenCalledOnce();
+      expect(updateMocks.discover).not.toHaveBeenCalled();
+      expect(updateMocks.send).not.toHaveBeenCalled();
+      await runTest(host);
+    },
+    { gatewayHost: "gateway.example", gatewayPort: 443, ...options },
+    () => {
+      process.emit("message", {
+        type: "openclaw.node.restart-result",
+        ok: false,
+        error: "test cleanup",
+      });
+    },
+  );
 }
 
 describe("node runner auto-update handoff", () => {
@@ -124,13 +89,6 @@ describe("node runner auto-update handoff", () => {
     resetRunnerTestState();
     mocks.useFakeRuntime = true;
     mocks.activeRuntime.tryPauseForUpdate.mockReset().mockResolvedValue(true);
-    mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
-      ready: true,
-      aborted: false,
-      elapsedMs: 0,
-      maxDriftMs: 0,
-      checks: 1,
-    });
     updateMocks.prepare.mockReset().mockResolvedValue(candidate);
     vi.stubEnv("OPENCLAW_STATE_DIR", temporary.make("node-runner-update-"));
     vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", undefined);
@@ -156,99 +114,98 @@ describe("node runner auto-update handoff", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([
-    {
-      label: "TLS, a context path, and process-local worker hosting",
-      gateway: {
-        host: "2001:db8::10",
-        port: 8443,
-        tls: true,
-        tlsFingerprint: "ab".repeat(32),
-        contextPath: "/openclaw-gw",
-      },
-      sharing: true,
-      commands: ["fixture.list", "fixture.read"],
-      forceWorkerRuns: true,
-      desktopSharingEnabled: true,
-      companion: true,
-      endpointArgs: ["--host", "2001:db8::10", "--port", "8443"],
-      optionArgs: [
-        "--tls",
-        "--share-installed-apps",
-        "--context-path",
-        "/openclaw-gw",
-        "--tls-fingerprint",
-        "ab".repeat(32),
-        "--commands",
-        "fixture.list,fixture.read",
-        "--session-host",
-        "--desktop-sharing",
-        "--auth-from-env",
-        "--parent-stdin",
-      ],
+  it.each([true, false])(
+    "warns about a legacy entrypoint only when updates are enabled (%s)",
+    async (enabled) => {
+      Object.defineProperty(process, "connected", { configurable: true, value: false });
+      const argv = process.argv;
+      process.argv = [process.execPath, "/installed/openclaw/dist/index.js", "node", "run"];
+      mocks.getRuntimeConfig.mockReturnValue({ nodeHost: { autoUpdate: { enabled } } });
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      try {
+        await withRunningNodeHost({}, async () => {
+          const warned = stderr.mock.calls.some(([line]) =>
+            String(line).includes("bypasses the node launcher"),
+          );
+          expect(warned).toBe(enabled);
+        });
+      } finally {
+        process.argv = argv;
+        stderr.mockRestore();
+      }
     },
-    {
-      label: "plaintext and the restored full command surface",
-      gateway: { host: "127.0.0.1", port: 18789, tls: false },
-      sharing: false,
-      commands: undefined,
-      forceWorkerRuns: false,
-      desktopSharingEnabled: false,
-      companion: false,
-      endpointArgs: ["--host", "127.0.0.1", "--port", "18789"],
-      optionArgs: ["--no-tls", "--no-share-installed-apps", "--no-desktop-sharing"],
+  );
+
+  it.each([true, false])(
+    "restarts with effective options (TLS/companion=%s) without replaying pairing",
+    async (companion) => {
+      const commands = companion ? ["fixture.list", "fixture.read"] : undefined;
+      const gateway = companion
+        ? {
+            host: "2001:db8::10",
+            port: 8443,
+            tls: true,
+            tlsFingerprint: "ab".repeat(32),
+            contextPath: "/openclaw-gw",
+          }
+        : { host: "127.0.0.1", port: 18789, tls: false };
+      const optionArgs = companion
+        ? `--tls --share-installed-apps --context-path /openclaw-gw --tls-fingerprint ${"ab".repeat(32)} --commands fixture.list,fixture.read --session-host --desktop-sharing --auth-from-env --parent-stdin`.split(
+            " ",
+          )
+        : "--no-tls --no-share-installed-apps --no-desktop-sharing".split(" ");
+      const effectiveConfig = {
+        version: 1 as const,
+        nodeId: "persisted-node-id",
+        displayName: "Persisted Node",
+        gateway,
+        installedAppsSharing: companion,
+        commands,
+      };
+      mocks.configureNodeHost.mockResolvedValueOnce(effectiveConfig);
+      mocks.activeRuntime.tryPauseForUpdate.mockResolvedValueOnce(false);
+
+      await withRunningNodeHost(
+        {
+          gatewayBootstrapToken: "one-use-bootstrap-token",
+          preferGatewayBootstrapToken: true,
+          forceWorkerRuns: companion,
+          desktopSharingEnabled: companion,
+          gatewayAuthFromEnv: companion,
+          parentStdin: companion,
+          allCommands: commands === undefined,
+        },
+        async () => {
+          receiveHello(undefined, 1);
+          await expectCalls(mocks.activeRuntime.tryPauseForUpdate);
+
+          expect(updateMocks.send.mock.calls.map(([message]) => message)).toEqual([
+            {
+              type: "openclaw.node.restart-args",
+              argv: [
+                "node",
+                "run",
+                "--host",
+                gateway.host,
+                "--port",
+                String(gateway.port),
+                "--node-id",
+                "persisted-node-id",
+                "--display-name",
+                "Persisted Node",
+                ...optionArgs,
+              ],
+            },
+            { type: "openclaw.node.ready", version: VERSION },
+          ]);
+        },
+      );
     },
-  ])("restarts with effective options for $label without replaying pairing", async (entry) => {
-    const effectiveConfig = {
-      version: 1 as const,
-      nodeId: "persisted-node-id",
-      displayName: "Persisted Node",
-      gateway: entry.gateway,
-      installedAppsSharing: entry.sharing,
-      commands: entry.commands,
-    };
-    mocks.configureNodeHost.mockResolvedValueOnce(effectiveConfig);
-    mocks.activeRuntime.tryPauseForUpdate.mockResolvedValueOnce(false);
-
-    await withRunningNodeHost(
-      {
-        gatewayBootstrapToken: "one-use-bootstrap-token",
-        preferGatewayBootstrapToken: true,
-        forceWorkerRuns: entry.forceWorkerRuns,
-        desktopSharingEnabled: entry.desktopSharingEnabled,
-        gatewayAuthFromEnv: entry.companion,
-        parentStdin: entry.companion,
-        allCommands: entry.commands === undefined,
-      },
-      async () => {
-        hello();
-        await vi.waitFor(() =>
-          expect(mocks.activeRuntime.tryPauseForUpdate).toHaveBeenCalledOnce(),
-        );
-
-        expect(updateMocks.send.mock.calls.map(([message]) => message)).toEqual([
-          {
-            type: "openclaw.node.restart-args",
-            argv: [
-              "node",
-              "run",
-              ...entry.endpointArgs,
-              "--node-id",
-              "persisted-node-id",
-              "--display-name",
-              "Persisted Node",
-              ...entry.optionArgs,
-            ],
-          },
-          { type: "openclaw.node.ready", version: VERSION },
-        ]);
-      },
-    );
-  });
+  );
 
   it("does not schedule updates for service enrollment", async () => {
     await withRunningNodeHost({ stopAfterFirstConnect: true }, async ({ running, stop }) => {
-      hello();
+      receiveHello(undefined, 1);
       stop();
       await running;
 
@@ -265,8 +222,8 @@ describe("node runner auto-update handoff", () => {
       updateMocks.prepare.mockReturnValueOnce(installing.promise);
       await withRunningNodeHost({}, async ({ running, stop }) => {
         try {
-          hello();
-          await vi.waitFor(() => expect(updateMocks.prepare).toHaveBeenCalledOnce());
+          receiveHello(undefined, 1);
+          await expectCalls(updateMocks.prepare);
           const updateSignal = updateMocks.prepare.mock.calls[0]?.[0].signal;
 
           let onSigterm: (() => void) | undefined;

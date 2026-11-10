@@ -46,8 +46,8 @@ export {
   type MemorySearchDeadlineControl,
   type MemorySearchDeadlineControlOptions,
 } from "./host/search-deadline-control.js";
+export type { MemoryCliSearchParams, MemorySearchManager } from "./host/search-manager.types.js";
 export type {
-  MemoryCliSearchParams,
   MemoryCliSearchResult,
   MemoryCliSearchOutcome,
   MemoryEmbeddingProbeResult,
@@ -56,7 +56,6 @@ export type {
   MemoryIndexIdentityDiagnostic,
   MemoryIndexIdentityState,
   MemoryProviderStatus,
-  MemorySearchManager,
   MemorySearchRuntimeDebug,
   MemorySearchResult,
   MemorySessionSyncTarget,
@@ -78,7 +77,6 @@ export {
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
 } from "./host/memory-schema.js";
-export { loadSqliteVecExtension, loadSqliteVecExtensionFromPath } from "./host/sqlite-vec.js";
 export {
   readCuratedProjectMemoryCandidates,
   readCuratedMemoryTriggerCandidates,

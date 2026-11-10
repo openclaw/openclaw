@@ -18,7 +18,8 @@ openclaw-lobster-pet .lobster-pet {
 
 .lobster-pet__motion {
   position: absolute;
-  inset: 0;
+  /* Sprites use pixel coordinates; a full-size moving box overflows the composer. */
+  inset: 0 auto auto 0;
   pointer-events: none;
 }
 
@@ -1561,24 +1562,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-.lobsterdex {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  align-items: flex-end;
-}
-
-.lobsterdex__mini {
-  display: inline-block;
-  position: relative;
-  width: 26px;
-  aspect-ratio: 120 / 105;
-}
-
-.lobsterdex__mini .lobster-pet__svg {
-  animation: none;
-}
-
 .lobsterdex__mini--unseen {
   filter: grayscale(1) brightness(0.45) opacity(0.55);
 }
@@ -1592,24 +1575,4 @@ openclaw-lobster-pet[data-dex-complete]::after {
   line-height: 1;
   color: #f4b840;
   pointer-events: none;
-}
-
-.lobsterdex__gallery {
-  display: grid;
-  gap: 12px;
-  justify-items: start;
-}
-
-.lobsterdex__tooltip {
-  display: grid;
-  max-width: 230px;
-  gap: 2px;
-}
-
-.lobsterdex__tooltip strong {
-  color: var(--text-strong);
-}
-
-.lobsterdex__tooltip span {
-  color: var(--muted);
 }

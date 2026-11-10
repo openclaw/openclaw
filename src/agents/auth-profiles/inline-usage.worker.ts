@@ -1,11 +1,13 @@
+import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
-  assertTransactionUsable,
   runSqliteWorkerTransactionSync,
-  runSqliteDeferredTransactionSync,
+  runSqliteReadSnapshotSync,
 } from "../../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
-import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
+import { encodeSqliteWorkerDomainError } from "../../infra/sqlite-worker-domain-error.js";
+import { enrollAuthProfileAuthorizationInDatabase } from "./authorization-enrollment.js";
 import { reportCommittedInlineAuthFailure } from "./constants.js";
 import {
   recordInlineAuthFailureInDatabase,
@@ -23,19 +25,26 @@ export function bindSqliteWorkerBackend(
   _input: unknown,
   context: SqliteWorkerDatabaseContext,
 ): SqliteWorkerBackend<InlineAuthFailureOperations> {
-  return {
+  return bindSqliteWorkerDatabase<InlineAuthFailureOperations>(context.database, {
     execute(command) {
+      if (command.type === "authProfiles.enrollAuthorization") {
+        return runSqliteWorkerTransactionSync(context, () =>
+          enrollAuthProfileAuthorizationInDatabase(context.database, "agent", command.input),
+        );
+      }
       if (command.type === "authProfiles.update") {
         if (!authProfilePeerGenerationMayMatch(context.database, command.input)) {
           return false;
         }
-        runSqliteWorkerTransactionSync(context, () =>
-          updateAuthProfileStoreInDatabase(context.database, "agent", command.input),
+        withSqlitePostCommitPublications(context.database, () =>
+          runSqliteWorkerTransactionSync(context, () =>
+            updateAuthProfileStoreInDatabase(context.database, "agent", command.input),
+          ),
         );
         return true;
       }
       if (command.type === "authProfiles.inlineSnapshot") {
-        return runSqliteDeferredTransactionSync(context.database, () => ({
+        return runSqliteReadSnapshotSync(context.database, () => ({
           store: inspectAuthProfileJsonCell(context.database, "store", "agent"),
           state: inspectAuthProfileJsonCell(context.database, "state", "agent"),
           cacheable: false,
@@ -75,16 +84,7 @@ export function bindSqliteWorkerBackend(
         );
       } catch (error) {
         if (!committed || !result) {
-          // A confirmed rollback is a domain refusal, not an unsettled executor.
-          assertTransactionUsable(context.database);
-          if (!context.database.isOpen || context.database.isTransaction) {
-            throw error;
-          }
-          const failure = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
-          if (!failure) {
-            throw error;
-          }
-          return { ok: false, error: failure };
+          return { ok: false, error: encodeSqliteWorkerDomainError(context.database, error) };
         }
         reportCommittedInlineAuthFailure(
           "Auth usage committed before transaction cleanup failed",
@@ -96,12 +96,5 @@ export function bindSqliteWorkerBackend(
       }
       return result;
     },
-    assertSettled() {
-      assertTransactionUsable(context.database);
-      if (!context.database.isOpen || context.database.isTransaction) {
-        throw new Error("Auth usage left an unsettled agent transaction");
-      }
-    },
-    close() {},
-  };
+  });
 }

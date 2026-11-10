@@ -23,6 +23,8 @@ describe("AppSidebar embedder Gateway menu", () => {
       const open = async () => {
         sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card")!.click();
         await sidebar.updateComplete;
+        sidebar.querySelector<HTMLButtonElement>('[data-value="command:gateways"]')!.click();
+        await sidebar.updateComplete;
       };
       await open();
       expect(bridge.postMessage).toHaveBeenCalledWith(
@@ -32,6 +34,8 @@ describe("AppSidebar embedder Gateway menu", () => {
       bridge.publish();
       await sidebar.updateComplete;
       const menu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu")!;
+      expect(menu.querySelector('[data-value="command:gateways"]')?.textContent).toContain("Team");
+      expect(menu.querySelector('[data-value="command:apps"]')).not.toBeNull();
       const rows = [...menu.querySelectorAll<HTMLElement>('[data-value^="gateway:"]')];
       expect(
         rows.map((row) => row.querySelector(".sidebar-customize-menu__text")?.textContent),

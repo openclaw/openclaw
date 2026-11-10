@@ -92,6 +92,9 @@ export const pluginSdkDocMetadata = {
   "plugin-command-runtime": {
     category: "runtime",
   },
+  "context-engine-transcript-runtime": {
+    category: "runtime",
+  },
   "session-store-runtime": {
     category: "runtime",
   },

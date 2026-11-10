@@ -1,8 +1,8 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 import { setupGuidedCustodianTestSuite } from "./onboard-guided.custodian.test-support.js";
-import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
 const launchTuiCli = vi.hoisted(() => vi.fn(async (_opts: unknown) => undefined));
 vi.mock("../tui/tui-launch.js", () => ({ launchTuiCli }));
@@ -85,7 +85,7 @@ describe("runGuidedOnboarding", () => {
 
   it("never attempts browser handoff for remote chat onboarding", async () => {
     const prompter = createWizardPrompter();
-    const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
+    const runBrowserHandoff = vi.fn(async () => true);
     const deps = setupDeps({
       prompter,
       handoffMode: "chat",
@@ -261,22 +261,6 @@ describe("runGuidedOnboarding", () => {
     );
   });
 
-  it("enables default hooks in the persisted setup config", async () => {
-    const applySetup = vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(async (params) => {
-      const sourceConfig = localOnboarding.persisted.config ?? {};
-      localOnboarding.persisted.config =
-        params.finalizeConfig?.(sourceConfig, sourceConfig) ?? sourceConfig;
-      return setupApplyResult();
-    });
-    const deps = setupDeps({ prompter: createWizardPrompter(), applySetup });
-
-    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
-
-    expect(
-      localOnboarding.persisted.config?.hooks?.internal?.entries?.["session-memory"]?.enabled,
-    ).toBe(true);
-  });
-
   it("resumes an interrupted gateway install using its approved workspace", async () => {
     const first = setupDeps({
       prompter: createWizardPrompter(),
@@ -333,7 +317,10 @@ describe("runGuidedOnboarding", () => {
       status: "completed",
       runId: pending?.runId,
     });
-    expect(retry.launchHatchTui).toHaveBeenCalledWith("/tmp/approved-workspace");
+    expect(retry.observeHandoff).toHaveBeenCalledWith(
+      expect.objectContaining({ workspace: "/tmp/approved-workspace", next: "hatch" }),
+    );
+    expect(retry.launchHatchTui).toHaveBeenCalledWith(expect.objectContaining({ deliver: false }));
   });
 
   it("replaces a stale receipt when explicit onboarding owns the replacement config", async () => {

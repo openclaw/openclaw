@@ -21,10 +21,10 @@ export function repairOpenClawAgentDatabasePaths(
   database: Pick<OpenClawStateDatabase, "db" | "path">,
 ): { repaired: number; warnings: string[] } {
   const { db, path: pathname } = database;
-  if (isPostgresSqlConnection(db)) {
-    requireNativeDatabaseFile("postgres", "repair");
+  const postgres = isPostgresSqlConnection(db);
+  if (!postgres) {
+    assertOpenClawStateDatabaseForMaintenance(db, { pathname });
   }
-  assertOpenClawStateDatabaseForMaintenance(db, { pathname });
   const active = readActiveUpdateRun(db);
   if (active) {
     return {
@@ -65,6 +65,9 @@ export function repairOpenClawAgentDatabasePaths(
     const sentinel =
       name === "(multiple).sqlite" || name === `(multiple).${newest.agent_id}.sqlite`;
     if (sentinel) {
+      if (postgres) {
+        requireNativeDatabaseFile("postgres", "repair");
+      }
       try {
         const files = resolveSqliteDatabaseFilePaths(registeredPath);
         const stats = files.map((file) => fs.lstatSync(file, { throwIfNoEntry: false }));
@@ -104,6 +107,9 @@ export function repairOpenClawAgentDatabasePaths(
         !aliases.some((row) => row.path.startsWith("\\\\?\\"))
       ) {
         continue;
+      }
+      if (postgres) {
+        requireNativeDatabaseFile("postgres", "repair");
       }
       const canonical = { ...newest, path: stored };
       executeSqliteQuerySync(

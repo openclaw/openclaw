@@ -25,6 +25,8 @@ export function buildOpenRouterSpeechProvider(): SpeechProviderPlugin {
     defaultModel: DEFAULT_OPENROUTER_TTS_MODEL,
     defaultVoice: DEFAULT_OPENROUTER_TTS_VOICE,
     defaultBaseUrl: OPENROUTER_BASE_URL,
+    // Hosted Kokoro synthesis can exceed the standard 30-second timeout.
+    defaultTimeoutMs: 120_000,
     envKey: "OPENROUTER_API_KEY",
     responseFormats: OPENROUTER_TTS_RESPONSE_FORMATS,
     defaultResponseFormat: "mp3",

@@ -1,5 +1,4 @@
 import type { Message } from "grammy/types";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
@@ -70,7 +69,6 @@ export async function editMessageReplyMarkupTelegram(
           throw err;
         }
       }
-      logVerbose(`[telegram] Edited reply markup for message ${messageId} in chat ${chatId}`);
       return { ok: true, messageId: String(messageId), chatId };
     },
   );
@@ -150,14 +148,13 @@ export async function editMessageTelegram(
           warn: (message) => sendLogger.warn(message),
           fallbackLimit: Number.MAX_SAFE_INTEGER,
           sender: {
-            sendPlain: (value, _fallback, label) =>
-              edit(
-                () =>
-                  Object.keys(commonTextParams).length
-                    ? api.editMessageText(chatId, messageId, value, commonTextParams)
-                    : api.editMessageText(chatId, messageId, value),
-                label,
-              ),
+            sendPlain: (value, _fallback, label, entities) =>
+              edit(() => {
+                const other = { ...commonTextParams, ...(entities?.length ? { entities } : {}) };
+                return Object.keys(other).length
+                  ? api.editMessageText(chatId, messageId, value, other)
+                  : api.editMessageText(chatId, messageId, value);
+              }, label),
             sendHtml: (value) =>
               edit(() =>
                 api.editMessageText(chatId, messageId, value, {
@@ -240,10 +237,8 @@ export async function editMessageTelegram(
         });
       }
 
-      logVerbose(`[telegram] Edited message ${messageId} in chat ${chatId}`);
       return { ok: true, messageId: String(messageId), chatId };
     },
-    (err) =>
-      isRecoverableTelegramNetworkError(err, { context: "edit" }) || isTelegramServerError(err),
+    (err) => isRecoverableTelegramNetworkError(err) || isTelegramServerError(err),
   );
 }

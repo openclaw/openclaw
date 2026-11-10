@@ -99,9 +99,23 @@ read_when:
 
 **Forwarded-header evidence overrides loopback locality for local-direct fallback.** If a request arrives on loopback but carries a `Forwarded`, any `X-Forwarded-*`, or `X-Real-IP` header, that evidence disqualifies it from local-direct password fallback and device-identity gating, even though it still fails trusted-proxy auth as loopback.
 
+The same restriction always applies to Tailscale identity headers. While OpenClaw ID
+is on (`gateway.openclawId.enabled`), it also applies to Cloudflare Access identity
+headers, `Remote-User`, `X-Remote-User`, and the configured `userHeader` or
+`requiredHeaders`: an identity-only request without a usable forwarded client
+address is rejected, not treated as the local operator. This protects OpenClaw
+ID's local-only linking; see [access coexistence](/gateway/remote#openclaw-id-alongside-existing-access).
+With OpenClaw ID off, those headers do not change loopback locality.
+
 `allowLoopback` trusts local processes on the Gateway host to the same degree as the reverse proxy. Enable it only when the Gateway is still firewalled from direct remote access and the local proxy strips or overwrites client-supplied identity headers.
 
 Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. `openclaw gateway status` selects this local password automatically when no `--url` override is supplied, including with `--json`. For browser access, omit `gateway.controlUi.allowedOrigins` to use `gateway.publicOrigin` as the default, or configure an explicit list that overrides it.
+
+Browser OAuth sign-in can use the HTTPS origin from `gateway.publicOrigin` on a
+trusted-proxy-authenticated connection even when the proxy rewrites `Host` to an
+internal Gateway address. The browser must still pass the configured origin
+policy, and operator MCP sign-in requires administrator access. An additional
+allowlisted origin alone does not qualify as an OAuth callback address.
 
 Update and restart health checks can also reuse the local CLI's existing paired device credentials when no shared credential is configured. These checks read existing identity and token state without creating an identity or saving replacement credentials.
 </Warning>
@@ -244,6 +258,10 @@ Scope implications:
 - If methods fail with `missing scope` after a successful WebSocket connect, reload so the browser pairs its device identity, or approve the pending device request. See [Control UI insecure HTTP](/web/control-ui/connect-and-pair#insecure-http).
 
 Reverse-proxy scope capping: if your proxy sends `x-openclaw-scopes` on the Control UI WebSocket upgrade request, OpenClaw caps device enrollment or upgrade requests and the final union of device-authorized and identity-granted session scopes. This header does not grant scopes; it only narrows authority. When `deviceAutoApprove.enabled` is true, the cap also limits the persistent device grant written by [automatic device approval](#automatic-device-approval).
+
+The cap honors operator scope implications. For example, an `operator.write`
+grant with an `operator.read` header retains read access without write access,
+whether or not the grant also lists the redundant `operator.read` scope.
 
 Implications:
 

@@ -88,7 +88,13 @@ struct ExecApprovalsPromptServerTests {
             tokens: ["", "current-token"])
         let server = ExecApprovalsPromptServer(
             retryDelay: .milliseconds(10),
-            resolveSocketCredentials: { probe.resolve() },
+            resolveSocketCredentials: {
+                let credentials = probe.resolve()
+                guard !credentials.token.isEmpty else {
+                    throw CocoaError(.fileReadNoPermission)
+                }
+                return credentials
+            },
             onPrompt: { _ in .allowOnce })
 
         server.start()

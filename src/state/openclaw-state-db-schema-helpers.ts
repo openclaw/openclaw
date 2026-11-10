@@ -1,6 +1,5 @@
-import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { executeWithCachedStatement } from "../infra/kysely-sync-cache-state.js";
-// Provides shared SQLite schema probes and additive column migration helpers.
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
@@ -10,9 +9,32 @@ import {
   type SqliteSchemaFacts,
 } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
-import { readSqlToken } from "../infra/sqlite-schema-sql.js";
+import {
+  findSqlCharacter,
+  findSqlClosingParenthesis,
+  hasUnquotedSqlKeyword,
+  normalizeSqlIdentifier,
+  readSqlToken,
+  readTableConstraintKeyword,
+  splitSqlList,
+} from "../infra/sqlite-schema-sql.js";
 
 const tableColumns = new WeakMap<SqliteSchemaFacts, Map<string, Set<string>>>();
+
+function readCanonicalTableDefinition(sql: string, tableName: string) {
+  if (!/^CREATE TABLE\b/iu.test(sql) || hasUnquotedSqlKeyword(sql, /\bAS\b/giu)) {
+    return undefined;
+  }
+  const definition = parseSqliteTableDefinition(sql, tableName);
+  // table_info omits generated columns and preserves identifier spelling.
+  // Noncanonical identifiers and unsupported constraint names keep native inspection.
+  return [...definition.columns.values()].every((column) => {
+    const token = readSqlToken(column, 0);
+    return token?.keyword !== "CONSTRAINT" && /^[a-z_][a-z0-9_]*$/u.test(token?.raw ?? "");
+  })
+    ? definition
+    : undefined;
+}
 
 export function tableHasColumn(
   db: EngineConnection,
@@ -24,7 +46,18 @@ export function tableHasColumn(
 
 export function readTableColumns(db: EngineConnection, tableName: string): Set<string> {
   if (isPostgresSqlConnection(db)) {
-    requireNativeDatabaseFile("postgres", "repair");
+    return new Set(
+      getPostgresPhysicalFacts(db)?.catalog.flatMap((fact) =>
+        fact.table === tableName &&
+        fact.kind === "column" &&
+        fact.value &&
+        typeof fact.value === "object" &&
+        "name" in fact.value &&
+        typeof fact.value.name === "string"
+          ? [fact.value.name]
+          : [],
+      ) ?? [],
+    );
   }
   const schema = getAdmittedSqliteSchemaFacts(db);
   const sql = schema?.tableSql.get(tableName);
@@ -37,20 +70,14 @@ export function readTableColumns(db: EngineConnection, tableName: string): Set<s
   ) {
     return new Set();
   }
-  if (schema && sql && /^CREATE TABLE\b/iu.test(sql) && !/\bAS\b/iu.test(sql)) {
+  if (schema && sql) {
     let tables = tableColumns.get(schema);
     const retained = tables?.get(tableName);
     if (retained) {
       return retained;
     }
-    const definition = parseSqliteTableDefinition(sql, tableName);
-    // table_info omits generated columns and preserves identifier spelling.
-    // Views, virtual tables, and noncanonical identifiers keep native inspection.
-    if (
-      [...definition.columns.values()].every((column) =>
-        /^[a-z_][a-z0-9_]*$/u.test(readSqlToken(column, 0)?.raw ?? ""),
-      )
-    ) {
+    const definition = readCanonicalTableDefinition(sql, tableName);
+    if (definition) {
       const columns = new Set(definition.columns.keys());
       if (!tables) {
         tables = new Map();
@@ -94,7 +121,32 @@ export function classifySqliteTableReadError(
 
 export function tablePrimaryKeyColumns(db: EngineConnection, tableName: string): string[] {
   if (isPostgresSqlConnection(db)) {
-    requireNativeDatabaseFile("postgres", "repair");
+    const value = getPostgresPhysicalFacts(db)?.catalog.find(
+      (fact) => fact.table === tableName && fact.kind === "primaryKey",
+    )?.value;
+    return Array.isArray(value)
+      ? value.filter((column): column is string => typeof column === "string")
+      : [];
+  }
+  const sql = getAdmittedSqliteSchemaFacts(db)?.tableSql.get(tableName);
+  const definition = sql && readCanonicalTableDefinition(sql, tableName);
+  if (definition) {
+    const key = definition.constraints.find((constraint) => {
+      const first = readSqlToken(constraint, 0);
+      return first && readTableConstraintKeyword(constraint, first) === "PRIMARY";
+    });
+    if (!key) {
+      return [...definition.columns].flatMap(([name, column]) =>
+        hasUnquotedSqlKeyword(column, /\bPRIMARY\s+KEY\b/giu) ? [name] : [],
+      );
+    }
+    const open = findSqlCharacter(key, "(");
+    const columns = splitSqlList(key.slice(open + 1, findSqlClosingParenthesis(key, open))).map(
+      (term) => normalizeSqlIdentifier(readSqlToken(term, 0)?.raw ?? ""),
+    );
+    if (columns.every((column) => definition.columns.has(column))) {
+      return [...new Set(columns)];
+    }
   }
   const rows = db.prepare(`PRAGMA table_info(${tableName})`).all();
   return rows
@@ -105,7 +157,11 @@ export function tablePrimaryKeyColumns(db: EngineConnection, tableName: string):
 
 export function tableExists(db: EngineConnection, tableName: string): boolean {
   if (isPostgresSqlConnection(db)) {
-    requireNativeDatabaseFile("postgres", "repair");
+    return (
+      getPostgresPhysicalFacts(db)?.catalog.some(
+        (fact) => fact.table === tableName && fact.kind === "table",
+      ) ?? false
+    );
   }
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (schema) {
@@ -132,6 +188,9 @@ export function ensureColumn(db: EngineConnection, tableName: string, columnSql:
 
 /** Missing runtime tables are empty only before state grows beyond checkpoint bootstrap. */
 export function hasOpenClawStateTablesBeyondStartupCheckpoint(db: EngineConnection): boolean {
+  if (isPostgresSqlConnection(db)) {
+    return true;
+  }
   return (
     /* sqlite-allow-raw -- Read-only startup-checkpoint schema discriminator. */ db
       .prepare(

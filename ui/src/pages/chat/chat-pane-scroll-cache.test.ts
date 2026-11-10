@@ -1,12 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { stubAnimationFrames } from "./chat-view.test-helpers.ts";
-import { renderChatThread } from "./components/chat-thread.test-support.ts";
+import { mountChatThread } from "./components/chat-thread.test-support.ts";
+import { emitTranscriptResize } from "./components/chat-transcript-fixture.test-support.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -24,6 +24,8 @@ async function mountSession(paneId: string, sessionKey: string) {
   pane.paneId = paneId;
   pane.presentationId = JSON.stringify([paneId, sessionKey]);
   state.sessionKey = sessionKey;
+  state.connected = true;
+  state.chatLoading = false;
   state.chatMessages = Array.from({ length: 12 }, (_, index) => ({
     role: index % 2 ? "assistant" : "user",
     content: `Message ${index}`,
@@ -31,25 +33,38 @@ async function mountSession(paneId: string, sessionKey: string) {
   }));
   pane.render();
   const props = expectDefined(pane.chatProps, "pane transcript props");
-  const container = document.body.appendChild(document.createElement("div"));
-  props.transcript.hostConnected();
-  render(renderChatThread(props, props.transcript), container);
+  props.transcript.start();
+  const view = mountChatThread(props, props.transcript);
+  const { container } = view;
   const thread = expectDefined(container.querySelector<HTMLDivElement>(".chat-thread"), "thread");
   Object.defineProperties(thread, {
     clientHeight: { configurable: true, value: 600 },
     scrollHeight: { configurable: true, value: 3_000 },
   });
-  props.transcript.hostUpdated();
-  await Promise.resolve();
-  flush();
-  flushFrames();
-  flush();
+  thread.scrollTo = (options?: ScrollToOptions | number) => {
+    if (typeof options === "object") {
+      thread.scrollTop = Math.max(0, Math.min(options.top ?? thread.scrollTop, 2_400));
+    }
+  };
+  props.transcript.update();
+  thread.dispatchEvent(new Event("scroll"));
+  await expect
+    .poll(async () => {
+      await Promise.resolve();
+      flush();
+      for (const row of thread.querySelectorAll<HTMLElement>(".chat-virtual-row")) {
+        emitTranscriptResize(row, 800, row.offsetHeight);
+      }
+      flushFrames();
+      flush();
+      return props.transcript.isPositionSettled;
+    })
+    .toBe(true);
   return {
     thread,
     dispose: () => {
-      props.transcript.hostDisconnected();
-      render(nothing, container);
-      container.remove();
+      props.transcript.dispose();
+      view.unmount();
     },
   };
 }

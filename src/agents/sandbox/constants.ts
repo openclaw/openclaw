@@ -7,7 +7,7 @@ export { DEFAULT_SANDBOX_BROWSER_NETWORK } from "./browser-network.js";
 
 export const DEFAULT_SANDBOX_WORKSPACE_ROOT = path.join(STATE_DIR, "sandboxes");
 
-export const DEFAULT_SANDBOX_IMAGE = "openclaw-sandbox:bookworm-slim";
+export const DEFAULT_SANDBOX_IMAGE = "openclaw-sandbox:trixie-slim";
 export const DEFAULT_SANDBOX_CONTAINER_PREFIX = "openclaw-sbx-";
 export const DEFAULT_SANDBOX_WORKDIR = "/workspace";
 export const DEFAULT_SANDBOX_IDLE_HOURS = 24;
@@ -26,6 +26,8 @@ export const DEFAULT_TOOL_ALLOW = [
   "edit",
   "apply_patch",
   "view_image",
+  "github_read",
+  "github_search",
   "github_publish",
   "sessions_list",
   "sessions_history",
@@ -35,6 +37,9 @@ export const DEFAULT_TOOL_ALLOW = [
   "sessions_yield",
   "subagents",
   "session_status",
+  "get_goal",
+  "create_goal",
+  "update_goal",
 ] as const;
 
 // Provider docking: keep sandbox policy aligned with provider tool names.
@@ -49,14 +54,14 @@ export const DEFAULT_TOOL_DENY = [
   ...CHANNEL_IDS,
 ] as const;
 
-export const DEFAULT_SANDBOX_BROWSER_IMAGE = "openclaw-sandbox-browser:bookworm-slim";
-export const DEFAULT_SANDBOX_COMMON_IMAGE = "openclaw-sandbox-common:bookworm-slim";
+export const DEFAULT_SANDBOX_BROWSER_IMAGE = "openclaw-sandbox-browser:trixie-slim";
+export const DEFAULT_SANDBOX_COMMON_IMAGE = "openclaw-sandbox-common:trixie-slim";
 export const SANDBOX_BROWSER_SECURITY_HASH_EPOCH = "2026-05-12-cdp-relay-auth";
 export const SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH = "2026-05-12-cdp-relay-auth";
 
 // Bump with shared Docker create-flag changes so existing ordinary and browser
 // sandboxes roll through the hash/recreate path instead of keeping stale flags.
-export const SANDBOX_DOCKER_CREATE_ARGS_EPOCH = "2026-08-25-container-env-file";
+export const SANDBOX_DOCKER_CREATE_ARGS_EPOCH = "2026-11-09-bounded-tmpfs";
 
 export const DEFAULT_SANDBOX_BROWSER_PREFIX = "openclaw-sbx-browser-";
 export const DEFAULT_SANDBOX_BROWSER_CDP_PORT = 9222;

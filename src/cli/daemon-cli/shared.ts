@@ -1,3 +1,4 @@
+import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import {
@@ -10,6 +11,7 @@ import { buildPlatformServiceStartHints } from "../../daemon/runtime-hints.js";
 import type { GatewayServiceInstallationDrift } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-user-transport.js";
+import { formatGatewayCrash, type GatewayCrashRecord } from "../../infra/gateway-crash.js";
 import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
 import { parseTcpPort } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -94,14 +96,27 @@ export function resolveDaemonServiceInstallGuidance(
 
 export function formatGatewayServiceInstallationDrift(
   drift: GatewayServiceInstallationDrift,
-  targetRole?: "target" | "diagnostic-only",
   env: NodeJS.ProcessEnv = process.env,
   service?: { stopped?: boolean; port?: number },
 ): string {
   const { serviceRoot, serviceVersion, activeRoot, activeVersion } = drift;
-  const facts = `Gateway service targets a different OpenClaw install: ${serviceRoot} (${serviceVersion ?? "version unknown"}); active CLI: ${activeRoot} (${activeVersion ?? "version unknown"}).`;
-  const guidance = resolveDaemonServiceInstallGuidance(targetRole, env, service);
+  const facts = `CLI ${activeVersion ?? "version unknown"} at ${activeRoot} differs from the Gateway service's ${serviceVersion ?? "version unknown"} at ${serviceRoot}. Run \`${formatCliCommand("openclaw update", env)}\` or use the CLI from ${serviceRoot}.`;
+  const guidance = resolveDaemonServiceInstallGuidance(undefined, env, service);
   return guidance ? `${facts} ${guidance}` : facts;
+}
+
+export type GatewayCrashHistory = {
+  recentCrashes?: readonly GatewayCrashRecord[];
+  crashHistoryError?: string;
+};
+
+export function formatGatewayCrashHistory(history?: GatewayCrashHistory): string[] {
+  return history?.crashHistoryError
+    ? [terminalText`Recent Gateway crashes unavailable: ${history.crashHistoryError}`]
+    : (history?.recentCrashes ?? []).map(
+        (crash) =>
+          terminalText`Previous Gateway run ended unexpectedly (${new Date(crash.detectedAtMs).toISOString()}): ${formatGatewayCrash(crash)}`,
+      );
 }
 
 export function createCliStatusTextStyles() {
@@ -126,23 +141,6 @@ export function resolveRuntimeStatusColor(status: string | undefined): (value: s
       : runtimeStatus === "unknown"
         ? theme.muted
         : theme.warn;
-}
-
-export function pickProbeHostForBind(
-  bindMode: string,
-  tailnetIPv4: string | undefined,
-  customBindHost?: string,
-) {
-  if (bindMode === "custom" && customBindHost?.trim()) {
-    return customBindHost.trim();
-  }
-  if (bindMode === "tailnet") {
-    return tailnetIPv4 ?? "127.0.0.1";
-  }
-  // Same as call.ts: self-connections should always target loopback.
-  // bind=lan controls which interfaces the server listens on (0.0.0.0),
-  // but co-located CLI probes should connect via 127.0.0.1.
-  return "127.0.0.1";
 }
 
 const SAFE_DAEMON_ENV_KEYS = [
@@ -192,6 +190,24 @@ export function projectDaemonServiceForJson<
 
 export function safeDaemonEnv(env: Record<string, string> | undefined): string[] {
   return Object.entries(filterDaemonEnv(env)).map(([key, value]) => `${key}=${value}`);
+}
+
+export function resolveLaunchdInspectionWarnings(service: {
+  foreignLaunchdInspectionError?: string;
+  staleLaunchdInspectionError?: string;
+}): string[] {
+  const warnings: string[] = [];
+  if (service.foreignLaunchdInspectionError) {
+    warnings.push(
+      terminalText`Could not inspect foreign launchd jobs: ${service.foreignLaunchdInspectionError}`,
+    );
+  }
+  if (service.staleLaunchdInspectionError) {
+    warnings.push(
+      terminalText`Could not inspect stale OpenClaw updater launchd jobs: ${service.staleLaunchdInspectionError}; interrupted-update leftovers were NOT checked. Check launchctl availability and rerun ${formatCliCommand("openclaw doctor")}.`,
+    );
+  }
+  return warnings;
 }
 
 export function normalizeListenerAddress(raw: string): string {

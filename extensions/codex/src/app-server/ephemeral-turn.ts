@@ -4,7 +4,6 @@ import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce
 import { isTerminalTurnStatus, readCodexNotificationItem } from "./attempt-notifications.js";
 import type { CodexAppServerClient } from "./client.js";
 import { CodexUsageProjection } from "./event-projector-usage.js";
-import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
 import { isJsonObject, type CodexThreadItem, type CodexTurn, type JsonObject } from "./protocol.js";
 import { getCodexAppServerTurnRouter, type CodexThreadRouteReservation } from "./turn-router.js";
 
@@ -60,9 +59,8 @@ export class CodexEphemeralTurn {
             // thread/fork cannot opt into raw events, so forks report usage only here.
             this.usage.recordThread(params);
           } else if (notification.method === "turn/completed") {
-            const completed = readCodexTurnCompletedNotification(params);
-            if (completed) {
-              this.turn = completed.turn;
+            if (notification.completedTurn) {
+              this.turn = notification.completedTurn;
               this.completion.resolve();
             }
           } else if (notification.method === "error") {

@@ -2,21 +2,13 @@
  * Markdown AST — addressing index for workspace files.
  *
  * Pure addressing structure; no per-file opinions (those live in lint
- * rules). Byte-fidelity: `parseMd(raw).ast.raw === raw`; `raw` on the
+ * rules). Byte-fidelity: `parseMd(raw).raw === raw`; `raw` on the
  * root preserves the original bytes for round-trip.
  *
  * @module @openclaw/oc-path/ast
  */
 
-/** Parser diagnostic. Severity `warning` for recoverable input; never throws. */
-export interface Diagnostic {
-  readonly line: number;
-  readonly message: string;
-  readonly severity: "info" | "warning" | "error";
-  readonly code?: string;
-}
-
-/** Frontmatter entry. Values unquoted (`"`/`'` stripped) but otherwise verbatim. */
+/** Frontmatter entry. YAML string scalars decoded; non-string scalar spelling preserved. */
 export interface FrontmatterEntry {
   readonly key: string;
   readonly value: string;
@@ -31,6 +23,8 @@ export interface AstItem {
   readonly text: string;
   readonly slug: string;
   readonly line: number;
+  /** First inline paragraph's source line; null when its token has no source map. */
+  readonly textLine: number | null;
   readonly kv?: { readonly key: string; readonly value: string };
 }
 
@@ -54,11 +48,8 @@ export interface MdAst {
   readonly kind: "md";
   readonly raw: string;
   readonly frontmatter: readonly FrontmatterEntry[];
+  /** 1-based line of the closing frontmatter fence, including an empty block. */
+  readonly frontmatterEndLine?: number;
   readonly preamble: string;
   readonly blocks: readonly AstBlock[];
-}
-
-export interface ParseResult {
-  readonly ast: MdAst;
-  readonly diagnostics: readonly Diagnostic[];
 }

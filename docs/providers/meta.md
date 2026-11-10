@@ -182,6 +182,11 @@ Responses API. To run them through Meta's Muse Code CLI instead, install the
 `@openclaw/muse` plugin and set `agentRuntime: { id: "muse" }` on the model or
 provider. See [Muse Code agent runtime](/plugins/muse).
 
+In **Settings → Models**, choose **Connect provider → Meta → Muse Code** to sign
+in and approve native permissions. If an AI model is already available, this
+enables Muse Code without replacing your active model. When no model is
+available, the AI setup flow also selects the verified Muse model.
+
 ## Smoke test
 
 ```bash

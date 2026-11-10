@@ -33,7 +33,7 @@ import type {
   TelegramSendResult,
 } from "./send-message-types.js";
 import { recordSentMessage } from "./sent-message-cache.js";
-import { parseTelegramTarget } from "./targets.js";
+import { parseTelegramTarget, resolveTelegramTargetChatType } from "./targets.js";
 
 type PreparedTelegramOutbound = {
   chatId: string;
@@ -77,6 +77,20 @@ export function withTelegramMessageAction<T, TMessageId extends string | number 
       request,
     } as TelegramMessageActionContext<TMessageId>);
   });
+}
+
+/** Forward effects only when the resolved target is a private chat. */
+export function resolveTelegramMessageEffectParams(
+  chatId: string,
+  messageEffectId: string | undefined,
+): { message_effect_id: string } | undefined {
+  if (!messageEffectId) {
+    return undefined;
+  }
+  if (resolveTelegramTargetChatType(chatId) !== "direct") {
+    return undefined;
+  }
+  return { message_effect_id: messageEffectId };
 }
 
 export function buildTelegramProviderDeliveryResult(params: {
@@ -198,7 +212,6 @@ export async function finalizeTelegramOutbound(params: {
   messageThreadId?: number;
   promptContextProjectionPlan?: TelegramSendOpts["promptContextProjectionPlan"];
   onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
-  beforeActivity?: (result: { messageId: string; chatId: string }) => void;
 }): Promise<TelegramSendResult> {
   const { cfg, account, ownerAgentId } = params.context;
   const messageId = resolveTelegramMessageIdOrThrow(params.result, params.resultContext);
@@ -241,7 +254,6 @@ export async function finalizeTelegramOutbound(params: {
       visibleReplySent: true,
     });
   }
-  params.beforeActivity?.(resultIds);
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,

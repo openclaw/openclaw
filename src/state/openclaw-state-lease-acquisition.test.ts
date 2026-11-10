@@ -12,8 +12,11 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import { withProjectCheckoutLifecycle } from "../projects/project-checkout.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { acquireClawPackageLifecycleLease } from "./claw-package-lifecycle-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
@@ -68,6 +71,34 @@ function leaseOptions(
     ...overrides,
   };
 }
+
+it("names the checkout operation holding up foreground preparation", async () => {
+  await withOpenClawTestState({ label: "checkout-owner" }, async ({ env }) => {
+    const capture = createWarnLogCapture("checkout-owner");
+    const abort = new AbortController();
+    vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async () => abort.abort());
+    try {
+      await withProjectCheckoutLifecycle(
+        "synthetic-project",
+        { env, operation: "worktree.maintenance.retire" },
+        async () => {
+          await expect(
+            withProjectCheckoutLifecycle(
+              "synthetic-project",
+              { env, signal: abort.signal },
+              async () => {},
+            ),
+          ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+          expect(await capture.findText("Waiting for project checkout lease")).toMatch(
+            /projects\.checkout\/synthetic-project held by worktree\.maintenance\.retire:[0-9a-f-]+; current lease expires at /,
+          );
+        },
+      );
+    } finally {
+      capture.cleanup();
+    }
+  });
+});
 
 it.each([false, true])(
   "records an uncoded native open failure during acquisition (prepare: %s)",
@@ -128,6 +159,61 @@ it("rebinds the real shared-state lease worker and joins its retained generation
     expect(retainedWorker.threadId).toBe(-1);
     await exited;
     await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
+  });
+});
+
+it("passes the exact persisted owner identity to the lease callback", async () => {
+  await withOpenClawTestState({ label: "lease-callback-identity" }, async (state) => {
+    await withOpenClawStateLease(
+      leaseOptions(state.env, "callback-identity"),
+      async (lease, identity) => {
+        lease.assertOwned();
+        expect(identity).toMatchObject({ scope: "core:test", key: "callback-identity" });
+        const database = openOpenClawStateDatabase({ env: state.env });
+        expect(leaseStore.readOpenClawStateLeaseExpiry(database.db, identity)).toBeGreaterThan(
+          Date.now(),
+        );
+        expect(
+          leaseStore.readOpenClawStateLeaseExpiry(database.db, {
+            ...identity,
+            owner: "not-the-lease-owner",
+          }),
+        ).toBeUndefined();
+      },
+    );
+  });
+});
+
+it("holds an exact Template package owner until async release completes", async () => {
+  await withOpenClawTestState({ label: "claw-package-lease-owner" }, async (state) => {
+    const artifact = { kind: "plugin", source: "clawhub", ref: "sample/plugin" } as const;
+    const options = { env: state.env, required: true };
+    const lease = await acquireClawPackageLifecycleLease(artifact, options);
+    if (!lease) {
+      throw new Error("Expected the package lease to be acquired");
+    }
+    try {
+      lease.assertCurrent();
+      const database = openOpenClawStateDatabase({ env: state.env });
+      expect(leaseStore.readOpenClawStateLeaseExpiry(database.db, lease.identity)).toBeGreaterThan(
+        Date.now(),
+      );
+      expect(
+        leaseStore.readOpenClawStateLeaseExpiry(database.db, {
+          ...lease.identity,
+          owner: "not-the-package-owner",
+        }),
+      ).toBeUndefined();
+      await expect(acquireClawPackageLifecycleLease(artifact, options)).rejects.toThrow();
+    } finally {
+      await lease.release();
+    }
+    const next = await acquireClawPackageLifecycleLease(artifact, options);
+    if (!next) {
+      throw new Error("Expected the released package lease to be reacquired");
+    }
+    expect(next.identity.owner).not.toBe(lease.identity.owner);
+    await next.release();
   });
 });
 

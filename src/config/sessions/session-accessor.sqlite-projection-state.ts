@@ -9,10 +9,10 @@ import {
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import {
   deleteLegacySessionEntryRows,
+  rehomeSessionWindows,
   deleteSessionEntryRows,
   readExactSessionEntryRow,
   readSessionEntryCount,
-  rehomeSessionWindows,
   writeSessionEntry,
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-store.js";
@@ -34,6 +34,7 @@ import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owne
 import { appendSessionResetBoundary } from "./session-accessor.sqlite-reset-boundary.js";
 import type { ResolvedSqliteReadScope } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { commitSessionCreationReceipt } from "./session-creation-receipts.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { SessionEntryLifecycleUpsertConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionEntry } from "./types.js";
@@ -182,9 +183,17 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
         projectionNeedsReconcile,
       });
     }
+    const relatedRemovalKeys = validatedRemovals.flatMap((removal) => {
+      const removedSessionId = removal.expectedEntry.sessionId;
+      return removal.sessionKey !== sessionKey &&
+        (removedSessionId === entry.sessionId || removedSessionId === entry.previousSessionId)
+        ? [removal.sessionKey]
+        : [];
+    });
     writeSessionEntry(database, sessionKey, entry, {
       // Inbound initialization observes activity even without authoritative route facts.
       observeConversation: true,
+      publishConversationBinding: relatedRemovalKeys.length > 0,
       allowStoredAliases: options.allowCanonicalRepair === true,
       preserveNodeSuggestions: options.allowCanonicalRepair === true,
       previousEntry: expectedCurrentEntry ?? null,
@@ -203,13 +212,6 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
     if (!currentEntry) {
       afterCount += 1;
     }
-    const relatedRemovalKeys = validatedRemovals.flatMap((removal) => {
-      const removedSessionId = removal.expectedEntry.sessionId;
-      return removal.sessionKey !== sessionKey &&
-        (removedSessionId === entry.sessionId || removedSessionId === entry.previousSessionId)
-        ? [removal.sessionKey]
-        : [];
-    });
     rehomeSessionWindows(database, sessionKey, relatedRemovalKeys, options.postimages);
     for (const legacyKey of relatedRemovalKeys) {
       const removedEntry = validatedRemovals.find(
@@ -222,6 +224,10 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
     }
   }
   options.afterUpsertsInTransaction?.(database);
+  if (options.creation?.receipt) {
+    const { operation, sessionKey, entry } = options.creation.receipt;
+    commitSessionCreationReceipt(database, operation, sessionKey, entry);
+  }
   if (options.creation?.preparedTranscript) {
     const { sessionKey, sessionId, events } = options.creation.preparedTranscript;
     appendTranscriptEventsInTransaction(

@@ -1,44 +1,33 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../../state/openclaw-agent-db.generated.js";
 import {
-  openOpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
+  runOpenClawAgentWriteTransaction,
 } from "../../../state/openclaw-agent-db.js";
-import {
-  createAcpParentStreamRecorder,
-  type AcpParentStreamEvent,
-} from "./acp-parent-stream-store.sqlite.js";
 
 type AcpParentStreamDatabase = Pick<OpenClawAgentKyselyDatabase, "acp_parent_stream_events">;
 
 export async function recordAcpParentStreamEventsForTest(
-  options: Parameters<typeof createAcpParentStreamRecorder>[0] & {
-    events: Array<{ event: AcpParentStreamEvent; createdAt: number }>;
+  options: OpenClawAgentDatabaseOptions & {
+    sessionId: string;
+    runId: string;
+    events: Array<{ event: Record<string, unknown>; createdAt: number }>;
   },
 ): Promise<void> {
-  const recorder = createAcpParentStreamRecorder(options);
-  try {
-    const result = await recorder.record(options.events);
-    if (!result.ok) {
-      throw result.error;
-    }
-  } finally {
-    await recorder.close();
-  }
-}
-
-export function listAcpParentStreamEventsForTest(
-  options: OpenClawAgentDatabaseOptions & { sessionId: string; runId: string },
-): AcpParentStreamEvent[] {
-  const database = openOpenClawAgentDatabase(options);
-  const db = getNodeSqliteKysely<AcpParentStreamDatabase>(database.db);
-  return executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("acp_parent_stream_events")
-      .select("event_json")
-      .where("session_id", "=", options.sessionId)
-      .where("run_id", "=", options.runId)
-      .orderBy("seq", "asc"),
-  ).rows.map((row) => JSON.parse(row.event_json) as AcpParentStreamEvent);
+  // Seed historical diagnostics: live relays no longer write this table.
+  runOpenClawAgentWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<AcpParentStreamDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db.insertInto("acp_parent_stream_events").values(
+        options.events.map(({ event, createdAt }, seq) => ({
+          session_id: options.sessionId,
+          run_id: options.runId,
+          seq,
+          event_json: JSON.stringify(event),
+          created_at: createdAt,
+        })),
+      ),
+    );
+  }, options);
 }

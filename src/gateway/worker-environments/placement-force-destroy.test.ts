@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +15,11 @@ import {
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import {
+  makeClaimInput,
+  expectPlacement,
+  seedReconciliationJournal,
+} from "./placement-lifecycle.test-support.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
@@ -53,35 +57,12 @@ describe("forced worker environment destruction", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = await placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "force-destroy-claim",
-      runId: "force-destroy-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const claim = await placementStore.claimTurn(
+      makeClaimInput(active, "force-destroy-claim", "force-destroy-run"),
+    );
     await placementStore.markWorkspaceResultPending(claim);
-    const owner = {
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      placementGeneration: active.generation,
-    };
     const appliedManifestRef = harness.reconciledManifestRef;
-    await placementStore.beginWorkspaceReconciliation(owner, {
-      version: 1,
-      temporaryNonce: "a".repeat(32),
-      baseManifestRef: active.workspaceBaseManifestRef,
-      currentManifestRef: appliedManifestRef,
-      baseEntries: [],
-      appliedEntries: [],
-      baseTree: "f".repeat(40),
-      basePackSha256: createHash("sha256").update("").digest("hex"),
-      basePack: Buffer.alloc(0),
-    });
+    const owner = await seedReconciliationJournal(placementStore, active, appliedManifestRef, "a");
     await placementStore.updateWorkspaceBaseManifest({ claim, manifestRef: appliedManifestRef });
     expect((await placementStore.loadWorkspaceReconciliation(owner))?.appliedManifestRef).toBe(
       appliedManifestRef,
@@ -100,8 +81,7 @@ describe("forced worker environment destruction", () => {
       undefined,
       expect.objectContaining({ state: "destroyed" }),
     ]);
-    expect(placementStore.get(REQUEST.sessionId)).toMatchObject({
-      state: "failed",
+    expectPlacement(placementStore, "failed", {
       turnClaim: null,
       recoveryError: "Worker result abandoned by forced operator teardown",
     });
@@ -144,23 +124,12 @@ describe("forced worker environment destruction", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const owner = {
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      placementGeneration: active.generation,
-    };
-    await placementStore.beginWorkspaceReconciliation(owner, {
-      version: 1,
-      temporaryNonce: "e".repeat(32),
-      baseManifestRef: active.workspaceBaseManifestRef,
-      currentManifestRef: `sha256:${"e".repeat(64)}`,
-      baseEntries: [],
-      appliedEntries: [],
-      baseTree: "f".repeat(40),
-      basePackSha256: createHash("sha256").update("").digest("hex"),
-      basePack: Buffer.alloc(0),
-    });
+    const owner = await seedReconciliationJournal(
+      placementStore,
+      active,
+      `sha256:${"e".repeat(64)}`,
+      "e",
+    );
 
     await expect(
       harness.service.forceDestroyEnvironment(active.environmentId),
@@ -176,6 +145,25 @@ describe("forced worker environment destruction", () => {
 
 describe("forced destruction across Gateway restart", () => {
   support.setupWorkerEnvironmentServiceSuite();
+  let placements: PlacementStore;
+  beforeEach(() => {
+    placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+  });
+  async function createRuntime(provider: Parameters<typeof support.createService>[0]) {
+    const service = support.createService(provider, {
+      placementStore: createWorkerSessionPlacementGate(placements, {
+        recoveryPlacements: await placements.listAsync(),
+      }),
+    });
+    return {
+      service,
+      buildHarness: () =>
+        createHarness(support.testState.stateDb, placements, {
+          environmentService: service,
+          workspacePath: support.testState.root,
+        }),
+    };
+  }
 
   it("retains forced intent and the latest dedicated-provider teardown failure after restart", async () => {
     const environmentId = "worker-forced-provider-failure";
@@ -186,7 +174,6 @@ describe("forced destruction across Gateway restart", () => {
       to: "attached",
       patch: { ...support.attachedPatch(environmentId, REQUEST.sessionId), sharedHost: false },
     });
-    let placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const active = await seedActivePlacement(placements, {
       environmentId,
       ownerEpoch: attached.ownerEpoch,
@@ -197,36 +184,25 @@ describe("forced destruction across Gateway restart", () => {
         new Error(`provider deletion refused: ${"detail ".repeat(300)}quota blocked`),
       )
       .mockRejectedValueOnce(new Error("provider deletion still blocked"));
-    const createService = async () =>
-      support.createService(
-        support.createProvider({
-          supportedExecutionModes: ["worker-turn"],
-          inspect: async () => ({ status: "active", sharedHost: false }),
-          destroy,
-        }),
-        {
-          placementStore: createWorkerSessionPlacementGate(placements, {
-            recoveryPlacements: await placements.listAsync(),
-          }),
-        },
-      );
-    const harness = await createHarness(support.testState.stateDb, placements, {
-      environmentService: await createService(),
-      workspacePath: support.testState.root,
+    const provider = support.createProvider({
+      supportedExecutionModes: ["worker-turn"],
+      inspect: async () => ({ status: "active", sharedHost: false }),
+      destroy,
     });
+    const { buildHarness } = await createRuntime(provider);
+    const harness = await buildHarness();
 
     await expect(harness.service.forceDestroyEnvironment(environmentId)).rejects.toThrow(
       "provider deletion refused",
     );
-    expect(placements.get(REQUEST.sessionId)).toMatchObject({
-      state: "failed",
+    expectPlacement(placements, "failed", {
       recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
       turnClaim: null,
     });
 
     await support.reopenWorkerEnvironmentStore();
     placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-    const service = await createService();
+    const { service, buildHarness: buildRestarted } = await createRuntime(provider);
     const pending = service.get(environmentId);
     if (!pending) {
       throw new Error("forced teardown lost its dedicated environment");
@@ -243,16 +219,11 @@ describe("forced destruction across Gateway restart", () => {
     expect(pending?.lastError?.length).toBeLessThanOrEqual(1_024);
     expect(summarizeWorkerEnvironment(pending, support.testState.nowMs)).toMatchObject({
       status: "error",
-      worker: {
-        error: expect.stringContaining("provider deletion refused"),
-      },
+      worker: { error: expect.stringContaining("provider deletion refused") },
     });
     const claimStop = vi.spyOn(placements, "claimReclaimWorkspaceResult");
     const tunnel = vi.spyOn(service, "startTunnel");
-    const restarted = await createHarness(support.testState.stateDb, placements, {
-      environmentService: service,
-      workspacePath: support.testState.root,
-    });
+    const restarted = await buildRestarted();
     await restarted.service.reconcile("startup");
     // Failed-placement cleanup belongs to the tracked post-start sweep.
     await restarted.service.reconcileActive(environmentId);
@@ -268,8 +239,7 @@ describe("forced destruction across Gateway restart", () => {
     expect(claimStop).not.toHaveBeenCalled();
     expect(tunnel).not.toHaveBeenCalled();
     expect(restarted.log).not.toContain("workspace");
-    expect(placements.get(REQUEST.sessionId)).toMatchObject({
-      state: "failed",
+    expectPlacement(placements, "failed", {
       recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
       workspaceBaseManifestRef: active.workspaceBaseManifestRef,
       turnClaim: null,
@@ -287,7 +257,6 @@ describe("forced destruction across Gateway restart", () => {
         to: "attached",
         patch: support.attachedPatch(environmentId, REQUEST.sessionId),
       });
-      let placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
       const active = await seedActivePlacement(placements, {
         environmentId,
         ownerEpoch: attached.ownerEpoch,
@@ -297,27 +266,16 @@ describe("forced destruction across Gateway restart", () => {
         await support.testState.store.requestDestroy({ environmentId, state: "attached" });
       }
       const destroy = vi.fn(async () => {});
-      const createService = async () =>
-        support.createService(support.createProvider({ destroy }), {
-          placementStore: createWorkerSessionPlacementGate(placements, {
-            recoveryPlacements: await placements.listAsync(),
-          }),
-        });
-      const service = await createService();
-      const harness = await createHarness(support.testState.stateDb, placements, {
-        environmentService: service,
-        workspacePath: support.testState.root,
-      });
+      const provider = support.createProvider({ destroy });
+      const { service, buildHarness } = await createRuntime(provider);
+      const harness = await buildHarness();
       const crash = new Error("Gateway exits before recording placement failure");
       const reconcile = vi.spyOn(placements, "startReconcile").mockImplementationOnce(() => {
         throw crash;
       });
       await expect(harness.service.forceDestroyEnvironment(environmentId)).rejects.toBe(crash);
       reconcile.mockRestore();
-      expect(placements.get(REQUEST.sessionId)).toMatchObject({
-        state: "draining",
-        turnClaim: null,
-      });
+      expectPlacement(placements, "draining", { turnClaim: null });
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(await placements.getPlacementMoveAsync(REQUEST.sessionId)).toBeUndefined();
       expect.soft(support.testState.store.get(environmentId)).toMatchObject({
@@ -337,19 +295,16 @@ describe("forced destruction across Gateway restart", () => {
       await support.reopenWorkerEnvironmentStore();
       placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
       const claimStop = vi.spyOn(placements, "claimReclaimWorkspaceResult");
-      const restartedService = await createService();
+      const { service: restartedService, buildHarness: buildRestarted } =
+        await createRuntime(provider);
       const tunnel = vi.spyOn(restartedService, "startTunnel");
-      const restarted = await createHarness(support.testState.stateDb, placements, {
-        environmentService: restartedService,
-        workspacePath: support.testState.root,
-      });
+      const restarted = await buildRestarted();
       await restarted.service.reconcile("startup");
 
       expect(claimStop).not.toHaveBeenCalled();
       expect(tunnel).not.toHaveBeenCalled();
       expect(restarted.log).not.toContain("workspace");
-      expect(placements.get(REQUEST.sessionId)).toMatchObject({
-        state: "failed",
+      expectPlacement(placements, "failed", {
         turnClaim: null,
         recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
         workspaceBaseManifestRef: active.workspaceBaseManifestRef,

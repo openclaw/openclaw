@@ -10,6 +10,7 @@ import {
 import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { managedWorktrees, WORKTREE_GC_INTERVAL_MS } from "../agents/worktrees/service.js";
+import type { WorktreeWarmPoolRequest } from "../agents/worktrees/template-registry.js";
 import type {
   ManagedWorktreeGcReceipt,
   ManagedWorktreeGcResult,
@@ -19,10 +20,18 @@ import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets-c
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { createHostIoPressureProbe } from "../infra/host-io-pressure.js";
+import {
+  cleanScratch,
+  closeScratchCleanupCursor,
+  type ScratchCleanupCursor,
+} from "../infra/scratch-cleanup.js";
 import {
   isGatewayWorkAdmissionClosed,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { prepareScratchMaintenanceTargets } from "./scratch-maintenance-custody.js";
+import { sweepLocalWorkspaceManifests } from "./worker-environments/local-workspace-gc.js";
 
 type MaintenanceRequest = { jobId?: string; retryDeferred?: boolean };
 type MaintenanceOwner = {
@@ -31,6 +40,10 @@ type MaintenanceOwner = {
   stop: () => Promise<void>;
 };
 const owners = new WeakMap<() => OpenClawConfig, MaintenanceOwner>();
+// Subvolume deletion leaves asynchronous backref work behind. One attempt per
+// minute gives the filesystem time to settle even when IO PSI stays low.
+const REMOVAL_INTERVAL_MS = 60_000;
+const PRESSURE_BACKOFF_MS = 5 * 60_000;
 
 function captureCleanupInputs(config: OpenClawConfig) {
   const defaults = config.agents?.defaults;
@@ -62,14 +75,15 @@ export function startWorktreeMaintenance(params: {
   getRuntimeConfig: () => OpenClawConfig;
   onComplete: (result: ManagedWorktreeGcResult) => void;
   onError: (message: string) => void;
-  runGc?: () => Promise<ManagedWorktreeGcResult | void>;
 }): MaintenanceOwner {
   const previousDrain = owners.get(params.getRuntimeConfig)?.stop();
   const scheduler = params.scheduler.scope();
   const inOwnerContext = AsyncLocalStorage.snapshot();
   let receipt: ManagedWorktreeGcReceipt | undefined;
-  let inFlight: Promise<void> | undefined;
   let archivePending = false;
+  let nextRemovalAt = 0;
+  const scratchCursor: ScratchCleanupCursor = {};
+  const hasIoPressure = createHostIoPressureProbe();
   const isActive = () =>
     !scheduler.signal.aborted &&
     owners.get(params.getRuntimeConfig) === owner &&
@@ -81,8 +95,100 @@ export function startWorktreeMaintenance(params: {
       );
     }
   };
+  const pause = (delayMs: number) =>
+    new Promise<void>((resolve, reject) => {
+      const abort = () =>
+        reject(toErrorObject(scheduler.signal.reason, "Worktree cleanup canceled"));
+      scheduler.signal.addEventListener("abort", abort, { once: true });
+      scheduler.schedule({
+        id: "maintenance:worktrees:resume",
+        delayMs,
+        run: () => {
+          scheduler.signal.removeEventListener("abort", abort);
+          resolve();
+        },
+      });
+    });
+  const warmPending = new Map<
+    string,
+    { request: WorktreeWarmPoolRequest; inputs: ReturnType<typeof captureCleanupInputs> }
+  >();
+  let warmScheduled = false;
+  const scheduleWarmPool = () => {
+    if (warmScheduled) {
+      return;
+    }
+    warmScheduled = true;
+    inOwnerContext(() =>
+      scheduler.schedule({
+        id: "maintenance:worktrees:warm-pool",
+        delayMs: 0,
+        run: () =>
+          runWithGatewayIndependentRootWorkAdmission(
+            async () => {
+              await previousDrain;
+              while (warmPending.size && isActive()) {
+                const [key, next] = warmPending.entries().next().value!;
+                warmPending.delete(key);
+                let checkedConfig: OpenClawConfig | undefined;
+                let checkedPublication = getRuntimeConfigSnapshotMetadata();
+                const commitGuard = () => {
+                  assertActive();
+                  const config = params.getRuntimeConfig();
+                  const publication = getRuntimeConfigSnapshotMetadata();
+                  if (
+                    config !== checkedConfig ||
+                    publication !== checkedPublication ||
+                    config.worktreeAcceleration === false
+                  ) {
+                    if (
+                      config.worktreeAcceleration === false ||
+                      !isDeepStrictEqual(captureCleanupInputs(config), next.inputs)
+                    ) {
+                      throw new Error("Worktree warm pool configuration changed");
+                    }
+                    checkedConfig = config;
+                    checkedPublication = publication;
+                  }
+                };
+                try {
+                  commitGuard();
+                  await managedWorktrees.prewarm(next.request, {
+                    signal: scheduler.signal,
+                    commitGuard,
+                  });
+                } catch (error) {
+                  params.onError(`Worktree warm pool refill failed: ${String(error)}`);
+                }
+              }
+            },
+            "runtime:worktree-warm-pool",
+            scheduler.signal,
+          ).finally(() => {
+            warmScheduled = false;
+            if (warmPending.size && isActive()) {
+              scheduleWarmPool();
+            }
+          }),
+      }),
+    );
+  };
+  const stopWarmPool = managedWorktrees.onWarmPoolNeeded((request) => {
+    const config = params.getRuntimeConfig();
+    if (!isActive() || config.worktreeAcceleration === false) {
+      return;
+    }
+    const key = request.template.cacheKey;
+    if (!warmPending.has(key) && warmPending.size >= 32) {
+      params.onError("Worktree warm pool refill skipped: maintenance queue is full");
+      return;
+    }
+    warmPending.set(key, { request, inputs: captureCleanupInputs(config) });
+    scheduleWarmPool();
+  });
   const owner: MaintenanceOwner = {
-    request: ({ jobId, retryDeferred } = {}) => {
+    request: (options = {}) => {
+      const { jobId, retryDeferred } = options;
       assertActive();
       if (jobId) {
         if (!receipt || receipt.jobId !== jobId) {
@@ -130,50 +236,69 @@ export function startWorktreeMaintenance(params: {
             current.startedAt = scheduler.now();
             let batchStartedAt = scheduler.now();
             let batchItems = 0;
+            const beforeRemoval = async () => {
+              assertCurrent();
+              if (scheduler.now() < nextRemovalAt) {
+                await pause(nextRemovalAt - scheduler.now());
+              }
+              while (await hasIoPressure()) {
+                assertCurrent();
+                await pause(PRESSURE_BACKOFF_MS);
+              }
+              assertCurrent();
+              nextRemovalAt = scheduler.now() + REMOVAL_INTERVAL_MS;
+              batchStartedAt = scheduler.now();
+              batchItems = 0;
+            };
             // The scheduler already detaches this job and joins its tracked cleanup.
             // Preserve that work scope when admitting the maintenance root.
-            inFlight = runWithGatewayIndependentRootWorkAdmission(
+            return runWithGatewayIndependentRootWorkAdmission(
               async () => {
                 await previousDrain;
                 assertCurrent();
-                const result = await (params.runGc
-                  ? params.runGc()
-                  : managedWorktrees.gc({
-                      ...createManagedWorktreeOwnerPolicy(config),
-                      retryDeferred,
-                      signal: scheduler.signal,
-                      commitGuard: assertCurrent,
-                      checkpoint: async (progress) => {
-                        Object.assign(current, progress);
-                        assertCurrent();
-                        if (++batchItems < 8 && scheduler.now() - batchStartedAt < 5_000) {
-                          return;
-                        }
-                        await new Promise<void>((resolve, reject) => {
-                          const abort = () =>
-                            reject(
-                              toErrorObject(scheduler.signal.reason, "Worktree cleanup canceled"),
-                            );
-                          scheduler.signal.addEventListener("abort", abort, { once: true });
-                          scheduler.schedule({
-                            id: "maintenance:worktrees:resume",
-                            delayMs: 1_000,
-                            run: () => {
-                              scheduler.signal.removeEventListener("abort", abort);
-                              resolve();
-                            },
-                          });
-                        });
-                        assertCurrent();
-                        batchItems = 0;
-                        batchStartedAt = scheduler.now();
-                      },
-                    }));
+                const result = await managedWorktrees.gc({
+                  ...createManagedWorktreeOwnerPolicy(config),
+                  retryDeferred,
+                  signal: scheduler.signal,
+                  commitGuard: assertCurrent,
+                  beforeRemoval: async (record) => {
+                    await closeScratchCleanupCursor(scratchCursor, record.path);
+                    await beforeRemoval();
+                  },
+                  beforeTemplateRemoval: beforeRemoval,
+                  checkpoint: async (progress) => {
+                    Object.assign(current, progress);
+                    assertCurrent();
+                    if (++batchItems < 8 && scheduler.now() - batchStartedAt < 5_000) {
+                      return;
+                    }
+                    await pause(1_000);
+                    assertCurrent();
+                    batchItems = 0;
+                    batchStartedAt = scheduler.now();
+                  },
+                });
                 assertCurrent();
-                if (result) {
-                  Object.assign(current, result);
-                  params.onComplete(result);
+                await sweepLocalWorkspaceManifests({ signal: scheduler.signal, assertCurrent });
+                assertCurrent();
+                const scratch = await prepareScratchMaintenanceTargets(config);
+                try {
+                  result.scratch = await cleanScratch({
+                    targets: scratch.targets,
+                    now: scheduler.now(),
+                    assertCurrent,
+                    pause,
+                    cursor: scratchCursor,
+                    onProgress: (progress) => {
+                      current.scratch = progress;
+                    },
+                  });
+                } finally {
+                  scratch.release();
                 }
+                assertCurrent();
+                Object.assign(current, result);
+                params.onComplete(result);
                 current.state = "completed";
               },
               "runtime:worktree-cleanup",
@@ -186,13 +311,11 @@ export function startWorktreeMaintenance(params: {
               })
               .finally(() => {
                 current.completedAt = scheduler.now();
-                inFlight = undefined;
                 if (archivePending && isActive()) {
                   archivePending = false;
                   owner.request();
                 }
               });
-            return inFlight;
           },
         }),
       );
@@ -210,9 +333,11 @@ export function startWorktreeMaintenance(params: {
       }
     },
     stop: async () => {
+      stopWarmPool();
+      warmPending.clear();
       // Aborting also wakes a paused batch before joining worker settlement.
       await scheduler.stop();
-      await inFlight;
+      await closeScratchCleanupCursor(scratchCursor);
       await previousDrain;
       if (owners.get(params.getRuntimeConfig) === owner) {
         owners.delete(params.getRuntimeConfig);

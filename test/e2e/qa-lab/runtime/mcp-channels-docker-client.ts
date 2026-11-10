@@ -12,11 +12,11 @@ import {
   extractTextFromGatewayPayload,
   type ClaudeChannelNotification,
   type GatewayRpcClient,
-  maybeApprovePendingBridgePairing,
   waitFor,
 } from "./mcp-channels.fixture.ts";
 import {
   connectMcpClientWithPairingReconnect,
+  maybeApprovePendingBridgePairing,
   createMcpClientTempState,
 } from "./mcp-client-temp-state.fixture.ts";
 
@@ -142,7 +142,7 @@ async function main() {
     const connectedMcp = mcpHandle;
     const mcp = connectedMcp.client;
     const callTool = <T>(params: Parameters<typeof mcp.callTool>[0]) =>
-      mcp.callTool(params, undefined, { timeout: 240_000 }) as Promise<T>;
+      mcp.callTool(params, { timeout: 240_000 }) as Promise<T>;
 
     let lastMcpConversationList: unknown;
     const conversation = await waitFor(

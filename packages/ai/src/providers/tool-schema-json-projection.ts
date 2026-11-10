@@ -1,4 +1,5 @@
 import { types as utilTypes } from "node:util";
+import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { SCHEMA_MAP_KEYS } from "./schema-walk.js";
@@ -32,6 +33,7 @@ type PublishedRuntimeToolInputSchema = {
   readonly projection: RuntimeToolInputSchemaProjection;
   readonly json: string;
   readonly fingerprint: string;
+  readonly canonicalFingerprint: string;
 };
 
 const publishedSchemas = new WeakMap<object, PublishedRuntimeToolInputSchema>();
@@ -70,9 +72,18 @@ export function publishRuntimeToolInputSchema(
   }
   Object.freeze(projection.violations);
   Object.freeze(projection);
+  let canonicalFingerprint: string | undefined;
   publishedSchemas.set(
     projection.schema,
-    Object.freeze({ projection, json, fingerprint: sha256Hex(json) }),
+    Object.freeze({
+      projection,
+      json,
+      fingerprint: sha256Hex(json),
+      // Provider variants need publication but not prompt-comparison fingerprints.
+      get canonicalFingerprint() {
+        return (canonicalFingerprint ??= sha256Hex(stableStringify(projection.schema)));
+      },
+    }),
   );
   return projection;
 }
@@ -210,7 +221,8 @@ function inspectJsonSchema(
       }
     }
   }
-  for (const [key, value] of Object.entries(schema)) {
+  for (const key of Object.keys(schema)) {
+    const value = schema[key];
     if (typeof value === "number" && !Number.isFinite(value)) {
       return false;
     }
@@ -221,9 +233,10 @@ function inspectJsonSchema(
     // Literal subtrees contain instance data, but still need JSON number checks.
     const inspectChildKeywords = inspectKeywords && !SCHEMA_LITERAL_KEYS.has(key);
     if (inspectChildKeywords && SCHEMA_MAP_KEYS.has(key) && isJsonObject(value)) {
-      for (const [schemaName, childSchema] of Object.entries(value)) {
+      for (const schemaName of Object.keys(value)) {
         path.push(".", schemaName);
-        const valid = inspectJsonSchema(childSchema, path, violations);
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- Own keys of parsed JSON always have values.
+        const valid = inspectJsonSchema(value[schemaName]!, path, violations);
         path.length -= 2;
         if (!valid) {
           return false;

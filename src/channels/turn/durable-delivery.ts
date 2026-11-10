@@ -15,27 +15,25 @@ import {
 } from "../../infra/outbound/deliver.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
 import {
   durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
   sendStructuredDurableMessageBatchCore,
 } from "../message/send.js";
+import { runAdmittingGatewayDelivery } from "./admitting-gateway-delivery.js";
 import {
   createChannelDeliveryResultFromReceipt,
   createChannelPartialDeliveryError,
 } from "./delivery-result.js";
-import { withDurableDeliveryRuntime } from "./durable-delivery-runtime.js";
 import type {
   ChannelDeliveryInfo,
   ChannelDeliveryResult,
   ChannelTurnDurableDeliveryOptions,
 } from "./types.js";
 
-export type DurableInboundReplyDeliveryOptions = ChannelTurnDurableDeliveryOptions & {
-  /** Optional: validate the admitted sender and pin its resolved credential before a registry handoff. */
-  prepareRuntimeHandoff?: (cfg: OpenClawConfig) => OpenClawConfig;
-};
+export type DurableInboundReplyDeliveryOptions = ChannelTurnDurableDeliveryOptions;
 
 export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptions & {
   cfg: OpenClawConfig;
@@ -149,8 +147,21 @@ async function deliverInboundReplyWithMessageSendContext(
   }
 
   try {
-    return await withDurableDeliveryRuntime(input, (cfg, assertCurrent) =>
-      deliverAdmittedInboundReply({ ...input, cfg }, sendBatch, assertCurrent),
+    // Final delivery is a new operation of the admitting Gateway, not of the completed model turn.
+    const deliver = (cfg: OpenClawConfig, assertCurrent?: () => void) =>
+      deliverAdmittedInboundReply({ ...input, cfg }, sendBatch, assertCurrent);
+    const registry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+    if (!registry) {
+      return await deliver(input.cfg);
+    }
+    return await runAdmittingGatewayDelivery(
+      {
+        registry,
+        cfg: input.cfg,
+        channel: input.channel,
+        prepareRuntimeHandoff: input.prepareRuntimeHandoff,
+      },
+      deliver,
     );
   } catch (error) {
     return { status: "failed", error };

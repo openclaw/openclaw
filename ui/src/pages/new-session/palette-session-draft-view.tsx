@@ -1,7 +1,6 @@
 import { createMemo, Show } from "solid-js";
-import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent, emptyLegacyContent } from "../../lit/solid-content.tsx";
-import { renderAttachmentPreview } from "../chat/components/chat-attachments.ts";
+import { AttachmentPreview } from "../chat/components/chat-attachments.tsx";
+import type { ChatCommentAction } from "../chat/components/chat-selection-annotations.tsx";
 import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
 import type { PaletteSessionDraft } from "./palette-session-draft.ts";
 import { PaletteSessionSettingsView } from "./palette-session-settings-view.tsx";
@@ -13,22 +12,30 @@ export function PaletteSessionControls(props: DraftProps) {
     void props.revision;
     return props.draft.settingsView();
   });
-  return (
-    <Show when={view()}>{(settings) => <PaletteSessionSettingsView view={settings()} />}</Show>
-  );
+  return <Show when={view()}>{(settings) => <PaletteSessionSettingsView {...settings()} />}</Show>;
 }
 
 export function PaletteSessionAttachments(props: DraftProps) {
   const preview = createMemo(() => {
     void props.revision;
     const attachments = props.draft.attachmentProps();
-    const rendered = attachments ? renderAttachmentPreview(attachments) : emptyLegacyContent;
-    return rendered === emptyLegacyContent ? undefined : rendered;
+    if (!attachments) {
+      return undefined;
+    }
+    const current = attachments.attachments ?? [];
+    return (attachments.attachmentReads?.project(current).length ?? current.length)
+      ? attachments
+      : undefined;
   });
   return (
     <Show when={preview()}>
-      <div class="cmd-palette__attachments">
-        <LitContent value={preview()} />
+      <div
+        class="cmd-palette__attachments"
+        onOpenclaw-comment-action={(event: CustomEvent<ChatCommentAction>) =>
+          props.draft.removeComment(event.detail)
+        }
+      >
+        <AttachmentPreview {...preview()!} readRevision={props.revision} />
       </div>
     </Show>
   );
@@ -40,12 +47,4 @@ export function PaletteSessionAuxiliary(props: DraftProps) {
     return props.draft.auxiliaryView();
   });
   return <ConnectMachineDialog {...view()} />;
-}
-
-export function PaletteSessionRecovery(props: { onOpen: () => void }) {
-  return (
-    <button class="btn btn--sm" type="button" onClick={() => props.onOpen()}>
-      {t("sessionsView.openSession")}
-    </button>
-  );
 }

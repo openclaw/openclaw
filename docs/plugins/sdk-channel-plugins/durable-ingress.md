@@ -52,6 +52,36 @@ the same `event_id` is rejected durably for the tombstone retention window.
 See [Channel outbound API](/plugins/sdk-channel-outbound#durable-ingress-monitors)
 for the monitor API and shutdown contract.
 
+For an idle monitor, a fresh singleton can be appended and claimed in the same
+worker transaction when the queue has no pending or claimed rows. The drain owns
+and refreshes that claim while the transport acknowledgement runs; dispatch still
+waits for the acknowledgement callback to settle. A failed acknowledgement stays
+caller-visible and does not discard the durable event. Pending retries and peer
+claims keep their existing order, and uncertain worker outcomes use normal claim
+recovery. Plugin-supplied queues may omit `enqueueAndClaim`. Monitors with custom
+`runPumpTask` wrappers or `waitForDeliveryIdleBeforeRepump` keep their existing
+pump contract. Monitors using `reconcileStoredLaneKey` keep separate append and
+claim operations unless they opt into `reuseAdmissionFactsForFreshClaims`.
+
+`reuseAdmissionFactsForFreshClaims` keeps the fresh event's admitted identity and
+lane through dispatch instead of inspecting it again. Payload deserialization
+still runs. Use it only when claim inspection neither prepares delivery data nor
+authorizes effects; delivery must retain its own authorization. Telegram opts in:
+a forum hint learned during append does not reclassify that already-admitted
+singleton. Previously stored events, duplicates, retries, and recovered claims
+still use claim inspection and persist any reconciled lane before delivery.
+
+Agent database preparation does not delay durable intake into shared state.
+The monitor bounds active starts to `drain.startLimit` (32 by default),
+leaving additional messages in the durable queue while an agent is preparing.
+Drains that release lanes on deferral may lend up to that many additional slots
+while the deferred callbacks settle.
+Preparation waits report `agent-database-preparation-pending` at the record stage
+and log the affected agent and channel. Dispatch still waits for that agent's
+integrity and preparation checks. This bounds active in-memory work; disk backlog
+retention remains owned by the transport's existing retention policy, and pending
+messages are not discarded to enforce the active limit.
+
 The dispatch lifecycle optionally exposes
 `readLaneBacklog(): Promise<readonly ChannelIngressQueueRecord<unknown, unknown>[]>`.
 It reads same-lane durable rows that have not yet been handed off, excluding the
@@ -114,6 +144,14 @@ than completed caps. TTL and cap both prune rows, so effective retention ends
 when the first bound is reached. Deviate only for a documented platform retry
 horizon, preserved shipped replay-guard window, expected volume or disk budget,
 or non-replay transport, and cover the retention contract with tests.
+
+Queue-cap policy drops are intentional non-outcomes. The shared drain records
+their reason for replay protection without calling a channel's dead-letter
+notification hook or asking the sender to retry. Health and Doctor dead-letter
+counts exclude these rows. `listFailed()` still includes them for inspection.
+The failed-row cap applies separately to policy drops and actual failures, with
+the same failed-row TTL for both. Telegram therefore retains at most 1,000 of
+each, so a flood of policy drops cannot evict its actual dead letters.
 
 ### At-least-once side effects
 

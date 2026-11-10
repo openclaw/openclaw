@@ -6,23 +6,42 @@ import {
 import { RelayError } from "./protocol.js";
 import type { RelayState } from "./state.js";
 
+export async function registerRelayPrincipalRecovery(
+  factory: GatewayControlUiIngressFactoryV2,
+  state: Pick<RelayState, "getGrant" | "assertGrantCurrent">,
+  signal: AbortSignal,
+): Promise<void> {
+  await factory.registerPrincipalRecovery?.(async (audienceId) => {
+    signal.throwIfAborted();
+    const grant = state.getGrant(audienceId);
+    if (!grant) {
+      return undefined;
+    }
+    return {
+      audienceId,
+      recoveryId: grant.issuanceId,
+      principal: grant.principal,
+      operatorScopeCeiling: grant.ceiling,
+      signal,
+      assertCurrent: () => {
+        signal.throwIfAborted();
+        state.assertGrantCurrent(audienceId);
+        if (state.getGrant(audienceId)?.issuanceId !== grant.issuanceId) {
+          throw new GatewayControlUiIngressError(
+            "forbidden",
+            "The original relay grant was replaced.",
+          );
+        }
+      },
+    };
+  });
+}
+
 export function isRetiredBindingError(error: unknown): error is GatewayControlUiIngressError {
   return (
     error instanceof GatewayControlUiIngressError &&
     (error.code === "closed" || error.code === "forbidden" || error.code === "unsupported-auth")
   );
-}
-
-export function principalFactory(
-  factory: GatewayControlUiIngressFactoryV2 | undefined,
-): GatewayControlUiIngressFactoryV2 {
-  if (!factory || factory.capabilityVersion !== 2) {
-    throw new RelayError(
-      "unavailable",
-      "Update OpenClaw to enable principal-bound MCP and Control UI access.",
-    );
-  }
-  return factory;
 }
 
 /** The relay connection owns one principal resolution shared by each grant's UI and RPC. */

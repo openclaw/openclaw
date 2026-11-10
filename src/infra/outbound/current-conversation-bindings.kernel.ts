@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding-metadata.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { registerNodeSqliteDisposeCallback } from "../kysely-sync-cache-state.js";
 import {
@@ -99,7 +100,10 @@ function createCurrentConversationBindingQueries(db: EngineConnection) {
           .where((eb) =>
             eb.or([
               eb(
-                parameter((params) => params.scope?.channel ?? null),
+                eb.cast(
+                  parameter((params) => params.scope?.channel ?? null),
+                  "text",
+                ),
                 "is",
                 null,
               ),
@@ -161,6 +165,7 @@ function createCurrentConversationBindingQueries(db: EngineConnection) {
         ),
       );
       const fields = sqliteStringSetEntries(encoded).as("field");
+      // A literal tuple width lets PostgreSQL match SELECT and GROUP BY expressions.
       const requested = bindingDb.with("requested", (query) =>
         query
           .selectFrom(fields)
@@ -174,14 +179,14 @@ function createCurrentConversationBindingQueries(db: EngineConnection) {
                   .end(),
               );
             return [
-              eb.cast<number>(eb("field.key", "/", 4), "integer").as("request_index"),
+              eb.cast<number>(eb("field.key", "/", eb.lit(4)), "integer").as("request_index"),
               component(0).as("binding_key"),
               component(1).as("channel"),
               component(2).as("account_id"),
               component(3).as("conversation_id"),
             ];
           })
-          .groupBy((eb) => eb.cast<number>(eb("field.key", "/", 4), "integer")),
+          .groupBy((eb) => eb.cast<number>(eb("field.key", "/", eb.lit(4)), "integer")),
       );
       const columns = [
         "requested.request_index",
@@ -372,7 +377,7 @@ function readCurrentConversationBindingRows(
 export function updateCurrentConversationBindingRecordInDatabase(
   db: EngineConnection,
   ref: ConversationRef,
-  update: (current: SessionBindingRecord | null) => SessionBindingRecord | null,
+  update: (current: SessionBindingRecord | null) => SessionBindingRecord | null | undefined,
 ): { previous: SessionBindingRecord | null; current: SessionBindingRecord | null } {
   const conversation = normalizeConversationRef(ref);
   const bindingKey = buildConversationKey(conversation);
@@ -380,6 +385,10 @@ export function updateCurrentConversationBindingRecordInDatabase(
   const existing = existingRow ? bindingRowToRecord(existingRow) : null;
   const previous = existing && !isBindingExpired(existing) ? existing : null;
   const current = update(previous);
+  // Returning a record still requests repair; only an explicit decline skips persistence.
+  if (current === undefined) {
+    return { previous, current: previous };
+  }
   if (!current) {
     if (existingRow) {
       getCurrentConversationBindingQueries(db).remove(existingRow.binding_key);
@@ -439,14 +448,6 @@ export function inspectCurrentConversationBindingRecordInDatabase(
   now = Date.now(),
 ): SessionBindingRecord | null {
   return inspectCurrentConversationBindingRecordsInDatabase(db, [conversation], now)[0] ?? null;
-}
-
-/** One statement selects higher-priority absences and fallback rows from the same snapshot. */
-export function readCurrentConversationBindingSelectionInDatabase(
-  db: EngineConnection,
-  conversations: readonly ConversationRef[],
-): Array<SessionBindingRecord | null> {
-  return inspectCurrentConversationBindingRecordsInDatabase(db, conversations);
 }
 
 export function readCurrentConversationBindingResolutionInDatabase(
@@ -515,15 +516,7 @@ export function readCurrentConversationBindingListsInDatabase(
     targetSessionKeys,
     scope: normalizedScope,
   }).rows;
-  const bySession = new Map<string, CurrentConversationBindingRow[]>();
-  for (const row of rows) {
-    let group = bySession.get(row.target_session_key);
-    if (!group) {
-      group = [];
-      bySession.set(row.target_session_key, group);
-    }
-    group.push(row);
-  }
+  const bySession = groupRecords(rows, (row) => row.target_session_key);
   return targetSessionKeys.map((key) => {
     const records = (bySession.get(key) ?? [])
       .map(bindingRowToRecord)
@@ -618,7 +611,11 @@ export function removeCurrentConversationBindingsInDatabase(
       input.conversation,
       (latest) => {
         assertExpectedCurrentBinding(latest, input.expected);
-        return !input.bindingId || latest?.bindingId === input.bindingId ? null : latest;
+        return !input.bindingId || latest?.bindingId === input.bindingId
+          ? null
+          : latest
+            ? undefined
+            : null;
       },
     );
     return previous && !current ? [previous] : [];

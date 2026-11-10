@@ -20,7 +20,7 @@ import {
   validateActionsArtifactProducerJob,
 } from "./lib/actions-artifact-archive.mjs";
 import { parseStrictBooleanArg } from "./lib/arg-utils.runtime.mjs";
-import { resolveNpmPublishPlan } from "./lib/npm-publish-plan.mjs";
+import { parsePublicationCliValues, resolveNpmPublishPlan } from "./lib/npm-publish-plan.mjs";
 
 export {
   downloadActionsArtifactArchive,
@@ -1168,20 +1168,7 @@ function parseCliArgs(argv) {
       "Usage: plugin-publication-artifact.mjs <create|verify> --artifact-name <name> ...",
     );
   }
-  const values = {};
-  for (let index = 0; index < rest.length; index += 2) {
-    const key = rest[index];
-    const value = rest[index + 1];
-    if (!key?.startsWith("--") || value === undefined || value.startsWith("--")) {
-      throw new Error(`Invalid ${command} argument near ${key ?? "<missing>"}.`);
-    }
-    const name = key.slice(2).replace(/-([a-z])/gu, (_, letter) => letter.toUpperCase());
-    if (values[name] !== undefined) {
-      throw new Error(`Duplicate ${command} option: ${key}`);
-    }
-    values[name] = value;
-  }
-  return { command, values };
+  return { command, values: parsePublicationCliValues(command, rest) };
 }
 
 function commonCliParams(values) {

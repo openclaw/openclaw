@@ -6,6 +6,7 @@ import { retireQuestionChannelGateway } from "../infra/question-channel-runtime.
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { bindLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeGatewayDeviceRevocation } from "./device-revocation.js";
 import { shouldUseGatewayOwnerProfile } from "./gateway-owner-profile.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
@@ -35,13 +36,16 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     pluginGatewayContext,
     getAttachedGatewayMethodRegistry,
     gatewayInstanceRuntimeRef,
-    lifecycle,
     startupState,
     shutdownRuntime,
   } = runtime;
   const [chatMetadataLifecycle, configRevisionProjector] = await Promise.all([
     startupTrace.measure("gateway.chat-metadata-lifecycle", () =>
-      createGatewayChatMetadataLifecycle({ getConfig: getRuntimeConfig, log }),
+      createGatewayChatMetadataLifecycle({
+        getConfig: getRuntimeConfig,
+        log,
+        getPluginMetadataSnapshot: runtime.getPluginMetadataSnapshot,
+      }),
     ),
     startupTrace.measure("gateway.config-revision-key", async () => {
       const { loadGatewayConfigRevisionProjector } = await import("./config-revision-token.js");
@@ -58,6 +62,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       logHealth,
     });
   });
+  gatewayRequestContext.restartResumeWindows = runtime.opts.restartResumeWindows;
   const projectionReady = runtime.opts.updateCanary
     ? undefined
     : startupTrace.measure("sessions.projection", async () => {
@@ -80,6 +85,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   let requestRuntimeReady: Promise<void> | undefined;
   const projectionLifetime: { closing: boolean; detach?: () => void } = { closing: false };
   runtime.registerGatewayLifetimeSidecars({
+    name: "request-runtime",
     stop: async () => {
       projectionLifetime.closing = true;
       // Received mutations and their finalizers join before lifetime sidecars stop.
@@ -126,10 +132,36 @@ export async function prepareGatewayKernelRequestRuntime(params: {
         }
       }
       // The initial roster must be usable before reconnecting clients can issue lists.
+      // Load-bearing: exact preparations outrank the bulk drain, so an un-awaited drain can
+      // stay incomplete under traffic and every read re-prepares rows (#184368, reverted).
       await startupTrace.measure("sessions.materialize", () => projection.ensureMaterialized());
       if (projectionLifetime.closing) {
         throw new Error("Gateway closed during session projection startup");
       }
+      // Facts are ready, but display rows remain lazy. Warm the recent page while sidecars start.
+      void runtime.connectionWork
+        .track(() =>
+          runWithGatewayIndependentRootWorkAdmission(
+            async () => {
+              const { listProjectedSessions } = await import("./session-utils-list.js");
+              runtime.connectionWork.signal.throwIfAborted();
+              await startupTrace.measure("sessions.first-page", () =>
+                listProjectedSessions({
+                  projection,
+                  opts: { limit: 100, archived: false, rowMode: "sidebar" },
+                  acceptsSerializedJson: true,
+                }),
+              );
+            },
+            "startup:session-row-prewarm",
+            runtime.connectionWork.signal,
+          ),
+        )
+        .catch((error: unknown) => {
+          if (!runtime.connectionWork.signal.aborted) {
+            log.warn(`Session first-page preparation failed: ${formatErrorMessage(error)}`);
+          }
+        });
     }
     if (!runtime.opts.updateCanary) {
       await startupTrace.measure("gateway.lifetime-sidecars", () =>
@@ -166,9 +198,10 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   const gatewayInstanceRuntime = createGatewayInstanceRuntime({
     getContext: () => gatewayRequestContext,
     getMethodRegistry: () => getAttachedGatewayMethodRegistry(),
-    isDispatchAvailable: () => startupState.dispatchReady && !lifecycle.closePreludeStarted,
+    // Request entry fences new calls during the prelude. Retained principals
+    // stay current until run shutdown records recovery and cancels execution.
+    isDispatchAvailable: () => startupState.dispatchReady,
     logError: (message) => log.error(message),
-    prepareRestartRecovery: runtime.channelManager.recoverAutostartSuppression,
   });
   gatewayInstanceRuntimeRef.current = gatewayInstanceRuntime;
   gatewayRequestContext.resolveGatewayContext = () =>
@@ -190,7 +223,12 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       getShutdownBudget: () => hostLifecycle.getShutdownBudget?.(),
       request: (action, assertCaller) =>
         hostLifecycle.request(action, () => {
-          if (!gatewayInstanceRuntime.isAvailable()) {
+          // Host control creates new effects; retained reply principals can remain
+          // current during recovery marking without admitting host start/stop.
+          if (
+            runtime.requestEntryLifetime.signal.aborted ||
+            !gatewayInstanceRuntime.isAvailable()
+          ) {
             throw new Error(
               "Gateway lifecycle is unavailable for this closed instance. Reconnect and retry.",
             );
@@ -200,9 +238,9 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     };
   }
   gatewayRequestContext.approvalEvents = gatewayInstanceRuntime.approvalEvents;
-  gatewayRequestContext.recoveryRuntime = gatewayInstanceRuntime.recovery;
+  gatewayRequestContext.lifecycleRuntime = gatewayInstanceRuntime.lifecycle;
   bindGatewayContextResolver(
-    gatewayInstanceRuntime.recovery,
+    gatewayInstanceRuntime.lifecycle,
     gatewayRequestContext.resolveGatewayContext,
   );
   gatewayRequestContext.createAgentTurnFacade = gatewayInstanceRuntime.createAgentTurnFacade;

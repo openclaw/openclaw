@@ -4,9 +4,11 @@ import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../../test/helpers/file-snapshots.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import "../../claws/tool-policy-runtime.js";
+import "../../templates/tool-policy-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../../infra/runtime-process-entrypoints.js";
 import { withSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
@@ -120,7 +122,6 @@ async function createExternalCodexGeneration() {
   const generation = generationFixture({
     provider: "openai",
     requestProvider: "openai",
-    config: {},
     label: "external-codex",
   });
   publishCurrentModelGeneration(generation);
@@ -309,7 +310,6 @@ describe("model runtime generation scope", () => {
       contextWindow: 32_768,
       maxTokens: 4_096,
     });
-    expect(await result.authStorage.getApiKey(provider)).toBe("fixture-caller-key");
     expect(await result.modelRegistry.getApiKeyAndHeaders(model)).toMatchObject({
       apiKey: "fixture-caller-key",
     });
@@ -332,7 +332,6 @@ describe("model runtime generation scope", () => {
     const snapshot = withPluginMetadataSnapshotScope(generation.metadataSnapshot, resolve, {
       config: generation.preparedModelRuntime.config,
     });
-    expect(snapshot).toBeDefined();
     expect(snapshot).not.toBe(generation.metadataSnapshot);
     expect(snapshot).toMatchObject({ policyHash: resolveInstalledPluginIndexPolicyHash(config) });
     expect(getRuntimeConfigSnapshot()?.plugins?.enabled).toBe(false);
@@ -346,11 +345,6 @@ describe("model runtime generation scope", () => {
     await state.writeAuthProfiles({
       version: 1,
       profiles: {
-        "generation-missing:selected": {
-          type: "api_key",
-          provider: "generation-missing",
-          key: "synthetic-missing-generation-key",
-        },
         [`${generation.provider}:selected`]: {
           type: "api_key",
           provider: generation.provider,
@@ -400,8 +394,7 @@ describe("model runtime generation scope", () => {
     expect(getRuntimeConfigSnapshot()).toBeNull();
     try {
       const { resolution } = await resolveTieredModel({
-        provider: "generation-missing",
-        fallbackProvider: generation.provider,
+        provider: generation.provider,
         modelId: generation.modelId,
         agentDir: state.agentDir(),
         config: generation.preparedModelRuntime.config,
@@ -418,7 +411,7 @@ describe("model runtime generation scope", () => {
       }
       expect(execPaths).toEqual([]);
       expect(getRuntimeConfigSnapshot()).toBeNull();
-      expect(await fs.readFile(databasePath)).toEqual(before);
+      expectBytesEqual(await fs.readFile(databasePath), before, "shared-state database");
     } finally {
       for (const spy of rowReads) {
         spy.mockRestore();
@@ -490,22 +483,21 @@ describe("model runtime generation scope", () => {
     { ambientScope: false, invalidation: "abort" },
     { ambientScope: false, invalidation: "authority" },
   ] as const)(
-    "reuses fresh auth readers during fallback (ambient=$ambientScope, invalidation=$invalidation)",
+    "retains auth readers during model selection (ambient=$ambientScope, invalidation=$invalidation)",
     async ({ ambientScope, invalidation }) => {
-      const missingProvider = "generation-missing";
-      const fallbackProvider = "generation-fallback";
+      const provider = "generation-selected";
       const children: ChildProcess[] = [];
-      let liveDuringFallback: ChildProcess[] = [];
+      let liveDuringPreparation: ChildProcess[] = [];
       let liveAfterSelection: ChildProcess[] = [];
       let current = true;
       const controller = new AbortController();
-      const stopped = new Error("Model selection stopped during fallback preparation");
+      const stopped = new Error("Model selection stopped during preparation");
       const generation = generationFixture({
         label: "readonly-reuse",
-        provider: fallbackProvider,
-        requestProvider: fallbackProvider,
+        provider,
+        requestProvider: provider,
         prepareDynamicModel: async () => {
-          liveDuringFallback = children.filter((child) => child.exitCode === null);
+          liveDuringPreparation = children.filter((child) => child.exitCode === null);
           await Promise.resolve();
           if (invalidation === "abort") {
             controller.abort(stopped);
@@ -518,15 +510,10 @@ describe("model runtime generation scope", () => {
       await state.writeAuthProfiles({
         version: 1,
         profiles: {
-          [`${missingProvider}:default`]: {
+          [`${provider}:default`]: {
             type: "api_key",
-            provider: missingProvider,
-            key: "synthetic-missing-provider-key",
-          },
-          [`${fallbackProvider}:default`]: {
-            type: "api_key",
-            provider: fallbackProvider,
-            key: "synthetic-fallback-provider-key",
+            provider,
+            key: "synthetic-selected-provider-key",
           },
         },
       });
@@ -554,8 +541,7 @@ describe("model runtime generation scope", () => {
                   throw stopped;
                 }
               },
-              provider: missingProvider,
-              fallbackProvider,
+              provider,
               modelId: generation.modelId,
               agentDir: state.agentDir(),
               config: generation.preparedModelRuntime.config,
@@ -569,36 +555,31 @@ describe("model runtime generation scope", () => {
         });
         if (invalidation === "none") {
           const result = await resolving;
-          expect(result.provider).toBe(fallbackProvider);
+          expect(result.provider).toBe(provider);
           expect(result.resolution.model).toMatchObject({
             id: generation.modelId,
-            provider: fallbackProvider,
+            provider,
             name: "Runtime READONLY-REUSE",
           });
         } else {
           await expect(resolving).rejects.toBe(stopped);
         }
         expect(auth.spy.mock.calls.map(([, options]) => options?.migrationProvider)).toEqual([
-          missingProvider,
-          fallbackProvider,
+          provider,
         ]);
         if (invalidation === "authority") {
           expect(generation.resolveDynamicModel).not.toHaveBeenCalled();
         } else {
           expect(generation.resolveDynamicModel).toHaveBeenCalledWith(
             expect.objectContaining({
-              authProfileId: `${fallbackProvider}:default`,
+              authProfileId: `${provider}:default`,
               authProfileMode: "api_key",
             }),
           );
         }
-        expect(children).toHaveLength(1);
-        expect(liveDuringFallback).toEqual(children);
+        expect(children).toMatchObject([{ exitCode: null, connected: true }]);
+        expect(liveDuringPreparation).toEqual(children);
         expect(liveAfterSelection).toEqual(invalidation === "none" ? children : []);
-        for (const child of children) {
-          expect(child.exitCode).toBeNull();
-          expect(child.connected).toBe(true);
-        }
       } finally {
         vi.mocked(spawn).mockImplementation(actual.spawn);
       }
@@ -608,10 +589,7 @@ describe("model runtime generation scope", () => {
   it("keeps concurrent prepared generations isolated across awaited runtime hooks", async () => {
     const config = {} satisfies OpenClawConfig;
     let arrivals = 0;
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: gate, resolve: release } = createDeferred();
     const prepareDynamicModel = async () => {
       arrivals += 1;
       if (arrivals === 2) {

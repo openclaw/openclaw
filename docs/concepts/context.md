@@ -39,6 +39,11 @@ capacity and configured limits. If neither current metadata nor a matching
 verified budget is available, the denominator is `?` (`null` in session-list
 JSON); reports do not substitute a generic window or another model's capacity.
 
+For models with selectable windows, `/status` and `session_status` use the selected
+window or the catalog's default window, rather than the model's larger scalar
+capacity. This also applies to the active fallback model; a smaller configured
+runtime cap still takes precedence.
+
 The Control UI context meter uses the last run's prompt budget when it still
 matches the selected model and effective context cap. This budget leaves room
 for the runtime's compaction reserve. Its label is **Prompt budget (last run)**:
@@ -48,6 +53,19 @@ new run supplies a matching estimate. If the selected model's capacity is unknow
 the meter omits context usage instead of borrowing the agent's default model
 capacity; available provider plan usage remains visible. Stale token totals remain
 approximate and do not trigger the context warning.
+
+In the Control UI, open the context ring beside the composer's model picker for a
+compact usage breakdown, latest-run tokens, and provider plan limits when available.
+Select **View context** to open the complete report in one side panel. **Workspace files** groups files by their recorded source: agent workspace,
+execution project, or personal instructions. File paths distinguish matching names
+such as two `AGENTS.md` files. Reports without source metadata show neutral file
+groups rather than guessing their role.
+
+**Tool schemas** groups tools in the direct tool surface by source and MCP server.
+The secondary **Tools loaded on use** section lists catalog entries outside that
+surface; their potential schema sizes are not added to current usage. Discovery descriptions and schemas retrieved into
+the conversation still consume context. Native-harness reports may cover only
+OpenClaw-provided tools, and unmeasured sizes remain unverified rather than zero.
 
 ## Example output
 
@@ -137,7 +155,7 @@ OpenClaw pins the complete system prompt for the session. Changed sections,
 including skills, workspace memory, and temporal context, arrive as instruction
 messages after the current user turn. Existing skill and memory refresh rules
 still apply. Changing the route or selected personal profile, resetting, or
-compacting history starts a new series; ordinary turn teardown and Gateway restarts restore the saved series.
+compacting history starts a new series; internal turns continuing the same session keep the series, and ordinary turn teardown and Gateway restarts restore the saved series.
 
 ## Injected workspace files (Project Context)
 
@@ -158,6 +176,10 @@ When truncation occurs, the runtime injects a concise in-prompt notice under Pro
 The system prompt includes a compact **skills list** (name + description + location). This list has real overhead.
 
 `/context` counts the catalog included in the rendered system prompt, not every installed skill. In the embedded runtime without Code Mode, denying both `read` and `skills_read` omits the catalog and reports zero skills.
+
+Code Mode also omits the catalog when installed skill search and reading are
+available. Its report then shows zero listed skills, while the agent can still
+search eligible skills and read their complete instructions on demand.
 
 Skill instructions are _not_ included by default. The model is expected to `read` the skill's `SKILL.md` **only when needed**.
 
@@ -219,6 +241,12 @@ your agent instructions: use it to answer the active request, keep internal
 details private, and do not treat the carrier as a new user request or wait for
 another message.
 
+Google generate-content requests keep the carrier separate and add explicit
+context-only framing: do not acknowledge the context; continue answering the
+user's request. This prevents the trailing user-role carrier from becoming the
+request to answer. The framing is deterministic for retained replay and does not
+rewrite user messages when turn-scoped context expires.
+
 For embedded Responses requests, current request metadata stays after the user
 message or compaction checkpoint and before its tool calls. This lets supported transports reuse the
 previous response across tool rounds without dropping live context, so OpenClaw
@@ -227,8 +255,9 @@ turn in an OpenAI Responses-family session preserves hidden runtime-context
 carriers append-only, so the previous turn, including tool calls and results,
 remains an unchanged cached prefix. Retained carriers count toward the context
 window until compaction, which does not split a user message from its carrier.
-User-role carriers contain the labeled context body; interpretation guidance lives
-once in the stable system prompt. OpenAI-compatible Chat Completions and native
+User-role carriers contain the labeled context body; except for Google's
+generate-content framing, interpretation guidance lives once in the stable system
+prompt. OpenAI-compatible Chat Completions and native
 Ollama also retain earlier carriers without rewriting the system prompt or prior
 conversation bytes.
 

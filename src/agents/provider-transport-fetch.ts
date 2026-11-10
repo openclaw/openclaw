@@ -9,15 +9,13 @@ import {
   clampPositiveTimerTimeoutMs,
   parseStrictFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
-import {
-  fetchWithSsrFGuard,
-  withTrustedEnvProxyGuardedFetchMode,
-} from "../infra/net/fetch-guard.js";
+import { withTrustedEnvProxyGuardedFetchMode } from "../infra/net/fetch-guard.js";
 import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import { formatModelTransportContext } from "../llm/model-transport-context.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getProviderAuthAuthority } from "../plugins/provider-auth-authority.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { isRetryableProviderHttpStatus } from "./failover/retry-evidence.js";
 import {
@@ -25,6 +23,11 @@ import {
   readResponseTextLimited,
   summarizeProviderTransportError,
 } from "./provider-http-errors.js";
+import {
+  attachLocalServiceDiagnostics,
+  getLocalServiceDiagnosticTail,
+} from "./provider-local-service-diagnostics.js";
+import { withLocalServiceResponseDiagnostics } from "./provider-local-service-response.js";
 import type { ProviderLocalServiceLease } from "./provider-local-service-target.js";
 import { ensureModelProviderLocalService } from "./provider-local-service.js";
 import {
@@ -38,7 +41,7 @@ import {
   mergeModelProviderRequestOverrides,
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
-import { getProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
+import { fetchWithProviderHttpGuard } from "./provider-transport-dispatcher-pool.js";
 import { requestBodyHasStreamTrue } from "./provider-transport-request-body.js";
 import { swapSecretSentinelsForEgress } from "./provider-transport-secret-egress.js";
 import {
@@ -228,13 +231,7 @@ function buildManagedResponse(
   const wrappedBody = wrapGuardedBodyStream({
     body: response.body,
     // Lease release must survive a failed guard release so local services do not leak.
-    cleanup: async () => {
-      try {
-        await release().catch(() => undefined);
-      } finally {
-        finalizeLocalServiceLease();
-      }
-    },
+    cleanup: () => release().finally(finalizeLocalServiceLease),
     refreshTimeout,
   });
   return new Response(wrappedBody, response);
@@ -282,10 +279,12 @@ export function buildGuardedModelFetch(
   timeoutMs?: number,
   options?: { sanitizeSse?: boolean; onSseComment?: () => void },
 ): typeof fetch {
+  const assertAuthCurrent = getProviderAuthAuthority(model);
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
   const requestTimeoutMs = resolveModelRequestTimeoutMs(model, timeoutMs);
   return async (input, init) => {
+    assertAuthCurrent?.();
     const diagnosticContext = formatModelTransportContext();
     let localServiceLease: ProviderLocalServiceLease | undefined;
     const request = input instanceof Request ? new Request(input, init) : undefined;
@@ -343,15 +342,16 @@ export function buildGuardedModelFetch(
         },
       },
       dispatcherPolicy,
-      dispatcherPool: getProviderTransportDispatcherPool(),
       timeoutMs: requestTimeoutMs,
       ...(baseSignal ? { signal: baseSignal } : {}),
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,
+      // Local service preparation, DNS and capture admission may outlive the credential owner.
+      beforeRequest: assertAuthCurrent,
       ...(policy ? { policy } : {}),
     };
-    let result: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    let result: Awaited<ReturnType<typeof fetchWithProviderHttpGuard>>;
     const fetchStartedAt = Date.now();
     const useEnvProxy = !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url);
     emitModelTransportDebug(
@@ -368,17 +368,18 @@ export function buildGuardedModelFetch(
         rawHeaders,
         localServiceSignal,
       );
-      result = await fetchWithSsrFGuard(
+      result = await fetchWithProviderHttpGuard(
         useEnvProxy
           ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
           : guardedFetchOptions,
       );
     } catch (error) {
-      const remediatedError = withModelProviderNetworkRemediation(error, {
-        baseUrl: model.baseUrl,
-        providerId: model.provider,
-        url,
-      });
+      const remediatedError = withModelProviderNetworkRemediation(
+        localServiceSignal?.aborted
+          ? error
+          : attachLocalServiceDiagnostics(error, localServiceLease),
+        { baseUrl: model.baseUrl, providerId: model.provider, url },
+      );
       emitModelTransportError(
         log,
         "model-fetch",
@@ -390,6 +391,14 @@ export function buildGuardedModelFetch(
       throw remediatedError;
     }
     let response = result.response;
+    if (localServiceLease && !response.ok) {
+      response = await withLocalServiceResponseDiagnostics(
+        response,
+        getLocalServiceDiagnosticTail(localServiceLease),
+        localServiceSignal,
+        swappedEgress.headers ?? rawHeaders,
+      );
+    }
     const elapsedMs = Date.now() - fetchStartedAt;
     const responseMessage =
       `[model-fetch] response provider=${model.provider} api=${model.api} model=${model.id} ` +

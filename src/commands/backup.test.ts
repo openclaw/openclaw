@@ -1,84 +1,107 @@
-// Backup command tests cover backup create, verify, and runtime output paths.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { formatCliOperatorError } from "../cli/failure-output.js";
 import {
   registerSignalExitBarrier,
   waitForCliSignalExit,
   waitForSignalExitBarriers,
 } from "../cli/signal-exit-barrier.js";
+import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import * as lifecycleWriteCustody from "../infra/lifecycle-write-custody.js";
 import { readLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { readBackupRuns } from "../state/backup-run-records.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
-import {
-  buildBackupArchivePath,
-  buildBackupArchiveRoot,
-  type BackupAsset,
-  resolveBackupPlanFromDisk,
-} from "./backup-shared.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { buildBackupArchiveRoot, resolveBackupPlanFromDisk } from "./backup-shared.js";
 import * as backupVerify from "./backup-verify.js";
 import {
   createMockTarStream,
   mockStateOnlyBackupPlan,
-  resetBackupTempHome,
   backupWalkMock,
 } from "./backup.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
+// The fixture helper imports backup commands; install the tar mock before loading it.
+const { isolatedBackupCase } = await import("../infra/backup-create.test-support.js");
 const { backupCreateCommand } = await import("./backup.js");
 const actualTar = await vi.importActual<typeof import("tar")>("tar");
 const { walkBackupTar } = await vi.importActual<typeof import("../infra/backup-tar-walk.js")>(
   "../infra/backup-tar-walk.js",
 );
+const create = (
+  options: Parameters<typeof backupCreateCommand>[1],
+  runtime = createTestRuntime(),
+) => backupCreateCommand(runtime, options);
 
 describe("backup commands", () => {
-  let tempHome: TempHomeEnv;
+  let home: string;
+  let stateDir: string;
+  let fixtureRoot: string;
 
-  async function writeWorkspaceBackupConfig(stateDir: string, workspaceDir: string) {
-    await fs.writeFile(
-      path.join(stateDir, "openclaw.json"),
-      JSON.stringify({
-        agents: { ownership: "explicit", entries: { main: { workspace: workspaceDir } } },
-      }),
-      "utf8",
-    );
+  it.skipIf(process.platform === "win32")(
+    "escapes terminal controls in archive creation output without changing paths",
+    backupCase(async () => {
+      await mockStateOnlyBackupPlan(stateDir);
+      const output = path.join(home, "café\u001b[31m\nforged\tend\rrow\u0007.tar.gz ");
+      const runtime = createTestRuntime();
+      const result = await create({ output, includeWorkspace: false }, runtime);
+      const report = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+      expect(report).toContain("café\\nforged\\tend\\rrow.tar.gz");
+      expect(report.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+      expect(report).not.toContain("\nforged");
+      expect(result.archivePath).toBe(output);
+      expect((await fs.stat(output)).isFile()).toBe(true);
+    }),
+  );
+
+  async function writeWorkspaceBackupConfig(workspaceDir: string) {
+    await writeFixtureJson(path.join(stateDir, "openclaw.json"), {
+      agents: { ownership: "explicit", entries: { main: { workspace: workspaceDir } } },
+    });
   }
 
-  beforeAll(async () => {
-    tempHome = await createTempHomeEnv("openclaw-backup-test-");
-  });
+  async function prepareWorkspace() {
+    const workspaceDir = path.join(stateDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
+    return workspaceDir;
+  }
 
-  beforeEach(async () => {
-    await resetBackupTempHome(tempHome);
-    backupWalkMock.mockReset();
-    backupWalkMock.mockImplementation(() => createMockTarStream());
-  });
-
-  afterEach(async () => {
-    vi.restoreAllMocks();
-  });
-
-  afterAll(async () => {
-    await tempHome.restore();
-  });
+  function backupCase<Args extends unknown[]>(run: (...args: Args) => Promise<void>) {
+    return isolatedBackupCase({
+      layout: "home",
+      scenario: "empty",
+      prefix: "openclaw-backup-test-",
+      env: { OPENCLAW_CONFIG_PATH: undefined },
+    })(async (state, ...args: Args) => {
+      state.envVars.OPENCLAW_HOME = undefined;
+      state.applyEnv();
+      home = state.home;
+      stateDir = state.stateDir;
+      fixtureRoot = state.root;
+      try {
+        backupWalkMock.mockReset();
+        backupWalkMock.mockImplementation(() => createMockTarStream());
+        await run(...args);
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
+  }
 
   it.each(["success", "failure", "uncertain", "SIGINT", "SIGTERM"] as const)(
     "retains archive custody until stream cleanup is confirmed: %s",
-    async (outcome) => {
-      await mockStateOnlyBackupPlan(path.join(tempHome.home, ".openclaw"));
+    backupCase(async (outcome) => {
+      await mockStateOnlyBackupPlan(stateDir);
       const beginCustody = lifecycleWriteCustody.beginLifecycleWriteCustody;
       let releaseCustody: (() => void) | undefined;
       vi.spyOn(lifecycleWriteCustody, "beginLifecycleWriteCustody").mockImplementation((phase) => {
@@ -87,31 +110,22 @@ describe("backup commands", () => {
       });
       const entered = createDeferred();
       const settled = createDeferred();
+      const failed = outcome === "failure" || outcome === "uncertain";
+      const cause =
+        outcome === "uncertain"
+          ? new AggregateError([new CommandProcessCleanupError()], "nested cleanup")
+          : undefined;
       backupWalkMock.mockImplementation(() =>
         createMockTarStream({
           beforeRead: async () => {
             entered.resolve();
             await settled.promise;
           },
-          ...(outcome === "success" || outcome === "SIGINT" || outcome === "SIGTERM"
-            ? {}
-            : {
-                error: new Error(
-                  "archive failed",
-                  outcome === "uncertain"
-                    ? {
-                        cause: new AggregateError(
-                          [new CommandProcessCleanupError()],
-                          "nested cleanup",
-                        ),
-                      }
-                    : undefined,
-                ),
-              }),
+          ...(failed ? { error: new Error("archive failed", cause ? { cause } : undefined) } : {}),
         }),
       );
-      const running = backupCreateCommand(createTestRuntime(), {
-        output: path.join(tempHome.home, `backup-${outcome}.tgz`),
+      const running = create({
+        output: path.join(home, `backup-${outcome}.tgz`),
         includeWorkspace: false,
       }).catch((error: unknown) => error);
       await entered.promise;
@@ -136,173 +150,126 @@ describe("backup commands", () => {
         releaseCustody?.();
       }
       expect(readLifecycleWriteCustody()).toEqual([]);
-    },
+    }),
   );
 
-  it("retains a committed archive and records its verified outcome before signal exit", async () => {
-    openOpenClawStateDatabase();
-    await closeStateDatabaseForTest();
-    await mockStateOnlyBackupPlan(path.join(tempHome.home, ".openclaw"));
-    backupWalkMock.mockImplementationOnce(walkBackupTar);
-    const archivePath = path.join(tempHome.home, "committed.tar.gz");
-    const entered = createDeferred();
-    const continueVerification = createDeferred();
-    const verify = backupVerify.verifyBackupArchive;
-    vi.spyOn(backupVerify, "verifyBackupArchive").mockImplementation(async (...args) => {
-      entered.resolve();
-      await continueVerification.promise;
-      return verify(...args);
-    });
-    const running = backupCreateCommand(createTestRuntime(), {
-      output: archivePath,
-      verify: true,
-      nowMs: 123,
-    });
-    const observed = running.catch((error: unknown) => error);
-    let cleanupStarted = false;
-    const releaseBarrier = registerSignalExitBarrier(async () => {
-      cleanupStarted = true;
-    });
-    let signalDrain: Promise<void> | undefined;
-    try {
-      await Promise.race([
-        entered.promise,
-        running.then(() => {
-          throw new Error("Backup completed without entering requested verification");
-        }),
-      ]);
-      const committed = await fs.stat(archivePath, { bigint: true });
-      let drained = false;
-      signalDrain = waitForSignalExitBarriers("SIGTERM").then(() => {
-        drained = true;
+  it(
+    "retains a committed archive and records its verified outcome before signal exit",
+    backupCase(async () => {
+      openOpenClawStateDatabase();
+      await closeStateDatabaseForTest();
+      await mockStateOnlyBackupPlan(stateDir);
+      backupWalkMock.mockImplementationOnce(walkBackupTar);
+      const archivePath = path.join(home, "committed.tar.gz");
+      const entered = createDeferred();
+      const continueVerification = createDeferred();
+      const verify = backupVerify.verifyBackupArchive;
+      vi.spyOn(backupVerify, "verifyBackupArchive").mockImplementation(async (...args) => {
+        entered.resolve();
+        await continueVerification.promise;
+        return verify(...args);
       });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
+      const running = create({
+        output: archivePath,
+        verify: true,
+        nowMs: 123,
       });
-      expect(drained).toBe(false);
-      expect(cleanupStarted).toBe(false);
-      expect(readLifecycleWriteCustody()).toEqual([{ phase: "backup", count: 1 }]);
-      continueVerification.resolve();
-      await expect(running).resolves.toMatchObject({ archivePath, verified: true });
-      await signalDrain;
-      expect(await waitForCliSignalExit()).toBe(143);
-      expect((await fs.stat(archivePath, { bigint: true })).ino).toBe(committed.ino);
-      expect(await readBackupRuns(process.env)).toContainEqual(
-        expect.objectContaining({ archivePath, status: "ok", kind: "archive" }),
-      );
-    } finally {
-      continueVerification.resolve();
-      await observed;
-      await signalDrain;
-      await waitForCliSignalExit();
-      releaseBarrier();
-    }
-  });
+      const observed = running.catch((error: unknown) => error);
+      let cleanupStarted = false;
+      const releaseBarrier = registerSignalExitBarrier(async () => {
+        cleanupStarted = true;
+      });
+      let signalDrain: Promise<void> | undefined;
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          running,
+          "Backup completed without entering requested verification",
+        );
+        const committed = await fs.stat(archivePath, { bigint: true });
+        let drained = false;
+        signalDrain = waitForSignalExitBarriers("SIGTERM").then(() => {
+          drained = true;
+        });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(drained).toBe(false);
+        expect(cleanupStarted).toBe(false);
+        expect(readLifecycleWriteCustody()).toEqual([{ phase: "backup", count: 1 }]);
+        continueVerification.resolve();
+        await expect(running).resolves.toMatchObject({ archivePath, verified: true });
+        await signalDrain;
+        expect(await waitForCliSignalExit()).toBe(143);
+        expect((await fs.stat(archivePath, { bigint: true })).ino).toBe(committed.ino);
+        expect(await readBackupRuns(process.env)).toContainEqual(
+          expect.objectContaining({ archivePath, status: "ok", kind: "archive" }),
+        );
+      } finally {
+        continueVerification.resolve();
+        await observed;
+        await signalDrain;
+        await waitForCliSignalExit();
+        releaseBarrier();
+      }
+    }),
+  );
 
-  async function withInvalidWorkspaceBackupConfig<T>(
-    raw: string,
-    fn: (runtime: RuntimeEnv) => Promise<T>,
-  ) {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const configPath = path.join(tempHome.home, "custom-config.json");
-    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
-    await fs.writeFile(configPath, raw, "utf8");
+  it.each([
+    ["Asia/Shanghai", "2026-03-14T09-02-03.456+08-00-openclaw-backup"],
+    ["America/New_York", "2026-03-13T21-02-03.456-04-00-openclaw-backup"],
+  ])(
+    "formats backup archive timestamps in %s local time",
+    backupCase(async (timezone, expected) => {
+      await withEnvAsync({ TZ: timezone }, async () => {
+        expect(buildBackupArchiveRoot(Date.UTC(2026, 2, 14, 1, 2, 3, 456))).toBe(expected);
+      });
+    }),
+  );
 
-    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH"]);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    const runtime = createTestRuntime();
-    try {
-      return await fn(runtime);
-    } finally {
-      envSnapshot.restore();
-    }
-  }
+  it(
+    "orders coverage checks by canonical path so symlinked workspaces do not duplicate state",
+    backupCase(async () => {
+      if (process.platform === "win32") {
+        return;
+      }
 
-  function expectWorkspaceCoveredByState(
-    plan: Awaited<ReturnType<typeof resolveBackupPlanFromDisk>>,
-  ) {
-    const included = plan.included[0];
-    if (!included) {
-      throw new Error("Expected state asset to be included");
-    }
-    const stateSourcePath = included.sourcePath;
-    expect(plan.included).toStrictEqual([
-      {
-        kind: "state",
-        sourcePath: stateSourcePath,
-        displayPath: included.displayPath,
-        archivePath: buildBackupArchivePath(buildBackupArchiveRoot(123), stateSourcePath),
-      },
-    ]);
-    const workspaceSourcePath = path.join(included.sourcePath, "workspace");
-    expect(plan.skipped).toStrictEqual([
-      {
-        kind: "workspace",
-        sourcePath: workspaceSourcePath,
-        displayPath: path.join(included.displayPath, "workspace"),
-        reason: "covered",
-        coveredBy: included.displayPath,
-      },
-    ]);
-    const [skipped] = plan.skipped;
-    if (!skipped) {
-      throw new Error("Expected covered workspace skip entry");
-    }
-    expect(path.relative(included.sourcePath, skipped.sourcePath).startsWith("..")).toBe(false);
-  }
-
-  function expectOnlyAssetKind(assets: BackupAsset[], kind: BackupAsset["kind"]) {
-    expect(assets).toStrictEqual([
-      {
-        kind,
-        sourcePath: expect.any(String),
-        displayPath: expect.any(String),
-        archivePath: expect.stringContaining("/payload/"),
-      },
-    ]);
-  }
-
-  it("formats backup archive timestamps in local time", () => {
-    const envSnapshot = captureEnv(["TZ"]);
-    try {
-      setTestEnvValue("TZ", "Asia/Shanghai");
-      expect(buildBackupArchiveRoot(Date.UTC(2026, 2, 14, 1, 2, 3, 456))).toBe(
-        "2026-03-14T09-02-03.456+08-00-openclaw-backup",
-      );
-      setTestEnvValue("TZ", "America/New_York");
-      expect(buildBackupArchiveRoot(Date.UTC(2026, 2, 14, 1, 2, 3, 456))).toBe(
-        "2026-03-13T21-02-03.456-04-00-openclaw-backup",
-      );
-    } finally {
-      envSnapshot.restore();
-    }
-  });
-
-  it("orders coverage checks by canonical path so symlinked workspaces do not duplicate state", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const workspaceDir = path.join(stateDir, "workspace");
-    const symlinkDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-link-"));
-    const workspaceLink = path.join(symlinkDir, "ws-link");
-    try {
-      await fs.mkdir(workspaceDir, { recursive: true });
-      await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
+      const workspaceDir = await prepareWorkspace();
+      const symlinkDir = path.join(fixtureRoot, "workspace-link");
+      await fs.mkdir(symlinkDir);
+      const workspaceLink = path.join(symlinkDir, "ws-link");
       await fs.symlink(workspaceDir, workspaceLink);
-      await writeWorkspaceBackupConfig(stateDir, workspaceLink);
+      await writeWorkspaceBackupConfig(workspaceLink);
       const plan = await resolveBackupPlanFromDisk({ includeWorkspace: true, nowMs: 123 });
-      expectWorkspaceCoveredByState(plan);
-    } finally {
-      await fs.rm(symlinkDir, { recursive: true, force: true });
-    }
-  });
+      const included = expectDefined(plan.included[0], "included state asset");
+      const stateSourcePath = included.sourcePath;
+      expect(plan.included).toStrictEqual([
+        {
+          kind: "state",
+          sourcePath: stateSourcePath,
+          displayPath: included.displayPath,
+          archivePath: buildBackupArchivePath(buildBackupArchiveRoot(123), stateSourcePath),
+        },
+      ]);
+      expect(plan.skipped).toStrictEqual([
+        {
+          kind: "workspace",
+          sourcePath: path.join(stateSourcePath, "workspace"),
+          displayPath: path.join(included.displayPath, "workspace"),
+          reason: "covered",
+          coveredBy: included.displayPath,
+        },
+      ]);
+      const skipped = expectDefined(plan.skipped[0], "covered workspace skip entry");
+      expect(path.relative(stateSourcePath, skipped.sourcePath).startsWith("..")).toBe(false);
+    }),
+  );
 
-  it("backupCreateCommand omits volatile files and keeps notices out of JSON output", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-json-"));
-    try {
+  it(
+    "backupCreateCommand omits volatile files and keeps notices out of JSON output",
+    backupCase(async () => {
+      const backupDir = path.join(fixtureRoot, "archives-json");
+      await fs.mkdir(backupDir);
       const runtime = createTestRuntime();
       await mockStateOnlyBackupPlan(stateDir);
       const sessions = path.join(stateDir, "sessions");
@@ -331,173 +298,155 @@ describe("backup commands", () => {
       }
       expect(payload).not.toContain("Backup skipped");
       expect(JSON.parse(payload)).toHaveProperty("skippedVolatileCount", 1);
-    } finally {
-      await fs.rm(backupDir, { recursive: true, force: true });
-    }
-  });
+    }),
+  );
 
-  it("reports an actionable EACCES output-parent failure", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const outputParent = path.join(tempHome.home, "missing-parent", "daily");
-    const outputPath = path.join(outputParent, "backup.tar.gz");
-    await mockStateOnlyBackupPlan(stateDir);
-    vi.spyOn(fs, "mkdir").mockRejectedValueOnce(
-      Object.assign(new Error(`EACCES: filesystem error, mkdir '${outputParent}'`), {
-        code: "EACCES",
-        path: outputParent,
-        syscall: "mkdir",
-      }),
-    );
+  it.each(["EACCES", "EEXIST"] as const)(
+    "reports an actionable %s output-parent failure",
+    backupCase(async (code) => {
+      const outputParent = path.join(
+        home,
+        code === "EACCES" ? "missing-parent/daily" : "not-a-directory",
+      );
+      const outputPath = path.join(outputParent, "backup.tar.gz");
+      if (code === "EEXIST") {
+        await fs.writeFile(outputParent, "file\n", "utf8");
+      }
+      await mockStateOnlyBackupPlan(stateDir);
+      if (code === "EACCES") {
+        vi.spyOn(fs, "mkdir").mockRejectedValueOnce(
+          Object.assign(new Error(`EACCES: filesystem error, mkdir '${outputParent}'`), {
+            code,
+            path: outputParent,
+            syscall: "mkdir",
+          }),
+        );
+      }
+      const error = await create({ output: outputPath }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(Error);
+      const detail = code === "EACCES" ? "directory is not writable" : "parent is not a directory";
+      const recovery =
+        code === "EACCES"
+          ? "Check the path and directory permissions, then run"
+          : "Choose a directory path and run";
+      const operatorMessage = `Backup archive creation failed: ${outputPath}. Backup output ${detail}: ${outputParent}. ${recovery} \`openclaw backup create --output <archive>\` again.`;
+      expect(formatCliOperatorError(error, { argv: [], env: {} })).toBe(operatorMessage);
+      const debug = formatCliOperatorError(error, { argv: [], env: { OPENCLAW_DEBUG: "1" } });
+      if (code === "EACCES") {
+        expect(debug).toBe(
+          `${operatorMessage} | EACCES: filesystem error, mkdir '${outputParent}' | EACCES`,
+        );
+      } else {
+        expect(debug).toMatch(/\| EEXIST: .*mkdir.*\| EEXIST/u);
+      }
+    }),
+  );
 
-    const error = await backupCreateCommand(createTestRuntime(), {
-      output: outputPath,
-    }).catch((caught: unknown) => caught);
+  it(
+    "rejects symlinked output paths even when intermediate directories do not exist yet",
+    backupCase(async () => {
+      if (process.platform === "win32") {
+        return;
+      }
 
-    expect(error).toBeInstanceOf(Error);
-    const operatorMessage = `Backup archive creation failed: ${outputPath}. Backup output directory is not writable: ${outputParent}. Check the path and directory permissions, then run \`openclaw backup create --output <archive>\` again.`;
-    expect(formatCliOperatorError(error, { argv: [], env: {} })).toBe(operatorMessage);
-    const debugMessage = `${operatorMessage} | EACCES: filesystem error, mkdir '${outputParent}' | EACCES`;
-    expect(formatCliOperatorError(error, { argv: [], env: { OPENCLAW_DEBUG: "1" } })).toBe(
-      debugMessage,
-    );
-  });
-
-  it("does not describe an output parent file as a missing directory", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const outputParent = path.join(tempHome.home, "not-a-directory");
-    const outputPath = path.join(outputParent, "backup.tar.gz");
-    await fs.writeFile(outputParent, "file\n", "utf8");
-    await mockStateOnlyBackupPlan(stateDir);
-
-    const error = await backupCreateCommand(createTestRuntime(), {
-      output: outputPath,
-    }).catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(Error);
-    const operatorMessage = `Backup archive creation failed: ${outputPath}. Backup output parent is not a directory: ${outputParent}. Choose a directory path and run \`openclaw backup create --output <archive>\` again.`;
-    expect(formatCliOperatorError(error, { argv: [], env: {} })).toBe(operatorMessage);
-    expect(formatCliOperatorError(error, { argv: [], env: { OPENCLAW_DEBUG: "1" } })).toMatch(
-      /\| EEXIST: .*mkdir.*\| EEXIST/u,
-    );
-  });
-
-  it("rejects symlinked output paths even when intermediate directories do not exist yet", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const symlinkDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-link-"));
-    const symlinkPath = path.join(symlinkDir, "linked-state");
-    try {
-      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      const symlinkDir = path.join(fixtureRoot, "linked-state");
+      await fs.mkdir(symlinkDir);
+      const symlinkPath = path.join(symlinkDir, "linked-state");
+      await writeFixtureJson(path.join(stateDir, "openclaw.json"), {});
       await fs.symlink(stateDir, symlinkPath);
 
       const runtime = createTestRuntime();
       await mockStateOnlyBackupPlan(stateDir);
 
       await expect(
-        backupCreateCommand(runtime, {
-          output: path.join(symlinkPath, "new", "subdir", "backup.tar.gz"),
-        }),
+        create({ output: path.join(symlinkPath, "new", "subdir", "backup.tar.gz") }, runtime),
       ).rejects.toThrow(/must not be written inside a source path/i);
-    } finally {
-      await fs.rm(symlinkDir, { recursive: true, force: true });
-    }
-  });
+    }),
+  );
 
-  it("falls back to the home directory when cwd is inside a backed-up source tree", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const workspaceDir = path.join(stateDir, "workspace");
-    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
-    vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-    const nowMs = Date.UTC(2026, 2, 9, 1, 2, 3);
-    await writeWorkspaceBackupConfig(stateDir, workspaceDir);
-
-    const runtime = createTestRuntime();
-
-    const result = await backupCreateCommand(runtime, { nowMs });
-
-    expect(result.archivePath).toBe(
-      path.join(tempHome.home, `${buildBackupArchiveRoot(nowMs)}.tar.gz`),
-    );
-    await fs.rm(result.archivePath, { force: true });
-
-    if (process.platform !== "win32") {
-      const linkParent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-cwd-link-"));
-      const workspaceLink = path.join(linkParent, "workspace-link");
-      try {
-        await fs.symlink(workspaceDir, workspaceLink);
-        vi.mocked(process["cwd"]).mockReturnValue(workspaceLink);
-        const symlinkNowMs = Date.UTC(2026, 2, 9, 1, 3, 4);
-        const symlinkResult = await backupCreateCommand(createTestRuntime(), {
-          nowMs: symlinkNowMs,
-        });
-        expect(symlinkResult.archivePath).toBe(
-          path.join(tempHome.home, `${buildBackupArchiveRoot(symlinkNowMs)}.tar.gz`),
-        );
-        await fs.rm(symlinkResult.archivePath, { force: true });
-      } finally {
-        await fs.rm(linkParent, { recursive: true, force: true });
+  it.each([false, true])(
+    "falls back to home when cwd is a backed-up workspace (symlink=%s)",
+    backupCase(async (symlink) => {
+      if (symlink && process.platform === "win32") {
+        return;
       }
-    }
-  });
+      const workspaceDir = await prepareWorkspace();
+      await writeWorkspaceBackupConfig(workspaceDir);
+      const linkParent = path.join(fixtureRoot, "cwd-link");
+      await fs.mkdir(linkParent);
+      const cwd = symlink ? path.join(linkParent, "workspace-link") : workspaceDir;
+      if (symlink) {
+        await fs.symlink(workspaceDir, cwd);
+      }
+      vi.spyOn(process, "cwd").mockReturnValue(cwd);
+      const nowMs = Date.UTC(2026, 2, 9, 1, 2, 3);
+      const result = await create({ nowMs });
+      expect(result.archivePath).toBe(path.join(home, `${buildBackupArchiveRoot(nowMs)}.tar.gz`));
+      await fs.rm(result.archivePath, { force: true });
+    }),
+  );
 
-  it("handles invalid syntax according to backup scope", async () => {
-    const raw = '{"agents": { defaults: { workspace: ';
-    await withInvalidWorkspaceBackupConfig(raw, async (runtime) => {
-      await expect(backupCreateCommand(runtime, { dryRun: true })).rejects.toThrow(
-        /ownership could not be resolved/i,
-      );
+  it(
+    "handles invalid syntax according to backup scope",
+    backupCase(async () => {
+      const configPath = path.join(home, "custom-config.json");
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), "{}", "utf8");
+      await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
+      await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
+        const runtime = createTestRuntime();
+        await expect(create({ dryRun: true }, runtime)).rejects.toThrow(
+          /ownership could not be resolved/i,
+        );
 
-      await expect(
-        backupCreateCommand(runtime, { dryRun: true, includeWorkspace: false }),
-      ).rejects.toThrow(/ownership could not be resolved/i);
+        await expect(create({ dryRun: true, includeWorkspace: false }, runtime)).rejects.toThrow(
+          /ownership could not be resolved/i,
+        );
 
-      const configOnly = await backupCreateCommand(runtime, {
-        dryRun: true,
-        onlyConfig: true,
+        const configOnly = await create({ dryRun: true, onlyConfig: true }, runtime);
+        expect(configOnly.assets).toStrictEqual([
+          {
+            kind: "config",
+            sourcePath: expect.any(String),
+            displayPath: expect.any(String),
+            archivePath: expect.stringContaining("/payload/"),
+          },
+        ]);
       });
-      expectOnlyAssetKind(configOnly.assets, "config");
-    });
-  });
+    }),
+  );
 
-  it("discovers workspaces through the stable upgrade compatibility view", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const configPath = path.join(tempHome.home, "stable-openclaw.json");
-    const workspaceDir = path.join(tempHome.home, "stable-workspace");
-    const stableConfig = {
-      meta: {
-        lastTouchedAt: "2026-08-01T00:00:00.000Z",
-        lastTouchedVersion: "2026.7.1-2",
-      },
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          heartbeat: { skipWhenBusy: true },
+  it(
+    "discovers workspaces through the stable upgrade compatibility view",
+    backupCase(async () => {
+      const configPath = path.join(home, "stable-openclaw.json");
+      const workspaceDir = path.join(home, "stable-workspace");
+      const stableConfig = {
+        meta: {
+          lastTouchedAt: "2026-08-01T00:00:00.000Z",
+          lastTouchedVersion: "2026.7.1-2",
         },
-      },
-      gateway: { mode: "local" },
-    };
-    const originalRaw = `${JSON.stringify(stableConfig, null, 2)}\n`;
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(configPath, originalRaw, "utf8");
-    const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
-    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH"]);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    try {
-      const plan = await resolveBackupPlanFromDisk({ nowMs: 123 });
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            heartbeat: { skipWhenBusy: true },
+          },
+        },
+        gateway: { mode: "local" },
+      };
+      const originalRaw = `${JSON.stringify(stableConfig, null, 2)}\n`;
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(configPath, originalRaw, "utf8");
+      const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
+      await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
+        const plan = await resolveBackupPlanFromDisk({ nowMs: 123 });
 
-      expect(plan.included).toContainEqual(
-        expect.objectContaining({ kind: "workspace", sourcePath: canonicalWorkspaceDir }),
-      );
-      expect(await fs.readFile(configPath, "utf8")).toBe(originalRaw);
-      expect(plan.configPath).toBe(configPath);
-      expect(plan.stateDir).toBe(stateDir);
-    } finally {
-      envSnapshot.restore();
-    }
-  });
+        expect(plan.included).toContainEqual(
+          expect.objectContaining({ kind: "workspace", sourcePath: canonicalWorkspaceDir }),
+        );
+        expect(await fs.readFile(configPath, "utf8")).toBe(originalRaw);
+        expect(plan.configPath).toBe(configPath);
+        expect(plan.stateDir).toBe(stateDir);
+      });
+    }),
+  );
 });

@@ -21,6 +21,7 @@ import {
   resolveConfiguredSubagentSpawnModelSelection,
   resolveThinkingDefault,
 } from "../../model-selection.js";
+import { buildThinkingCatalog } from "../../model-thinking-default-core.js";
 import type { PreparedSpawnThreadBinding } from "../../spawn-plan.js";
 import { buildSpawnThreadBinding } from "./spawn-thread-binding.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
@@ -106,9 +107,10 @@ export function resolveAcpSpawnRuntimeOptions(params: {
   });
   if (thinkingPlan.status === "error") {
     const { provider, model: modelId } = splitModelRef(model);
+    const catalog = buildThinkingCatalog({ cfg: params.cfg, provider, model: modelId });
     return {
       ok: false,
-      error: `Invalid thinking level "${thinkingPlan.thinkingCandidateRaw}". Use one of: ${formatThinkingLevels(provider, modelId)}.`,
+      error: `Invalid thinking level "${thinkingPlan.thinkingCandidateRaw}". Use one of: ${formatThinkingLevels(provider, modelId, ", ", catalog)}.`,
     };
   }
 
@@ -196,18 +198,15 @@ export async function bindPreparedAcpThread(params: {
       label: params.label,
       binding: params.preparedBinding,
       sessionCwd: resolveAcpSessionCwd(params.initializedRuntime.initialized.meta),
-      sessionDetails: resolveAcpThreadSessionDetailLines({
-        sessionKey: params.sessionKey,
-        meta: params.initializedRuntime.initialized.meta,
-      }),
+      sessionDetails: resolveAcpThreadSessionDetailLines(
+        params.initializedRuntime.initialized.meta,
+      ),
     }),
   );
   params.assertActive?.();
   if (!binding.conversation.conversationId) {
     throw new Error(
-      params.preparedBinding.placement === "child"
-        ? `Failed to create and bind a ${params.preparedBinding.channel} thread for this ACP session.`
-        : `Failed to bind the current ${params.preparedBinding.channel} conversation for this ACP session.`,
+      `Failed to create and bind a ${params.preparedBinding.channel} thread for this ACP session.`,
     );
   }
 

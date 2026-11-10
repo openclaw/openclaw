@@ -1,13 +1,16 @@
+import { ensureStatePostgresFragment, isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  runOpenClawStateWriteTransaction,
+  withOpenClawStateStartupMigrationCheckpointDatabase,
+} from "../state/openclaw-state-db.js";
 import { isOpenClawStateWriteContentionError } from "../state/openclaw-state-ownership.js";
-import { requireNativeDatabaseFile } from "./database-engine/physical-facts.js";
 import { formatErrorMessage } from "./errors.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { isPostgresSqlConnection } from "./sql-connection.js";
 import { assertSqliteIntegrity, SqliteRepairableForeignKeyError } from "./sqlite-integrity.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
+import { withUpdateRunRead } from "./update-run-read-admission.js";
 import { updateRunLedgerSchema } from "./update-run-write.js";
 
 export class UpdateRunAdmissionBusyError extends Error {
@@ -33,9 +36,9 @@ export function runUpdateRunAdmission<T>(
   // Once a file exists, failures remain failures; never retry via bootstrap.
   // Pre-v19 orphan recovery must remain here: schema-19 table retirement waits
   // for managed shutdown and cannot run just to open the old driver's ledger.
-  const inspection = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db, path }) => {
+  const inspection = withUpdateRunRead(({ db, path }) => {
     if (isPostgresSqlConnection(db)) {
-      requireNativeDatabaseFile("postgres", "integrity");
+      return { repairable: undefined };
     }
     try {
       assertSqliteIntegrity(db, path);
@@ -79,6 +82,15 @@ export function runUpdateRunAdmission<T>(
       }
       throw error;
     }
+  }
+  if (isStatePostgres()) {
+    return withOpenClawStateStartupMigrationCheckpointDatabase((db) => {
+      if (!isPostgresSqlConnection(db)) {
+        throw new Error("PostgreSQL update admission requires its selected engine");
+      }
+      ensureStatePostgresFragment(db, "update_runs");
+      return admitted(db, []);
+    }, options);
   }
   return runOpenClawStateWriteTransaction(
     ({ db }) => {

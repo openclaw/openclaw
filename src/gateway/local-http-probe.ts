@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createNodeProxyAgent } from "../infra/net/node-proxy-agent.js";
 import { registerManagedProxyGatewayLoopbackBypass } from "../infra/net/proxy/proxy-lifecycle.js";
 
-const GATEWAY_HTTP_PROBE_MAX_RESPONSE_CHARS = 1024;
+const GATEWAY_HTTP_PROBE_MAX_RESPONSE_CHARS = 64 * 1024;
 const directHttpAgent = new HttpAgent({ keepAlive: false });
 // Do not reuse sockets or TLS sessions: certificate renewal must expose the
 // listener's current certificate to the pin check on every local probe.
@@ -15,11 +15,6 @@ const directHttpsAgent = new HttpsAgent({ keepAlive: false, maxCachedSessions: 0
 type GatewayHttpProbeResponse = {
   statusCode: number;
   body: string;
-  tlsFingerprint?: string;
-};
-
-type GatewayLocalProbeTarget = {
-  url: string;
   tlsFingerprint?: string;
 };
 
@@ -34,7 +29,10 @@ export type ConfiguredGatewayLocalProbe = {
   resolveWebSocketTarget(
     port: number,
     signal?: AbortSignal,
-  ): Promise<GatewayLocalProbeTarget | null>;
+  ): Promise<{
+    url: string;
+    tlsFingerprint?: string;
+  } | null>;
 };
 
 function normalizeGatewayHttpProbeHost(host: string): string {
@@ -82,7 +80,6 @@ async function requestGatewayLocalHttpProbe(params: {
         port: params.port,
         path: params.pathname,
         method: "GET",
-        timeout: params.timeoutMs,
         // agent:false reconstructs the global agent without its required proxy
         // options. Select an explicit agent without overriding loopback policy.
         agent: proxyAgent ?? (pins ? directHttpsAgent : directHttpAgent),
@@ -108,8 +105,12 @@ async function requestGatewayLocalHttpProbe(params: {
         res.setEncoding("utf8");
         res.on("data", (chunk: string) => {
           if (body.length + chunk.length > GATEWAY_HTTP_PROBE_MAX_RESPONSE_CHARS) {
+            finish({
+              statusCode: res.statusCode ?? 0,
+              body: "",
+              ...(tlsFingerprint ? { tlsFingerprint } : {}),
+            });
             res.destroy();
-            finish(null);
             return;
           }
           body += chunk;
@@ -130,10 +131,6 @@ async function requestGatewayLocalHttpProbe(params: {
       req.destroy();
       finish(null);
     }, params.timeoutMs);
-    req.once("timeout", () => {
-      req.destroy();
-      finish(null);
-    });
     req.once("error", () => {
       finish(null);
     });
@@ -148,23 +145,14 @@ export function createConfiguredGatewayLocalProbe(
   config: OpenClawConfig,
 ): ConfiguredGatewayLocalProbe {
   const tlsConfig = config.gateway?.tls;
-  type CertificatePin = { fingerprint: string; generation: number };
-  let configured: CertificatePin | undefined;
-  let inspection: Promise<CertificatePin | undefined> | undefined;
-  let verified: (CertificatePin & { endpoint: string }) | undefined;
-  // Share pending reads so file observations establish one ordered generation stream.
+  let inspection: Promise<string | undefined> | undefined;
+  let verified: { fingerprint: string; endpoint: string } | undefined;
+  // Health and readiness probes share their pending public-certificate read.
   const inspectCertificate = () =>
     (inspection ??= import("../infra/tls/gateway.js")
       .then(async ({ inspectGatewayTlsCertificate }) => {
         const certificate = await inspectGatewayTlsCertificate(tlsConfig);
-        if (!certificate.ok) {
-          return undefined;
-        }
-        const fingerprint = certificate.value.fingerprintSha256;
-        if (configured?.fingerprint !== fingerprint) {
-          configured = { fingerprint, generation: (configured?.generation ?? 0) + 1 };
-        }
-        return configured;
+        return certificate.ok ? certificate.value.fingerprintSha256 : undefined;
       })
       .catch(() => undefined)
       .finally(() => {
@@ -174,15 +162,14 @@ export function createConfiguredGatewayLocalProbe(
     params.signal?.throwIfAborted();
     const endpoint = `${normalizeGatewayHttpProbeHost(params.host)}:${params.port}`;
     const previous = verified;
-    let candidate: CertificatePin | undefined;
     let tlsFingerprints: string[] | undefined;
     if (tlsConfig?.enabled === true) {
-      candidate = await inspectCertificate();
+      const candidate = await inspectCertificate();
       params.signal?.throwIfAborted();
       // Files may precede listener acceptance. Retain only this endpoint's last
       // verified serving pin while a replacement is incomplete or reload is off.
       tlsFingerprints = [
-        ...(candidate ? [candidate.fingerprint] : []),
+        ...(candidate ? [candidate] : []),
         ...(previous?.endpoint === endpoint ? [previous.fingerprint] : []),
       ];
       if (tlsFingerprints.length === 0) {
@@ -190,15 +177,8 @@ export function createConfiguredGatewayLocalProbe(
       }
     }
     const result = await requestGatewayLocalHttpProbe({ ...params, tlsFingerprints });
-    const accepted = result?.tlsFingerprint === candidate?.fingerprint ? candidate : previous;
-    // Order by certificate observation, not response completion: parallel readiness
-    // probes may finish an old handshake before or after verifying its replacement.
-    if (
-      result?.tlsFingerprint &&
-      accepted &&
-      (verified?.endpoint !== endpoint || accepted.generation >= verified.generation)
-    ) {
-      verified = { ...accepted, endpoint };
+    if (result?.tlsFingerprint) {
+      verified = { fingerprint: result.tlsFingerprint, endpoint };
     }
     return result;
   };

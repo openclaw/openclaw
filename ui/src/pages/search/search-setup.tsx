@@ -4,19 +4,27 @@ import type { WebSearchStatusResult } from "../../../../packages/gateway-protoco
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
+import {
+  flattenConfigLeafFields,
+  type ConfigLeafField,
+} from "../../components/config-form.leaf-fields.ts";
+import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import { ConfigNode } from "../../components/config-form.node.tsx";
-import { resolveConfigFieldMeta } from "../../components/config-form.search.ts";
+import { hintForPath, pathKey } from "../../components/config-form.shared.ts";
+import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { LearnMoreLink, SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
+import type { ConfigSecretFields } from "../../lib/config/config-secret-fields.ts";
 import {
   currentConfigObject,
   type RuntimeConfigState,
 } from "../../lib/config/config-state-model.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { PluginCredentialEditor } from "../plugins/credential-editor.tsx";
 import { pluginConfigSchema } from "../plugins/settings-model.ts";
-import { readConfigValue } from "./search-config.ts";
+import { isProviderReady, readConfigValue } from "./search-config.ts";
 
 type SearchProvider = WebSearchStatusResult["providers"][number];
 type SearchSettingsProps = {
@@ -24,43 +32,60 @@ type SearchSettingsProps = {
   canEdit: () => boolean;
   busy: () => boolean;
   commit: (path: Array<string | number>, value: unknown) => Promise<boolean>;
+  secretFields: ConfigSecretFields;
 };
-type SearchConfigFieldProps = Pick<SearchSettingsProps, "state" | "canEdit" | "busy">;
-function SearchConfigField(
-  props: SearchConfigFieldProps & {
-    schema: JsonSchema;
+
+/** Leaf rows for one config object; nested objects become labeled rows, never a row control. */
+function searchConfigFields(
+  props: Pick<SearchSettingsProps, "state" | "canEdit" | "busy" | "secretFields">,
+  object: {
+    schema: JsonSchema | null | undefined;
     path: Array<string | number>;
     value: unknown;
     unsupported: Set<string>;
     patch: (path: Array<string | number>, value: unknown) => Promise<boolean>;
   },
-) {
-  const hints = () => props.state().configUiHints;
-  const meta = () => resolveConfigFieldMeta(props.path, props.schema, hints());
+): ConfigLeafField[] {
+  if (!object.schema) {
+    return [];
+  }
+  return resolveConfigObjectFields({
+    schema: object.schema,
+    value: object.value,
+    path: object.path,
+    hints: props.state().configUiHints,
+    unsupported: object.unsupported,
+    disabled: !props.canEdit() || props.busy(),
+    compact: true,
+    commitOnBlur: true,
+    rawAvailable: false,
+    maskSensitive: true,
+    secretFields: props.secretFields,
+    onPatch: (path, value) => void object.patch(path, value),
+    onRemove: (path) => void object.patch(path, undefined),
+  }).fields.flatMap((field) => flattenConfigLeafFields(field, String(field.path.at(-1))));
+}
+
+function SearchConfigField(props: { field: ConfigLeafField; nested?: boolean }) {
+  const params = createMemo(() => ({
+    ...props.field,
+    showLabel: false,
+    // The control's accessible name carries the full nested label, like its row title.
+    hints: {
+      ...props.field.hints,
+      [pathKey(props.field.path)]: {
+        ...hintForPath(props.field.path, props.field.hints),
+        label: props.field.label,
+      },
+    },
+  }));
   return (
     <SettingsRow
-      title={meta().label}
-      description={meta().help}
+      title={props.field.label}
+      description={props.field.help}
       stackedOnNarrow
-      control={
-        <ConfigNode
-          params={{
-            schema: props.schema,
-            value: props.value,
-            path: props.path,
-            hints: hints(),
-            unsupported: props.unsupported,
-            disabled: !props.canEdit() || props.busy(),
-            compact: true,
-            commitOnBlur: true,
-            showLabel: false,
-            rawAvailable: false,
-            maskSensitive: true,
-            onPatch: (path, value) => void props.patch(path, value),
-            onRemove: (path) => void props.patch(path, undefined),
-          }}
-        />
-      }
+      nested={props.nested}
+      control={<ConfigNode params={params()} />}
     />
   );
 }
@@ -68,8 +93,9 @@ function SearchConfigField(
 export function SearchSetup(
   props: SearchSettingsProps & {
     context: ApplicationContext;
-    gateway: Pick<GatewayPageController, "capture" | "isCurrent" | "epoch" | "connected">;
+    gateway: Pick<GatewayPageBinding, "capture" | "isCurrent" | "epoch" | "connected" | "client">;
     provider: SearchProvider;
+    getPresentationLifetime: () => Promise<void>;
   },
 ) {
   const config = () => currentConfigObject(props.state());
@@ -86,41 +112,35 @@ export function SearchSetup(
       : null;
   const values = () => asNullableRecord(readConfigValue(config(), props.provider.configPath));
   const credential = () => props.provider.credential;
-  const fields = () =>
-    Object.entries(schema()?.properties ?? {}).filter(([key]) => {
-      const descriptor = credential();
-      return (
-        !descriptor ||
-        descriptor.path.length !== props.provider.configPath.length + 1 ||
-        !props.provider.configPath.every((segment, index) => segment === descriptor.path[index]) ||
-        descriptor.path.at(-1) !== key
-      );
-    });
+  const credentialKey = () => {
+    const path = credential()?.path;
+    return path ? JSON.stringify(path) : undefined;
+  };
+  const fields = createMemo(() =>
+    searchConfigFields(props, {
+      schema: schema(),
+      path: props.provider.configPath,
+      value: values(),
+      unsupported: unsupported(),
+      patch: props.commit,
+    }).filter((field) => JSON.stringify(field.path) !== credentialKey()),
+  );
   return (
     <>
-      <SettingsRow
-        title={t("searchPage.configuration")}
-        description={t(`searchPage.credentialSources.${props.provider.credentialSource}`)}
-        control={
-          <SettingsStatus
-            kind={props.provider.available && props.provider.configured ? "ok" : "warn"}
-            label={t(
-              !props.provider.installed
-                ? "searchPage.pluginMissing"
-                : !props.provider.available
-                  ? "searchPage.pluginUnavailable"
-                  : props.provider.configured
-                    ? "searchPage.configured"
-                    : "searchPage.needsSetup",
-            )}
-          />
-        }
-      />
+      {/* The list row carries the status; a missing key shows as its empty field. */}
+      <Show when={props.provider.credentialSource !== "missing" || !credential()}>
+        <SettingsRow
+          title={t("searchPage.configuration")}
+          description={t(`searchPage.credentialSources.${props.provider.credentialSource}`)}
+          nested
+        />
+      </Show>
       <Show when={credential()}>
         {(descriptor) => (
           <SettingsRow
             title={descriptor().label}
             stackedOnNarrow
+            nested
             control={
               <PluginCredentialEditor
                 field={{
@@ -134,7 +154,10 @@ export function SearchSetup(
                   baseHash: props.state().configSnapshot?.hash ?? null,
                   gateway: props.gateway,
                   canInspect: props.canEdit(),
-                  saveError: props.state().lastError,
+                  getPresentationLifetime: () => props.getPresentationLifetime(),
+                  get saveError() {
+                    return props.state().lastError;
+                  },
                   onCommit: props.commit,
                   onDiscard: () => props.context.runtimeConfig.discardFormValue(descriptor().path),
                 }}
@@ -143,21 +166,11 @@ export function SearchSetup(
           />
         )}
       </Show>
-      <For each={fields()} keyed={(field) => field[0]}>
-        {(field) => (
-          <SearchConfigField
-            schema={field()[1]}
-            path={[...props.provider.configPath, field()[0]]}
-            value={values()?.[field()[0]]}
-            unsupported={unsupported()}
-            patch={props.commit}
-            state={props.state}
-            canEdit={props.canEdit}
-            busy={props.busy}
-          />
-        )}
+      <For each={fields()} keyed={(field) => JSON.stringify(field.path)}>
+        {(field) => <SearchConfigField field={field()} nested />}
       </For>
       <SettingsRow
+        nested
         title={t("searchPage.pluginSettings")}
         description={t("searchPage.pluginSettingsHint")}
         control={
@@ -171,8 +184,73 @@ export function SearchSetup(
       />
       <Show when={props.provider.docsUrl}>
         {(url) => (
-          <SettingsRow title={t("searchPage.docs")} control={<LearnMoreLink url={url()} />} />
+          <SettingsRow
+            nested
+            title={t("searchPage.docs")}
+            control={<LearnMoreLink url={url()} />}
+          />
         )}
+      </Show>
+    </>
+  );
+}
+
+/** One provider in the setup list: its status at a glance, its setup in place when opened. */
+export function SearchProviderRow(
+  props: Parameters<typeof SearchSetup>[0] & {
+    open: boolean;
+    /** Only a provider in use warns, so unused providers don't read as a wall of problems. */
+    inUse: boolean;
+    onToggle: () => void;
+  },
+) {
+  const ready = () => isProviderReady(props.provider);
+  return (
+    <>
+      <button
+        type="button"
+        class="settings-row settings-row--nav search-provider"
+        aria-expanded={props.open ? "true" : "false"}
+        onClick={() => props.onToggle()}
+      >
+        <span class="settings-row__text">
+          <span class="settings-row__title">{props.provider.label}</span>
+          <Show when={props.open && props.provider.hint}>
+            <span class="settings-row__desc">{props.provider.hint}</span>
+          </Show>
+        </span>
+        <span class="settings-row__control">
+          <SettingsStatus
+            kind={ready() ? "ok" : props.inUse ? "warn" : "muted"}
+            label={t(
+              !props.provider.installed
+                ? "searchPage.pluginMissing"
+                : !props.provider.available
+                  ? "searchPage.pluginUnavailable"
+                  : props.provider.configured
+                    ? "searchPage.configured"
+                    : "searchPage.needsSetup",
+            )}
+          />
+          <span class="settings-row__chevron">
+            <Icon name="chevronRight" />
+          </span>
+        </span>
+      </button>
+      <Show when={props.open}>
+        <SearchSetup
+          provider={props.provider}
+          state={props.state}
+          context={props.context}
+          gateway={props.gateway}
+          getPresentationLifetime={props.getPresentationLifetime}
+          secretFields={props.secretFields}
+          canEdit={props.canEdit}
+          busy={props.busy}
+          commit={(path, value) =>
+            props.open ? props.commit(path, value) : Promise.resolve(false)
+          }
+        />
       </Show>
     </>
   );
@@ -184,33 +262,22 @@ export function AdvancedSearchSettings(props: SearchSettingsProps) {
   const schema = () => analysis().schema?.properties?.tools?.properties?.web?.properties?.search;
   const config = () => currentConfigObject(props.state());
   const value = () => asNullableRecord(readConfigValue(config(), ["tools", "web", "search"]));
-  const fields = () =>
-    Object.entries(schema()?.properties ?? {}).filter(
-      ([key]) => key !== "enabled" && key !== "provider",
-    );
+  const fields = createMemo(() =>
+    searchConfigFields(props, {
+      schema: schema(),
+      path: ["tools", "web", "search"],
+      value: value(),
+      unsupported: unsupported(),
+      patch: props.commit,
+    }).filter((field) => field.property !== "enabled" && field.property !== "provider"),
+  );
   return (
     <Show when={fields().length > 0}>
-      <details class="settings-section config-advanced-disclosure">
-        <summary class="settings-section__heading config-advanced-disclosure__summary">
-          {t("searchPage.advanced")}
-        </summary>
-        <div class="settings-group">
-          <For each={fields()} keyed={(field) => field[0]}>
-            {(field) => (
-              <SearchConfigField
-                schema={field()[1]}
-                path={["tools", "web", "search", field()[0]]}
-                value={value()?.[field()[0]]}
-                unsupported={unsupported()}
-                patch={props.commit}
-                state={props.state}
-                canEdit={props.canEdit}
-                busy={props.busy}
-              />
-            )}
-          </For>
-        </div>
-      </details>
+      <SettingsDisclosure class="config-advanced-disclosure" title={t("searchPage.advanced")}>
+        <For each={fields()} keyed={(field) => JSON.stringify(field.path)}>
+          {(field) => <SearchConfigField field={field()} />}
+        </For>
+      </SettingsDisclosure>
     </Show>
   );
 }

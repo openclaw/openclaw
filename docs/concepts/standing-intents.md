@@ -25,7 +25,8 @@ Put aspirations in `MEMORY.md`, a project note, or another maintained Markdown f
 
 Standing intents are owner-directed memory. Channel owners recognized by
 `commands.ownerAllowFrom` can use the `intent` tool to create, list, or cancel
-them; other senders do not receive that tool. Authenticated Gateway/Control UI
+them. The tool definition stays available across turns, but calls without owner
+authority are denied. Authenticated Gateway/Control UI
 administrators and the local CLI can inspect and cancel existing intents, but
 creation requires an authenticated channel and sender identity. If either is
 missing, OpenClaw refuses creation and asks the operator to retry from an
@@ -39,6 +40,8 @@ When someone mentions the launch checklist, remind me to confirm the rollback ow
 
 The agent uses the `intent` tool with a description and trigger keywords. It can also narrow the intent to one conversation channel identifier or sender identifier, set an expiry, reduce or increase the fire budget, or change the cooldown.
 
+Conversation scope uses the channel's native chat identifier for both creation and matching, not a routing session key or its topic suffix.
+
 The default scope is the current channel and sender. An explicit `anywhere` or
 `anyone` scope still requires the creating sender identity: the matching hook
 cannot safely enforce a senderless owner principal on later channel turns.
@@ -49,11 +52,16 @@ Defaults are intentionally conservative:
 - maximum fires: 3
 - expiry: 90 days
 
+The `intent` tool accepts integers or numeric strings for `maxFires` and
+`cooldownSeconds`. `maxFires` must be positive; `cooldownSeconds` may be zero.
+Fractions, negative values, and nonnumeric strings are rejected with an integer
+type error.
+
 For a clock time, the agent should use the existing scheduled-task path instead of creating a standing intent.
 
 ## How matching works
 
-On an eligible user turn, OpenClaw performs a rule-based FTS keyword prefilter over armed intents. A candidate fires only when every term in at least one configured trigger entry appears in the turn. OpenClaw also rechecks channel scope, sender scope, expiry, cooldown, and fire budget against the authoritative SQLite rows in one synchronous transaction. Matching scans at most 256 scoped FTS candidates per turn so a noisy trigger set cannot stall the reply path.
+On an eligible user turn, OpenClaw performs a rule-based FTS keyword prefilter over armed intents. Comparison text is lowercased and NFC-normalized without changing stored descriptions or injected text. A trigger term matches when it appears as a whole token of the turn. Terms written in CJK (Han, Hiragana, Katakana, or Hangul) match as literal substrings instead, because the FTS tokenizer turns an unspaced CJK sentence into one token. A candidate fires only when every term in at least one configured trigger entry matches. OpenClaw also rechecks channel scope, sender scope, expiry, cooldown, and fire budget against the authoritative SQLite rows in one synchronous transaction. Matching scans at most 256 scoped candidates per turn so a noisy trigger set cannot stall the reply path. A turn that contains CJK scans literal candidates after the indexed scan and shares that limit, so existing word matches keep priority.
 
 No model call occurs in the matching path. On a hit, the main reply receives a bounded hidden context block:
 

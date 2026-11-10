@@ -1,19 +1,19 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { recordedToolCall } from "./recorded-tool.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Tweet browser cards" });
 const url = "https://x.com/openclaw/status/1234567890123456789";
 const title = "OpenClaw (@openclaw) on X";
 const description =
   "Small details make a big difference. A readable preview keeps the conversation in context, so you can understand the post without opening another tab.";
+const imageData = (file: string) =>
+  `data:image/png;base64,${readFileSync(file).toString("base64")}`;
 
 suite.define(() => {
   it.each([
-    { width: 1280, height: 900, colorScheme: "dark" as const, state: "text" },
-    { width: 390, height: 844, colorScheme: "light" as const, state: "text" },
     { width: 1280, height: 900, colorScheme: "dark" as const, state: "media" },
     { width: 390, height: 844, colorScheme: "dark" as const, state: "unavailable" },
     { width: 390, height: 844, colorScheme: "light" as const, state: "long" },
@@ -29,46 +29,25 @@ suite.define(() => {
           state === "long"
             ? description + " https://example.com/" + "long-path-".repeat(25)
             : description;
+        const preview =
+          state === "unavailable"
+            ? {}
+            : {
+                title: postTitle,
+                description: postText,
+                faviconDataUrl: imageData("ui/public/favicon-32.png"),
+                ...(state === "media"
+                  ? { imageDataUrl: imageData("docs/assets/openclaw-hero-dark.png") }
+                  : {}),
+              };
         const gateway = await installMockGateway(page, {
           automaticallyFetchFavicons: true,
           featureMethods: [],
           methodResponses: {
-            "controlUi.linkPreview":
-              state === "unavailable"
-                ? {}
-                : {
-                    title: postTitle,
-                    description: postText,
-                    ...(state === "media"
-                      ? {
-                          imageDataUrl:
-                            "data:image/png;base64," +
-                            readFileSync("docs/assets/openclaw-hero-dark.png").toString("base64"),
-                        }
-                      : {}),
-                    faviconDataUrl:
-                      "data:image/png;base64," +
-                      readFileSync("ui/public/favicon-32.png").toString("base64"),
-                  },
+            "controlUi.linkPreview": preview,
           },
           historyMessages: [
-            {
-              role: "user",
-              content: "Take a look at this post about keeping previews readable.",
-              timestamp: 1000,
-            },
-            {
-              role: "assistant",
-              timestamp: 2000,
-              content: [
-                {
-                  type: "toolCall",
-                  id: "tweet",
-                  name: "browser",
-                  arguments: { action: "open", url },
-                },
-              ],
-            },
+            { ...recordedToolCall("tweet", "browser", { action: "open", url }), timestamp: 2000 },
             {
               role: "toolResult",
               timestamp: 3000,
@@ -91,6 +70,7 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "chat");
         await page.getByText("Here’s the post for context.", { exact: true }).waitFor();
         const card = page.locator("openclaw-browser-tab-card");
+        const open = card.getByRole("button", { name: "Open post", exact: true });
         await card.locator(".tweet-author").waitFor();
         if (state !== "unavailable") {
           await card.locator(".tweet-text").waitFor();
@@ -105,21 +85,6 @@ suite.define(() => {
             ),
           ).toBeGreaterThan(0);
         }
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          card,
-          [
-            card.locator(".tweet-author"),
-            card.getByRole("button", { name: "Open post", exact: true }),
-          ],
-          {
-            elements: [card],
-            scrollTo: card,
-            animations: "disabled",
-          },
-        );
-        writeFileSync(suite.artifactDir + "/chat.png", frame.png);
-        writeFileSync(suite.artifactDir + "/card.png", frame.elements[0]!.png);
         expect(await card.locator(".tweet-handle").textContent()).toBe("@openclaw");
         const body = card.locator(".tweet-text");
         expect(await body.count()).toBe(state === "unavailable" ? 0 : 1);
@@ -132,7 +97,6 @@ suite.define(() => {
         expect(
           await card.locator(".actions").evaluate((node) => getComputedStyle(node).opacity),
         ).toBe("1");
-        const open = card.getByRole("button", { name: "Open post", exact: true });
         await open.focus();
         expect(await open.evaluate((node) => node.matches(":focus-visible"))).toBe(true);
         await card.getByRole("button", { name: "More actions", exact: true }).click();

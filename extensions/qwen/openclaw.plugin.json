@@ -133,6 +133,7 @@
     ],
     "providers": {
       "qwen": {
+        "baseUrl": "https://coding-intl.dashscope.aliyuncs.com/v1",
         "api": "openai-completions",
         "models": [
           {

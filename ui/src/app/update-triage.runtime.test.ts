@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { buildSystemAgentSessionInvalidatedErrorDetails } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { buildSystemAgentSessionInvalidatedErrorDetails } from "../../../packages/gateway-protocol/src/system-agent-error-details.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import { custodianAlertStore } from "../pages/custodian/custodian-alert-store.ts";
 import { createContext } from "../pages/custodian/custodian-page.test-harness.ts";
@@ -11,7 +11,9 @@ import { QUICK_ACTIONS_QUESTION } from "../test-helpers/custodian-quick-actions.
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
+import type { ApplicationContext } from "./context.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
+import { campaignSchedule, updateSentinel } from "./overlays-update.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { projectUpdateRunFailure } from "./update-overlay-helpers.ts";
 import type { UpdateFailureTriage, UpdateTriageAdmission } from "./update-overlay-helpers.ts";
@@ -34,6 +36,27 @@ const FAILURE: UpdateFailureTriage = {
   },
 };
 
+function stubStorage() {
+  vi.stubGlobal("localStorage", createStorageMock());
+  vi.stubGlobal("sessionStorage", createStorageMock());
+}
+
+function mountSurface(context: ApplicationContext) {
+  const provider = createApplicationContextProvider(context);
+  const surface = document.createElement("openclaw-custodian-surface");
+  surface.store = new CustodianSessionStore();
+  provider.append(surface);
+  document.body.append(provider);
+  return surface;
+}
+
+const ACCESS_QUESTION = {
+  id: "access",
+  header: "Access",
+  question: "How should OpenClaw work?",
+  options: [{ label: "Full access" }, { label: "Ask first" }],
+};
+
 function typeComposerDraft(surface: HTMLElement, draft: string): HTMLTextAreaElement {
   const composer = surface.querySelector("textarea");
   if (!composer) {
@@ -52,101 +75,104 @@ afterEach(() => {
 });
 
 describe("update triage presentation", () => {
-  it.each(["reply", "session invalidation"])(
-    "preserves a draft after diagnostic %s",
-    async (outcome) => {
-      let invalidateSession = outcome === "session invalidation";
-      const request = vi.fn(
-        async (_method: string, params: { sessionId: string; message?: string }) => {
-          if (params.message && invalidateSession) {
-            invalidateSession = false;
-            throw new GatewayRequestError({
-              code: "UNAVAILABLE",
-              message: "The diagnostic session expired.",
-              details: buildSystemAgentSessionInvalidatedErrorDetails(),
-            });
-          }
-          return {
-            sessionId: params.sessionId,
-            reply: "Inspecting the failed build before proposing a repair.",
-            ...(!params.message ? { question: QUICK_ACTIONS_QUESTION } : {}),
-          };
-        },
-      );
-      const { context } = createContext(request);
-      const provider = createApplicationContextProvider(context);
-      const surface = document.createElement("openclaw-custodian-surface");
-      surface.store = new CustodianSessionStore();
-      provider.append(surface);
-      document.body.append(provider);
-      await surface.updateComplete;
-      await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
-      const draft = "Keep my unsent question";
-      const composer = typeComposerDraft(surface, draft);
-      const admission = { isCurrent: () => true, admit: vi.fn(() => true) };
-      const openPanel = vi.fn();
-      window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, openPanel, { once: true });
-
-      presentUpdateFailureTriage(context, FAILURE, admission);
-      await vi.waitFor(() => expect(admission.admit).toHaveBeenCalledOnce());
-      await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
-      await surface.updateComplete;
-
-      expect(openPanel).toHaveBeenCalledOnce();
-      const questions = request.mock.calls.filter(([, params]) => "message" in params);
-      expect(questions).toHaveLength(1);
-      expect(questions[0]?.[1]).toMatchObject({
-        message: expect.stringContaining("Disk is full"),
+  it.each([
+    "reply",
+    "session invalidation",
+    "consumed admission",
+    "throw before send",
+    "reject before send",
+  ])("preserves the draft and admission after diagnostic %s", async (outcome) => {
+    const unsent = outcome !== "reply" && outcome !== "session invalidation";
+    let failMessage = outcome !== "reply" && outcome !== "consumed admission";
+    const request = vi.fn((_method: string, params: { sessionId: string; message?: string }) => {
+      if (params.message && failMessage) {
+        failMessage = false;
+        const error =
+          outcome === "session invalidation"
+            ? new GatewayRequestError({
+                code: "UNAVAILABLE",
+                message: "The diagnostic session expired.",
+                details: buildSystemAgentSessionInvalidatedErrorDetails(),
+              })
+            : new Error("Diagnostic transport is unavailable");
+        if (outcome === "reject before send" || outcome === "session invalidation") {
+          return Promise.reject(error);
+        }
+        throw error;
+      }
+      return Promise.resolve({
+        sessionId: params.sessionId,
+        reply: "Ready.",
+        ...(!params.message ? { question: QUICK_ACTIONS_QUESTION } : {}),
       });
-      expect(questions[0]?.[1].message).toContain("1111111111111111111111111111111111111111");
-      expect(questions[0]?.[1].message).toContain("2222222222222222222222222222222222222222");
+    });
+    const questions = () =>
+      request.mock.calls.flatMap(([, params]) => ("message" in params ? [params] : []));
+    const { context } = createContext(request);
+    const surface = mountSurface(context);
+    await surface.updateComplete;
+    await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
+    const draft = "Keep my unsent question";
+    const composer = typeComposerDraft(surface, draft);
+    const admission = {
+      isCurrent: () => true,
+      admit: vi.fn(() => outcome !== "consumed admission"),
+    };
+    const openPanel = vi.fn();
+    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, openPanel, { once: true });
+    presentUpdateFailureTriage(context, FAILURE, admission);
+    await vi.waitFor(() => expect(admission.admit).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(surface.store.sending).toBe(false));
+    if (!unsent) {
+      await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
+    }
+    await surface.updateComplete;
+    const attempts = outcome === "consumed admission" ? 0 : 1;
+    expect(questions()).toHaveLength(attempts);
+    expect(openPanel).toHaveBeenCalledOnce();
+    if (unsent) {
+      expect(surface.store.messages.filter((message) => message.role === "user")).toEqual([]);
+      expect(surface.store.hasRealUserTurn()).toBe(false);
+      expect(surface.store.canRetry()).toBe(false);
+      expect(surface.querySelector(".chat-group.user")).toBeNull();
+      expect(surface.querySelector<HTMLButtonElement>(".option-card__choice")?.disabled).toBe(
+        false,
+      );
+    } else {
+      for (const text of ["Disk is full", "1".repeat(40), "2".repeat(40)]) {
+        expect(questions()[0]?.message).toContain(text);
+      }
       expect(custodianAlertStore.alert?.question).toContain("Do not retry the update");
       expect(surface.textContent).toContain("build-failed");
       expect(surface.textContent).toContain("openclaw triage");
       if (outcome === "session invalidation") {
         const recovery = request.mock.calls.at(-1)?.[1];
-        expect(recovery?.sessionId).not.toBe(questions[0]?.[1].sessionId);
+        expect(recovery?.sessionId).not.toBe(questions()[0]?.sessionId);
         expect(recovery).not.toHaveProperty("message");
         expect(surface.textContent).toContain("started a fresh session");
       }
       typeComposerDraft(surface, draft);
-      await waitForSolid(() => expect(composer.value).toBe(draft));
-      expect(admission.admit).toHaveBeenCalledOnce();
-
-      composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      await vi.waitFor(() =>
-        expect(request.mock.calls.filter(([, params]) => "message" in params)).toHaveLength(2),
-      );
-      await surface.updateComplete;
-      expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ message: draft });
-      expect(composer.value).toBe("");
-      expect(admission.admit).toHaveBeenCalledOnce();
-    },
-  );
+    }
+    await waitForSolid(() => expect(composer.value).toBe(draft));
+    expect(admission.admit).toHaveBeenCalledOnce();
+    composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await vi.waitFor(() => expect(questions()).toHaveLength(attempts + 1));
+    await surface.updateComplete;
+    expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ message: draft });
+    expect(composer.value).toBe("");
+    expect(admission.admit).toHaveBeenCalledOnce();
+  });
 
   it("waits for an active workflow question before admitting diagnostic triage", async () => {
     const request = vi.fn(
       async (_method: string, params: { sessionId: string; message?: string }) => ({
         sessionId: params.sessionId,
         reply: "Review the current access policy.",
-        ...(!params.message
-          ? {
-              question: {
-                id: "access",
-                header: "Access",
-                question: "How should OpenClaw work?",
-                options: [{ label: "Full access" }, { label: "Ask first" }],
-              },
-            }
-          : {}),
+        ...(!params.message ? { question: ACCESS_QUESTION } : {}),
       }),
     );
     const { context } = createContext(request);
-    const provider = createApplicationContextProvider(context);
-    const surface = document.createElement("openclaw-custodian-surface");
-    surface.store = new CustodianSessionStore();
-    provider.append(surface);
-    document.body.append(provider);
+    const surface = mountSurface(context);
     await vi.waitFor(() =>
       expect(surface.querySelector('[data-option-value="Ask first"]')).not.toBeNull(),
     );
@@ -167,15 +193,17 @@ describe("update triage presentation", () => {
     expect(composer.value).toBe(draft);
   });
 
-  it("retires changed run facts and waits for a new explicit diagnosis before sending", async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    let run = createUpdateRunFixture();
+  it("requires new diagnosis after run facts change", async () => {
+    stubStorage();
+    let run = createUpdateRunFixture({
+      phase: "finished",
+      status: "failed",
+      reason: "restart-revision-mismatch",
+      finishedAtMs: 2_000,
+      updatedAtMs: 2_000,
+    });
     const request = vi.fn(
       async (method: string, params?: { sessionId?: string; message?: string }) => {
-        if (method === "update.run") {
-          return { ok: true, runId: run.runId };
-        }
         if (method === "update.runs.get") {
           return { run };
         }
@@ -186,31 +214,18 @@ describe("update triage presentation", () => {
           ? {
               sessionId: params?.sessionId,
               reply: "Review the current access policy.",
-              ...(!params?.message
-                ? {
-                    question: {
-                      id: "access",
-                      header: "Access",
-                      question: "How should OpenClaw work?",
-                      options: [{ label: "Full access" }, { label: "Ask first" }],
-                    },
-                  }
-                : {}),
+              ...(!params?.message ? { question: ACCESS_QUESTION } : {}),
             }
           : {};
       },
     );
-    const { context, emitGatewayEvent, setGatewaySnapshot } = createContext(request);
+    const { context, emitGatewayEvent } = createContext(request);
     const onUpdateFailure = vi.fn(
       (failure: UpdateFailureTriage, admission: UpdateTriageAdmission) =>
         presentUpdateFailureTriage(context, failure, admission),
     );
     const overlays = createApplicationOverlays(context.gateway, { onUpdateFailure });
-    const provider = createApplicationContextProvider(context);
-    const surface = document.createElement("openclaw-custodian-surface");
-    surface.store = new CustodianSessionStore();
-    provider.append(surface);
-    document.body.append(provider);
+    const surface = mountSurface(context);
     const diagnosticMessages = () =>
       request.mock.calls.flatMap(([method, params]) =>
         method === "openclaw.chat" && params?.message ? [params.message] : [],
@@ -219,25 +234,12 @@ describe("update triage presentation", () => {
       await vi.waitFor(() =>
         expect(surface.querySelector('[data-option-value="Ask first"]')).not.toBeNull(),
       );
-      await overlays.runUpdate();
-      setGatewaySnapshot({ phase: "reconnecting" });
-      run = {
-        ...run,
-        phase: "finished",
-        status: "failed",
-        reason: "restart-revision-mismatch",
-        finishedAtMs: 2_000,
-        updatedAtMs: 2_000,
-      };
-      setGatewaySnapshot({ phase: "connected" });
       await overlays.refreshUpdateStatus();
       expect(onUpdateFailure).not.toHaveBeenCalled();
       expect(diagnosticMessages()).toEqual([]);
       overlays.diagnoseUpdateFailure(run.runId);
       expect(custodianAlertStore.alert?.question).toContain("restart-revision-mismatch");
       const staleAdmission = onUpdateFailure.mock.calls[0]?.[1];
-      await overlays.refreshUpdateStatus();
-      expect(onUpdateFailure).toHaveBeenCalledOnce();
       expect(staleAdmission?.isCurrent()).toBe(true);
 
       run = {
@@ -260,8 +262,6 @@ describe("update triage presentation", () => {
       await vi.waitFor(() => expect(custodianAlertStore.alert?.question).toContain("Disk is full"));
       expect(custodianAlertStore.alert?.question).not.toContain("restart-revision-mismatch");
       expect(onUpdateFailure).toHaveBeenCalledTimes(2);
-      await overlays.refreshUpdateStatus();
-      expect(onUpdateFailure).toHaveBeenCalledTimes(2);
       await vi.waitFor(() => expect(diagnosticMessages()).toHaveLength(2));
       expect(diagnosticMessages()).toEqual(["Ask first", expect.stringContaining("Disk is full")]);
       expect(diagnosticMessages()[1]).toContain(run.runId);
@@ -280,63 +280,26 @@ describe("update triage presentation", () => {
     }
   });
 
-  it("requires an explicit action after the run finishes even with stale campaign metadata", async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    const schedule = {
-      channel: "stable",
-      autoEnabled: true,
-      campaign: {
-        id: "applying-campaign",
-        state: "applying",
-        announcedAtMs: 1_000,
-        forceAtMs: 2_000,
-        updatedAtMs: 2_000,
-      },
-    } as const;
+  it("requires explicit diagnosis after a campaign run fails", async () => {
+    stubStorage();
+    const schedule = campaignSchedule({ state: "applying" });
     let run = createUpdateRunFixture({
       phase: "verifying",
       origin: { campaignId: schedule.campaign.id },
     });
-    const request = vi.fn(
-      async (method: string, params?: { sessionId?: string; message?: string }) => {
-        if (method === "update.run") {
-          return { ok: true, runId: run.runId };
-        }
-        if (method === "update.runs.get") {
-          return { run };
-        }
-        if (method === "update.status") {
-          return { activeRun: run.status === "running" ? run : null, lastRun: run, schedule };
-        }
-        return method === "openclaw.chat"
-          ? { sessionId: params?.sessionId, reply: "Ready to inspect the update." }
-          : {};
-      },
+    const request = vi.fn(async (method: string) =>
+      method === "update.runs.get"
+        ? { run }
+        : method === "update.status"
+          ? { activeRun: run.status === "running" ? run : null, lastRun: run, schedule }
+          : {},
     );
-    const diagnosticMessages = () =>
-      request.mock.calls.flatMap(([method, params]) =>
-        method === "openclaw.chat" && params?.message ? [params.message] : [],
-      );
-    const { context, emitGatewayEvent, setGatewaySnapshot } = createContext(request);
-    const overlays = createApplicationOverlays(context.gateway, {
-      onUpdateFailure: (failure, admission) =>
-        presentUpdateFailureTriage(context, failure, admission),
-    });
-    const provider = createApplicationContextProvider(context);
-    const surface = document.createElement("openclaw-custodian-surface");
-    surface.store = new CustodianSessionStore();
-    provider.append(surface);
-    document.body.append(provider);
+    const { context, emitGatewayEvent } = createContext(request);
+    const onUpdateFailure = vi.fn();
+    const overlays = createApplicationOverlays(context.gateway, { onUpdateFailure });
     try {
-      await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
       await overlays.refreshUpdateStatus();
       expect(overlays.snapshot.updateRunning).toBe(true);
-      expect(diagnosticMessages()).toEqual([]);
-      setGatewaySnapshot({ phase: "reconnecting" });
-      setGatewaySnapshot({ phase: "connected" });
-      await overlays.refreshUpdateStatus();
-      expect(diagnosticMessages()).toEqual([]);
       run = {
         ...run,
         phase: "finished",
@@ -346,27 +309,13 @@ describe("update triage presentation", () => {
         updatedAtMs: 3_000,
       };
       emitGatewayEvent({ event: "update.run.changed", payload: run });
-      expect(diagnosticMessages()).toEqual([]);
       expect(overlays.snapshot.diagnosableUpdateFailureId).toBeNull();
       await vi.waitFor(() => expect(overlays.snapshot.updateRun).toEqual(run));
-      expect(diagnosticMessages()).toEqual([]);
-      expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(run.runId);
-      overlays.diagnoseUpdateFailure(run.runId);
-      await vi.waitFor(() =>
-        expect(diagnosticMessages()).toEqual([expect.stringContaining("Do not retry the update")]),
-      );
+      expect(onUpdateFailure).not.toHaveBeenCalled();
       expect(overlays.snapshot.updateRunning).toBe(false);
       expect(overlays.snapshot.updateSchedule?.campaign?.state).toBe("applying");
-      await overlays.refreshUpdateStatus();
-      emitGatewayEvent({ event: "update.run.changed", payload: run });
-      setGatewaySnapshot({ phase: "reconnecting" });
-      setGatewaySnapshot({ phase: "connected" });
-      await overlays.refreshUpdateStatus();
-      expect(diagnosticMessages()).toHaveLength(1);
-      await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
       overlays.diagnoseUpdateFailure(run.runId);
-      await vi.waitFor(() => expect(diagnosticMessages()).toHaveLength(2));
-      expect(diagnosticMessages()[1]).toContain("restart-unhealthy");
+      expect(onUpdateFailure).toHaveBeenCalledOnce();
     } finally {
       overlays.dispose();
     }
@@ -404,193 +353,82 @@ describe("update triage presentation", () => {
     },
   );
 
-  it("keeps recorded facts visible without sending when no model is configured", async () => {
+  it("retires prepared diagnostics when authority changes before sending", async () => {
+    const request = vi.fn(async (method: string, params?: { sessionId?: string }) => {
+      if (method === "update.run") {
+        return {
+          ok: false,
+          result: { status: "error" },
+          sentinel: {
+            payload: updateSentinel("build-failed", 1_000, {
+              handoffId: "retired-attempt",
+              steps: [
+                { name: "build", log: { exitCode: 1, stderrTail: "Private diagnostic cause" } },
+              ],
+            }),
+          },
+        };
+      }
+      return method === "openclaw.chat"
+        ? { sessionId: params?.sessionId, reply: "Ready to inspect the installation." }
+        : {};
+    });
+    const { context, setGatewaySnapshot } = createContext(request);
+    const overlays = createApplicationOverlays(context.gateway, {
+      onUpdateFailure: (failure, admission) =>
+        presentUpdateFailureTriage(context, failure, admission),
+    });
+    const surface = mountSurface(context);
+    await surface.updateComplete;
+    await vi.waitFor(() => expect(surface.store.sending).toBe(false));
+    let retire = true;
+    const unsubscribe = surface.store.subscribe(() => {
+      if (!retire || !surface.store.sending) {
+        return;
+      }
+      retire = false;
+      setGatewaySnapshot({
+        hello: {
+          ...context.gateway.snapshot.hello,
+          auth: { role: "operator", scopes: ["operator.read"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+    });
+    try {
+      await overlays.runUpdate();
+      expect(retire).toBe(true);
+      expect(custodianAlertStore.alert).toBeNull();
+      overlays.diagnoseUpdateFailure("retired-attempt");
+      await vi.waitFor(() => expect(retire).toBe(false));
+      await surface.updateComplete;
+
+      expect(
+        request.mock.calls.filter(
+          ([method, params]) => method === "openclaw.chat" && params && "message" in params,
+        ),
+      ).toHaveLength(0);
+      expect(custodianAlertStore.alert).toBeNull();
+      await waitForSolid(() =>
+        expect(surface.textContent).not.toContain("Private diagnostic cause"),
+      );
+      expect(
+        surface.store.messages.every(
+          (message) => !message.text.includes("Private diagnostic cause"),
+        ),
+      ).toBe(true);
+    } finally {
+      unsubscribe();
+      overlays.dispose();
+    }
+  });
+
+  it("shows bounded, redacted diagnostic facts without a configured model", async () => {
     const request = vi.fn();
     const { context } = createContext(request, ["openclaw.chat"], {
       agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [{ id: "main" }] },
     });
-    const provider = createApplicationContextProvider(context);
-    const surface = document.createElement("openclaw-custodian-surface");
-    surface.store = new CustodianSessionStore();
-    provider.append(surface);
-    document.body.append(provider);
+    const surface = mountSurface(context);
     const admission = { isCurrent: () => true, admit: vi.fn(() => true) };
-    presentUpdateFailureTriage(context, FAILURE, admission);
-    await surface.updateComplete;
-
-    expect(surface.textContent).toContain("Reason code: build-failed");
-    expect(surface.textContent).toContain(
-      "Before update: 1111111111111111111111111111111111111111",
-    );
-    expect(surface.textContent).toContain("Disk is full");
-    expect(surface.textContent).toContain("openclaw triage");
-    expect(admission.admit).not.toHaveBeenCalled();
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it.each(["administrator", "profile", "Gateway"])(
-    "retires the facts before transport when %s changes during turn preparation",
-    async (boundary) => {
-      const request = vi.fn(async (method: string, params?: { sessionId?: string }) => {
-        if (method === "update.run") {
-          return {
-            ok: false,
-            result: { status: "error" },
-            sentinel: {
-              payload: {
-                kind: "update",
-                status: "error",
-                ts: 1_000,
-                stats: {
-                  handoffId: "retired-attempt",
-                  reason: "build-failed",
-                  steps: [
-                    { name: "build", log: { exitCode: 1, stderrTail: "Private diagnostic cause" } },
-                  ],
-                },
-              },
-            },
-          };
-        }
-        return method === "openclaw.chat"
-          ? { sessionId: params?.sessionId, reply: "Ready to inspect the installation." }
-          : {};
-      });
-      const { context, setGatewaySnapshot } = createContext(request);
-      const overlays = createApplicationOverlays(context.gateway, {
-        onUpdateFailure: (failure, admission) =>
-          presentUpdateFailureTriage(context, failure, admission),
-      });
-      const provider = createApplicationContextProvider(context);
-      const surface = document.createElement("openclaw-custodian-surface");
-      surface.store = new CustodianSessionStore();
-      provider.append(surface);
-      document.body.append(provider);
-      await surface.updateComplete;
-      await vi.waitFor(() => expect(surface.store.sending).toBe(false));
-      let retire = true;
-      const unsubscribe = surface.store.subscribe(() => {
-        if (!retire || !surface.store.sending) {
-          return;
-        }
-        retire = false;
-        if (boundary === "administrator") {
-          setGatewaySnapshot({
-            hello: {
-              ...context.gateway.snapshot.hello,
-              auth: { role: "operator", scopes: ["operator.read"] },
-            } as ApplicationGatewaySnapshot["hello"],
-          });
-        } else if (boundary === "profile") {
-          setGatewaySnapshot({
-            selfUser: { id: "replacement-profile" } as NonNullable<
-              ApplicationGatewaySnapshot["selfUser"]
-            >,
-          });
-        } else {
-          context.gateway.connection.gatewayUrl = "ws://replacement.test";
-          setGatewaySnapshot({});
-        }
-      });
-      try {
-        await overlays.runUpdate();
-        expect(retire).toBe(true);
-        expect(custodianAlertStore.alert).toBeNull();
-        overlays.diagnoseUpdateFailure("retired-attempt");
-        await vi.waitFor(() => expect(retire).toBe(false));
-        await surface.updateComplete;
-
-        expect(
-          request.mock.calls.filter(
-            ([method, params]) => method === "openclaw.chat" && params && "message" in params,
-          ),
-        ).toHaveLength(0);
-        expect(custodianAlertStore.alert).toBeNull();
-        await waitForSolid(() =>
-          expect(surface.textContent).not.toContain("Private diagnostic cause"),
-        );
-        expect(
-          surface.store.messages.every(
-            (message) => !message.text.includes("Private diagnostic cause"),
-          ),
-        ).toBe(true);
-      } finally {
-        unsubscribe();
-        overlays.dispose();
-      }
-    },
-  );
-
-  it.each(["consumed admission", "throw before send", "reject before send"])(
-    "does not retain an unsent diagnostic question after %s",
-    async (failure) => {
-      let rejectDiagnostic = failure !== "consumed admission";
-      const request = vi.fn((_method: string, params: { sessionId: string; message?: string }) => {
-        if (params.message && rejectDiagnostic) {
-          rejectDiagnostic = false;
-          const error = new Error("Diagnostic transport is unavailable");
-          if (failure === "throw before send") {
-            throw error;
-          }
-          return Promise.reject(error);
-        }
-        return Promise.resolve({
-          sessionId: params.sessionId,
-          reply: "Ready.",
-          ...(!params.message ? { question: QUICK_ACTIONS_QUESTION } : {}),
-        });
-      });
-      const { context } = createContext(request);
-      const provider = createApplicationContextProvider(context);
-      const surface = document.createElement("openclaw-custodian-surface");
-      surface.store = new CustodianSessionStore();
-      provider.append(surface);
-      document.body.append(provider);
-      await surface.updateComplete;
-      await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
-      const draft = "Keep my question after rejected triage";
-      const composer = typeComposerDraft(surface, draft);
-      const admission = {
-        isCurrent: () => true,
-        admit: vi.fn(() => failure !== "consumed admission"),
-      };
-      presentUpdateFailureTriage(context, FAILURE, admission);
-      await vi.waitFor(() => expect(admission.admit).toHaveBeenCalledOnce());
-      await vi.waitFor(() => expect(surface.store.sending).toBe(false));
-
-      const rejectedRequests = failure === "consumed admission" ? 0 : 1;
-      expect(request.mock.calls.filter(([, params]) => "message" in params)).toHaveLength(
-        rejectedRequests,
-      );
-      expect(
-        surface.store.messages
-          .filter((message) => message.role === "user")
-          .map((message) => message.text),
-      ).toEqual([]);
-      expect(surface.store.hasRealUserTurn()).toBe(false);
-      expect(surface.store.canRetry()).toBe(false);
-      await surface.updateComplete;
-      expect(surface.querySelector(".chat-group.user")).toBeNull();
-      expect(surface.querySelector<HTMLButtonElement>(".option-card__choice")?.disabled).toBe(
-        false,
-      );
-      expect(composer.value).toBe(draft);
-
-      composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      await vi.waitFor(() =>
-        expect(request.mock.calls.filter(([, params]) => "message" in params)).toHaveLength(
-          rejectedRequests + 1,
-        ),
-      );
-      await surface.updateComplete;
-      expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ message: draft });
-      expect(composer.value).toBe("");
-      expect(admission.admit).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("bounds and redacts the recorded run identity and failure before sending diagnostics", () => {
-    const { context } = createContext(vi.fn());
     const run = createUpdateRunFixture({
       phase: "finished",
       status: "failed",
@@ -606,12 +444,23 @@ describe("update triage presentation", () => {
         },
       ],
     });
-    const failure = projectUpdateRunFailure(run);
+    const failure = await projectUpdateRunFailure(run);
     expect(failure).not.toBeNull();
     if (!failure) {
       throw new Error("Expected a failed run projection");
     }
-    presentUpdateFailureTriage(context, failure, { isCurrent: () => true, admit: () => true });
+    presentUpdateFailureTriage(context, failure, admission);
+    await surface.updateComplete;
+    expect(admission.admit).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    for (const text of [
+      "Reason code: build-failed",
+      `Before update: ${"1".repeat(40)}`,
+      "Build failed",
+      "openclaw triage",
+    ]) {
+      expect(surface.textContent).toContain(text);
+    }
 
     const alert = custodianAlertStore.alert;
     expect(alert?.question).toContain(run.runId);

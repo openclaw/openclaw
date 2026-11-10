@@ -19,7 +19,6 @@ export type BrowserProfileCapabilities = {
   usesChromeMcp: boolean;
   usesPersistentPlaywright: boolean;
   supportsPerTabWs: boolean;
-  supportsJsonTabEndpoints: boolean;
   supportsReset: boolean;
   supportsManagedTabLimit: boolean;
   supportsBatchActions: boolean;
@@ -33,10 +32,7 @@ export type BrowserProfileCapabilities = {
   supportsVisualActions: boolean;
   supportsUploads: boolean;
   supportsDialogs: boolean;
-  supportsStorage: boolean;
-  supportsScreencast: boolean;
   supportsConsole: boolean;
-  supportsMultipleTabs: boolean;
   /** Supports native CDP accessibility/role snapshot formats and scoped snapshots. */
   supportsNativeSnapshots: boolean;
   requiresCompleteTargetEnumeration: boolean;

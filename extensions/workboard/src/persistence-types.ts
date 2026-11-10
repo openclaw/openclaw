@@ -2,6 +2,7 @@ import type {
   WorkboardAttachment,
   WorkboardBoardMetadata,
   WorkboardCard,
+  WorkboardCardCursor,
   WorkboardNotificationSubscription,
   WorkboardSessionPlacement,
   WorkboardSessionsBoard,
@@ -93,6 +94,13 @@ export type WorkboardCardStatsAggregate = {
 export type WorkboardOwnerClaimResult = "updated" | "conflict" | "owner_busy";
 
 export type WorkboardCardReadScope =
+  | {
+      kind: "page";
+      boardId?: string;
+      sessionKey?: string;
+      after?: WorkboardCardCursor;
+      limit: number;
+    }
   | { kind: "board"; boardId: string }
   | { kind: "session"; sessionKey: string }
   | { kind: "session-links"; sessionKey: string; boardId?: string }

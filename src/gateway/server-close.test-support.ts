@@ -19,6 +19,13 @@ type GatewayCloseFixtureMocks = Pick<
 };
 type GatewayCloseClient = GatewayCloseParams["clients"] extends Set<infer T> ? T : never;
 
+/** Read the captured first close-effect call without changing its mock behavior. */
+export function firstMockCall<T extends readonly unknown[]>(mock: {
+  mock: { calls: readonly T[] };
+}) {
+  return mock.mock.calls[0];
+}
+
 export function createGatewayCloseTestHandlerFactory({
   prepareGatewayClose,
   completeGatewayClose,
@@ -27,7 +34,7 @@ export function createGatewayCloseTestHandlerFactory({
     completeGatewayClose(params, await prepareGatewayClose(params, opts));
 }
 
-export function createTestChatRunState() {
+function createTestChatRunState() {
   const state = createChatRunState();
   const clear = state.clear;
   state.clear = vi.fn(() => clear());
@@ -35,9 +42,10 @@ export function createTestChatRunState() {
 }
 
 export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMocks) {
+  const resolveGatewayContext = () => undefined;
   return (overrides: Partial<GatewayCloseParams> = {}): GatewayCloseParams => {
     return {
-      resolveGatewayContext: () => undefined,
+      resolveGatewayContext,
       preparePluginRegistryClose: async () => [],
       drainWorktreeRunEnd: vi.fn(async () => {}),
       closePluginRegistry: async (onRetirement) => {
@@ -74,9 +82,8 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       disposeAllCodeModeRuns: mocks.disposeAllCodeModeRuns,
       closeProviderTransportDispatcherPool: mocks.closeProviderTransportDispatcherPool,
       cron: { stop: vi.fn() },
-      heartbeatRunner: { stop: vi.fn() } as never,
+      stopScheduledServices: vi.fn(async () => {}),
       updateCheckStop: null,
-      broadcast: vi.fn(),
       maintenance: {
         stopPeriodicTasks: vi.fn(async () => {}),
         startMediaCleanup: vi.fn(),
@@ -85,17 +92,9 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       },
       stopMediaCleanup: vi.fn(async () => "drained" as const),
       agentUnsub: null,
-      heartbeatUnsub: null,
       transcriptUnsub: null,
       lifecycleUnsub: null,
       chatRunState: createTestChatRunState(),
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
-      restartRecoveryCandidates: new Map(),
-      removeChatRun: vi.fn(),
-      agentRunSeq: new Map(),
-      nodeSendToSession: vi.fn(),
-      getPendingReplyCount: vi.fn(() => 0),
       clients: new Set<GatewayCloseClient>(),
       configReloader: { stop: vi.fn(async () => undefined) },
       wss: {

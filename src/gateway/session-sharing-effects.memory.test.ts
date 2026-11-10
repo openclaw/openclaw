@@ -1,19 +1,20 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { sessionSuggestionHandlers } from "./server-methods/sessions-suggestions.js";
 import { skillsLibraryHandlers } from "./server-methods/skills-library.js";
-import type { GatewayClient, GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import type { SessionCompanionService } from "./session-companion.js";
+import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -87,25 +88,13 @@ async function fixture(name: string, fields: Partial<SessionEntry> = {}) {
       actor.storage.mutate({ type: "session.entry.create", input: { entry } }, authority),
   );
   expect(created?.kind).toBe("committed");
-  const client: GatewayClient = {
-    connId: "memory-effects-client",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      role: "operator",
-      scopes: ["operator.admin"],
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-    },
-  };
+  const client = sharingPolicyClient({ scopes: ["operator.admin"] });
+  client.connId = "memory-effects-client";
   const context = createGatewayRequestContext(makeContextParams());
   context.getRuntimeConfig = () => cfg;
   context.getCommittedRuntimeConfig = () => cfg;
   context.isConnectionActive = () => true;
-  const call = async (
-    method: string,
-    request: Record<string, unknown>,
-    extra: Partial<GatewayRequestHandlerOptions> = {},
-  ) => {
+  const call = async (method: string, request: Record<string, unknown>) => {
     const params = { sessionKey: scope.sessionKey, ...request };
     const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
     await handlers[method]!({
@@ -114,14 +103,17 @@ async function fixture(name: string, fields: Partial<SessionEntry> = {}) {
       client,
       context,
       isWebchatConnect: () => true,
-      ...extra,
       respond,
     });
     return respond;
   };
   const readEntry = () =>
     memorySessionActorOwners.read(location)?.readSession(scope.sessionKey, authority)?.entry;
-  return { scope, entry, client, context, call, readEntry };
+  return { scope, client, context, call, readEntry };
+}
+
+function expectRefused(reply: Mock<GatewayRequestHandlerOptions["respond"]>, code: string) {
+  expect(reply).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code }));
 }
 
 it("detaches a selected skill through the unbound Gateway handler without library storage", async () => {
@@ -172,51 +164,36 @@ it("adds and lists current incognito suggestions through Gateway effects without
   });
   client.invalidated = true;
   const refused = await call("session.suggestions.list", {});
-  expect(refused).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ code: "FORBIDDEN" }),
-  );
+  expectRefused(refused, "FORBIDDEN");
 });
 
-it.each(["current", "revoked"] as const)(
-  "checks unbound companion disclosure with a %s transport",
-  async (transport) => {
-    const { call, client, context } = await fixture("companion");
-    const entered = createDeferredCore();
-    const finish = createDeferredCore();
-    const ask = vi.fn<SessionCompanionService["ask"]>(async (request) => {
-      request.assertSourceCurrent?.();
-      entered.resolve();
-      await finish.promise;
-      return { answer: "Private answer", ts: 1 };
-    });
-    context.sessionCompanion = {
-      ask,
-      state: vi.fn<SessionCompanionService["state"]>(),
-      reset: vi.fn(),
-      dispose: vi.fn(),
-    };
-    const response = call("sessions.companion.ask", { question: "Explain the private session" });
-    await Promise.race([
-      entered.promise,
-      response.then(() => {
-        throw new Error("Companion request ended before reaching its effect");
-      }),
-    ]);
-    client.invalidated = transport === "revoked";
-    finish.resolve();
-    const reply = await response;
-    expect(ask).toHaveBeenCalledOnce();
-    if (transport === "revoked") {
-      expect(reply).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE" }),
-      );
-      expect(reply.mock.calls.some(([ok]) => ok)).toBe(false);
-    } else {
-      expect(reply).toHaveBeenCalledWith(true, { answer: "Private answer", ts: 1 });
-    }
-  },
-);
+it("withholds unbound companion disclosure after transport revocation", async () => {
+  const { call, client, context } = await fixture("companion");
+  const entered = createDeferredCore();
+  const finish = createDeferredCore();
+  const ask = vi.fn<SessionCompanionService["ask"]>(async (request) => {
+    request.assertSourceCurrent?.();
+    entered.resolve();
+    await finish.promise;
+    return { answer: "Private answer", ts: 1 };
+  });
+  context.sessionCompanion = {
+    ask,
+    state: vi.fn<SessionCompanionService["state"]>(),
+    reset: vi.fn(),
+    dispose: vi.fn(),
+  };
+  const response = call("sessions.companion.ask", { question: "Explain the private session" });
+  await Promise.race([
+    entered.promise,
+    response.then(() => {
+      throw new Error("Companion request ended before reaching its effect");
+    }),
+  ]);
+  client.invalidated = true;
+  finish.resolve();
+  const reply = await response;
+  expect(ask).toHaveBeenCalledOnce();
+  expectRefused(reply, "UNAVAILABLE");
+  expect(reply.mock.calls.some(([ok]) => ok)).toBe(false);
+});

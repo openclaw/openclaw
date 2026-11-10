@@ -1,8 +1,11 @@
 import path from "node:path";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
 } from "../auto-reply/reply/session-hooks.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import {
@@ -11,18 +14,22 @@ import {
   isSessionAutoResetReason,
 } from "../hooks/session-auto-reset.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginHookSessionEndReason } from "../plugins/hook-types.js";
 import type { SessionEndTranscriptSource } from "../plugins/session-end-transcript.js";
 import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
+import { runWithSessionControllerCleanup } from "../sessions/session-controller.owner-context.js";
 import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
 import { createArchivedSessionTranscriptSource } from "./session-end-transcript-reader.js";
+import { readGatewayBeforeResetPluginHookMessages } from "./session-reset-transcript.js";
 import {
   resolveSessionTranscriptCandidates,
   resolveStableSessionEndTranscript,
   type ArchivedSessionTranscript,
 } from "./session-transcript-files.fs.js";
+import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 
 export function emitGatewaySessionEndPluginHook(params: {
   cfg: OpenClawConfig;
@@ -32,16 +39,7 @@ export function emitGatewaySessionEndPluginHook(params: {
   sessionFile?: string;
   agentId: string;
   workspaceDir?: string;
-  reason:
-    | "new"
-    | "reset"
-    | "idle"
-    | "daily"
-    | "compaction"
-    | "deleted"
-    | "shutdown"
-    | "restart"
-    | "unknown";
+  reason: PluginHookSessionEndReason;
   archivedTranscripts?: ArchivedSessionTranscript[];
   nextSessionId?: string;
   nextSessionKey?: string;
@@ -113,15 +111,17 @@ export function emitGatewaySessionEndPluginHook(params: {
         ? { available: false as const, reason: "no-stable-cutoff" as const }
         : { available: false as const, reason: "unsupported-source" as const });
   const payload = buildSessionEndHookPayload({ ...hookParams, endedTranscript });
-  void runWithGatewayDetachedWorkContinuation(async () => {
-    await hookRunner.runSessionEnd(payload.event, payload.context);
-  }, "hooks:session-end").catch((err: unknown) => {
+  // Detached hooks outlive the emitting turn and must not retain its mutation ownership.
+  void runWithSessionControllerCleanup(() =>
+    runWithGatewayDetachedWorkContinuation(async () => {
+      await hookRunner.runSessionEnd(payload.event, payload.context);
+    }, "hooks:session-end"),
+  ).catch((err: unknown) => {
     logVerbose(`session_end hook failed: ${String(err)}`);
   });
 }
 
 export function emitGatewaySessionStartPluginHook(params: {
-  cfg: OpenClawConfig;
   sessionKey: string;
   sessionId?: string;
   resumedFrom?: string;
@@ -134,7 +134,6 @@ export function emitGatewaySessionStartPluginHook(params: {
   }
   if (params.storePath) {
     noteActiveSessionForShutdown({
-      cfg: params.cfg,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
       storePath: params.storePath,
@@ -147,9 +146,61 @@ export function emitGatewaySessionStartPluginHook(params: {
     return;
   }
   const payload = buildSessionStartHookPayload({ ...params, sessionId: params.sessionId });
-  void runWithGatewayDetachedWorkContinuation(async () => {
-    await hookRunner.runSessionStart(payload.event, payload.context);
-  }, "hooks:session-start").catch((err: unknown) => {
+  void runWithSessionControllerCleanup(() =>
+    runWithGatewayDetachedWorkContinuation(async () => {
+      await hookRunner.runSessionStart(payload.event, payload.context);
+    }, "hooks:session-start"),
+  ).catch((err: unknown) => {
     logVerbose(`session_start hook failed: ${String(err)}`);
   });
+}
+
+export async function emitGatewayBeforeResetPluginHook(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  messages?: unknown[];
+  target: GatewaySessionStoreTarget;
+  storePath: string;
+  entry?: SessionEntry;
+  reason: "new" | "reset";
+}): Promise<void> {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("before_reset")) {
+    return;
+  }
+
+  const sessionKey = params.target.canonicalKey;
+  const sessionId = params.entry?.sessionId;
+  const agentId = params.target.agentId;
+  const sessionFile = sessionId
+    ? formatSqliteSessionFileMarker({ agentId, sessionId, storePath: params.storePath })
+    : undefined;
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
+  const messages =
+    params.messages ??
+    (await readGatewayBeforeResetPluginHookMessages({
+      agentId,
+      entry: params.entry,
+      sessionId,
+      sessionKey,
+      storePath: params.storePath,
+    }));
+
+  void hookRunner
+    .runBeforeReset(
+      {
+        sessionFile,
+        messages,
+        reason: params.reason,
+      },
+      {
+        agentId,
+        sessionKey,
+        sessionId,
+        workspaceDir,
+      },
+    )
+    .catch((err: unknown) => {
+      logVerbose(`before_reset hook failed: ${String(err)}`);
+    });
 }

@@ -1,119 +1,115 @@
-import { Show, Switch, Match, createMemo } from "solid-js";
-import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { handleCopyButton } from "../../components/copy-button.ts";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
 import {
+  action,
+  createMemo,
+  createOptimistic,
+  Errored,
+  lazy,
+  Loading,
+  Match,
+  onSettled,
+  Show,
+  Switch,
+} from "solid-js";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { ConfigError } from "../../components/config-error.tsx";
+import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
+import {
+  RetryAction,
   SettingsEmpty,
+  SettingsPage,
+  SettingsPageHeader,
   SettingsSection,
   SettingsNavRow,
+  SettingsLoadingSkeleton,
   LearnMoreLink,
 } from "../../components/solid/settings-ui.tsx";
-import { buildAgentContext } from "../../lib/agents/display.ts";
+import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
-import type { AgentsPanel } from "../../lib/agents/index.ts";
-import {
-  currentConfigObject,
-  type RuntimeConfigState,
-} from "../../lib/config/config-state-model.ts";
-import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
-import type { AgentConfigActions } from "./config-actions.tsx";
-import { AgentMemoryPanel } from "./memory/memory-panel.tsx";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { buildAgentContext } from "../../lib/agents/display.ts";
+import { currentConfigObject } from "../../lib/config/config-state-model.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
+import { ReasonedDisabledControl } from "../plugins/reasoned-disabled-control.tsx";
+import { AgentsPageMenu } from "./agents-page-menu.tsx";
+import type { AgentsPageView } from "./agents-page-state.ts";
 import { AgentFiles } from "./panels-files.tsx";
 import { AgentOverview } from "./panels-overview.tsx";
-import { AgentSkills } from "./panels-skills.tsx";
-import { AgentChannels, AgentCron } from "./panels-status-files.tsx";
-import { AgentTools } from "./panels-tools-skills.tsx";
+import { AgentReadNotice, createAgentReadPending } from "./read-status.tsx";
 
+registerRouteSubtitlesEnglish();
+
+registerEnglishCatalog(registerSettingsEnglish);
+registerEnglishCatalog(registerPluginManagementEnglish);
+
+// Matches the phone rules in agents.css, where New agent and Refresh move into the menu.
+const PHONE_WIDTH_QUERY = "(max-width: 640px)";
 const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
+const AgentMemoryPanel = lazy(() => import("./memory/memory-panel.tsx"), {
+  export: "AgentMemoryPanel",
+});
+const AgentCron = lazy(() => import("./panel-cron.tsx"), { export: "AgentCron" });
+const AgentSkills = lazy(() => import("./panels-skills.tsx"), { export: "AgentSkills" });
+const AgentChannels = lazy(() => import("./panels-status-files.tsx"), { export: "AgentChannels" });
+const AgentTools = lazy(() => import("./panels-tools-skills.tsx"), { export: "AgentTools" });
 
-export type AgentsProps = {
-  access: {
-    canCreateAgent: boolean;
-    canPatchConfig: boolean;
-    canUpdateConfig: boolean;
-    canUpdateIdentity: boolean;
-    canWriteFiles: boolean;
-    canRunCron: boolean;
-  };
-  basePath: string;
-  loading: boolean;
-  error: string | null;
-  agentsList: AgentsListResult | null;
-  selectedAgentId: string | null;
-  activePanel: AgentsPanel;
+export type AgentsProps = Omit<
+  AgentsPageView,
+  "config" | "overview" | "onOpenMemoryImport" | "onOpenMemorySettings"
+> & {
   config: Pick<
-    RuntimeConfigState,
+    AgentsPageView["config"],
     | "configForm"
     | "configSnapshot"
     | "configLoading"
     | "configSaving"
     | "configFormDirty"
+    | "configAutoSaveStatus"
     | "lastError"
   >;
-  channels: Omit<Parameters<typeof AgentChannels>[0], "context" | "configForm" | "onSelectPanel">;
-  cron: Omit<
-    Parameters<typeof AgentCron>[0],
-    "basePath" | "context" | "canRunNow" | "onSelectPanel"
-  >;
-  agentFiles: Omit<Parameters<typeof AgentFiles>[0], "agentId" | "canWrite">;
-  agentIdentityById: Record<string, AgentIdentityResult>;
-  overview: Omit<
-    Parameters<typeof AgentOverview>[0],
-    | keyof AgentConfigActions
-    | "agent"
-    | "defaultId"
-    | "configForm"
-    | "agentFilesList"
-    | "agentIdentity"
-    | "canUpdateIdentity"
-    | "onSelectPanel"
-  >;
-  agentSkills: Omit<
-    Parameters<typeof AgentSkills>[0],
-    keyof AgentConfigActions | "agentId" | "configForm" | "canPatchConfig"
-  >;
-  tools: Omit<
-    Parameters<typeof AgentTools>[0],
-    keyof AgentConfigActions | "agentId" | "configForm"
-  >;
-  pinnedAgentIds: readonly string[];
-  onTogglePinnedAgent: (agentId: string) => void;
-  onRefresh: () => void;
-  onCreateAgent: () => void;
-  onSelectPanel: (panel: AgentsPanel) => void;
-  onConfigReload: () => void;
-  onConfigSave: () => void;
-  onOpenMemoryImport?: () => void;
-  onOpenMemorySettings?: () => void;
-  onOpenAgentDefaults: () => void;
-  onSetDefault: (agentId: string) => void;
+  overview: Omit<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired"> &
+    Partial<Pick<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired">>;
+  onOpenMemoryImport?: AgentsPageView["onOpenMemoryImport"];
+  onOpenMemorySettings?: AgentsPageView["onOpenMemorySettings"];
 };
 
-export function AgentsPageHeader() {
-  return (
-    <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-      <section class="content-header">
-        <div>
-          <div class="page-title">{titleForRoute("agents")}</div>
-          <div class="page-subtitle">
-            {subtitleForRoute("agents")} <LearnMoreLink url={AGENTS_DOCS_URL} />
-          </div>
-        </div>
-      </section>
-    </ShellLayoutBoundary>
-  );
-}
-
 export function Agents(props: AgentsProps) {
-  const config = createMemo(() => currentConfigObject(props.config), { equals: false });
+  const panel = createMemo(() => props.readData().agentsPanel);
+  const [defaultPending, setSettingDefault] = createOptimistic(false);
+  const settingDefault = () => defaultPending() || props.config.configSaving;
+  const defaultAction = action(function* (completion: Promise<void>, retired: Promise<void>) {
+    if (retired === props.presentationRetired()) {
+      setSettingDefault(true);
+    }
+    yield Promise.race([completion, retired]);
+  });
+  const setDefault = (agentId: string) => {
+    const retired = props.presentationRetired();
+    const completion = props.onSetDefault(agentId);
+    onSettled(() => {
+      void defaultAction(completion, retired);
+    });
+  };
+  const rosterPending = createAgentReadPending(() => props.listRead);
+  const config = () => currentConfigObject(props.config);
   const defaultId = () =>
-    props.agentsList?.selectionRequired ? null : (props.agentsList?.defaultId ?? null);
+    props.readData().agentsList?.selectionRequired
+      ? null
+      : (props.readData().agentsList?.defaultId ?? null);
   const selectedAgent = createMemo(
-    () => props.agentsList?.agents.find((agent) => agent.id === props.selectedAgentId) ?? null,
+    () =>
+      props
+        .readData()
+        .agentsList?.agents.find(
+          (agent) => agent.kind !== "system" && agent.id === props.selectedAgentId,
+        ) ?? null,
   );
   const configActions = () => ({
     configForm: config(),
@@ -121,217 +117,272 @@ export function Agents(props: AgentsProps) {
     configSaving: props.config.configSaving,
     configDirty: props.config.configFormDirty,
     canUpdateConfig: props.access.canUpdateConfig,
-    onConfigReload: props.onConfigReload,
-    onConfigSave: props.onConfigSave,
   });
   const context = () =>
     buildAgentContext(
       selectedAgent()!,
       config(),
-      props.agentFiles.agentFilesList,
+      props.readData().agentFilesList,
       defaultId(),
       props.agentIdentityById[props.selectedAgentId!] ?? null,
     );
-  const tabCounts = (): Record<string, number | null> => ({
-    files: props.agentFiles.agentFilesList?.files?.length ?? null,
-    skills:
-      props.selectedAgentId && props.agentSkills.activeAgentId === props.selectedAgentId
-        ? (props.agentSkills.report?.skills.length ?? null)
-        : null,
-    channels: props.channels.snapshot
-      ? Object.keys(props.channels.snapshot.channelAccounts ?? {}).length
-      : null,
-    cron: props.selectedAgentId ? props.cron.jobsTotal || null : null,
-  });
-  return (
-    <div class="agents-layout">
-      <section class="agents-toolbar">
-        <div class="agents-toolbar-row">
-          <div class="agents-toolbar-actions">
-            <Show when={props.access.canCreateAgent}>
-              <button
-                class="btn btn--sm btn--ghost agents-create-btn"
-                disabled={props.loading}
-                onClick={() => props.onCreateAgent()}
-              >
-                {t("custodian.newAgent")}
-              </button>
-            </Show>
-            <Show when={selectedAgent()}>
-              {(agent) => (
-                <>
-                  <Show when={agent().id} keyed>
-                    {(id) => (
-                      <button
-                        type="button"
-                        class="btn btn--sm btn--ghost"
-                        onClick={(event) => void handleCopyButton(event, id, t("agents.copyId"))}
-                      >
-                        <span data-copy-label>{t("agents.copyId")}</span>
-                      </button>
-                    )}
-                  </Show>
-                  <button
-                    type="button"
-                    class="btn btn--sm btn--ghost"
-                    disabled={!props.access.canUpdateConfig || agent().id === defaultId()}
-                    onClick={() => props.onSetDefault(agent().id)}
-                  >
-                    {agent().id === defaultId() ? t("agents.default") : t("agents.setDefault")}
-                  </button>
-                  <button
-                    type="button"
-                    class="btn btn--sm btn--ghost"
-                    onClick={() => props.onTogglePinnedAgent(agent().id)}
-                  >
-                    {t(
-                      props.pinnedAgentIds.includes(agent().id)
-                        ? "agents.unpinFromSwitcher"
-                        : "agents.pinToSwitcher",
-                    )}
-                  </button>
-                </>
-              )}
-            </Show>
-            <button
-              class="btn btn--sm agents-refresh-btn"
-              disabled={props.loading}
-              onClick={() => props.onRefresh()}
-            >
-              {t(props.loading ? "common.loading" : "common.refresh")}
-            </button>
-          </div>
-        </div>
-        <Show when={props.error}>
-          <div class="callout danger" style={{ "margin-top": "8px" }}>
-            {props.error}
-          </div>
-        </Show>
-      </section>
-      <section class="agents-main">
-        <div class="settings-group">
-          <SettingsNavRow
-            title={t("agents.defaults.title")}
-            description={t("agents.defaults.description")}
-            onClick={props.onOpenAgentDefaults}
-          />
-        </div>
-        <Show
-          when={selectedAgent()}
-          fallback={
-            <SettingsSection title={t("agents.selectTitle")}>
-              <SettingsEmpty message={t("agents.selectSubtitle")} />
-            </SettingsSection>
-          }
+  const phone = createMediaQuery(
+    PHONE_WIDTH_QUERY,
+    globalThis.matchMedia?.(PHONE_WIDTH_QUERY).matches ?? false,
+  );
+  const pageMenu = () => (
+    <AgentsPageMenu
+      agentId={selectedAgent()?.id ?? null}
+      defaultLabel={
+        settingDefault()
+          ? t("common.saving")
+          : selectedAgent()?.id === defaultId()
+            ? t("agents.default")
+            : t("agents.setDefault")
+      }
+      defaultDisabled={
+        !props.access.canUpdateConfig || settingDefault() || selectedAgent()?.id === defaultId()
+      }
+      pinLabel={t(
+        props.pinnedAgentIds.includes(selectedAgent()?.id ?? "")
+          ? "agents.unpinFromSwitcher"
+          : "agents.pinToSwitcher",
+      )}
+      deleteDisabled={!props.access.canDeleteAgent}
+      onDelete={props.onDeleteAgent}
+      showPhoneActions={phone()}
+      createLabel={t("custodian.newAgent")}
+      createDisabled={rosterPending() || !props.access.canCreateAgent}
+      createDisabledReason={
+        !props.access.canCreateAgent ? t("custodian.adminAccessRequired") : undefined
+      }
+      onCreate={props.onCreateAgent}
+      refreshLabel={t(rosterPending() ? "common.loading" : "common.refresh")}
+      refreshDisabled={rosterPending()}
+      onSetDefault={setDefault}
+      onTogglePinned={props.onTogglePinnedAgent}
+      onRefresh={props.onRefresh}
+    />
+  );
+  const pageActions = () => (
+    <div class="agents-toolbar-actions">
+      <RefreshButton
+        class="agents-refresh-btn"
+        label={t("common.refresh")}
+        busy={rosterPending()}
+        onClick={() => props.onRefresh()}
+      />
+      <Show when={!phone()}>
+        <ReasonedDisabledControl
+          reason={!props.access.canCreateAgent ? t("custodian.adminAccessRequired") : undefined}
         >
-          {(agent) => (
-            <>
-              <LitContent
-                render={() =>
-                  renderHubTabs({
-                    id: "agents",
-                    active: props.activePanel,
-                    tabs: (
-                      [
-                        ["overview", "agents.tabs.overview"],
-                        ["files", "agents.tabs.files"],
-                        ["tools", "agents.tabs.tools"],
-                        ["skills", "agents.tabs.skills"],
-                        ["channels", "agents.tabs.channels"],
-                        ["cron", "agents.tabs.cronJobs"],
-                        ["memory", "agents.tabs.memory"],
-                      ] as const
-                    ).map(([value, key]) => ({ value, label: t(key), count: tabCounts()[value] })),
-                    ariaLabel: t("tabs.agents"),
-                    panelId: "agent-panel",
-                    onSelect: props.onSelectPanel,
-                  })
-                }
-              />
-              <div
-                id="agent-panel"
-                class="settings-stack"
-                role="tabpanel"
-                aria-labelledby={`agents-tab-${props.activePanel}`}
-              >
-                <Show when={props.config.lastError}>
-                  <div class="callout danger" role="alert">
-                    {props.config.lastError}
-                  </div>
-                </Show>
-                <Switch>
-                  <Match when={props.activePanel === "overview"}>
-                    <Show when={agent().id} keyed>
-                      {(agentId) => (
-                        <AgentOverview
-                          {...props.overview}
-                          {...configActions()}
-                          agent={agent()}
-                          defaultId={defaultId()}
-                          agentFilesList={props.agentFiles.agentFilesList}
-                          agentIdentity={props.agentIdentityById[agentId] ?? null}
-                          canUpdateIdentity={props.access.canUpdateIdentity}
-                          onSelectPanel={props.onSelectPanel}
-                        />
-                      )}
-                    </Show>
-                  </Match>
-                  <Match when={props.activePanel === "files"}>
-                    <AgentFiles
-                      {...props.agentFiles}
-                      agentId={agent().id}
-                      canWrite={props.access.canWriteFiles}
-                    />
-                  </Match>
-                  <Match when={props.activePanel === "tools"}>
-                    <AgentTools {...props.tools} {...configActions()} agentId={agent().id} />
-                  </Match>
-                  <Match when={props.activePanel === "skills"}>
-                    <AgentSkills
-                      {...props.agentSkills}
-                      {...configActions()}
-                      agentId={agent().id}
-                      canPatchConfig={props.access.canPatchConfig}
-                    />
-                  </Match>
-                  <Match when={props.activePanel === "channels"}>
-                    <AgentChannels
-                      {...props.channels}
-                      context={context()}
-                      configForm={config()}
-                      onSelectPanel={props.onSelectPanel}
-                    />
-                  </Match>
-                  <Match when={props.activePanel === "cron"}>
-                    <AgentCron
-                      {...props.cron}
-                      basePath={props.basePath}
-                      context={context()}
-                      canRunNow={props.access.canRunCron}
-                      onSelectPanel={props.onSelectPanel}
-                    />
-                  </Match>
-                  <Match when={props.activePanel === "memory"}>
-                    <div class="settings-group agent-memory-import-row">
-                      <SettingsNavRow
-                        title={t("tabs.memory")}
-                        description={t("subtitles.memory")}
-                        onClick={() => props.onOpenMemorySettings?.()}
-                      />
-                      <SettingsNavRow
-                        title={t("tabs.memoryImport")}
-                        description={t("subtitles.memoryImport")}
-                        onClick={() => props.onOpenMemoryImport?.()}
-                      />
-                    </div>
-                    <AgentMemoryPanel agentId={agent().id} />
-                  </Match>
-                </Switch>
-              </div>
-            </>
-          )}
-        </Show>
-      </section>
+          <button
+            class="btn btn--sm agents-create-btn"
+            disabled={rosterPending() || !props.access.canCreateAgent}
+            title={!props.access.canCreateAgent ? t("custodian.adminAccessRequired") : undefined}
+            onClick={() => props.onCreateAgent()}
+          >
+            {t("custodian.newAgent")}
+          </button>
+        </ReasonedDisabledControl>
+      </Show>
+      <Show when={selectedAgent() || phone()}>
+        <FloatingHeaderActions fallback={pageMenu()}>{pageMenu()}</FloatingHeaderActions>
+      </Show>
     </div>
+  );
+  // Defaults apply to every agent, so this row stays out of the per-agent tab bar.
+  const agentDefaultsRow = () => (
+    <div class="settings-group">
+      <SettingsNavRow
+        title={t("agents.defaults.title")}
+        description={t("agents.defaults.description")}
+        onClick={props.onOpenAgentDefaults}
+      />
+    </div>
+  );
+  return (
+    <>
+      <SettingsPageHeader
+        title={titleForRoute("agents")}
+        subtitle={
+          <>
+            {subtitleForRoute("agents")} <LearnMoreLink url={AGENTS_DOCS_URL} />
+          </>
+        }
+        actions={pageActions()}
+      />
+      <SettingsWorkspace>
+        <SettingsPage wide>
+          <div class="agents-layout">
+            <AgentReadNotice request={props.listRead} />
+            <section class="agents-main">
+              <Show
+                when={selectedAgent()}
+                fallback={
+                  <>
+                    <SettingsSection title={t("agents.selectTitle")}>
+                      <SettingsEmpty message={t("agents.selectSubtitle")} />
+                    </SettingsSection>
+                    {agentDefaultsRow()}
+                  </>
+                }
+              >
+                {(agent) => (
+                  <>
+                    <HubTabs
+                      {...{
+                        id: "agents",
+                        active: props.readData().agentsPanel,
+                        tabs: (
+                          [
+                            ["overview", "agents.tabs.overview"],
+                            ["files", "agents.tabs.files"],
+                            ["tools", "agents.tabs.tools"],
+                            ["skills", "agents.tabs.skills"],
+                            ["channels", "agents.tabs.channels"],
+                            ["cron", "agents.tabs.cronJobs"],
+                            ["memory", "agents.tabs.memory"],
+                          ] as const
+                        ).map(([value, key]) => ({
+                          value,
+                          label: t(key),
+                        })),
+                        ariaLabel: t("tabs.agents"),
+                        panelId: "agent-panel",
+                        onSelect: props.onSelectPanel,
+                      }}
+                    />
+                    <div
+                      id="agent-panel"
+                      class="settings-stack"
+                      role="tabpanel"
+                      aria-labelledby={`agents-tab-${props.readData().agentsPanel}`}
+                    >
+                      {/* A failed write is reported by the save status, without moving this page. */}
+                      <Show
+                        when={
+                          !props.config.configSaving &&
+                          !["error", "rejected", "conflict"].includes(
+                            props.config.configAutoSaveStatus,
+                          )
+                        }
+                      >
+                        <ConfigError message={props.config.lastError}>
+                          {(message) => (
+                            <InlineAlert tone="danger" class="agent-config-error" role="alert">
+                              {message}
+                              <Show when={!props.config.configSnapshot}>
+                                <RetryAction
+                                  disabled={props.config.configLoading}
+                                  onRetry={props.onConfigRetry}
+                                />
+                              </Show>
+                            </InlineAlert>
+                          )}
+                        </ConfigError>
+                      </Show>
+                      <Loading on={panel()} fallback={<SettingsLoadingSkeleton />}>
+                        <Errored
+                          fallback={(error, reset) => (
+                            <InlineAlert tone="danger" role="alert">
+                              {formatUiError(error())}
+                              <button class="btn" onClick={() => reset()}>
+                                {t("common.retry")}
+                              </button>
+                            </InlineAlert>
+                          )}
+                        >
+                          <Switch>
+                            <Match when={props.readData().agentsPanel === "overview"}>
+                              <Show when={agent().id} keyed>
+                                {(agentId) => (
+                                  <AgentOverview
+                                    {...props.overview}
+                                    readData={props.readData}
+                                    {...configActions()}
+                                    agent={agent()}
+                                    defaultId={defaultId()}
+                                    agentFilesList={props.readData().agentFilesList}
+                                    agentIdentity={props.agentIdentityById[agentId] ?? null}
+                                    canUpdateIdentity={props.access.canUpdateIdentity}
+                                    onSelectPanel={props.onSelectPanel}
+                                  />
+                                )}
+                              </Show>
+                              {agentDefaultsRow()}
+                            </Match>
+                            <Match when={props.readData().agentsPanel === "files"}>
+                              <AgentFiles
+                                {...props.agentFiles}
+                                readData={props.readData}
+                                presentationRetired={props.presentationRetired}
+                                agentId={agent().id}
+                                canWrite={props.access.canWriteFiles}
+                              />
+                            </Match>
+                            <Match when={props.readData().agentsPanel === "tools"}>
+                              <AgentTools
+                                {...props.tools}
+                                {...configActions()}
+                                readData={props.readData}
+                                agentId={agent().id}
+                              />
+                            </Match>
+                            <Match when={props.readData().agentsPanel === "skills"}>
+                              <AgentSkills
+                                {...props.agentSkills}
+                                readData={props.readData}
+                                {...configActions()}
+                                agentId={agent().id}
+                                canPatchConfig={props.access.canPatchConfig}
+                              />
+                            </Match>
+                            <Match when={props.readData().agentsPanel === "channels"}>
+                              <AgentChannels
+                                {...props.channels}
+                                readState={props.readChannels}
+                                context={context()}
+                                configForm={config()}
+                                onSelectPanel={props.onSelectPanel}
+                              />
+                            </Match>
+                            <Match when={props.readData().agentsPanel === "cron"}>
+                              <AgentCron
+                                {...props.cron}
+                                readState={() => props.readData().cron}
+                                basePath={props.basePath}
+                                context={context()}
+                                canRunNow={props.access.canRunCron}
+                                onSelectPanel={props.onSelectPanel}
+                              />
+                            </Match>
+                            <Match when={props.readData().agentsPanel === "memory"}>
+                              <div class="settings-group agent-memory-import-row">
+                                <SettingsNavRow
+                                  title={t("tabs.memory")}
+                                  description={t("subtitles.memory")}
+                                  onClick={() => props.onOpenMemorySettings?.()}
+                                />
+                                <SettingsNavRow
+                                  title={t("tabs.memoryImport")}
+                                  description={t("subtitles.memoryImport")}
+                                  onClick={() => props.onOpenMemoryImport?.()}
+                                />
+                              </div>
+                              <AgentMemoryPanel initialAgentTarget={props.memoryTarget} />
+                            </Match>
+                          </Switch>
+                        </Errored>
+                      </Loading>
+                    </div>
+                  </>
+                )}
+              </Show>
+            </section>
+          </div>
+        </SettingsPage>
+      </SettingsWorkspace>
+    </>
   );
 }

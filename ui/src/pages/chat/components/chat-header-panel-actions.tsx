@@ -1,10 +1,29 @@
-import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
-import { createMemo, createSignal, For, Show } from "solid-js";
-import { icons } from "../../../components/icons.ts";
+import {
+  createMemo,
+  createUniqueId,
+  Errored,
+  lazy,
+  Loading,
+  onSettled,
+  Show,
+  type Element,
+} from "solid-js";
+import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-options.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
+import {
+  createMenuControls,
+  Menu,
+  type MenuControls,
+  type MenuEntry,
+  type MenuItem,
+  type MenuHandle,
+} from "../../../components/solid/menu.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
+import { ClearCompanion, ExternalPanelLink } from "../chat-panel-header-actions.tsx";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import {
   ensureSidebarConversation,
@@ -19,8 +38,17 @@ import {
   type SidebarSlotId,
 } from "../sidebar-layout.ts";
 import type { HeaderMenuQuickAction } from "./chat-header-session-menu.ts";
-import { ChatQuickActionItem, type ChatQuickAction } from "./chat-quick-action.tsx";
+import type { ChatQuickAction } from "./chat-quick-action.tsx";
 import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
+
+const DashboardContent = lazy(() => import("./chat-header-panel-menu-content.tsx"), {
+  export: "ChatDashboardMenuContent",
+});
+const LayoutContent = lazy(() => import("./chat-header-panel-menu-content.tsx"), {
+  export: "ChatPaneLayoutMenuContent",
+});
 
 export type HeaderPanelAction = HeaderMenuQuickAction & { shortcut?: KeyboardShortcutCombo };
 
@@ -28,7 +56,6 @@ export type ChatPaneLayoutMenuProps = {
   paneId: string;
   narrow: boolean;
   mobile?: boolean;
-  onOpenDetails?: (source: HTMLElement) => void;
   actionsDisabled?: boolean;
   panelMenuActions?: HeaderPanelAction[];
   layoutMenuActions?: HeaderMenuQuickAction[];
@@ -43,7 +70,7 @@ export type ChatPaneLayoutMenuProps = {
   onClosePane?: (paneId: string) => void;
 };
 
-function layoutModel(props: ChatPaneLayoutMenuProps, openDetails: () => void) {
+export function chatPaneLayoutModel(props: ChatPaneLayoutMenuProps) {
   const layout = props.sidebarLayout;
   const definitions = props.panelDefinitions ?? [];
   const side = layout ? sidebarActivePanel(layout) : undefined;
@@ -57,7 +84,7 @@ function layoutModel(props: ChatPaneLayoutMenuProps, openDetails: () => void) {
       id: "focus",
       className: "chat-panel-focus",
       label: t(layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand"),
-      icon: layout.expanded ? icons.minimize : icons.maximize,
+      icon: layout.expanded ? "minimize" : "maximize",
       active: layout.expanded === true,
       onActivate: () =>
         props.onLayoutChange?.(
@@ -71,7 +98,7 @@ function layoutModel(props: ChatPaneLayoutMenuProps, openDetails: () => void) {
       id: "swap",
       className: "chat-panel-swap",
       label: t("chat.sidePanel.swap", { main: mainDefinition.label, side: sideDefinition.label }),
-      icon: icons.arrowLeftRight,
+      icon: "arrowLeftRight",
       onActivate: () => props.onLayoutChange?.(promoteSidebarPanel(layout, side.id)),
     });
   }
@@ -87,7 +114,7 @@ function layoutModel(props: ChatPaneLayoutMenuProps, openDetails: () => void) {
       id: "expand-side-panel",
       className: "side-panel__expand",
       label: t("chat.sidePanel.expandPanel", { panel: sideDefinition.label }),
-      icon: icons.maximize,
+      icon: "maximize",
       onActivate: () =>
         props.onLayoutChange?.(toggleSidebarPanelExpanded(layout, side.id), {
           dashboardPresentation: "personal",
@@ -98,8 +125,23 @@ function layoutModel(props: ChatPaneLayoutMenuProps, openDetails: () => void) {
     actions.push({
       id: "close-side-panel",
       label: t("chat.sidebarColumns.close", { panel: sideDefinition.label }),
-      icon: icons.x,
-      onActivate: () => props.onCloseSidePanel?.(side.slot),
+      icon: "x",
+      onActivate: async () => {
+        if (props.mobile === false && side.slot === "companion") {
+          const paneId = props.paneId;
+          const clear = sideDefinition.view?.onClearCompanion;
+          if (
+            !clear ||
+            !(await clear()) ||
+            props.paneId !== paneId ||
+            !props.sidebarLayout ||
+            sidebarActivePanel(props.sidebarLayout)?.id !== side.id
+          ) {
+            return;
+          }
+        }
+        props.onCloseSidePanel?.(side.slot);
+      },
     });
   }
   if (props.onToggleSidePanel) {
@@ -107,17 +149,17 @@ function layoutModel(props: ChatPaneLayoutMenuProps, openDetails: () => void) {
       id: "side-panel",
       className: "chat-side-panel-toggle",
       label: t(split ? "chat.sidePanel.minimize" : "chat.sidePanel.label"),
-      icon: split ? icons.panelRightClose : icons.panelRightOpen,
+      icon: split ? "panelRightClose" : "panelRightOpen",
       active: split,
       onActivate: props.onToggleSidePanel,
     });
   }
   actions.push(...(props.layoutMenuActions ?? []));
   for (const [id, label, icon, callback] of [
-    ["open-split-view", "chat.splitView.open", icons.columns2, props.onOpenSplitView],
-    ["split-down", "chat.splitView.splitDown", icons.panelBottomOpen, props.onSplitDown],
-    ["split-right", "chat.splitView.splitRight", icons.panelRightOpen, props.onSplitRight],
-    ["close-pane", "chat.splitView.closePane", icons.x, props.onClosePane],
+    ["open-split-view", "chat.splitView.open", "columns2", props.onOpenSplitView],
+    ["split-down", "chat.splitView.splitDown", "panelBottomOpen", props.onSplitDown],
+    ["split-right", "chat.splitView.splitRight", "panelRightOpen", props.onSplitRight],
+    ["close-pane", "chat.splitView.closePane", "x", props.onClosePane],
   ] as const) {
     if (callback && (!props.narrow || (id !== "split-down" && id !== "split-right"))) {
       actions.push({
@@ -133,9 +175,9 @@ function layoutModel(props: ChatPaneLayoutMenuProps, openDetails: () => void) {
   }
   if (layout && props.onLayoutChange && !props.narrow && split) {
     for (const [dock, label, icon] of [
-      ["left", "dockLeft", icons.panelLeftOpen],
-      ["right", "dockRight", icons.panelRightOpen],
-      ["bottom", "dockBottom", icons.panelBottomOpen],
+      ["left", "dockLeft", "panelLeftOpen"],
+      ["right", "dockRight", "panelRightOpen"],
+      ["bottom", "dockBottom", "panelBottomOpen"],
     ] as const) {
       actions.push({
         id: `dock-${dock}`,
@@ -147,106 +189,286 @@ function layoutModel(props: ChatPaneLayoutMenuProps, openDetails: () => void) {
       });
     }
   }
-  const panelActions: ChatQuickAction[] = [
-    ...(props.mobile && props.onOpenDetails
-      ? [
-          {
-            id: "details",
-            label: t("chat.sessionDetails.title"),
-            icon: icons.listChecks,
-            onActivate: openDetails,
-          },
-        ]
-      : []),
-    ...(props.panelMenuActions ?? []),
-  ];
+  const panelActions: ChatQuickAction[] = props.panelMenuActions ?? [];
   const allActions = [...actions, ...panelActions];
   return {
     actions,
     panelActions,
     allActions,
-    mainHeaderAction: mainDefinition?.headerAction,
-    sideHeaderAction: sideDefinition?.headerAction,
+    mainHeaderActionView: mainDefinition?.headerActionView,
+    sideHeaderActionView: sideDefinition?.headerActionView,
+    mainHeaderLink: mainDefinition?.headerLink,
+    sideHeaderLink: sideDefinition?.headerLink,
   };
 }
-export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
-  const [opened, setOpened] = createSignal(false);
-  let trigger!: HTMLButtonElement;
-  const model = createMemo(() => layoutModel(props, () => props.onOpenDetails?.(trigger)));
-  let menu!: WaDropdown;
-  let pendingAction: (() => void) | undefined;
+/** Renders definition-owned controls without mounting the panel's content/view. */
+export function ChatPanelHeaderActions(
+  props: Pick<SidebarPanelDefinition, "headerActionView" | "headerLink"> & {
+    controls?: MenuControls;
+  },
+) {
   return (
-    <Show when={model().allActions.length > 0 || model().mainHeaderAction}>
-      <wa-dropdown
-        ref={(element) => {
-          menu = element;
-        }}
+    <>
+      <Show when={props.headerActionView}>
+        {(view) => <ClearCompanion {...view()} actionRef={props.controls?.ref()} />}
+      </Show>
+      <Show when={props.headerLink}>
+        {(link) => <ExternalPanelLink {...link()} actionRef={props.controls?.ref()} />}
+      </Show>
+    </>
+  );
+}
+
+type ChatPanelMenuHandlers = {
+  items: () => readonly MenuEntry[];
+  select: (item: MenuItem, event: CustomEvent<MenuItem>) => void;
+};
+export type ChatPanelMenuContentProps = {
+  menuProps: ChatPaneLayoutMenuProps & { widgetMenu?: BoardWidgetPageMenu };
+  controls: MenuControls;
+  readMenu: () => MenuHandle | undefined;
+  onReady: (handlers: ChatPanelMenuHandlers | undefined) => void;
+  renderItems: (items: () => readonly MenuEntry[]) => Element;
+};
+
+/** Hand off initial keyboard focus only while the opening gesture still owns it. */
+function createPanelMenuFocusHandoff() {
+  let menu: MenuHandle | undefined;
+  let openingFocus: globalThis.Element | null | undefined;
+  let focusLast = false;
+  let stopKeyboard: (() => void) | undefined;
+  onSettled(() => () => stopKeyboard?.());
+  return {
+    read: () => menu,
+    bind(this: void, handle: MenuHandle) {
+      menu = handle;
+      stopKeyboard?.();
+      const trigger = handle.overlay.trigger;
+      stopKeyboard = trigger
+        ? listen(
+            trigger,
+            "keydown",
+            (event) => {
+              if (!handle.overlay.open) {
+                focusLast = event.key === "ArrowUp";
+              }
+            },
+            true,
+          )
+        : undefined;
+    },
+    beforeShow(this: void) {
+      openingFocus = menu?.overlay.surface.ownerDocument.activeElement;
+    },
+    openChange(this: void, open: boolean) {
+      if (!open) {
+        openingFocus = undefined;
+        focusLast = false;
+      }
+    },
+    focusReady(this: void) {
+      if (!menu?.overlay.open) {
+        return;
+      }
+      const active = menu.overlay.surface.ownerDocument.activeElement;
+      if (
+        active !== openingFocus &&
+        active !== menu.overlay.surface &&
+        active !== menu.overlay.surface.ownerDocument.body
+      ) {
+        return;
+      }
+      const last = focusLast ? menu.itemElements().at(-1) : undefined;
+      if (last) {
+        last.focus({ preventScroll: true });
+      } else {
+        menu.focusFirst();
+      }
+    },
+  };
+}
+
+function ChatPanelMenuBoundary(props: {
+  controls: MenuControls;
+  focusReady: () => void;
+  fallback: Element;
+  children: Element;
+}) {
+  return (
+    <Errored
+      fallback={(error, reset) => {
+        onSettled(props.focusReady);
+        return (
+          <LazyViewError error={error()} onRetry={reset} retryRef={props.controls.ref()} inline />
+        );
+      }}
+    >
+      <Loading fallback={props.fallback}>{props.children}</Loading>
+    </Errored>
+  );
+}
+
+/** External Dashboard controls reuse the layout and page-widget owners. */
+export function ChatDashboardMenu(
+  props: ChatPaneLayoutMenuProps & {
+    widgetMenu?: BoardWidgetPageMenu;
+  },
+) {
+  const id = createUniqueId();
+  const controls = createMenuControls();
+  const focus = createPanelMenuFocusHandoff();
+  let handlers: ChatPanelMenuHandlers | undefined;
+  return (
+    <Menu
+      controls={controls}
+      lazy="while-open"
+      id={`chat-dashboard-${id}`}
+      label={t("chat.sidePanel.dashboardOptions")}
+      class="chat-dashboard-menu"
+      panelClass="chat-dashboard-menu__panel"
+      placement="bottom-end"
+      triggerClass="chat-dashboard-menu__trigger"
+      triggerAttributes={{ title: t("chat.sidePanel.dashboardOptions") }}
+      trigger={
+        <>
+          <Icon name="layoutDashboard" />
+          <Icon name="chevronDown" class="chat-dashboard-menu__chevron" />
+        </>
+      }
+      items={[
+        {
+          kind: "group",
+          id: "dashboard-content",
+          get items() {
+            return handlers?.items() ?? [];
+          },
+          render: (renderItems) => (
+            <ChatPanelMenuBoundary
+              controls={controls}
+              focusReady={focus.focusReady}
+              fallback={renderItems(() => [
+                { id: "loading", label: t("common.loading"), disabled: true },
+              ])}
+            >
+              <DashboardContent
+                menuProps={props}
+                controls={controls}
+                readMenu={focus.read}
+                onReady={(next) => {
+                  handlers = next;
+                  if (next) {
+                    onSettled(focus.focusReady);
+                  }
+                }}
+                renderItems={renderItems}
+              />
+            </ChatPanelMenuBoundary>
+          ),
+        },
+      ]}
+      ref={focus.bind}
+      onBeforeShow={focus.beforeShow}
+      onOpenChange={focus.openChange}
+      onSelect={(item, event) => handlers?.select(item, event)}
+    />
+  );
+}
+
+export function ChatPaneLayoutHeaderActions(props: {
+  model: ReturnType<typeof chatPaneLayoutModel>;
+  controls?: MenuControls;
+  /** Set only when the corresponding visible panel header supplies these controls. */
+  omitMain?: boolean;
+  omitSide?: boolean;
+}) {
+  return (
+    <>
+      <Show when={!props.omitMain}>
+        <ChatPanelHeaderActions
+          controls={props.controls}
+          headerActionView={props.model.mainHeaderActionView}
+          headerLink={props.model.mainHeaderLink}
+        />
+      </Show>
+      <Show when={!props.omitSide}>
+        <ChatPanelHeaderActions
+          controls={props.controls}
+          headerActionView={props.model.sideHeaderActionView}
+          headerLink={props.model.sideHeaderLink}
+        />
+      </Show>
+    </>
+  );
+}
+
+let nextLayoutId = 0;
+
+export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
+  const id = `chat-pane-layout-${++nextLayoutId}`;
+  const controls = createMenuControls();
+  const focus = createPanelMenuFocusHandoff();
+  const model = createMemo(() => chatPaneLayoutModel(props));
+  let handlers: ChatPanelMenuHandlers | undefined;
+
+  return (
+    <Show
+      when={model().allActions.length > 0 || model().mainHeaderActionView || model().mainHeaderLink}
+    >
+      <Menu
+        controls={controls}
+        lazy
+        id={id}
         class={[
           "chat-pane__layout-menu chat-panel-layout-menu",
           { "chat-panel-layout-menu--mobile": props.mobile },
         ]}
         placement="bottom-end"
-        onWa-show={() => setOpened(true)}
-        onWa-select={(event) => {
-          const action = model().allActions.find(
-            (candidate) => candidate.id === event.detail.item.value,
-          );
-          if (action && action.kind !== "status" && !action.disabled) {
-            event.preventDefault();
-            pendingAction = action.onActivate;
-            // Settle opening first; Web Awesome otherwise skips the hide transition.
-            const selectedMenu = menu;
-            void selectedMenu.updateComplete.then(() => {
-              selectedMenu.open = false;
-              selectedMenu
-                .querySelector<HTMLElement>('[slot="trigger"]')
-                ?.focus({ preventScroll: true });
-            });
-          }
-        }}
-        onWa-after-hide={(event) => {
-          if (event.target !== event.currentTarget) {
-            return;
-          }
-          const action = pendingAction;
-          pendingAction = undefined;
-          action?.();
-        }}
-      >
-        <button
-          ref={(element) => {
-            trigger = element;
-          }}
-          slot="trigger"
-          class="btn btn--ghost chat-pane__layout-trigger"
-          type="button"
-          aria-label={t(props.mobile ? "chat.sessionHeader.panels" : "chat.sessionHeader.layout")}
-        >
-          <span aria-hidden="true">
-            <Icon name={props.mobile ? "panelRightOpen" : "columns2"} />
-          </span>
-          <Show when={!props.mobile}>{t("chat.sessionHeader.layout")}</Show>
-        </button>
-        <Show when={opened()}>
-          <For
-            each={props.mobile ? model().panelActions : model().actions}
-            keyed={(action) => action.id}
-          >
-            {(action) => <ChatQuickActionItem action={action()} value={action().id} layout />}
-          </For>
-          <Show when={model().panelActions.length > 0 && model().actions.length > 0}>
-            <div class="session-menu__separator" role="separator" />
-          </Show>
-          <For
-            each={props.mobile ? model().actions : model().panelActions}
-            keyed={(action) => action.id}
-          >
-            {(action) => <ChatQuickActionItem action={action()} value={action().id} layout />}
-          </For>
-          <LitContent value={model().mainHeaderAction} />
-          <LitContent value={model().sideHeaderAction} />
-        </Show>
-      </wa-dropdown>
+        label={t(props.mobile ? "chat.sessionHeader.panels" : "chat.sessionHeader.layout")}
+        triggerClass="btn btn--ghost chat-pane__layout-trigger"
+        trigger={
+          <>
+            <span aria-hidden="true">
+              <Icon name={props.mobile ? "panelRightOpen" : "columns2"} />
+            </span>
+            <Show when={!props.mobile}>{t("chat.sessionHeader.layout")}</Show>
+          </>
+        }
+        items={[
+          {
+            kind: "group",
+            id: "layout-content",
+            get items() {
+              return handlers?.items() ?? [];
+            },
+            render: (renderItems) => (
+              <ChatPanelMenuBoundary
+                controls={controls}
+                focusReady={focus.focusReady}
+                fallback={renderItems(() => [
+                  { id: "loading", label: t("common.loading"), disabled: true },
+                ])}
+              >
+                <LayoutContent
+                  menuProps={props}
+                  controls={controls}
+                  readMenu={focus.read}
+                  onReady={(next) => {
+                    handlers = next;
+                    if (next) {
+                      onSettled(focus.focusReady);
+                    }
+                  }}
+                  renderItems={renderItems}
+                />
+              </ChatPanelMenuBoundary>
+            ),
+          },
+        ]}
+        ref={focus.bind}
+        onBeforeShow={focus.beforeShow}
+        onOpenChange={focus.openChange}
+        onSelect={(item, event) => handlers?.select(item, event)}
+      />
     </Show>
   );
 }

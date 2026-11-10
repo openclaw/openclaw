@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SpeechModelOverridePolicy } from "./provider-types.js";
+import { createSpeechPolicy } from "./speech-provider.test-support.js";
 import { summarizeText } from "./tts-core.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
 
@@ -12,24 +16,13 @@ vi.mock("../agents/simple-completion-runtime.js", async (importOriginal) => ({
   completeWithPreparedSimpleCompletionModel,
 }));
 
-const modelOverridePolicy: SpeechModelOverridePolicy = {
-  enabled: false,
-  allowText: false,
-  allowProvider: false,
-  allowVoice: false,
-  allowModelId: false,
-  allowVoiceSettings: false,
-  allowNormalization: false,
-  allowSeed: false,
-};
-
 const ttsConfig = {
   auto: "inbound",
   mode: "final",
   provider: "test-provider",
   providerSource: "config",
   personas: {},
-  modelOverrides: modelOverridePolicy,
+  modelOverrides: createSpeechPolicy(false),
   providerConfigs: {},
   maxTextLength: 10_000,
   timeoutMs: 10_000,
@@ -41,6 +34,7 @@ describe("TTS summary model in a multi-agent setup", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-test");
   });
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
     completeWithPreparedSimpleCompletionModel.mockReset();
   });
@@ -58,6 +52,7 @@ describe("TTS summary model in a multi-agent setup", () => {
         },
       },
     } as OpenClawConfig;
+    setRuntimeConfigSnapshot(cfg);
 
     const result = await summarizeText({
       text: "Long text that should be summarized for speech. ".repeat(10),

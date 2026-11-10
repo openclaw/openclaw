@@ -9,7 +9,7 @@ const discovery = vi.hoisted(() => ({ resolve: vi.fn() }));
 
 vi.mock("../../channels/plugins/read-only.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../channels/plugins/read-only.js")>()),
-  resolveReadOnlyChannelPluginsForConfig: discovery.resolve,
+  resolveReadOnlyChannelPluginsForConfigAsync: discovery.resolve,
 }));
 
 beforeAll(async () => {

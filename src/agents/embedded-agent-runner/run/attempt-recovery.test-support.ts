@@ -14,6 +14,7 @@ import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js"
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
+import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
 export const outputLimitDetails = {
@@ -43,9 +44,16 @@ export const emptyLengthScenario = {
   }),
 } satisfies TransportDropScenario;
 
-export const outputLimitScenarios = [outputLimitScenario, emptyLengthScenario];
+export const outputLimitScenarios = [
+  outputLimitScenario,
+  emptyLengthScenario,
+  { ...emptyLengthScenario, trigger: "cron" as const, toolResultText: "NO_REPLY" },
+];
 
 export type TransportDropScenario = {
+  continueFromCurrentTranscript?: Awaited<
+    ReturnType<typeof createEmbeddedRunSessionPromptState>
+  >["continueFromCurrentTranscript"];
   config?: OpenClawConfig;
   assistant?: AssistantMessage;
   providerOwner?: PreparedProviderFailoverOwner;
@@ -124,8 +132,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       content: scenario.content ?? [{ type: "thinking", thinking: "checking the results" }],
       usage: scenario.usage ?? createMockUsage(0, 0),
     });
-  const provider = erroredAssistant.provider;
-  const modelId = erroredAssistant.model;
+  const { provider, model: modelId } = erroredAssistant;
   const messagesSnapshot = [
     ...(scenario.precedingMessages ?? []),
     { role: "user", content: "why is it unauthorized?" },
@@ -160,15 +167,13 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       toolCallId,
       toolName: "exec",
       replaySafe: false,
-      ...(scenario.asyncStarted ? { asyncStarted: true } : {}),
-      ...(scenario.terminate ? { terminate: true } : {}),
-      ...(scenario.codeModeSuspended ? { codeModeSuspended: true } : {}),
+      asyncStarted: scenario.asyncStarted || undefined,
+      terminate: scenario.terminate || undefined,
+      codeModeSuspended: scenario.codeModeSuspended || undefined,
     })) as never,
     lastAssistant: erroredAssistant,
     currentAttemptAssistant: erroredAssistant,
-    ...(scenario.completedAssistant
-      ? { currentAttemptCompletedAssistant: scenario.completedAssistant }
-      : {}),
+    currentAttemptCompletedAssistant: scenario.completedAssistant,
     lastToolError: scenario.lastToolError,
     didSendDeterministicApprovalPrompt: scenario.didSendDeterministicApprovalPrompt,
     itemLifecycle: {
@@ -178,9 +183,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
     },
     ...(scenario.terminal ? { terminal: scenario.terminal } : {}),
     ...(scenario.yieldDetected ? { yieldDetected: true } : {}),
-    ...(scenario.providerRetryMaxDelayMs !== undefined
-      ? { providerRetryMaxDelayMs: scenario.providerRetryMaxDelayMs }
-      : {}),
+    providerRetryMaxDelayMs: scenario.providerRetryMaxDelayMs,
     ...(scenario.replaySafe
       ? { currentAttemptReplayMetadata: { replaySafe: true, hadPotentialSideEffects: false } }
       : {}),
@@ -192,7 +195,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
     assistant: erroredAssistant,
   });
   const markOwnedTranscriptRetry = vi.fn();
-  const continueFromCurrentTranscript = vi.fn();
+  const continueFromCurrentTranscript = vi.fn(scenario.continueFromCurrentTranscript);
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
     runInput: {
@@ -204,6 +207,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       globalLane: "test",
       agentDir: "/tmp/provider-recovery-test",
       fallbackConfigured: scenario.fallbackConfigured ?? false,
+      startedAtMs: Date.now(),
     },
     preparedRuntime: {
       provider,
@@ -254,6 +258,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
         genericCompactionRecoveryAllowed: scenario.compactionEnabled ?? false,
         attemptedThinking: new Set(["off"]),
         maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
+        refreshTransportForConnectionError: vi.fn(async () => {}),
         snapshot: () => ({
           thinkLevel: "off",
           agentHarness: { id: "openclaw" },

@@ -6,10 +6,10 @@ import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts"
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { createActiveSessionPlacement } from "../test-helpers/session-placement.ts";
 import { collectKnownSessionRows, fetchSessionLineage } from "./app-sidebar-child-session-data.ts";
 import {
   buildReconciledSidebarZone,
-  buildSidebarSessionNavigationState,
   collectSidebarSessionRowsByKey,
   createSidebarSessionRowsComparator,
   resolveSidebarMainSessionKey,
@@ -162,6 +162,26 @@ describe("sidebar session sort modes", () => {
     ]);
   });
 
+  it("orders Updated mode by conversation activity, not metadata writes", () => {
+    const rows = [
+      // Renamed, pinned/unpinned, or marked unread after its last message.
+      { ...row("metadata-touched", 100, 900), lastActivityAt: 200 },
+      { ...row("replied", 100, 500), lastActivityAt: 400 },
+      // A just-sent message counts before the reply lands.
+      { ...row("sent", 100, 600), lastActivityAt: 100, lastInteractionAt: 600 },
+      // Rows without activity clocks keep their recorded updatedAt.
+      row("legacy", 100, 300),
+    ];
+    const observed = new Map(rows.map((entry, index) => [entry.key, index]));
+
+    expect(sortSidebarRows(rows, "updated", observed).map((entry) => entry.key)).toEqual([
+      "sent",
+      "replied",
+      "legacy",
+      "metadata-touched",
+    ]);
+  });
+
   it("keeps first-facet precedence and row label fallbacks across People projections", () => {
     const alex = row("alex", 100, 1, " alex ");
     const sam = row("sam", 100, 1, "sam");
@@ -295,19 +315,7 @@ describe("sidebar navigation lineage ownership", () => {
       const row = (key: string, status: "available" | "offline"): GatewaySessionRow => ({
         ...child,
         key,
-        placement: {
-          state: "active",
-          generation: 1,
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          stateChangedAtMs: 1,
-          environmentId: "worker:device",
-          activeOwnerEpoch: 1,
-          workerBundleHash: "a".repeat(64),
-          workspaceBaseManifestRef: "manifest",
-          remoteWorkspaceDir: "/workspace",
-          runner: { kind: "device", status },
-        },
+        placement: createActiveSessionPlacement({ runner: { kind: "device", status } }),
       });
       const canonical = {
         ...row(rootKey, "offline"),
@@ -412,7 +420,6 @@ describe("sidebar navigation lineage ownership", () => {
           isChild,
           attention: { kind: "none" },
           runningChildCount: 0,
-          failedChildCount: 0,
         }) as SidebarRecentSession,
     });
 
@@ -439,29 +446,25 @@ describe("sidebar navigation lineage ownership", () => {
       "archived subagent",
       { status: "running", hasActiveRun: true, hasActiveSubagentRun: true, archived: true },
       0,
-      0,
     ],
-  ] as const)(
-    "counts normalized live runs for a %s",
-    (_name, runState, runningChildCount, failedChildCount) => {
-      const childRow = { ...child, ...runState };
-      const projected = projectSessionTree({
-        roots: [navigationParent],
-        rowsByKey: collectSidebarSessionRowsByKey({
-          rows: [navigationParent, childRow],
-          childRowsByParent: {},
-        }),
-        loadingChildKeys: new Set(),
-        resolveAttention: () => ({ kind: "none" }),
-        toSidebarSession: (row, isChild) => ({
-          ...projectSidebarSession(row),
-          isChild: isChild === true,
-        }),
-      });
+  ] as const)("counts normalized live runs for a %s", (_name, runState, runningChildCount) => {
+    const childRow = { ...child, ...runState };
+    const projected = projectSessionTree({
+      roots: [navigationParent],
+      rowsByKey: collectSidebarSessionRowsByKey({
+        rows: [navigationParent, childRow],
+        childRowsByParent: {},
+      }),
+      loadingChildKeys: new Set(),
+      resolveAttention: () => ({ kind: "none" }),
+      toSidebarSession: (row, isChild) => ({
+        ...projectSidebarSession(row),
+        isChild: isChild === true,
+      }),
+    });
 
-      expect(projected[0]).toMatchObject({ runningChildCount, failedChildCount });
-    },
-  );
+    expect(projected[0]).toMatchObject({ runningChildCount });
+  });
 
   it.each([
     ["unloaded before children", "none", true, "approval", 1, 4_503_599_627_370_497],
@@ -545,16 +548,13 @@ describe("sidebar navigation lineage ownership", () => {
       expect(trees[0]).toMatchObject({
         attention: { kind: expected },
         runningChildCount: 1,
-        failedChildCount: 2,
         containsActiveDescendant: true,
         workspaceConflictCount: expectedConflicts,
       });
       expect(trees[0]?.childSessionKeys).toStrictEqual(["first", "second", "missing"]);
-      expect(
-        trees[0]?.children.map((row) => [row.key, row.runningChildCount, row.failedChildCount]),
-      ).toStrictEqual([
-        ["first", 1, 0],
-        ["second", 0, 0],
+      expect(trees[0]?.children.map((row) => [row.key, row.runningChildCount])).toStrictEqual([
+        ["first", 1],
+        ["second", 0],
       ]);
     },
   );
@@ -617,7 +617,6 @@ describe("sidebar navigation lineage ownership", () => {
       ownAttention: attention.root,
       runningChildCount: 1,
       queuedChildCount: 1,
-      failedChildCount: 1,
       attention: { kind: "approval", requests: [shared, question, later] },
     });
     const container = document.createElement("div");
@@ -678,7 +677,6 @@ describe("sidebar navigation lineage ownership", () => {
           isChild,
           attention: { kind: "none" },
           runningChildCount: 0,
-          failedChildCount: 0,
         }) as SidebarRecentSession,
     });
 
@@ -702,41 +700,16 @@ describe("sidebar navigation lineage ownership", () => {
 });
 
 it("keeps a prepared worktree session in Coding before canonical metadata arrives", () => {
-  const key = "agent:main:new-worktree";
-  const context = {
-    basePath: "",
-    agents: { state: { agentsList: { mainKey: "main" } } },
-    agentSelection: { state: { selectedId: "main" } },
-    gateway: { snapshot: { assistantAgentId: "main", hello: null } },
-    sessions: {
-      isPreparedWorkSession: (candidate: string) => candidate === key,
-      pullRequestSummary: () => undefined,
-    },
-  } as unknown as Parameters<typeof buildSidebarSessionNavigationState>[0]["context"];
-  const navigation = buildSidebarSessionNavigationState({
-    context,
-    routeSessionKey: key,
-    sessionsResult: {
-      ts: 1,
-      path: "(multiple)",
-      count: 1,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [{ key, kind: "direct", updatedAt: 1 }],
-    },
-    sessionsAgentId: null,
-    showCron: false,
-    showSystem: false,
-    statusFilter: "active",
-    compareSessions: () => 0,
-    highlightCurrentSession: true,
-    runtimeSampledAtByRow: new WeakMap(),
-    loadingChildSessionKeys: new Set(),
-    outboxAttentionCountForSessionKey: () => 0,
-    hasSessionDraft: () => false,
-    resolveAttention: () => ({ kind: "none" }),
-    resolveAgentStatusNote: () => undefined,
-  });
+  expect(projectSidebarSession({}, undefined, { preparedWorkSession: true }).workSession).toBe(
+    true,
+  );
+});
 
-  expect(navigation.visibleSessionRows).toHaveLength(1);
-  expect(navigation.toSidebarSession(navigation.visibleSessionRows[0]!).workSession).toBe(true);
+it("hides a main-session alias draft only while viewing that conversation", () => {
+  const options = { highlightCurrentSession: true, hasComposerDraft: true };
+  const project = (extra: Partial<typeof options> & { routeSessionKey?: string } = {}) =>
+    projectSidebarSession({ key: "main" }, undefined, { ...options, ...extra }).hasComposerDraft;
+  expect(project()).toBe(false);
+  expect(project({ routeSessionKey: "agent:main:other" })).toBe(true);
+  expect(project({ highlightCurrentSession: false })).toBe(true);
 });

@@ -11,9 +11,9 @@ import {
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { expect, it, vi } from "vitest";
 import { IMessageRpcClient, createIMessageRpcClient } from "./client.js";
-import { monitorIMessageProvider } from "./monitor.js";
 import { resolveIMessageInboundDecision } from "./monitor/inbound-processing.js";
 import { createIMessageDurableIngress } from "./monitor/ingress.js";
+import { monitorIMessageProvider } from "./monitor/monitor-provider.js";
 import { getIMessageRuntime } from "./runtime.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
@@ -31,10 +31,7 @@ vi.mock("./monitor/inbound-processing.js", async (importOriginal) => ({
     reason: "dmPolicy disabled",
   })),
 }));
-vi.mock("./monitor/ingress.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./monitor/ingress.js")>();
-  return { ...actual, createIMessageDurableIngress: vi.fn(actual.createIMessageDurableIngress) };
-});
+vi.mock("./monitor/ingress.js", { spy: true });
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
   return { ...actual, createChannelInboundDebouncer: vi.fn(actual.createChannelInboundDebouncer) };
@@ -130,17 +127,6 @@ it("changes iMessage batching delay without replacing the attached RPC client", 
     await ingress.waitForIdle();
     await debouncer.drain();
     expect(bodies()).toEqual(["immediate", "first second", "after disable"]);
-    console.log(
-      "MONITOR_DEBOUNCE_PROOF " +
-        JSON.stringify({
-          channel: "imessage",
-          pid: process.pid,
-          clock: "fake",
-          delaysMs: [0, 500, 0],
-          bodies: bodies(),
-          clientsCreated: vi.mocked(createIMessageRpcClient).mock.calls.length,
-        }),
-    );
     expect(createIMessageRpcClient).toHaveBeenCalledTimes(1);
   } finally {
     abort.abort();

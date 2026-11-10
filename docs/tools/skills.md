@@ -54,6 +54,10 @@ workspace, `skills/` wins over `.agents/skills/`. Both directories participate i
 snapshot refresh and sandbox synchronization. Sandboxed runs read the
 materialized copies, not the original host paths.
 
+After a Gateway restart, sandbox skill synchronization compares existing copies
+with the current source content. Unchanged files are retained; changed or removed
+instructions and supporting files are reconciled before the turn uses them.
+
 Managed worktree sessions keep their recorded source workspace as the skill
 source. That source is read and watched on the Gateway, even when a File Transfer
 plugin serves the agent workspace from a paired node. The node reads its configured
@@ -74,7 +78,8 @@ project skills overriding bundled skills, and managed-worktree skills overriding
 project checkout skills, are warnings; other collisions are informational.
 Worktree provenance uses the configured `worktreeRoot` (the state directory's
 `worktrees/` by default), without checking Git. Identical content stays silent.
-Unchanged root-pair summaries are not repeated on refresh; changes to content,
+Unchanged root-pair summaries are not repeated on refresh or when switching
+between execution workspaces and the agent-only catalog; changes to content,
 declared metadata, or collision membership update the summary. Precedence is unchanged.
 
 Skill roots support grouped layouts. OpenClaw discovers a skill whenever
@@ -169,7 +174,7 @@ skill. Different owners can use the same friendly name without one skill
 silently replacing another.
 
 <Warning>
-A shared Gateway remains [one trust domain](/start/teams#one-trust-boundary).
+A shared Gateway remains [one trust domain](/start/multiplayer#one-trust-boundary).
 Skills attached to a shared session are inputs to that session, not secret
 storage. Library ownership governs management and discovery; it does not grant
 new tools, credentials, host installation rights, or isolation from the Gateway
@@ -200,8 +205,13 @@ another. Enablement does not bypass agent allowlists, required binaries,
 operating-system restrictions, or other prerequisites.
 
 A managed bundle is limited to 256 files, 1 MiB per file, and 8 MiB total.
-Worker resource delivery also has an 8 MiB aggregate limit; narrow the session
-selection if its complete bundles exceed that limit. Published revisions are
+Worker resource delivery also has an 8 MiB aggregate limit. If the selected
+bundles exceed it, delivery omits supporting files and adds a notice to the
+delivered instructions. Complete instructions are retained when they fit;
+otherwise that skill receives an explicit unavailability notice, never partial
+instructions. The turn can continue with available tools. The notice explains
+how to request a missing resource or narrow the selection. Gateway logs identify
+each reduced skill, its size, and its largest file. Published revisions are
 retained, including revisions still selected by older sessions.
 
 ZIP imports allow up to 16 unfinished uploads per Gateway profile and 32
@@ -233,7 +243,6 @@ regardless of where they are loaded from.
     ownership: "explicit",
     defaults: {
       skills: ["github", "weather"], // shared baseline
-      heartbeat: { agentId: "writer" },
       systemAgent: { agentId: "writer" },
       authInheritance: { agentId: "writer" },
     },
@@ -293,6 +302,9 @@ reference more than one skill:
 Use $github and $release_notes to summarize this change for the release.
 ```
 
+The picker matches display titles across composed and decomposed Unicode forms
+without changing the displayed title or inserted command name.
+
 OpenClaw resolves explicit references from authorized senders on every channel
 and on generic Gateway, CLI, and webhook agent turns. It matches the current
 agent's eligible, user-invocable skills and tells the model to read each
@@ -307,10 +319,17 @@ as `$HOME`, `$PATH`, and `$EDITOR` remain ordinary text; use lowercase `$home`,
 `$path`, or `$editor` to reference skills with those names. Escape a reference
 as `\$name` when it should stay literal.
 
-Skills with `disable-model-invocation: true` stay out of the `$` picker and the
-model's normal prompt, so the model cannot select them on its own. An authorized
-explicit `$skill-name` reference still invokes them; the flag only hides the
-skill from model-initiated selection.
+In the Control UI New session composer, selecting a registered project adds that
+project's eligible `skills/` and `.agents/skills/` entries to the `$` picker and
+slash commands, with the same precedence and allowlist as the execution
+workspace catalog above. They appear only when you could create a session in that
+project, and switching projects replaces the list.
+
+Eligible, user-invocable skills with `disable-model-invocation: true` appear in
+the `$` picker and inline slash suggestions, but stay out of the model's normal
+prompt so it cannot select them on its own. Selecting one inserts an explicit
+`$skill-name` reference. Bundle prompt-template commands remain available as
+leading slash commands, not as `$` references or inline skill suggestions.
 
 ## Skill Workshop
 
@@ -457,6 +476,10 @@ When the user asks to generate an image, use the `image_generate` tool...
   skill folder path.
 </Note>
 
+The bundled skill-creator Python validator also works without PyYAML. In that
+mode, trailing comments on plain indented description lines are ignored; hashes
+inside quoted or block-scalar content remain literal.
+
 ### Optional frontmatter keys
 
 <ParamField path="homepage" type="string">
@@ -541,10 +564,10 @@ metadata:
   Optional URL shown as "Website" in the macOS Skills UI.
 </ParamField>
 
-<ParamField path="os" type='("darwin" | "linux" | "win32")[]'>
+<ParamField path="os" type='("darwin" | "macos" | "linux" | "win32")[]'>
   Hard platform filter. When set, the skill is only eligible when the local
   host or a connected remote runtime matches a listed OS. `always` does not
-  override this filter.
+  override this filter. `macos` is accepted as an alias for `darwin`.
 </ParamField>
 
 <ParamField path="requires.bins" type="string[]">
@@ -619,7 +642,7 @@ metadata:
       option (brew when available, otherwise node).
     - If all installers are `download`, OpenClaw lists each entry so you can
       see all available artifacts.
-    - Specs can include `os: ["darwin"|"linux"|"win32"]` to filter by platform.
+    - Specs can include `os: ["darwin"|"macos"|"linux"|"win32"]` to filter by platform.
     - Node installs honor `skills.install.nodeManager` in `openclaw.json`
       (default: npm; options: npm / pnpm / yarn / bun). This only affects skill
       installs; the Gateway runtime should still be Node.
@@ -770,12 +793,15 @@ below apply to ordinary file-backed skill roots.
 
 One background worker discovers local file-backed skills across managed,
 bundled, plugin, personal, and workspace skill roots. With `skills.load.watch`
-enabled, it checks for passive on-disk changes about once per minute. Edits made
-outside OpenClaw may therefore take up to about a minute to appear, including
+enabled, filesystem events trigger discovery after on-disk changes, including
 adding or removing a skill and creating, removing, or replacing a skill root or
-workspace. Each discovery pass reads a shared root once for matching discovery
+workspace. A safety rescan every 30 minutes catches missed events, including on
+filesystems without reliable native notifications. Each discovery pass reads a shared root once for matching discovery
 limits and file policies, then applies each workspace's precedence separately.
-The next pass reads those roots again to observe changes.
+Unchanged roots need no discovery work between events and safety rescans.
+Sessions share immutable parsed skill facts for unchanged files while retaining
+their own eligibility, allowlists, and prompt selections. A changed file replaces
+those facts on refresh; snapshots already in use keep their original revision.
 
 Explicit OpenClaw actions request an immediate rescan: installing, updating,
 uninstalling, or editing a skill; changing configuration that affects skills;
@@ -798,6 +824,8 @@ OpenClaw actions and Gateway startup still refresh skills immediately.
   <Accordion title="Automatic skill refresh">
     The background discovery worker scans configured skill roots, so ordinary
     source edits elsewhere in a workspace do not trigger skill rescans.
+    Missing skill roots observe their nearest existing ancestor; unrelated
+    sibling writes and ancestor metadata changes do not trigger discovery.
     Configure under `skills.load`:
 
     ```json5
@@ -812,7 +840,7 @@ OpenClaw actions and Gateway startup still refresh skills immediately.
     }
     ```
 
-    Passive edits are coalesced into the next periodic scan. Supporting-file
+    Native file events are coalesced into a discovery pass. Supporting-file
     changes refresh sandbox copies without changing the skill catalog. Unchanged
     names, configuration keys, sources, precedence winners, and `SKILL.md` content
     keep the same snapshot version and do not notify chat metadata consumers.
@@ -880,6 +908,11 @@ ineligible, and model-hidden skills are not added by search. Existing explicit
 user references remain separate. Search does not query ClawHub, install a
 skill, or grant permission to execute its commands.
 
+When Tool Search defers these tools in its default `tools` mode, call
+`dispatch_action` with `{"id":"skills_read","args":{"name":"<name>"}}` or
+`{"id":"skills_search","args":{"query":"<query>"}}`. The Skills prompt selects
+this invocation automatically; directly callable tools keep their normal syntax.
+
 Instruction-body indexing requires the effective native `skills_read` tool.
 When reads are denied or shadowed, search uses metadata only and performs no
 instruction-body reads. Revocation also excludes cached body matches and rejects
@@ -888,13 +921,33 @@ in-flight indexing started under the previous grant.
 In OpenClaw Code Mode, use `await skills.search(query, limit)` and
 `await skills.read(name)`. These calls dispatch through the same tools and
 policies. The read returns a string with the same location context and complete
-instructions. `await skills.list(offset)` returns up to 20 directory entries;
+instructions. Cloud worker turns use the Gateway's admitted skill catalog for
+search and reads, with the same turn-lifetime checks. If a request fails, the
+Code Mode bridge reports a bounded, redacted cause.
+`await skills.list(offset)` returns up to 20 directory entries;
 the default offset is 0. Codex receives the OpenClaw tools through its dynamic
 tool surface; these are distinct from Codex's native skill-resource tools.
 Codex refuses a skill read that exceeds the turn's dynamic-tool output budget
 instead of returning partial instructions as a successful read.
 An existing `read` policy grant also permits `skills_read`. An explicit
 `skills_read` denial still wins; search permission alone does not grant reads.
+
+For installed local Gateway skills, `skills_read({ name, relativePath })` and
+Code Mode's `await skills.read(name, relativePath)` read a companion file relative
+to the directory containing `SKILL.md`, for example `references/workflow.md`.
+Companions return plain UTF-8 text, capped at 256 KiB; invalid UTF-8 and NUL bytes
+are rejected. Reads reject traversal, symlinks, hardlinks, and replaced skill
+directories. This extends the existing skill-read grant to that skill's files;
+it does not list directories or execute scripts. Sandbox, remote workspace,
+node-hosted, and required-workspace placements remain instruction-only.
+
+For embedded runs, finite runtime tool allowlists retain the Skills catalog when
+the final callable tool set supports reading instructions. Missing readers are
+not added automatically, and an explicit `toolsAllow: []` remains tool-less.
+Skill and reference files must also be accessible in the run's execution environment.
+
+List and search results cap descriptions at 512 UTF-16 code units without splitting
+surrogate pairs. The source `SKILL.md` and complete skill instructions stay unchanged.
 
 Search uses an in-memory lexical index of the prepared catalog. It follows the
 existing [snapshot and refresh rules](/tools/skills#snapshots-and-refresh), with
@@ -904,6 +957,15 @@ Concurrent first searches share one build; cancelling a waiter does not cancel
 its owner. Later searches reuse the completed index for that prepared catalog
 and still check current run authority. Names and descriptions have twice the lexical
 weight of body text; exact names rank first.
+Fresh runs share metadata preparation from compact published skill revisions,
+without retaining another copy of every description in their lookup keys.
+Up to four catalog selections retain their current content-only indexes between
+runs, within a shared 64 MiB conservative byte budget. Oversized selections remain
+available to their active run but are not retained for later runs. Readers and permission checks remain run-specific. Local file bodies still
+pass file admission on each fresh run before their confirmed revisions reuse an index.
+Delivered instruction bodies reuse the same index when only companion files change.
+Prepared bodies share a 12 MiB cache, bounded to 2,048 revisions; byte limits and
+UTF-8 normalization are part of each prepared document's identity.
 
 Body indexing reads at most 1,024 skills in name order, four at a time. Each body
 contributes at most 16 KiB, reduced equally across the selected skills
@@ -918,8 +980,14 @@ If bodies are unreadable, omitted, or shortened,
 An empty result with partial coverage does not prove that no applicable skill exists.
 Indexing never executes skill content, and index limits do not truncate `skills_read`.
 
-Sandbox search includes only readable, delivered skills. Discovery does not
-expand the existing worker transfer selection or its 8 MiB total resource limit.
+Sandbox search includes only readable, delivered skills. Remote-exec turns
+transfer eligible discovery skills as well as prompt-listed skills, within the
+existing 8 MiB total resource limit. Delivery includes at most 256 skills;
+prompt-listed, explicitly selected, and pinned library resources take priority
+over additional discovery-only skills. On paired nodes, prompt references, search,
+and instruction reads use the same verified delivery for the admitted turn,
+even without a filesystem bridge. A different placement or a retired turn cannot
+reuse that delivery.
 Dedicated remote workers retain their existing tool protocol; the new search
 tools are not added to that protocol. Use a Gateway run to search its full
 eligible catalog.

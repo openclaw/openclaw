@@ -10,13 +10,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseSecretRef } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
-import { getOAuthApiKey, getOAuthProviders, type OAuthCredentials } from "../../llm/oauth.js";
-import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
-import {
-  formatProviderAuthProfileApiKeyWithPlugin,
-  resolveProviderOAuthCredentialWithPlugin,
-  resolveProviderOAuthRefreshCapabilityWithPlugin,
-} from "../../plugins/provider-runtime.runtime.js";
 import { secretRefKey } from "../../secrets/ref-contract.js";
 import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
 import {
@@ -32,8 +25,8 @@ import {
   resolveTokenExpiryState,
 } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
-import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
 import { createOAuthManager } from "./oauth-manager.js";
+import { refreshOAuthCredential } from "./oauth-provider-operations.js";
 import {
   OAuthManagerRefreshError,
   isSettledOAuthRefreshFailure,
@@ -56,8 +49,6 @@ import {
 } from "./store-runtime.js";
 import { resolveRuntimeAuthProfileAgentDir } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
-
-const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
 
 function isProfileConfigCompatible(params: {
   cfg?: OpenClawConfig;
@@ -125,35 +116,11 @@ type ResolveApiKeyForProfileParams = {
   signal?: AbortSignal;
   /** Reject an OAuth credential before the resolver persists, adopts, or returns it. */
   validateOAuthCredential?: (credential: OAuthCredential) => void;
+  /** Admission only: an already claimed refresh retains independent settlement. */
+  assertRefreshAdmission?: () => void;
 };
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
-
-async function refreshOAuthCredential(
-  credential: OAuthCredential,
-  context: { cfg?: OpenClawConfig } = {},
-): Promise<OAuthCredentials | null> {
-  const pluginResult = await resolveProviderOAuthCredentialWithPlugin({
-    provider: credential.provider,
-    config: context.cfg,
-    credential,
-    refresh: true,
-  });
-  if (pluginResult.status === "available") {
-    return pluginResult.credential;
-  }
-  if (pluginResult.status === "configured-unavailable") {
-    throw new OAuthProviderConfiguredUnavailableError(credential.provider);
-  }
-
-  if (!OAUTH_PROVIDER_IDS.has(credential.provider)) {
-    return null;
-  }
-  const result = await getOAuthApiKey(credential.provider, {
-    [credential.provider]: credential,
-  });
-  return result?.newCredentials ?? null;
-}
 
 /** Refresh one OAuth credential and merge provider-returned token fields. */
 export async function refreshOAuthCredentialForRuntime(params: {
@@ -170,38 +137,7 @@ export async function refreshOAuthCredentialForRuntime(params: {
     : null;
 }
 
-const oauthManager = createOAuthManager({
-  async buildApiKey(provider, credentials, context) {
-    const formatted = await formatProviderAuthProfileApiKeyWithPlugin({
-      provider,
-      config: context.cfg,
-      context: credentials,
-    });
-    return typeof formatted === "string" && formatted.length > 0 ? formatted : credentials.access;
-  },
-  refreshCredential: refreshOAuthCredential,
-  async canRefreshCredential(credential, context) {
-    const pluginCapability = await resolveProviderOAuthRefreshCapabilityWithPlugin({
-      provider: credential.provider,
-      config: context.cfg,
-    });
-    if (pluginCapability.status === "available") {
-      return true;
-    }
-    if (pluginCapability.status === "configured-unavailable") {
-      throw new OAuthProviderConfiguredUnavailableError(credential.provider);
-    }
-    return OAUTH_PROVIDER_IDS.has(credential.provider);
-  },
-  readBootstrapCredential: readExternalCliBootstrapCredential,
-});
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.oauthTestApi")] = {
-    isRefreshTokenReusedError,
-    resetOAuthRefreshQueuesForTest: oauthManager.resetRefreshQueuesForTest,
-  };
-}
+const oauthManager = createOAuthManager();
 
 async function resolveOAuthProfileAccess(
   params: ResolveApiKeyForProfileParams,
@@ -221,6 +157,7 @@ async function resolveOAuthProfileAccess(
     cfg: params.cfg,
     forceRefresh: params.forceRefresh,
     validateCredential: params.validateOAuthCredential,
+    assertRefreshAdmission: params.assertRefreshAdmission,
     signal: params.signal,
   });
   return resolved
@@ -280,43 +217,6 @@ function authProfileSecretRefKey(
   return ref ? secretRefKey(ref) : undefined;
 }
 
-function resolveRuntimeAuthProfile(params: {
-  agentDir?: string;
-  profileId: string;
-  profile: AuthProfileCredential;
-  defaults: SecretDefaults | undefined;
-}): { profile: AuthProfileCredential; published: boolean } {
-  const setupProfile = getSetupCredentialRuntimeProfile(params);
-  const runtimeProfile =
-    setupProfile === undefined
-      ? getRuntimeAuthProfileStoreSnapshotCore(params.agentDir)?.profiles[params.profileId]
-      : setupProfile;
-  const inputRefKey = authProfileSecretRefKey(params.profile, params.defaults);
-  const runtimeRefKey = runtimeProfile
-    ? authProfileSecretRefKey(runtimeProfile, params.defaults)
-    : undefined;
-  const published = Boolean(
-    runtimeProfile &&
-    (isDeepStrictEqual(runtimeProfile, params.profile) ||
-      (inputRefKey &&
-        runtimeRefKey === inputRefKey &&
-        runtimeProfile.type === params.profile.type &&
-        runtimeProfile.provider === params.profile.provider)),
-  );
-  let profile = params.profile;
-  if (published && runtimeProfile?.type === "api_key" && params.profile.type === "api_key") {
-    const value = runtimeProfile.key;
-    profile = { ...params.profile, key: value };
-  } else if (published && runtimeProfile?.type === "token" && params.profile.type === "token") {
-    const value = runtimeProfile.token;
-    profile = { ...params.profile, token: value };
-  }
-  return {
-    profile,
-    published,
-  };
-}
-
 /** Resolve a selected auth profile into the provider API key string. */
 export async function resolveApiKeyForProfile(
   params: ResolveApiKeyForProfileParams,
@@ -360,13 +260,36 @@ async function resolveApiKeyForProfileOwned(
   }
   const configForRefResolution = cfg ?? getRuntimeConfig();
   const refDefaults = configForRefResolution.secrets?.defaults;
-  const runtimeProfile = resolveRuntimeAuthProfile({
-    agentDir: params.agentDir,
+  const agentDir = params.agentDir;
+  const setupProfile = getSetupCredentialRuntimeProfile({
+    agentDir,
     profileId,
     profile: storedProfile,
-    defaults: refDefaults,
   });
-  const cred = runtimeProfile.profile;
+  const runtimeProfile =
+    setupProfile === undefined
+      ? getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles[profileId]
+      : setupProfile;
+  const inputRefKey = authProfileSecretRefKey(storedProfile, refDefaults);
+  const runtimeRefKey = runtimeProfile
+    ? authProfileSecretRefKey(runtimeProfile, refDefaults)
+    : undefined;
+  const published = Boolean(
+    runtimeProfile &&
+    (isDeepStrictEqual(runtimeProfile, storedProfile) ||
+      (inputRefKey &&
+        runtimeRefKey === inputRefKey &&
+        runtimeProfile.type === storedProfile.type &&
+        runtimeProfile.provider === storedProfile.provider)),
+  );
+  let cred = storedProfile;
+  if (published && runtimeProfile?.type === "api_key" && storedProfile.type === "api_key") {
+    const value = runtimeProfile.key;
+    cred = { ...storedProfile, key: value };
+  } else if (published && runtimeProfile?.type === "token" && storedProfile.type === "token") {
+    const value = runtimeProfile.token;
+    cred = { ...storedProfile, token: value };
+  }
   if (
     !isProfileConfigCompatible({
       cfg,
@@ -398,13 +321,13 @@ async function resolveApiKeyForProfileOwned(
     const ownerId = resolveAuthProfileSecretOwnerId(params);
     const degraded = findActiveDegradedSecretOwner("account", ownerId);
     // Another store may reuse this profile id; only the matching published credential is blocked.
-    if (degraded && runtimeProfile.published) {
+    if (degraded && published) {
       throw new SecretSurfaceUnavailableError(degraded);
     }
     const inlineValue = cred.type === "api_key" ? cred.key : cred.token;
     const refKey = authProfileSecretRefKey(cred, refDefaults);
     const apiKey = normalizeOptionalSecretInput(inlineValue);
-    if (refKey && (!runtimeProfile.published || !apiKey)) {
+    if (refKey && (!published || !apiKey)) {
       throw new SecretSurfaceUnavailableError({
         ownerKind: "account",
         ownerId,
@@ -511,6 +434,7 @@ async function resolveApiKeyForProfileOwned(
           agentDir: params.agentDir,
           forceRefresh: params.forceRefresh,
           validateOAuthCredential: params.validateOAuthCredential,
+          assertRefreshAdmission: params.assertRefreshAdmission,
           signal: params.signal,
         });
         params.signal?.throwIfAborted();
@@ -524,18 +448,21 @@ async function resolveApiKeyForProfileOwned(
     }
 
     const message = formatErrorMessage(surfacedCause);
-    const hint = await formatAuthDoctorHint({
-      cfg,
-      store: refreshedStore,
-      provider: cred.provider,
-      profileId,
-    });
+    const retryable = error instanceof OAuthRefreshFailureError && error.retryable === true;
+    const hint = retryable
+      ? undefined
+      : await formatAuthDoctorHint({
+          cfg,
+          store: refreshedStore,
+          provider: cred.provider,
+          profileId,
+        });
     const failure = new OAuthRefreshFailureError({
       provider: cred.provider,
       profileId,
       message:
         `OAuth token refresh failed for ${cred.provider}: ${message}. ` +
-        "Please try again or re-authenticate." +
+        (retryable ? "Please try again shortly." : "Please try again or re-authenticate.") +
         (hint ? `\n\n${hint}` : ""),
       cause: error,
     });

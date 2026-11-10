@@ -1,8 +1,55 @@
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
-import { hasErrnoCode } from "./errno.js";
+import type { BackupResourceInventory } from "../commands/backup-resource-inventory.js";
+import { ignoreMissingPath } from "./errno.js";
 import { sameFileMutationFingerprint, type FileMutationFingerprint } from "./file-descriptor.js";
+import { assertNotUpdateCapturePath } from "./update-capture-paths.js";
+
+export type CanonicalSqliteSource = {
+  archiveSourcePath: string;
+  identity: BigIntStats;
+  sourcePath: string;
+} & ({ role: "global" | "quarantine" | "client" } | { role: "agent"; agentId: string });
+
+export async function planBackupSqliteSources(
+  inventory: BackupResourceInventory,
+  snapshotPaths: readonly string[],
+) {
+  const sources: Array<{
+    archiveSourcePath: string;
+    path: string;
+    identity: BigIntStats;
+    canonicalSource: CanonicalSqliteSource | undefined;
+  }> = [];
+  for (const archiveSourcePath of snapshotPaths) {
+    const identity = await fs.stat(archiveSourcePath, { bigint: true });
+    const owner = inventory.resolveSqliteSource(archiveSourcePath, identity);
+    if (!owner || owner.role === "unresolvable-link") {
+      throw new Error(`SQLite ownership changed after discovery: ${archiveSourcePath}`);
+    }
+    let canonicalSource: CanonicalSqliteSource | undefined;
+    if (owner.role !== "plugin") {
+      if (!owner.identity || !sameFileIdentity(owner.identity, identity)) {
+        throw new Error(`Canonical SQLite path changed after discovery: ${archiveSourcePath}`);
+      }
+      canonicalSource = {
+        ...owner,
+        archiveSourcePath: owner.sourcePath,
+        sourcePath: await fs.realpath(owner.sourcePath),
+        identity: owner.identity,
+      };
+      assertNotUpdateCapturePath(canonicalSource.sourcePath, inventory.stateDir);
+    }
+    sources.push({
+      archiveSourcePath,
+      path: canonicalSource ? await fs.realpath(archiveSourcePath) : archiveSourcePath,
+      identity,
+      canonicalSource,
+    });
+  }
+  return { sources, groups: await planBackupSqliteSourceGroups(sources) };
+}
 
 export type BackupSqliteSource = {
   path: string;
@@ -21,14 +68,9 @@ function hasKnownIdentity(identity: BigIntStats): boolean {
 }
 
 async function readRegularSidecar(pathname: string): Promise<BigIntStats | null> {
-  let identity: BigIntStats;
-  try {
-    identity = await fs.lstat(pathname, { bigint: true });
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
+  const identity = await fs.lstat(pathname, { bigint: true }).catch(ignoreMissingPath);
+  if (!identity) {
+    return null;
   }
   if (!identity.isFile()) {
     throw new Error(`SQLite hardlink sidecar must be a regular file: ${pathname}`);

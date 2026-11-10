@@ -1,5 +1,12 @@
 {
   "id": "team-reports",
+  "backupResources": [
+    {
+      "disposition": "include",
+      "scope": "state",
+      "relativePath": "plugins/team-reports/team-reports.sqlite"
+    }
+  ],
   "uiCapabilities": ["page", "navigation"],
   "name": "Team Reports",
   "description": "Daily, weekly, and monthly team activity reports from GitHub and Discord, with model-written summaries, served in the Control UI.",
@@ -455,5 +462,10 @@
         }
       ]
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me plan Team Reports setup for the repositories, people, and channels I choose.",
+    "Summarize a stored team activity report with evidence and source gaps.",
+    "Help me prepare a local export of a stored team report for my chosen audience."
+  ]
 }

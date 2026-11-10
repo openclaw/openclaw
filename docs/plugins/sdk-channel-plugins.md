@@ -44,6 +44,10 @@ shared `message` tool. Your plugin owns:
   owns inline-button guidance; core then omits its generic callback example and
   capability-configuration hint. Return no button instructions when the account
   has buttons disabled. The flag defaults to `false`.
+- **Question input** - declare `agentPrompt.questionInputMode: "buttons"` only
+  when your channel supports native `ask_user` controls. Core resolves this from
+  the inbound channel when preparing the conversation's tool capabilities;
+  omission keeps `ask_user` out of the tool catalog so the agent asks in plain text.
 
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch. For configured agent group
@@ -56,6 +60,21 @@ the typed action in a transport-private authenticated callback envelope. Keep
 approval, command, URL, web-app, question, callback, and model-picker actions
 distinguishable until that encoding boundary; never infer picker intent from a
 raw callback string. Actor and source-message checks remain channel-owned.
+
+## Native mention display
+
+A channel can provide `mentions.readDisplayMentions(text)` for native user references.
+Return ordered, non-overlapping UTF-16 `start`/`end` ranges, the channel's canonical `senderId`, and an optional
+`fallbackLabel` already present in the source text. Include the whole native
+ID/name form in the range so it can be displayed as one name. Keep this parser
+pure: the Gateway resolves verified profile links using the captured channel
+and account, and applies the reader's existing session and profile-visibility
+policy. References inside Markdown code remain literal.
+
+This is a read-time display projection, not a recipient selection. It does not
+rewrite stored/model text, change routing or authorization, or create mention
+notifications. Missing source scope stays unchanged; an unlinked or invisible
+profile uses only the source fallback, or keeps the raw ID if none is available.
 
 ## Opted-in public child sessions
 
@@ -220,6 +239,15 @@ when initialization must finish before the child runs.
     config-only bootstrap activation remain separate; persisted credentials alone
     do not enable a channel.
 
+    `gateway.loginWithQrStart` receives an optional
+    `assertCredentialPersistenceCurrent()` callback. Retain it with the QR login
+    and invoke it immediately before credential writes, including deferred writes
+    after the RPC returns. It throws when the Gateway's account configuration or
+    plugin lifetime changes. Compose it with the plugin's own active-login guard;
+    do not replace that guard or tie QR lifetime to the initiating RPC. Omitted
+    account IDs retain plugin-specific single-account profile selection; the
+    Gateway rejects omission when multiple accounts are configured.
+
     Create `src/channel.ts`:
 
     ```typescript src/channel.ts
@@ -328,11 +356,48 @@ when initialization must finish before the child runs.
 
     For channels that accept both current top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
 
+    The scoped, top-level, and hybrid config adapter builders read allowlists and
+    default targets from the account returned by `resolveAccount`. To use a
+    different, lightweight account shape for these read-only accessors, provide
+    `resolveAccessorAccount`; `resolveAllowFrom` and `resolveDefaultTo` then receive
+    that projection. A separate accessor type requires its own resolver. The
+    builders do not convert a runtime account into another account shape.
+
     For channel-specific secret activation, `createChannelSecretContract` from
     `openclaw/plugin-sdk/channel-secret-basic-runtime` combines `channelKey`,
     `account`/`channel` registry specs, and a `collect` callback. The callback receives
     `config`, `defaults`, `context`, `channelKey`, `channel`, and the resolved account
-    `surface`; it runs only when the channel record exists. Keep activation rules in the callback.
+    `surface`; it runs only when the channel record exists. Channels that start an implicit
+    default alongside named accounts supply `hasImplicitDefaultAccount`, using the same
+    credential-readiness rule as account listing. The shared surface then includes that
+    default as a consumer of root secrets. Keep field activation rules in `collect`.
+
+    External channel plugins must also publish a lightweight secret-contract
+    artifact: `secret-contract-api` (preferred) or `contract-api`, with a `.js`,
+    `.mjs`, `.cjs`, `.ts`, `.mts`, or `.cts` extension, in the plugin root or
+    `dist/`. Built OpenClaw prefers `dist/`; source runs prefer the root.
+    Include the artifact and its dependencies in the published package and declare
+    the channel in the plugin manifest's `channels` or `channelConfigs`.
+
+    The loader reads named exports: `secretTargetRegistryEntries` supplies targets
+    for `openclaw secrets audit` and secret planning; `collectRuntimeConfigAssignments`
+    collects channel SecretRefs during runtime preparation. Export both for full
+    support; a default export alone is ignored. Defining `ChannelPlugin.secrets`
+    alone does not publish an external contract for these paths.
+
+    ```typescript secret-contract-api.ts
+    import { createSimpleChannelSecretContract } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+
+    const channelSecrets = createSimpleChannelSecretContract({
+      channelKey: "acme-chat",
+      label: "Acme Chat",
+      accountFields: ["token"],
+      channelFields: ["token"],
+      mode: "account-inheritance",
+    });
+
+    export const { secretTargetRegistryEntries, collectRuntimeConfigAssignments } = channelSecrets;
+    ```
 
     Config-backed logout handlers can use `clearAccountFieldsFromConfigSection`
     from `openclaw/plugin-sdk/channel-config-helpers`. Pass `cfg`, `sectionKey`,
@@ -412,6 +477,51 @@ when initialization must finish before the child runs.
       while retaining terminal errors and host-marked command results.
       It classifies the reply lane; it does not check content, sendability, or authority.
 
+      `isHostNoticePayload(payload)` from the same subpath identifies host errors,
+      status notices, and metadata-only host diagnostics. Agent-to-agent channels
+      can exclude these in `messaging.transformReplyPayload` while still preserving
+      run failures through `replyOptions.onAgentRunTerminalOutcome` and their native
+      task status. This callback stays bound to the originating request when its
+      turn runs as a queued followup; collected turns notify every source's terminal
+      observer. Human-facing channels should continue to
+      deliver useful host notices.
+
+      `replyOptions.onFollowupQueueDisposition` reports terminal queue-cap rejection
+      (`queue-cap` or `queue-cap-new`) and eviction (`queue-cap-old`) for the original
+      source. These messages will not run, so channels should finalize their status
+      without waiting for `onAgentRunTerminalOutcome`. Overflow retained for a summary
+      remains pending; sources evicted from the summary cap report `queue-cap-old`.
+
+      Durable ingress wrappers must also forward and await
+      `turnAdoptionLifecycle.onDropped(reason)` for terminal queue-policy losses.
+      The ingress owner records `queue-cap-old` or `queue-cap-new` as the failed
+      row's reason, without replay. Keep `onAbandoned` for retryable relinquishment;
+      `queue-cap` when all entries are protected still uses that path. Wrappers
+      must settle their handoff and source cleanup when either callback completes.
+      Spreading the lifecycle while overriding only `onAbandoned` does not intercept
+      drops: also wrap `onDropped`, or use the reply lifecycle's `onSettled` for
+      shared terminal cleanup. Omitting `onDropped` retains legacy abandonment and
+      replay. Policy drops do not send retry-failure notices.
+
+      A `queuedDeliveryCorrelations` entry stays bound to its source through collect
+      batching. Its optional `shouldSuppressReply(payload)` applies before an
+      origin-routed send, which bypasses the immediate reply dispatcher. All source
+      policies in a collected batch must agree to suppress it; an explicit request
+      can therefore retain feedback alongside passive messages. `onReplyDelivered`
+      runs only after confirmed origin delivery, so deduplication must not record
+      a failed or transport-pending send as delivered.
+      Its `begin()` cleanup receives an optional settlement with `visibleReplySent`,
+      `failed`, and `completed` after delivery and presentation cleanup finish.
+      `completed` identifies successful execution, including deliberate silence;
+      cancellation does not count as recovery from an earlier failure.
+      `transportPending: true` means delivery remains owned by transport without a
+      later callback to this source; clear activity UI without claiming success or failure
+      unless `visibleReplySent` or `failed` already proves the outcome.
+      An omitted settlement means the attempt deferred, queued a source retry,
+      or uses a separate source-owned delivery outcome (such as a Gateway reply batch).
+      Use the settlement for delivery-dependent completion UI; an agent's successful
+      execution callback can arrive before any reply is sent.
+
       When cloning a host-supplied reply, use `copyReplyPayloadMetadata(source, clone)`
       from `openclaw/plugin-sdk/reply-payload` to preserve its non-serialized runtime
       metadata. Persisted transcript delivery facts cannot replace that metadata.
@@ -479,9 +589,31 @@ when initialization must finish before the child runs.
       to avoid reparsing literal text in its own normalization code.
     </Accordion>
 
-    ### Group tool-policy adapters
+    <a id="group-tool-policy-adapters"></a>
 
-    A channel that implements `group.resolveToolPolicy` and supports
+    ### Conversation tool-policy adapters
+
+    Resolve configured permissions at execution admission. Direct conversations
+    use `security.resolveDirectToolPolicy(context)`; shared conversations use
+    `groups.resolveToolPolicy(context)`. The host passes current `cfg` and the
+    original authenticated account, sender, and conversation facts. Direct
+    callbacks receive an explicit `conversationId`; use that value rather than
+    inferring a chat from the destination execution session key.
+    Resolve through your plugin's existing account/config helpers.
+
+    Preserve requester facts across delegation, not previously calculated policy.
+    A new delegated execution resolves destination policy for the original
+    requester; an already admitted execution keeps its prepared policy. Human
+    input still waiting for admission uses current configuration when admitted.
+    Shared history is unchanged, and delegation may reach a more capable agent
+    under its destination authorization.
+
+    `access.toolPolicy` and `MsgContext.ConversationToolPolicy` remain deprecated
+    original-request snapshots for external plugins. Migrate configuration-derived
+    producers to the adapters above; see the
+    [compatibility lifetime](/plugins/sdk-migration/compatibility-policy#channel-prepared-tool-policy).
+
+    A channel that implements `groups.resolveToolPolicy` and supports
     `toolsBySender` must forward the complete `ChannelGroupContext` to its
     shared policy resolver. In particular, honor `senderPolicyMode: "never"`
     by skipping sender-specific overlays at both the matched-group and wildcard
@@ -967,6 +1099,12 @@ upgrade OpenClaw and the plugin, implement the request and retry checks above,
 declare only the covered actions, and load the updated registration. Existing
 direct-operator and interactive actions retain their admission rules. Upgrading
 the plugin does not grant additional authority to an existing job.
+
+`ChannelMessageActionContext.abortSignal` is the host-owned cancellation for the
+originating invocation. Canceling it may drop work that was never issued, such as
+a request still waiting in a rate-limit queue or retry backoff. A provider request
+already dispatched must still settle and keep its outcome, so an accepted write is
+never reported as unsent or replayed.
 
 ## Advanced topics
 

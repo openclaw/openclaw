@@ -126,21 +126,9 @@ export async function loadMemoryWikiVaultIdentity(
       if (fragments.length > 0) {
         consumeLine(fragments.join(""));
       }
-    } catch (error) {
-      try {
-        await handle.close();
-      } catch (closeError) {
-        throw new AggregateError(
-          [error, closeError],
-          "Memory Wiki journal read and close failed.",
-          {
-            cause: closeError,
-          },
-        );
-      }
-      throw error;
+    } finally {
+      await handle.close();
     }
-    await handle.close();
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
       return emptyIdentity;
@@ -150,24 +138,32 @@ export async function loadMemoryWikiVaultIdentity(
   return identity;
 }
 
-export async function resolveMemoryWikiVaultSourceGeneration(vaultRoot: string): Promise<string> {
+async function resolveMemoryWikiVaultSourceGeneration(vaultRoot: string): Promise<string> {
   const files = (
     await Promise.all(
       COMPILED_SOURCE_DIRECTORIES.map((relativeDir) =>
         listMemoryWikiPagePaths(vaultRoot, relativeDir),
       ),
     )
-  )
-    .flat()
-    .toSorted((left, right) => left.localeCompare(right));
-  const hash = createHash("sha256");
+  ).flat();
+  const entries: Array<[string, Buffer]> = [];
   for (const file of files) {
-    const relativePath = Buffer.from(file);
-    const pathLength = Buffer.allocUnsafe(4);
-    pathLength.writeUInt32BE(relativePath.byteLength);
     const contentDigest = createHash("sha256")
       .update(await fs.readFile(path.join(vaultRoot, file)))
       .digest();
+    entries.push([file, contentDigest]);
+  }
+  return hashMemoryWikiVaultSources(entries);
+}
+
+export function hashMemoryWikiVaultSources(entries: Array<[string, Buffer]>): string {
+  const hash = createHash("sha256");
+  for (const [file, contentDigest] of entries.toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    const relativePath = Buffer.from(file);
+    const pathLength = Buffer.allocUnsafe(4);
+    pathLength.writeUInt32BE(relativePath.byteLength);
     hash.update(pathLength).update(relativePath).update(contentDigest);
   }
   return hash.digest("hex");

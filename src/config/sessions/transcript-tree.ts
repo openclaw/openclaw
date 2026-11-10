@@ -180,13 +180,13 @@ export type SessionTranscriptNavigationStorage<T> = {
 export function scanSessionTranscriptTree<T>(entries: Iterable<T>): SessionTranscriptTree<T> {
   const nodes: SessionTranscriptTreeNode<T>[] = [];
   const byId = new Map<string, SessionTranscriptTreeNode<T>>();
-  const navigation = scanSessionTranscriptNavigation(entries, {
+  const storage: SessionTranscriptNavigationStorage<T> = {
     byId,
     addNode: (node) => nodes.push(node),
     resetDescendantIds: new Set(),
     invalidLeafControlIds: new Set(),
-  });
-  return { nodes, byId, ...navigation };
+  };
+  return { nodes, byId, ...scanSessionTranscriptNavigation(entries, storage) };
 }
 
 /** Resolves the active branch leaf from the same transcript tree used by branch listing. */

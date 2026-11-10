@@ -10,6 +10,14 @@ Matrix is a downloadable channel plugin (`@openclaw/matrix`) built on the offici
 
 Node remains the recommended runtime. Matrix also accepts the [opt-in Bun runtime](/install/bun); E2EE requires the Matrix SDK's native crypto bindings to be available for your platform.
 
+Matrix account and token-hash stores follow the effective `database.families.state.engine`
+(or `database.engine` when inherited). PostgreSQL gives each root its own local
+anchor and remote namespace, including its serialized crypto state. Stop the
+Gateway and use [database port](/reference/database-engines#port-existing-stores)
+to move existing roots; changing config alone does not migrate them. Keep the
+Matrix plugin installed so backup, restore, updates, and Doctor can discover its
+retained roots, including disabled accounts.
+
 `openclaw matrix verify status`, `verify bootstrap`, and `verify device` route
 through the local Gateway when it is running. Update an older Gateway if it does
 not support this routing; failed requests are never replayed locally.
@@ -135,9 +143,12 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 
 ### Access and policy
 
+`openclaw config validate` warns about missing `dm.allowFrom` entries, including account overrides and inherited defaults. For `dm.policy: "open"`, add `"*"` to the indicated nested allowlist or run `openclaw doctor --fix`; for `"allowlist"`, add the intended Matrix user IDs.
+
 - `groupPolicy`: `"open"`, `"allowlist"`, or `"disabled"`. Default: `"allowlist"`.
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
 - `mentionPatterns`: scoped regex patterns for room mentions. Object with `{ mode: "allow"|"deny", allowIn: [roomId, ...], denyIn: [roomId, ...] }`. Controls whether configured `agents.entries.*.groupChat.mentionPatterns` apply per-room.
+  Formatted `matrix.to` mentions must still visibly name the bot. Malformed or repetitive HTML is scanned in linear time and does not bypass mention requirements.
 - `dm.enabled`: when `false`, ignore all DMs. Default: `true`.
 - `dm.policy`: `"pairing"` (default), `"allowlist"`, `"open"`, or `"disabled"`. Applies after the bot has joined and classified the room as a DM; it does not affect invite handling.
 - `dm.allowFrom`: allowlist of user IDs for DM traffic.

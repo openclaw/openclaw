@@ -1,5 +1,5 @@
-import * as ts from "typescript/unstable/ast";
-import { SymbolFlags, type Symbol } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import { SymbolFlags, type Symbol } from "typescript/sync";
 import type { NativeTypeScriptProject } from "./native-typescript.mts";
 
 const accounts = "src/state/user-model-accounts.ts";
@@ -17,6 +17,10 @@ const personalPublication = "src/gateway/github-personal-publication-store.worke
 const repositoryPublication = "src/gateway/github-repository-publication-store.worker.ts";
 const publicationLifecycle = "src/state/github-publication-session-lifecycles.worker.ts";
 const publicationDeletion = "src/state/github-personal-publication-lifecycle.ts";
+const offlinePublicationFixture = key(
+  "scripts/bench-gateway-startup.ts",
+  "seedTeamBootPublication",
+);
 const sessionMembers = "src/config/sessions/session-sharing-store.native.ts";
 const sessionArtifacts = "src/config/sessions/session-accessor.sqlite-node-artifacts.ts";
 const sessionEntries = "src/config/sessions/session-accessor.sqlite-entry-store.ts";
@@ -29,6 +33,8 @@ const authSqlite = "src/agents/auth-profiles/sqlite.ts";
 const authStore = "src/agents/auth-profiles/store.ts";
 const authRuntime = "src/agents/auth-profiles/store-runtime.ts";
 const authUpdate = "src/agents/auth-profiles/store-update.ts";
+const authEnrollment = "src/agents/auth-profiles/authorization-enrollment.ts";
+const authEnrollmentRuntime = "src/agents/auth-profiles/authorization-enrollment-runtime.ts";
 const authKernel = "src/agents/auth-profiles/store-update.worker.ts";
 const authProfiles = "src/agents/auth-profiles/profiles.ts";
 const authStorage = "src/agents/sessions/auth-storage.ts";
@@ -45,7 +51,8 @@ const guardedTables = new Set([
   "session_members",
 ]);
 
-// Schema owners create/rebuild tables and v18 adds a column; no publication row-DML exception.
+// Offline benchmark roots are synthetic and owned before any Gateway runs.
+// Historical startup receipts lack requester authority and can only reconcile reads.
 const publicationWriters = new Map<string, readonly string[]>([
   [
     key(publicationLifecycle, "insertGitHubPublicationSessionLifecycle"),
@@ -62,7 +69,15 @@ const publicationWriters = new Map<string, readonly string[]>([
     ] as const
   ).map(([file, name]): [string, string[]] => [
     key(file, name),
-    [key(publicationRequestWorker, "githubPublications.insert/write")],
+    [
+      key(publicationRequestWorker, "githubPublications.insert/write"),
+      ...(file === sharedPublication
+        ? [
+            offlinePublicationFixture,
+            key("scripts/perf/publication-empty-recovery-measure.ts", "seedPublicationRequests"),
+          ]
+        : []),
+    ],
   ]),
   ...[
     "markSharedGitHubPublicationReportedInDatabase",
@@ -71,16 +86,22 @@ const publicationWriters = new Map<string, readonly string[]>([
     "bindAcceptedGitHubPublicationClaimSnapshotInDatabase",
   ].map((name): [string, string[]] => [
     key(sharedPublication, name),
-    [key(publicationWorker, "sharedMutation")],
+    [
+      key(publicationWorker, "sharedMutation"),
+      ...(name === "claimGitHubPublicationExecutionInDatabase" ? [offlinePublicationFixture] : []),
+    ],
   ]),
   [
     key(sharedPublication, "writeGitHubPublicationExecutionInDatabase"),
     [key(sharedPublication, "createGitHubPublicationExecutionStoreInDatabase")],
   ],
+  [
+    key(personalPublication, "requirePersonalGitHubPublicationConfirmationInDatabase"),
+    [key(personalPublication, "githubPublications.personalRestart")],
+  ],
   ...[
     "claimPersonalGitHubPublicationInDatabase",
     "writePersonalGitHubPublicationInDatabase",
-    "requirePersonalGitHubPublicationConfirmationInDatabase",
     "markPersonalGitHubPublicationReportedInDatabase",
   ].map((name): [string, string[]] => [
     key(personalPublication, name),
@@ -155,9 +176,25 @@ const authCredentialCallers = new Map<string, readonly string[]>([
     [
       key(authSqlite, "mutateAuthProfileCell/write"),
       key(authKernel, "updateAuthProfileStoreInDatabase"),
+      key(authEnrollment, "enrollAuthProfileAuthorizationInDatabase"),
       key("src/agents/auth-profiles/inline-usage-kernel.ts", "recordInlineAuthFailureInDatabase"),
       key("src/agents/auth-profiles/usage-kernel.ts", "recordAuthProfileUsageInDatabase"),
     ],
+  ],
+  // Enrollment preserves credential bytes with a CAS in the existing admitted transaction.
+  // Doctor uses the native agent transaction only with exclusive maintenance, live admission
+  // and the same credential CAS/commit fence. Keep its exact host edge, not a file exemption.
+  [
+    key(authEnrollment, "enrollAuthProfileAuthorizationInDatabase"),
+    [
+      key(authWorker, "authProfiles.enrollAuthorization"),
+      key("src/agents/auth-profiles/inline-usage.worker.ts", "bindSqliteWorkerBackend/execute"),
+      key(authEnrollmentRuntime, "enrollOwnedAuthProfileAuthorization"),
+    ],
+  ],
+  [
+    key(authEnrollmentRuntime, "enrollOwnedAuthProfileAuthorization"),
+    [key("src/agents/auth-profiles/authorization.ts", "captureAuthProfileAuthorization")],
   ],
   [
     key(authCells, "deleteAuthProfileJsonCell"),
@@ -283,18 +320,40 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
       key("src/state/config-machine-state.worker.ts", "machineState.write"),
       // localOnboardingStateKey always uses the onboarding.local. namespace.
       key("src/state/local-onboarding-state.worker.ts", "localOnboarding.complete"),
+      // installationCountStateKey is fixed to telemetry.installationCount.<endpoint hash>.
+      key("src/infra/telemetry-store.worker.ts", "telemetry.claimInstallationCount"),
+      // Pairing receipts are fixed to devicePairing.openclawIdNode.<peer>, never credential keys.
+      key("src/infra/device-pairing-openclaw-id.worker.ts", "consumeOpenClawIdNodePairingInWorker"),
+      // Fixed update recovery/cohort prefixes cannot address authProfiles.store.
+      ...[
+        "beginPluginCohortRecovery",
+        "writePluginCohortRecovery",
+        "recordPluginCohortIndexPublicationInDatabase",
+        "recordPluginCohortMigrationPublicationInDatabase",
+      ].map((name) => key("src/infra/update-run-recovery-store.ts", name)),
     ],
   ],
   [
     key(machineState, "updateConfigMachineStateInDatabase"),
-    [key(machineState, "updateConfigMachineState")],
+    [
+      key(machineState, "updateConfigMachineState"),
+      // Deletes only the exact run/transaction-bound update recovery pair.
+      key("src/infra/update-run-recovery-store.ts", "deletePluginCohortRecovery"),
+      // Both receipt writers construct only automation-default: keys in their kernel.
+      ...["recordDefaultProactiveJobInDatabase", "recordConvertedProactiveJobInDatabase"].map(
+        (name) => key("src/cron/proactive-job-receipt.kernel.ts", name),
+      ),
+    ],
   ],
   // These keys are built by bounded prefixes in the reviewed owners, never copied from a command.
   [
     key(machineState, "writeConfigMachineState"),
     [
-      key("src/state/openclaw-state-worker-runtime.ts", "executeSharedStateCommand"),
+      key("src/tui/tui-last-session.kernel.ts", "tui.lastSession.write"),
       key("src/commands/doctor/shared/legacy-webhook-pins.ts", "recordUnwrittenWebhookCompletion"),
+      // Exclusive Doctor repair records only sessions.relative-store.v1.<path hash> fingerprints.
+      // This receipt prevents retained originals from resurrecting later-deleted conversations.
+      key("src/commands/doctor-relative-session-store.ts", "repairRelativeSessionStores"),
     ],
   ],
   [
@@ -315,7 +374,11 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
   ],
   [
     key(machineState, "deleteConfigMachineState"),
-    [key("src/state/onboarding-recommendations.kernel.ts", "onboardingRecommendations.clear")],
+    [
+      key("src/state/onboarding-recommendations.kernel.ts", "onboardingRecommendations.clear"),
+      // Exclusive migration selects only daemon-runtime-pin rows before retiring their copied source.
+      key("src/infra/state-migrations.daemon-runtime-pins.ts", "migrateDaemonRuntimePins"),
+    ],
   ],
   [
     key(machineState, "importConfigMachineState"),
@@ -331,7 +394,7 @@ const nativeReadCallers = new Map<string, readonly string[]>([
       "extensions/codex/src/account-usage-runtime.ts:handleCodexAccountUsage/assertCurrent",
       "extensions/codex/src/app-server/auth-profile.ts:<module>",
       "extensions/codex/src/app-server/auth-profile-selection.ts:createCodexAuthProfileSelection/resolveCodexAppServerAuthProfileIdAtEffect",
-      "extensions/codex/src/command-diagnostics.ts:resolvePendingCodexDiagnosticsTargets",
+      "extensions/codex/src/command-diagnostics.ts:resolvePendingCodexDiagnosticsTarget",
       "src/agents/embedded-agent-runner/cli-backend-dispatch-eligibility.ts:resolveEmbeddedCliBackendDispatchEligibility",
       "src/agents/model-auth-label.ts:resolveModelAuthLabel",
       "src/agents/model-auth-provider.ts:resolveScopedAuthProfileStore",
@@ -390,7 +453,7 @@ const nativeReadCallers = new Map<string, readonly string[]>([
       "src/cli/capability-cli/model.ts:runModelAuthLogout",
       "src/cli/capability-cli/shared.ts:providerHasGenericConfig",
       "src/commands/doctor-auth.ts:loadAuthProfileHealth",
-      "src/commands/doctor-auth.ts:noteCopilotAmbientToken",
+      "src/commands/doctor-auth.ts:collectCopilotAmbientTokenFindings",
     ],
   ],
   [
@@ -482,8 +545,23 @@ const callers = new Map<string, readonly string[]>([
     [key("src/config/sessions/session-sharing-store.worker.ts", "bindSqliteWorkerBackend/execute")],
   ]),
   [
+    key(sessionMembers, "addSessionMemberInTransaction"),
+    [
+      key(sessionMembers, "addSessionMember"),
+      key(
+        "src/config/sessions/session-accessor.sqlite-involvement.worker.ts",
+        "updateSessionProfileInvolvementInTransaction",
+      ),
+    ],
+  ],
+  [
     key(sessionArtifacts, "clearSessionCollaborationForKey"),
-    [key(sessionEntries, "writeSessionEntry")],
+    [
+      key(
+        "src/config/sessions/session-accessor.sqlite-entry-write.ts",
+        "prepareSessionEntryWrite/write",
+      ),
+    ],
   ],
   [
     key(sessionArtifacts, "deleteSessionNodeArtifacts"),
@@ -494,7 +572,9 @@ const callers = new Map<string, readonly string[]>([
     key(sessionArtifacts, "copySessionNodeArtifactsForRepair"),
     [
       key(sessionEntries, "deleteLegacySessionEntryRows"),
-      key("src/config/sessions/legacy-main-session-migration-operations.ts", "copyClaimCrossStore"),
+      // Moved from copyClaimCrossStore: the same offline claim-copy transaction now also
+      // preserves relocation membership after source/destination claim and sharing checks.
+      key("src/config/sessions/session-claim-repair-copy.ts", "copySessionClaimForRepair"),
       key(
         "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
         "copySqliteSessionOwnedStateForRepair",
@@ -546,16 +626,25 @@ const callers = new Map<string, readonly string[]>([
   ]),
   [
     key(sharedPublication, "createGitHubPublicationExecutionStoreInDatabase"),
-    [key(publicationWorker, "sharedMutation")],
+    [key(publicationWorker, "sharedMutation"), offlinePublicationFixture],
   ],
   [
     key(publicationDeletion, "deletePersonalGitHubSessionReceiptsInDatabase"),
-    [key("src/state/openclaw-state-worker-runtime.ts", "executeSharedStateCommand")],
+    [
+      key(
+        "src/state/github-personal-publication-lifecycle.worker.ts",
+        "githubPublication.deleteSessionReceipts",
+      ),
+    ],
   ],
   [key(accounts, "writeRecord"), [key(accounts, "writeProfile"), key(accounts, "writeLinks")]],
   [
     key(accounts, "writeProfile"),
-    [key(accounts, "updateUserModelAuthProfile"), key(accounts, "connectUserModelAccount")],
+    [
+      key(accounts, "updateUserModelAuthProfile"),
+      key(accounts, "connectUserModelAccount"),
+      key(accounts, "enrollPersonalAuthProfileAuthorizationInDatabase"),
+    ],
   ],
   [
     key(accounts, "writeLinks"),
@@ -576,6 +665,11 @@ const callers = new Map<string, readonly string[]>([
   [
     key(accounts, "connectUserModelAccount"),
     [key(profileWorker, "userProfiles.modelAccount.connect")],
+  ],
+  // Enrollment preserves credential bytes and requires the same admitted personal writer.
+  [
+    key(accounts, "enrollPersonalAuthProfileAuthorizationInDatabase"),
+    [key(profileWorker, "userProfiles.modelAccount.enrollAuthorization")],
   ],
   [key(accounts, "mergeUserModelAccounts"), [key(profileMerge, "mergeUserProfiles")]],
   [
@@ -625,7 +719,15 @@ const exclusiveMaintenanceCallers = new Map([
 
 // Counts shrink freely. An additional sink, even in an existing function, needs review.
 const sinks = new Map<string, number>([
-  ...["addSessionMember", "removeSessionMember"].map((name): [string, number] => [
+  // Private restore output copies the validated named pair verbatim under parent exclusion.
+  [
+    key(
+      "src/infra/update-database-restore-source.ts",
+      "prepareUpdateDatabaseRestoreSourceInProcess",
+    ),
+    2,
+  ],
+  ...["addSessionMemberInTransaction", "removeSessionMember"].map((name): [string, number] => [
     key(sessionMembers, name),
     1,
   ]),
@@ -699,9 +801,15 @@ const sinks = new Map<string, number>([
   ],
 ]);
 
+// Generated v25 migration metadata is published only by the existing schema transaction.
+const subagentRecoveryMetadataSinks = new Set([
+  key("scripts/generate-postgres-schema.mts", "generatePostgresSchemas"),
+  key("src/state/postgres-schema.generated/runtime.ts", "<module>"),
+]);
 const rawMachineStateSinks = new Map([
   [key("src/state/openclaw-state-db-schema-v12-foldin.ts", "migrateSingletonStateFoldInV12"), 1],
   [key("src/state/openclaw-state-db-schema-v13-widerow.ts", "migrateJsonCanonicalWideRowsV13"), 2],
+  ...[...subagentRecoveryMetadataSinks].map((id): [string, number] => [id, 1]),
 ]);
 
 function mayIncludeAuthKey(
@@ -809,9 +917,17 @@ const credentialCommandOwners = new Map([
     key("src/state/config-machine-state-async.ts", "writeConfigMachineStateAsync"),
   ],
   ["authProfiles.update", key(authUpdate, "runPreparedAuthProfileStoreUpdate")],
+  [
+    "authProfiles.enrollAuthorization",
+    key(authEnrollmentRuntime, "enrollOwnedAuthProfileAuthorization"),
+  ],
 ]);
 
 const repeatedEdges = new Map([
+  [
+    `${key(machineState, "writeConfigMachineStateInDatabase")}<-${key("src/infra/update-run-recovery-store.ts", "beginPluginCohortRecovery")}`,
+    2,
+  ],
   ...[
     key(
       "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
@@ -879,7 +995,9 @@ function operation(node: ts.Node): string {
 export function inspectPersonalCredentialWriters(
   sources: readonly { file: string; source: ts.SourceFile }[],
   checker: NativeTypeScriptProject["project"]["checker"],
+  symbolsAt: (nodes: readonly ts.Node[]) => (Symbol | undefined)[],
 ): string[] {
+  const symbolAt = (node: ts.Node) => symbolsAt([node])[0];
   const approvedCallers = new Map([...callers, ...exclusiveMaintenanceCallers]);
   const protectedDeclarations = new Map<ts.Node, string>();
   const names = new Set(
@@ -888,6 +1006,7 @@ export function inspectPersonalCredentialWriters(
     ),
   );
   const aliases: [string, string][] = [];
+  const bindingNames: (ts.Identifier | ts.StringLiteral)[] = [];
   for (const { file, source } of sources) {
     const visit = (node: ts.Node) => {
       if (
@@ -911,27 +1030,31 @@ export function inspectPersonalCredentialWriters(
       }
       if (ts.isImportSpecifier(node) || ts.isExportSpecifier(node)) {
         aliases.push([node.propertyName?.text ?? node.name.text, node.name.text]);
+        if (node.propertyName?.text === "default") {
+          bindingNames.push(node.name);
+        }
       }
       if (ts.isNamespaceImport(node)) {
-        names.add(node.name.text);
+        bindingNames.push(node.name);
+      } else if (ts.isImportClause(node) && node.name) {
+        bindingNames.push(node.name);
       }
       node.forEachChild(visit);
     };
     source.forEachChild(visit);
   }
-  let expanded = true;
-  while (expanded) {
-    expanded = false;
-    for (const [from, to] of aliases) {
-      if (names.has(from) && !names.has(to)) {
-        names.add(to);
-        expanded = true;
+  const importedBindings = new Map<Symbol, Symbol>();
+  // Compiler aliases are immutable; prepared binding overrides are applied separately.
+  const aliasTargets = new Map<Symbol, Symbol>();
+  const resolveSymbol = (raw: Symbol | undefined): Symbol | undefined => {
+    let symbol = raw;
+    if (raw && raw.flags & SymbolFlags.Alias) {
+      symbol = aliasTargets.get(raw);
+      if (!symbol) {
+        symbol = checker.getAliasedSymbol(raw);
+        aliasTargets.set(raw, symbol);
       }
     }
-  }
-  const importedBindings = new Map<Symbol, Symbol>();
-  const resolveSymbol = (raw: Symbol | undefined): Symbol | undefined => {
-    const symbol = raw && raw.flags & SymbolFlags.Alias ? checker.getAliasedSymbol(raw) : raw;
     return symbol && (importedBindings.get(symbol) ?? symbol);
   };
   const resolved = new Map<Symbol, string[]>();
@@ -954,7 +1077,11 @@ export function inspectPersonalCredentialWriters(
       found.push(...targets(checker.getShorthandAssignmentValueSymbol(declaration)));
     } else if (symbol.flags & SymbolFlags.Module) {
       for (const member of checker.getExportsOfModule(symbol)) {
-        found.push(...targets(member));
+        const writers = targets(member);
+        if (writers.length) {
+          names.add(member.name);
+          found.push(...writers);
+        }
       }
     }
     return found;
@@ -969,7 +1096,7 @@ export function inspectPersonalCredentialWriters(
       expression.expression.kind === ts.SyntaxKind.ImportKeyword
     ) {
       const specifier = expression.arguments[0];
-      return specifier && resolveSymbol(checker.getSymbolAtLocation(specifier));
+      return specifier && resolveSymbol(symbolAt(specifier));
     }
     if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
       const base = accessSymbol(expression.expression);
@@ -986,14 +1113,14 @@ export function inspectPersonalCredentialWriters(
         );
       }
     }
-    return resolveSymbol(checker.getSymbolAtLocation(expression));
+    return resolveSymbol(symbolAt(expression));
   };
   const bindModule = (binding: ts.BindingName, module: Symbol): boolean => {
     if (ts.isIdentifier(binding)) {
-      const local = checker.getSymbolAtLocation(binding);
+      const local = symbolAt(binding);
       if (local) {
         importedBindings.set(local, module);
-        names.add(binding.text);
+        bindingNames.push(binding);
       }
       return true;
     }
@@ -1084,6 +1211,23 @@ export function inspectPersonalCredentialWriters(
     };
     source.forEachChild(visit);
   }
+  // Resolve namespace candidates after every dynamic binding has its prepared target.
+  const bindingSymbols = symbolsAt(bindingNames);
+  for (const [index, binding] of bindingNames.entries()) {
+    if (targets(bindingSymbols[index]).length) {
+      names.add(binding.text);
+    }
+  }
+  let expanded = true;
+  while (expanded) {
+    expanded = false;
+    for (const [from, to] of aliases) {
+      if (names.has(from) && !names.has(to)) {
+        names.add(to);
+        expanded = true;
+      }
+    }
+  }
   const selectsImportMember = (call: ts.CallExpression): boolean => {
     let expression: ts.Expression = call;
     while (
@@ -1111,6 +1255,8 @@ export function inspectPersonalCredentialWriters(
       );
     };
     const references: ts.Node[] = [];
+    const commandNodes: (readonly [ts.Node, ts.Expression])[] = [];
+    const commandExpressions: ts.Expression[] = [];
     const visit = (node: ts.Node) => {
       if (
         ts.isTypeNode(node) ||
@@ -1124,18 +1270,10 @@ export function inspectPersonalCredentialWriters(
         (ts.isIdentifier(node.name) || ts.isStringLiteralLikeNode(node.name)) &&
         node.name.text === "type"
       ) {
-        const type = checker.getTypeAtLocation(
-          ts.isPropertyAssignment(node) ? node.initializer : node.name,
-        );
-        const variants = type.isUnionType() ? type.getTypes() : [type];
-        for (const value of variants) {
-          if (!value.isStringLiteralType()) {
-            continue;
-          }
-          const owner = credentialCommandOwners.get(value.value);
-          if (owner && key(file, operation(node)) !== owner) {
-            fail(node, `${value.value} credential writes require the host publication adapter`);
-          }
+        const initializer = ts.isPropertyAssignment(node) ? node.initializer : node.name;
+        commandNodes.push([node, initializer]);
+        if (!ts.isStringLiteralLikeNode(initializer)) {
+          commandExpressions.push(initializer);
         }
       }
       if (
@@ -1150,7 +1288,7 @@ export function inspectPersonalCredentialWriters(
         while (table && !seen.has(table)) {
           seen.add(table);
           if (ts.isIdentifier(table)) {
-            const declaration = checker.getSymbolAtLocation(table)?.valueDeclaration?.resolve();
+            const declaration = symbolAt(table)?.valueDeclaration?.resolve();
             if (declaration && ts.isVariableDeclaration(declaration)) {
               const loop = declaration.parent.parent;
               table =
@@ -1209,8 +1347,27 @@ export function inspectPersonalCredentialWriters(
           const count = (rawSinkCounts.get(id) ?? 0) + 1;
           rawSinkCounts.set(id, count);
           if (
+            id === offlinePublicationFixture &&
+            count === 1 &&
+            ts.isStringLiteralLikeNode(node) &&
+            ts.isCallExpression(node.parent) &&
+            ts.isPropertyAccessExpression(node.parent.expression) &&
+            node.parent.expression.name.text === "prepare" &&
+            node.parent.arguments.length === 1 &&
+            node.parent.arguments[0] === node &&
+            /^UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id IN \('startup-publication', 'startup-publication-0', 'startup-publication-1', 'startup-publication-2', 'startup-publication-3'\)$/u.test(
+              node.text,
+            )
+          ) {
+            continue;
+          }
+          if (
             write[1]?.toLowerCase() !== "config_machine_state" ||
-            count > (rawMachineStateSinks.get(id) ?? 0)
+            count > (rawMachineStateSinks.get(id) ?? 0) ||
+            (subagentRecoveryMetadataSinks.has(id) &&
+              !/^UPDATE config_machine_state SET value_json = '25' WHERE state_key = 'state\.schema\.contentVersion' AND value_json = '24';\s*$/u.test(
+                node.text.slice(write.index),
+              ))
           ) {
             fail(node, "raw authority-table write bypasses the reviewed writer sinks");
           }
@@ -1242,14 +1399,44 @@ export function inspectPersonalCredentialWriters(
       node.forEachChild(visit);
     };
     source.forEachChild(visit);
-    const symbols = checker.getSymbolAtLocation(references);
-    for (const [index, node] of references.entries()) {
+    // Literal commands need no compiler query; resolve every expression in the
+    // same immutable file together instead of one native round trip per field.
+    const commandTypes = commandExpressions.length
+      ? checker.getTypeAtLocation(commandExpressions)
+      : [];
+    let commandTypeIndex = 0;
+    for (const [node, initializer] of commandNodes) {
+      const type = ts.isStringLiteralLikeNode(initializer)
+        ? undefined
+        : commandTypes[commandTypeIndex++];
+      const commands = ts.isStringLiteralLikeNode(initializer)
+        ? [initializer.text]
+        : (type?.isUnionType() ? type.getTypes() : type ? [type] : [])
+            .filter((value) => value.isStringLiteralType())
+            .map((value) => value.value);
+      for (const command of commands) {
+        const owner = credentialCommandOwners.get(command);
+        if (owner && key(file, operation(node)) !== owner) {
+          fail(node, `${command} credential writes require the host publication adapter`);
+        }
+      }
+    }
+    // Access and shorthand references have their own resolution paths below.
+    const directReferences = references.filter(
+      (node) =>
+        !ts.isShorthandPropertyAssignment(node.parent) &&
+        !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) &&
+        !(ts.isElementAccessExpression(node.parent) && node.parent.argumentExpression === node),
+    );
+    const symbols = symbolsAt(directReferences);
+    let symbolIndex = 0;
+    for (const node of references) {
       const symbol = ts.isShorthandPropertyAssignment(node.parent)
         ? checker.getShorthandAssignmentValueSymbol(node.parent)
         : (ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) ||
             (ts.isElementAccessExpression(node.parent) && node.parent.argumentExpression === node)
           ? accessSymbol(node.parent)
-          : symbols[index];
+          : symbols[symbolIndex++];
       if (
         ts.isStringLiteral(node) &&
         ts.isCallExpression(node.parent) &&

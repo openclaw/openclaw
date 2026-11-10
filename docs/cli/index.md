@@ -3,6 +3,7 @@ summary: "OpenClaw CLI index: command list, global flags, and links to per-comma
 read_when:
   - Finding the right `openclaw` subcommand
   - Looking up global flags or output styling rules
+  - Preparing an exact PostgreSQL shared-state target while offline
 title: "CLI reference"
 ---
 
@@ -25,7 +26,7 @@ Setup commands by intent:
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Setup and onboarding         | [`openclaw`](/cli/openclaw) · [`setup`](/cli/setup) · [`onboard`](/cli/onboard) · [`configure`](/cli/configure) · [`config`](/cli/config) · [`completion`](/cli/completion) · [`doctor`](/cli/doctor) · [`dashboard`](/cli/dashboard) |
 | Reset, backup, and migration | [`backup`](/cli/backup) · [`database`](/cli#database) · [`migrate`](/cli/migrate) · [`reset`](/cli/reset) · [`uninstall`](/cli/uninstall) · [`update`](/cli/update)                                                                   |
-| Messaging and agents         | [`message`](/cli/message) · [`agent`](/cli/agent) · [`agents`](/cli/agents) · [`claws`](/cli/claws) · [`attach`](/cli/attach) · [`acp`](/cli/acp) · [`mcp`](/cli/mcp)                                                                 |
+| Messaging and agents         | [`message`](/cli/message) · [`agent`](/cli/agent) · [`agents`](/cli/agents) · [`templates`](/cli/templates) · [`attach`](/cli/attach) · [`acp`](/cli/acp) · [`mcp`](/cli/mcp)                                                         |
 | Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`triage`](/cli/triage) · [`sessions`](/cli/sessions) · [`resume`](/cli/resume) · [`audit`](/cli/audit)                                                                           |
 | Gateway and logs             | [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                                             |
 | Models and inference         | [`models`](/cli/models) · [`promos`](/cli/promos) · [`infer`](/cli/infer) · `capability` (alias for [`infer`](/cli/infer)) · [`memory`](/cli/memory) · [`wiki`](/cli/wiki)                                                            |
@@ -34,7 +35,7 @@ Setup commands by intent:
 | Worktrees                    | [`worktrees`](/concepts/managed-worktrees)                                                                                                                                                                                            |
 | Automation                   | [`cron`](/cli/cron) (alias `automations`) · [`hooks`](/cli/hooks) · [`webhooks`](/cli/webhooks) · [`transcripts`](/cli/transcripts)                                                                                                   |
 | Discovery and docs           | [`dns`](/cli/dns) · [`docs`](/cli/docs)                                                                                                                                                                                               |
-| Pairing and channels         | [`pairing`](/cli/pairing) · [`qr`](/cli/qr) · [`devices`](/cli/devices) · [`channels`](/cli/channels) · [`users`](/cli/users)                                                                                                         |
+| Pairing and channels         | [`pair`](/cli/pair) · [`pairing`](/cli/pairing) · [`qr`](/cli/qr) · [`devices`](/cli/devices) · [`channels`](/cli/channels) · [`users`](/cli/users)                                                                                   |
 | Security and plugins         | [`security`](/cli/security) · [`secrets`](/cli/secrets) · [`skills`](/cli/skills) · [`plugins`](/cli/plugins) · [`proxy`](/cli/proxy)                                                                                                 |
 | Legacy aliases               | [`daemon`](/cli/daemon) (gateway service) · [`clawbot`](/cli/clawbot) (namespace)                                                                                                                                                     |
 | Plugins (optional)           | [`file-transfer`](/cli/file-transfer) · [`path`](/cli/path) · [`policy`](/cli/policy) · [`voicecall`](/cli/voicecall) · [`workboard`](/cli/workboard) (if installed)                                                                  |
@@ -68,6 +69,12 @@ Use `--` to stop option parsing. Command words still dispatch after it: for exam
 - ANSI colors and progress indicators render only in TTY sessions.
 - OSC-8 hyperlinks render as clickable links where supported. Otherwise the
   CLI prints plain URLs.
+- Human-readable report values neutralize terminal escape sequences before styling.
+  Embedded newlines, carriage returns, and tabs appear as `\n`, `\r`, and `\t`
+  instead of changing the report layout. This display formatting does not change
+  the underlying paths, configuration values, or JSON fields.
+  Bidirectional formatting controls are removed from displayed values; ordinary
+  right-to-left letters and emoji are preserved.
 - On bounded reporting commands, `--json` reserves stdout for one JSON document.
   The CLI suppresses styling and progress output. Warnings and diagnostics stay on
   stderr.
@@ -77,6 +84,7 @@ Use `--` to stop option parsing. Command words still dispatch after it: for exam
 - Long-running commands show a progress indicator (`OSC 9;4` when supported).
 - Connection failures give a short explanation and a status-check command. If a request may have completed, check its result before retrying. Unexpected failures point to a recovery command; use `OPENCLAW_DEBUG=1` when rerunning to include diagnostics. JSON failures keep their diagnostic fields.
 - Update failures keep their reason on stderr, including in JSON mode.
+- Resource cleanup failures are reported on stderr without replacing the command's result. Cleanup that exceeds its reporting deadline remains tracked and reports any later failure.
 
 ### JSON failures
 
@@ -145,6 +153,7 @@ openclaw [--dev] [--profile <name>] <command>
     schema
     validate
   database
+    prepare-state
     port
     preflight
     preflight-agent
@@ -488,6 +497,7 @@ openclaw [--dev] [--profile <name>] <command>
   pairing
     list
     approve
+  pair
   qr
   clawbot
     qr
@@ -507,29 +517,109 @@ Plugins can add additional top-level commands, such as
 
 ## Database
 
-`openclaw database` provides schema preflight, preservation verification,
-shared-state ownership, and offline workboard engine porting. See
+`openclaw database` provides shared-state preparation, schema preflight,
+preservation verification, shared-state ownership, and offline database-family engine porting. See
 [database schemas](/reference/database-schemas) for compatibility contracts.
 
 ```bash
 openclaw database port --to <postgres|sqlite> [--dry-run] [--json]
+openclaw database port --family <state|agent|workboard|logbook|team-reports> --to <postgres|sqlite> [--dry-run] [--json]
 openclaw database port --resume <manifest> [--json]
 openclaw database port --rollback <manifest> [--json]
 ```
 
-Stop the Gateway and embedded agents first. `--to` selects the destination for
-all existing registered workboard stores; shared state and agent databases remain
-on SQLite. `--dry-run` checks read-only prerequisites without creating migration
+Stop the Gateway and embedded agents first. `--family` selects all existing
+physical stores of one family and changes only that family's override. Omit it
+to port all eligible families when their engines are homogeneous; mixed
+selections require a family. Agent and shared-state families can use different
+engines. `--dry-run` checks
+read-only prerequisites without creating migration
 artifacts. Recovery requires the active manifest at
 `<stateDir>/recovery/database-port/manifest.json`; `--resume` and `--rollback` are
-mutually exclusive and cannot be combined with `--to` or `--dry-run`.
+mutually exclusive and cannot be combined with `--family`, `--to`, or `--dry-run`.
 
 Completed ports retain exact original captures and an archived manifest under
 `<stateDir>/recovery/database-port/<operation-id>/`. To keep later writes when
 returning to SQLite, run a new `--to sqlite` port; completed manifests are not an
 undo mechanism. Reverse-port before a raw package-manager downgrade. See the
-[port runbook](/reference/database-engines#port-existing-workboard-stores) for
+[port runbook](/reference/database-engines#port-existing-stores) for
 backup contents, interruption recovery, and restart guidance.
+
+### Prepare exact PostgreSQL shared state
+
+Use `prepare-state` to initialize an absent PostgreSQL shared-state namespace or
+validate an existing one for the installed OpenClaw version. It requires valid
+PostgreSQL configuration for the `state` family and an **existing matching local
+anchor** in the selected profile/state directory; it does not create or replace
+an anchor, port SQLite data, or select a new store identity.
+
+Stop the Gateway and embedded agents first. The command acquires exclusive
+shared-state schema custody without waiting for another owner and closes its
+native resources before releasing custody. It does not stop a running owner or
+bypass an unfinished database port.
+
+```bash
+openclaw database prepare-state --expected-store-id <uuid> --expected-namespace <namespace> --json
+```
+
+Both identity options are required:
+
+- `--expected-store-id <uuid>` must exactly match the store UUID in the existing
+  PostgreSQL anchor. Do not generate a replacement UUID.
+- `--expected-namespace <namespace>` must exactly match both the anchor's namespace
+  and `<schemaPrefix>_state_<uuid-prefix>` for the configured
+  `database.postgres.schemaPrefix`. Here, `uuid-prefix` is the first 16 characters
+  of the store UUID with hyphens removed. The namespace accepts lowercase letters,
+  digits, and underscores, starting with a letter or underscore.
+
+Only a namespace that is entirely absent is bootstrapped with the installed
+schema. An existing namespace, even an empty or incomplete one, is never treated
+as new: it must pass existing-only identity, metadata, catalog, and current
+schema-version validation. This command does not migrate or repair existing state.
+See [anchors and catalog admission](/reference/database-engines#anchors-and-backups).
+
+Success reports `prepared` after bootstrap or `ready` for an already valid store.
+With `--json`, the result includes `ok`, `status`, `path` (the local anchor),
+`storeId`, `namespace`, and `schemaVersion`. Without it, the command prints
+`Shared state: <status> (<namespace>).` Failures exit nonzero; `--json` uses the
+[JSON failure envelope](/cli#json-failures).
+
+If identity validation fails, check the selected profile, configuration, and
+matched anchor before retrying. For incompatible or incomplete existing storage,
+use a compatible OpenClaw version or restore a matched backup; do not delete the
+namespace or edit its metadata to force preparation.
+
+### Exact SQLite migration capture
+
+An external controller can capture a running local Gateway only while it holds a
+ready, non-drain suspension with terminal sessions preserved and zero write custody.
+Use the controller's existing request and suspension IDs; this command neither
+creates the initial suspension nor resumes or stops the Gateway.
+
+```bash
+openclaw database migration-capture create --externally-quiesced --request-id <request> --suspension-id <suspension> --output <private-directory> --json
+openclaw database migration-capture restore <capture> --target <empty-staging-directory> --manifest-sha256 <producer-digest> --json
+```
+
+Quiesced capture authenticates to the selected local backend with its shared token
+or password. It creates its own verified filesystem archive and exact SQLite images
+under the same bounded suspension without writing to the source database or journal
+files. The Gateway keeps its live ownership heartbeat: its own lease timestamps can
+advance during suspension. Capture does not stop those renewals or treat a captured
+lease as authority to activate restored state.
+Filesystem archive creation and verification run in a joined subprocess so blocking
+SQLite or filesystem work does not prevent suspension renewal. The archive step has
+a 30-minute deadline; cancellation waits for the child to stop before capture returns.
+It renews only the supplied controller request and refuses changed owners, expired
+suspensions, pending writes, and PostgreSQL sources. The controller must retain the
+suspension until capture finishes, then decide whether to resume or stop its Gateway.
+
+The output must be outside the source state and configuration roots. Restore only
+extracts into new private staging; it never activates that state. Preserve the
+producer's manifest digest and the same logical source paths. Exact captures contain
+private credentials and retained operational state, unlike sanitized ordinary backups.
+For a stopped source, the existing offline mode instead requires `--base-archive`
+from that same stopped state and does not accept suspension IDs.
 
 ## Chat slash commands
 

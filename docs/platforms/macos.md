@@ -44,12 +44,16 @@ Building from source also requires the toolchain listed in
 
 ## Download
 
-Get macOS app builds from [OpenClaw GitHub releases](https://github.com/openclaw/openclaw/releases).
-When a release ships macOS app assets, look for:
+Download a macOS installer from the published **2026.10.3** release:
 
-- `OpenClaw-<version>.dmg` (preferred)
-- `OpenClaw-<version>.zip`
+| Your Mac                              | Installer                                                                                                           |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Apple Silicon                         | [Apple Silicon DMG](https://github.com/openclaw/openclaw/releases/download/v2026.10.3/OpenClaw-2026.10.3-arm64.dmg) |
+| Intel                                 | [Intel DMG](https://github.com/openclaw/openclaw/releases/download/v2026.10.3/OpenClaw-2026.10.3-x86_64.dmg)        |
+| Either architecture, or you're unsure | [Universal DMG](https://github.com/openclaw/openclaw/releases/download/v2026.10.3/OpenClaw-2026.10.3.dmg)           |
 
+These download links are pinned to **2026.10.3**. For newer builds or ZIP archives,
+see [OpenClaw GitHub releases](https://github.com/openclaw/openclaw/releases).
 Some releases only ship CLI, evidence, or Windows assets. If the newest release
 has no macOS app asset, use the newest one that does, or build from source with
 [macOS dev setup](/platforms/mac/dev-setup).
@@ -248,7 +252,7 @@ first-run model setup still runs when needed.
 
 In the macOS app's embedded dashboard, clicking an external web link opens it as a **Mac tab** in the **Browser** tab of the chat side panel. On non-chat routes, it opens in the shell-level Browser dock. While Settings is open, external links open in the default browser because the Browser panel is hidden. WebKit renders Mac tabs natively, alongside **Agent browser tabs** backed by the Gateway-controlled browser. Older Control UI bundles that still send the legacy `inline` link request open the default browser; current bundles open Mac tabs through the native Browser bridge.
 
-Use the tab strip to select or close a page, the URL bar to navigate, and the back, forward, reload, stop, and **Open in Default Browser** controls to manage the active Mac tab. Opening the same link again reuses its existing tab, including a retained original URL after an initial redirect. Mac tabs belong to each window and survive chat session switches. **Annotate** and **Inspect** capture a one-shot snapshot of a Mac tab for sharing page context with the agent. Navigating that tab to a different URL discards the capture and restores its live view. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the Browser panel's controls navigate the active page.
+Use the tab strip to select or close a page, the URL bar to navigate, and the back, forward, reload, stop, and **Open in Default Browser** controls to manage the active Mac tab. Stop keeps the current page, including when the next navigation is still starting. When a page fails to load, the tab keeps the address you tried and shows the error with a **Reload** button that retries it. If a page's content keeps quitting, the tab reloads it automatically at most twice, then shows the failure and waits for **Reload**. Opening the same link again reuses its existing tab, including a retained original URL after an initial redirect. Mac tabs belong to each window and survive chat session switches. **Annotate** and **Inspect** capture a one-shot snapshot of a Mac tab for sharing page context with the agent. Navigating that tab to a different URL discards the capture and restores its live view. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the Browser panel's controls navigate the active page.
 
 The titlebar controls follow the app sidebar: while it is expanded, back/forward sit at its right edge next to the sidebar toggle; while it is collapsed, they make way for a search button (opens the command palette) and a new-session button.
 

@@ -3,7 +3,6 @@ import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.
 import { acquireAgentRuntimeCleanupRegistries } from "../agents/prepared-model-runtime.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { logVerbose } from "../globals.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
@@ -93,7 +92,7 @@ export async function cleanupSessionBeforeMutation(params: {
   if (cleanupError) {
     return cleanupError;
   }
-  const pluginCleanup = await runPluginHostCleanup({
+  await runPluginHostCleanup({
     cfg: params.cfg,
     registry: getActivePluginRegistry(),
     reason: params.reason === "session-reset" ? "reset" : "delete",
@@ -106,11 +105,6 @@ export async function cleanupSessionBeforeMutation(params: {
     },
   });
   params.assertCurrent?.();
-  for (const failure of pluginCleanup.failures) {
-    logVerbose(
-      `plugin host cleanup failed for ${failure.pluginId}/${failure.hookId}: ${String(failure.error)}`,
-    );
-  }
   const parentSessionKey = params.target.canonicalKey;
   const parentAcpError = await closeAcpRuntimeForSession({
     cfg: params.cfg,

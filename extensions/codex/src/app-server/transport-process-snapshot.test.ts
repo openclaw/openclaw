@@ -1,10 +1,7 @@
-import { execFile, execFileSync } from "node:child_process";
-import fs from "node:fs/promises";
-import os from "node:os";
+import { execFile, spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isPidAlive } from "openclaw/plugin-sdk/process-runtime";
-import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { resolveNodeRuntimeExecutable } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   type PosixProcess,
@@ -26,7 +23,7 @@ const observedProcess: PosixProcess = {
 };
 
 it.skipIf(process.platform === "win32")(
-  "keeps parent timers responsive and reaps the inspector when a command read blocks",
+  "keeps parent timers responsive and closes the descriptor after a blocked read expires",
   async () => {
     const stdout = await new Promise<string>((resolve, reject) => {
       execFile(
@@ -48,8 +45,8 @@ it.skipIf(process.platform === "win32")(
     const result = JSON.parse(stdout);
     expect(result).toMatchObject({
       outcome: { status: "rejected", reason: "deadline" },
-      inspectorUsed: true,
-      inspectorClosed: true,
+      inspectionSpawns: 0,
+      descriptorClosed: true,
       ambientPreloadExecuted: false,
     });
     expect(result.firstHeartbeatMs).toBeLessThan(500);
@@ -59,11 +56,16 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
-  "inspects procfs identities, commands and full trees despite filesystem worker starvation",
+  "bounds inspection during filesystem worker starvation and recovers after release",
   async () => {
+    // Bun's async filesystem does not share Node's libuv worker pool.
+    const node = resolveNodeRuntimeExecutable();
+    if (!node) {
+      throw new Error("The libuv starvation probe requires Node");
+    }
     const stdout = await new Promise<string>((resolve, reject) => {
       execFile(
-        process.execPath,
+        node,
         [
           "--import",
           path.resolve("scripts/tsx.mjs"),
@@ -79,73 +81,97 @@ it.skipIf(process.platform === "win32")(
         (error: Error | null, output: string) => (error ? reject(error) : resolve(output)),
       );
     });
-    expect(JSON.parse(stdout)).toMatchObject({
-      startupDeadlineMs: 10_000,
-      filesystemWorkerReleaseDeadlineMs: 10_500,
+    const result = JSON.parse(stdout);
+    expect(result).toMatchObject({
+      inspectionDeadlineMs: 1_000,
       filesystemWorkerHeldAtInspection: true,
+      inspectionSpawns: 0,
       outcomes: [
+        { operation: "selected-identity", status: "rejected", reason: "deadline" },
+        { operation: "selected-command", status: "rejected", reason: "deadline" },
+        { operation: "full-snapshot", status: "rejected", reason: "deadline" },
+      ],
+      recovered: [
         { operation: "selected-identity", status: "fulfilled", observerPresent: true },
         { operation: "selected-command", status: "fulfilled", commandBytes: expect.any(Number) },
         { operation: "full-snapshot", status: "fulfilled", observerPresent: true },
       ],
     });
+    expect(result.firstHeartbeatMs).toBeLessThan(500);
+    expect(result.inspectionMs).toBeLessThan(2_000);
   },
   20_000,
 );
 
 vi.mock("node:child_process", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:child_process")>();
-  const { createProcfsCommandFixture } = await import("./transport-procfs.test-support.js");
+  return { ...original, execFile: vi.fn(original.execFile), spawn: vi.fn(original.spawn) };
+});
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs/promises")>();
+  const { createProcfsFixture } = await import("./transport-procfs.test-support.js");
   return {
     ...original,
-    execFile: vi.fn(
-      createProcfsCommandFixture(
-        original,
-        (file) => (procfs.readFile.getMockImplementation() ? procfs.readFile(file) : undefined),
-        () => (procfs.readdir.getMockImplementation() ? procfs.readdir() : undefined),
-      ),
+    ...createProcfsFixture(
+      original,
+      (file) => (procfs.readFile.getMockImplementation() ? procfs.readFile(file) : undefined),
+      () => (procfs.readdir.getMockImplementation() ? procfs.readdir() : undefined),
     ),
   };
 });
 
-vi.mock("node:fs", async (importOriginal) => {
-  const original = await importOriginal<typeof import("node:fs")>();
-  const { createProcfsSyncFixture } = await import("./transport-procfs.test-support.js");
-  return {
-    ...original,
-    ...createProcfsSyncFixture(original, (file) =>
-      procfs.readFile.getMockImplementation() ? procfs.readFile(file) : undefined,
-    ),
-  };
-});
-
-it.for(["snapshot", "command"] as const)(
-  "normalizes synchronous inspector launch denial for %s",
-  async (kind, ctx) => {
-    ctx.onTestFinished(() => {
-      vi.restoreAllMocks();
+it.skipIf(process.platform !== "linux")(
+  "inspects Linux selected identities, commands and full trees without spawning",
+  async () => {
+    vi.mocked(execFile).mockClear();
+    vi.mocked(spawn).mockClear();
+    const deadline = performance.now() + 2_000;
+    const [observed] = await readCodexAppServerProcessSnapshot(deadline, [process.pid]);
+    expect(observed).toMatchObject({ pid: process.pid, ppid: process.ppid });
+    expect(await readCodexAppServerProcessCommand(observed!, deadline)).not.toBe("");
+    const snapshot = await readCodexAppServerProcessSnapshot(deadline);
+    expect(snapshot.find((row) => row.pid === process.pid)).toMatchObject({
+      pid: process.pid,
+      startedAt: observed!.startedAt,
     });
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    vi.mocked(execFile).mockImplementationOnce(() => {
-      throw Object.assign(new Error("spawn EPERM"), { code: "EPERM" });
-    });
-    const inspected =
-      kind === "snapshot"
-        ? readCodexAppServerProcessSnapshot(undefined, [process.pid])
-        : readCodexAppServerProcessCommand(observedProcess, performance.now() + 1_000);
-    await expect(inspected).rejects.toMatchObject({
-      name: "ProcessInspectionError",
-      reason: "permission",
-      message: expect.stringContaining("Check process inspection permissions"),
-    });
+    expect(execFile).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
   },
 );
+
+it.for([
+  { kind: "snapshot", code: "EACCES" },
+  { kind: "snapshot", code: "EPERM" },
+  { kind: "command", code: "EACCES" },
+  { kind: "command", code: "EPERM" },
+])("normalizes procfs permission denial for $kind: $code", async ({ kind, code }, ctx) => {
+  ctx.onTestFinished(() => {
+    procfs.readFile.mockReset();
+    vi.restoreAllMocks();
+  });
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  procfs.readFile.mockImplementation(() => {
+    throw Object.assign(new Error("procfs read denied"), { code });
+  });
+  const inspected =
+    kind === "snapshot"
+      ? readCodexAppServerProcessSnapshot()
+      : readCodexAppServerProcessCommand(observedProcess, performance.now() + 1_000);
+  await expect(inspected).rejects.toMatchObject({
+    name: "ProcessInspectionError",
+    reason: "permission",
+    message: expect.stringContaining("Check process inspection permissions"),
+  });
+});
 
 describe("Codex procfs command inspector", () => {
   it.for([
     "ready",
     "empty",
     "gone",
+    "permission",
+    "malformed",
     "replaced",
     "zombie",
     "reparented",
@@ -212,6 +238,8 @@ describe("Codex procfs command inspector", () => {
     }
     if (["ready", "empty", "read-error", "replaced after read"].includes(mode)) {
       expect(commandReads).toBe(2);
+    } else {
+      expect(commandReads).toBe(1);
     }
   });
 
@@ -288,7 +316,7 @@ describe("Codex procfs process inspector", () => {
     },
   );
 
-  it.for(["2", "9007199254740992"])(
+  it.for(["1", "2", "9007199254740992"])(
     "requires explicit thread evidence before classifying a zombie leader: %s",
     async (threads, ctx) => {
       ctx.onTestFinished(() => {
@@ -365,97 +393,60 @@ describe("Codex procfs process inspector", () => {
   );
 });
 
-describe.skipIf(process.platform === "win32" || process.platform === "linux")(
-  "Codex POSIX process inspector",
-  () => {
-    it.for(["gone", "missing observer", "malformed"])(
-      "requires complete selected ps evidence when the target is %s",
-      async (mode, ctx) => {
-        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-ps-selected-"));
-        ctx.onTestFinished(() => fs.rm(tempDir, { recursive: true, force: true }));
-        await fs.writeFile(
-          path.join(tempDir, "ps"),
-          `#!/usr/bin/env node
-const selected = process.argv[process.argv.indexOf("-p") + 1]?.split(",");
-if (selected?.includes("${process.pid}") && ${JSON.stringify(mode)} !== "missing observer") {
-  console.log("${process.pid} ${process.ppid} ${process.pid} S Sat Aug 29 10:00:00 2026");
-}
-if (${JSON.stringify(mode)} === "malformed") console.log("unusable selected process");
-`,
-          { mode: 0o755 },
-        );
-        await withEnvAsync(
-          { PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}` },
-          async () => {
-            const inspected = readCodexAppServerProcessSnapshot(undefined, [process.pid + 1]);
-            if (mode === "gone") {
-              await expect(inspected).resolves.toMatchObject([{ pid: process.pid }]);
-            } else {
-              await expect(inspected).rejects.toMatchObject({ reason: "unavailable" });
-            }
-          },
-        );
-      },
+describe.skipIf(process.platform !== "darwin")("Codex Darwin process inspector", () => {
+  it("reads the observer through the shared native owner", async () => {
+    const [observed] = await readCodexAppServerProcessSnapshot(undefined, [process.pid]);
+    expect(observed).toMatchObject({
+      pid: process.pid,
+      ppid: process.ppid,
+      pgid: expect.any(Number),
+      state: expect.stringMatching(/^[RSZTI?]$/),
+      startedAt: expect.stringMatching(/^\w{3} \w{3} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/),
+    });
+    expect(await readCodexAppServerProcessCommand(observed!, performance.now() + 1_000)).not.toBe(
+      "",
     );
+  });
 
-    it.for([
-      ["snapshot", "unavailable"],
-      ["snapshot", "hung"],
-      ["command", "unavailable"],
-      ["command", "hung"],
-    ] as const)(
-      "settles a %s ps inspector without leaking its process",
-      async ([kind, mode], ctx) => {
-        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-ps-deadline-"));
-        const inspectorPath = path.join(tempDir, "ps");
-        const pidPath = path.join(tempDir, "inspector.pid");
-        let inspectorPid: number | undefined;
-        ctx.onTestFinished(async () => {
-          const pid = inspectorPid ?? Number(await fs.readFile(pidPath, "utf8").catch(() => ""));
-          if (pid && isPidAlive(pid)) {
-            const command = execFileSync("/bin/ps", ["-o", "command=", "-p", String(pid)], {
-              encoding: "utf8",
-              stdio: ["ignore", "pipe", "ignore"],
-            });
-            if (command.includes(inspectorPath)) {
-              process.kill(pid, "SIGKILL");
-            }
-          }
-          await fs.rm(tempDir, { recursive: true, force: true });
-        });
-        await fs.writeFile(
-          inspectorPath,
-          `#!/usr/bin/env node
-const fs = require("node:fs");
-fs.writeFileSync(process.env.CODEX_TEST_PS_PID_FILE, String(process.pid));
-${mode === "unavailable" ? "process.exit(1);" : "setInterval(() => {}, 1000);"}
-`,
-          { mode: 0o755 },
-        );
-        await withEnvAsync(
-          {
-            PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`,
-            CODEX_TEST_PS_PID_FILE: pidPath,
-          },
-          async () => {
-            const startedAt = performance.now();
-            const budgetMs = 1_000;
-            const result =
-              kind === "command"
-                ? readCodexAppServerProcessCommand(observedProcess, startedAt + budgetMs)
-                : readCodexAppServerProcessSnapshot(startedAt + budgetMs);
-            await expect(result).rejects.toMatchObject({
-              reason: mode === "hung" ? "deadline" : "unavailable",
-            });
-            const pid = Number(await fs.readFile(pidPath, "utf8"));
-            inspectorPid = pid;
-            expect(pid).toBeGreaterThan(0);
-            // Allow scheduler jitter, but not the inspector's unbounded event loop.
-            expect(performance.now() - startedAt).toBeLessThan(budgetMs + 500);
-            await expect.poll(() => isPidAlive(pid)).toBe(false);
-          },
-        );
-      },
-    );
-  },
-);
+  it("omits a reaped child while retaining the selected observer", async () => {
+    const pid = await new Promise<number>((resolve, reject) => {
+      const child = execFile(process.execPath, ["-e", ""], { env: {} }, (error) => {
+        if (error) {
+          reject(new Error("Could not run the process snapshot fixture", { cause: error }));
+        } else if (child.pid === undefined) {
+          reject(new Error("Child PID is unavailable"));
+        } else {
+          resolve(child.pid);
+        }
+      });
+    });
+    const rows = await readCodexAppServerProcessSnapshot(undefined, [pid]);
+    expect(rows.map((row) => row.pid)).toEqual([process.pid]);
+  });
+
+  it.for(["snapshot", "tree", "command"] as const)(
+    "preserves the native owner's deadline failure for %s",
+    async (kind) => {
+      const deadline = performance.now() - 1;
+      const inspected =
+        kind === "command"
+          ? readCodexAppServerProcessCommand(observedProcess, deadline)
+          : readCodexAppServerProcessSnapshot(
+              deadline,
+              [process.pid],
+              kind === "tree" ? [process.pid] : undefined,
+            );
+      await expect(inspected).rejects.toMatchObject({
+        name: "ProcessInspectionError",
+        reason: "deadline",
+      });
+    },
+  );
+
+  it("preserves unavailable selected identity errors", async () => {
+    await expect(readCodexAppServerProcessSnapshot(undefined, [-1])).rejects.toMatchObject({
+      name: "ProcessInspectionError",
+      reason: "unavailable",
+    });
+  });
+});

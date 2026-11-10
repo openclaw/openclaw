@@ -1,28 +1,25 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
 import { vi } from "vitest";
+import { createChangeListeners } from "../../../src/shared/listeners.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import type { SolidController } from "../lit/solid-controller-host.ts";
-import { ControllerHost } from "../lit/subscriptions-controller.ts";
 import { createDraftFixture } from "../pages/new-session/draft-submission-flow.test-support.ts";
 import {
   PaletteSessionAttachments,
   PaletteSessionAuxiliary,
   PaletteSessionControls,
-  PaletteSessionRecovery,
 } from "../pages/new-session/palette-session-draft-view.tsx";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import { mountSolid } from "./mount-solid.ts";
 import { flush } from "./solid-settle.ts";
 
-export class PaletteDraftHost extends ControllerHost {
+export class PaletteDraftHost {
   readonly element = document.createElement("div");
-  readonly ownerDocument = document;
   readonly querySelector = this.element.querySelector.bind(this.element);
   readonly querySelectorAll = this.element.querySelectorAll.bind(this.element);
-  private readonly updatedControllers = new Set<SolidController>();
+  private publish = () => {};
+  private readonly onDraftChange = () => this.publish();
   private readonly unmount: () => void;
-  readonly context: ApplicationContext;
   paletteOpen = true;
   readonly started = vi.fn();
   readonly settingsReady = createDeferred();
@@ -41,66 +38,58 @@ export class PaletteDraftHost extends ControllerHost {
     }
   }
   readonly draft = new PaletteSessionDraft(
-    this,
+    this.element,
     () => ({ context: this.context, open: this.paletteOpen }),
-    { onClose: () => this.started() },
+    {
+      changed: this.onDraftChange,
+      updateComplete: () => this.updateComplete,
+      onClose: () => {
+        this.paletteOpen = false;
+        this.started();
+      },
+    },
   );
-  constructor(context: ApplicationContext) {
-    super();
-    this.context = context;
+  constructor(readonly context: ApplicationContext) {
     document.body.append(this.element);
-    const mounted = mountSolid(
+    this.unmount = mountSolid(
       () => {
         const [revision, setRevision] = createSignal({}, { ownedWrite: true });
-        const unsubscribe = this.subscribe(() => setRevision({}));
-        const recovery = createMemo(() => {
-          revision();
-          return this.draft.recoveryAction;
-        });
+        this.publish = () => setRevision({});
         const message = createMemo(() => {
           revision();
           return this.draft.message;
         });
         createEffect(revision, () => {
-          for (const controller of this.updatedControllers) {
-            controller.hostUpdated?.();
-          }
+          this.draft.synchronize();
+          this.draft.settled();
           this.updated();
         });
-        onCleanup(() => {
-          unsubscribe();
-          this.disconnect();
+        onSettled(() => {
+          const sources = [context.agents, context.agentIdentity, context.sessions, context.config];
+          const stops = sources.map((source) => source.subscribe(this.onDraftChange));
+          this.draft.connect();
+          this.onDraftChange();
+          return () => {
+            this.publish = () => {};
+            stops.forEach((stop) => stop());
+            this.draft.disconnect();
+          };
         });
         return (
           <>
             <textarea aria-label="Palette prompt" value={message()} />
             <PaletteSessionControls draft={this.draft} revision={revision()} />
-            <Show when={recovery()}>
-              {(onOpen) => <PaletteSessionRecovery onOpen={onOpen()} />}
-            </Show>
             <PaletteSessionAuxiliary draft={this.draft} revision={revision()} />
             <PaletteSessionAttachments draft={this.draft} revision={revision()} />
           </>
         );
       },
       { container: this.element },
-    );
-    this.unmount = mounted.unmount;
-    this.connect();
+    ).unmount;
   }
 
-  override addController(controller: SolidController) {
-    this.updatedControllers.add(controller);
-    super.addController(controller);
-  }
-
-  override removeController(controller: SolidController) {
-    this.updatedControllers.delete(controller);
-    super.removeController(controller);
-  }
-
-  override get updateComplete() {
-    return super.updateComplete.then(() => {
+  get updateComplete() {
+    return Promise.resolve(true).then(() => {
       flush();
       return true;
     });
@@ -115,18 +104,13 @@ export class PaletteDraftHost extends ControllerHost {
 export async function mount(options: Parameters<typeof createDraftFixture>[0] = {}) {
   const fixture = createDraftFixture(options);
   const { context } = fixture;
-  const listeners = new Set<() => void>();
+  const changes = createChangeListeners();
   Object.assign(context.gateway, {
     connectionRevision: 1,
-    subscribe: (listener: () => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener: Parameters<ApplicationContext["gateway"]["subscribe"]>[0]) =>
+      changes.subscribe(() => listener(context.gateway.snapshot)),
   });
-  Object.assign(context.agents, { subscribe: () => () => {} });
   Object.assign(context.agents.state, { connected: true, client: context.gateway.snapshot.client });
-  Object.assign(context.sessions, { subscribe: () => () => {} });
-  Object.assign(context.config, { subscribe: () => () => {} });
   Object.assign(context, {
     agentIdentity: {
       subscribe: () => () => {},
@@ -140,5 +124,5 @@ export async function mount(options: Parameters<typeof createDraftFixture>[0] = 
   host.draft.open();
   await host.updateComplete;
   await host.updateComplete;
-  return { ...fixture, host, publish: () => listeners.forEach((listener) => listener()) };
+  return { ...fixture, host, publish: changes.publish };
 }

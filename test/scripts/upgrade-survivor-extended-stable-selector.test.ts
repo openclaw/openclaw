@@ -1,20 +1,14 @@
-import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import * as io from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
 
-function slice(start: string, end: string) {
-  const from = source.indexOf(start);
-  const to = source.indexOf(end, from);
-  if (from < 0 || to < from) {
-    throw new Error(`Expected upgrade survivor entry point ${start}`);
-  }
-  return source.slice(from, to);
-}
+const slice = (start: string, end: string) =>
+  source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
 
 // The real registry and update owners; only process boundaries are inert.
 const harness = [
@@ -24,23 +18,22 @@ const harness = [
 
 type Call = { argv: string[]; packageSpec: string | null; registry: string | null };
 
-function runUpdate(params: {
-  baselineVersion: string;
-  candidateVersion: string;
-  configureRegistry?: boolean;
-}) {
-  const root = tempDirs.make("survivor-extended-selector-");
-  const artifacts = join(root, "artifacts");
-  const bin = join(root, "bin");
-  mkdirSync(artifacts);
-  mkdirSync(bin);
-  const calls = join(root, "calls.jsonl");
-  const registries = join(root, "registries.jsonl");
-  writeFileSync(calls, "");
-  writeFileSync(registries, "");
-  writeFileSync(
-    join(bin, "openclaw"),
-    `#!${process.execPath}
+it.skipIf(process.platform === "win32").each([
+  ["2026.8.35", "2026.9.33", false, "selector"],
+  ["2026.8.35", "2026.9.33", true, "selector"],
+  ["2026.9.9", "2026.9.33", false, "target"],
+  ["2026.8.35", "2026.10.1", false, "stable"],
+] as const)(
+  "routes %s to %s (registry=%s, %s)",
+  (baselineVersion, candidateVersion, configureRegistry, route) => {
+    const root = tempDirs.make("survivor-extended-selector-");
+    const calls = join(root, "calls.jsonl");
+    const registries = join(root, "registries.jsonl");
+    writeFileSync(calls, "");
+    writeFileSync(registries, "");
+    io.writeExecutable(
+      join(root, "openclaw"),
+      `#!${process.execPath}
 const fs = require("node:fs");
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({
   argv: process.argv.slice(2),
@@ -49,13 +42,12 @@ fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({
 }) + "\\n");
 process.exit(process.argv[2] === "update" ? 2 : 0);
 `,
-    { mode: 0o755 },
-  );
-  const result = spawnSync(
-    "bash",
-    [
-      "-c",
-      `set -u
+    );
+    const result = io.runProcess(
+      "bash",
+      [
+        "-c",
+        `set -u
 openclaw_e2e_maybe_timeout() { shift; "$@"; }
 openclaw_e2e_print_log() { :; }
 read_installed_version() { printf '%s' "$baseline_version"; }
@@ -66,7 +58,7 @@ openclaw_prepublish_plugin_registry_start() {
   export NPM_CONFIG_REGISTRY=http://127.0.0.1:4873
 }
 ${harness}
-ARTIFACT_ROOT=${JSON.stringify(artifacts)}
+ARTIFACT_ROOT=${JSON.stringify(root)}
 UPDATE_JSON="$ARTIFACT_ROOT/update.json"
 UPDATE_ERR="$ARTIFACT_ROOT/update.err"
 POST_UPDATE_VALIDATE_JSON="$ARTIFACT_ROOT/validate.json"
@@ -80,80 +72,41 @@ CANDIDATE_SPEC=${JSON.stringify(join(root, "candidate.tgz"))}
 candidate_tarball=""
 plugin_registry_pid=""
 candidate_selector_registry=0
-baseline_version=${params.baselineVersion}
+baseline_version=${baselineVersion}
 baseline_spec="openclaw@$baseline_version"
-candidate_version=${params.candidateVersion}
-${params.configureRegistry ? "configure_plugin_registry || exit 90" : ""}
+candidate_version=${candidateVersion}
+${configureRegistry ? "configure_plugin_registry || exit 90" : ""}
 update_candidate
 `,
-    ],
-    {
-      encoding: "utf8",
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, REGISTRY_LOG: registries },
-      timeout: 30_000,
-    },
-  );
-  const read = (file: string) =>
-    readFileSync(file, "utf8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
-  return {
-    result,
-    update: (read(calls) as Call[]).find((call) => call.argv[0] === "update"),
-    registries: read(registries) as { tags: string | null; args: string[] }[],
-    tarball: join(root, "candidate.tgz"),
-  };
-}
-
-describe.skipIf(process.platform === "win32")("upgrade survivor extended-stable selector", () => {
-  it.each([false, true])(
-    "updates 2026.8.35 to 2026.9.33 through the loopback selector (fixture registry: %s)",
-    (configureRegistry) => {
-      const { result, update, registries, tarball } = runUpdate({
-        baselineVersion: "2026.8.35",
-        candidateVersion: "2026.9.33",
-        configureRegistry,
-      });
-      // The fake updater fails after recording its invocation.
-      expect(result.status, result.stderr).toBe(2);
-      expect(update).toEqual({
-        argv: ["update", "--yes", "--json", "--no-restart"],
-        packageSpec: "openclaw",
-        registry: "http://127.0.0.1:4873",
-      });
-      expect(registries).toHaveLength(1);
-      expect(registries[0]?.args.slice(-3)).toEqual(["openclaw", "2026.9.33", tarball]);
-      expect(registries[0]?.tags).toBe(
-        configureRegistry
-          ? "beta=2026.9.33,extended-stable=2026.9.33"
-          : "extended-stable=2026.9.33",
+      ],
+      { ...process.env, PATH: `${root}:${process.env.PATH ?? ""}`, REGISTRY_LOG: registries },
+      30_000,
+    );
+    expect(result.status, result.stderr).toBe(2);
+    const update = io.readJsonLines<Call>(calls).find((call) => call.argv[0] === "update");
+    const registered = io.readJsonLines<{ tags: string | null; args: string[] }>(registries);
+    const tarball = join(root, "candidate.tgz");
+    expect(update).toEqual({
+      argv: [
+        "update",
+        ...(route === "selector" ? [] : ["--tag", `file:${tarball}`]),
+        "--yes",
+        "--json",
+        ...(route === "stable" ? ["--channel", "stable"] : []),
+        "--no-restart",
+      ],
+      packageSpec: route === "selector" ? "openclaw" : null,
+      registry:
+        route === "selector" ? "http://127.0.0.1:4873" : (process.env.NPM_CONFIG_REGISTRY ?? null),
+    });
+    if (route === "selector") {
+      expect(registered).toHaveLength(1);
+      expect(registered[0]?.args.slice(-3)).toEqual(["openclaw", candidateVersion, tarball]);
+      expect(registered[0]?.tags).toBe(
+        `${configureRegistry ? "beta=2026.9.33," : ""}extended-stable=2026.9.33`,
       );
-    },
-  );
-
-  it.each([
-    { baselineVersion: "2026.9.9", candidateVersion: "2026.9.33", channel: [] },
-    {
-      baselineVersion: "2026.8.35",
-      candidateVersion: "2026.10.1",
-      channel: ["--channel", "stable"],
-    },
-  ])(
-    "keeps the explicit target for $baselineVersion to $candidateVersion",
-    ({ baselineVersion, candidateVersion, channel }) => {
-      const { result, update, registries, tarball } = runUpdate({
-        baselineVersion,
-        candidateVersion,
-      });
-      expect(result.status, result.stderr).toBe(2);
-      expect(update).toEqual({
-        argv: ["update", "--tag", `file:${tarball}`, "--yes", "--json", ...channel, "--no-restart"],
-        packageSpec: null,
-        registry: process.env.NPM_CONFIG_REGISTRY ?? null,
-      });
-      expect(registries).toEqual([]);
-    },
-  );
-});
+    } else {
+      expect(registered).toEqual([]);
+    }
+  },
+);

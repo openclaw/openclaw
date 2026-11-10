@@ -1,19 +1,12 @@
+import {
+  isSessionRunActive,
+  isSessionRunActiveForKey,
+} from "../sessions/session-controller.queries.js";
 import { logMessageProcessed, logMessageQueued, logSessionStateChange } from "./diagnostic.js";
 
 type MessageLifecycleRef = {
   sessionId?: string;
   sessionKey?: string;
-};
-
-type MessageLifecycleOutcome = "completed" | "skipped" | "error";
-
-type MessageLifecycleProcessedOptions = MessageLifecycleRef & {
-  durationMs?: number;
-  reason?: string;
-  error?: string;
-  agentId?: string;
-  userPrompt?: string;
-  finalResponse?: string;
 };
 
 export function createDiagnosticMessageLifecycle(
@@ -35,13 +28,21 @@ export function createDiagnosticMessageLifecycle(
     sessionId: override?.sessionId ?? params.sessionId,
     sessionKey: override?.sessionKey ?? params.sessionKey,
   });
+  const resolveState = (ref: MessageLifecycleRef, inactive: "idle" | "waiting") =>
+    (
+      ref.sessionKey
+        ? isSessionRunActiveForKey(ref.sessionKey)
+        : ref.sessionId && isSessionRunActive(ref.sessionId)
+    )
+      ? "processing"
+      : inactive;
   // Processed events still matter without a session ref; queue-depth/state events do not.
   const canTrackSessionState = (ref: MessageLifecycleRef): boolean =>
     params.enabled && params.trackSessionState && Boolean(ref.sessionId || ref.sessionKey);
 
   return {
-    markProcessing(override?: MessageLifecycleRef): void {
-      const ref = resolveRef(override);
+    markProcessing(): void {
+      const ref = resolveRef();
       if (!canTrackSessionState(ref)) {
         return;
       }
@@ -54,7 +55,7 @@ export function createDiagnosticMessageLifecycle(
       logSessionStateChange({
         sessionId: ref.sessionId,
         sessionKey: ref.sessionKey,
-        state: "processing",
+        state: resolveState(ref, "waiting"),
         reason: params.processingReason,
       });
     },
@@ -67,14 +68,21 @@ export function createDiagnosticMessageLifecycle(
       logSessionStateChange({
         sessionId: ref.sessionId,
         sessionKey: ref.sessionKey,
-        state: "idle",
+        state: resolveState(ref, "idle"),
+        consumeQueuedTurn: true,
         reason,
       });
     },
 
     markProcessed(
-      outcome: MessageLifecycleOutcome,
-      options?: MessageLifecycleProcessedOptions,
+      outcome: "completed" | "skipped" | "error",
+      options?: MessageLifecycleRef & {
+        durationMs?: number;
+        reason?: string;
+        error?: string;
+        userPrompt?: string;
+        finalResponse?: string;
+      },
     ): void {
       if (!params.enabled) {
         return;
@@ -86,7 +94,7 @@ export function createDiagnosticMessageLifecycle(
         messageId: params.messageId,
         sessionId: ref.sessionId,
         sessionKey: ref.sessionKey,
-        agentId: options?.agentId ?? params.agentId,
+        agentId: params.agentId,
         durationMs: options?.durationMs ?? Date.now() - startedAtMs,
         outcome,
         reason: options?.reason,

@@ -1,5 +1,6 @@
 import {
   getReplyPayloadMetadata,
+  readReplyPayloadSourceOccurrence,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
@@ -37,6 +38,17 @@ export function resolvePendingFinalCompletion(payload: ReplyPayload) {
   return identity ? { kind: "pending-final" as const, ...identity } : undefined;
 }
 
+const activeDeliveries = new Set<NonNullable<ReturnType<typeof resolvePendingFinalCompletion>>>();
+
+export function hasActiveDirectPendingFinalDelivery(sessionId: string, intentId: string): boolean {
+  for (const completion of activeDeliveries) {
+    if (completion.sessionId === sessionId && completion.intentId === intentId) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export async function createDirectPendingFinalCustody(
   payload: ReplyPayload,
   fallbackStorePath?: string,
@@ -59,13 +71,20 @@ export async function createDirectPendingFinalCustody(
         ...(authority ? { sessionWriterDeliveryAuthority: authority } : {}),
       }),
     assertPlatformSendAuthorized: () => assertSessionWriterDeliveryAuthorized(authority),
-    release,
+    release: () => {
+      if (completion) {
+        activeDeliveries.delete(completion);
+      }
+      release();
+    },
     onPlatformSendDispatch: async () => {
       // One logical delivery retains custody across all of its physical posts.
       await (admission ??= (async () => {
         if (!completion) {
           return;
         }
+        // Keep crash-safe debt, but defer its notice until this live send settles.
+        activeDeliveries.add(completion);
         const result = await settlePendingFinalDelivery(completion, "unknown", [
           "prepared",
           "queued",
@@ -79,12 +98,14 @@ export async function createDirectPendingFinalCustody(
   };
 }
 
-export function toCoreManagedDeliveryInfo(info: ChannelDeliveryInfo) {
+export function toCoreManagedDeliveryInfo(info: ChannelDeliveryInfo, payload: ReplyPayload) {
+  const blockSource = info.kind === "block" ? readReplyPayloadSourceOccurrence(payload) : undefined;
   return {
     kind: info.kind,
     ...(info.participant ? { participant: info.participant } : {}),
     ...(info.assistantMessageIndex === undefined
       ? {}
       : { assistantMessageIndex: info.assistantMessageIndex }),
+    ...(blockSource ? { blockSourceRange: blockSource.sourceRange } : {}),
   };
 }

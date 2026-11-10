@@ -4,13 +4,14 @@ import type {
   TalkClientCreateParams,
   TalkConfigResult,
 } from "@openclaw/gateway-protocol";
-import type { SchemaContract } from "../../../../../packages/gateway-protocol/src/schema-contract.js";
+import type { RealtimeVoiceCloseOptions } from "../../../../../src/talk/provider-types.js";
+import { normalizeTalkTransport } from "../../../../../src/talk/talk-session-controller.js";
 import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../../../../../src/talk/voice-transcript.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
-import { RealtimeTalkInputController } from "./input.ts";
+import { RealtimeTalkInputOwner } from "./input.ts";
 import type {
   RealtimeTalkCallbacks,
   RealtimeTalkSessionResult,
@@ -25,12 +26,12 @@ import {
   reserveClientVoiceSessionOwner,
   retryVoiceTranscriptPersistence,
 } from "./transcript-owner.ts";
-import { normalizeLaunchTransport, type RealtimeTalkLaunchTransport } from "./transport.ts";
 
 export type { RealtimeTalkStatus };
 
-type RealtimeTalkLaunchOptions = SchemaContract<
-  Omit<TalkClientCreateParams, "sessionKey" | "voiceSessionId" | "mode" | "brain" | "capabilities">
+type RealtimeTalkLaunchOptions = Pick<
+  TalkClientCreateParams,
+  "voice" | "voiceChangeId" | "transport"
 >;
 
 type RealtimeTalkLocalOptions = {
@@ -64,7 +65,7 @@ export async function switchActiveRealtimeTalkCameras(
 
 export class RealtimeTalkSession {
   private transport: RealtimeTalkTransport | null = null;
-  private selectedTransport: RealtimeTalkLaunchTransport | undefined;
+  private selectedTransport: RealtimeTalkSessionResult["transport"] | undefined;
   private pendingStartup: Pick<RealtimeTalkTransport, "stop"> | null = null;
   private closed = false;
   private closeCompletion: Promise<void> = Promise.resolve();
@@ -98,7 +99,7 @@ export class RealtimeTalkSession {
   async start(): Promise<void> {
     const owner = reserveClientVoiceSessionOwner(this.client, this.sessionKey);
     let ownerTransferred = false;
-    let input: RealtimeTalkInputController | undefined;
+    let input: RealtimeTalkInputOwner | undefined;
     try {
       // Each start owns a new call. Provider allocation can retire an earlier
       // transport, so a failed start cannot restore that transport locally.
@@ -126,12 +127,12 @@ export class RealtimeTalkSession {
             this.closed ||
             lifecycleGeneration !== this.lifecycleGeneration
           ) {
-            transport.stop();
+            transport.stop({ disposition: "detach" });
             return;
           }
           this.transport = transport;
         } catch (error) {
-          transport.stop();
+          transport.stop({ disposition: "detach" });
           throw error;
         } finally {
           if (this.pendingStartup === transport) {
@@ -147,7 +148,7 @@ export class RealtimeTalkSession {
       if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {
         return;
       }
-      input = new RealtimeTalkInputController(
+      input = new RealtimeTalkInputOwner(
         () => undefined,
         (detail) => this.callbacks.onStatus?.("connecting", detail),
       );
@@ -297,15 +298,9 @@ export class RealtimeTalkSession {
       return false;
     }
     try {
-      const requestedProvider = this.options.provider?.trim();
-      const requestedModel = this.options.model?.trim();
       const catalog = await this.client.request<TalkCatalogResult>(
         "talk.catalog",
-        {
-          sessionKey: this.sessionKey,
-          ...(requestedProvider ? { provider: requestedProvider } : {}),
-          ...(requestedModel ? { model: requestedModel } : {}),
-        },
+        { sessionKey: this.sessionKey },
         { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
       );
       const selectedProvider = catalog.realtime.activeProvider;
@@ -349,33 +344,23 @@ export class RealtimeTalkSession {
       ) {
         throw error;
       }
-      let transport = options.transport;
-      if (!transport) {
-        let result: TalkConfigResult;
-        try {
-          result = await this.client.request<TalkConfigResult>(
-            "talk.config",
-            {},
-            { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
-          );
-        } catch {
-          throw error;
-        }
-        if (!result.config || typeof result.config !== "object") {
-          throw error;
-        }
-        const configuredTransport = result.config?.talk?.realtime?.transport;
-        if (configuredTransport !== undefined) {
-          transport = normalizeLaunchTransport(configuredTransport);
-          if (!transport) {
-            throw error;
-          }
-        }
+      let result: TalkConfigResult;
+      try {
+        result = await this.client.request<TalkConfigResult>(
+          "talk.config",
+          {},
+          { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+        );
+      } catch {
+        throw error;
       }
+      const configuredTransport = result.config?.talk?.realtime?.transport;
       if (
+        !result.config ||
         this.closed ||
         this.lifecycleGeneration !== lifecycleGeneration ||
-        (transport && transport !== "gateway-relay")
+        (configuredTransport !== undefined &&
+          normalizeTalkTransport(configuredTransport) !== "gateway-relay")
       ) {
         throw error;
       }
@@ -402,9 +387,9 @@ export class RealtimeTalkSession {
     );
   }
 
-  stop(): Promise<void> {
+  stop(options: RealtimeVoiceCloseOptions = {}): Promise<void> {
     try {
-      return this.retireTransport();
+      return this.retireTransport(options);
     } finally {
       this.callbacks.onStatus?.("idle");
     }
@@ -414,11 +399,13 @@ export class RealtimeTalkSession {
     return this.closed ? undefined : this.voiceSessionId;
   }
 
-  getTransport(): RealtimeTalkLaunchTransport | undefined {
+  getTransport(): RealtimeTalkSessionResult["transport"] | undefined {
     return this.closed ? undefined : this.selectedTransport;
   }
 
-  private retireTransport(): Promise<void> {
+  private retireTransport(
+    options: RealtimeVoiceCloseOptions = { disposition: "detach" },
+  ): Promise<void> {
     this.lifecycleGeneration += 1;
     this.closed = true;
     this.videoOperation += 1;
@@ -431,10 +418,10 @@ export class RealtimeTalkSession {
     this.selectedTransport = undefined;
     this.pendingStartup = null;
     try {
-      completions.push(Promise.resolve(pendingStartup?.stop({ emitClosed: false })));
+      completions.push(Promise.resolve(pendingStartup?.stop({ ...options, emitClosed: false })));
     } finally {
       try {
-        completions.push(Promise.resolve(transport?.stop()));
+        completions.push(Promise.resolve(transport?.stop(options)));
       } finally {
         if (detached) {
           completions.push(this.closeLogicalVoiceSession(detached));

@@ -3,7 +3,6 @@ import {
   buildChannelInboundEventContext,
   buildMentionRegexes,
   formatMediaPlaceholderText,
-  type EnvelopeFormatOptions,
   filterChannelInboundQuoteContext,
   formatInboundEnvelope,
   formatInboundFromLabel,
@@ -31,16 +30,13 @@ import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context
 import type { ConfiguredBindingRouteResult } from "openclaw/plugin-sdk/conversation-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveIMessageDirectChatService } from "../chat-context.js";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
 import { resolveIMessageGroupSystemPrompt } from "../group-policy.js";
-import {
-  isKnownFromMeIMessageMessageId,
-  isKnownFromMeIMessageTarget,
-  rememberIMessageReplyCache,
-} from "../monitor-reply-cache.js";
+import { isKnownFromMeIMessageTarget, rememberIMessageReplyCache } from "../monitor-reply-cache.js";
 import { getIMessageRuntime } from "../runtime.js";
 import {
   formatIMessageChatTarget,
@@ -59,8 +55,6 @@ import {
 import { detectReflectedContent } from "./reflection-guard.js";
 import type { SelfChatCache } from "./self-chat-cache.js";
 import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
-
-export { resolveIMessageReactionContext };
 
 type IMessageReactionNotificationMode = "off" | "own" | "all";
 
@@ -321,16 +315,12 @@ export async function resolveIMessageInboundDecision(params: {
   allowLegacyConversationAllowFromForGroup?: boolean;
   groupPolicy: string;
   dmPolicy: string;
-  storeAllowFrom: string[];
+  readStoreAllowFrom: () => Promise<string[]>;
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   echoCache?: IMessageEchoCache;
   selfChatCache?: SelfChatCache;
   reactionNotifications?: IMessageReactionNotificationMode;
-  isKnownFromMeMessageId?: (
-    ...args: Parameters<typeof isKnownFromMeIMessageMessageId>
-  ) => boolean | Promise<boolean>;
-  logVerbose?: (msg: string) => void;
 }): Promise<IMessageInboundDecision> {
   const senderRaw = params.message.sender ?? "";
   const sender = senderRaw.trim();
@@ -399,12 +389,12 @@ export async function resolveIMessageInboundDecision(params: {
   // Outbound sends persist one target shape; inbound rows must probe every
   // equivalent shape so a GUID-keyed send also matches a chat_id-bearing echo.
   const echoScope: string[] = [];
-  if (isGroup) {
-    const chatIdScope = formatIMessageChatTarget(chatId);
-    if (chatIdScope) {
-      echoScope.push(`${params.accountId}:${chatIdScope}`);
-    }
-  } else {
+  // Only self-chats need direct chat_id echo lookup; ordinary DMs keep handle scopes.
+  const chatIdScope = formatIMessageChatTarget(chatId);
+  if (chatIdScope && (isGroup || isSelfChat)) {
+    echoScope.push(`${params.accountId}:${chatIdScope}`);
+  }
+  if (!isGroup) {
     echoScope.push(`${params.accountId}:imessage:${sender}`);
   }
   if (chatGuid) {
@@ -457,12 +447,13 @@ export async function resolveIMessageInboundDecision(params: {
     sender,
     chatId,
   });
+  let storeAllowFrom: Promise<string[]> | undefined;
   const ingressResolver = getIMessageRuntime().channel.inbound.ingress.createResolver({
     channelId: "imessage",
     accountId: params.accountId,
     identity: imessageIngressIdentity,
     cfg: params.cfg,
-    readStoreAllowFrom: async () => params.storeAllowFrom,
+    readStoreAllowFrom: () => (storeAllowFrom ??= params.readStoreAllowFrom()),
   });
   const resolveChannelIngress = (contextBinding?: ChannelIngressContextBinding) =>
     ingressResolver.message({
@@ -500,20 +491,18 @@ export async function resolveIMessageInboundDecision(params: {
   if (senderAccess.decision !== "allow") {
     if (isGroup) {
       if (senderAccess.reasonCode === "group_policy_disabled") {
-        params.logVerbose?.("Blocked iMessage group message (groupPolicy: disabled)");
+        logVerbose("Blocked iMessage group message (groupPolicy: disabled)");
         return { kind: "drop", reason: "groupPolicy disabled" };
       }
       if (senderAccess.reasonCode === "group_policy_empty_allowlist") {
-        params.logVerbose?.(
-          "Blocked iMessage group message (groupPolicy: allowlist, no groupAllowFrom)",
-        );
+        logVerbose("Blocked iMessage group message (groupPolicy: allowlist, no groupAllowFrom)");
         return { kind: "drop", reason: "groupPolicy allowlist (empty groupAllowFrom)" };
       }
       if (senderAccess.reasonCode === "group_policy_not_allowlisted") {
-        params.logVerbose?.(`Blocked iMessage sender ${sender} (not in groupAllowFrom)`);
+        logVerbose(`Blocked iMessage sender ${sender} (not in groupAllowFrom)`);
         return { kind: "drop", reason: "not in groupAllowFrom" };
       }
-      params.logVerbose?.(`Blocked iMessage group message (${senderAccess.reasonCode})`);
+      logVerbose(`Blocked iMessage group message (${senderAccess.reasonCode})`);
       return { kind: "drop", reason: senderAccess.reasonCode };
     }
     if (senderAccess.reasonCode === "dm_policy_disabled") {
@@ -522,14 +511,12 @@ export async function resolveIMessageInboundDecision(params: {
     if (senderAccess.decision === "pairing") {
       return { kind: "pairing", senderId: senderNormalized };
     }
-    params.logVerbose?.(`Blocked iMessage sender ${sender} (dmPolicy=${params.dmPolicy})`);
+    logVerbose(`Blocked iMessage sender ${sender} (dmPolicy=${params.dmPolicy})`);
     return { kind: "drop", reason: "dmPolicy blocked" };
   }
 
   if (isGroup && groupListPolicy.allowlistEnabled && !groupListPolicy.allowed) {
-    params.logVerbose?.(
-      `imessage: skipping group message (${groupId ?? "unknown"}) not in allowlist`,
-    );
+    logVerbose(`imessage: skipping group message (${groupId ?? "unknown"}) not in allowlist`);
     return { kind: "drop", reason: "group id not in allowlist" };
   }
 
@@ -554,7 +541,6 @@ export async function resolveIMessageInboundDecision(params: {
           chatId,
           chatGuid,
           chatIdentifier,
-          isKnownFromMeMessageId: params.isKnownFromMeMessageId,
         }))),
     );
     if (notificationMode === "own" && !targetIsOwn) {
@@ -601,11 +587,10 @@ export async function resolveIMessageInboundDecision(params: {
         text: bodyText,
       });
   if (selfChatHit) {
-    params.logVerbose?.("imessage: dropping self-chat reflected duplicate");
+    logVerbose("imessage: dropping self-chat reflected duplicate");
     return { kind: "drop", reason: "self-chat echo" };
   }
 
-  // Echo detection: check if the received message matches a recently sent message.
   // Scope by conversation so same text in different chats is not conflated.
   if (params.echoCache && (messageText || inboundMessageId || mediaFacts.length > 0)) {
     if (
@@ -618,7 +603,7 @@ export async function resolveIMessageInboundDecision(params: {
         includePendingText: isSelfChat,
       })
     ) {
-      params.logVerbose?.(
+      logVerbose(
         `imessage: skipping echo message${inboundMessageId ? ` id=${inboundMessageId}` : ""}`,
       );
       return { kind: "drop", reason: "echo" };
@@ -630,7 +615,7 @@ export async function resolveIMessageInboundDecision(params: {
   // inbound, which causes recursive echo amplification.
   const reflection = detectReflectedContent(messageText);
   if (reflection.isReflection) {
-    params.logVerbose?.(
+    logVerbose(
       `imessage: dropping reflected assistant content (markers: ${reflection.matchedLabels.join(", ")})`,
     );
     return { kind: "drop", reason: "reflected assistant content" };
@@ -689,7 +674,7 @@ export async function resolveIMessageInboundDecision(params: {
       }
     : null;
   if (replyContext && !filteredReplyContext && isGroup) {
-    params.logVerbose?.(
+    logVerbose(
       `imessage: drop reply context (mode=${contextVisibilityMode}, sender_allowed=${replySenderAllowed ? "yes" : "no"})`,
     );
   }
@@ -706,21 +691,18 @@ export async function resolveIMessageInboundDecision(params: {
       isGroup,
       message: params.message,
       requireMentionOverride: params.opts?.requireMention,
-      isKnownFromMeMessageId: params.isKnownFromMeMessageId,
     });
   // An explicit bot-thread requirement remains enforced when patterns are disabled.
   const canDetectMention = mentionRegexes.length > 0 || enforceMentionRequirement;
 
   const commandAuthorized = commandAccess.authorized;
   if (commandAccess.shouldBlockControlCommand) {
-    if (params.logVerbose) {
-      logInboundDrop({
-        log: params.logVerbose,
-        channel: "imessage",
-        reason: "control command (unauthorized)",
-        target: sender,
-      });
-    }
+    logInboundDrop({
+      log: logVerbose,
+      channel: "imessage",
+      reason: "control command (unauthorized)",
+      target: sender,
+    });
     return { kind: "drop", reason: "control command (unauthorized)" };
   }
 
@@ -741,7 +723,7 @@ export async function resolveIMessageInboundDecision(params: {
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
   if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
-    params.logVerbose?.(`imessage: skipping group message (no mention)`);
+    logVerbose(`imessage: skipping group message (no mention)`);
     createChannelHistoryWindow({ historyMap: params.groupHistories }).record({
       historyKey: historyKey ?? "",
       limit: params.historyLimit,
@@ -798,7 +780,6 @@ export async function buildIMessageInboundContext(params: {
   accountService: IMessageService | undefined;
   decision: IMessageInboundDispatchDecision;
   message: IMessagePayload;
-  envelopeOptions?: EnvelopeFormatOptions;
   previousTimestamp?: number;
   remoteHost?: string;
   media?: {
@@ -811,7 +792,7 @@ export async function buildIMessageInboundContext(params: {
     params: BuildChannelInboundEventContextParams,
   ) => BuiltChannelInboundEventContext | Promise<BuiltChannelInboundEventContext>;
 }) {
-  const envelopeOptions = params.envelopeOptions ?? resolveEnvelopeFormatOptions(params.cfg);
+  const envelopeOptions = resolveEnvelopeFormatOptions(params.cfg);
   const { decision } = params;
   const chatId = decision.chatId;
   const chatTarget =

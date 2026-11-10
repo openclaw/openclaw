@@ -8,6 +8,7 @@ import {
   readStateLeaseProcessOwnerStatus,
   type StateLeaseProcessOwner,
 } from "../../infra/state-lease-process-owner.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { createOpenClawStateSchemaEnsurer } from "../../state/openclaw-state-feature-schema-ensure.js";
@@ -16,7 +17,7 @@ import type {
   WorkerOperationHandlers,
   WorkerOperations,
 } from "../../state/worker-operation-registry.js";
-import type { WorktreeTemplateRecord } from "./template-registry.js";
+import { retainedWorktreeTemplateKey, type WorktreeTemplateRecord } from "./template-registry.js";
 
 type TemplateDatabase = Pick<DB, "worktree_templates" | "state_leases">;
 const TEMPLATE_READER_SCOPE = "core:managed-worktrees:template-readers";
@@ -103,35 +104,65 @@ function hasTemplateReaders(db: EngineConnection, id: string): boolean {
   return retained;
 }
 
-export const worktreeTemplateOperations = {
-  "worktrees.templates.read": ({ cacheKey }: { cacheKey: string }, context) => {
-    const { db } = openTemplateDatabase(context).database;
-    const row = executeSqliteQuerySync(
-      db,
-      kyselyFor(db).selectFrom("worktree_templates").selectAll().where("cache_key", "=", cacheKey),
-    ).rows[0];
-    return row ? rowToRecord(row) : undefined;
+export const worktreeTemplateReadOperations = {
+  "worktrees.templates.read": (
+    { cacheKey, contentKey }: { cacheKey: string; contentKey?: string },
+    db,
+  ) => {
+    const row = tableExists(db, "worktree_templates")
+      ? executeSqliteQuerySync(
+          db,
+          kyselyFor(db)
+            .selectFrom("worktree_templates")
+            .selectAll()
+            .where(
+              "cache_key",
+              "in",
+              contentKey === undefined
+                ? [cacheKey]
+                : [cacheKey, retainedWorktreeTemplateKey(cacheKey, contentKey)],
+            )
+            .orderBy((eb) =>
+              eb
+                .case()
+                .when("content_key", "=", contentKey ?? "")
+                .then(0)
+                .else(1)
+                .end(),
+            )
+            .limit(1),
+        ).rows[0]
+      : undefined;
+    return {
+      type: "worktrees.templates.read" as const,
+      record: row ? rowToRecord(row) : undefined,
+    };
   },
-  "worktrees.templates.has": (_input: undefined, context) => {
-    const { db } = openTemplateDatabase(context).database;
-    return (
+  "worktrees.templates.has": (_input: undefined, db) => ({
+    type: "worktrees.templates.has" as const,
+    has:
+      tableExists(db, "worktree_templates") &&
       executeSqliteQuerySync(
         db,
         kyselyFor(db).selectFrom("worktree_templates").select("cache_key").limit(1),
-      ).rows.length > 0
-    );
-  },
-  "worktrees.templates.list": (_input: undefined, context) => {
-    const { db } = openTemplateDatabase(context).database;
-    return executeSqliteQuerySync(
-      db,
-      kyselyFor(db)
-        .selectFrom("worktree_templates")
-        .selectAll()
-        .orderBy("last_used_at", "asc")
-        .orderBy("id", "asc"),
-    ).rows.map(rowToRecord);
-  },
+      ).rows.length > 0,
+  }),
+  "worktrees.templates.list": (_input: undefined, db) => ({
+    type: "worktrees.templates.list" as const,
+    records: tableExists(db, "worktree_templates")
+      ? executeSqliteQuerySync(
+          db,
+          kyselyFor(db)
+            .selectFrom("worktree_templates")
+            .selectAll()
+            .orderBy("last_used_at", "asc")
+            .orderBy("id", "asc"),
+        ).rows.map(rowToRecord)
+      : [],
+  }),
+} satisfies WorkerOperationHandlers<EngineConnection>;
+
+export const worktreeTemplateOperations = {
   "worktrees.templates.reserve": worktreeTemplateMutation(
     "worktrees.templates.reserve",
     (db, record: WorktreeTemplateRecord & { status: "preparing" }) => {
@@ -156,15 +187,50 @@ export const worktreeTemplateOperations = {
   ),
   "worktrees.templates.ready": worktreeTemplateMutation(
     "worktrees.templates.ready",
-    (db, { id, now }: { id: string; now: number }) =>
-      executeSqliteQuerySync(
-        db,
-        kyselyFor(db)
-          .updateTable("worktree_templates")
-          .set({ status: "ready", last_used_at: now })
-          .where("id", "=", id)
-          .where("status", "=", "preparing"),
-      ).numAffectedRows === 1n,
+    (
+      db,
+      {
+        id,
+        now,
+        publication,
+      }: {
+        id: string;
+        now: number;
+        publication?: { cacheKey: string; previousId?: string; retainedCacheKey?: string };
+      },
+    ) => {
+      const k = kyselyFor(db);
+      const updated =
+        executeSqliteQuerySync(
+          db,
+          k
+            .updateTable("worktree_templates")
+            .set({ status: "ready", last_used_at: now })
+            .where("id", "=", id),
+        ).numAffectedRows === 1n;
+      if (updated && publication) {
+        if (publication.previousId) {
+          executeSqliteQuerySync(
+            db,
+            k
+              .updateTable("worktree_templates")
+              .set({
+                cache_key: publication.retainedCacheKey ?? `retired:${publication.previousId}`,
+                status: publication.retainedCacheKey ? "ready" : "preparing",
+              })
+              .where("id", "=", publication.previousId),
+          );
+        }
+        executeSqliteQuerySync(
+          db,
+          k
+            .updateTable("worktree_templates")
+            .set({ cache_key: publication.cacheKey })
+            .where("id", "=", id),
+        );
+      }
+      return updated;
+    },
   ),
   "worktrees.templates.delete": worktreeTemplateMutation(
     "worktrees.templates.delete",
@@ -183,7 +249,11 @@ export const worktreeTemplateOperations = {
         owner: StateLeaseProcessOwner;
       } & (
         | { id: string; unpublish?: true }
-        | { selection: Pick<WorktreeTemplateRecord, "cacheKey" | "contentKey" | "backend"> }
+        | {
+            selection: Pick<WorktreeTemplateRecord, "cacheKey" | "contentKey" | "backend"> & {
+              now?: number;
+            };
+          }
       ),
     ) => {
       const k = kyselyFor(db);
@@ -194,7 +264,19 @@ export const worktreeTemplateOperations = {
           : k
               .selectFrom("worktree_templates")
               .selectAll()
-              .where("cache_key", "=", input.selection.cacheKey)
+              .where(
+                "cache_key",
+                "in",
+                input.selection.backend.startsWith("sandbox-")
+                  ? [
+                      input.selection.cacheKey,
+                      retainedWorktreeTemplateKey(
+                        input.selection.cacheKey,
+                        input.selection.contentKey,
+                      ),
+                    ]
+                  : [input.selection.cacheKey],
+              )
               .where("content_key", "=", input.selection.contentKey)
               .where("backend", "=", input.selection.backend)
               .where("status", "=", "ready"),
@@ -214,7 +296,22 @@ export const worktreeTemplateOperations = {
       if (unpublish) {
         executeSqliteQuerySync(
           db,
-          k.updateTable("worktree_templates").set({ status: "preparing" }).where("id", "=", row.id),
+          k
+            .updateTable("worktree_templates")
+            .set({
+              status: "preparing",
+            })
+            .where("id", "=", row.id),
+        );
+      }
+      if ("selection" in input && input.selection.now !== undefined) {
+        row.last_used_at = input.selection.now;
+        executeSqliteQuerySync(
+          db,
+          k
+            .updateTable("worktree_templates")
+            .set({ last_used_at: row.last_used_at })
+            .where("id", "=", row.id),
         );
       }
       const now = Date.now();

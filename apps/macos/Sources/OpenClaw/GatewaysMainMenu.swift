@@ -126,7 +126,6 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
         // SwiftUI owns the top-level item; AppKit owns the view-based submenu.
         if topLevelItem.submenu !== self.ownedMenu {
             topLevelItem.submenu = self.ownedMenu
-            self.logger.debug("Attached AppKit Gateways submenu")
         }
         self.rebuildRowsIfNeeded()
         return true

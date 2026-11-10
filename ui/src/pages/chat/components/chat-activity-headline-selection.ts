@@ -1,7 +1,7 @@
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
-import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { spawnedSubagentLabel } from "../chat-spawned-subagent.ts";
 
 export type ActivityHeadline = Pick<AgentActivityItem, "name" | "commandBearing"> & {
@@ -53,12 +53,11 @@ export function selectActivityHeadline(
   return operation.title.trim()
     ? {
         key: operation.toolCallId ?? operation.itemId,
-        // Prepared metadata owns the purpose; never strip a localized tool prefix.
+        // Purpose and outcome are separate: uncertainty must not replace known intent.
         title:
-          (!operation.status ? operation.summary : undefined) ??
           subagentLabel ??
           operation.meta ??
-          (operation.title === resolveToolDisplay({ name: operation.name }).label
+          (operation.status && operation.title === resolveToolDisplayIdentity(operation.name).label
             ? ""
             : operation.title),
         name: operation.name,

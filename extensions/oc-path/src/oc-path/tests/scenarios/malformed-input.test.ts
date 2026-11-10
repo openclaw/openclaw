@@ -5,8 +5,8 @@ import { parseMd } from "../../parse.js";
 describe("malformed-input", () => {
   it("truncated mid-frontmatter (no close fence)", () => {
     const raw = "---\nname: github\n";
-    const { ast, diagnostics } = parseMd(raw);
-    expect(diagnostics.some((d) => d.code === "OC_FRONTMATTER_UNCLOSED")).toBe(true);
+    const ast = parseMd(raw);
+    expect(ast.raw).toBe(raw);
     expect(ast.frontmatter).toEqual([]);
   });
 

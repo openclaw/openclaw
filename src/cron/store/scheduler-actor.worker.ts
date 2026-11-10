@@ -6,8 +6,8 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import {
+  computeJobPreviousRunAtOrBeforeMs,
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   hasActiveCronRun,
   hasScheduledNextRunAtMs,
@@ -25,7 +25,7 @@ import {
   DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS,
   MAX_CRON_TIMER_DELAY_MS,
   MIN_REFIRE_GAP_MS,
-} from "../service/timer-execution-timeout.js";
+} from "../service/timer-constants.js";
 import { hasMissedCronSlotSinceLastRun, isRunnableJob } from "../service/timer-runnable.js";
 import type { CronJob } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
@@ -36,7 +36,6 @@ import { listActiveCronRunReceiptJobIdsInDatabase } from "./run-receipt-store.js
 import { createCronScheduledRunId } from "./run-request-id.js";
 import { scheduleUnownedCronJobsInWorker } from "./runtime-maintenance.worker.js";
 import { createCronMutationLogger } from "./runtime-mutation.worker.js";
-import { mutateCronRuntimeRowsInDatabase } from "./runtime-rows.kernel.js";
 import type {
   CronSchedulerOperations,
   CronSchedulerResult,
@@ -80,6 +79,7 @@ function emptyResult(): CronSchedulerResult {
     accepted: [],
     rejected: [],
     launches: [],
+    preparing: [],
     skipped: [],
     notifications: [],
     logs: [],
@@ -235,7 +235,10 @@ function armActor(
       !waitsForStartupBatch(actor, job) &&
       hasScheduledNextRunAtMs(job.state.nextRunAtMs)
     ) {
-      nextWakeAtMs = Math.min(nextWakeAtMs ?? Infinity, job.state.nextRunAtMs);
+      nextWakeAtMs = Math.min(
+        nextWakeAtMs ?? Infinity,
+        Math.max(job.state.nextRunAtMs, job.state.admissionDeferred?.retryAtMs ?? 0),
+      );
     }
   }
   if (!enabled) {
@@ -252,12 +255,7 @@ function armActor(
 }
 
 function isAgentWork(job: CronJob): boolean {
-  return (
-    job.payload.kind === "agentTurn" ||
-    job.payload.kind === "heartbeat" ||
-    isHeartbeatTaskCronJob(job) ||
-    (job.sessionTarget === "main" && job.payload.kind === "systemEvent" && job.wakeMode === "now")
-  );
+  return job.payload.kind === "agentTurn" || job.payload.kind === "systemEvent";
 }
 
 function boundedCatchup(
@@ -267,8 +265,12 @@ function boundedCatchup(
   snapshot: CronSchedulerSnapshot,
   nowMs: number,
   result: CronSchedulerResult,
-  options?: { skipJobIds?: string[]; deferAgentWork?: boolean },
+  jobs: ReadonlyMap<string, CronJob>,
+  options?: { skipJobIds?: string[]; deferAgentWork?: boolean; liveSinceMs?: number },
 ): { immediate: CronJob[]; overflow: Map<string, StartupOverflow> } {
+  if (jobs.size === 0) {
+    return { immediate: [], overflow: new Map() };
+  }
   const { config } = snapshot;
   const maxImmediate = Math.max(
     0,
@@ -284,116 +286,127 @@ function boundedCatchup(
     ({ db }) => {
       const active = listActiveCronRunReceiptJobIdsInDatabase(db, storeKey);
       const skipped = new Set(options?.skipJobIds);
-      return mutateCronRuntimeRowsInDatabase({
-        database: db,
-        storeKey,
-        jobIds: new Set(loadCronRows(db, storeKey).map((row) => row.job_id)),
-        mutate({ jobs }) {
-          const changed: CronJob[] = [];
-          const notifications: CronSchedulerResult["notifications"] = [];
-          const state: CronJobPolicyContext = {
-            deps: { nowMs: () => nowMs, log: createCronMutationLogger(result.logs) },
-          };
-          const missed: CronJob[] = [];
-          for (const job of jobs.values()) {
-            if (
-              !isJobEnabled(job) ||
-              skipped.has(job.id) ||
-              waitsForStartupBatch(actor, job) ||
-              active.has(job.id) ||
-              hasActiveCronRun(job, false)
-            ) {
-              continue;
-            }
-            const backoff =
-              job.schedule.kind === "cron"
-                ? resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS)
-                : undefined;
-            if (
-              backoff !== undefined &&
-              nowMs < backoff &&
-              hasMissedCronSlotSinceLastRun(job, nowMs) &&
-              job.state.nextRunAtMs !== backoff
-            ) {
-              job.state.nextRunAtMs = backoff;
-              changed.push(job);
-              continue;
-            }
-            if (
-              !isRunnableJob({
-                job,
-                nowMs,
-                skipAtIfAlreadyRan: true,
-                allowCronMissedRunByLastRun: true,
-                activeInProcess: false,
-              })
-            ) {
-              continue;
-            }
-            if (
-              config.cronConfig?.skipMissedJobs &&
-              (job.schedule.kind === "cron" || job.schedule.kind === "every")
-            ) {
-              if (
-                recomputeJobNextRunAtMs({ state, job, nowMs, deferredNotifications: notifications })
-              ) {
-                changed.push(job);
-              }
-            } else {
-              missed.push(job);
-            }
-          }
-          missed.sort(
-            (left, right) => (left.state.nextRunAtMs ?? 0) - (right.state.nextRunAtMs ?? 0),
-          );
-          const eligible = options?.deferAgentWork
-            ? missed.filter((job) => !isAgentWork(job))
-            : missed;
-          const immediate = eligible.slice(0, maxImmediate);
-          const deferred = [
-            ...eligible.slice(maxImmediate).map((job) => ({ job, delayMs: undefined })),
-            ...(options?.deferAgentWork
-              ? missed.filter(isAgentWork).map((job) => ({ job, delayMs: agentDelayMs }))
-              : []),
-          ];
-          const overflow = new Map<string, StartupOverflow>();
-          for (const [index, { job, delayMs }] of deferred.entries()) {
-            const candidate = nowMs + (delayMs ?? staggerMs) + index * staggerMs;
-            job.state.nextRunAtMs = resolveNextRunAtMsOrDisable({
-              state,
-              job,
-              candidate,
-              deferredNotifications: notifications,
-            });
-            job.state.startupCatchupAtMs = job.state.nextRunAtMs;
-            if (delayMs === undefined && job.state.nextRunAtMs !== undefined) {
-              overflow.set(job.id, {
-                catchupAtMs: job.state.nextRunAtMs,
-                delayMs: (index + 1) * staggerMs,
-                lastRunAtMs: job.state.lastRunAtMs,
-              });
-            }
+      const previousEnabled = new Map(
+        [...jobs.values()].map((job) => [job.id, job.enabled ?? true]),
+      );
+      const changed: CronJob[] = [];
+      const notifications: CronSchedulerResult["notifications"] = [];
+      const state: CronJobPolicyContext = {
+        deps: { nowMs: () => nowMs, log: createCronMutationLogger(result.logs) },
+      };
+      const missed: CronJob[] = [];
+      for (const job of jobs.values()) {
+        if (
+          !isJobEnabled(job) ||
+          // Pending admission already owns its slot and retry deadline across restarts.
+          job.state.admissionDeferred !== undefined ||
+          skipped.has(job.id) ||
+          waitsForStartupBatch(actor, job) ||
+          active.has(job.id) ||
+          hasActiveCronRun(job, false)
+        ) {
+          continue;
+        }
+        const backoff =
+          job.schedule.kind === "cron"
+            ? resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS)
+            : undefined;
+        if (
+          backoff !== undefined &&
+          nowMs < backoff &&
+          hasMissedCronSlotSinceLastRun(job, nowMs) &&
+          job.state.nextRunAtMs !== backoff
+        ) {
+          job.state.nextRunAtMs = backoff;
+          changed.push(job);
+          continue;
+        }
+        if (
+          !isRunnableJob({
+            job,
+            nowMs,
+            skipAtIfAlreadyRan: true,
+            allowCronMissedRunByLastRun: true,
+            activeInProcess: false,
+          })
+        ) {
+          continue;
+        }
+        if (
+          config.cronConfig?.skipMissedJobs &&
+          (job.schedule.kind === "cron" || job.schedule.kind === "every")
+        ) {
+          if (
+            recomputeJobNextRunAtMs({ state, job, nowMs, deferredNotifications: notifications })
+          ) {
             changed.push(job);
           }
-          if (deferred.length > 0) {
-            result.logs.push({
-              level: "info",
-              fields: {
-                immediateCount: immediate.length,
-                deferredCount: deferred.length,
-                totalMissed: missed.length,
-              },
-              message: "cron: staggering missed jobs to prevent gateway overload",
-            });
-          }
-          for (const notification of notifications) {
-            notification.routing = { defaultAgentId: config.defaultAgentId };
-          }
-          result.jobs.push(...changed);
-          result.notifications.push(...notifications);
-          return { upsertJobIds: changed.map((job) => job.id), value: { immediate, overflow } };
-        },
-      }).value;
+        } else {
+          missed.push(job);
+        }
+      }
+      missed.sort((left, right) => (left.state.nextRunAtMs ?? 0) - (right.state.nextRunAtMs ?? 0));
+      // Startup defers agent work missed during downtime. A due slot that came due
+      // after this Gateway went live, such as a job added before the scheduler
+      // finished starting, is only late; deferring it would push its first run out.
+      // A future nextRunAtMs means the miss was found from persisted lastRun state,
+      // which is downtime.
+      const isLateLiveSlot = (job: CronJob) => {
+        const dueAtMs = job.state.nextRunAtMs;
+        return (
+          options?.liveSinceMs !== undefined &&
+          dueAtMs !== undefined &&
+          dueAtMs >= options.liveSinceMs &&
+          dueAtMs <= nowMs
+        );
+      };
+      const deferAgentWork = (job: CronJob) =>
+        options?.deferAgentWork === true && isAgentWork(job) && !isLateLiveSlot(job);
+      const eligible = missed.filter((job) => !deferAgentWork(job));
+      const immediate = eligible.slice(0, maxImmediate);
+      const deferred = [
+        ...eligible.slice(maxImmediate).map((job) => ({ job, delayMs: undefined })),
+        ...missed.filter(deferAgentWork).map((job) => ({ job, delayMs: agentDelayMs })),
+      ];
+      const overflow = new Map<string, StartupOverflow>();
+      for (const [index, { job, delayMs }] of deferred.entries()) {
+        const candidate = nowMs + (delayMs ?? staggerMs) + index * staggerMs;
+        job.state.nextRunAtMs = resolveNextRunAtMsOrDisable({
+          state,
+          job,
+          candidate,
+          deferredNotifications: notifications,
+        });
+        job.state.startupCatchupAtMs = job.state.nextRunAtMs;
+        if (delayMs === undefined && job.state.nextRunAtMs !== undefined) {
+          overflow.set(job.id, {
+            catchupAtMs: job.state.nextRunAtMs,
+            delayMs: (index + 1) * staggerMs,
+            lastRunAtMs: job.state.lastRunAtMs,
+          });
+        }
+        changed.push(job);
+      }
+      if (deferred.length > 0) {
+        result.logs.push({
+          level: "info",
+          fields: {
+            immediateCount: immediate.length,
+            deferredCount: deferred.length,
+            totalMissed: missed.length,
+          },
+          message: "cron: staggering missed jobs to prevent gateway overload",
+        });
+      }
+      for (const notification of notifications) {
+        notification.routing = { defaultAgentId: config.defaultAgentId };
+      }
+      result.jobs.push(...changed);
+      result.notifications.push(...notifications);
+      for (const job of changed) {
+        updateCronRuntimeRow(db, storeKey, job, previousEnabled.get(job.id));
+      }
+      return { immediate, overflow };
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.scheduler-catchup" },
@@ -478,15 +491,17 @@ export function runCronSchedulerInWorker(
         snapshot,
         nowMs,
         result,
+        jobs,
         command.type === "cron.schedulerStart" ? command.input : undefined,
       );
       candidates = catchup.immediate;
       overflow = catchup.overflow;
     } else if (command.type !== "cron.schedulerRefresh") {
+      const allowCronMissedRunByLastRun = snapshot.config.cronConfig?.skipMissedJobs !== true;
       candidates = currentJobs().filter(
         (job) =>
           !waitsForStartupBatch(actor, job) &&
-          isRunnableJob({ job, nowMs, activeInProcess: false }),
+          isRunnableJob({ job, nowMs, allowCronMissedRunByLastRun, activeInProcess: false }),
       );
     }
     const ownerless = candidates.filter(
@@ -531,6 +546,12 @@ export function runCronSchedulerInWorker(
         currentJobs().some((job) => job.state.queuedAtMs !== undefined))
     ) {
       currentJobs();
+      for (const job of owned) {
+        if (job.state.nextRunAtMs !== undefined && job.state.nextRunAtMs > nowMs) {
+          // Recovery must not consume the future occurrence's receipt identity.
+          job.state.nextRunAtMs = computeJobPreviousRunAtOrBeforeMs(job, nowMs);
+        }
+      }
       const requested = requestAndDrainCronRunsInWorker(
         database,
         {
@@ -549,12 +570,16 @@ export function runCronSchedulerInWorker(
           requests: input.requests ?? [],
           maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
           schedulingPaused: input.paused,
+          preparingAgentIds: snapshot.config.preparingAgentIds,
+          hostProcessId: snapshot.config.hostProcessId,
+          pluginCommandHosts: snapshot.config.pluginCommandHosts,
         },
         jobs,
       );
       result.accepted.push(...requested.accepted);
       result.rejected.push(...requested.rejected);
       result.launches.push(...requested.launches);
+      result.preparing.push(...requested.preparing);
       result.skipped.push(...requested.skipped);
       result.jobs.push(...requested.accepted.map((entry) => entry.job));
       result.jobs.push(...requested.launches.map((entry) => entry.job));

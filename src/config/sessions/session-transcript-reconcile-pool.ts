@@ -16,6 +16,11 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
+  SQLITE_ARCHIVE_TASK_TIMEOUT_MS,
+  SQLITE_WORKER_RETIREMENT_GRACE_MS,
+  watchSqliteWorkerSettlement,
+} from "./session-accessor.sqlite-archive-worker-lifetime.js";
+import {
   withSqliteWorkerLifecycleCoordination,
   type SqliteMutationWorkerCoordination,
 } from "./session-accessor.sqlite-worker-coordination.js";
@@ -34,7 +39,6 @@ type ReconcileRuntime = {
   closing?: Promise<void>;
 };
 const MAX_WORKERS = resolveWorkerPoolSize("writer");
-const CLOSE_GRACE_MS = 5_000;
 const log = createSubsystemLogger("sessions/transcript-index");
 const runtime = resolveGlobalSingleton<ReconcileRuntime>(
   Symbol.for("openclaw.sessionTranscriptReconcilePool"),
@@ -49,9 +53,6 @@ const runtime = resolveGlobalSingleton<ReconcileRuntime>(
 export type SessionTranscriptReconcileOperation = {
   signal: AbortSignal;
   shouldYield(): boolean;
-  retainLeaseForCleanup(
-    lease: Extract<SessionTranscriptReconcileWorkerInput, { mode: "release" }>,
-  ): void;
   startTask(
     input: SessionTranscriptReconcileWorkerInput,
   ): ReturnType<typeof startReconcileWorkerTask>;
@@ -61,7 +62,7 @@ export function isSessionTranscriptReconcileWorkerPoolClosing(): boolean {
   return runtime.stopped;
 }
 
-/** Track the complete owner, including parent writes and independent lease recovery. */
+/** Track the complete owner, including parent writes and native lease release. */
 export function runSessionTranscriptReconcileOperation<T>(
   run: (operation: SessionTranscriptReconcileOperation) => Promise<T>,
   owner?: { agentId: string; path: string },
@@ -75,15 +76,12 @@ export function runSessionTranscriptReconcileOperation<T>(
     controller.abort(signal.reason);
   }
   const abort = signal && addAbortListener(signal, () => controller.abort(signal.reason));
-  let cleanupLease: Extract<SessionTranscriptReconcileWorkerInput, { mode: "release" }> | undefined;
   let unregister: (() => void) | undefined;
   const completion = createDeferredCore<T>();
   const promise = completion.promise.finally(() => {
     abort?.[Symbol.dispose]();
     runtime.operations.delete(promise);
-    if (!cleanupLease) {
-      unregister?.();
-    }
+    unregister?.();
   });
   runtime.operations.set(promise, controller);
   try {
@@ -92,29 +90,18 @@ export function runSessionTranscriptReconcileOperation<T>(
       registerOpenClawAgentDatabaseAsyncResource({
         ...owner,
         revoke: () => controller.abort(new Error("Session transcript reconciliation was revoked")),
-        close() {
-          // Failed projection work is advisory; an unsettled native lease retains custody.
-          const closing = promise
-            .catch(() => {})
-            .then(async () => {
-              if (cleanupLease) {
-                await releaseReconcileWorkerLease(cleanupLease);
-                cleanupLease = undefined;
-                unregister?.();
-              }
-            });
-          runtime.operations.set(closing, controller);
-          return closing.finally(() => runtime.operations.delete(closing));
-        },
+        // Failed indexing is advisory; unreleased durable leases still prevent deletion.
+        close: () =>
+          promise.then(
+            () => undefined,
+            () => undefined,
+          ),
       });
     completion.resolve(
       run({
         signal: controller.signal,
         // Give another agent a turn after one session, without another admission queue.
         shouldYield: () => runtime.operations.size > 1,
-        retainLeaseForCleanup: (lease) => {
-          cleanupLease ??= lease;
-        },
         startTask: (input) => {
           // Native exit may require a release task after the agent owner revokes new work.
           if (input.mode === "release") {
@@ -187,13 +174,7 @@ export async function finishSessionTranscriptReconcileTask<T>({
       `Transcript lease cleanup incomplete; restart OpenClaw before deleting this agent: ${toStringifiedError(error).message}`,
       { cause: error },
     );
-    operation.retainLeaseForCleanup({
-      mode: "release",
-      leaseId: input.leaseId,
-      path: input.path,
-      stateDir: input.stateDir,
-      externallySupervised: input.externallySupervised,
-    });
+    // If native cleanup itself fails, its durable lease requires restart/Doctor; do not replay it.
     throw outcome.ok
       ? failure
       : new AggregateError([outcome.error, failure], failure.message, { cause: failure });
@@ -208,21 +189,6 @@ export async function finishSessionTranscriptReconcileTask<T>({
     throw plannerFailure;
   }
   return outcome.value;
-}
-
-async function releaseReconcileWorkerLease(
-  input: Extract<SessionTranscriptReconcileWorkerInput, { mode: "release" }>,
-): Promise<void> {
-  const task = await startReconcileWorkerTask(input);
-  try {
-    const cleanup = await task.leaseRelease;
-    if (cleanup.failure) {
-      throw cleanup.failure;
-    }
-  } finally {
-    task.port.close();
-    task.port.removeAllListeners();
-  }
 }
 
 /** Close admission first; accepted owners may still dispatch their lease-release tasks. */
@@ -242,7 +208,7 @@ export function closeSessionTranscriptReconcileWorkerPool(): Promise<void> {
     for (const controller of runtime.tasks.keys()) {
       controller.abort(error);
     }
-  }, CLOSE_GRACE_MS);
+  }, SQLITE_WORKER_RETIREMENT_GRACE_MS);
   runtime.closing = Promise.resolve()
     .then(async () => {
       while (runtime.operations.size) {
@@ -348,7 +314,8 @@ async function startReconcileWorkerTask(
           // Cancel queued admission, but join native settlement once the task is dispatched.
           abort[Symbol.dispose]();
           controller.signal.throwIfAborted();
-          return pool.run(
+          const execution = createDeferredCore();
+          const result = pool.run(
             {
               input,
               port: port2,
@@ -357,6 +324,8 @@ async function startReconcileWorkerTask(
             },
             {
               inputBytes,
+              timeoutMs: SQLITE_ARCHIVE_TASK_TIMEOUT_MS,
+              onExecutionSettled: () => execution.resolve(),
               transferList: (task) => [
                 task.port,
                 ...(task.coordination?.databaseAdmission
@@ -366,6 +335,8 @@ async function startReconcileWorkerTask(
               signal: controller.signal,
             },
           );
+          watchSqliteWorkerSettlement(execution.promise, SQLITE_ARCHIVE_TASK_TIMEOUT_MS);
+          return result;
         }),
       waiting.signal,
     );

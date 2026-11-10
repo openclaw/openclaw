@@ -1,4 +1,5 @@
 import { createRetainedCache } from "../infra/retained-cache.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import type {
   ControlUiSessionPullRequestCheckDetails,
   ControlUiSessionPullRequest,
@@ -7,16 +8,13 @@ import type {
 import {
   createGitHubReadGroup,
   prepareSessionPullRequestGitHubRead,
+  type SessionPullRequestReadCredential,
 } from "./control-ui-session-pr-request.js";
 import {
   fetchSessionPullRequestCheckDetails,
-  sessionPullRequestRepositoryApiUrl,
   type SessionPullRequestCheckTarget,
 } from "./control-ui-session-prs-checks.js";
-import {
-  parsePullListItem,
-  type ControlUiSessionPullRequestsParams,
-} from "./control-ui-session-prs.js";
+import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-prs.js";
 import { gitHubPublicApi } from "./github-public-api.js";
 
 const checkDetailsCache = createRetainedCache<{
@@ -38,13 +36,12 @@ export type ControlUiSessionPullRequestChecksParams = Pick<
 };
 
 type LoadSessionCheckDetailsDeps = {
+  credential?: () => SessionPullRequestReadCredential | undefined;
   /** The request handler binds and rechecks session visibility, generation, and workspace. */
   sessionScope: string;
   assertCurrent: () => void;
-  fetchImpl?: typeof fetch;
   loadPullRequests: (
     params: ControlUiSessionPullRequestsParams,
-    deps: { fetchImpl?: typeof fetch },
   ) => Promise<ControlUiSessionPullRequests>;
 };
 
@@ -69,21 +66,19 @@ export async function loadControlUiSessionPullRequestChecks(
     candidate.number === number &&
     candidate.headSha === headSha;
   const { loadPullRequests } = deps;
-  const snapshot = await loadPullRequests(
-    { sessionKey: params.sessionKey, agentId: params.agentId },
-    { fetchImpl: deps.fetchImpl },
-  );
+  const snapshot = await loadPullRequests({
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
   deps.assertCurrent();
   const pull = snapshot.pullRequests.find(matchesTarget);
   if (!pull || (pull.state !== "open" && pull.state !== "draft")) {
     return unavailable("The session pull request or head changed; reopen CI details");
   }
   const host = new URL(pull.url).hostname;
-  const read = prepareSessionPullRequestGitHubRead(
-    host,
-    deps.fetchImpl ?? fetch,
-    deps.assertCurrent,
-  );
+  const read = prepareSessionPullRequestGitHubRead(host, deps.assertCurrent, {
+    credential: deps.credential?.(),
+  });
   const assertCurrent = read.assertCurrent;
   const checkTarget = { ...target, host, apiBaseUrl: read.apiBaseUrl };
   const key = JSON.stringify([
@@ -98,7 +93,7 @@ export async function loadControlUiSessionPullRequestChecks(
   ]);
   let entry = checkDetailsCache.get(key);
   let releaseReader: (() => void) | undefined;
-  if (!entry || entry.expiresAt <= Date.now() || entry.access.signal.aborted) {
+  if (!entry || entry.expiresAt <= monotonicNow() || entry.access.signal.aborted) {
     if (activeCheckDetails >= MAX_CHECK_DETAIL_REQUESTS) {
       return { ...unavailable("CI details are busy; retry shortly"), retryAfterMs: 5_000 };
     }
@@ -110,20 +105,18 @@ export async function loadControlUiSessionPullRequestChecks(
       access: createGitHubReadGroup(),
     };
     releaseReader = pending.access.add(deps.assertCurrent);
-    const transportRead = prepareSessionPullRequestGitHubRead(
-      host,
-      deps.fetchImpl ?? fetch,
-      pending.access.assertCurrent,
-      { signal: pending.access.signal },
-    );
+    const transportRead = prepareSessionPullRequestGitHubRead(host, pending.access.assertCurrent, {
+      signal: pending.access.signal,
+      credential: read.credential,
+    });
     activeCheckDetails += 1;
     const load = async (): Promise<ControlUiSessionPullRequestCheckDetails> => {
-      const deadline = Date.now() + 25_000;
+      const deadline = monotonicNow() + 25_000;
       const signal = AbortSignal.timeout(25_000);
       let requests = 0;
       const request = async (url: string, maxBytes?: number) => {
         transportRead.assertCurrent();
-        if (++requests > 64 || Date.now() > deadline) {
+        if (++requests > 64 || monotonicNow() > deadline) {
           throw new gitHubPublicApi.ControlUiGitHubError(
             502,
             "CI details exceeded the request budget; open the job on GitHub",
@@ -137,27 +130,8 @@ export async function loadControlUiSessionPullRequestChecks(
           );
         });
       };
-      const assertHead = async () => {
-        const value = parsePullListItem(
-          await request(`${sessionPullRequestRepositoryApiUrl(checkTarget)}/pulls/${number}`),
-        );
-        if (
-          !value ||
-          value.owner.toLowerCase() !== owner.toLowerCase() ||
-          value.repo.toLowerCase() !== repo.toLowerCase() ||
-          new URL(value.url).hostname !== host ||
-          value.number !== number ||
-          value.headSha?.toLowerCase() !== headSha ||
-          (value.state !== "open" && value.state !== "draft")
-        ) {
-          throw new gitHubPublicApi.ControlUiGitHubError(
-            409,
-            "The pull request head changed; reopen CI details",
-          );
-        }
-      };
       try {
-        await assertHead();
+        // CI details describe the chip's exact head until the session PR snapshot refreshes.
         const details = await fetchSessionPullRequestCheckDetails(checkTarget, request);
         const result: ControlUiSessionPullRequestCheckDetails = {
           ...target,
@@ -208,7 +182,8 @@ export async function loadControlUiSessionPullRequestChecks(
     };
     pending.promise = load()
       .then((result) => {
-        pending.expiresAt = Date.now() + Math.max(CHECK_DETAILS_CACHE_MS, result.retryAfterMs ?? 0);
+        pending.expiresAt =
+          monotonicNow() + Math.max(CHECK_DETAILS_CACHE_MS, result.retryAfterMs ?? 0);
         return result;
       })
       .finally(() => {
@@ -221,27 +196,11 @@ export async function loadControlUiSessionPullRequestChecks(
   try {
     const result = await entry.promise;
     assertCurrent();
-    // A summary refresh can replace the PR while this details request is in flight.
-    const current = await loadPullRequests(
-      { sessionKey: params.sessionKey, agentId: params.agentId },
-      { fetchImpl: deps.fetchImpl },
-    );
-    assertCurrent();
-    if (
-      !current.pullRequests.some(
-        (candidate) =>
-          matchesTarget(candidate) &&
-          new URL(candidate.url).hostname === host &&
-          (candidate.state === "open" || candidate.state === "draft"),
-      )
-    ) {
-      return unavailable("The session pull request or head changed; reopen CI details");
-    }
     return structuredClone({
       ...result,
       ...(result.retryAfterMs === undefined
         ? {}
-        : { retryAfterMs: Math.max(0, entry.expiresAt - Date.now()) }),
+        : { retryAfterMs: Math.max(0, entry.expiresAt - monotonicNow()) }),
     });
   } finally {
     release();

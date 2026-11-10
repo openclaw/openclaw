@@ -18,6 +18,7 @@ import {
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { rewritePreparedAssistantTranscriptMessageForRun } from "../../config/sessions/session-message-rewrite.js";
 import { withPreparedTranscriptCorrection } from "../../config/sessions/session-transcript-correction.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
@@ -40,6 +41,7 @@ import {
 import {
   sanitizeAssistantDisplayText,
   type AssistantDisplayContentBlock,
+  type AssistantDisplayMediaBySource,
 } from "./chat-assistant-content.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 
@@ -50,11 +52,10 @@ type AssistantTranscriptScopeParams = {
   agentId?: string;
 };
 
-type ResolvedAssistantTranscriptScope = SessionTranscriptWriteScope & { sessionId: string };
-
-type SourceReplyTranscriptMirrorMetadata = NonNullable<
-  ReturnType<typeof getReplyPayloadMetadata>
->["sourceReplyTranscriptMirror"];
+export type ResolvedAssistantTranscriptScope = SessionTranscriptWriteScope & {
+  sessionId: string;
+  sessionKey: string;
+};
 
 export type SourceReplyContentState = {
   broadcastContent: AssistantDisplayContentBlock[];
@@ -65,7 +66,7 @@ export type SourceReplyContentState = {
 
 export type SourceReplyTranscriptMirror = {
   idempotencyKey: string;
-  metadata: SourceReplyTranscriptMirrorMetadata;
+  metadata: NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"];
 };
 
 export type SourceReplyTranscriptRewrite = SourceReplyTranscriptMirror & {
@@ -102,9 +103,10 @@ function mergeAssistantDisplayContent(
   return content;
 }
 
-function buildAssistantDisplayRewrite(params: {
+export function buildAssistantDisplayRewrite(params: {
   message: Record<string, unknown>;
   displayContent: AssistantDisplayContentBlock[];
+  mediaBySource?: AssistantDisplayMediaBySource;
   managedMediaUrls?: readonly string[];
   retainOriginalText?: true;
 }): Record<string, unknown> {
@@ -115,27 +117,80 @@ function buildAssistantDisplayRewrite(params: {
   const managedMediaUrls = previousDisplay
     ? [...filterStringEntries(previousMedia), ...(params.managedMediaUrls ?? [])]
     : params.managedMediaUrls;
+  const preparedBlocks = new Map<AssistantDisplayContentBlock, AssistantDisplayContentBlock>();
   const prepared = applyAssistantDeliveryDirectives(
     {
       ...params.message,
-      content: params.displayContent.map((block) => Object.assign({}, block)),
+      content: params.displayContent.map((block) => {
+        const preparedBlock = Object.assign({}, block);
+        preparedBlocks.set(block, preparedBlock);
+        return preparedBlock;
+      }),
     },
     { managedMediaUrls },
   );
-  const original =
-    previousDisplay ??
-    (Array.isArray(params.message.content)
-      ? (params.message.content as AssistantDisplayContentBlock[])
-      : []);
+  const modelContent = Array.isArray(params.message.content)
+    ? (params.message.content as AssistantDisplayContentBlock[])
+    : [];
+  let original = previousDisplay ?? modelContent;
+  if (previousDisplay && params.mediaBySource?.size) {
+    // Display rewrites have no MEDIA markers. Recover final-answer slots from
+    // immutable model text while leaving already prepared commentary in place.
+    const phasedFinal = readAssistantTextBlocksForPhase(params.message, "final_answer");
+    const finalText = phasedFinal.length
+      ? phasedFinal
+      : readAssistantTextBlocksForPhase(params.message);
+    const previousCommentary = new Set<unknown>(
+      readAssistantTextBlocksForPhase(
+        { ...params.message, content: previousDisplay },
+        "commentary",
+      ),
+    );
+    let restored = false;
+    original = previousDisplay.flatMap((block) => {
+      if (block.type !== "text" || previousCommentary.has(block)) {
+        return [block];
+      }
+      const replacement = restored ? [] : finalText;
+      restored = true;
+      return replacement;
+    });
+  }
   const retainedCommentary = new Set<unknown>(
     previousDisplay
       ? readAssistantTextBlocksForPhase({ ...params.message, content: original }, "commentary")
       : [],
   );
+  const authoredText = extractAssistantPhaseText(params.message);
+  const joinedCaption = authoredText
+    ? sanitizeAssistantDisplayText(splitMediaFromOutput(authoredText).text)
+    : undefined;
+  // A row mirroring one native CLI message owns only that message; earlier
+  // narration in the delivered caption is already shown by its own native rows.
+  const nativeMirror = Boolean(
+    readNonBlankString(transcriptEventRecord(params.message["__openclaw"])?.externalId),
+  );
+  // Delivery can join multiple authored blocks into one caption. Consume that
+  // caption while retaining the original blocks around their selected media.
+  const matchingCaptions =
+    params.mediaBySource?.size && joinedCaption
+      ? prepared.content.filter((block) => {
+          const caption =
+            block.type === "text" && typeof block.text === "string"
+              ? sanitizeAssistantDisplayText(block.text)
+              : undefined;
+          return (
+            caption === joinedCaption ||
+            (nativeMirror && caption?.endsWith(`\n${joinedCaption}`) === true)
+          );
+        })
+      : [];
+  const retainOriginalText = params.retainOriginalText || matchingCaptions.length > 0;
   // Final delivery replaces its own media while retaining prepared progress segments.
   let inCommentary = false;
   const content: AssistantDisplayContentBlock[] = [];
   const seenText = new Set<string>();
+  const consumedDisplay = new Set<AssistantDisplayContentBlock>(matchingCaptions);
   for (const block of original) {
     if (block.type === "text") {
       inCommentary = retainedCommentary.has(block);
@@ -144,10 +199,53 @@ function buildAssistantDisplayRewrite(params: {
       content.push(block);
       continue;
     }
+    if (block.type === "text" && typeof block.text === "string" && params.mediaBySource) {
+      const parsed = splitMediaFromOutput(block.text);
+      const segments = parsed.segments ?? [];
+      const visibleText = sanitizeAssistantDisplayText(parsed.text);
+      const hasManagedSlot = segments.some(
+        (segment) =>
+          segment.type === "media" &&
+          params.mediaBySource?.has(normalizeMediaReferenceForComparison(segment.url)),
+      );
+      const matchingText = prepared.content.filter(
+        (candidate) =>
+          candidate.type === "text" &&
+          typeof candidate.text === "string" &&
+          sanitizeAssistantDisplayText(candidate.text) === visibleText,
+      );
+      if (hasManagedSlot && (retainOriginalText || matchingText.length > 0 || !visibleText)) {
+        // Use selected source associations, never positional guesses after normalization.
+        // Aliases and duplicate directives consume one prepared group only once.
+        for (const segment of segments) {
+          if (segment.type === "media") {
+            const group = params.mediaBySource.get(
+              normalizeMediaReferenceForComparison(segment.url),
+            );
+            for (const sourceBlock of group ?? []) {
+              const media = preparedBlocks.get(sourceBlock);
+              if (media && !consumedDisplay.has(media)) {
+                content.push(media);
+                consumedDisplay.add(media);
+              }
+            }
+          } else {
+            const text = sanitizeAssistantDisplayText(segment.text, { preserveBoundaries: true });
+            if (text) {
+              const { textSignature: _textSignature, ...rest } = block;
+              content.push({ ...rest, text });
+            }
+          }
+        }
+        seenText.add(parsed.text);
+        matchingText.forEach((candidate) => consumedDisplay.add(candidate));
+        continue;
+      }
+    }
     if (
       block.type !== "text" ||
       typeof block.text !== "string" ||
-      (!params.retainOriginalText &&
+      (!retainOriginalText &&
         !prepared.content.some(
           (candidate) => candidate.type === "text" && candidate.text === block.text,
         ))
@@ -162,8 +260,8 @@ function buildAssistantDisplayRewrite(params: {
       preserveBoundaries: true,
     });
     if (text) {
-      if (text === block.text || previousDisplay) {
-        content.push(text === block.text ? block : { ...block, text });
+      if (text === block.text) {
+        content.push(block);
       } else {
         const { textSignature: _textSignature, ...rest } = block;
         content.push({ ...rest, text });
@@ -174,16 +272,21 @@ function buildAssistantDisplayRewrite(params: {
     }
   }
   for (const block of prepared.content) {
-    if (block.type === "text" && typeof block.text === "string" && !seenText.has(block.text)) {
+    if (
+      block.type === "text" &&
+      typeof block.text === "string" &&
+      !seenText.has(block.text) &&
+      !consumedDisplay.has(block)
+    ) {
       content.push(block);
     }
   }
   return {
     ...prepared,
-    content: previousDisplay ? params.message.content : content,
+    content: params.message.content,
     [ASSISTANT_DISPLAY_CONTENT_FIELD]: mergeAssistantDisplayContent(
       content,
-      prepared.content,
+      prepared.content.filter((block) => !consumedDisplay.has(block)),
       retainedCommentary,
     ),
   };
@@ -243,11 +346,7 @@ function mediaReferenceSet(mediaUrls: readonly string[]) {
 
 function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
   events: readonly TranscriptEvent[],
-  params: {
-    assistantMessageIndex: number;
-    mediaUrls: readonly string[];
-    rejectedMediaCount: number;
-  },
+  params: Parameters<typeof rewriteAssistantTranscriptMessageByTurnIndexAndMedia>[0],
 ): { messageId: string; message: Record<string, unknown> } | null {
   const expectedMedia = mediaReferenceSet(params.mediaUrls);
   if (
@@ -367,7 +466,9 @@ export async function persistAbortedPartial(params: {
         activeWriterRunId: snapshot.runId,
       },
     };
-    const manager = await withoutSessionTranscriptReadFence(() => SessionManager.openAsync(target));
+    const manager = await withoutSessionTranscriptReadFence(() =>
+      withSessionTranscriptHydrationCaller("correction", () => SessionManager.openAsync(target)),
+    );
     const messages = manager.buildSessionContext().messages;
     const start = messages.findLastIndex((message) => message.role === "user");
     for (const result of repairToolUseResultPairing(messages.slice(Math.max(0, start)), {
@@ -423,10 +524,10 @@ async function touchAssistantTranscriptSessionEntry(
         target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
       },
       operation,
-      { skipMaintenance: true },
+      { result: "none", skipMaintenance: true },
     );
   } else {
-    await applySessionEntryOperation(target, operation, { skipMaintenance: true });
+    await applySessionEntryOperation(target, operation, { result: "none", skipMaintenance: true });
   }
 }
 
@@ -503,6 +604,7 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
 
 export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: {
   content: AssistantDisplayContentBlock[];
+  mediaBySource?: AssistantDisplayMediaBySource;
   idempotencyKey: string;
   managedMediaUrls?: readonly string[];
   scope: SessionTranscriptWriteScope;
@@ -523,6 +625,7 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
             message: buildAssistantDisplayRewrite({
               message: target.message,
               displayContent: params.content,
+              mediaBySource: params.mediaBySource,
               managedMediaUrls: params.managedMediaUrls,
             }),
           })
@@ -537,6 +640,7 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
   afterSeq: number;
   assistantMessageIndex: number;
   content: AssistantDisplayContentBlock[];
+  mediaBySource?: AssistantDisplayMediaBySource;
   expectedGeneration: string | null;
   mediaUrls: readonly string[];
   rejectedMediaCount: number;
@@ -566,6 +670,7 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
       const rewrittenMessage = buildAssistantDisplayRewrite({
         message: target.message,
         displayContent: params.content,
+        mediaBySource: params.mediaBySource,
         managedMediaUrls: params.mediaUrls,
         // Indexed replies can contain earlier chunks; exact final/mirror replacements cannot.
         retainOriginalText: true,
@@ -588,6 +693,7 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
 /** Adds managed display media to the completion reply without rewriting model content. */
 export async function enrichAssistantTranscriptMediaForRun(params: {
   content: AssistantDisplayContentBlock[];
+  mediaBySource?: AssistantDisplayMediaBySource;
   mediaUrls: readonly string[];
   runId: string;
   expectedLifecycleRevision: SessionLifecycleRevisionExpectation;
@@ -603,6 +709,7 @@ export async function enrichAssistantTranscriptMediaForRun(params: {
       ...buildAssistantDisplayRewrite({
         message,
         displayContent: params.content,
+        mediaBySource: params.mediaBySource,
         managedMediaUrls: params.mediaUrls,
         retainOriginalText: true,
       }),

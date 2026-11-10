@@ -39,6 +39,10 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 
     Default: off, for client compatibility — some current Desktop, Web, Android, and third-party clients render accepted rich messages as unsupported. Keep this off unless every client used with the bot can render them. `/status` shows whether the current session has rich messages on or off.
 
+    With rich messages off, tight numbered Markdown lists keep properly indented bullet children attached to their parent without added blank lines. Separate bullet and numbered sections keep their paragraph spacing.
+
+    Caller-authored HTML escapes literal `<` characters without consuming a later supported tag or a closing code tag. A supported start tag without a matching end tag, such as `<b>` mentioned in prose, stays visible as text instead of making Telegram reject the message. Existing tag, attribute, and entity restrictions still apply.
+
     Link previews are on by default. `channels.telegram.linkPreview: false` disables automatic entity detection for rich text. OpenClaw explicitly marks bare URLs so they remain tappable, except URLs containing `&`, which stay plain to avoid Telegram's query-separator encoding issue. Use a labeled Markdown link for those URLs.
 
   </Accordion>
@@ -186,6 +190,8 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
     `channels.telegram.allowFrom`, `groupAllowFrom`, and `defaultTo` control who can talk to the bot and where it sends normal replies — they do not make someone an exec approver. The first approved DM pairing bootstraps `commands.ownerAllowFrom` when no command owner exists yet, so one-owner setups work without duplicating IDs under `execApprovals.approvers`.
 
     Channel delivery shows the command text in the chat; only enable `channel` or `both` in trusted groups/topics. When the prompt lands in a forum topic, OpenClaw preserves the topic for the approval prompt and follow-up. Exec approvals expire after 30 minutes by default.
+
+    Delegated OpenClaw change approvals return their final result to the requesting chat or topic, even when the approval card was sent to an approver DM. An edited card in the requesting topic serves as the result there without an extra notice.
 
     Inline approval buttons also require `channels.telegram.capabilities.inlineButtons` to allow the target surface (`dm`, `group`, or `all`). Approval IDs prefixed with `plugin:` resolve through plugin approvals; others resolve through exec approvals first.
 

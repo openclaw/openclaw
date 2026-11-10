@@ -15,7 +15,7 @@ export const REPORT_SCRIPT = `(() => {
     const applyTheme = (theme, persist) => {
       root.dataset.theme = theme;
       if (persist) {
-        try { localStorage.setItem('theme', theme); } catch {}
+        try { localStorage.setItem('theme', theme); } catch { /* Opaque-origin frames retain the theme through links instead. */ }
         history.replaceState(null, '', '#theme=' + theme);
       }
       // Opaque-origin frames cannot use storage; carry their choice through report links.

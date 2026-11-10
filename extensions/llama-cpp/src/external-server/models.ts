@@ -1,11 +1,11 @@
-import type {
-  ModelDefinitionConfig,
-  ModelProviderConfig,
+import {
+  resolveDefaultModelMaxTokens,
+  type ModelDefinitionConfig,
+  type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
-  SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeLlamaServerProviderConfig, resolveLlamaServerEndpoint } from "./endpoint.js";
@@ -44,7 +44,7 @@ type LlamaServerPropsWire = Record<string, unknown> & {
 };
 
 export type LlamaServerDiscoveredModel = {
-  config: ModelDefinitionConfig;
+  config: ModelDefinitionConfig & { input: Array<"text" | "image"> };
   status: LlamaServerModelStatus;
   failed: boolean;
 };
@@ -66,7 +66,7 @@ function resolveMaxTokens(props: LlamaServerPropsWire | undefined, contextWindow
   const params = props?.default_generation_settings?.params;
   const advertised =
     asPositiveSafeInteger(params?.max_tokens) ?? asPositiveSafeInteger(params?.n_predict);
-  return Math.min(advertised ?? SELF_HOSTED_DEFAULT_MAX_TOKENS, contextWindow);
+  return Math.min(advertised ?? resolveDefaultModelMaxTokens(contextWindow), contextWindow);
 }
 
 function resolveInput(
@@ -101,7 +101,6 @@ function buildCompat(
   };
 }
 
-/** Maps one llama-server model row plus optional runtime properties into OpenClaw config. */
 export function mapLlamaServerModel(
   row: LlamaServerModelWire,
   props?: LlamaServerPropsWire,

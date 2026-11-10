@@ -1,4 +1,3 @@
-// Gateway install auth policy used by service/install flows.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { collectDurableServiceEnvVars } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -27,8 +26,5 @@ export function shouldRequireGatewayTokenForInstall(
   // Service install should only infer password mode from durable sources that
   // survive outside the invoking shell.
   const durableServiceEnv = collectDurableServiceEnvVars({ env, config: cfg });
-  return !(
-    normalizeOptionalString(durableServiceEnv.OPENCLAW_GATEWAY_PASSWORD) ||
-    normalizeOptionalString(durableServiceEnv.CLAWDBOT_GATEWAY_PASSWORD)
-  );
+  return !normalizeOptionalString(durableServiceEnv.OPENCLAW_GATEWAY_PASSWORD);
 }

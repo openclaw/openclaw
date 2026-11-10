@@ -1,8 +1,13 @@
+// Keep file observation independent of publication cleanup and its runtime logger.
 import fsSync, { type BigIntStats, type Stats } from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
+import fs, { type FileHandle } from "node:fs/promises";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
-import { hashFileDescriptorSync, sameFileMutationFingerprint } from "./file-descriptor.js";
+import { sha256File } from "./directory-durability.js";
+import {
+  hashFileDescriptorSync,
+  sameFileMutationFingerprint,
+  type FileMutationFingerprint,
+} from "./file-descriptor.js";
 
 export type SqliteFileContent = {
   sha256: string;
@@ -143,27 +148,62 @@ export function sameFileStatFingerprint(
   return sameFileIdentity(left, right) && left.size === right.size;
 }
 
-export async function removePublicationStagingDirectory(
-  stagingDir: string,
+export async function assertMutationFingerprintUnchanged(
+  handle: FileHandle,
+  expected: FileMutationFingerprint,
+  filePath: string,
+  expectedContent: SqliteFileContent,
+): Promise<void> {
+  const current = await handle.stat({ bigint: true });
+  if (!sameFileMutationFingerprint(current, expected)) {
+    if (!sameFileStatFingerprint(current, expected)) {
+      throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
+    }
+    // Re-read the pinned snapshot when FUSE timestamps settle after copying or hashing.
+    const { digest, bytes } = await sha256File(handle);
+    assertExpectedContent({ sha256: digest, sizeBytes: bytes }, expectedContent, filePath);
+  }
+}
+
+export async function assertOpenFileIdentity(
+  handle: FileHandle,
+  filePath: string,
   expectedIdentity: FileIdentityStat,
 ): Promise<void> {
-  const currentIdentity = await fs.lstat(stagingDir, { bigint: true }).catch(() => undefined);
-  if (!currentIdentity) {
-    return;
-  }
-  if (!currentIdentity.isDirectory() || !sameFileIdentity(expectedIdentity, currentIdentity)) {
-    throw new Error(`SQLite publication staging directory changed: ${stagingDir}`);
-  }
-  const entries = await fs.readdir(stagingDir, { withFileTypes: true });
+  const openedIdentity = await handle.stat({ bigint: true });
+  const currentIdentity = await fs.lstat(filePath, { bigint: true });
   if (
-    entries.length > 1 ||
-    entries.some((entry) => entry.name !== "database.sqlite" || !entry.isFile())
+    !openedIdentity.isFile() ||
+    !currentIdentity.isFile() ||
+    !sameFileIdentity(expectedIdentity, openedIdentity) ||
+    !sameFileIdentity(expectedIdentity, currentIdentity)
   ) {
-    throw new Error(`SQLite publication staging directory has unexpected contents: ${stagingDir}`);
+    throw new Error(`SQLite snapshot file changed: ${filePath}`);
   }
-  const stagedEntry = entries[0];
-  if (stagedEntry) {
-    await fs.unlink(path.join(stagingDir, stagedEntry.name));
+}
+
+export async function hashPublishedFile(
+  filePath: string,
+  expectedIdentity: FileIdentityStat,
+): Promise<SqliteFileContent> {
+  const handle = await fs.open(filePath, "r");
+  try {
+    return await hashOpenPublishedFile(handle, filePath, expectedIdentity);
+  } finally {
+    await handle.close();
   }
-  await fs.rmdir(stagingDir);
+}
+
+export async function hashOpenPublishedFile(
+  handle: FileHandle,
+  filePath: string,
+  expectedIdentity: FileIdentityStat,
+): Promise<SqliteFileContent> {
+  await assertOpenFileIdentity(handle, filePath, expectedIdentity);
+  const fingerprint = await handle.stat({ bigint: true });
+  const { digest, bytes } = await sha256File(handle);
+  const content = { sha256: digest, sizeBytes: bytes };
+  await assertMutationFingerprintUnchanged(handle, fingerprint, filePath, content);
+  await assertOpenFileIdentity(handle, filePath, expectedIdentity);
+  return content;
 }

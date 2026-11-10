@@ -1,13 +1,8 @@
-/**
- * Shell execution helpers.
- *
- * Resolves platform shell commands and sanitizes binary output.
- */
 import fs from "node:fs";
 import path from "node:path";
 import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequences.js";
 import { stripAnsiForStreamChunk } from "../../packages/terminal-core/src/ansi.js";
-import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
+import { isExecutableFile, resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getBinDir } from "./config.js";
 
@@ -179,14 +174,7 @@ export function buildShellCommandInvocation(
   return { argv: [config.shell, ...config.args, command], stdin: "ignore" };
 }
 
-export function getShellConfig(customShellPath?: string): ShellConfig {
-  if (customShellPath) {
-    if (!fs.existsSync(customShellPath)) {
-      throw new Error(`Custom shell path not found: ${customShellPath}`);
-    }
-    return createArgvShellConfig(customShellPath, getPosixShellArgs(customShellPath));
-  }
-
+export function getShellConfig(): ShellConfig {
   if (process.platform === "win32") {
     // Use PowerShell instead of cmd.exe on Windows.
     // Problem: Many Windows system utilities (ipconfig, systeminfo, etc.) write
@@ -212,14 +200,7 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
   return createArgvShellConfig(shell, getPosixShellArgs(shell));
 }
 
-export function getBashShellConfig(customShellPath?: string): ShellConfig {
-  if (customShellPath) {
-    if (!fs.existsSync(customShellPath)) {
-      throw new Error(`Custom shell path not found: ${customShellPath}`);
-    }
-    return resolveBashCommandConfig(customShellPath);
-  }
-
+export function getBashShellConfig(): ShellConfig {
   if (process.platform === "win32") {
     const bash = resolveWindowsBashPath();
     if (bash) {
@@ -261,11 +242,10 @@ function resolveShellFromPath(
   for (const executableName of executableNames) {
     for (const entry of entries) {
       const candidate = path.join(entry, executableName);
-      try {
-        fs.accessSync(candidate, fs.constants.X_OK);
+      // App-execution aliases can pass access(X_OK) but fail to launch across
+      // Windows logon sessions. Require a regular executable file instead.
+      if (isExecutableFile(candidate, { env })) {
         return candidate;
-      } catch {
-        // Ignore missing or non-executable entries.
       }
     }
   }

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
+import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
 import { WorktreeRepositoryError } from "./errors.js";
 import { commandError, insideGitCheckout, resolveGitRepositoryPaths, runGit } from "./git.js";
 import { timeWorktreePreparationPhase } from "./preparation-timing.js";
@@ -8,7 +9,7 @@ import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 export async function resolveCheckoutRootFromRealPath(
   requested: string,
   requestedLabel: string,
-): Promise<{ root: string; commit: string }> {
+): Promise<{ root: string }> {
   const rootResult = await runGit(requested, [
     "rev-parse",
     "--show-toplevel",
@@ -49,7 +50,6 @@ export async function resolveCheckoutRootFromRealPath(
   }
   return {
     root: await fs.realpath(normalizeGitPathForFilesystem(root)),
-    commit: output.slice(separator + 1),
   };
 }
 
@@ -61,31 +61,59 @@ export type ResolvedRepository = {
   fingerprint: string;
 };
 
+async function resolveRepositoryPathsFromRealPath(requested: string, requestedLabel: string) {
+  const { root: sourceRoot } = await resolveCheckoutRootFromRealPath(requested, requestedLabel);
+  return { sourceRoot, ...(await resolveGitRepositoryPaths(sourceRoot)) };
+}
+
 export async function resolveRepositoryFromRealPath(
   requested: string,
   requestedLabel: string,
 ): Promise<ResolvedRepository> {
-  const { root: sourceRoot } = await resolveCheckoutRootFromRealPath(requested, requestedLabel);
-  const { canonicalRoot, commonDir } = await resolveGitRepositoryPaths(sourceRoot);
-  const origin = await runGit(canonicalRoot, ["config", "--get", "remote.origin.url"]);
-  if (origin.termination !== "exit" || (origin.code !== 0 && origin.code !== 1)) {
-    throw commandError("git config --get remote.origin.url", origin);
-  }
-  const originUrl = origin.code === 0 ? origin.stdout.trim() : "";
-  const fingerprint = createHash("sha256")
-    .update(`${commonDir}\n${originUrl}`)
-    .digest("hex")
-    .slice(0, 16);
-  return { repoRoot: canonicalRoot, sourceRoot, commonDir, originUrl, fingerprint };
+  return withGitProcessOperation(
+    "repository.identities",
+    async () => {
+      const { sourceRoot, canonicalRoot, commonDir } = await resolveRepositoryPathsFromRealPath(
+        requested,
+        requestedLabel,
+      );
+      const origin = await runGit(canonicalRoot, ["config", "--get", "remote.origin.url"]);
+      if (origin.termination !== "exit" || (origin.code !== 0 && origin.code !== 1)) {
+        throw commandError("git config --get remote.origin.url", origin);
+      }
+      const originUrl = origin.code === 0 ? origin.stdout.trim() : "";
+      const fingerprint = createHash("sha256")
+        .update(`${commonDir}\n${originUrl}`)
+        .digest("hex")
+        .slice(0, 16);
+      return { repoRoot: canonicalRoot, sourceRoot, commonDir, originUrl, fingerprint };
+    },
+    "default",
+  );
 }
 
-export async function resolveRepository(repoRoot: string): Promise<ResolvedRepository> {
+async function withRepositoryRealPath<T>(
+  repoRoot: string,
+  read: (requested: string, requestedLabel: string) => Promise<T>,
+): Promise<T> {
   return await timeWorktreePreparationPhase("repository", async () => {
     const requested = await fs.realpath(repoRoot).catch(() => {
       throw new Error(`repository does not exist: ${repoRoot}`);
     });
-    return await resolveRepositoryFromRealPath(requested, repoRoot);
+    return await read(requested, repoRoot);
   });
+}
+
+export function resolveRepository(repoRoot: string): Promise<ResolvedRepository> {
+  return withRepositoryRealPath(repoRoot, resolveRepositoryFromRealPath);
+}
+
+export function resolveRepositoryPaths(repoRoot: string) {
+  return withGitProcessOperation(
+    "repository.identities",
+    () => withRepositoryRealPath(repoRoot, resolveRepositoryPathsFromRealPath),
+    "default",
+  );
 }
 
 export async function resolveRepositoryIdentity(repoRoot: string) {

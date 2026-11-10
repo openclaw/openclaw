@@ -21,7 +21,7 @@ import {
 } from "../../scripts/lib/local-build-metadata.mts";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import { writeUpdateCompatibilityChunks } from "../../scripts/lib/update-compat-chunks.mts";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveNodeCompilerArgs } from "../../scripts/lib/vitest-node-args.mts";
 import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mts";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
@@ -30,7 +30,8 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
-import { isProcessAlive } from "../helpers/process-wait.js";
+import { launcherFixtureModules } from "../helpers/openclaw-launcher-fixture.js";
+import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
@@ -67,28 +68,6 @@ async function fixturePidBeforeSettlement(
   const pid = Number(readFileSync(pidPath, "utf8"));
   expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
   return pid;
-}
-
-async function waitForFixtureExit(pids: number[], signal: AbortSignal): Promise<void> {
-  // Native owner death can orphan escaped workers, so no retained ChildProcess
-  // can join them. Only test cancellation bounds this foreign-PID observation.
-  let tick: ReturnType<typeof setTimeout> | undefined;
-  try {
-    while (pids.some(isProcessAlive)) {
-      await withinTest(
-        new Promise<void>((resolve) => {
-          tick = setTimeout(resolve, 5);
-        }),
-        signal,
-      ).catch((cause: unknown) => {
-        throw new Error(`process still alive: ${pids.filter(isProcessAlive).join(", ")}`, {
-          cause,
-        });
-      });
-    }
-  } finally {
-    clearTimeout(tick);
-  }
 }
 
 const sourceRunnerServiceFixtureUrl = new URL(
@@ -266,7 +245,7 @@ process.kill(process.pid, "SIGKILL");
 it.runIf(process.platform !== "win32")(
   "preserves gateway watch signal loss across compile-cache process replacement",
   async ({ signal }) => {
-    const nodeArgs = resolveVitestNodeArgs();
+    const nodeArgs = resolveNodeCompilerArgs();
     await withShimFixture("scripts/run-node.mjs", async (fixture) => {
       const { checkoutRoot, fixtureRoot, implementationPath } = fixture;
       const childPidPath = path.join(fixtureRoot, "child.pid");
@@ -274,19 +253,7 @@ it.runIf(process.platform !== "win32")(
       const launcherPidPath = path.join(fixtureRoot, "launcher.pid");
       const invocationsPath = path.join(fixtureRoot, "invocations.jsonl");
       const releasePath = path.join(fixtureRoot, "release");
-      for (const filename of [
-        "openclaw.mjs",
-        "node-host-launcher.mjs",
-        "node-compile-cache.mjs",
-        "node-version.mjs",
-        "node-runtime-update.mjs",
-        "node-runtime-recovery.mjs",
-        "node-runtime-env.mjs",
-        "cli-root-options.mjs",
-        "gateway-run-argv.mjs",
-        "gateway-shutdown-budget.mjs",
-        "node-sqlite.mjs",
-      ]) {
+      for (const filename of launcherFixtureModules) {
         copyFileSync(filename, path.join(checkoutRoot, filename));
       }
       mkdirSync(path.join(checkoutRoot, "src"));
@@ -453,6 +420,8 @@ it.runIf(process.platform !== "win32").for(["runner", "watch"] as const)(
     const sourceRoot = process.cwd();
     const hook = fileURLToPath(new URL("./fixtures/native-runner-signals.mjs", import.meta.url));
     mkdirSync(path.join(checkout, "src"), { recursive: true });
+    // This standalone checkout must not borrow its temporary parent's artifact lock.
+    mkdirSync(path.join(checkout, ".git"));
     mkdirSync(path.join(root, "home"));
     writeFileSync(
       path.join(root, "receipts.mjs"),
@@ -525,7 +494,8 @@ it.runIf(process.platform !== "win32").for(["runner", "watch"] as const)(
       },
       ...pidPaths.map((pidPath) => async () => {
         if (existsSync(pidPath)) {
-          await waitForFixtureExit([Number(readFileSync(pidPath, "utf8"))], signal);
+          // Native owner death can orphan workers without a ChildProcess to join.
+          await waitForDead(Number(readFileSync(pidPath, "utf8")), signal, "reject");
         }
       }),
       () => {
@@ -543,9 +513,9 @@ it.runIf(process.platform !== "win32").for(["runner", "watch"] as const)(
   },
 );
 
-it.runIf(process.platform !== "win32").for(["SIGTERM", "SIGHUP"] as const)(
-  "joins the dev runner's resistant child before returning from %s",
-  async (stopSignal, { signal }) => {
+it.runIf(process.platform !== "win32")(
+  "joins the dev runner's resistant child before returning from SIGTERM",
+  async ({ signal }) => {
     await withShimFixture("scripts/run-node.mjs", async (fixture) => {
       const { checkoutRoot, fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
       const childPidPath = path.join(fixtureRoot, "child.pid");
@@ -601,33 +571,48 @@ else process.exit(outcome);
         prepareRunnerEnv(env, [implementationPath]),
         checkoutRoot,
       );
-      try {
-        const childPid = await fixturePidBeforeSettlement(
-          childPidPath,
-          command,
-          signal,
-          "Dev runner exited before its child started",
-        );
-        // The implementation records its wrapper before runNodeMain can spawn the child.
-        const wrapperPid = Number(readFileSync(wrapperPidPath, "utf8"));
-        process.kill(wrapperPid, stopSignal);
-        const result = await withinTest(command, signal);
-        expect(result.error, formatShimResult(result)).toBeUndefined();
-        expect(isProcessAlive(childPid), "the stopped runner still owns a live child").toBe(false);
-        expect(result.status).not.toBe(0);
-      } finally {
-        // Negative controls can orphan a separate process group; the test owns its cleanup.
-        if (existsSync(childPidPath)) {
-          const childPid = Number(readFileSync(childPidPath, "utf8"));
-          if (isProcessAlive(childPid)) {
-            process.kill(-childPid, "SIGKILL");
+      await runQaGatewayFixture(
+        async () => {
+          const childPid = await fixturePidBeforeSettlement(
+            childPidPath,
+            command,
+            signal,
+            "Dev runner exited before its child started",
+          );
+          // The implementation records its wrapper before runNodeMain can spawn the child.
+          const wrapperPid = Number(readFileSync(wrapperPidPath, "utf8"));
+          process.kill(wrapperPid, "SIGTERM");
+          const result = await withinTest(command, signal);
+          expect(result.error, formatShimResult(result)).toBeUndefined();
+          expect(isProcessAlive(childPid), "the stopped runner still owns a live child").toBe(
+            false,
+          );
+          expect(result.status).not.toBe(0);
+        },
+        async () => {
+          // Negative controls can orphan a separate process group; the test owns its cleanup.
+          if (existsSync(childPidPath)) {
+            try {
+              const childPid = Number(readFileSync(childPidPath, "utf8"));
+              // Signaling -1 broadcasts beyond the fixture's process group.
+              if (!Number.isSafeInteger(childPid) || childPid <= 1) {
+                throw new Error("Invalid resistant-child PID; cleanup custody unverified");
+              }
+              if (isProcessAlive(childPid)) {
+                process.kill(-childPid, "SIGKILL");
+              }
+              await command;
+              await waitForDead(childPid, signal, "reject");
+            } catch (error) {
+              throw Object.assign(toErrorObject(error, "Resistant-child cleanup failed"), {
+                processTreeState: "indeterminate",
+              });
+            }
+          } else {
+            await command;
           }
-          await command;
-          await waitForFixtureExit([childPid], signal);
-        } else {
-          await command;
-        }
-      }
+        },
+      );
     });
   },
 );

@@ -3,8 +3,6 @@ import { hasAnthropicDefaultSignal } from "./defaults.js";
 import type {
   ConfigSnapshotMetadataLoader,
   ConfigSnapshotPreparationContext,
-  MaterializationRequest,
-  MetadataRequest,
   PreparedValidation,
   ValidationRequest,
 } from "./io.snapshot-preparation.types.js";
@@ -14,7 +12,6 @@ import {
   validateConfigObjectWithPluginsAsync,
   validateConfigObjectWithStrictFactsAsync,
 } from "./validation.js";
-import type { PreparedConfigValidationPluginMetadata } from "./validation.types.js";
 
 /** Preserve the ordinary reader's lazy defaults, including an unused manifest loader. */
 export function materializeConfigSnapshotDefaults(
@@ -44,25 +41,6 @@ export async function materializeConfigSnapshotDefaultsAsync(
     await metadata.loadAsync(config);
   }
   return materializeConfigSnapshotDefaults(context, config, metadata);
-}
-
-/** Supplied by a native Gateway host, never selected by generic config readers. */
-export function prepareHostConfigSnapshot(request: ValidationRequest): Promise<PreparedValidation>;
-export function prepareHostConfigSnapshot(request: MaterializationRequest): Promise<RuntimeConfig>;
-export function prepareHostConfigSnapshot(
-  request: MetadataRequest,
-): Promise<PreparedConfigValidationPluginMetadata>;
-export async function prepareHostConfigSnapshot(
-  request: ValidationRequest | MaterializationRequest | MetadataRequest,
-): Promise<PreparedValidation | RuntimeConfig | PreparedConfigValidationPluginMetadata> {
-  if (request.kind === "metadata") {
-    return await request.metadata.loadAsync(request.config);
-  }
-  const { context, metadata } = request;
-  if (request.kind === "materialize") {
-    return materializeConfigSnapshotDefaultsAsync(context, request.config, metadata);
-  }
-  return prepareConfigSnapshotValidation(request);
 }
 
 /** Runtime validation consumes canonical config; Doctor supplies its own pending facts. */

@@ -232,9 +232,8 @@ Existing plugins remain source-compatible during the deprecation window:
 | `mutableIdentifierMatching: "disabled"` or omitted | default minimum `asserted`           |
 
 An explicit `authentication` or `minIdentifierAuthentication` takes
-precedence. The deprecated fields remain through the current Plugin SDK major
-and are planned for removal in the next major after bundled and known external
-plugins migrate.
+precedence. The deprecated fields remain until a separately announced ordinary
+stable removal release after bundled and known external plugins migrate.
 
 ### Bundled channel declarations
 

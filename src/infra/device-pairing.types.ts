@@ -1,4 +1,3 @@
-// Persisted device pairing and bootstrap-token record shapes.
 // Leaf contract shared by the domain modules (device-pairing.ts,
 // device-bootstrap.ts) and the SQLite row mapper (device-pairing-store.ts);
 // keeping it import-free of both sides prevents module cycles.
@@ -29,9 +28,18 @@ export type DevicePairingStoreState = {
   pairedByDeviceId: Record<string, PairedDevice>;
 };
 
+/** The signed membership listing that originally granted this node role. */
+export type OpenClawIdNodePairingProvenance = {
+  approvedVia: "openclaw-id-node";
+  peerKey: string;
+  authority: { clawId: string; rootPub: string; listedSeq: number };
+};
+
 /** Bearer token issued to one paired device role. */
 export type DeviceAuthToken = {
   token: string;
+  /** Node-role provenance survives token rotation, but ends with role removal. */
+  approval?: OpenClawIdNodePairingProvenance;
   role: string;
   scopes: string[];
   issuer?: {
@@ -62,6 +70,7 @@ export type PairedDeviceApprovalKind =
   | "trusted-proxy"
   | "remote-ingress"
   | "ssh-verified"
+  | "openclaw-id-node"
   | "bootstrap";
 
 /**

@@ -1,4 +1,3 @@
-// Transcript artifact usage, previews, and response bounds.
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";

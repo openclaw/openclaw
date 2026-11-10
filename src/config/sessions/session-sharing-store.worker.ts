@@ -6,10 +6,10 @@ import {
   withSqlitePostCommitPublications,
 } from "../../infra/sqlite-post-commit.js";
 import {
-  assertTransactionUsable,
   runSqliteSingleStatementSync,
   runSqliteWorkerTransactionSync,
 } from "../../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
@@ -28,6 +28,10 @@ import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { readSqliteSessionParticipantProjection } from "./session-accessor.sqlite-participant-projection.js";
 import { recordSessionParticipantFromWorker } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import {
+  boundSessionEntryMetadataReceipts,
+  captureSessionEntryMetadataReceipts,
+} from "./session-entry-metadata-receipt.js";
 import { applySessionGroupCategoryMutation } from "./session-group-categories.kernel.js";
 import { readSessionGroupCategoryKeys } from "./session-group-categories.read.js";
 import { prepareSessionParticipantContribution } from "./session-participant-contribution.worker.js";
@@ -69,11 +73,11 @@ export function bindSqliteWorkerBackend(
     }
     return database;
   };
-  return {
+  return bindSqliteWorkerDatabase<SessionSharingWorkerOperations>(db, {
     execute(command) {
       const scope = { ...command.input.scope };
       const target = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteScope(scope)));
-      const sameOwner = db.location()
+      const sameOwner = sqlPublicationAnchor(db).location()
         ? readDatabasePathIdentitySync(target).canonicalPath === context.databasePath
         : target === context.databasePath &&
           getOpenClawAgentDatabaseIfOpen(toDatabaseOptions(resolveSqliteScope(scope)))?.db === db;
@@ -131,6 +135,7 @@ export function bindSqliteWorkerBackend(
       let keys = [scope.sessionKey];
       let participantResult: SessionSharingWorkerOperations["participant"]["output"] | undefined;
       let membershipResult: MembershipPublication | undefined;
+      let involvementResult: SessionSharingWorkerOperations["involvement"]["output"] | undefined;
       let ownerResult: SessionSharingWorkerOperations["owner.assign"]["output"] | undefined;
       return withSqlitePostCommitPublications(sqlPublicationAnchor(db), () =>
         runSqliteWorkerTransactionSync(
@@ -153,11 +158,12 @@ export function bindSqliteWorkerBackend(
           () => {
             const captured = captureSessionRowChanges(db, () => {
               if (command.type === "involvement") {
-                return updatePreparedSessionProfileInvolvement(
+                involvementResult = updatePreparedSessionProfileInvolvement(
                   scope,
                   command.input.params,
                   command.input.profiles,
                 );
+                return involvementResult;
               }
               if (command.type === "owner.assign") {
                 ownerResult = { value: assignSessionOwner(scope, command.input.params) };
@@ -255,8 +261,13 @@ export function bindSqliteWorkerBackend(
                 continue;
               }
               const facts = change.facts;
-              if (membershipResult && facts.kind === "member") {
-                membershipResult.facts = facts;
+              if ((membershipResult || involvementResult) && facts.kind === "member") {
+                if (membershipResult) {
+                  membershipResult.facts = facts;
+                }
+                if (involvementResult) {
+                  (involvementResult.memberFacts ??= []).push(facts);
+                }
                 recordFact(change.sessionKey, facts);
               } else if (ownerResult && facts.kind === "owner") {
                 ownerResult.facts = facts;
@@ -292,12 +303,20 @@ export function bindSqliteWorkerBackend(
                     : { kind: "unchanged" };
                 },
               });
+              const entryMetadata =
+                command.type === "involvement"
+                  ? captureSessionEntryMetadataReceipts(captured.changes)
+                  : undefined;
               candidate = {
                 kind: "session-collaboration-committed",
                 type: command.type,
                 result: captured.result,
                 publication,
+                ...(entryMetadata ? { entryMetadata } : {}),
               };
+              if (entryMetadata) {
+                boundSessionEntryMetadataReceipts(entryMetadata, candidate);
+              }
               deferSqliteWorkerCommitReceipt(db, candidate);
             }
             return captured.result;
@@ -310,12 +329,5 @@ export function bindSqliteWorkerBackend(
         ),
       );
     },
-    assertSettled() {
-      assertTransactionUsable(db);
-      if (db.isTransaction) {
-        throw new Error("Session collaboration transaction did not settle");
-      }
-    },
-    close() {},
-  };
+  });
 }

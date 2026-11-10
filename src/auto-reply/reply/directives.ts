@@ -1,7 +1,6 @@
 import { escapeRegExp } from "../../shared/regexp.js";
 import {
   type ReasoningLevel,
-  type TraceLevel,
   type ElevatedLevel,
   normalizeFastMode,
   normalizeElevatedLevel,
@@ -97,6 +96,6 @@ export const extractReasoningDirective = createLevelDirectiveExtractor(
   normalizeReasoningLevel,
 );
 
-export type { ElevatedLevel, ReasoningLevel, ThinkLevel, TraceLevel, VerboseLevel };
+export type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel };
 export { extractExecDirective } from "./exec/directive.js";
 export { extractStatusDirective } from "./reply-inline.js";

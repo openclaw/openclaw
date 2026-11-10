@@ -9,20 +9,11 @@ import {
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 import type { QueueDropPolicy } from "./types.js";
 
-function parseQueueDebounce(raw?: string): number | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  try {
-    const parsed = parseDurationMs(raw.trim(), { defaultUnit: "ms" });
-    return parsed > 0 ? Math.round(parsed) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /** Extracts and removes a `/queue` directive from message text. */
-export function extractQueueDirective(rawBody?: string): {
+export function extractQueueDirective(
+  rawBody?: string,
+  options?: { strict?: boolean },
+): {
   queueMode?: QueueMode;
   queueReset: boolean;
   rawMode?: string;
@@ -54,15 +45,7 @@ export function extractQueueDirective(rawBody?: string): {
   const parsed: ReturnType<typeof extractQueueDirective> = {
     cleaned: body,
     hasDirective: true,
-    queueMode: undefined,
     queueReset: false,
-    rawMode: undefined,
-    debounceMs: undefined,
-    cap: undefined,
-    dropPolicy: undefined,
-    rawDebounce: undefined,
-    rawCap: undefined,
-    rawDrop: undefined,
     hasOptions: false,
   };
   while (i < raw.length) {
@@ -79,7 +62,14 @@ export function extractQueueDirective(rawBody?: string): {
     }
     if (lowered.startsWith("debounce:") || lowered.startsWith("debounce=")) {
       parsed.rawDebounce = token.split(/[:=]/)[1] ?? "";
-      parsed.debounceMs = parseQueueDebounce(parsed.rawDebounce);
+      try {
+        const debounceMs = parsed.rawDebounce
+          ? parseDurationMs(parsed.rawDebounce.trim(), { defaultUnit: "ms" })
+          : 0;
+        parsed.debounceMs = debounceMs > 0 ? Math.round(debounceMs) : undefined;
+      } catch {
+        parsed.debounceMs = undefined;
+      }
     } else if (lowered.startsWith("cap:") || lowered.startsWith("cap=")) {
       parsed.rawCap = token.split(/[:=]/)[1] ?? "";
       parsed.cap = parseStrictPositiveInteger(parsed.rawCap);
@@ -105,5 +95,21 @@ export function extractQueueDirective(rawBody?: string): {
   }
   // Remove only the directive and consumed options; leave the rest as agent input.
   parsed.cleaned = removeDirectiveSpan(body, match.index, argsStart + consumed);
+  // Like inline /model, an unknown word followed by more text is prose. As in the
+  // level directives, only a bare `[\w-]+` word can be a mode, so "work?" is prose.
+  // A word that starts with a mode ("collect.") was meant as one and keeps the
+  // error, as do native /queue and explicit syntax (`/queue:`, options).
+  const rest = raw.slice(consumed).trim();
+  if (
+    !options?.strict &&
+    parsed.rawMode &&
+    !parsed.queueMode &&
+    (rest || !/^[\w-]+$/.test(parsed.rawMode)) &&
+    !normalizeQueueMode(/^[\w-]*/.exec(parsed.rawMode)?.[0]) &&
+    !raw.trimStart().startsWith(":") &&
+    !/^(?:debounce|cap|drop)[:=]/i.test(rest)
+  ) {
+    return { cleaned: body, hasDirective: false, queueReset: false, hasOptions: false };
+  }
   return parsed;
 }
