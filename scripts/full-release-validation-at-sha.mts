@@ -19,6 +19,8 @@ import {
   normalizePublicationLaneInputs,
   publicationDispatchEnvelope,
   publicationIntentInputs,
+  validatePublicationVersionSelection,
+  type PublicationSelection,
 } from "./full-release-publication-contract.mjs";
 import {
   classifyReleaseGhTransportError,
@@ -51,6 +53,7 @@ import { validateCandidateChangelog } from "./lib/release-candidate-changelog.mt
 import { parseReleaseContextRef, resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { resolveQualificationBaselines } from "./lib/release-upgrade-baseline.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
+import { validateActiveExtendedStableLine } from "./openclaw-npm-extended-stable-release.mjs";
 import { validatePackageSourceRef } from "./package-source-preflight.mjs";
 import {
   validateCandidateActorPermissionWithGithub,
@@ -2040,6 +2043,39 @@ function verifyReleaseEvidence(
   }
 }
 
+function preflightPublicationRoute(
+  targetVersion: string,
+  publicationSelection: PublicationSelection | null,
+) {
+  if (publicationSelection) {
+    validatePublicationVersionSelection(targetVersion, publicationSelection);
+    if (publicationSelection.route === "extended-stable") {
+      // This is planning evidence, not authority: an older line can still use the
+      // publisher's authenticated retired-line decision, checked again at effect.
+      try {
+        const file: unknown = JSON.parse(
+          runGh([
+            "api",
+            "-H",
+            GH_NO_CACHE_HEADER,
+            `repos/${REPOSITORY}/contents/package.json?ref=refs/heads/main`,
+          ]),
+        );
+        requireDispatch(
+          isJsonRecord(file) && typeof file.content === "string",
+          "Could not read protected main package version for publication preflight",
+        );
+        const mainPackage = JSON.parse(Buffer.from(file.content, "base64").toString("utf8"));
+        validateActiveExtendedStableLine(targetVersion, mainPackage.version);
+      } catch (error) {
+        console.warn(
+          `Publication route preflight: ${error instanceof Error ? error.message : String(error)} Qualification does not authorize publication; resolve the publisher policy or its explicit retired-line decision before publication.`,
+        );
+      }
+    }
+  }
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const args = parseArgs(argv);
@@ -2053,6 +2089,10 @@ async function main() {
       retained.kind === CANDIDATE_REQUEST_KIND && retained.refs.workflow === "intended",
       "Only a candidate request with no qualification ref mutation can resume; reconcile uncertain work read-only",
     );
+    const retainedIntent = decodePublicationDispatchEnvelope(
+      retained.request.inputs.trusted_workflow_json,
+    );
+    preflightPublicationRoute(retained.request.targetVersion, retainedIntent.publicationSelection);
     args.trustedWorkflowRef = "candidate";
     args.admissionWorkflowRef = retained.admission!.workflowRef;
     if (retained.request.targetContextRef !== retained.request.targetSha) {
@@ -2063,9 +2103,6 @@ async function main() {
         retained.request.targetVersion,
       );
     }
-    const retainedIntent = decodePublicationDispatchEnvelope(
-      retained.request.inputs.trusted_workflow_json,
-    );
     const candidateAuthorityActor =
       retainedIntent.validationPurpose === "publish"
         ? preflightCandidateSigningProvenance(
@@ -2105,6 +2142,11 @@ async function main() {
   preflightTargetShaFetch(targetSha);
   const targetVersion = targetVersionForTarget(targetSha);
   const targetProfile = releaseProfileForVersion(targetVersion);
+  const publicationIntent = normalizePublicationIntent(
+    args.inputs.validation_purpose,
+    args.inputs.publication_selection_json,
+  );
+  preflightPublicationRoute(targetVersion, publicationIntent.publicationSelection);
   args.inputs.release_profile ??= targetProfile;
   args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true";
   const targetContextRef = verifyTargetRef(args.targetRef, targetSha, targetVersion);
