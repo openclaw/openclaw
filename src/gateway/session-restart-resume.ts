@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
 import {
@@ -9,13 +10,17 @@ import {
   enqueueSessionEventForHost,
 } from "../auto-reply/reply/session-event-handoff.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
+import {
+  applySessionEntryReplacements,
+  patchSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { readSessionEntrySummariesInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
 import {
   interruptOrphanedSessionPendingInputs,
   listOrphanedSessionPendingInputTargets,
 } from "../config/sessions/session-pending-input-withdrawal.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import {
   captureSessionStoreEnvironment,
   captureSessionStoreReadCandidates,
@@ -25,6 +30,7 @@ import {
   prepareSessionStoreTargetInventoryRead,
   withSessionStoreTarget,
 } from "../config/sessions/session-store-target-runtime.js";
+import { resolveSessionWorkStartBlock } from "../config/sessions/session-work-start.js";
 import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets-configured-agents.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -34,6 +40,10 @@ import {
   listLiveAgentRunIds,
 } from "../infra/agent-run-registry.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  GatewayDrainingError,
+  isGatewayRestartDraining,
+} from "../process/gateway-work-admission.js";
 import {
   isAcpSessionKey,
   isCronSessionKey,
@@ -47,6 +57,7 @@ import {
   hasCommittedReplyOperationOutcome,
 } from "../sessions/session-controller.state.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
+import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
@@ -267,6 +278,12 @@ export async function resumeMarkedSessions(params: {
   log: { warn: (message: string) => void };
 }): Promise<void> {
   const { context, signal, log } = params;
+  const assertRecoveryCurrent = () => {
+    signal.throwIfAborted();
+    if (isGatewayRestartDraining()) {
+      throw new GatewayDrainingError();
+    }
+  };
   const processStartedAt = performance.timeOrigin;
   const cfg = context.getRuntimeConfig();
   const inventory = prepareSessionStoreTargetInventoryRead(
@@ -339,7 +356,7 @@ export async function resumeMarkedSessions(params: {
         >({
           ...target,
           sessionKeys: [sessionKey],
-          assertCommitAllowed: () => signal.throwIfAborted(),
+          assertCommitAllowed: assertRecoveryCurrent,
           requireWriteSuccess: true,
           update: (current) => {
             const selected = current.find((row) => row.sessionKey === sessionKey)?.entry;
@@ -357,12 +374,18 @@ export async function resumeMarkedSessions(params: {
                 : undefined);
             const entry = {
               ...selected,
-              resumeAfterRestart: undefined,
+              // Retain durable custody until admission, including another restart
+              // while the workspace owner is still preparing the binding.
+              resumeAfterRestart: canResumeSession(sessionKey, selected) ? marker : undefined,
               mainRestartRecovery: undefined,
             };
             return {
               result: marker ? { entry, marker } : undefined,
-              replacements: [{ sessionKey, entry }],
+              replacements:
+                selected.mainRestartRecovery ||
+                entry.resumeAfterRestart !== selected.resumeAfterRestart
+                  ? [{ sessionKey, entry }]
+                  : undefined,
             };
           },
         });
@@ -392,6 +415,36 @@ export async function resumeMarkedSessions(params: {
           });
           if (captured.sessionId !== entry.sessionId) {
             throw new Error("Session changed before restart resume admission");
+          }
+          if (entry.pendingWorktree || entry.pendingProjectGitUrl !== undefined) {
+            const blocked = resolveSessionWorkStartBlock(sessionKey, entry, {
+              allowPendingWorkspace: true,
+            });
+            if (blocked) {
+              throw blocked;
+            }
+            const { prepareSessionWorkspaceForRun } =
+              await import("./server-methods/session-create-project.js");
+            // The old readiness scope died with the process. Rejoin its owner,
+            // which publishes the prepared workspace under current authority.
+            await prepareSessionWorkspaceForRun({
+              entry,
+              cfg: context.getRuntimeConfig(),
+              agentId,
+              sessionKey,
+              storePath: target.storePath,
+              context,
+              signal,
+              runId: randomUUID(),
+              assertCurrent: composeSessionSourceAssertion(
+                [authority?.authority.assertCurrent],
+                (assertSources) => {
+                  assertRecoveryCurrent();
+                  assertSources();
+                },
+              ),
+              runSetupScript: authority?.authority.scopes.includes(ADMIN_SCOPE) === true,
+            });
           }
           const receipt = withPluginRuntimeGatewayContextResolver(
             context.resolveGatewayContext,
@@ -428,11 +481,23 @@ export async function resumeMarkedSessions(params: {
             throw new Error(accepted.error);
           }
         } catch (error) {
-          if (signal.aborted) {
-            throw error;
-          }
+          signal.throwIfAborted();
           log.warn(`Skipped restart resume for ${sessionKey}: ${String(error)}`);
         }
+        await patchSessionEntryCore(
+          { ...target, agentId, sessionKey },
+          (current) =>
+            current.sessionId === entry.sessionId &&
+            current.lifecycleRevision === entry.lifecycleRevision
+              ? { resumeAfterRestart: undefined }
+              : null,
+          {
+            requireWriteSuccess: true,
+            skipMaintenance: true,
+            // Shutdown captures a new marker before cancelling recovery; it wins.
+            assertCommitAllowed: assertRecoveryCurrent,
+          },
+        );
         // Each accepted sender retains its own admission even when the owner cannot resume.
         await continueSessionQueuedInputs(
           context,
@@ -444,9 +509,7 @@ export async function resumeMarkedSessions(params: {
           },
         );
       } catch (error) {
-        if (signal.aborted) {
-          throw error;
-        }
+        signal.throwIfAborted();
         log.warn(`Skipped restart resume for ${sessionKey}: ${String(error)}`);
       } finally {
         authority?.release();

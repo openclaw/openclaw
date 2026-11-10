@@ -14,6 +14,13 @@ ordinary system input asking the agent to inspect current state and continue.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution.
 
+If the interrupted turn left a managed workspace pending, its recovery input waits
+for the workspace owner to finish preparation before starting the turn. Setup
+failures still produce the ordinary actionable error; pending setup alone does
+not discard the resume input. Setup scripts require the recovered caller's current
+administrator authority. The restart marker remains durable until the resumed
+turn is admitted, so another restart during preparation can recover it again.
+
 A crash or `SIGKILL` does not write these markers. Nothing resumes automatically
 from that process. Open the conversation and send a message to continue. This is
 an accepted loss window: files, external actions, and tool effects may already

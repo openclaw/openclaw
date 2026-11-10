@@ -4,9 +4,11 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { addSession } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
+import type { SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -22,7 +24,12 @@ import * as pendingInputWithdrawal from "../config/sessions/session-pending-inpu
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
@@ -343,3 +350,79 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
       await live!.settled?.();
     }
   }));
+
+it.for(["aborted", "draining"] as const)(
+  "retains restart custody while admission is %s by another restart",
+  (mode, test) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const target = { agentId: "main", sessionKey: "agent:main:pending-resume" };
+      replaceSessionEntrySync(target, { sessionId: "pending-resume", updatedAt: 110 });
+      replaceSessionEntrySync(target, {
+        sessionId: "pending-resume",
+        updatedAt: 110,
+        resumeAfterRestart: { queuedInputIds: [] },
+      });
+      const controller = new AbortController();
+      const entered = createDeferredCore();
+      const accepted = createDeferredCore<Awaited<SessionEventReceipt["accepted"]>>();
+      const enqueue = vi
+        .spyOn(sessionEvents, "enqueueSessionEventForHost")
+        .mockImplementation(() => {
+          entered.resolve();
+          return {
+            id: "pending-resume-input",
+            accepted: accepted.promise,
+            settled: Promise.resolve({
+              status: "completed",
+              executionStarted: true,
+              delivered: false,
+            }),
+            cancel: () => false,
+          };
+        });
+      const recovery = resumeMarkedSessions({
+        context: createContext([], () => cfg),
+        signal: controller.signal,
+        log: { warn() {} },
+      });
+      void recovery.catch(() => {});
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            recovery,
+            "Recovery finished before event admission",
+          ),
+          test.signal,
+        );
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
+          queuedInputIds: [],
+        });
+        if (mode === "aborted") {
+          const error = new Error("Another restart interrupted admission");
+          controller.abort(error);
+          accepted.resolve({ ok: false, error: error.message });
+          await expect(recovery).rejects.toBe(error);
+        } else {
+          markGatewayRestartDraining();
+          replaceSessionEntrySync(target, {
+            ...loadExactSessionEntry(target)!.entry,
+            resumeAfterRestart: { queuedInputIds: ["next-shutdown-input"] },
+          });
+          accepted.resolve({ ok: true });
+          await recovery;
+        }
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
+          queuedInputIds: mode === "draining" ? ["next-shutdown-input"] : [],
+        });
+        expect(enqueue).toHaveBeenCalledOnce();
+      } finally {
+        accepted.resolve({ ok: true });
+        await Promise.allSettled([recovery]);
+        resetGatewayWorkAdmission();
+        enqueue.mockRestore();
+      }
+    }),
+);
