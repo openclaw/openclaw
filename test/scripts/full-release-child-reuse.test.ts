@@ -377,7 +377,7 @@ describe("independent release child reuse", () => {
       const checked = succeeds
         ? expect(verification).resolves.toMatchObject({ receipt: { jobs: data.receipt.jobs } })
         : expect(verification).rejects.toMatchObject({
-            message: `Full release child evidence API GET repos/openclaw/openclaw/actions/runs/101 failed (HTTP ${status})`,
+            message: `Full release child evidence API GET repos/openclaw/openclaw/actions/runs/101 failed (HTTP ${status}); reason=unclassified`,
           });
       await vi.runAllTimersAsync();
       await checked;
@@ -788,6 +788,36 @@ describe("independent release child reuse", () => {
         data.deps,
       ),
     ).toBeNull();
+  });
+
+  it.each([
+    ["API rate limit exceeded for private-account", "primary-rate-limit"],
+    ["You have exceeded a secondary rate limit", "secondary-rate-limit"],
+    ["Resource not accessible by integration", "permission"],
+    ["private unexpected response", "unclassified"],
+  ])("classifies a failed gh read without exposing its response: %s", async (message, reason) => {
+    const data = await fixture();
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    const root = tempDirs.make("frv-child-gh-failure-");
+    const calls = join(root, "calls.txt");
+    const gh = join(root, "gh");
+    writeFileSync(
+      gh,
+      `#!${process.execPath}
+const fs = require("node:fs");
+fs.appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2).join(" ") + "\n");
+process.stdout.write(${JSON.stringify(JSON.stringify({ message, privateData: "secret-response" }))});
+process.stderr.write("gh: Forbidden (HTTP 403)");
+process.exit(1);
+`,
+    );
+    chmodSync(gh, 0o755);
+    vi.stubEnv("PATH", `${root}${delimiter}${process.env.PATH ?? ""}`);
+    const { github: _github, ...transport } = data.deps;
+    await expect(validateReusableReleaseChild(selection, data.request, transport)).rejects.toMatchObject({
+      message: `Full release child evidence API GET repos/openclaw/openclaw/actions/runs/101 failed (HTTP 403); reason=${reason}`,
+    });
+    expect(readFileSync(calls, "utf8")).toBe("api repos/openclaw/openclaw/actions/runs/101\n");
   });
 
   it("reads binary archives through configured gh auth and rejects failed transfers", async () => {
