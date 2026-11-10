@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
   createPublicationAdmission,
@@ -15,6 +15,8 @@ import {
   validateReceiptRecoveryRequest,
   verifyOriginalReceiptQualification,
 } from "../../scripts/full-release-receipt-recovery.mjs";
+import * as candidateReuse from "../../scripts/lib/full-release-candidate-reuse.mjs";
+import * as childReuse from "../../scripts/lib/full-release-child-reuse.mjs";
 import { retainedPublicationArtifactSource } from "../../scripts/lib/release-evidence-identity.mjs";
 import { validateFullReleaseNpmPreflight } from "../../scripts/npm-preflight-tooling-identity.mjs";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
@@ -34,6 +36,10 @@ function fixture() {
     { packages: [], platforms: [] },
     old.source.projection,
   );
+  const baselines = JSON.parse(
+    JSON.parse(old.admission.receipt.request.inputs.trusted_workflow_json).laneInputs
+      .qualification_baselines_json,
+  );
   const recovery = {
     schema: RECEIPT_RECOVERY_SCHEMA,
     requestId: "12345678-1234-4123-8123-123456789abc",
@@ -41,13 +47,26 @@ function fixture() {
     qualificationAdmission: old.admission.descriptor,
     originalParent: { runId: old.runId, runAttempt: 1 },
     candidateBinding: {
-      request: { targetSha: old.q, toolingSha: old.q },
+      request: {
+        targetSha: old.q,
+        toolingSha: old.q,
+        ...baselines,
+        releaseProfile: "beta",
+        releaseSoak: false,
+      },
+      package: { version: old.admission.receipt.baselinePolicy.candidateVersion },
       producer: { runId: "901", runAttempt: 1 },
     },
     children: Object.fromEntries(
       roles.map((role, index) => [
         role,
-        { runId: String(910 + index), runAttempt: 1, workflowRef: old.branch },
+        {
+          runId: String(910 + index),
+          runAttempt: 1,
+          workflowRef: old.branch,
+          sourceParentRunId: old.runId,
+          sourceParentAttempt: 1,
+        },
       ]),
     ),
     publicationArtifacts: {
@@ -67,7 +86,32 @@ function fixture() {
   return { old, producer, source, recovery, manifest };
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("receipt-backed aggregate recovery", () => {
+  it("passes a ten-minute budget to recovery child verification", async () => {
+    const { old, recovery } = fixture();
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    // Candidate payload validation is separate from the child deadline handoff.
+    vi.spyOn(candidateReuse, "verifySealedFullReleaseCandidate").mockImplementation(vi.fn());
+    const verifyChild = vi
+      .spyOn(childReuse, "validateReusableReleaseChild")
+      .mockRejectedValue(new Error("child verification reached"));
+    await expect(
+      verifyOriginalReceiptQualification(recovery, {
+        client: {
+          ...old.client,
+          getWorkflowSource: (_sha: string, path: string) => readFileSync(path, "utf8"),
+        },
+      }),
+    ).rejects.toThrow("child verification reached");
+    expect(verifyChild).toHaveBeenCalledOnce();
+    expect(verifyChild.mock.calls[0]?.[2]?.deadlineMs).toBe(now + 600_000);
+  });
+
   it("retains original selection, baselines and Q artifacts under a distinct P admission", () => {
     const { old, source, recovery, manifest, producer } = fixture();
     expect(validateReceiptRecoveryRequest(recovery)).toBe(recovery);
@@ -127,23 +171,6 @@ describe("receipt-backed aggregate recovery", () => {
     "rejects changed original %s through the receipt owner",
     async (fault) => {
       const { old, recovery } = fixture();
-      const baselines = JSON.parse(
-        JSON.parse(old.admission.receipt.request.inputs.trusted_workflow_json).laneInputs
-          .qualification_baselines_json,
-      );
-      const request = {
-        ...recovery,
-        candidateBinding: {
-          ...recovery.candidateBinding,
-          request: {
-            ...recovery.candidateBinding.request,
-            ...baselines,
-            releaseProfile: "beta",
-            releaseSoak: false,
-          },
-          package: { version: old.admission.receipt.baselinePolicy.candidateVersion },
-        },
-      };
       const callsBefore = old.admission.calls.length;
       const client = {
         ...old.client,
@@ -153,7 +180,7 @@ describe("receipt-backed aggregate recovery", () => {
         },
         getRunAttemptJobs: async () => [],
       };
-      await expect(verifyOriginalReceiptQualification(request, { client })).rejects.toThrow(
+      await expect(verifyOriginalReceiptQualification(recovery, { client })).rejects.toThrow(
         fault === "parent identity"
           ? "original parent differs"
           : "required job did not succeed exactly once",
