@@ -318,7 +318,10 @@ describe("Codex native configuration lifecycle", () => {
         expect(placed).toBe(threads[0]?.preparedOpenClawBaseInstructions);
         expect(placed).toContain("You are a personal assistant running inside OpenClaw.");
         const carrier = isJsonObject(request.params) ? request.params[carrierKey] : undefined;
-        expect(typeof carrier === "string" && carrier.startsWith(`${placed}`)).toBe(true);
+        expect(
+          typeof carrier === "string" &&
+            carrier.startsWith(nativeBaseKey ? `<openclaw_thread_policy>\n${placed}` : `${placed}`),
+        ).toBe(true);
         expect(request.params).toMatchObject({
           config: {
             "features.tool_suggest": false,
@@ -388,7 +391,9 @@ describe("Codex native configuration lifecycle", () => {
           ? undefined
           : "",
     );
-    expect(frames.at(-1)?.[1]).toMatchObject({ developerInstructions: "" });
+    expect(frames.at(-1)?.[1]).toMatchObject({
+      developerInstructions: "<openclaw_thread_policy>\n\n</openclaw_thread_policy>",
+    });
     expect(frames.at(-1)?.[1].baseInstructions).toBe(key ? undefined : "");
     expect(resumed.preparedOpenClawBaseInstructions).toBeUndefined();
   });

@@ -261,7 +261,7 @@ it("continues a persistent upstream fork on its secondary home and native model 
         model: nativeModel,
         modelProvider: "openai",
         dynamicTools,
-        developerInstructions,
+        developerInstructions: `<openclaw_thread_policy>\n${developerInstructions}\n</openclaw_thread_policy>`,
       }),
     );
     expectNativeRequest("thread/inject_items", {
