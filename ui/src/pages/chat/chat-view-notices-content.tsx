@@ -339,7 +339,7 @@ function ChatErrorNotice(props: {
   );
   // The toast reads its action for presence and rendering; retain one DOM slot.
   const actions = (
-    <div class="chat-error__actions">
+    <div class="stack chat-error__actions">
       {props.action}
       <ReportIssueLink />
     </div>
