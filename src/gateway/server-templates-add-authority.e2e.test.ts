@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
+import { buffer } from "node:stream/consumers";
+import { zstdDecompressSync } from "node:zlib";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
 import type { TemplateLifecyclePlanResult } from "../../packages/gateway-protocol/src/schema/templates.js";
@@ -12,10 +15,8 @@ import {
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { resolveAgentDir } from "../agents/agent-scope.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { acquireCronInferenceAuthorization } from "../cron/inference-binding.runtime.js";
 import { loadCronJobsStore } from "../cron/store.js";
 import { testApi as loggingTestApi } from "../logging/logger.test-support.js";
 import { clawHubSecurityResponse } from "../plugins/clawhub.test-fixtures.js";
@@ -26,11 +27,14 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawStateLeaseAsync } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
 import { pairOperatorDeviceFixture } from "./paired-device.test-support.js";
 import { startGatewayServerCore } from "./server-start.js";
 import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
+import { buildOpenAiResponsesTestModel } from "./test-openai-responses-model.js";
 
 const remote = vi.hoisted(() => ({
   detail: vi.fn(),
@@ -73,7 +77,7 @@ const version = "1.0.0";
 const token = "template-authority-test-token";
 type Kind = "skill" | "plugin" | "clawhub-plugin";
 
-async function makeFixture(kind: Kind, label: string) {
+async function makeFixture(kind: Kind, label: string, effectFile?: string) {
   const dependencyId = `${label}-${kind}-probe`;
   const agentId = `${label}-${kind}-template`;
   const packageName = `@openclaw/${agentId}`;
@@ -99,7 +103,10 @@ async function makeFixture(kind: Kind, label: string) {
           "index.cjs": `module.exports = { id: ${JSON.stringify(dependencyId)}, register(api) {
       api.registerTool({ name: ${JSON.stringify(`${dependencyId.replaceAll("-", "_")}_tool`)}, description: "Synthetic probe",
         parameters: { type: "object", properties: {} },
-        execute: async () => ({ content: [{ type: "text", text: "ready" }] }) });
+        execute: async () => {
+          ${effectFile ? `require("node:fs").appendFileSync(${JSON.stringify(effectFile)}, "called\\n");` : ""}
+          return { content: [{ type: "text", text: "ready" }] };
+        } });
     } };`,
         };
   const pluginArchive = kind === "clawhub-plugin" ? await createArchive(files) : undefined;
@@ -111,7 +118,10 @@ async function makeFixture(kind: Kind, label: string) {
     }),
     "CLAW.md": `---\n${JSON.stringify({
       schemaVersion: 1,
-      agent: { id: agentId },
+      agent: {
+        id: agentId,
+        ...(effectFile ? { tools: { allow: [`${dependencyId.replaceAll("-", "_")}_tool`] } } : {}),
+      },
       [kind === "skill" ? "skills" : "plugins"]: [
         kind === "clawhub-plugin" ? { ref: pluginName, version } : { path: dependencyPath },
       ],
@@ -228,7 +238,8 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
       env: {
         ...KERNEL_TEST_ENV,
         OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: kind === "plugin" ? undefined : "1",
+        OPENCLAW_SKIP_PROVIDERS: kind === "plugin" ? undefined : "1",
       },
     });
     const clients: GatewayClient[] = [];
@@ -240,8 +251,87 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
     });
     let server: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
     let model: Awaited<ReturnType<typeof startOpenAiResponsesModelServer>> | undefined;
+    let provider:
+      | Awaited<ReturnType<typeof reserveTestPortListener<ReturnType<typeof createServer>>>>
+      | undefined;
     try {
-      const allowed = await makeFixture(kind, "allowed");
+      const effectFile = state.path("scheduled-tool-effects.txt");
+      const allowed = await makeFixture(
+        kind,
+        "allowed",
+        kind === "plugin" ? effectFile : undefined,
+      );
+      const toolName = `${allowed.dependencyId.replaceAll("-", "_")}_tool`;
+      let providerRequests = 0;
+      const providerErrors: unknown[] = [];
+      if (kind === "plugin") {
+        provider = await reserveTestPortListener({
+          offsets: [0],
+          signal,
+          createListener: () =>
+            createServer((request, response) => {
+              // Host listener probes are not provider requests.
+              if (request.method === "GET" && request.url === "/") {
+                request.resume();
+                response.writeHead(404).end();
+                return;
+              }
+              void (async () => {
+                expect(request.method).toBe("POST");
+                expect(request.url).toBe("/v1/responses");
+                expect(request.headers.authorization).toBe("Bearer synthetic-scheduling-key");
+                const encoded = await buffer(request);
+                const body = JSON.parse(
+                  (request.headers["content-encoding"] === "zstd"
+                    ? zstdDecompressSync(encoded)
+                    : encoded
+                  ).toString("utf8"),
+                );
+                expect(body.model).toBe("gpt-4.1");
+                // Main now opens ordinary chat before optional setup. Keep its greeting
+                // separate from the scheduled run's counted provider and tool effects.
+                if (
+                  !JSON.stringify(body.input).includes("Report the synthetic probe status.") &&
+                  !body.input.some((item: { type: string }) => item.type === "function_call_output")
+                ) {
+                  expect(JSON.stringify(body.input)).toContain(
+                    "This ordinary conversation was just created from a Template.",
+                  );
+                  writeOpenAiResponsesText(response, {
+                    text: "Your Template agent is ready.",
+                    messageId: "template-greeting",
+                    responseId: "template-greeting-response",
+                  });
+                  return;
+                }
+                providerRequests++;
+                if (providerRequests % 2 === 1) {
+                  expect(body.tools).toEqual(
+                    expect.arrayContaining([expect.objectContaining({ name: toolName })]),
+                  );
+                  writeToolCall(response, toolName, {});
+                } else {
+                  expect(body.input).toEqual(
+                    expect.arrayContaining([
+                      expect.objectContaining({
+                        type: "function_call_output",
+                        output: expect.stringContaining("ready"),
+                      }),
+                    ]),
+                  );
+                  writeOpenAiResponsesText(response, {
+                    text: "Synthetic probe is ready.",
+                    messageId: `msg_${providerRequests}`,
+                    responseId: `resp_${providerRequests}`,
+                  });
+                }
+              })().catch((error: unknown) => {
+                providerErrors.push(error);
+                response.writeHead(500).end();
+              });
+            }),
+        });
+      }
       const revoked = await makeFixture(kind, "revoked");
       setRemoteFixtures([allowed, revoked]);
       const policyPath = state.path("bundled-policy.cjs");
@@ -331,8 +421,39 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
         logging: { level: "error", consoleLevel: "silent", file: state.path("gateway.log") },
         agents: {
           ...modelConfig.agents,
-          defaults: { ...modelConfig.agents?.defaults, workspace: state.workspaceDir },
+          defaults: {
+            ...modelConfig.agents?.defaults,
+            workspace: state.workspaceDir,
+            model: "openai/gpt-4.1",
+            models: {
+              "openai/gpt-4.1": {
+                agentRuntime: { id: "openclaw" },
+                params: { transport: "sse", openaiWsWarmup: false },
+              },
+            },
+          },
         },
+        ...(provider
+          ? {
+              models: {
+                providers: {
+                  openai: {
+                    api: "openai-responses",
+                    baseUrl: `http://127.0.0.1:${provider.claim.port}/v1`,
+                    request: { allowPrivateNetwork: true },
+                    models: [buildOpenAiResponsesTestModel("gpt-4.1")],
+                  },
+                },
+              },
+              plugins: {
+                allow: ["openai", allowed.dependencyId, revoked.dependencyId],
+                entries: { openai: { enabled: true } },
+                slots: { memory: "none" },
+              },
+              tools: { codeMode: false, toolSearch: false },
+              cron: { enabled: false, triggers: { enabled: false } },
+            }
+          : {}),
         security: {
           installPolicy: {
             enabled: true,
@@ -380,6 +501,27 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
       };
       const admin = await connect({ scopes: ["operator.read", "operator.admin"], token });
       const reader = await connect({ scopes: ["operator.read"], token });
+      const creator =
+        kind === "plugin"
+          ? await pairOperatorDeviceFixture({
+              identityPath: state.path("creator", "client", "credentials.sqlite"),
+              scopes: ["operator.read", "operator.admin"],
+              tokenScopes: ["operator.read", "operator.admin"],
+              clientId: "test",
+              clientMode: "test",
+              callerScopes: ["operator.admin"],
+            })
+          : undefined;
+      if (creator && !creator.issued.ok) {
+        throw new Error("Could not issue synthetic creator token");
+      }
+      const author = creator?.issued.ok
+        ? await connect({
+            scopes: ["operator.read", "operator.admin"],
+            deviceIdentity: creator.identity,
+            deviceToken: creator.issued.entry.token,
+          })
+        : admin;
       const source = (fixture: Fixture) => ({ packageName: fixture.packageName, version });
       const plan = (client: GatewayClient, fixture: Fixture) =>
         client.request<TemplateLifecyclePlanResult>("templates.add.plan", {
@@ -428,9 +570,10 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
       await noEffects(allowed, allowedWorkspace);
       expect(await fs.stat(allowedWorkspace).catch(() => null)).toBeNull();
       expect(
-        await admin.client.request("templates.add.apply", params(allowed, allowedPlan)),
+        await author.client.request("templates.add.apply", params(allowed, allowedPlan)),
       ).toMatchObject({ status: "complete" });
       if (kind === "plugin") {
+        assert(creator);
         // Preserve the real Gateway handoff: Add must publish its new agent
         // before native scheduling, without a manual config receipt or restart.
         const schedules = await admin.client.request<{ jobs: Array<{ id: string }> }>("cron.list", {
@@ -456,21 +599,53 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
           agentId: allowed.agentId,
           enabled: false,
           inferenceBinding: { provider: "openai", profileId: "openai:template-scheduling" },
+          operatorSource: {
+            source: {
+              kind: "gateway",
+              snapshot: { device: { deviceId: creator.identity.deviceId } },
+            },
+          },
         });
         assert(stored?.inferenceBinding);
         expect(stored.payload).not.toHaveProperty("model");
-        const cfg = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
-        const authority = await acquireCronInferenceAuthorization({
-          binding: stored.inferenceBinding,
-          cfg,
-          agentDir: resolveAgentDir(cfg, allowed.agentId),
+        // Controller B forces the unchanged job; each occurrence restores creator A's authority.
+        const run = () =>
+          admin.client.request<{ run?: { status: string; error?: string } }>(
+            "cron.run",
+            { id: stored.id, mode: "force", waitTimeoutMs: 60_000 },
+            { timeoutMs: 65_000 },
+          );
+        const accepted = await run();
+        expect(providerErrors).toEqual([]);
+        expect(accepted.run).toMatchObject({ status: "ok" });
+        expect(providerRequests).toBe(2);
+        expect(await fs.readFile(effectFile, "utf8")).toBe("called\n");
+        await admin.client.request("device.token.revoke", {
+          deviceId: creator.identity.deviceId,
+          role: "operator",
         });
-        try {
-          await authority.revalidate();
-          authority.assertCurrent();
-        } finally {
-          authority.dispose();
-        }
+        await withinTest(author.closed, signal);
+        const refused = await run();
+        expect(
+          refused.run,
+          JSON.stringify({ providerRequests, toolEffects: await fs.readFile(effectFile, "utf8") }),
+        ).toMatchObject({
+          status: "error",
+          error: expect.stringContaining(
+            "operator authority that created this automation was refused",
+          ),
+        });
+        expect(providerErrors).toEqual([]);
+        expect(providerRequests).toBe(2);
+        expect(await fs.readFile(effectFile, "utf8")).toBe("called\n");
+        const unchanged = (await loadCronJobsStore(state.statePath("cron", "jobs.json"))).jobs.find(
+          (job) => job.id === stored.id,
+        );
+        expect(unchanged).toEqual({
+          ...stored,
+          state: unchanged?.state,
+          updatedAtMs: unchanged?.updatedAtMs,
+        });
       }
       expect(await effects(allowed, allowedWorkspace)).toMatchObject({
         agent: expect.objectContaining({}),
@@ -575,6 +750,16 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
         ...clients.map((client) => () => client.stopAndWait()),
         async () => server?.close(),
         async () => model?.close(),
+        async () => {
+          if (provider) {
+            provider.listener.closeAllConnections();
+            await runQaGatewayFixture(
+              async () => {},
+              provider.releaseListener,
+              provider.claim.release,
+            );
+          }
+        },
         () => state.cleanup(),
         () => clearPluginMetadataLifecycleCaches(),
       );
