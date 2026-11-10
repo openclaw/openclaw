@@ -588,15 +588,6 @@ export const deviceHandlers: GatewayRequestHandlers = {
           return;
         }
         clearRemovedNodeRuntimeState({ nodeId: removed.deviceId, context });
-        // A reused identity must not inherit the deleted pairing's tunnel bindings.
-        await forgetDeviceTokenBindings(
-          removed.deviceId,
-          target ? listApprovedPairedDeviceRoles(target) : [],
-        ).catch((error: unknown) => {
-          context.logGateway.warn(
-            `device pairing removed device=${removed.deviceId} but its OpenClaw ID token bindings were not cleared: ${String(error)}`,
-          );
-        });
         // Removal can retire its requester. Keep only its final reply, without
         // letting a failed claim or worker reconciliation skip client teardown.
         try {
@@ -605,6 +596,15 @@ export const deviceHandlers: GatewayRequestHandlers = {
           } finally {
             context.invalidateClientsForDevice?.(removed.deviceId, {
               reason: "device-pair-removed",
+            });
+            // A reused identity must not inherit the deleted pairing's tunnel bindings.
+            await forgetDeviceTokenBindings(
+              removed.deviceId,
+              target ? listApprovedPairedDeviceRoles(target) : [],
+            ).catch((error: unknown) => {
+              context.logGateway.warn(
+                `device pairing removed device=${removed.deviceId} but its OpenClaw ID token bindings were not cleared: ${String(error)}`,
+              );
             });
             await reconcileRevokedDeviceWorker(context, removed.deviceId);
           }

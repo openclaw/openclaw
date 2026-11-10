@@ -160,7 +160,12 @@ async function connectTunnel(
   return { ws, res };
 }
 
-type HelloAuth = { method?: string; scopes?: string[]; roleAllowsAdmin?: boolean };
+type HelloAuth = {
+  method?: string;
+  scopes?: string[];
+  roleAllowsAdmin?: boolean;
+  deviceToken?: string;
+};
 
 function helloAuth(res: Awaited<ReturnType<typeof connectReq>>): HelloAuth | undefined {
   return (res.payload as { auth?: HelloAuth } | undefined)?.auth;
@@ -262,6 +267,83 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
       ws.close();
     }
   });
+
+  test.each(["removed", "reassigned"] as const)(
+    "a tokenless browser is Access-managed and loses RPC access when its peer is %s",
+    async (change) => {
+      const original = expectDefined(PRINCIPALS[OPERATOR_KEY], "operator principal");
+      const gateway = {
+        auth: { mode: "token" as const, token: TOKEN },
+        controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
+      };
+      await writeConfigFile({
+        gateway: {
+          ...gateway,
+          openclawId: { enabled: true },
+          roles: {
+            default: "member",
+            definitions: {
+              member: {
+                sessions: { others: "none" },
+                agents: "*",
+                scopes: ["operator.read", "operator.write"],
+              },
+            },
+          },
+        },
+      });
+      let browser: WebSocket | undefined;
+      let admin: WebSocket | undefined;
+      try {
+        const connected = await connectTunnel(OPERATOR_KEY);
+        browser = connected.ws;
+        expect(connected.res.ok, JSON.stringify(connected.res.error)).toBe(true);
+        expect(helloAuth(connected.res)?.deviceToken).toBeUndefined();
+        expect(grantedScopes(connected.res)).toEqual([
+          "operator.approvals",
+          "operator.questions",
+          "operator.read",
+          "operator.talk",
+          "operator.write",
+        ]);
+        const deviceId = expectDefined(
+          (await listDevicePairing()).paired[0]?.deviceId,
+          "browser pairing",
+        );
+        const owner = await connectTunnel(undefined, { token: TOKEN });
+        admin = owner.ws;
+        expect(owner.res.ok).toBe(true);
+        const list = await rpcReq<{ paired: Array<{ deviceId: string; managedBy?: string }> }>(
+          admin,
+          "device.pair.list",
+          {},
+        );
+        expect(list.payload?.paired.find((entry) => entry.deviceId === deviceId)?.managedBy).toBe(
+          "openclaw-id",
+        );
+        expect((await rpcReq(browser, "health", {})).ok).toBe(true);
+        expect((await rpcReq(browser, "exec.approvals.get", {})).ok).toBe(false);
+        if (change === "removed") {
+          delete PRINCIPALS[OPERATOR_KEY];
+        } else {
+          PRINCIPALS[OPERATOR_KEY] = {
+            ...original,
+            kind: "member",
+            accountId: "acct_reassigned",
+            role: "operator",
+          };
+        }
+        await expect(rpcReq(browser, "health", {})).rejects.toThrow(
+          /closed 4001.*membership changed/,
+        );
+      } finally {
+        PRINCIPALS[OPERATOR_KEY] = original;
+        browser?.close();
+        admin?.close();
+        await writeConfigFile({ gateway });
+      }
+    },
+  );
 
   test("a viewer member reads but is refused chat.send", async () => {
     const { ws, res } = await connectTunnel(VIEWER_KEY);

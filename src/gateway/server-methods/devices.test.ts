@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { captureNodeWakeLifecycle } from "../node-wake-state.js";
 import { setDeviceTokenBindingOwner } from "../openclaw-id/device-token-binding.js";
 import {
@@ -70,7 +71,12 @@ it("marks only OpenClaw ID operator browsers and forgets bindings of a removed p
     // A node host whose node role was removed first keeps its operator row: still a node host.
     ["node-host:operator", "iroh:host"],
   ]);
-  const forget = vi.fn(async () => {});
+  const cleanupEntered = createDeferredCore();
+  const cleanupRelease = createDeferredCore();
+  const forget = vi.fn(async () => {
+    cleanupEntered.resolve();
+    await cleanupRelease.promise;
+  });
   setDeviceTokenBindingOwner({
     lookup: (deviceId, role) => bindings.get(`${deviceId}:${role}`),
     record: async () => {},
@@ -131,7 +137,18 @@ it("marks only OpenClaw ID operator browsers and forgets bindings of a removed p
     const removed = withConfig(
       createOptions("device.pair.remove", { deviceId: "ocid-browser" }, createClient(scopes)),
     );
-    await invoke(removed);
+    const removal = invoke(removed);
+    try {
+      await cleanupEntered.promise;
+      expect(removed.context.invalidateClientsForDevice).toHaveBeenCalledWith("ocid-browser", {
+        reason: "device-pair-removed",
+      });
+      expect(removed.respond).not.toHaveBeenCalled();
+    } finally {
+      cleanupRelease.resolve();
+      await removal;
+    }
+    expect(removed.context.disconnectClientsForDevice).toHaveBeenCalledWith("ocid-browser");
     expect(forget).toHaveBeenCalledWith([
       { deviceId: "ocid-browser", role: "operator", peerKey: "iroh:browser" },
     ]);
