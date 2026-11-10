@@ -79,6 +79,20 @@ handoff, or claim the ledger current while any item remains unsynchronized.
    evidence. Completion requires the stored head to match the remote head and no
    unexplained stale assessment or unsynchronized decision.
 
+## Final closeout integrity check
+
+At closeout, review branch history from the recorded baseline through the published
+Release SHA—not just existing ledger rows. When access is available, reconcile
+all landed hotfixes, including late backports and release-first fixes, with complete
+release assessments: source/destination commits, disposition, adaptations,
+dependencies/exclusions, and proof. Account for reverts and partial or superseding
+fixes; don't count later branch commits as shipped.
+
+Use the existing checkpoint flow for corrections. Note the checked range and any
+unresolved gaps in closeout evidence; if access is unavailable, use the
+[fallback](#fallback-and-privacy). This is an agent judgment pass, not a new
+validator or publication gate.
+
 ## Manager opportunity intake
 
 When the release manager receives a backport opportunity, persist it before

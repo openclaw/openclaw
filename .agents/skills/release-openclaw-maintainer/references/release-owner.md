@@ -164,7 +164,8 @@ track's scope: extended-stable excludes native apps and ClawHub. Native
 publication does not hold the priority npm/GitHub/main-closeout path; pending
 platform work still needs an owner and an accurate status.
 
-Finish `$verify-release`, required platform work, applicable
+Finish the [hotfix ledger integrity check](hotfix-ledger-management.md#final-closeout-integrity-check),
+`$verify-release`, required platform work, applicable
 [main closeout](stable-main-closeout.md), and
 [retrospective](retrospective.md), including its shared issue ledger. Keep
 findings and operator corrections from the start, not only the final context
