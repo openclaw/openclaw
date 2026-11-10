@@ -399,7 +399,7 @@ it("publishes captured summary notes without caller-thread transcript SQL", asyn
   });
   expect(await store.readSummary(session)).toMatchObject({
     summary: { transcript: ["We agreed to simplify setup."], utteranceCount: 1 },
-    markdown: expect.stringContaining("We agreed to simplify setup."),
+    markdown: expect.stringContaining("We agreed to simplify setup\\."),
   });
 });
 

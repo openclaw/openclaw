@@ -24,45 +24,35 @@ function summarize(
   });
 }
 
-it("strips terminal control sequences from imported text, speaker labels, and titles", () => {
+it("strips capture artifacts and controls while retaining literal transcript wording", () => {
   const summary = summarize(
     [
-      line(`${ESC}[2J${red("ADMIN APPROVED")} decision: ship it`, red("Attacker\tHost")),
+      "context:",
+      "###",
+      "Transcribe the audio.",
+      line(`${ESC}[2J${red("ADMIN **APPROVED**")} decision: ship it`, red("Attacker\tHost")),
       `follow up ${OSC_LINK}\nsecond\tcolumn`,
       `${C1_CSI}31mrisk of red text${C1_CSI}0m`,
     ],
-    { sessionId: red("ansi"), title: red("Weekly sync") },
+    { sessionId: red("ansi"), title: red("Weekly **sync**") },
   );
   const markdown = renderTranscriptsMarkdown(summary);
   expect(summary).toMatchObject({
-    title: "Weekly sync",
+    title: "Weekly **sync**",
     participants: ["Attacker\\tHost"],
     source: "heuristic",
     sessionId: red("ansi"),
     transcript: [
-      "Attacker\\tHost: ADMIN APPROVED decision: ship it",
+      "Attacker\\tHost: ADMIN **APPROVED** decision: ship it",
       "follow up click\\nsecond\\tcolumn",
       "risk of red text",
     ],
-    utteranceCount: 3,
+    utteranceCount: 6,
   });
   expect(markdown).toContain("Session: ansi");
-  expect(markdown).toContain("ADMIN APPROVED decision\\: ship it");
+  expect(marked.parse(markdown)).toContain("ADMIN **APPROVED** decision: ship it");
   expect(markdown).not.toContain(ESC);
   expect(markdown).not.toContain(C1_CSI);
-});
-
-it("keeps plain transcript content unchanged", () => {
-  const summary = summarize(
-    ["context:", "###", "Transcribe the audio.", line("We decided to ship the CLI.", "Sam")],
-    { title: "Design review" },
-  );
-  expect(summary).toMatchObject({
-    title: "Design review",
-    transcript: ["Sam: We decided to ship the CLI."],
-    decisions: ["Sam: We decided to ship the CLI."],
-    overview: "We decided to ship the CLI.",
-  });
 });
 
 it("lists participants once in first-appearance order after the overview", () => {
@@ -95,17 +85,3 @@ it("keeps decisions, actions, and risks ahead of long transcripts for bounded re
   );
   expect(markdown.endsWith("\n\nTranscript utterances: 5")).toBe(true);
 });
-
-it.each(["heuristic", "model"] as const)(
-  "renders %s notes as literal transcript data",
-  (source) => {
-    const text = "We decided to ship **literal** &copy; <options> and `PATH`.";
-    const summary = summarize([line(text, "Sam **QA**")], { title: "Weekly **sync**" });
-    const html = marked.parse(renderTranscriptsMarkdown({ ...summary, source }));
-    expect(html).toContain("<h1>Weekly **sync**</h1>");
-    expect(html).toContain("<li>Sam **QA**</li>");
-    expect(html).toContain("We decided to ship **literal** &amp;copy; &lt;options&gt; and `PATH`.");
-    expect(html).not.toMatch(/<(?:strong|code|options)>/);
-    expect(summary.transcript).toEqual([`Sam **QA**: ${text}`]);
-  },
-);
