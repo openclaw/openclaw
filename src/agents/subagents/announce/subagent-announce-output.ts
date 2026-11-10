@@ -383,7 +383,7 @@ export async function readSubagentRunFinalAnswer(
 export async function readChildCompletionFindings(
   children: SubagentRunRecord[],
   readSubagentRun?: AnnounceRunReader,
-): Promise<PreparedAnnounceResult> {
+): Promise<PreparedAnnounceResult & { childResults: string[] }> {
   const readCurrent =
     readSubagentRun ?? (await prepareAnnounceRunReader(children.map((child) => child.runId)));
   const results = await Promise.all(
@@ -408,6 +408,8 @@ export async function readChildCompletionFindings(
     text: buildChildCompletionFindings(
       results.map(({ child, text }) => Object.assign({}, child, { announceResult: text })),
     ),
+    /** Each child's own result text, without the model-facing findings framing. */
+    childResults: results.flatMap(({ text }) => (text?.trim() ? [text.trim()] : [])),
     isCurrent,
   };
 }

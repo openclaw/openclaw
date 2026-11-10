@@ -388,7 +388,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       return false;
     }
     const preparedFindings = pauseNotice
-      ? { text: pauseNotice.acknowledgment, isCurrent: () => true }
+      ? { text: pauseNotice.acknowledgment, childResults: [], isCurrent: () => true }
       : await readChildCompletionFindings(completionRows.filter(needsRequesterSettleFindings));
     if (await retireReplacedStore()) {
       return false;
@@ -573,8 +573,8 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
             // Only a public batch may show its findings while the goal is paused.
             // A pause notice stays on the wake message, and parent-only findings
             // stay internal even when the parent may deliver its own final.
-            ...(!pauseNotice && privateRows.length === 0 && preparedFindings.text
-              ? { pausedGoalVisibleText: preparedFindings.text }
+            ...(!pauseNotice && privateRows.length === 0 && preparedFindings.childResults.length
+              ? { pausedGoalVisibleText: preparedFindings.childResults.join("\n\n") }
               : {}),
             requesterSessionOrigin,
             directOrigin,

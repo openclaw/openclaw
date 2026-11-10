@@ -50,7 +50,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
     expect(String(call.pausedGoalVisibleText)).toContain("social findings");
     expect(String(call.pausedGoalVisibleText)).toContain("network findings");
     expect(String(call.pausedGoalVisibleText)).not.toContain("Review the settled results");
-    expect(String(call.triggerMessage)).toContain(String(call.pausedGoalVisibleText));
+    expect(String(call.pausedGoalVisibleText)).not.toContain("<prompt-data>");
     expect(quietChild.requesterTurnRunId).toBe("quiet-cancellation-owner");
     const message = String(call.triggerMessage);
     expect(message).toContain("settled");
