@@ -185,7 +185,7 @@ export function createSessionActorMemoryEvents(options: {
   const parent = (input: { parentId?: string | null; appendIntent?: "active-branch" }) =>
     resolveTranscriptAppendParent({
       ...input,
-      tailId: tree().appendParentId,
+      readTailId: () => tree().appendParentId,
       parentId: input.parentId,
       isAncestor,
     });
@@ -236,6 +236,7 @@ export function createSessionActorMemoryEvents(options: {
             message_role: message.role,
             context_free_command:
               message.excludeFromContext === true && internal?.contextFreeCommand === true ? 1 : 0,
+            human_addressed: internal?.humanAddressed === true ? 1 : 0,
             provenance_kind: provenance?.kind,
             provenance_source_channel: provenance?.sourceChannel,
           },

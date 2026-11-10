@@ -1,0 +1,2 @@
+13
+# Extend the existing first-input custody table with an absent logical selector and assert no selector file is created.

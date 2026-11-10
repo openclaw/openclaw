@@ -112,6 +112,7 @@ beforeEach(() => {
     mintMcpLoopbackClientGrant: createTestMcpLoopbackClientGrant,
     bindMcpLoopbackClientGrantAdmission: () => true,
     revokeMcpLoopbackClientGrant: () => true,
+    revokeMintedMcpLoopbackClientGrant: () => true,
     resolveMcpLoopbackPolicyTools,
     resolveMcpLoopbackScopedTools,
     resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),

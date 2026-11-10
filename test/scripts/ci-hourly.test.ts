@@ -1,6 +1,7 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import {
+  acceptsWorkflowPaths,
   evaluateWorkflowExpression,
   readCiWorkflow,
   readWorkflow,
@@ -119,9 +120,16 @@ describe("hourly main CI admission", () => {
       steps: {
         diff_base: { outputs: { sha: baseSha } },
         guard_setup: { outputs: {}, outcome: "success" },
+        guard_ripgrep: { outputs: {}, outcome: "success" },
       },
     } as const;
     expect(evaluate(guards.if, context)).toBe(true);
+    expect(
+      evaluate(guards.if, {
+        ...context,
+        steps: { ...context.steps, guard_ripgrep: { outputs: {}, outcome: "failure" } },
+      }),
+    ).toBe(false);
     for (const name of ["BASE_SHA", "PROTOCOL_SINCE_BASE_SHA"]) {
       expect(evaluate(guards.env[name], context)).toBe(baseSha);
     }
@@ -225,6 +233,9 @@ describe("CodeQL language selection", () => {
     selectionCase([".github/actions/example/action.yml"], ["actions"]),
     selectionCase([".github/workflows/codeql.yml"]),
     selectionCase([".github/codeql/codeql-actions-critical-security.yml"]),
+    ...[".gitattributes", "apps/.gitattributes", ".hidden/.gitattributes"].map((file) =>
+      selectionCase([file]),
+    ),
     selectionCase(["src/main.ts"], categories.slice(0, -1)),
     selectionCase(["packages/example/README.md"], categories.slice(0, -1)),
     selectionCase([".github/workflows/docs.yml", "src/main.ts"]),
@@ -332,6 +343,16 @@ describe("CodeQL language selection", () => {
       ).toBe(expected.length > 0);
     },
   );
+
+  it("admits root and nested attribute changes while excluding unrelated docs", () => {
+    expect(workflow.on.pull_request.paths).toEqual(
+      expect.arrayContaining([".gitattributes", "**/.gitattributes"]),
+    );
+    for (const file of [".gitattributes", "apps/.gitattributes"]) {
+      expect(acceptsWorkflowPaths(workflow.on.pull_request.paths, [file])).toBe(true);
+    }
+    expect(acceptsWorkflowPaths(workflow.on.pull_request.paths, ["docs/intro.md"])).toBe(false);
+  });
 
   it("keeps event admission and exact merge identity", () => {
     expectAdmission(scope.if);

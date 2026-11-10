@@ -56,9 +56,12 @@ Send `Accept: application/json` and an identifying User-Agent, e.g.
 
 ## Enforced release-owner checkpoint
 
-The release owner must complete this checkpoint after every branch-head change
-and again at handoff. The manager rejects a handoff without it; do not publish,
-handoff, or claim the ledger current while any item remains unsynchronized.
+The release owner records a checkpoint after every branch-head change and again
+at handoff. When the service is usable, complete the synchronization below before
+claiming the ledger current. If access, availability, or required capabilities
+prevent use, follow [Fallback and privacy](#fallback-and-privacy): retain the
+checkpoint and pending updates in local release evidence without delaying
+publication or handoff.
 
 1. Resolve the configured release ref from the remote and record its exact SHA.
    GET the release record, then PATCH `observedHeadSha` with its current
@@ -78,6 +81,20 @@ handoff, or claim the ledger current while any item remains unsynchronized.
    stale count, unresolved decisions, mutation request IDs, and rollback/export
    evidence. Completion requires the stored head to match the remote head and no
    unexplained stale assessment or unsynchronized decision.
+
+## Final closeout integrity check
+
+At closeout, review branch history from the recorded baseline through the published
+Release SHA—not just existing ledger rows. When access is available, reconcile
+all landed hotfixes, including late backports and release-first fixes, with complete
+release assessments: source/destination commits, disposition, adaptations,
+dependencies/exclusions, and proof. Account for reverts and partial or superseding
+fixes; don't count later branch commits as shipped.
+
+Use the existing checkpoint flow for corrections. Note the checked range and any
+unresolved gaps in closeout evidence; if access is unavailable, use the
+[fallback](#fallback-and-privacy). This is an agent judgment pass, not a new
+validator or publication gate.
 
 ## Manager opportunity intake
 

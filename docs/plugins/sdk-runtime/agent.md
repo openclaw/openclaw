@@ -69,9 +69,12 @@ loads the selected active branch, and `openDetachedBoundedAsync` returns the sam
 selection without persistence. File-backed SQLite reads run on the history worker.
 The synchronous getters consume the prepared view without reading storage.
 
-Hydrated entry and message envelopes remain mutable local views. Their nested
-payloads are frozen after migration and can be shared across rewrite snapshots.
-Replace a payload with a new value instead of editing its nested objects or arrays.
+Public SessionManager getters preserve local entry and message mutation behavior:
+they detach selected hydrated entries before exposing them; already-admitted immutable
+append payloads retain their existing sharing contract. Internal hydration,
+actor reads, and initial model-context preparation share immutable transcript
+payloads. Extension context hooks still receive writable message copies. Neither
+editing a getter's local view nor editing hook messages changes retained actor history.
 
 Full reads transfer bounded chunks from one committed SQLite snapshot without
 truncating the transcript to fit the worker. The caller still holds the complete
@@ -191,7 +194,8 @@ compaction or reset boundary. It preserves
 tool-result ownership and rejects a limit that cannot retain the newest complete
 frame or required boundary. Stored transcripts stay unchanged. Omitting `limits`
 keeps the full selected context. Async reads retain admission, anchor, and
-cancellation checks.
+cancellation checks. Background model views should pass bounded limits, because an
+unbounded read of a very large session can exhaust the transcript worker.
 
 For a temporary model-only view, callers may explicitly add
 `toolResultOverflow: "omit"` to `limits`. Under byte pressure, the reader replaces

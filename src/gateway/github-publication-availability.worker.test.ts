@@ -26,6 +26,7 @@ import {
   qualifyGitHubPublicationSource,
   prepareGitHubPublicationSession,
   prepareGitHubPublicationWorkspaceOwner,
+  readGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
 import {
   readGitHubPublicationFact,
@@ -272,6 +273,11 @@ it.each([true, false])(
     sql.calibrate();
     expect(await prepareGitHubPublicationAvailability(session)).toBe(present);
     sql.expectIdle();
+    if (!present) {
+      await expect(readGitHubPublicationWorktreeOwner(session)).rejects.toThrow(
+        "GitHub publication session lifecycle changed.",
+      );
+    }
   },
 );
 

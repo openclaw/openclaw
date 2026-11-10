@@ -53,6 +53,7 @@ async function createDeferredProfileFixture(foreign = false) {
     { configSnapshot: config, handler } as unknown as GatewayConnectPhaseContext,
     {
       authPolicy: captureGatewayAuthPolicy(config, { role: "operator", authMethod: "token" }),
+      authResult: { ok: true, method: "token" },
     } as DeviceAuthorizedGatewayConnect,
   );
   lifecycle.bind(client);

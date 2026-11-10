@@ -11,7 +11,6 @@ import { resolveWidgetPresenters } from "../plugins/widget-presenters.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import { resolveSkillWorkshopToolConstructionBlock } from "../skills/workshop/tool-availability.js";
 import { hasMultipleSessionSharingIdentitiesNative } from "../state/user-profile-list.native.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { hasConfiguredWebSearchProvider } from "../web-search/runtime.js";
@@ -35,6 +34,7 @@ import {
   resolveImageToolFactoryAvailable,
   resolveOptionalMediaToolFactoryPlan,
 } from "./openclaw-tools.media-factory-plan.js";
+import { resolveWebSearchToolContext } from "./openclaw-tools.model-context.js";
 import { prepareOpenClawTools } from "./openclaw-tools.preparation.js";
 import {
   applyNodesToolWorkspaceGuard,
@@ -89,7 +89,7 @@ import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsTool } from "./tools/sessions-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
-import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
+import { createSkillLibraryTool } from "./tools/skill-library-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTerminalTool } from "./tools/terminal-tool.js";
@@ -346,11 +346,10 @@ function* createOpenClawToolsSteps(
         })
       : null;
   options?.recordToolPrepStage?.("openclaw-tools:pdf-tool");
-  const webSearchAgentDir =
-    options?.agentDir ?? resolveAgentDir(resolvedConfig ?? {}, sessionAgentId);
+  const searchContext = resolveWebSearchToolContext(resolvedConfig ?? {}, sessionAgentId, options);
   let webSearchTool = createWebSearchTool({
     ...options,
-    agentDir: webSearchAgentDir,
+    ...searchContext,
     enabled: options?.webSearchEnabled,
     runtimeWebSearch: runtimeWebTools?.search,
     lateBindRuntimeConfig: true,
@@ -360,7 +359,7 @@ function* createOpenClawToolsSteps(
       preparedWebSearchConfigured ??
       hasConfiguredWebSearchProvider({
         config: availabilityConfig ?? resolvedConfig,
-        agentDir: webSearchAgentDir,
+        agentDir: searchContext.agentDir,
         authStore: options?.authProfileStore,
         runtimeWebSearch: runtimeWebTools?.search,
         ...(options?.authProfileStoreSource !== undefined
@@ -474,6 +473,22 @@ function* createOpenClawToolsSteps(
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
   const githubSettingsOffered = options?.listingClientCaps?.includes("ui-agent-github-settings");
+  // sessions_create runs through the visible-spawn owner, so both tools share one trusted context.
+  const sessionsSpawnToolOptions = {
+    ...options,
+    // Only a keyed parent has a stored incarnation for spawn to check.
+    expectedParentSessionId:
+      (options?.runSessionKey ?? options?.agentSessionKey) ? options?.sessionId : undefined,
+    agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+    requesterTurnRunId: options?.runId,
+    completionOwnerKey: options?.runSessionKey,
+    currentMessagingTarget: options?.currentMessagingTarget ?? options?.currentChannelId,
+    currentChannelId: options?.nativeChannelId ?? options?.currentChannelId,
+    config: sessionConfig,
+    requesterAgentIdOverride: sessionAgentId,
+    requesterRunId: options?.runId,
+    workspaceDir: spawnWorkspaceDir,
+  };
   const tools: AnyAgentTool[] = [
     ...createInstalledSkillTools(options?.installedSkills ?? []),
     createDashboardTool({
@@ -510,7 +525,7 @@ function* createOpenClawToolsSteps(
             creatorAuthorityUnavailableReason: options?.cronCreatorAuthorityUnavailableReason,
             selfRemoveOnlyJobId: options?.cronSelfRemoveOnlyJobId,
           }),
-          createSessionsCreateTool({ sessionControlAuthority: options?.sessionControlAuthority }),
+          createSessionsCreateTool(sessionsSpawnToolOptions),
           createSessionsTool({
             ...options,
             stopAllowed: options?.swarmCollector !== true,
@@ -588,19 +603,7 @@ function* createOpenClawToolsSteps(
     ...[createGetGoalTool, createCreateGoalTool, createUpdateGoalTool].map((createTool) =>
       createTool({ ...options, sessionAgentId }),
     ),
-    resolveSkillWorkshopToolConstructionBlock({
-      sandboxed: options?.sandboxed,
-      libraryAuthoring: options?.skillWorkshop?.libraryAuthoring,
-    }) || !resolvedConfig
-      ? null
-      : createConfiguredSkillWorkshopTool({
-          config: resolvedConfig,
-          agentId: sessionAgentId,
-          sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-          runId: options?.runId,
-          run: options?.skillWorkshop,
-          sandboxed: options?.sandboxed,
-        }),
+    options?.skillLibraryAuthoring ? createSkillLibraryTool(options.skillLibraryAuthoring) : null,
     progressCardTool,
     ...swarmToolGroups.structuredOutput,
     ...(
@@ -645,21 +648,7 @@ function* createOpenClawToolsSteps(
     }),
     ...(embedded ? [] : createHostedConversationTools(options, sessionAgentId, sessionConfig)),
     !embedded || options?.allowGatewaySubagentBinding === true
-      ? createSessionsSpawnTool({
-          ...options,
-          // Only a keyed parent has a stored incarnation for spawn to check.
-          expectedParentSessionId:
-            (options?.runSessionKey ?? options?.agentSessionKey) ? options?.sessionId : undefined,
-          agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-          requesterTurnRunId: options?.runId,
-          completionOwnerKey: options?.runSessionKey,
-          currentMessagingTarget: options?.currentMessagingTarget ?? options?.currentChannelId,
-          currentChannelId: options?.nativeChannelId ?? options?.currentChannelId,
-          config: sessionConfig,
-          requesterAgentIdOverride: sessionAgentId,
-          requesterRunId: options?.runId,
-          workspaceDir: spawnWorkspaceDir,
-        })
+      ? createSessionsSpawnTool(sessionsSpawnToolOptions)
       : null,
     ...swarmToolGroups.agentsWait,
     createSessionsYieldTool({

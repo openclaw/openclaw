@@ -24,6 +24,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { constants as osConstants, homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -56,6 +57,7 @@ const invocationLogTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const artifactTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const dependencyTempDirs = useAutoCleanupTempDirTracker(afterAll);
 const repoRoot = process.cwd();
+const require = createRequire(import.meta.url);
 const bundledWrapperPath = path.join(repoRoot, ".tmp", `crabbox-wrapper-test-${process.pid}.mjs`);
 const realBundledWrapperPath = bundledWrapperPath.replace(".mjs", "-real.mjs");
 const bundledOutputPaths = new Set<string>();
@@ -214,7 +216,7 @@ async function main() {
     if (process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_UNKNOWN_PATH) topFiles.push({ path: "not-a-source-candidate.txt" });
     process.stdout.write(JSON.stringify({ candidate: { files: topFiles.length + Number(process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_COUNT_DELTA || "0") }, topFiles })); return;
   }
-  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.80.0"); return; }
+  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.82.0"); return; }
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
   if (args[0] === "warmup" && args[1] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeWarmupValueOptionHelp}`)}); return; }
   if (args[0] === "actions" && args[1] === "hydrate" && args[2] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeHydrateValueOptionHelp}`)}); return; }
@@ -323,7 +325,7 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         '  if [ -n "${OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG:-}" ]; then',
         `    printf '%s\\n' '["--version"]' >> "$OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG"`,
         "  fi",
-        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.80.0}"`,
+        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.82.0}"`,
         "  exit 0",
         "fi",
         'if [ "$#" -eq 2 ] && [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
@@ -358,7 +360,7 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         "  printf '%s\\000\\000' \"$PWD\"",
         "  exit 0",
         "fi",
-        `exec node ${shellQuote(nodePath)} "$@"`,
+        `exec ${shellQuote(nodePath)} "$@"`,
       ].join("\n"),
     );
   }
@@ -376,7 +378,7 @@ function makeSlowHelpCrabbox(helpText: string, delayMs: number): string {
     String.raw`
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
-  console.log("crabbox 0.80.0");
+  console.log("crabbox 0.82.0");
 } else if (args[0] === "run" && args[1] === "--help") {
   setTimeout(() => { process.stderr.write(${JSON.stringify(runHelpText)}); process.exit(0); }, ${delayMs});
 }`,
@@ -467,12 +469,14 @@ function resolvePinnedFixturePnpm(cwd: string, nodeExecPath: string, pnpmArgs: s
 }
 
 function writeNodeCommand(commandPath: string, script: string): void {
-  writeFileSync(commandPath, `#!/usr/bin/env node\n${script.trimStart()}\n`, "utf8");
+  const sourcePath = `${commandPath}.cjs`;
+  writeFileSync(sourcePath, `${script.trimStart()}\n`, "utf8");
   if (process.platform === "win32") {
-    const shim = windowsNodeCmdShim(path.basename(commandPath));
+    const shim = windowsNodeCmdShim(path.basename(sourcePath));
     writeFileSync(`${commandPath}.cmd`, shim, "utf8");
+  } else {
+    writeShellCommand(commandPath, `exec node ${shellQuote(sourcePath)} "$@"`);
   }
-  chmodSync(commandPath, 0o755);
 }
 
 function makeFakeGit(
@@ -529,10 +533,7 @@ process.exit(response.status ?? 0);`;
       ].join("\n");
     });
     writeNodeCommand(nodePath, script);
-    writeShellCommand(
-      gitPath,
-      `${responseCases.join("\n")}\nexec node ${shellQuote(nodePath)} "$@"`,
-    );
+    writeShellCommand(gitPath, `${responseCases.join("\n")}\nexec ${shellQuote(nodePath)} "$@"`);
   }
   fakeGitBinDirs.set(key, binDir);
   return binDir;
@@ -1801,6 +1802,16 @@ describe("scripts/crabbox-wrapper", () => {
       target: "node22",
       plugins: [
         {
+          name: "fs-safe-source-owner",
+          setup(builder) {
+            // Relocated fixtures keep the parser beside its package-owned WASM asset.
+            builder.onResolve({ filter: /^@openclaw\/fs-safe(?:\/|$)/ }, (args) => ({
+              path: pathToFileURL(require.resolve(args.path)).href,
+              external: true,
+            }));
+          },
+        },
+        {
           name: "canonical-state-schemas",
           setup(builder) {
             // Relocated fixtures need the same embedded SQL as production bundles.
@@ -1899,7 +1910,7 @@ describe("scripts/crabbox-wrapper", () => {
       const stateDir = path.join(root, "state");
       const platform = process.platform;
       const arch = process.arch === "x64" ? "amd64" : process.arch;
-      const managed = path.join(stateDir, "tools/crabbox/0.80.0", `${platform}-${arch}`, "crabbox");
+      const managed = path.join(stateDir, "tools/crabbox/0.82.0", `${platform}-${arch}`, "crabbox");
       mkdirSync(path.dirname(managed), { recursive: true });
       // Keep candidate and managed commands distinguishable at the executable boundary.
       const fake = path.join(makeFakeCrabbox(defaultProviderHelp), "crabbox-node");
@@ -1908,11 +1919,11 @@ describe("scripts/crabbox-wrapper", () => {
       mkdirSync(path.dirname(candidate));
       writeShellCommand(
         candidate,
-        `OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG=${shellQuote(candidateLog)} exec node ${shellQuote(fake)} "$@"`,
+        `OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG=${shellQuote(candidateLog)} exec ${shellQuote(fake)} "$@"`,
       );
       writeShellCommand(
         managed,
-        `unset OPENCLAW_FAKE_CRABBOX_VERSION\nexec node ${shellQuote(fake)} "$@"`,
+        `unset OPENCLAW_FAKE_CRABBOX_VERSION\nexec ${shellQuote(fake)} "$@"`,
       );
       const log = makeInvocationLog();
       const options = {
@@ -1925,7 +1936,7 @@ describe("scripts/crabbox-wrapper", () => {
       };
       const result = runDefaultWrapper(runArgs(provider, "--", "true"), options);
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toContain(`version=0.80.0 provider=${provider}`);
+      expect(result.stderr).toContain(`version=0.82.0 provider=${provider}`);
       expect(readInvocations(candidateLog)).toEqual([["--version"]]);
       const calls = readInvocations(log);
       expect(calls[0]).toEqual(["--version"]);
@@ -2634,7 +2645,7 @@ describe("scripts/crabbox-wrapper", () => {
       const env = testHomeEnv(home);
       if (customState) {
         env.XDG_STATE_HOME = path.join(home, "selected state");
-        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.80.0";
+        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.82.0";
         const legacyKey = path.join(
           testCrabboxConfigDir(home),
           "testboxes",
@@ -2657,16 +2668,16 @@ describe("scripts/crabbox-wrapper", () => {
   );
 
   it.each([
-    { id: "tbx_default", createKey: true, state: "", version: "0.80.0", selectedKey: false },
-    { id: "tbx_selected", createKey: true, state: "state", version: "0.80.0", selectedKey: true },
-    { id: "blue-hermit", createKey: false, state: "", version: "0.80.0", selectedKey: false },
+    { id: "tbx_default", createKey: true, state: "", version: "0.82.0", selectedKey: false },
+    { id: "tbx_selected", createKey: true, state: "state", version: "0.82.0", selectedKey: true },
+    { id: "blue-hermit", createKey: false, state: "", version: "0.82.0", selectedKey: false },
     ...(process.platform === "win32"
       ? [
           {
             id: "tbx_namespaced",
             createKey: true,
             state: "namespaced",
-            version: "0.80.0",
+            version: "0.82.0",
             selectedKey: true,
           },
         ]
@@ -2725,14 +2736,14 @@ describe("scripts/crabbox-wrapper", () => {
       env: {
         ...testHomeEnv(home),
         XDG_STATE_HOME: stateRoot,
-        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.80.0",
+        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.82.0",
       },
     });
     expect(result).toMatchObject({ status: 2, stdout: "" });
     expect(result.stderr).toContain("XDG_STATE_HOME must be absolute");
   });
 
-  it.each([{ version: "0.80.0", stateDirectory: "state " }])(
+  it.each([{ version: "0.82.0", stateDirectory: "state " }])(
     "fails before reuse when a Blacksmith Testbox is claimed by another repo ($version, $stateDirectory)",
     ({ version, stateDirectory }) => {
       const home = invocationLogTempDirs.make("openclaw-crabbox-home-");
@@ -3984,12 +3995,12 @@ esac
     }
   });
 
-  it("passes an advertised Boat alias to Crabbox unchanged", () => {
+  it("passes an advertised Boat provider argument to Crabbox unchanged", () => {
     const args = runArgs("boat", "--", "echo ok");
     const result = runWrapper("provider: ascii-box\n", args);
 
     expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual(args);
+    expect(parseFakeCrabboxOutput(result).args.slice(0, 3)).toEqual(["run", "--provider", "boat"]);
   });
 
   it.each([
@@ -4901,7 +4912,7 @@ require('node:module').syncBuiltinESMExports();`,
           extraEnv?: NodeJS.ProcessEnv;
           nativeSeed?: boolean;
           remoteArgs?: string[];
-          interrupt?: boolean;
+          interrupt?: boolean | "closed-pipes";
           prepareReceiver?: (receiver: string) => void;
         } = {},
       ) => {
@@ -4974,8 +4985,11 @@ require('node:module').syncBuiltinESMExports();`,
           : ["-c", remoteCommand, "receiver-script", ...remoteArgs];
         const terminator = [
           'const {spawn}=require("node:child_process");',
-          'const child=spawn("bash",process.argv.slice(1),{stdio:["inherit","pipe","inherit"]});',
-          'let output="",sent=false; child.stdout.on("data",chunk=>{process.stdout.write(chunk);output+=chunk;if(!sent&&output.includes("payload-ready\\n")){sent=true;child.kill("SIGTERM");}});',
+          `const closedPipes=${JSON.stringify(interrupt === "closed-pipes")};`,
+          'const child=spawn("bash",process.argv.slice(1),{stdio:["inherit","pipe",closedPipes?"pipe":"inherit"]});',
+          'if(process.env.PIPE_ERRORS)process.stdout.write("receiver-pid="+child.pid+"\\n");',
+          'if(closedPipes)child.stderr.on("data",chunk=>process.stderr.write(chunk));',
+          'let output="",sent=false; child.stdout.on("data",chunk=>{process.stdout.write(chunk);output+=chunk;if(!sent&&/payload-ready(?: \\d+)?\\n/.test(output)){sent=true;if(closedPipes){let closed=0;for(const stream of [child.stdout,child.stderr]){stream.once("close",()=>{if(++closed===2)child.kill("SIGTERM");});stream.destroy();}}else child.kill("SIGTERM");}});',
           'child.on("close",(code)=>process.exit(code??1));',
         ].join("");
         const result = runCommand(
@@ -5232,6 +5246,77 @@ require('node:module').syncBuiltinESMExports();`,
         expect(lstatSync(nativeGit).ino).toBe(nativeStat.ino);
         expect(readFileSync(path.join(nativeGit, "index"))).toEqual(nativeIndex);
         expectFileText(nativeGit, "crabbox/manifest", "native sync receipt\n");
+        const pipeMonitor = path.join(root, "pipe-monitor.cjs");
+        const pipeErrors = path.join(root, "pipe-errors.jsonl");
+        writeFileSync(
+          pipeMonitor,
+          'process.on("uncaughtExceptionMonitor",error=>{if(error.code==="EPIPE")require("node:fs").appendFileSync(process.env.PIPE_ERRORS,JSON.stringify({pid:process.pid,code:error.code})+"\\n");});',
+        );
+        for (const closedPipes of [false, true]) {
+          const quietTermination = runSender("shell", [
+            "run",
+            "--provider",
+            provider,
+            "--shell",
+            "--",
+            "exec node -e " +
+              shellQuote(
+                'process.on("SIGTERM",()=>process.exit(0));console.log("payload-ready "+process.pid);setInterval(()=>{},1000);',
+              ),
+          ]);
+          const observed = receive("native-reused", quietTermination, {
+            interrupt: closedPipes ? "closed-pipes" : true,
+            extraEnv: { NODE_OPTIONS: `--require ${pipeMonitor}`, PIPE_ERRORS: pipeErrors },
+          });
+          const childPid = Number(/payload-ready (\d+)/u.exec(observed.result.stdout)?.[1]);
+          const receiverPid = Number(/receiver-pid=(\d+)/u.exec(observed.result.stdout)?.[1]);
+          const backups = readdirSync(receiver).filter((name) =>
+            name.startsWith(".openclaw-source-"),
+          );
+          const head = runCommand("git", ["rev-parse", "HEAD"], { cwd: receiver });
+          const index = path.join(nativeGit, "index");
+          const manifest = path.join(nativeGit, "crabbox", "manifest");
+          const pipeFacts = {
+            closedPipes,
+            receiverPid,
+            receiverExit: observed.result.status,
+            childGone: Number.isInteger(childPid) && childPid > 0 && !isProcessAlive(childPid),
+            gitInodeRestored: existsSync(nativeGit) && lstatSync(nativeGit).ino === nativeStat.ino,
+            gitHeadRestored: head.status === 0 && head.stdout.trim() === nativeHead,
+            gitIndexRestored: existsSync(index) && readFileSync(index).equals(nativeIndex),
+            gitMetadataRestored:
+              existsSync(manifest) && readFileSync(manifest, "utf8") === "native sync receipt\n",
+            gitDirectoryPresent: existsSync(nativeGit),
+            gitMetadataPresent: existsSync(path.join(nativeGit, "crabbox")),
+            nativeBackupPresent: backups.some((name) =>
+              existsSync(path.join(receiver, name, "native-git")),
+            ),
+            backupGone: backups.length === 0,
+            pipeErrors: existsSync(pipeErrors)
+              ? readFileSync(pipeErrors, "utf8")
+                  .trim()
+                  .split("\n")
+                  .map((line) => JSON.parse(line))
+                  .filter((error) => error.pid === receiverPid)
+              : [],
+          };
+          try {
+            expect(pipeFacts).toMatchObject({
+              receiverExit: 143,
+              childGone: true,
+              gitInodeRestored: true,
+              gitHeadRestored: true,
+              gitIndexRestored: true,
+              gitMetadataRestored: true,
+              backupGone: true,
+              pipeErrors: [],
+            });
+          } finally {
+            if (Number.isInteger(childPid) && childPid > 0 && isProcessAlive(childPid)) {
+              process.kill(childPid, "SIGKILL");
+            }
+          }
+        }
         const installer = ".github/actions/setup-node-env/install-dependencies.sh";
         mkdirSync(path.dirname(path.join(producer, installer)), { recursive: true });
         writeFileSync(
@@ -5379,6 +5464,14 @@ require('node:module').syncBuiltinESMExports();`,
             path.join(dependencyBin, "node"),
             fsConstants.COPYFILE_FICLONE,
           );
+          // Copied dynamic Node builds still load libraries from their prefix.
+          const nodeLibraryDirectory = path.resolve(
+            path.dirname(realpathSync(nodeExecPath)),
+            "../lib",
+          );
+          if (existsSync(nodeLibraryDirectory)) {
+            symlinkSync(nodeLibraryDirectory, path.join(dependencyRoot, "lib"), "dir");
+          }
           writeDependencySource(hydratedSource, "a");
           writeDependencySource(selectedSource, "b");
         }

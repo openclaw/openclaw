@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { text as readText } from "node:stream/consumers";
-import { assert, expect, it } from "vitest";
+import { assert, beforeAll, expect, it } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
+import { shareCoreWithWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -14,6 +15,9 @@ import type { GatewayClient } from "./client.js";
 import type { GatewayServer } from "./server.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+
+// The Gateway loads the bundled skill-workshop plugin; it must share this test's core.
+beforeAll(shareCoreWithWorkshopPluginForTest);
 
 it(
   "N6 N8: reads persisted dashboard, Telegram, and other Learned markers without replaying them to the provider",
@@ -30,7 +34,8 @@ it(
         OPENCLAW_SKIP_CANVAS_HOST: "1",
         OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
         OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        // The skill-workshop plugin is bundled; plugins.allow keeps every other one off.
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
       },
     });
     let gateway: { client: GatewayClient; server: Pick<GatewayServer, "close"> } | undefined;
@@ -87,6 +92,8 @@ it(
             gateway: { auth: { mode: "token", token } },
             models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
             plugins: {
+              enabled: true,
+              allow: ["skill-workshop"],
               slots: { memory: "none" },
               entries: { "skill-workshop": { config: { autonomous: { mode: "off" } } } },
             },

@@ -39,8 +39,9 @@ import {
   type StreamGroupOptions,
   type StreamGroupPart,
 } from "./chat-message-stream-view.tsx";
-import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
-import { selectWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
+import { NO_REPLY_LINE, resolveGroupReplyLine } from "./chat-reply-attribution.ts";
+import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
+import type { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 import "../../../styles/chat/source-previews.css";
 
@@ -52,7 +53,9 @@ type AgentRunFrameOptions = {
   basePath?: string;
   sessionPublicOrigin?: string;
   streamOptions: StreamGroupOptions;
+  workPreviews: ReturnType<typeof projectTranscriptWorkPreviews>;
   renderGroupOptions: (group: MessageGroupData) => NativeMessageGroupOptions;
+  partDependencies: (part: BodyPart) => readonly unknown[];
   isWorkExpanded: (key: string) => boolean;
   onToggleWork: (key: string, expanded: boolean) => void;
   turnRecap?: TurnRecap;
@@ -63,18 +66,31 @@ type BodyPart =
   | StreamGroupPart;
 type PartInput = { part: BodyPart; options: AgentRunFrameOptions };
 type PartRange = {
+  dependencies: readonly unknown[];
   start: Comment;
   end: Comment;
   write: (input: PartInput) => void;
   dispose: () => void;
 };
 
-/** Completion can reorder the reply after a live widget has moved into it. */
-function FrameBody(props: {
+type FrameBodyProps = {
   parts: readonly BodyPart[];
   options: AgentRunFrameOptions;
   children: (input: Accessor<PartInput>) => JSX.Element;
-}): JSX.Element {
+};
+
+function FrameBody(props: FrameBodyProps & { completedFragment: boolean }): JSX.Element {
+  return (
+    <Show when={props.completedFragment} fallback={<RetainedFrameBody {...props} />}>
+      <For each={props.parts} keyed={(part) => `${part.kind}:${part.key}`}>
+        {(part) => props.children(() => ({ part: part(), options: props.options }))}
+      </For>
+    </Show>
+  );
+}
+
+/** Completion can reorder the reply after a live widget has moved into it. */
+function RetainedFrameBody(props: FrameBodyProps): JSX.Element {
   // Canvas widgets move between these foreign-DOM ranges without disconnecting.
   // Mount new ranges under the frame's owner, not the transient reconciliation effect.
   const owner = getOwner();
@@ -121,9 +137,13 @@ function FrameBody(props: {
     }
     const ordered = parts.map((value) => {
       const key = `${value.kind}:${value.key}`;
+      const dependencies = options.partDependencies(value);
       const existing = ranges.get(key);
       if (existing) {
-        existing.write({ part: value, options });
+        if (!transcriptArraysEqual(existing.dependencies, dependencies)) {
+          existing.dependencies = dependencies;
+          existing.write({ part: value, options });
+        }
         return existing;
       }
       const start = document.createComment("frame-part");
@@ -142,7 +162,7 @@ function FrameBody(props: {
             },
           );
           insert(parent, render(readInput), end);
-          return { start, end, write, dispose };
+          return { dependencies, start, end, write, dispose };
         }),
       );
       ranges.set(key, range);
@@ -174,10 +194,14 @@ function FrameBody(props: {
 }
 
 function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions) {
-  const groups = chatItemGroups(frame);
-  const firstAssistant = groups.find((group) => group.role === "assistant");
-  const actionOwner = frame.outcome.kind === "completed" ? frame.outcome.actionOwner : null;
-  const representative = firstAssistant ?? groups[0];
+  const fragment = frame.fragment;
+  const source = fragment?.source ?? frame;
+  const groups = chatItemGroups(fragment?.first || fragment?.last ? source : frame);
+  const firstAssistant =
+    fragment?.firstAssistant ?? groups.find((group) => group.role === "assistant");
+  const sourceActionOwner = source.outcome.kind === "completed" ? source.outcome.actionOwner : null;
+  const actionOwner = !fragment || fragment.last ? sourceActionOwner : null;
+  const representative = fragment?.representative ?? firstAssistant ?? groups[0];
   const streamStarts = frame.parts.flatMap((part) =>
     part.kind === "stream-run" ? part.parts.map((streamPart) => streamPart.startedAt) : [],
   );
@@ -189,10 +213,16 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     senderLabel: firstAssistant?.senderLabel,
     replyToSender: firstAssistant?.replyToSender ?? streamRun?.replyToSender,
     replyToMessage: firstAssistant?.replyToMessage ?? streamRun?.replyToMessage,
+    replyPreviousMessageId:
+      firstAssistant?.replyPreviousMessageId ?? streamRun?.replyPreviousMessageId,
     replyShared: firstAssistant?.replyShared,
     replyTurnSource: firstAssistant?.replyTurnSource,
     replyCurrentSource: firstAssistant?.replyCurrentSource,
-    messages: representative?.messages ?? [],
+    // Only the outer chrome needs whole-run metadata; middle rows stay bounded.
+    messages:
+      fragment && !fragment.first && !fragment.last
+        ? (groups[0]?.messages ?? [])
+        : (representative?.messages ?? []),
     visibleContent: representative?.visibleContent ?? "none",
     timestamp:
       (actionOwner ? rawMessageTimestamp(actionOwner.message) : null) ??
@@ -200,37 +230,38 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     isStreaming: frame.outcome.kind === "active",
     runId: frame.runId,
   };
-  const frameReplyLine = resolveGroupReplyLine(
-    (actionOwner && groups.find((group) => group.messages.includes(actionOwner))) || shell,
-    opts.renderGroupOptions(shell).resolveReplyPreview,
-    groups.flatMap((group) => group.messages),
-  );
+  const frameReplyLine =
+    fragment && !fragment.first
+      ? NO_REPLY_LINE
+      : resolveGroupReplyLine(
+          {
+            ...((sourceActionOwner &&
+              groups.find((group) => group.messages.includes(sourceActionOwner))) ||
+              shell),
+            replyPreviousMessageId: shell.replyPreviousMessageId,
+          },
+          opts.renderGroupOptions(shell).resolveReplyPreview,
+          groups.flatMap((group) => group.messages),
+        );
   // A preceding segment becoming history must not reparent the live answer.
   const bodyParts = frame.parts.flatMap<BodyPart>((part) =>
     part.kind === "stream-run" ? part.parts : [part],
   );
-  const firstBubbleKey =
-    bodyParts
-      .flatMap((part) =>
-        part.kind === "stream"
-          ? part.text.trim()
-            ? [part.key]
-            : []
-          : part.kind === "group" && part.role !== "tool"
-            ? part.messages
-                .filter((message) => message.hasVisibleContent)
-                .map((message) => message.key)
-            : [],
-      )
-      .at(0) ?? null;
-  const workPreviews = selectWorkGroupBrowserTabPreviews(
-    frame.parts.flatMap((part) =>
-      !opts.streamOptions.bubbleMode && part.kind === "work-group" && !opts.isWorkExpanded(part.key)
-        ? [part]
-        : [],
-    ),
-    opts.renderGroupOptions(shell),
-  );
+  const firstBubbleKey = fragment
+    ? fragment.firstBubbleKey
+    : (bodyParts
+        .flatMap((part) =>
+          part.kind === "stream"
+            ? part.text.trim()
+              ? [part.key]
+              : []
+            : part.kind === "group" && part.role !== "tool"
+              ? part.messages
+                  .filter((message) => message.hasVisibleContent)
+                  .map((message) => message.key)
+              : [],
+        )
+        .at(0) ?? null);
   const sourcePreviews = actionOwner
     ? extractChatSourcePreviews({
         // Cited results can sit in an earlier rollup that no visible reply owns.
@@ -247,7 +278,6 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     frameReplyLine,
     bodyParts,
     firstBubbleKey,
-    workPreviews,
     sourcePreviews,
   };
 }
@@ -263,27 +293,39 @@ export function AgentRunFrame(props: FrameProps) {
 
 function RunFrame(props: FrameProps) {
   const state = createMemo(() => prepareFrame(props.frame, props.options));
+  const firstBubbleKey = createMemo(() => state().firstBubbleKey);
   const timedWork = createMemo(() => {
     const recap = props.options.turnRecap;
-    const work = props.frame.parts.find(
-      (part) => part.kind === "work-group" && part.replyRunId === props.frame.runId,
-    );
+    if (!recap) {
+      return undefined;
+    }
+    const work = props.frame.fragment
+      ? props.frame.fragment.work
+      : props.frame.parts.find(
+          (part) => part.kind === "work-group" && part.replyRunId === props.frame.runId,
+        );
     // The recap retains this run's terminal timing after the session moves on.
-    // Handoffs have no work summary: their request-wide timing stays in the recap.
-    if (!recap || work?.kind !== "work-group") {
+    // Run duration appears only on the Worked summary; turns without one show no timing.
+    if (work?.kind !== "work-group") {
       return undefined;
     }
     const durationMs = work.durationMs ?? recap.runtimeMs;
     return durationMs > 0 ? { ...work, durationMs } : undefined;
   });
   const frameContent = [
-    <FrameBody parts={state().bodyParts} options={props.options}>
+    <FrameBody
+      parts={state().bodyParts}
+      options={props.options}
+      // Completed nonfinal fragments cannot contain widgets. Keep the final
+      // reply's owner unchanged as it transitions from active to completed.
+      completedFragment={Boolean(props.frame.fragment && !props.frame.fragment.last)}
+    >
       {(input) => {
         const part = () => input().part;
         const options = () => input().options;
         const groupOptions = (group: MessageGroupData) => ({
           ...options().renderGroupOptions(group),
-          firstBubbleKey: state().firstBubbleKey,
+          firstBubbleKey: firstBubbleKey(),
         });
         const streamPart = () => {
           const value = part();
@@ -313,7 +355,7 @@ function RunFrame(props: FrameProps) {
                   part={stream()}
                   options={{
                     ...options().streamOptions,
-                    firstBubbleKey: state().firstBubbleKey,
+                    firstBubbleKey: firstBubbleKey(),
                   }}
                   presentation="standalone"
                 />
@@ -331,10 +373,10 @@ function RunFrame(props: FrameProps) {
                       onToggle: () =>
                         options().onToggleWork(work().key, options().isWorkExpanded(work().key)),
                       presentation: "continuation",
-                      browserTabPreviews: state().workPreviews.get(work().key),
+                      browserTabPreviews: options().workPreviews.get(work().key),
                     }}
                   />
-                  <Show when={options().isWorkExpanded(work().key)}>
+                  <Show when={!props.frame.fragment && options().isWorkExpanded(work().key)}>
                     <For each={work().groups} keyed={(group) => group.key}>
                       {(group) => (
                         <MessageGroupContent group={group()} options={groupOptions(group())} />
@@ -365,7 +407,7 @@ function RunFrame(props: FrameProps) {
                 <>
                   <MessageGroupContent group={group()} options={groupOptions(group())} />
                   <BrowserTabPreviews
-                    previews={state().workPreviews.get(group().key)}
+                    previews={options().workPreviews.get(group().key)}
                     mediaReadAllowed={options().streamOptions.mediaReadAllowed}
                   />
                 </>
@@ -397,8 +439,10 @@ function RunFrame(props: FrameProps) {
         frameContent,
         frameReplyLine: state().frameReplyLine,
         frameActionOwner: state().actionOwner,
-        turnRecap: props.options.turnRecap,
-        hideTurnRecapDuration: timedWork() !== undefined,
+        frameHeader: props.frame.fragment?.first,
+        frameFooter: props.frame.fragment?.last,
+        turnRecap:
+          !props.frame.fragment || props.frame.fragment.last ? props.options.turnRecap : undefined,
       }}
     />
   );

@@ -168,23 +168,33 @@ describe("google web search provider", () => {
     expect(parseGeminiFetchBody(mockFetch).tools).toEqual([{ google_search: {} }]);
   });
 
-  it("sends operator headers while keeping provider-owned headers authoritative", async () => {
-    const mockFetch = installGeminiFetch();
-    const tool = createGeminiToolWithHeaders({
-      "X-Routing-Target": "staging",
-      "X-Gateway-Token": "resolved-gateway-token",
-      "X-Goog-Api-Key": "operator-value",
-    });
+  it.each([undefined, "https://ai-gateway.vercel.sh/v1beta"])(
+    "sends operator headers while keeping provider-owned headers authoritative at %s",
+    async (baseUrl) => {
+      const mockFetch = installGeminiFetch();
+      const tool = createGeminiTool({
+        baseUrl,
+        headers: {
+          "X-Routing-Target": "staging",
+          "X-Gateway-Token": "resolved-gateway-token",
+          "X-Goog-Api-Key": "operator-value",
+          "X-Title": "operator-title",
+          "HTTP-Referer": "https://operator.example/",
+        },
+      });
 
-    await tool?.execute({ query: "OpenClaw operator headers" });
+      await tool?.execute({ query: "OpenClaw operator headers" });
 
-    expect(getFetchHeaders(mockFetch)).toMatchObject({
-      "content-type": "application/json",
-      "x-gateway-token": "resolved-gateway-token",
-      "x-goog-api-key": "AIza-plugin-test",
-      "x-routing-target": "staging",
-    });
-  });
+      expect(getFetchHeaders(mockFetch)).toMatchObject({
+        "content-type": "application/json",
+        "x-gateway-token": "resolved-gateway-token",
+        "x-goog-api-key": "AIza-plugin-test",
+        "x-routing-target": "staging",
+        "x-title": baseUrl ? "OpenClaw" : "operator-title",
+        "http-referer": baseUrl ? "https://openclaw.ai" : "https://operator.example/",
+      });
+    },
+  );
 
   it("partitions cached Gemini results by operator headers", async () => {
     const mockFetch = installGeminiFetch();
@@ -473,16 +483,69 @@ describe("google web search provider", () => {
     const mockFetch = installGeminiFetch();
     mockFetch.mockImplementationOnce(async () => {
       controller.abort(reason);
-      return new Response(JSON.stringify(geminiAnswer("Cancelled grounded answer")));
+      return new Response(
+        JSON.stringify(
+          geminiAnswer("Cancelled grounded answer", {
+            groundingChunks: [{ web: { uri: "https://example.com/cancelled" } }],
+          }),
+        ),
+      );
     });
     const tool = createGeminiTool();
     const query = "OpenClaw late-cancel Gemini cache";
 
     await expect(tool?.execute({ query }, { signal: controller.signal })).rejects.toBe(reason);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
     await tool?.execute({ query });
 
     const postCalls = postedCalls(mockFetch);
     expect(postCalls).toHaveLength(2);
+  });
+
+  it("cancels active citation requests without starting another batch", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Gemini search cancelled during citation resolution");
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const redirects: RequestInit[] = [];
+    const body = JSON.stringify(
+      geminiAnswer("Grounded answer", {
+        groundingChunks: Array.from({ length: 25 }, (_, index) => ({
+          web: { uri: `https://example.com/source-${index}` },
+        })),
+      }),
+    );
+    const mockFetch = installGeminiResponse(body);
+    mockFetch.mockImplementation(async (_input, init) => {
+      if (init?.method !== "HEAD") {
+        return new Response(body);
+      }
+      redirects.push(init);
+      if (redirects.length === 10) {
+        started.resolve();
+      }
+      await release.promise;
+      init.signal?.throwIfAborted();
+      return new Response(null);
+    });
+    const tool = createGeminiTool();
+    const query = "OpenClaw cancel citation batch";
+    const result = expect(tool?.execute({ query }, { signal: controller.signal })).rejects.toBe(
+      reason,
+    );
+    try {
+      await started.promise;
+      controller.abort(reason);
+    } finally {
+      release.resolve();
+    }
+    await result;
+    expect(redirects).toHaveLength(10);
+    expect(redirects.every((init) => init.signal?.aborted)).toBe(true);
+
+    await tool?.execute({ query });
+    expect(postedCalls(mockFetch)).toHaveLength(2);
+    expect(redirects).toHaveLength(35);
   });
 
   it.each([

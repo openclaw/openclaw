@@ -53,7 +53,7 @@ suite.define(() => {
       await expect.poll(() => empty.getAttribute("aria-pressed")).toBe("true");
       await expect
         .poll(() => empty.getAttribute("title"))
-        .toBe("Start in an empty folder for this session.");
+        .toBe("Start without existing files. The agent uses its default workspace.");
       await empty.click();
 
       await page.locator(".new-session-page__message").fill(message);
