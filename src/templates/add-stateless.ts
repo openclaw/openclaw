@@ -557,7 +557,15 @@ export async function applyTemplateAddPlanStateless(
         const agent = listAgentEntries(current).find(
           (entry) => normalizeAgentId(entry.id) === normalizeAgentId(plan.agent.finalId),
         );
-        if (agent) {
+        // A refused write leaves the original admitted agent in place. It is
+        // not a configured checkpoint, so only this attempt's instructions roll back.
+        const admissionUnchanged =
+          options.admittedAgent &&
+          isDeepStrictEqual(
+            current.agents?.entries?.[plan.agent.finalId],
+            options.admittedAgent.config,
+          );
+        if (agent && !admissionUnchanged) {
           if (!sameCommittedAgent(agent, plan)) {
             throw new Error("Agent config changed during Add", { cause: error });
           }
