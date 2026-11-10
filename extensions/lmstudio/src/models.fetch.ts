@@ -1,4 +1,5 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { resolveEmbeddingProviderSsrFPolicy } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
@@ -10,7 +11,7 @@ import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-s
 import { readResponseTextPrefix } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
+import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import {
   mapLmstudioWireModels,
   resolveLmstudioCanonicalModelKey,
@@ -175,6 +176,7 @@ export async function discoverLmstudioModels(params: {
   apiKey: string;
   headers?: Record<string, string>;
   quiet: boolean;
+  allowPrivateNetwork?: boolean;
   discoveryMode?: "strict";
   fetchImpl?: typeof fetch;
 }): Promise<ModelDefinitionConfig[]> {
@@ -183,6 +185,15 @@ export async function discoverLmstudioModels(params: {
     apiKey: params.apiKey,
     headers: params.headers,
     fetchImpl: params.fetchImpl,
+    // An undefined resolution means "no private allow". Keep a policy object so
+    // discovery still uses the guard instead of platform fetch.
+    ssrfPolicy:
+      resolveEmbeddingProviderSsrFPolicy({
+        provider: LMSTUDIO_PROVIDER_ID,
+        api: "openai-completions",
+        baseUrl: params.baseUrl,
+        allowPrivateNetwork: params.allowPrivateNetwork ?? true,
+      }) ?? {},
   });
   const quiet = params.quiet;
   if (!fetched.reachable || (fetched.status !== undefined && fetched.status >= 400)) {

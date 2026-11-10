@@ -846,8 +846,6 @@ export async function configureLmstudioNonInteractive(
   };
 }
 
-export { discoverLmstudioProvider } from "./catalog.js";
-
 export async function prepareLmstudioDynamicModel(
   ctx: ProviderPrepareDynamicModelContext,
 ): Promise<ProviderRuntimeModel | undefined> {
@@ -863,6 +861,7 @@ export async function prepareLmstudioDynamicModel(
     apiKey: apiKey ?? "",
     headers,
     quiet: true,
+    allowPrivateNetwork: ctx.providerConfig?.request?.allowPrivateNetwork,
   });
   const model = discoveredModels.find((candidate) => candidate.id === ctx.modelId);
   if (!model) {
