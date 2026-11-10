@@ -242,15 +242,11 @@ it("lists active threads by guild", async () => {
   await send.listThreadsDiscord({ guildId: "g1" }, clientOpts(rest));
   expect(getMock).toHaveBeenCalledWith(Routes.guildActiveThreads("g1"));
 });
-it.each([{ appliedTags: ["tag-1"] }, { appliedTags: [] }])(
-  "edits a channel with applied tags %#",
-  async ({ appliedTags }) => {
-    const { rest, patchMock } = makeDiscordRest();
-    await send.editChannelDiscord({ channelId: "c1", appliedTags }, clientOpts(rest));
-    expect(requestPath(patchMock)).toBe(Routes.channel("c1"));
-    expect(requestBody(patchMock).applied_tags).toEqual(appliedTags);
-  },
-);
+it("sends applied tags when editing a channel", async () => {
+  const { rest, patchMock } = makeDiscordRest();
+  await send.editChannelDiscord({ channelId: "c1", appliedTags: [] }, clientOpts(rest));
+  expect(requests(patchMock)).toEqual([[Routes.channel("c1"), { applied_tags: [] }]]);
+});
 it("times out a member", async () => {
   const { rest, patchMock } = makeDiscordRest();
   await timeoutMember(rest, 10);

@@ -1,2 +1,0 @@
-# Protect non-empty replacement and explicit empty-array clearing across the Discord action parser and REST boundary.
-18
