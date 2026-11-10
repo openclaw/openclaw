@@ -102,7 +102,10 @@ export type StatelessTemplateAddOptions = TemplateMutationStateOptions & {
   /** Persist verified configuration before runtime wait. Uncertain acknowledgement retains custody. */
   onAgentConfigured?: (checkpoint: TemplateConfiguredAgentCheckpoint) => Promise<void>;
   /** Confirm active runtime publication before transferring rollback custody. */
-  waitForAgentRuntime?: () => Promise<"applied" | "applied-restart-required">;
+  waitForAgentRuntime?: (retainedAgent?: {
+    agentId: string;
+    config: TemplateConfiguredAgentCheckpoint["config"];
+  }) => Promise<"applied" | "applied-restart-required">;
   /** Instructions, canonical chat, and active runtime are ready; setup continues here. */
   onAgentReady?: (agent: { agentId: string; sessionKey: string }) => Promise<void>;
   /** Publish each actual installation outcome without a model recap. */
@@ -574,7 +577,11 @@ export async function applyTemplateAddPlanStateless(
       await assertConfigured(configuredCheckpoint);
     }
     if (options.waitForAgentRuntime) {
-      const outcome = await options.waitForAgentRuntime();
+      const outcome = await options.waitForAgentRuntime(
+        configuredRetry
+          ? { agentId: plan.agent.finalId, config: options.admittedAgent!.config }
+          : undefined,
+      );
       retained = true;
       rollbackAgentSession = undefined;
       if (outcome === "applied-restart-required") {

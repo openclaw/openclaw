@@ -114,7 +114,14 @@ const trust = {
 
 const createPluginArchive = createClawHubArchiveFactory(afterEach);
 
-it.each(["allowed", "source", "admission-runtime", "initialization-runtime"] as const)(
+it.each([
+  "allowed",
+  "source",
+  "admission-runtime",
+  "initialization-runtime",
+  "source-retry",
+  "initialization-retry",
+] as const)(
   "retains original templates.add.apply administrator through final owners: %s",
   async (boundary) => {
     await withOpenClawTestState({ label: "template-request-authority" }, async (state) => {
@@ -170,8 +177,13 @@ it.each(["allowed", "source", "admission-runtime", "initialization-runtime"] as 
       const reached = Promise.withResolvers<void>();
       const release = Promise.withResolvers<void>();
       const persist = vi.fn(async () => source);
+      let downloadFailed = false;
       resolveSource.mockImplementation(
         async (input: Parameters<typeof withResolvedClawHubSource>[0]) => {
+          if (boundary === "source-retry" && !downloadFailed) {
+            downloadFailed = true;
+            throw new Error("Temporary registry download failure");
+          }
           if (boundary === "source") {
             reached.resolve();
             await release.promise;
@@ -198,6 +210,8 @@ it.each(["allowed", "source", "admission-runtime", "initialization-runtime"] as 
         ) {
           reached.resolve();
           void release.promise.then(() => claim.settle("applied"));
+        } else if (boundary === "initialization-retry" && writes === 2) {
+          claim.settle("failed");
         } else {
           claim.settle("applied");
         }
@@ -224,7 +238,29 @@ it.each(["allowed", "source", "admission-runtime", "initialization-runtime"] as 
       const request = Promise.resolve(templatesAddHandlers["templates.add.apply"]!(options));
       const settled = request.then(() => "settled" as const);
       try {
-        if (boundary !== "allowed") {
+        let retainedSessionId: string | undefined;
+        if (boundary === "source-retry" || boundary === "initialization-retry") {
+          await request;
+          expect(respond.mock.calls[0]?.[1]).toMatchObject({
+            agentRetained: true,
+            initializationPending: true,
+            status: "partial",
+          });
+          retainedSessionId = (await readSessionEntryReadOnlyInWorker({ agentId, sessionKey }))
+            ?.sessionId;
+          expect(retainedSessionId).toBeTruthy();
+          expect(greeting).not.toHaveBeenCalled();
+          respond.mockClear();
+          await templatesAddHandlers["templates.add.apply"]!({
+            ...options,
+            req: { ...options.req, id: "retained-admin-retry" },
+          });
+        }
+        const successful =
+          boundary === "allowed" ||
+          boundary === "source-retry" ||
+          boundary === "initialization-retry";
+        if (!successful) {
           expect(
             await Promise.race([reached.promise.then(() => "held" as const), settled]),
             JSON.stringify(respond.mock.calls),
@@ -242,14 +278,17 @@ it.each(["allowed", "source", "admission-runtime", "initialization-runtime"] as 
         expect(ok).toBe(true);
         expect(result, JSON.stringify(result)).toMatchObject({
           agentId,
-          status: boundary === "allowed" ? "complete" : "partial",
+          status: successful ? "complete" : "partial",
         });
         const stored = (await readConfigFileSnapshot()).config;
         expect(stored.agents?.entries).toHaveProperty(agentId);
         const entry = await readSessionEntryReadOnlyInWorker({ agentId, sessionKey });
         expect(entry?.sessionId).toBeTruthy();
         const workspace = stored.agents!.entries![agentId]!.workspace!;
-        if (boundary === "allowed") {
+        if (successful) {
+          if (retainedSessionId) {
+            expect(entry?.sessionId).toBe(retainedSessionId);
+          }
           expect(entry?.initializationPending).toBeUndefined();
           expect(resolveSessionWorkStartError(sessionKey, entry)).toBeUndefined();
           expect(await fs.readFile(path.join(workspace, "SOUL.md"), "utf8")).toBe(
@@ -257,6 +296,9 @@ it.each(["allowed", "source", "admission-runtime", "initialization-runtime"] as 
           );
           expect(stored.agents!.entries![agentId]!.name).toBe("Verified Authority Fixture");
           expect(greeting).toHaveBeenCalledOnce();
+          if (retainedSessionId) {
+            expect(writes).toBe(2);
+          }
         } else {
           expect(result).toMatchObject({ agentRetained: true, initializationPending: true });
           expect(entry?.initializationPending).toBe(true);

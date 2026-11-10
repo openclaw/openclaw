@@ -227,6 +227,35 @@ it("uses separate exact-write runtime receipts for admission and verified Templa
   expect(response).toEqual([[true, complete]]);
 });
 
+it.each(["matching", "stale"] as const)(
+  "validates retained agent against the active runtime: %s",
+  async (state) => {
+    const retained = { agentId, config: { name: "Reviewed", workspace: "/tmp/retained-template" } };
+    const runtime = {
+      ...enabled,
+      agents: {
+        entries: {
+          [agentId]: { ...retained.config, name: state === "matching" ? "Reviewed" : "Changed" },
+        },
+      },
+    };
+    const response = await applyThrough(
+      async (input) => {
+        for (const wait of [input.waitForAdmissionRuntime!, input.waitForAgentRuntime!]) {
+          if (state === "matching") {
+            await expect(wait(retained)).resolves.toBe("applied");
+          } else {
+            await expect(wait(retained)).rejects.toThrow("not active in this Gateway");
+          }
+        }
+      },
+      {},
+      runtime,
+    );
+    expect(response).toEqual([[true, complete]]);
+  },
+);
+
 it("guards live authority while leaving post-admission Labs policy to the Add service", async () => {
   let authorized = true;
   const revoked = await applyThrough(

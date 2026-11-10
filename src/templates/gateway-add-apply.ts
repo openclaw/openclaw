@@ -85,7 +85,7 @@ export async function applyTemplateAddForGateway(
     stateDir?: string;
     reloadPlugins?: PluginInstallBatchReload;
     configWriteOptions?: StatelessTemplateAddOptions["configWriteOptions"];
-    waitForAgentRuntime?: () => Promise<"applied" | "applied-restart-required">;
+    waitForAgentRuntime?: StatelessTemplateAddOptions["waitForAgentRuntime"];
     prepareAgentChat?: (
       agentId: string,
       config: OpenClawConfig,
@@ -96,7 +96,7 @@ export async function applyTemplateAddForGateway(
       },
     ) => Promise<PreparedAgentChat>;
     admissionConfigWriteOptions?: StatelessTemplateAddOptions["configWriteOptions"];
-    waitForAdmissionRuntime?: () => Promise<"applied" | "applied-restart-required">;
+    waitForAdmissionRuntime?: StatelessTemplateAddOptions["waitForAgentRuntime"];
     onAgentAdmitted?: (agent: { agentId: string; sessionKey: string }) => Promise<void>;
     onAgentReady?: StatelessTemplateAddOptions["onAgentReady"];
     onSetupEvent?: StatelessTemplateAddOptions["onSetupEvent"];
@@ -254,7 +254,9 @@ export async function applyTemplateAddForGateway(
                 );
               }
             }
-            const applied = await (input.waitForAdmissionRuntime ?? input.waitForAgentRuntime!)();
+            const applied = await (input.waitForAdmissionRuntime ?? input.waitForAgentRuntime!)(
+              existingConfig ? { agentId, config: existingConfig } : undefined,
+            );
             if (applied !== "applied") {
               throw new Error(
                 "Ordinary admission requires Gateway recovery; its agent and chat were kept",
