@@ -99,7 +99,7 @@ if (isMainThread && process.send && process.env.SOURCE_PROOF_ROOT) {
     fs.statSync = observe(fs.statSync, "stat");
     syncBuiltinESMExports();
   }
-  process.on("message", async (message) => {
+  async function handleMessage(message) {
     if (message?.channel !== "source-proof") {
       return;
     }
@@ -136,5 +136,8 @@ if (isMainThread && process.send && process.env.SOURCE_PROOF_ROOT) {
     } catch (error) {
       process.send({ channel: "source-proof", id: message.id, error: String(error) });
     }
+  }
+  process.on("message", (message) => {
+    void handleMessage(message);
   });
 }
