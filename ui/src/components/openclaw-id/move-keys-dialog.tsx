@@ -1,3 +1,4 @@
+import "../../styles/exec-approval-card.css";
 // "Move to new keys" from the account menu, on the computer that runs the claw: the recovery
 // code typed here signs the new binding in this browser (lib/openclaw-id/rebind.ts), the
 // owner confirms the key fingerprints, and the Gateway stores it and publishes the new keys.

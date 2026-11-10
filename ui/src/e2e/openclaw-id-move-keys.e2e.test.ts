@@ -172,79 +172,95 @@ suite.define(() => {
     }
   });
 
-  it("moves to new keys with the recovery code, after the owner confirms the fingerprints", async () => {
-    const fixture = await authorityFixture();
-    await suite.withPage(
-      { ...createControlUiE2eContextOptions(), viewport: { width: 1280, height: 844 } },
-      async ({ page }) => {
-        const { gateway } = await openMenu(
-          page,
-          { status: { state: "keys_refused", key: "endpoint", reason: "keys_missing" } },
-          fixture.response,
-        );
-        await page.keyboard.press("Escape");
-        await page.locator("openclaw-sidebar-attention:visible .sidebar-issues-button").click();
-        const warning = page.locator('[data-attention-kind="openClawIdKeys"]');
-        await warning.locator("summary").click();
-        await warning.getByRole("button", { name: "Move to new keys", exact: true }).click();
-        const dialog = page.locator("openclaw-modal-dialog .openclaw-id-move-keys");
-        await dialog.waitFor();
-        await dialog.getByLabel("Recovery code").fill(fixture.kit);
-        await capture(page, "dialog-recovery-code");
-        await dialog.getByRole("button", { name: "Check", exact: true }).click();
-        await dialog.getByText("Confirm the new keys", { exact: true }).waitFor();
-        await expect
-          .poll(() => dialog.getByText("matches your recovery kit", { exact: true }).count())
-          .toBe(1);
-        await capture(page, "dialog-confirm");
-        await gateway.setMethodResponse("openclawId.status", {
-          status: { state: "on" },
-          channel: "local_operator",
-          owner: true,
-          link: { linked: true, hostname },
-          services: {},
-        });
-        await gateway.setMethodResponse("openclawId.people", {
-          link: {
-            linked: true,
-            hostname,
-            publication: { state: "failed", code: "binding_superseded", message: "newer binding" },
-          },
-        });
-        await dialog.getByRole("button", { name: "Move to new keys", exact: true }).click();
-        await dialog.waitFor({ state: "detached" });
-        await page.locator("openclaw-sidebar-attention:visible .sidebar-issues-button").click();
-        await expect.poll(() => warning.textContent()).toContain("Newer keys are in use");
-        await gateway.setMethodResponse("openclawId.people", {
-          link: {
-            linked: true,
-            hostname,
-            publication: { state: "published", ownerAccountId: "fixture", snapshotSeq: 1 },
-          },
-        });
-        await gateway.emitGatewayEvent("openclawId.people.changed", {});
-        await expect
-          .poll(() => page.locator('[data-attention-kind="openClawIdKeys"]').count())
-          .toBe(0);
-        const actions = (await gateway.getRequests())
-          .filter((request) => request.method === "openclawId.authority")
-          .map((request) => (request.params as { action: string }).action);
-        expect(actions).toEqual(["account_link_code", "rebind_prepare", "rebind_commit"]);
-        const commit = (await gateway.getRequests()).find(
-          (request) =>
-            request.method === "openclawId.authority" &&
-            (request.params as { action: string }).action === "rebind_commit",
-        );
-        // The browser signed the binding with the kit's root; the code came from the account.
-        expect(commit?.params).toMatchObject({
-          code: "SYNTHETIC-LINK-CODE",
-          binding: {
-            type: "ServerBinding",
-            signer: fixture.response.root_pub,
-            body: { k_srv: fixture.response.k_srv, k_gw: fixture.response.k_gw, binding_seq: 2 },
-          },
-        });
-      },
-    );
-  });
+  it.each(["account-menu", "inbox"])(
+    "moves to new keys from %s after fingerprint confirmation",
+    async (entry) => {
+      const fixture = await authorityFixture();
+      await suite.withPage(
+        { ...createControlUiE2eContextOptions(), viewport: { width: 1280, height: 844 } },
+        async ({ page }) => {
+          const { menu, gateway } = await openMenu(
+            page,
+            { status: { state: "keys_refused", key: "endpoint", reason: "keys_missing" } },
+            fixture.response,
+          );
+          const warning = page.locator('[data-attention-kind="openClawIdKeys"]');
+          if (entry === "inbox") {
+            await page.keyboard.press("Escape");
+            await page.locator("openclaw-sidebar-attention:visible .sidebar-issues-button").click();
+            await warning.locator("summary").click();
+            await warning.getByRole("button", { name: "Move to new keys", exact: true }).click();
+          } else {
+            await menu.getByRole("menuitem", { name: "Move to new keys", exact: true }).click();
+          }
+          const dialog = page.locator("openclaw-modal-dialog .openclaw-id-move-keys");
+          await dialog.waitFor();
+          await dialog.getByLabel("Recovery code").fill(fixture.kit);
+          await capture(page, "dialog-recovery-code");
+          await dialog.getByRole("button", { name: "Check", exact: true }).click();
+          await dialog.getByText("Confirm the new keys", { exact: true }).waitFor();
+          await expect
+            .poll(() => dialog.getByText("matches your recovery kit", { exact: true }).count())
+            .toBe(1);
+          expect(
+            await dialog
+              .locator(".openclaw-id-move-keys__row")
+              .evaluateAll((rows) => rows.map((row) => getComputedStyle(row).display)),
+          ).toEqual(["flex", "flex", "flex", "flex"]);
+          await capture(page, `dialog-confirm-${entry}`);
+          await gateway.setMethodResponse("openclawId.status", {
+            status: { state: "on" },
+            channel: "local_operator",
+            owner: true,
+            link: { linked: true, hostname },
+            services: {},
+          });
+          await gateway.setMethodResponse("openclawId.people", {
+            link: {
+              linked: true,
+              hostname,
+              publication: {
+                state: "failed",
+                code: "binding_superseded",
+                message: "newer binding",
+              },
+            },
+          });
+          await dialog.getByRole("button", { name: "Move to new keys", exact: true }).click();
+          await dialog.waitFor({ state: "detached" });
+          await page.locator("openclaw-sidebar-attention:visible .sidebar-issues-button").click();
+          await expect.poll(() => warning.textContent()).toContain("Newer keys are in use");
+          await gateway.setMethodResponse("openclawId.people", {
+            link: {
+              linked: true,
+              hostname,
+              publication: { state: "published", ownerAccountId: "fixture", snapshotSeq: 1 },
+            },
+          });
+          await gateway.emitGatewayEvent("openclawId.people.changed", {});
+          await expect
+            .poll(() => page.locator('[data-attention-kind="openClawIdKeys"]').count())
+            .toBe(0);
+          const actions = (await gateway.getRequests())
+            .filter((request) => request.method === "openclawId.authority")
+            .map((request) => (request.params as { action: string }).action);
+          expect(actions).toEqual(["account_link_code", "rebind_prepare", "rebind_commit"]);
+          const commit = (await gateway.getRequests()).find(
+            (request) =>
+              request.method === "openclawId.authority" &&
+              (request.params as { action: string }).action === "rebind_commit",
+          );
+          // The browser signed the binding with the kit's root; the code came from the account.
+          expect(commit?.params).toMatchObject({
+            code: "SYNTHETIC-LINK-CODE",
+            binding: {
+              type: "ServerBinding",
+              signer: fixture.response.root_pub,
+              body: { k_srv: fixture.response.k_srv, k_gw: fixture.response.k_gw, binding_seq: 2 },
+            },
+          });
+        },
+      );
+    },
+  );
 });
