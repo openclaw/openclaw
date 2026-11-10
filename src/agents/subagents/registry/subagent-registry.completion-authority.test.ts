@@ -782,6 +782,7 @@ describe("registered completion source custody", () => {
 
   it.each([
     "settle",
+    "non-announcing-settle",
     "revoke",
     "gateway-close",
     "replace",
@@ -806,6 +807,7 @@ describe("registered completion source custody", () => {
               registration(runId, {
                 requesterAgentId: "main",
                 requesterTurnRunId: "parent",
+                expectsCompletionMessage: ending !== "non-announcing-settle",
                 ...(ending === "replace"
                   ? { childSessionKey: "global", childAgentId: "research" }
                   : {}),
@@ -829,7 +831,7 @@ describe("registered completion source custody", () => {
           expect(retained?.source).toBe(source.authority.source);
           expect(retained?.scopes).toEqual(["operator.write"]);
         });
-        if (ending === "settle") {
+        if (ending === "settle" || ending === "non-announcing-settle") {
           await updateRun(entry.runId, (draft) => {
             draft.execution = { status: "terminal", endedAt: 1, outcome: { status: "ok" } };
             draft.cleanupCompletedAt = 1;
@@ -837,10 +839,17 @@ describe("registered completion source custody", () => {
           });
           expect(source.authority.assertCurrent).not.toThrow();
           await updateRun(entry.runId, (draft) => {
-            draft.requesterTurnRunId = undefined;
+            if (ending === "settle") {
+              draft.requesterTurnRunId = undefined;
+            }
             draft.requesterSettleWake = undefined;
-            draft.delivery = { status: "delivered" };
+            draft.delivery = {
+              status: ending === "settle" ? "delivered" : "not_required",
+            };
           });
+          if (ending === "non-announcing-settle") {
+            expect(subagentRuns.get(entry.runId)?.requesterTurnRunId).toBe("parent");
+          }
         } else if (ending === "cancelled-with-requester-custody") {
           await markCancelled(entry.runId);
           const observer = createOperatorClient({
