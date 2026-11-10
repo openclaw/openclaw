@@ -1,2 +1,0 @@
-# Prove skill completion is suppressed in Markdown code and preserved in prose.
-37
