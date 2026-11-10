@@ -3,8 +3,13 @@ import {
   gateAgentToolExecution,
   markAgentToolExecutionUnavailable,
 } from "./agent-tool-availability.js";
-import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
+import {
+  bindAgentToolExecutionLocation,
+  copyAgentToolMetadata,
+  getAgentToolExecutionLocation,
+} from "./agent-tool-metadata.js";
 import { guardOwnerTool } from "./scheduled-owner-tool-guard.js";
+import { toolPolicyRestrictsTools, type ToolPolicyLike } from "./tool-policy.js";
 import { CRON_SCOPED_READ_ACTIONS, isAutomationsToolName } from "./tools/automations-tool-name.js";
 import { readToolStringParam, type AnyAgentTool } from "./tools/common.js";
 import { prepareCronToolArguments } from "./tools/cron-tool-canonicalize.js";
@@ -23,17 +28,37 @@ export function isHostSystemTurn(params: {
   return params.trigger === "event" && params.inputProvenance?.kind === "internal_system";
 }
 
+type TurnNarrowing = "completion-handoff" | "sender";
+
+/**
+ * Names the per-turn policy that narrows the session's tool surface. Global and agent
+ * tools.toolsBySender follow the sender of each message; group-level toolsBySender stays
+ * inside the group policy and still filters.
+ */
+export function resolveTurnNarrowing(policy: {
+  requesterPolicySource: string;
+  senderPolicy?: ToolPolicyLike;
+}): TurnNarrowing | undefined {
+  if (policy.requesterPolicySource === "completion-handoff") {
+    return "completion-handoff";
+  }
+  return toolPolicyRestrictsTools(policy.senderPolicy) ? "sender" : undefined;
+}
+
 /**
  * Offers the session's tool surface on every turn, so the provider prompt prefix
  * stays cacheable, and gates the calls this turn's authority does not cover.
- * Owner-only tools and a completion handoff's replayed requester policy are
- * per-turn authority; they never hide a tool definition.
+ * Owner-only tools, a completion handoff's replayed requester policy and the
+ * sender's tools.toolsBySender entry are per-turn authority; they never hide a
+ * tool definition.
  */
 export function resolveTurnToolSurface(params: {
   /** Tools the full per-turn policy admits. */
   turnTools: AnyAgentTool[];
   /** The session surface, when per-turn policy narrows it; defaults to `turnTools`. */
   sessionTools?: AnyAgentTool[];
+  /** The per-turn policy that narrows `sessionTools`; names it in the refusal. */
+  narrowedBy?: TurnNarrowing;
   ownerOnlyDenied: ReadonlySet<string>;
   ownerToolCurrentAssertion?: (toolName: string) => (() => void) | undefined;
   /**
@@ -71,7 +96,9 @@ export function resolveTurnToolSurface(params: {
     const gated = gateAgentToolExecution(
       tool,
       !turnTool
-        ? `${tool.name} is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry ${tool.name}.`
+        ? params.narrowedBy === "sender"
+          ? `${tool.name} is not allowed for the sender of this message (tools.toolsBySender). Do not retry ${tool.name}.`
+          : `${tool.name} is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry ${tool.name}.`
         : scopedReads
           ? `On this system-started turn, ${tool.name} runs only the ${CRON_SCOPED_READ_ACTIONS.join(", ")} actions. Other actions need the owner's authority, and this turn was not started by the owner. Do not retry them.`
           : `${tool.name} needs the owner's authority, and this turn was not started by the owner. ${
@@ -83,7 +110,7 @@ export function resolveTurnToolSurface(params: {
     // Copying hook metadata also copies the availability binding; re-mark the denial
     // so dependent affordances (for example collector spawns) never treat it as callable.
     // A split executor stays marked: only this turn's own reads pass, never descendants.
-    return markAgentToolExecutionUnavailable(
+    const denied = markAgentToolExecutionUnavailable(
       copyAgentToolMetadata(
         tool,
         scopedReads && turnTool
@@ -91,6 +118,12 @@ export function resolveTurnToolSurface(params: {
           : gated,
       ),
     );
+    // A worker placement runs placement tools from its own implementation; send the
+    // denied call to the Gateway, which returns this refusal, so it gets no launch authority.
+    if (getAgentToolExecutionLocation(denied).kind === "placement") {
+      bindAgentToolExecutionLocation(denied, { kind: "gateway" });
+    }
+    return denied;
   });
   return {
     tools,

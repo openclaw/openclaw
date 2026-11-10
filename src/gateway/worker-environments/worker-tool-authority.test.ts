@@ -5,6 +5,7 @@ import "../../agents/test-helpers/fast-bash-tools.js";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import { finalizeAgentToolAvailability } from "../../agents/agent-tool-availability.js";
 import { createOpenClawCodingToolsInternal } from "../../agents/agent-tools.js";
+import { expectSenderGated } from "../../agents/agent-tools.turn-authority.test-support.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
 import { resolveNodeExecutionTarget } from "../../agents/bash-tools.exec-host-node-phases.js";
 import * as conversationPolicy from "../../agents/conversation-capability-profile.js";
@@ -58,6 +59,10 @@ function resolvedAuthority(
 }
 
 async function authority(overrides: TurnOverrides = {}, computerAvailable = false) {
+  return (await authorityTools(overrides, computerAvailable)).map((tool) => tool.name);
+}
+
+async function authorityTools(overrides: TurnOverrides = {}, computerAvailable = false) {
   const input = turn(overrides);
   const resolved = await resolvedAuthority(input, computerAvailable);
   const { policy, capabilityProfile, exec, execUnavailable } = resolved;
@@ -98,7 +103,7 @@ async function authority(overrides: TurnOverrides = {}, computerAvailable = fals
     undefined,
     { tools, policy },
   );
-  return applyEmbeddedAttemptToolsAllow(codingTools, input.toolsAllow).map((tool) => tool.name);
+  return applyEmbeddedAttemptToolsAllow(codingTools, input.toolsAllow);
 }
 
 afterEach(() => {
@@ -340,33 +345,40 @@ describe("resolveWorkerToolAuthority", () => {
   });
 
   it.each([
-    { senderId: "restricted", expected: ["read"] },
-    { senderId: "authorized", expected: ["read", "write", "apply_patch"] },
+    { senderId: "restricted", gated: true },
+    { senderId: "authorized", gated: false },
   ])(
     "projects destination policy for original requester $senderId",
-    async ({ senderId, expected }) => {
-      expect(
-        await authority({
-          senderId: "worker-route-sender",
-          senderIsOwner: true,
-          toolsAllow: ["read", "write"],
-          config: {
-            agents: {
-              entries: {
-                research: { tools: { deny: ["write", "apply_patch"] } },
-                main: {
-                  tools: { toolsBySender: { "id:restricted": { deny: ["write", "apply_patch"] } } },
-                },
+    async ({ senderId, gated }) => {
+      const tools = await authorityTools({
+        senderId: "worker-route-sender",
+        senderIsOwner: true,
+        toolsAllow: ["read", "write"],
+        config: {
+          agents: {
+            entries: {
+              research: { tools: { deny: ["write", "apply_patch"] } },
+              main: {
+                tools: { toolsBySender: { "id:restricted": { deny: ["write", "apply_patch"] } } },
               },
             },
           },
-          requesterOrigin: {
-            sessionKey: "agent:research:whatsapp:group:requesters",
-            messageProvider: "whatsapp",
-            senderId,
-          },
-        }),
-      ).toEqual(expected);
+        },
+        requesterOrigin: {
+          sessionKey: "agent:research:whatsapp:group:requesters",
+          messageProvider: "whatsapp",
+          senderId,
+        },
+      });
+      // The requester's sender overlay keeps the definitions and refuses the denied calls.
+      expect(tools.map((tool) => tool.name)).toEqual(["read", "write", "apply_patch"]);
+      for (const name of ["write", "apply_patch"]) {
+        const call = tools.find((candidate) => candidate.name === name)!.execute(name, {});
+        // An authorized call reaches the executor, which rejects a call without input.
+        await (gated
+          ? expect(call).resolves.toMatchObject({ details: { gated: true } })
+          : expect(call).rejects.toThrow());
+      }
     },
   );
 
@@ -394,7 +406,10 @@ describe("resolveWorkerToolAuthority", () => {
       "write",
       "apply_patch",
     ]);
-    expect(await authority(sender)).toEqual(["read"]);
+    // The sender overlay keeps the session's definitions and refuses the denied calls.
+    const senderTools = await authorityTools(sender);
+    expect(senderTools.map((tool) => tool.name)).toEqual(["read", "write", "apply_patch"]);
+    await expectSenderGated(senderTools, "write", "apply_patch");
     expect(
       await authority({
         messageProvider: "whatsapp",

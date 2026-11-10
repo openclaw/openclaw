@@ -24,7 +24,7 @@ import { registerPluginOnlyCallerIdentityCase } from "./agent-tools.caller-ident
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createSandboxedReadTool, wrapReadToolWithSkillContent } from "./agent-tools.read.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
-import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
+import { expectOwnerGated, expectSenderGated } from "./agent-tools.turn-authority.test-support.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
   createCronCreatorAuthorityCapability,
@@ -777,7 +777,7 @@ describe("createOpenClawCodingTools", () => {
     );
   });
 
-  it("separates the canonical message provider from transport tool policy", () => {
+  it("separates the canonical message provider from transport tool policy", async () => {
     vi.mocked(createOpenClawTools).mockClear();
 
     const tools = createOpenClawCodingTools({
@@ -786,7 +786,9 @@ describe("createOpenClawCodingTools", () => {
       toolPolicyMessageProvider: "discord-voice",
       senderId: "speaker-1",
     });
-    expectToolNames(tools, [], ["exec", "tts"]);
+    // The sender policy keeps exec's definition and refuses the call.
+    expectToolNames(tools, ["exec"], ["tts"]);
+    await expectSenderGated(tools, "exec");
     expect(lastCoreOptions().agentChannel).toBe("discord");
   });
 
