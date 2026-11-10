@@ -3,7 +3,9 @@
  * Node 24.22.1 dist Gateway, after transcript-broadcast-measure.ts warmup. Launch
  * that Gateway with --gateway-preload scripts/perf/diagnostic-cpu-profile-measure-preload.mjs.
  * node --import ./scripts/tsx.mjs scripts/perf/diagnostic-cpu-profile-measure.mts \
- *   --url ws://127.0.0.1:42358 --output .local/cpu-batch.jsonl --pairs 5 --aa-sets 2
+ *   --url ws://127.0.0.1:42358 --output .local/cpu-batch.jsonl --pairs 5 --aa-sets 2 \
+ *   --artifact-root .local/cpu-profile-state
+ * Use the Gateway's synthetic --state-dir as --artifact-root.
  * Large graph regression: --large-graph --mode refusal --pairs 1 on the old build;
  * use --mode batch --artifact-root <synthetic-state> on the fixed build, with
  * --windows 12 or 30. The workload imports real bundled provider code, then runs
@@ -42,6 +44,14 @@ const windows = integer(values.windows, "--windows");
 const aaSets = integer(values["aa-sets"], "--aa-sets", 0);
 const settleMs = integer(values["settle-ms"], "--settle-ms", 0);
 assert.ok(["compare", "batch", "refusal"].includes(values.mode));
+const artifactRoot = values["artifact-root"] ? realpathSync(values["artifact-root"]) : undefined;
+assert.ok(
+  values.mode === "refusal" || artifactRoot,
+  "--artifact-root is required for file responses",
+);
+if (artifactRoot) {
+  assert.ok(lstatSync(artifactRoot).isDirectory(), "--artifact-root must be a directory");
+}
 const url = new URL(values.url);
 assert.equal(url.protocol, "ws:");
 assert.equal(url.hostname, "127.0.0.1", "Only the isolated loopback fixture is supported");
@@ -103,11 +113,10 @@ async function capture(batch: boolean, checkBusy: boolean) {
   assert.equal(result.requestedDurationMs, (batch ? windows : 1) * 5_000);
   let profile = result.profile;
   let artifact;
-  if (batch && typeof result.path === "string") {
-    assert.ok(values["artifact-root"], "--artifact-root is required for file responses");
+  if (typeof result.path === "string") {
+    assert.ok(artifactRoot);
     const filename = realpathSync(result.path);
-    const root = realpathSync(values["artifact-root"]);
-    assert.ok(filename.startsWith(`${root}${path.sep}`));
+    assert.ok(filename.startsWith(`${artifactRoot}${path.sep}`));
     assert.ok(filename.endsWith(".cpuprofile"));
     const stat = lstatSync(result.path);
     assert.ok(stat.isFile() && !stat.isSymbolicLink());
@@ -134,14 +143,15 @@ async function capture(batch: boolean, checkBusy: boolean) {
     assert.ok(isRecord(result.summary));
     assert.equal(result.summary.nodeCount, profile.nodes.length);
     assert.equal(result.summary.sampleCount, profile.samples.length);
-    if (values["large-graph"]) {
+    if (batch && values["large-graph"]) {
       assert.ok(profile.nodes.length > 16_384, "Large graph must exceed the old node limit");
       assert.ok(artifact.sizeBytes > 1024 * 1024, "Large graph must exceed the old byte limit");
     }
   }
   assert.ok(typeof profile.startTime === "number" && typeof profile.endTime === "number");
   assert.ok(profile.endTime > profile.startTime);
-  const boundaries = batch ? result.windowBoundariesMicros : [profile.startTime, profile.endTime];
+  const boundaries =
+    batch || artifact ? result.windowBoundariesMicros : [profile.startTime, profile.endTime];
   assert.ok(Array.isArray(boundaries));
   assert.equal(boundaries.length, batch ? windows + 1 : 2);
   assert.equal(boundaries[0], profile.startTime);
@@ -152,7 +162,7 @@ async function capture(batch: boolean, checkBusy: boolean) {
       assert.equal(boundaries[index], profile.startTime + index * 5_000_000);
     }
   }
-  if (!batch) {
+  if (!batch && !artifact) {
     assert.equal(result.windowBoundariesMicros, undefined);
   }
   const windowSamples = Array.from({ length: boundaries.length - 1 }, () => 0);
