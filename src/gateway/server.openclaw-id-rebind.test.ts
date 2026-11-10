@@ -12,9 +12,10 @@ import {
   formatEd25519PublicKey,
   formatIrohEndpointKey,
   randomBytes,
+  signRebind,
   signStatement,
+  type RebindPreparation,
 } from "../../packages/openclaw-id-protocol/src/index.js";
-import { signRebind, type RebindPreparation } from "../cli/id-cli-rebind.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { readStoredClaw, writeStoredClaw } from "./openclaw-id/claw-store.js";
 import { linkedClaw, memoryStore } from "./openclaw-id/openclaw-id.test-support.js";
