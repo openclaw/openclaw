@@ -522,10 +522,6 @@ openclaw-chat-detail-panel,
   }
 }
 
-.sidebar-region--desktop .side-panel__header {
-  background: transparent;
-}
-
 .sidebar-region--desktop .side-panel__header--occupied {
   /* Balance the bottom divider so the controls stay on the shared header axis. */
   padding-top: var(--rail-divider-size);

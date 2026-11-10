@@ -1161,7 +1161,8 @@ openclaw-chat-sidebar-region,
   display: contents;
 }
 
-.side-panel__panel {
+.side-panel__panel,
+.side-panel__empty-body {
   background: var(--bg);
 }
 
